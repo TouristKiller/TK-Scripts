@@ -1,8 +1,19 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.1.1
 -- @changelog 
 --[[
+  v1.1.1:
+  + Added CUE Bus mode with active CUE track selection
+  + In CUE mode, the fader controls per-track send volume to the active CUE bus
+  + Added per-CUE color setting, linked to fader highlight and CUE badge
+  + Moved the CUE section to the bottom of the sidebar
+  + Replaced CUE selection dropdown in the sidebar with radio buttons
+  + Selected track label in the sidebar now uses the track color as background
+  + CUE badge is always visible on CUE tracks; active CUE shows a green indicator lamp
+  + Made CUE badge adaptive on narrow strips (CUE, C, or lamp only)
+  + In CUE mode, mute and pan are now per-send (cue-specific)
+
   v1.1.0:
   + Scalable fader knob via new "Knob Scale" slider (0.5x - 2.5x) in Fader Style section
   + Channel Outline: thin border on both sides of each strip with adjustable color, thickness, and optional track color
@@ -13,24 +24,24 @@
   + FX slot height range extended to 30 px
   + FX font size slider now works correctly
   + Clicking empty mixer area deselects all tracks
-    + Send/Receive sectie volledig herwerkt met compacte rows en context-popup bediening
-    + Master hardware outputs toegevoegd in dezelfde routing-sectie met volume-popup
-    + Dynamische Send/Receive layout voor smalle strips (compact + rechtsklik voor detailacties)
-    + Send/Receive achtergrondkleur als losse setting toegevoegd
-    + Send/Receive handle verbeterd met "io" label
-    + FX slots handle verbeterd met "fx" label
-    + S/R hoogteberekening gefixt (incl. divider/handle budget) voor stabielere faderruimte
-    + Meter width limiet verhoogd tot 200 px
-    + Fader verbergt automatisch wanneer meter te breed wordt
-    + Meter render en loud-indicator breedte gecorrigeerd wanneer fader verborgen is
+    + Send/Receive section completely reworked with compact rows and context-popup control
+    + Master hardware outputs added in the same routing section with volume popup
+    + Dynamic Send/Receive layout for narrow strips (compact + right-click for detailed actions)
+    + Send/Receive background color added as a separate setting
+    + Send/Receive handle improved with "io" label
+    + FX slots handle improved with "fx" label
+    + S/R height calculation fixed (including divider/handle budget) for more stable fader space
+    + Meter width limit increased to 200 px
+    + Fader automatically hides when meter becomes too wide
+    + Meter render and loud-indicator width corrected when fader is hidden
     + Fixed ImGui style/pop mismatch in hidden-fader pad
-    + EQ curve visualizer toegevoegd als optionele strip boven de EQ controls
-    + EQ curve toggle in EQ header toegevoegd
-    + EQ curve kleurinstellingen toegevoegd (curve, grid, zero line, background)
-    + Band points op de EQ curve toegevoegd met hover tooltips (freq/gain)
-    + Sleepbare EQ band points toegevoegd: horizontaal = frequentie, verticaal = gain
-    + Shift fine adjust toegevoegd voor EQ point dragging
-    + HPF/LPF punten aparte kleuren gegeven en alleen horizontaal sleepbaar gemaakt
+    + EQ curve visualizer added as an optional strip above the EQ controls
+    + EQ curve toggle in EQ header added
+    + EQ curve color settings added (curve, grid, zero line, background)
+    + Band points on the EQ curve added with hover tooltips (freq/gain)
+    + Draggable EQ band points added: horizontal = frequency, vertical = gain
+    + Shift fine adjust added for EQ point dragging
+    + HPF/LPF points given separate colors and only horizontally draggable
 
   v1.0.0:
   + Initial standalone release
@@ -41,7 +52,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('TK Mixer')
 
-local script_version = "1.1.0"
+local script_version = "1.1.1"
 
 local mixer_state = {}
 local TCP_ICON_EXT_KEY = "TK_TCP_ICON"
@@ -98,6 +109,7 @@ mixer_state.vu_data = simple_mixer_vu_data
 mixer_state.track_fx_heights = simple_mixer_track_fx_heights
 mixer_state.track_sendrecv_heights = simple_mixer_track_sendrecv_heights
 mixer_state.hidden_track_guids = {}
+mixer_state.cue_mode_guid = ""
 mixer_state.fx_open_state = simple_mixer_fx_open_state
 mixer_state.editing_track_guid = nil
 mixer_state.editing_track_name = ""
@@ -363,6 +375,10 @@ local settings = {
  simple_mixer_auto_remove_unused_fx = false,
  simple_mixer_knob_style = 0,
  simple_mixer_vu_style = 0,
+ simple_mixer_cue_mode_guid = "",
+ simple_mixer_cue_fader_color = 0xE06C75FF,
+ simple_mixer_cue_send_prefader = true,
+ simple_mixer_cue_colors = {},
 }
 
 local function EnsureFolder(path)
@@ -2720,6 +2736,18 @@ end
 LoadMixerSettings()
 LoadPinnedParams()
 settings.simple_mixer_window_open = true
+do
+ local saved_guid = settings.simple_mixer_cue_mode_guid or ""
+ if saved_guid ~= "" then
+  local cue_t = r.BR_GetMediaTrackByGUID(0, saved_guid)
+  if cue_t then
+   local _, cue_name = r.GetTrackName(cue_t)
+   if cue_name:sub(1, 4) == "CUE:" then
+    mixer_state.cue_mode_guid = saved_guid
+   end
+  end
+ end
+end
 
 local function UpdateVUData(track_guid, track)
  if not track then return nil end
@@ -3749,6 +3777,112 @@ local function DrawSectionHeader(ctx, label, setting_key, sidebar_width)
  return is_open
 end
 
+local _cue_tracks_cache = nil
+local _cue_tracks_cache_frame = -1
+
+local CueBus = {}
+
+function CueBus.ScanTracks()
+ local frame = r.ImGui_GetFrameCount and r.ImGui_GetFrameCount(ctx) or -1
+ if _cue_tracks_cache and _cue_tracks_cache_frame == frame then
+  return _cue_tracks_cache
+ end
+ local result = {}
+ for i = 0, r.CountTracks(0) - 1 do
+  local track = r.GetTrack(0, i)
+  local _, name = r.GetTrackName(track)
+  if name:sub(1, 4) == "CUE:" then
+   table.insert(result, {track = track, guid = r.GetTrackGUID(track), label = name:sub(5)})
+  end
+ end
+ _cue_tracks_cache = result
+ _cue_tracks_cache_frame = frame
+ return result
+end
+
+function CueBus.GetActiveCueTrack()
+ local guid = mixer_state.cue_mode_guid
+ if not guid or guid == "" then return nil end
+ local track = r.BR_GetMediaTrackByGUID(0, guid)
+ if not track then
+  mixer_state.cue_mode_guid = ""
+  settings.simple_mixer_cue_mode_guid = ""
+  return nil
+ end
+ local _, name = r.GetTrackName(track)
+ if name:sub(1, 4) ~= "CUE:" then
+  mixer_state.cue_mode_guid = ""
+  settings.simple_mixer_cue_mode_guid = ""
+  return nil
+ end
+ return track
+end
+
+function CueBus.FindSend(src, dst)
+ local n = r.GetTrackNumSends(src, 0)
+ for i = 0, n - 1 do
+  if r.GetTrackSendInfo_Value(src, 0, i, "P_DESTTRACK") == dst then return i end
+ end
+ return nil
+end
+
+function CueBus.GetOrCreateSend(src, dst)
+ local idx = CueBus.FindSend(src, dst)
+ if idx then return idx end
+ local new_idx = r.CreateTrackSend(src, dst)
+ local sendmode = (settings.simple_mixer_cue_send_prefader ~= false) and 1 or 0
+ r.SetTrackSendInfo_Value(src, 0, new_idx, "I_SENDMODE", sendmode)
+ return new_idx
+end
+
+function CueBus.GetSendVolDb(src, dst)
+ local idx = CueBus.FindSend(src, dst)
+ if not idx then return 0.0 end
+ local vol = r.GetTrackSendInfo_Value(src, 0, idx, "D_VOL")
+ if vol <= 0 then return -60.0 end
+ return 20.0 * math.log(vol, 10)
+end
+
+function CueBus.SetSendVolDb(src, dst, db)
+ local idx = CueBus.GetOrCreateSend(src, dst)
+ r.SetTrackSendInfo_Value(src, 0, idx, "D_VOL", 10.0 ^ (db / 20.0))
+end
+
+function CueBus.GetSendMute(src, dst)
+ local idx = CueBus.FindSend(src, dst)
+ if not idx then return false end
+ return r.GetTrackSendInfo_Value(src, 0, idx, "B_MUTE") == 1
+end
+
+function CueBus.SetSendMute(src, dst, muted)
+ local idx = CueBus.GetOrCreateSend(src, dst)
+ r.SetTrackSendInfo_Value(src, 0, idx, "B_MUTE", muted and 1 or 0)
+end
+
+function CueBus.GetSendPan(src, dst)
+ local idx = CueBus.FindSend(src, dst)
+ if not idx then return 0.0 end
+ return r.GetTrackSendInfo_Value(src, 0, idx, "D_PAN")
+end
+
+function CueBus.SetSendPan(src, dst, pan)
+ local idx = CueBus.GetOrCreateSend(src, dst)
+ r.SetTrackSendInfo_Value(src, 0, idx, "D_PAN", pan)
+end
+
+function CueBus.CopyFromMain(cue_track, project_tracks)
+ r.Undo_BeginBlock()
+ for _, guid in ipairs(project_tracks) do
+  local track = r.BR_GetMediaTrackByGUID(0, guid)
+  if track and track ~= cue_track then
+   local vol = r.GetMediaTrackInfo_Value(track, "D_VOL")
+   local idx = CueBus.GetOrCreateSend(track, cue_track)
+   r.SetTrackSendInfo_Value(track, 0, idx, "D_VOL", vol)
+  end
+ end
+ r.Undo_EndBlock("TK Mixer: Copy main mix to cue", -1)
+end
+
 local function DrawMixerSidebarParams(mixer_ctx, sidebar_width)
  local sel_for_top = r.GetSelectedTrack(0, 0) or r.GetMasterTrack(0)
  local btn_width_top = math.floor((sidebar_width - 20) / 2)
@@ -4306,14 +4440,18 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    local track_color = r.GetTrackColor(sel_track)
    local cx, cy = r.ImGui_GetCursorScreenPos(mixer_ctx)
    local draw_list = r.ImGui_GetWindowDrawList(mixer_ctx)
-   local color_box_size = 12
+   local text_h = r.ImGui_GetTextLineHeight(mixer_ctx)
+   local name_label = track_num .. ": " .. sel_track_name
    if track_color ~= 0 then
     local rv, gv, bv = r.ColorFromNative(track_color)
-    local imgui_color = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
-    r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy + 2, cx + color_box_size, cy + 2 + color_box_size, imgui_color, 2)
-    r.ImGui_SetCursorPosX(mixer_ctx, r.ImGui_GetCursorPosX(mixer_ctx) + color_box_size + 4)
+    local bg_col = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 0.35)
+    local left_col = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
+    r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy, cx + sidebar_width - 16, cy + text_h + 4, bg_col, 3)
+    r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy, cx + 3, cy + text_h + 4, left_col, 0)
    end
-   r.ImGui_Text(mixer_ctx, track_num .. ": " .. sel_track_name)
+   r.ImGui_SetCursorScreenPos(mixer_ctx, cx + 6, cy + 2)
+   r.ImGui_Text(mixer_ctx, name_label)
+   r.ImGui_SetCursorScreenPos(mixer_ctx, cx, cy + text_h + 6)
    r.ImGui_Spacing(mixer_ctx)
    if DrawSectionHeader(mixer_ctx, "Input", "simple_mixer_input_open", sidebar_width) then
     InputSelector:Draw(mixer_ctx, sel_track)
@@ -4393,6 +4531,54 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    r.ImGui_Spacing(mixer_ctx)
    if DrawSectionHeader(mixer_ctx, "Record Mode", "simple_mixer_recmode_open", sidebar_width) then
     RecordModeSelector:Draw(mixer_ctx, sel_track)
+   end
+  end
+ end
+
+ do
+  local cue_tracks = CueBus.ScanTracks()
+  if #cue_tracks > 0 then
+   r.ImGui_Spacing(mixer_ctx)
+   r.ImGui_Separator(mixer_ctx)
+   r.ImGui_Spacing(mixer_ctx)
+   r.ImGui_Text(mixer_ctx, "CUE Bus")
+   r.ImGui_Spacing(mixer_ctx)
+   local active_guid = mixer_state.cue_mode_guid or ""
+   if r.ImGui_RadioButton(mixer_ctx, "Main##cue_main", active_guid == "") then
+    mixer_state.cue_mode_guid = ""
+    settings.simple_mixer_cue_mode_guid = ""
+    SaveMixerSettings()
+   end
+   for _, ct in ipairs(cue_tracks) do
+    local is_active = active_guid == ct.guid
+    if r.ImGui_RadioButton(mixer_ctx, ct.label .. "##cue_" .. ct.guid, is_active) then
+     mixer_state.cue_mode_guid = ct.guid
+     settings.simple_mixer_cue_mode_guid = ct.guid
+     SaveMixerSettings()
+    end
+    r.ImGui_SameLine(mixer_ctx, 0, 6)
+    local cue_colors = settings.simple_mixer_cue_colors or {}
+    local cur_col = cue_colors[ct.guid] or settings.simple_mixer_cue_fader_color or 0xE06C75FF
+    cur_col = (cur_col & 0xFFFFFF00) | 0xFF
+    local rv_col, new_col = r.ImGui_ColorEdit4(mixer_ctx, "##cuecol_" .. ct.guid, cur_col, r.ImGui_ColorEditFlags_NoInputs())
+    if rv_col then
+     if not settings.simple_mixer_cue_colors then settings.simple_mixer_cue_colors = {} end
+     settings.simple_mixer_cue_colors[ct.guid] = (new_col & 0xFFFFFF00) | 0xFF
+     SaveMixerSettings()
+    end
+    if is_active then
+     local cue_t = r.BR_GetMediaTrackByGUID(0, ct.guid)
+     if cue_t then
+      r.ImGui_Spacing(mixer_ctx)
+      if r.ImGui_Button(mixer_ctx, "Copy Main->Cue", sidebar_width - 16) then
+       CueBus.CopyFromMain(cue_t, project_mixer_tracks)
+      end
+      if r.ImGui_IsItemHovered(mixer_ctx) then
+       r.ImGui_SetTooltip(mixer_ctx, "Copies current main fader levels as\nsend volumes to this cue bus.")
+      end
+      r.ImGui_Spacing(mixer_ctx)
+     end
+    end
    end
   end
  end
@@ -4641,6 +4827,10 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local is_locked = (not is_master) and IsTrackLocked(track)
  
  local track_guid_for_fx = is_master and "master" or r.GetTrackGUID(track)
+
+ local _cue_track = (not is_master) and CueBus.GetActiveCueTrack() or nil
+ local _is_cue_mode = _cue_track ~= nil and track ~= _cue_track
+ local _is_cue_master = _cue_track ~= nil and track == _cue_track
  local track_fx_height = 0
  local fx_divider_height = 0
  if settings.simple_mixer_show_fx_slots and not settings.simple_mixer_fx_section_collapsed then
@@ -4753,7 +4943,26 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
   local num_height = 18
+    local is_cue_track = track_name and track_name:sub(1, 4) == "CUE:"
   r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy, cx + track_width, cy + num_height, bg_color, 2)
+    if is_cue_track then
+   local cue_colors = settings.simple_mixer_cue_colors or {}
+   local cue_col = (cue_colors[r.GetTrackGUID(track)] or settings.simple_mixer_cue_fader_color or 0xE06C75FF)
+   local cr, cg, cb = r.ImGui_ColorConvertU32ToDouble4(cue_col)
+   r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy, cx + track_width, cy + num_height, r.ImGui_ColorConvertDouble4ToU32(cr, cg, cb, 0.35), 2)
+     local cue_badge_text = "CUE"
+     if track_width <= 72 then cue_badge_text = "C" end
+     if track_width <= 54 then cue_badge_text = "" end
+     if cue_badge_text ~= "" then
+        r.ImGui_DrawList_AddText(draw_list, cx + 3, cy + (num_height - r.ImGui_GetTextLineHeight(ctx)) / 2, 0xFFFFFFFF, cue_badge_text)
+     end
+     if _is_cue_master then
+        local lamp_x = cx + track_width - 8
+        local lamp_y = cy + num_height * 0.5
+        r.ImGui_DrawList_AddCircleFilled(draw_list, lamp_x, lamp_y, 4.0, 0x003300FF, 12)
+        r.ImGui_DrawList_AddCircleFilled(draw_list, lamp_x, lamp_y, 2.5, 0x33FF33FF, 12)
+     end
+  end
   local text_w = r.ImGui_CalcTextSize(ctx, track_number_str)
   local text_x = cx + (track_width - text_w) / 2
   local text_y = cy + (num_height - r.ImGui_GetTextLineHeight(ctx)) / 2
@@ -5332,6 +5541,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    r.ImGui_PopStyleColor(ctx, 1)
   else
    local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
+     local cue_mute = _is_cue_mode and CueBus.GetSendMute(track, _cue_track) or false
    local is_solo = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
    local rms_btn_width = (track_width - 6) / 3
 
@@ -5343,9 +5553,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
    r.ImGui_SameLine(ctx, 0, 3)
 
-   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_muted and 0xFF6666FF or rms_off_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), ((_is_cue_mode and cue_mute) or (not _is_cue_mode and is_muted)) and 0xFF6666FF or rms_off_color)
    if r.ImGui_Button(ctx, "M##rms_top", rms_btn_width, 20) then
-    r.SetMediaTrackInfo_Value(track, "B_MUTE", is_muted and 0 or 1)
+     if _is_cue_mode then
+      CueBus.SetSendMute(track, _cue_track, not cue_mute)
+     else
+      r.SetMediaTrackInfo_Value(track, "B_MUTE", is_muted and 0 or 1)
+     end
    end
    r.ImGui_PopStyleColor(ctx, 1)
 
@@ -5381,7 +5595,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local slider_grab_active_col = 0xAAAAAAFF
  
  if settings.simple_mixer_show_pan then
-  local pan = r.GetMediaTrackInfo_Value(track, "D_PAN")
+    local pan = _is_cue_mode and CueBus.GetSendPan(track, _cue_track) or r.GetMediaTrackInfo_Value(track, "D_PAN")
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   
   r.ImGui_InvisibleButton(ctx, "##pan_slider", track_width, pan_slider_height)
@@ -5392,12 +5606,20 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    local mx = r.ImGui_GetMousePos(ctx)
    local new_pan = ((mx - x) / track_width) * 2 - 1
    new_pan = math.max(-1, math.min(1, new_pan))
-   r.SetMediaTrackInfo_Value(track, "D_PAN", new_pan)
+    if _is_cue_mode then
+     CueBus.SetSendPan(track, _cue_track, new_pan)
+    else
+     r.SetMediaTrackInfo_Value(track, "D_PAN", new_pan)
+    end
    pan = new_pan
   end
   
   if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
-   r.SetMediaTrackInfo_Value(track, "D_PAN", 0.0)
+    if _is_cue_mode then
+     CueBus.SetSendPan(track, _cue_track, 0.0)
+    else
+     r.SetMediaTrackInfo_Value(track, "D_PAN", 0.0)
+    end
    pan = 0.0
   end
   
@@ -5417,7 +5639,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    else
     pan_text = string.format("%.0f%% R", pan * 100)
    end
-   r.ImGui_SetTooltip(ctx, "Pan: " .. pan_text .. " (Right-click to reset)")
+    r.ImGui_SetTooltip(ctx, (_is_cue_mode and "Cue Pan: " or "Pan: ") .. pan_text .. " (Right-click to reset)")
   end
  end
 
@@ -5967,6 +6189,10 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local volume = r.GetMediaTrackInfo_Value(track, "D_VOL")
  local volume_db = 20.0 * math.log(volume, 10)
 
+ if _is_cue_mode then
+  volume_db = CueBus.GetSendVolDb(track, _cue_track)
+ end
+
  local is_track_selected = r.IsTrackSelected(track)
  local slider_color_pushed = false
 
@@ -6053,6 +6279,19 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   slider_color_pushed = true
  end
 
+ local cue_extra_colors = 0
+ if _is_cue_mode then
+  local cue_colors = settings.simple_mixer_cue_colors or {}
+  local cc = (cue_colors[r.GetTrackGUID(_cue_track)] or settings.simple_mixer_cue_fader_color or 0xE06C75FF)
+  local cr, cg, cb = r.ImGui_ColorConvertU32ToDouble4(cc)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), r.ImGui_ColorConvertDouble4ToU32(cr, cg, cb, 0.3))
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), r.ImGui_ColorConvertDouble4ToU32(cr, cg, cb, 0.4))
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), r.ImGui_ColorConvertDouble4ToU32(cr, cg, cb, 0.5))
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), cc)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), cc)
+  cue_extra_colors = 5
+ end
+
  local slider_start_x, slider_start_y = r.ImGui_GetCursorScreenPos(ctx)
  
  local show_meters = settings.simple_mixer_show_meters ~= false
@@ -6102,7 +6341,11 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local mx, my = r.ImGui_GetMousePos(ctx)
   if mx >= slider_start_x and mx <= slider_start_x + slider_actual_width and
      my >= slider_start_y and my <= slider_start_y + slider_height then
-   r.SetMediaTrackInfo_Value(track, "D_VOL", 1.0)
+   if _is_cue_mode then
+    CueBus.SetSendVolDb(track, _cue_track, 0.0)
+   else
+    r.SetMediaTrackInfo_Value(track, "D_VOL", 1.0)
+   end
    mixer_state.fader_reset_track = current_track_id
   end
  end
@@ -6118,9 +6361,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  if rv and mixer_state.fader_reset_track ~= current_track_id then
   local new_volume = 10.0 ^ (new_vol_db / 20.0)
   local delta_db = new_vol_db - volume_db
-  r.SetMediaTrackInfo_Value(track, "D_VOL", new_volume)
+  if _is_cue_mode then
+   CueBus.SetSendVolDb(track, _cue_track, new_vol_db)
+  else
+   r.SetMediaTrackInfo_Value(track, "D_VOL", new_volume)
+  end
   local track_guid = is_master and "master" or r.GetTrackGUID(track)
-  if mixer_state.linked_channels[track_guid] then
+  if not _is_cue_mode and mixer_state.linked_channels[track_guid] then
    for linked_guid, _ in pairs(mixer_state.linked_channels[track_guid]) do
     local linked_track = nil
     if linked_guid == "master" then
@@ -6841,6 +7088,9 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  end
  if is_locked then r.ImGui_BeginDisabled(ctx) end
 
+ if cue_extra_colors > 0 then
+  r.ImGui_PopStyleColor(ctx, cue_extra_colors)
+ end
  if slider_color_pushed then
   r.ImGui_PopStyleColor(ctx, 5)
  end
@@ -6909,6 +7159,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    r.ImGui_PopStyleColor(ctx, 1)
   else
    local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
+     local cue_mute = _is_cue_mode and CueBus.GetSendMute(track, _cue_track) or false
    local is_solo = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
    local rms_btn_width = (track_width - 6) / 3
 
@@ -6920,9 +7171,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
    r.ImGui_SameLine(ctx, 0, 3)
 
-   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), is_muted and 0xFF6666FF or rms_off_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), ((_is_cue_mode and cue_mute) or (not _is_cue_mode and is_muted)) and 0xFF6666FF or rms_off_color)
    if r.ImGui_Button(ctx, "M##rms_btm", rms_btn_width, 20) then
-    r.SetMediaTrackInfo_Value(track, "B_MUTE", is_muted and 0 or 1)
+     if _is_cue_mode then
+      CueBus.SetSendMute(track, _cue_track, not cue_mute)
+     else
+      r.SetMediaTrackInfo_Value(track, "B_MUTE", is_muted and 0 or 1)
+     end
    end
    r.ImGui_PopStyleColor(ctx, 1)
 
@@ -7466,6 +7721,7 @@ local function DrawSettingsWindow()
     { label = "Sends",    idx = 6 },
     { label = "Dividers", idx = 7 },
     { label = "Folders",  idx = 8 },
+    { label = "Cue Bus",  idx = 9 },
    }
    local _gap = 6
    local _active_color = 0x2D7FE6FF
@@ -8822,9 +9078,82 @@ local function DrawSettingsWindow()
      r.ImGui_EndTable(ctx)
     end
    end
-   
+
   end
-  
+
+  if mixer_state.settings_top_tab == 9 then
+   r.ImGui_Spacing(ctx)
+   if r.ImGui_BeginTable(ctx, "CueBusTable", 2, r.ImGui_TableFlags_None()) then
+    r.ImGui_TableSetupColumn(ctx, "col1", r.ImGui_TableColumnFlags_WidthStretch())
+    r.ImGui_TableSetupColumn(ctx, "col2", r.ImGui_TableColumnFlags_WidthStretch())
+
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    r.ImGui_Text(ctx, "Pre-fader sends:")
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_cue_send_prefader = r.ImGui_Checkbox(ctx, "##CuePrefader", settings.simple_mixer_cue_send_prefader ~= false)
+    if rv then SaveMixerSettings() end
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "When creating new sends to a CUE bus,\nuse pre-fader mode by default.")
+    end
+
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    r.ImGui_Text(ctx, "Cue fader color:")
+    r.ImGui_TableNextColumn(ctx)
+    r.ImGui_SetNextItemWidth(ctx, -1)
+    rv, settings.simple_mixer_cue_fader_color = r.ImGui_ColorEdit4(ctx, "##CueFaderColor", settings.simple_mixer_cue_fader_color or 0xE06C75FF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then SaveMixerSettings() end
+
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    r.ImGui_Text(ctx, "Active CUE bus:")
+    r.ImGui_TableNextColumn(ctx)
+    local cue_tracks = CueBus.ScanTracks()
+    if #cue_tracks == 0 then
+     r.ImGui_TextDisabled(ctx, "(geen CUE:-tracks)")
+    else
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     local active_guid = mixer_state.cue_mode_guid or ""
+     local active_label = "Main"
+     for _, ct in ipairs(cue_tracks) do
+      if ct.guid == active_guid then active_label = ct.label end
+     end
+     if r.ImGui_BeginCombo(ctx, "##cue_sel_settings", active_label) then
+      if r.ImGui_Selectable(ctx, "Main", active_guid == "") then
+       mixer_state.cue_mode_guid = ""
+       settings.simple_mixer_cue_mode_guid = ""
+       SaveMixerSettings()
+      end
+      for _, ct in ipairs(cue_tracks) do
+       if r.ImGui_Selectable(ctx, ct.label .. "##cueset_" .. ct.guid, active_guid == ct.guid) then
+        mixer_state.cue_mode_guid = ct.guid
+        settings.simple_mixer_cue_mode_guid = ct.guid
+        SaveMixerSettings()
+       end
+      end
+      r.ImGui_EndCombo(ctx)
+     end
+    end
+
+    r.ImGui_EndTable(ctx)
+   end
+
+   local cue_t = CueBus.GetActiveCueTrack()
+   if cue_t then
+    local project_tracks = GetProjectMixerTracks()
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+    if r.ImGui_Button(ctx, "Copy Main Mix to Cue", -1) then
+     CueBus.CopyFromMain(cue_t, project_tracks)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Copies the current D_VOL of every\nvisible track as send level to the active CUE bus.")
+    end
+   end
+  end
+
    end
   r.ImGui_EndChild(ctx)
   r.ImGui_PopFont(ctx)

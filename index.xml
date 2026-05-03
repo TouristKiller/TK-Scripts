@@ -204,7 +204,7 @@
 
 <category name="Mixer">
     <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
-        <version name="1.1.0" author="TouristKiller" time="2026-05-03T14:20:00Z">
+        <version name="1.1.1" author="TouristKiller" time="2026-05-03T15:30:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/icon_browser.lua</source>
@@ -213,6 +213,18 @@
             <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_VU_Meter.jsfx</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
             <changelog><![CDATA[
+   
+    v1.1.1:
+    + Added CUE Bus mode with active CUE track selection
+    + In CUE mode, the fader controls per-track send volume to the active CUE bus
+    + Added per-CUE color setting, linked to fader highlight and CUE badge
+    + Moved the CUE section to the bottom of the sidebar
+    + Replaced CUE selection dropdown in the sidebar with radio buttons
+    + Selected track label in the sidebar now uses the track color as background
+    + CUE badge is always visible on CUE tracks; active CUE shows a green indicator lamp
+    + Made CUE badge adaptive on narrow strips (CUE, C, or lamp only)
+    + In CUE mode, mute and pan are now per-send (cue-specific)
+
    v1.1.0:
     + Scalable fader knob via new "Knob Scale" slider (0.5x - 2.5x) in Fader Style section
     + Channel Outline: thin border on both sides of each strip with adjustable color, thickness, and optional track color
