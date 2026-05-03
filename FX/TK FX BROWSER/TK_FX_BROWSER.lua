@@ -1,8 +1,14 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.7.9
+-- @version 2.8.0
 -- @changelog:
 --[[ 
+    v2.8.0:
+        + Sends/Receives panel: Routing view now offers two modes via a Matrix / Hubs switcher. Hubs view groups all incoming sends per destination track (collapsable), with per-send Vol/Pan/Mute/Phase/Mono/Send mode/Delete controls and an "+ Add source..." button. Right-click a hub or click a source name to select that track in REAPER.
+        + Sends/Receives panel: new filter bar above both views with "Filter tracks..." search, "Only routed" (hide unrouted tracks), "Selected track only" (focus on rows/columns related to the current track), and "Group by folder" (matrix only, tints rows/columns per parent folder). Filter state is persisted.
+        + "Add as send" is now split into two explicit context menu items: "Add to new track as send (active track)" and "Add to new track as send (N selected tracks)". The second item only appears when one or more tracks are selected. The new send track receives a single send from each chosen source track.
+        + "Add as send" now prompts for the new send track's name (configurable: prompt / auto / custom suffix). New ROUTING tab in Settings exposes the folder toggle, folder name, and naming mode (folder name is SWS Auto Color/Icon/Layout friendly).
+
     v2.7.9:
         + Projects: new Producer Metadata editor (right-click project > Edit Metadata...). Music fields (Artist/Album/Title/Genre/Year/Comment) editable, with optional sync to RPP RENDER_METADATA when the project is active.
         + Projects: organization fields stored in sidecar project_metadata.json (Status: Idea/Tracking/Mixing/Mastering/Released, Rating 0-5, Client, Type: Single/Album/EP/Demo/Sound Design/Score/Other, Deadline, Tags).
@@ -1170,6 +1176,14 @@ function SetDefaultConfig()
         show_screenshot_settings = true,
         show_only_dropdown = false,
         create_sends_folder = false,
+        sends_folder_name = "SEND TRACK",
+        sends_track_name_mode = "prompt",
+        sends_track_name_custom = "Send",
+        routing_view_mode = "matrix",
+        routing_filter_text = "",
+        routing_only_routed = false,
+        routing_only_selected = false,
+        routing_group_by_folder = false,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
         font_size = 11,  -- Default font size
         custom_folder_use_default_font = true,
@@ -2325,6 +2339,157 @@ function CreateInstrumentTrack(plugin_name, midi_input_value)
     r.SetOnlyTrackSelected(new_track)
     
     r.UpdateArrange()
+end
+
+function GetSendTrackName(plugin_name)
+    local mode = config.sends_track_name_mode or "prompt"
+    local default_name = plugin_name .. " Send"
+    if mode == "auto" then
+        return default_name
+    elseif mode == "custom" then
+        local suffix = config.sends_track_name_custom or "Send"
+        if suffix == "" then return default_name end
+        return plugin_name .. " " .. suffix
+    else
+        local ok, retval = r.GetUserInputs("Name send track", 1, "Track name:,extrawidth=200", default_name)
+        if not ok then return nil end
+        local trimmed = retval and retval:match("^%s*(.-)%s*$") or ""
+        if trimmed == "" then return default_name end
+        return trimmed
+    end
+end
+
+function AddPluginAsSend(plugin_name, source_tracks)
+    if not source_tracks or #source_tracks == 0 then return end
+    local track_name = GetSendTrackName(plugin_name)
+    if not track_name then return end
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+
+    local track_count = r.CountTracks(0)
+    local insert_idx = track_count
+    local folder_name = config.sends_folder_name or "SEND TRACK"
+    local use_folder = config.create_sends_folder
+
+    if use_folder then
+        local folder_idx = -1
+        for k = 0, track_count - 1 do
+            local tr = r.GetTrack(0, k)
+            local _, nm = r.GetTrackName(tr)
+            if nm == folder_name and r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") == 1 then
+                folder_idx = k
+                break
+            end
+        end
+        if folder_idx >= 0 then
+            local last_in_folder_idx = track_count - 1
+            local depth = 1
+            for k = folder_idx + 1, track_count - 1 do
+                local tr = r.GetTrack(0, k)
+                local d = r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH")
+                depth = depth + d
+                if depth <= 0 then
+                    last_in_folder_idx = k
+                    break
+                end
+            end
+            insert_idx = last_in_folder_idx + 1
+            r.InsertTrackAtIndex(insert_idx, true)
+            local last_tr = r.GetTrack(0, last_in_folder_idx)
+            local last_depth = r.GetMediaTrackInfo_Value(last_tr, "I_FOLDERDEPTH")
+            if last_depth == -1 then
+                r.SetMediaTrackInfo_Value(last_tr, "I_FOLDERDEPTH", 0)
+            end
+            local new_tr = r.GetTrack(0, insert_idx)
+            r.SetMediaTrackInfo_Value(new_tr, "I_FOLDERDEPTH", -1)
+        else
+            r.InsertTrackAtIndex(track_count, true)
+            local f_tr = r.GetTrack(0, track_count)
+            r.GetSetMediaTrackInfo_String(f_tr, "P_NAME", folder_name, true)
+            r.SetMediaTrackInfo_Value(f_tr, "I_FOLDERDEPTH", 1)
+            r.InsertTrackAtIndex(track_count + 1, true)
+            insert_idx = track_count + 1
+            local new_tr = r.GetTrack(0, insert_idx)
+            r.SetMediaTrackInfo_Value(new_tr, "I_FOLDERDEPTH", -1)
+        end
+    else
+        r.InsertTrackAtIndex(track_count, true)
+        insert_idx = track_count
+    end
+
+    local send_track = r.GetTrack(0, insert_idx)
+    AddFXToTrack(send_track, plugin_name)
+    r.GetSetMediaTrackInfo_String(send_track, "P_NAME", track_name, true)
+
+    for _, src in ipairs(source_tracks) do
+        if src and r.ValidatePtr(src, "MediaTrack*") and src ~= send_track then
+            r.CreateTrackSend(src, send_track)
+        end
+    end
+
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Add " .. plugin_name .. " as send", -1)
+    r.UpdateArrange()
+end
+
+function CreateSendTargetTrack(track_name)
+    local track_count = r.CountTracks(0)
+    local insert_idx = track_count
+    local folder_name = config.sends_folder_name or "SEND TRACK"
+    local use_folder = config.create_sends_folder
+
+    if use_folder then
+        local folder_idx = -1
+        for k = 0, track_count - 1 do
+            local tr = r.GetTrack(0, k)
+            local _, nm = r.GetTrackName(tr)
+            if nm == folder_name and r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") == 1 then
+                folder_idx = k
+                break
+            end
+        end
+        if folder_idx >= 0 then
+            local last_in_folder_idx = track_count - 1
+            local depth = 1
+            for k = folder_idx + 1, track_count - 1 do
+                local tr = r.GetTrack(0, k)
+                local d = r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH")
+                depth = depth + d
+                if depth <= 0 then
+                    last_in_folder_idx = k
+                    break
+                end
+            end
+            insert_idx = last_in_folder_idx + 1
+            r.InsertTrackAtIndex(insert_idx, true)
+            local last_tr = r.GetTrack(0, last_in_folder_idx)
+            local last_depth = r.GetMediaTrackInfo_Value(last_tr, "I_FOLDERDEPTH")
+            if last_depth == -1 then
+                r.SetMediaTrackInfo_Value(last_tr, "I_FOLDERDEPTH", 0)
+            end
+            local new_tr = r.GetTrack(0, insert_idx)
+            r.SetMediaTrackInfo_Value(new_tr, "I_FOLDERDEPTH", -1)
+        else
+            r.InsertTrackAtIndex(track_count, true)
+            local f_tr = r.GetTrack(0, track_count)
+            r.GetSetMediaTrackInfo_String(f_tr, "P_NAME", folder_name, true)
+            r.SetMediaTrackInfo_Value(f_tr, "I_FOLDERDEPTH", 1)
+            r.InsertTrackAtIndex(track_count + 1, true)
+            insert_idx = track_count + 1
+            local new_tr = r.GetTrack(0, insert_idx)
+            r.SetMediaTrackInfo_Value(new_tr, "I_FOLDERDEPTH", -1)
+        end
+    else
+        r.InsertTrackAtIndex(track_count, true)
+        insert_idx = track_count
+    end
+
+    local send_track = r.GetTrack(0, insert_idx)
+    if track_name and track_name ~= "" then
+        r.GetSetMediaTrackInfo_String(send_track, "P_NAME", track_name, true)
+    end
+    return send_track
 end
 
 function BuildTypePriorityIndex()
@@ -5145,7 +5310,7 @@ function ShowConfigWindow()
         
         r.ImGui_Separator(ctx)
         do
-            local _tabs = {"GUI","VIEW","SCREENSHOTS","PLUGIN MANAGER","PATHS"}
+            local _tabs = {"GUI","VIEW","SCREENSHOTS","PLUGIN MGR","ROUTING","PATHS"}
             _G.settings_active_tab = _G.settings_active_tab or "GUI"
             local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
             local spacing = 4
@@ -6322,8 +6487,77 @@ function ShowConfigWindow()
             if r.ImGui_Button(ctx, "Reset", button_width, 20) then
                 ResetConfig()
             end
-        elseif _G.settings_active_tab == "PLUGIN MANAGER" then
+        elseif _G.settings_active_tab == "PLUGIN MGR" then
             ShowPluginManagerTab()
+        elseif _G.settings_active_tab == "ROUTING" then
+            NewSection("SENDS:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local ch_folder, v_folder = r.ImGui_Checkbox(ctx, "Create sends in folder", config.create_sends_folder)
+            if ch_folder then
+                config.create_sends_folder = v_folder
+                SaveConfig()
+            end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Sends folder name")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, 180)
+            local ch_name, v_name = r.ImGui_InputText(ctx, "##sends_folder_name", config.sends_folder_name or "SEND TRACK")
+            if ch_name then config.sends_folder_name = v_name end
+            r.ImGui_PopItemWidth(ctx)
+            if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) then SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Name of the folder/bus track that groups send tracks. Match this to your SWS Auto Color/Icon/Layout rule for automatic styling.")
+            end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Send track naming")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, 180)
+            local _send_modes = {"prompt", "auto", "custom"}
+            local _send_mode_labels = { prompt = "Prompt for name", auto = 'Auto ("<plugin> Send")', custom = "Custom suffix" }
+            local cur_mode = config.sends_track_name_mode or "prompt"
+            if r.ImGui_BeginCombo(ctx, "##sends_track_name_mode", _send_mode_labels[cur_mode] or cur_mode) then
+                for _, m in ipairs(_send_modes) do
+                    if r.ImGui_Selectable(ctx, _send_mode_labels[m], cur_mode == m) then
+                        config.sends_track_name_mode = m
+                        SaveConfig()
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_PopItemWidth(ctx)
+
+            if cur_mode == "custom" then
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+                r.ImGui_Text(ctx, "Custom suffix")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column2_width)
+                r.ImGui_PushItemWidth(ctx, 180)
+                local ch_sfx, v_sfx = r.ImGui_InputText(ctx, "##sends_track_name_custom", config.sends_track_name_custom or "Send")
+                if ch_sfx then config.sends_track_name_custom = v_sfx end
+                r.ImGui_PopItemWidth(ctx)
+                if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) then SaveConfig() end
+                r.ImGui_SameLine(ctx)
+                r.ImGui_Text(ctx, '= "<plugin> ' .. (config.sends_track_name_custom or "Send") .. '"')
+            end
+
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)
+            r.ImGui_Separator(ctx)
+            local button_width = (window_width - 20) / 3
+            if r.ImGui_Button(ctx, "Save", button_width, 20) then
+                SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then
+                config_open = false
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset", button_width, 20) then
+                ResetConfig()
+            end
         elseif _G.settings_active_tab == "PATHS" then
             NewSection("FX CHAINS:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -9528,109 +9762,382 @@ function ParseRPPHeader(rpp_path)
 end
 
 function IsSendTrack(track)
+    local folder_name = config.sends_folder_name or "SEND TRACK"
     local parent = r.GetParentTrack(track)
     if parent then
         local _, name = r.GetTrackName(parent)
-        return name == "SEND TRACK"
+        return name == folder_name
     end
     local _, name = r.GetTrackName(track)
-    return name == "SEND TRACK"
+    return name == folder_name
+end
+
+function BuildVisibleRoutingTracks()
+    local track_count = r.CountTracks(0)
+    local filter = (config.routing_filter_text or ""):lower()
+    local only_routed = config.routing_only_routed
+    local only_selected = config.routing_only_selected
+    local group_by_folder = config.routing_group_by_folder
+
+    local related = nil
+    if only_selected and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+        related = { [TRACK] = true }
+        local ns = r.GetTrackNumSends(TRACK, 0)
+        for i = 0, ns - 1 do
+            local d = r.GetTrackSendInfo_Value(TRACK, 0, i, "P_DESTTRACK")
+            if d then related[d] = true end
+        end
+        local nr = r.GetTrackNumSends(TRACK, -1)
+        for i = 0, nr - 1 do
+            local s = r.GetTrackSendInfo_Value(TRACK, -1, i, "P_SRCTRACK")
+            if s then related[s] = true end
+        end
+    end
+
+    local list = {}
+    for i = 0, track_count - 1 do
+        local tr = r.GetTrack(0, i)
+        local _, name = r.GetTrackName(tr)
+        local include = true
+        if filter ~= "" and not name:lower():find(filter, 1, true) then include = false end
+        if include and only_routed then
+            if r.GetTrackNumSends(tr, 0) == 0 and r.GetTrackNumSends(tr, -1) == 0 then
+                include = false
+            end
+        end
+        if include and only_selected then
+            if not (related and related[tr]) then include = false end
+        end
+        if include then
+            local folder_label = ""
+            local parent = r.GetParentTrack(tr)
+            if parent then
+                local _, pname = r.GetTrackName(parent)
+                folder_label = pname or ""
+            end
+            list[#list + 1] = { idx = i, track = tr, name = name, folder = folder_label }
+        end
+    end
+
+    if group_by_folder then
+        table.sort(list, function(a, b)
+            if a.folder == b.folder then return a.idx < b.idx end
+            if a.folder == "" then return false end
+            if b.folder == "" then return true end
+            return a.folder:lower() < b.folder:lower()
+        end)
+    end
+    return list
+end
+
+function DrawRoutingFilterBar(is_matrix)
+    r.ImGui_PushItemWidth(ctx, 160)
+    local ch_f, v_f = r.ImGui_InputTextWithHint(ctx, "##routing_filter", "Filter tracks...", config.routing_filter_text or "")
+    if ch_f then config.routing_filter_text = v_f end
+    if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) then SaveConfig() end
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_SameLine(ctx)
+    local ch1, v1 = r.ImGui_Checkbox(ctx, "Only routed", config.routing_only_routed and true or false)
+    if ch1 then config.routing_only_routed = v1; SaveConfig() end
+    r.ImGui_SameLine(ctx)
+    local ch2, v2 = r.ImGui_Checkbox(ctx, "Selected track only", config.routing_only_selected and true or false)
+    if ch2 then config.routing_only_selected = v2; SaveConfig() end
+    if is_matrix then
+        r.ImGui_SameLine(ctx)
+        local ch3, v3 = r.ImGui_Checkbox(ctx, "Group by folder", config.routing_group_by_folder and true or false)
+        if ch3 then config.routing_group_by_folder = v3; SaveConfig() end
+    end
 end
 
 function ShowRoutingMatrix()
+    DrawRoutingFilterBar(true)
+    r.ImGui_Separator(ctx)
+
+    local visible = BuildVisibleRoutingTracks()
+    local n = #visible
+    if n == 0 then
+        r.ImGui_TextDisabled(ctx, "No tracks match filter.")
+        return
+    end
+
     local max_name_width = 0
-    local track_count = r.CountTracks(0)
-    for i = 0, track_count - 1 do
-        local track = r.GetTrack(0, i)
-        local _, name = r.GetTrackName(track)
-        local text_width = r.ImGui_CalcTextSize(ctx, i+1 .. ": " .. name)
-        max_name_width = math.max(max_name_width, text_width)
+    for vi = 1, n do
+        local v = visible[vi]
+        local tw = r.ImGui_CalcTextSize(ctx, (v.idx + 1) .. ": " .. v.name)
+        if tw > max_name_width then max_name_width = tw end
     end
 
     local cell_size = 20
     local header_height = 20
     local left_margin = 20
-    local legend_width = max_name_width + 20  -- Extra ruimte voor padding
-    local matrix_width = (track_count + 1) * cell_size + left_margin + legend_width
-    local matrix_height = (track_count + 1) * cell_size + header_height
-    r.ImGui_Separator(ctx)
+    local legend_width = max_name_width + 20
+    local matrix_width = (n + 1) * cell_size + left_margin + legend_width
+    local matrix_height = (n + 1) * cell_size + header_height + 10
+
     local routing_open = r.ImGui_BeginChild(ctx, "RoutingMatrix", matrix_width, matrix_height)
     if routing_open then
-        for i = 0, track_count - 1 do
-            local x = (i + 1) * cell_size + left_margin
-            local y = 20
-            r.ImGui_SetCursorPos(ctx, x + 5, y)
-            r.ImGui_Text(ctx, tostring(i + 1))
+        local group_by_folder = config.routing_group_by_folder
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local origin_x, origin_y = r.ImGui_GetCursorScreenPos(ctx)
+
+        if group_by_folder then
+            local folder_palette = { 0x4444FF22, 0xFF884422, 0x44CC8822, 0xCC44CC22, 0xCCAA4422, 0x44AACC22 }
+            local fmap = {}
+            local fcount = 0
+            for vi = 1, n do
+                local fkey = visible[vi].folder ~= "" and visible[vi].folder or "__none__"
+                if not fmap[fkey] then
+                    fcount = fcount + 1
+                    fmap[fkey] = folder_palette[((fcount - 1) % #folder_palette) + 1]
+                end
+            end
+            for vi = 1, n do
+                local fkey = visible[vi].folder ~= "" and visible[vi].folder or "__none__"
+                local color = fmap[fkey]
+                if color then
+                    local row_y = origin_y + vi * cell_size + header_height
+                    r.ImGui_DrawList_AddRectFilled(draw_list, origin_x, row_y, origin_x + matrix_width, row_y + cell_size, color)
+                    local col_x = origin_x + vi * cell_size + left_margin
+                    r.ImGui_DrawList_AddRectFilled(draw_list, col_x, origin_y, col_x + cell_size, origin_y + matrix_width, color)
+                end
+            end
         end
-        
-        for i = 0, track_count - 1 do
-            local y = (i + 1) * cell_size + header_height
+
+        for vi = 1, n do
+            local x = vi * cell_size + left_margin
+            r.ImGui_SetCursorPos(ctx, x + 5, 0)
+            r.ImGui_Text(ctx, tostring(visible[vi].idx + 1))
+        end
+        for vi = 1, n do
+            local y = vi * cell_size + header_height
             r.ImGui_SetCursorPos(ctx, 15, y + 2)
-            r.ImGui_Text(ctx, tostring(i + 1))
+            r.ImGui_Text(ctx, tostring(visible[vi].idx + 1))
         end
-        
-        for src = 0, track_count - 1 do
-            local src_track = r.GetTrack(0, src)
-            for dst = 0, track_count - 1 do
-                if src ~= dst then
-                    local dst_track = r.GetTrack(0, dst)
-                    local x = (dst + 1) * cell_size + left_margin
-                    local y = (src + 1) * cell_size + header_height
-                    
+
+        for si = 1, n do
+            local src_track = visible[si].track
+            for di = 1, n do
+                if si ~= di then
+                    local dst_track = visible[di].track
+                    local x = di * cell_size + left_margin
+                    local y = si * cell_size + header_height
                     r.ImGui_SetCursorPos(ctx, x, y)
-                    r.ImGui_PushID(ctx, string.format("cell_%d_%d", src, dst))
-                    
+                    r.ImGui_PushID(ctx, string.format("cell_%d_%d", visible[si].idx, visible[di].idx))
                     local send_idx = GetSendIndex(src_track, dst_track)
                     local has_send = send_idx >= 0
-                    
                     if has_send then
                         if IsSendTrack(dst_track) or IsSendTrack(src_track) then
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00BFFFFF)  -- Lichtblauw voor send tracks
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00BFFFFF)
                             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x33CCFFFF)
                             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x0099CCFF)
                         else
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)  -- Rood vlak
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)  -- Lichter rood bij hover
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xCC0000FF)   -- Donkerder rood bij klik
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF0000FF)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF3333FF)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xCC0000FF)
                         end
-                        
-                        if r.ImGui_Button(ctx, "##send", cell_size-4, cell_size-4) then
+                        if r.ImGui_Button(ctx, "##send", cell_size - 4, cell_size - 4) then
                             r.RemoveTrackSend(src_track, 0, send_idx)
                         end
                         r.ImGui_PopStyleColor(ctx, 3)
                     else
                         if IsSendTrack(dst_track) or IsSendTrack(src_track) then
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00BFFF33)  -- Lichtere lichtblauw voor lege send track cellen
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00BFFF33)
                             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x33CCFF66)
                         else
-                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x333333FF)  -- Donkergrijs vlak
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x333333FF)
                             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x666666FF)
                         end
-                        
-                        if r.ImGui_Button(ctx, "##empty", cell_size-4, cell_size-4) then
+                        if r.ImGui_Button(ctx, "##empty", cell_size - 4, cell_size - 4) then
                             r.CreateTrackSend(src_track, dst_track)
                         end
                         r.ImGui_PopStyleColor(ctx, 2)
                     end
-                    
                     r.ImGui_PopID(ctx)
                 end
             end
         end
 
-        local legend_x = (track_count + 1) * cell_size + left_margin + 20
-        r.ImGui_SetCursorPos(ctx, legend_x, 20)
+        local legend_x = (n + 1) * cell_size + left_margin + 20
+        r.ImGui_SetCursorPos(ctx, legend_x, 0)
         r.ImGui_Text(ctx, "Track Legend:")
-        for i = 0, track_count - 1 do
-            local track = r.GetTrack(0, i)
-            local _, name = r.GetTrackName(track)
-            r.ImGui_SetCursorPos(ctx, legend_x, 40 + (i * 20))
-            r.ImGui_Text(ctx, string.format("%d: %s", i + 1, name))
+        for vi = 1, n do
+            r.ImGui_SetCursorPos(ctx, legend_x, 20 + ((vi - 1) * 20))
+            r.ImGui_Text(ctx, string.format("%d: %s", visible[vi].idx + 1, visible[vi].name))
         end
-        
     end
     r.ImGui_EndChild(ctx)
 end
+
+function ShowRoutingHubs()
+    DrawRoutingFilterBar(false)
+    r.ImGui_Separator(ctx)
+
+    local filter = (config.routing_filter_text or ""):lower()
+    local only_selected = config.routing_only_selected
+    local track_count = r.CountTracks(0)
+
+    local hubs = {}
+    for i = 0, track_count - 1 do
+        local hub = r.GetTrack(0, i)
+        local nrec = r.GetTrackNumSends(hub, -1)
+        if nrec > 0 then
+            local sources = {}
+            for k = 0, nrec - 1 do
+                local src = r.GetTrackSendInfo_Value(hub, -1, k, "P_SRCTRACK")
+                if src and r.ValidatePtr(src, "MediaTrack*") then
+                    local send_idx = GetSendIndex(src, hub)
+                    if send_idx >= 0 then
+                        sources[#sources + 1] = { track = src, send_idx = send_idx }
+                    end
+                end
+            end
+            if #sources > 0 then
+                local _, hname = r.GetTrackName(hub)
+                hubs[#hubs + 1] = { hub = hub, hub_idx = i, name = hname, sources = sources }
+            end
+        end
+    end
+
+    if #hubs == 0 then
+        r.ImGui_TextDisabled(ctx, "No sends in project.")
+        return
+    end
+
+    for hi = 1, #hubs do
+        local h = hubs[hi]
+        local hub_match = filter == "" or h.name:lower():find(filter, 1, true)
+        local visible_sources = {}
+        for si = 1, #h.sources do
+            local s = h.sources[si]
+            local _, sname = r.GetTrackName(s.track)
+            local src_match = filter == "" or sname:lower():find(filter, 1, true)
+            if hub_match or src_match then
+                visible_sources[#visible_sources + 1] = { entry = s, name = sname }
+            end
+        end
+        if only_selected and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+            local include = (h.hub == TRACK)
+            if not include then
+                for si = 1, #h.sources do
+                    if h.sources[si].track == TRACK then include = true; break end
+                end
+            end
+            if not include then visible_sources = {} end
+        end
+        if #visible_sources > 0 then
+            r.ImGui_PushID(ctx, "hub_" .. h.hub_idx)
+            local is_st = IsSendTrack(h.hub)
+            if is_st then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00BFFF55)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x33CCFF77)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x0099CC99)
+            end
+            local label = string.format("%d: %s   (%d source%s)", h.hub_idx + 1, h.name, #visible_sources, #visible_sources == 1 and "" or "s")
+            local open = r.ImGui_TreeNode(ctx, label)
+            if is_st then r.ImGui_PopStyleColor(ctx, 3) end
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.SetOnlyTrackSelected(h.hub)
+                if r.SetMixerScroll then r.SetMixerScroll(h.hub) end
+                r.UpdateArrange()
+            end
+            if r.ImGui_BeginItemTooltip and r.ImGui_BeginItemTooltip(ctx) then
+                r.ImGui_Text(ctx, "Right-click: select track in REAPER")
+                r.ImGui_EndTooltip(ctx)
+            end
+            if open then
+                local win_w = r.ImGui_GetWindowWidth(ctx)
+                for si = 1, #visible_sources do
+                    local s = visible_sources[si].entry
+                    local sname = visible_sources[si].name
+                    r.ImGui_PushID(ctx, "src_" .. si)
+                    if r.ImGui_Selectable(ctx, sname, false, nil, win_w - 40) then
+                        r.SetOnlyTrackSelected(s.track)
+                        if r.SetMixerScroll then r.SetMixerScroll(s.track) end
+                        r.UpdateArrange()
+                    end
+                    r.ImGui_PushItemWidth(ctx, win_w - 60)
+                    local vol = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_VOL")
+                    local vol_db = vol > 0 and (20 * math.log(vol, 10)) or -150
+                    local ch_v, new_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
+                    if ch_v then
+                        local nv = math.exp(new_db * math.log(10) / 20)
+                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_VOL", nv)
+                    end
+                    local pan = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_PAN")
+                    local ch_p, new_pan = r.ImGui_SliderDouble(ctx, "Pan", pan, -1, 1, "%.2f")
+                    if ch_p then
+                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_PAN", new_pan)
+                    end
+                    r.ImGui_PopItemWidth(ctx)
+
+                    local mute = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MUTE") == 1
+                    local ch_m, new_m = r.ImGui_Checkbox(ctx, "Mute", mute)
+                    if ch_m then
+                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MUTE", new_m and 1 or 0)
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local phase = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_PHASE") == 1
+                    local ch_ph, new_ph = r.ImGui_Checkbox(ctx, "Phase", phase)
+                    if ch_ph then
+                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_PHASE", new_ph and 1 or 0)
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local mono = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MONO") == 1
+                    local ch_mo, new_mo = r.ImGui_Checkbox(ctx, "Mono", mono)
+                    if ch_mo then
+                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MONO", new_mo and 1 or 0)
+                    end
+                    r.ImGui_SameLine(ctx)
+                    local cur_mode = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "I_SENDMODE")
+                    local mode_names = { "Post-Fader", "Pre-Fader/Post-FX", "Pre-FX" }
+                    local mode_values = { 0, 3, 1 }
+                    local cur_idx = 1
+                    for k = 1, #mode_values do if mode_values[k] == cur_mode then cur_idx = k; break end end
+                    r.ImGui_PushItemWidth(ctx, 130)
+                    if r.ImGui_BeginCombo(ctx, "##mode", mode_names[cur_idx]) then
+                        for k = 1, #mode_names do
+                            if r.ImGui_Selectable(ctx, mode_names[k], cur_idx == k) then
+                                r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "I_SENDMODE", mode_values[k])
+                            end
+                        end
+                        r.ImGui_EndCombo(ctx)
+                    end
+                    r.ImGui_PopItemWidth(ctx)
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "X##del") then
+                        r.RemoveTrackSend(s.track, 0, s.send_idx)
+                    end
+                    r.ImGui_PopID(ctx)
+                    r.ImGui_Separator(ctx)
+                end
+                if r.ImGui_Button(ctx, "+ Add source...") then
+                    r.ImGui_OpenPopup(ctx, "AddSourceToHub")
+                end
+                if r.ImGui_BeginPopup(ctx, "AddSourceToHub") then
+                    r.ImGui_Text(ctx, "Add send from:")
+                    r.ImGui_Separator(ctx)
+                    local existing = {}
+                    for si = 1, #h.sources do existing[h.sources[si].track] = true end
+                    existing[h.hub] = true
+                    for ti = 0, track_count - 1 do
+                        local cand = r.GetTrack(0, ti)
+                        if not existing[cand] then
+                            local _, cname = r.GetTrackName(cand)
+                            if r.ImGui_Selectable(ctx, cname) then
+                                r.CreateTrackSend(cand, h.hub)
+                                r.ImGui_CloseCurrentPopup(ctx)
+                            end
+                        end
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+                r.ImGui_TreePop(ctx)
+            end
+            r.ImGui_PopID(ctx)
+        end
+    end
+end
+
 function GetSendIndex(src_track, dst_track)
     local num_sends = r.GetTrackNumSends(src_track, 0)
     for i = 0, num_sends - 1 do
@@ -10573,49 +11080,21 @@ function ShowPluginContextMenuInline(plugin_name)
         r.ImGui_Separator(ctx)
 
         if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-            if r.ImGui_MenuItem(ctx, "Add to new track as send") then
-                local track_idx = r.CountTracks(0)
-                r.InsertTrackAtIndex(track_idx, true)
-                local new_track = r.GetTrack(0, track_idx)
-
-                if config.create_sends_folder then
-                    local folder_idx = -1
-                    for k = 0, track_idx - 1 do
-                        local track = r.GetTrack(0, k)
-                        local _, name = r.GetTrackName(track)
-                        if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                            folder_idx = k
-                            break
-                        end
+            if r.ImGui_MenuItem(ctx, "Add to new track as send (active track)") then
+                AddPluginAsSend(plugin_name, { TRACK })
+            end
+            local sel_count = r.CountSelectedTracks(0)
+            if sel_count > 0 then
+                local lbl = (sel_count == 1)
+                    and "Add to new track as send (1 selected track)"
+                    or  ("Add to new track as send (" .. sel_count .. " selected tracks)")
+                if r.ImGui_MenuItem(ctx, lbl) then
+                    local sources = {}
+                    for i = 0, sel_count - 1 do
+                        sources[#sources + 1] = r.GetSelectedTrack(0, i)
                     end
-
-                    if folder_idx == -1 then
-                        r.InsertTrackAtIndex(track_idx, true)
-                        local folder_track = r.GetTrack(0, track_idx)
-                        r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
-                        r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
-                        folder_idx = track_idx
-                        track_idx = track_idx + 1
-                        new_track = r.GetTrack(0, track_idx)
-                    else
-                        local last_track_in_folder
-                        for k = folder_idx + 1, track_idx - 1 do
-                            local track = r.GetTrack(0, k)
-                            if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
-                                last_track_in_folder = track
-                            end
-                        end
-                        if last_track_in_folder then
-                            r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
-                        end
-                    end
-
-                    r.SetMediaTrackInfo_Value(new_track, "I_FOLDERDEPTH", -1)
+                    AddPluginAsSend(plugin_name, sources)
                 end
-
-                AddFXToTrack(new_track, plugin_name)
-                r.CreateTrackSend(TRACK, new_track)
-                r.GetSetMediaTrackInfo_String(new_track, "P_NAME", plugin_name .. " Send", true)
             end
         end
 
@@ -19442,48 +19921,39 @@ function ShowScreenshotWindow()
                         if r.ImGui_Button(ctx, "New Send") then
                             r.ImGui_OpenPopup(ctx, "SelectSendDestination")
                         end
-                        
+
                         if r.ImGui_BeginPopup(ctx, "SelectSendDestination") then
-                            r.ImGui_Text(ctx, "Select destination track:")
+                            r.ImGui_Text(ctx, "Create new send to:")
                             r.ImGui_Separator(ctx)
-                            
+
+                            if r.ImGui_Selectable(ctx, "+ New track...") then
+                                local default_name = "Send"
+                                local ok, retval = r.GetUserInputs("Name send track", 1, "Track name:,extrawidth=200", default_name)
+                                if ok then
+                                    local trimmed = retval and retval:match("^%s*(.-)%s*$") or ""
+                                    if trimmed == "" then trimmed = default_name end
+                                    r.Undo_BeginBlock()
+                                    r.PreventUIRefresh(1)
+                                    local new_track = CreateSendTargetTrack(trimmed)
+                                    if new_track and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                                        r.CreateTrackSend(TRACK, new_track)
+                                    end
+                                    r.PreventUIRefresh(-1)
+                                    r.Undo_EndBlock("Create new send track", -1)
+                                    r.UpdateArrange()
+                                end
+                                r.ImGui_CloseCurrentPopup(ctx)
+                            end
+
+                            r.ImGui_Separator(ctx)
+                            r.ImGui_Text(ctx, "Existing track:")
+
                             local track_count = r.CountTracks(0)
                             for i = 0, track_count - 1 do
                                 local dest_track = r.GetTrack(0, i)
                                 if dest_track and dest_track ~= TRACK then
                                     local _, track_name = r.GetTrackName(dest_track)
                                     if r.ImGui_Selectable(ctx, track_name) then
-                                        if config.create_sends_folder then
-                                            local folder_idx = -1
-                                            for j = 0, track_count - 1 do
-                                                local track = r.GetTrack(0, j)
-                                                local _, name = r.GetTrackName(track)
-                                                if name == "SEND TRACK" and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
-                                                    folder_idx = j
-                                                    break
-                                                end
-                                            end
-                                            
-                                            if folder_idx == -1 then
-                                                r.InsertTrackAtIndex(track_count, true)
-                                                local folder_track = r.GetTrack(0, track_count)
-                                                r.GetSetMediaTrackInfo_String(folder_track, "P_NAME", "SEND TRACK", true)
-                                                r.SetMediaTrackInfo_Value(folder_track, "I_FOLDERDEPTH", 1)
-                                                
-                                                local last_track_in_folder = nil
-                                                for j = folder_idx + 1, track_count - 1 do
-                                                    local track = r.GetTrack(0, j)
-                                                    if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == -1 then
-                                                        last_track_in_folder = track
-                                                    end
-                                                end
-                                                if last_track_in_folder then
-                                                    r.SetMediaTrackInfo_Value(last_track_in_folder, "I_FOLDERDEPTH", 0)
-                                                end
-                                                r.SetMediaTrackInfo_Value(dest_track, "I_FOLDERDEPTH", -1)
-                                            end
-                                        end
-                                        
                                         r.CreateTrackSend(TRACK, dest_track)
                                         r.ImGui_CloseCurrentPopup(ctx)
                                     end
@@ -19491,12 +19961,7 @@ function ShowScreenshotWindow()
                             end
                             r.ImGui_EndPopup(ctx)
                         end
-                        
-                        if r.ImGui_Checkbox(ctx, "Create sends in folder", config.create_sends_folder) then
-                            config.create_sends_folder = not config.create_sends_folder
-                            SaveConfig()
-                        end
-                        
+
                         r.ImGui_Dummy(ctx, 0, 10)  
                 
                         -- RECEIVES SECTIE
@@ -19633,13 +20098,38 @@ function ShowScreenshotWindow()
                     r.ImGui_Dummy(ctx, 0, 10) 
                 
                 if show_routing_matrix then
-                    ShowRoutingMatrix()
+                    if config.routing_view_mode == "hubs" then
+                        ShowRoutingHubs()
+                    else
+                        ShowRoutingMatrix()
+                    end
                 end
             r.ImGui_EndChild(ctx)
             r.ImGui_Separator(ctx)
-            if r.ImGui_Button(ctx, "Matrix View") then
-                  show_routing_matrix = not show_routing_matrix
-            end              
+            if r.ImGui_Button(ctx, show_routing_matrix and "Hide Routing" or "Show Routing") then
+                show_routing_matrix = not show_routing_matrix
+            end
+            if show_routing_matrix then
+                r.ImGui_SameLine(ctx)
+                local is_matrix = config.routing_view_mode ~= "hubs"
+                if is_matrix then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4477CCFF)
+                end
+                if r.ImGui_Button(ctx, "Matrix") then
+                    config.routing_view_mode = "matrix"
+                    SaveConfig()
+                end
+                if is_matrix then r.ImGui_PopStyleColor(ctx) end
+                r.ImGui_SameLine(ctx)
+                if not is_matrix then
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4477CCFF)
+                end
+                if r.ImGui_Button(ctx, "Hubs") then
+                    config.routing_view_mode = "hubs"
+                    SaveConfig()
+                end
+                if not is_matrix then r.ImGui_PopStyleColor(ctx) end
+            end
     end
 --------------------------------------------------------------------------------------
         -- ACTIONS GEDEELTE

@@ -1,8 +1,37 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.1.0
 -- @changelog 
 --[[
+  v1.1.0:
+  + Scalable fader knob via new "Knob Scale" slider (0.5x - 2.5x) in Fader Style section
+  + Channel Outline: thin border on both sides of each strip with adjustable color, thickness, and optional track color
+  + Outline applied to master and pinned channels as well
+  + Left Padding setting for spacing left of the first channel
+  + Folder-end icon (right-aligned) on the last track inside a folder
+  + Clicking the folder icon in a folder track header collapses/expands the folder
+  + FX slot height range extended to 30 px
+  + FX font size slider now works correctly
+  + Clicking empty mixer area deselects all tracks
+    + Send/Receive sectie volledig herwerkt met compacte rows en context-popup bediening
+    + Master hardware outputs toegevoegd in dezelfde routing-sectie met volume-popup
+    + Dynamische Send/Receive layout voor smalle strips (compact + rechtsklik voor detailacties)
+    + Send/Receive achtergrondkleur als losse setting toegevoegd
+    + Send/Receive handle verbeterd met "io" label
+    + FX slots handle verbeterd met "fx" label
+    + S/R hoogteberekening gefixt (incl. divider/handle budget) voor stabielere faderruimte
+    + Meter width limiet verhoogd tot 200 px
+    + Fader verbergt automatisch wanneer meter te breed wordt
+    + Meter render en loud-indicator breedte gecorrigeerd wanneer fader verborgen is
+    + Fixed ImGui style/pop mismatch in hidden-fader pad
+    + EQ curve visualizer toegevoegd als optionele strip boven de EQ controls
+    + EQ curve toggle in EQ header toegevoegd
+    + EQ curve kleurinstellingen toegevoegd (curve, grid, zero line, background)
+    + Band points op de EQ curve toegevoegd met hover tooltips (freq/gain)
+    + Sleepbare EQ band points toegevoegd: horizontaal = frequentie, verticaal = gain
+    + Shift fine adjust toegevoegd voor EQ point dragging
+    + HPF/LPF punten aparte kleuren gegeven en alleen horizontaal sleepbaar gemaakt
+
   v1.0.0:
   + Initial standalone release
   + Extracted from TK_TRANSPORT for independent use
@@ -12,7 +41,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('TK Mixer')
 
-local script_version = "1.0.0"
+local script_version = "1.1.0"
 
 local mixer_state = {}
 local TCP_ICON_EXT_KEY = "TK_TCP_ICON"
@@ -35,6 +64,9 @@ local simple_mixer_hidden_dividers = {}
 local simple_mixer_fx_handle_clicked = false
 local simple_mixer_track_fx_heights = {}
 local simple_mixer_fx_sync_resize = false
+local simple_mixer_track_sendrecv_heights = {}
+local simple_mixer_sendrecv_sync_resize = false
+local simple_mixer_sendrecv_handle_clicked = false
 local simple_mixer_fx_section_hovered = false
 local simple_mixer_editing_divider_guid = nil
 local simple_mixer_editing_divider_name = ""
@@ -64,6 +96,7 @@ mixer_state.ab_current = {}
 mixer_state.meter_data = simple_mixer_meter_data
 mixer_state.vu_data = simple_mixer_vu_data
 mixer_state.track_fx_heights = simple_mixer_track_fx_heights
+mixer_state.track_sendrecv_heights = simple_mixer_track_sendrecv_heights
 mixer_state.hidden_track_guids = {}
 mixer_state.fx_open_state = simple_mixer_fx_open_state
 mixer_state.editing_track_guid = nil
@@ -73,10 +106,13 @@ mixer_state.editing_divider_name = ""
 mixer_state.fx_section_hovered = false
 mixer_state.fx_handle_clicked = false
 mixer_state.fx_sync_resize = false
+mixer_state.sendrecv_sync_resize = false
+mixer_state.sendrecv_handle_clicked = false
 mixer_state.fader_reset_track = nil
 mixer_state.icon_target_track = nil
 mixer_state.last_clicked_track_idx = nil
 mixer_state.settings_tab = 0
+mixer_state.sendrecv_expanded = {}
 mixer_state.select_settings_tab = nil
 mixer_state.params_selected_track = nil
 mixer_state.param_learn_active = false
@@ -157,6 +193,18 @@ local settings = {
  simple_mixer_fx_show_bypass_button = true,
  simple_mixer_fx_section_collapsed = false,
  simple_mixer_fx_font_size = 12,
+ simple_mixer_show_sendrecv = false,
+ simple_mixer_sendrecv_show_receives = true,
+ simple_mixer_sendrecv_show_detail_mode = true,
+ simple_mixer_sendrecv_expand_by_default = false,
+ simple_mixer_sendrecv_section_height = 72,
+ simple_mixer_sendrecv_row_height = 16,
+ simple_mixer_sendrecv_color = 0x2F2F2FFF,
+ simple_mixer_sendrecv_send_color = 0x3D4A3AFF,
+ simple_mixer_sendrecv_receive_color = 0x3A3F4AFF,
+ simple_mixer_sendrecv_muted_color = 0x555555FF,
+ simple_mixer_sendrecv_text_color = 0xBBBBBBFF,
+ simple_mixer_sendrecv_collapsed = false,
  simple_mixer_show_master = false,
  simple_mixer_master_position = "left",
  simple_mixer_show_track_buttons = true,
@@ -169,9 +217,15 @@ local settings = {
  simple_mixer_divider_text_use_track_color = true,
  simple_mixer_divider_text_custom_color = 0xFFFFFFFF,
  simple_mixer_divider_width = 20,
+ simple_mixer_track_separator_enabled = false,
+ simple_mixer_track_separator_use_track_color = false,
+ simple_mixer_track_separator_color = 0x606060FF,
+ simple_mixer_track_separator_thickness = 1.0,
  simple_mixer_track_buttons_height = 16,
  simple_mixer_channel_rounding = 0,
+ simple_mixer_left_padding = 0,
  simple_mixer_show_folder_groups = false,
+ simple_mixer_show_folder_group_lines = false,
  simple_mixer_show_pinned_first = false,
  simple_mixer_show_track_icons = true,
  simple_mixer_track_icon_opacity = 0.3,
@@ -208,6 +262,8 @@ local settings = {
  simple_mixer_vu_show_db = true,
  simple_mixer_vu_integration_time = 300,
  simple_mixer_vu_needle_color = 0xDDDDDDFF,
+ simple_mixer_modules_scroll_enabled = false,
+ simple_mixer_modules_scroll_height = 120,
  simple_mixer_show_compressor = false,
  simple_mixer_comp_height = 140,
  simple_mixer_comp_bg_color = 0x2A2A3AFF,
@@ -222,7 +278,7 @@ local settings = {
  simple_mixer_comp_active_color = 0x00AA44FF,
  simple_mixer_comp_show_gr_meter = true,
  simple_mixer_comp_show_labels = true,
- simple_mixer_comp_auto_insert = true,
+ simple_mixer_comp_auto_insert = false,
  simple_mixer_show_limiter = false,
  simple_mixer_lim_height = 90,
  simple_mixer_lim_bg_color = 0x2A1A2AFF,
@@ -236,7 +292,7 @@ local settings = {
  simple_mixer_lim_active_color = 0x00AA44FF,
  simple_mixer_lim_show_gr_meter = true,
  simple_mixer_lim_show_labels = true,
- simple_mixer_lim_auto_insert = true,
+ simple_mixer_lim_auto_insert = false,
  simple_mixer_show_eq = false,
  simple_mixer_eq_bg_color = 0x1A2A2AFF,
  simple_mixer_eq_header_color = 0x3A5A5AFF,
@@ -250,6 +306,11 @@ local settings = {
  simple_mixer_eq_lmf_bg = 0xFFAA4418,
  simple_mixer_eq_hmf_bg = 0x66FF6618,
  simple_mixer_eq_hf_bg = 0x6666FF18,
+ simple_mixer_eq_curve_view_tracks = {},
+ simple_mixer_eq_curve_color = 0x66DDEEC0,
+ simple_mixer_eq_curve_bg_color = 0x0D1A1AFF,
+ simple_mixer_eq_curve_grid_color = 0x33333388,
+ simple_mixer_eq_curve_zero_color = 0x555555FF,
  simple_mixer_sidebar_collapsed = true,
  simple_mixer_sidebar_mode = "settings",
  simple_mixer_sidebar_text = "",
@@ -269,7 +330,7 @@ local settings = {
  simple_mixer_font_name = "Arial",
  simple_mixer_button_font_name = "Arial",
  simple_mixer_remember_state = true,
- simple_mixer_channel_width = 70,
+ simple_mixer_channel_width = 120,
  simple_mixer_track_name_centered = false,
  simple_mixer_rms_position = "top",
  simple_mixer_auto_all = false,
@@ -285,6 +346,7 @@ local settings = {
  simple_mixer_fader_bg_glow_color = 0x00FFFF40,
  simple_mixer_fader_style = 0,
  simple_mixer_fader_cyberpunk_color = 0x00FFFFFF,
+ simple_mixer_fader_handle_scale = 1.0,
  simple_mixer_show_gain_staging = true,
  simple_mixer_hide_tcp_icons = false,
  simple_mixer_track_icon_position = "overlay",
@@ -811,6 +873,7 @@ end
 local function InsertChannelStripFX(track, track_guid)
  local fx_index = r.TrackFX_AddByName(track, "JS:TK_ChannelStrip", false, -1)
  if fx_index >= 0 then
+    r.TrackFX_Show(track, fx_index, 0)
   r.TrackFX_SetEnabled(track, fx_index, true)
   channelstrip_fx_cache[track_guid] = {fx_index = fx_index}
   local routing_order = settings.simple_mixer_strip_routing_order or 0
@@ -1700,6 +1763,7 @@ function Trim.InsertFX(track, track_guid)
  end
  local fx_index = r.TrackFX_AddByName(track, "JS:TK_Trim", false, insert_pos)
  if fx_index >= 0 then
+    r.TrackFX_Show(track, fx_index, 0)
   r.TrackFX_SetEnabled(track, fx_index, true)
   Trim.fx_cache[track_guid] = {fx_index = fx_index}
  end
@@ -2012,6 +2076,149 @@ function EQ.DrawFilterRow(ctx, draw_list, x, y, width, row_height, track, fx_ind
  end
 end
 
+local function EQ_BellDB(freq, f0, gain, q)
+ if f0 <= 0 or gain == 0 then return 0 end
+ local d = freq / f0 - f0 / freq
+ return gain / (1 + q * q * d * d)
+end
+
+local function EQ_ShelfDB(freq, f0, gain, is_low)
+ if f0 <= 0 or gain == 0 then return 0 end
+ local ratio = is_low and (freq / f0) or (f0 / freq)
+ local r2 = ratio * ratio
+ return gain / (1 + r2 * r2)
+end
+
+local function EQ_FilterDB(freq, f0, is_hpf)
+ if f0 <= 0 then return 0 end
+ local ratio = is_hpf and (f0 / freq) or (freq / f0)
+ local r2 = ratio * ratio
+ return 10 * math.log(1 / (1 + r2 * r2)) / math.log(10)
+end
+
+function EQ.DrawCurve(ctx, draw_list, x, y, width, height, track, fx_index)
+ local bg = settings.simple_mixer_eq_curve_bg_color or 0x0D1A1AFF
+ r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg)
+ local cy = y + height * 0.5
+ local max_db = 14
+ local px_per_db = height * 0.5 / max_db
+ r.ImGui_DrawList_AddLine(draw_list, x, cy, x + width, cy, settings.simple_mixer_eq_curve_zero_color or 0x555555FF, 1)
+ local log_min = math.log(20)
+ local log_max = math.log(20000)
+ for _, db_mark in ipairs({-12, -6, 6, 12}) do
+  local gy = cy - db_mark * px_per_db
+  r.ImGui_DrawList_AddLine(draw_list, x, gy, x + width, gy, settings.simple_mixer_eq_curve_grid_color or 0x33333388, 1)
+ end
+ for _, fm in ipairs({100, 1000, 10000}) do
+  local fx = x + (math.log(fm) - log_min) / (log_max - log_min) * width
+  r.ImGui_DrawList_AddLine(draw_list, fx, y, fx, y + height, settings.simple_mixer_eq_curve_grid_color or 0x33333388, 1)
+ end
+ local hpf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 0)
+ local hpf_on   = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 1)
+ local lf_freq  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 2)
+ local lf_gain  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 3)
+ local lf_q     = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 4)
+ local lf_bell  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 16) > 0.5
+ local lmf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 5)
+ local lmf_gain = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 6)
+ local lmf_q    = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 7)
+ local hmf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 8)
+ local hmf_gain = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 9)
+ local hmf_q    = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 10)
+ local hf_freq  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 11)
+ local hf_gain  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 12)
+ local hf_q     = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 13)
+ local hf_bell  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 17) > 0.5
+ local lpf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 14)
+ local lpf_on   = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 15)
+ local function calc_db(freq)
+  local db = 0
+  if hpf_on > 0.5 then db = db + EQ_FilterDB(freq, hpf_freq, true) end
+  db = db + (lf_bell and EQ_BellDB(freq, lf_freq, lf_gain, lf_q) or EQ_ShelfDB(freq, lf_freq, lf_gain, true))
+  db = db + EQ_BellDB(freq, lmf_freq, lmf_gain, lmf_q)
+  db = db + EQ_BellDB(freq, hmf_freq, hmf_gain, hmf_q)
+  db = db + (hf_bell and EQ_BellDB(freq, hf_freq, hf_gain, hf_q) or EQ_ShelfDB(freq, hf_freq, hf_gain, false))
+  if lpf_on > 0.5 then db = db + EQ_FilterDB(freq, lpf_freq, false) end
+  return math.max(-max_db, math.min(max_db, db))
+ end
+ local n = math.max(40, math.floor(width))
+ local curve_col = settings.simple_mixer_eq_curve_color or 0x66DDEEC0
+ local prev_px, prev_py = nil, nil
+ for i = 0, n do
+  local t = i / n
+  local freq = math.exp(log_min + t * (log_max - log_min))
+  local db = calc_db(freq)
+  local px = x + t * width
+  local py = cy - db * px_per_db
+  if prev_px then
+   r.ImGui_DrawList_AddLine(draw_list, prev_px, prev_py, px, py, curve_col, 1.5)
+  end
+  prev_px, prev_py = px, py
+ end
+ local bands = {
+    { label = "HPF", freq = hpf_freq, gain = nil,      active = hpf_on > 0.5,  dot_col = 0xFF6644FF, freq_idx = STRIP_OFFSET.EQ + 0,  freq_min = 20,   freq_max = 500,   gain_idx = nil },
+    { label = "LF",  freq = lf_freq,  gain = lf_gain,  active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 2,  freq_min = 40,   freq_max = 600,   gain_idx = STRIP_OFFSET.EQ + 3 },
+    { label = "LMF", freq = lmf_freq, gain = lmf_gain, active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 5,  freq_min = 200,  freq_max = 2000,  gain_idx = STRIP_OFFSET.EQ + 6 },
+    { label = "HMF", freq = hmf_freq, gain = hmf_gain, active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 8,  freq_min = 1000, freq_max = 8000,  gain_idx = STRIP_OFFSET.EQ + 9 },
+    { label = "HF",  freq = hf_freq,  gain = hf_gain,  active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 11, freq_min = 2000, freq_max = 16000, gain_idx = STRIP_OFFSET.EQ + 12 },
+    { label = "LPF", freq = lpf_freq, gain = nil,      active = lpf_on > 0.5,  dot_col = 0x44AAFFFF, freq_idx = STRIP_OFFSET.EQ + 14, freq_min = 4000, freq_max = 20000, gain_idx = nil },
+ }
+ local dot_r = 3
+ for _, band in ipairs(bands) do
+  if band.active and band.freq >= 20 and band.freq <= 20000 then
+   local t = (math.log(band.freq) - log_min) / (log_max - log_min)
+   local bx = x + t * width
+   local by = cy - calc_db(band.freq) * px_per_db
+   r.ImGui_DrawList_AddCircleFilled(draw_list, bx, by, dot_r, band.dot_col, 12)
+   r.ImGui_DrawList_AddCircle(draw_list, bx, by, dot_r + 1, curve_col, 12, 1)
+   local hit = dot_r + 4
+   r.ImGui_SetCursorScreenPos(ctx, bx - hit, by - hit)
+   r.ImGui_InvisibleButton(ctx, "##eqdot_" .. band.label, hit * 2, hit * 2)
+     if r.ImGui_IsItemActive(ctx) then
+        local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
+        local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+        local freq_scale = shift and 0.25 or 1.0
+        local gain_scale = shift and 0.02 or 0.08
+        local disp_freq = band.freq
+        local disp_gain = band.gain
+        local changed = false
+        if math.abs(dx) > 0 then
+         local band_log_min = math.log(band.freq_min)
+         local band_log_max = math.log(band.freq_max)
+         local band_t = (math.log(math.max(band.freq_min, math.min(band.freq_max, band.freq))) - band_log_min) / (band_log_max - band_log_min)
+         local new_t = math.max(0, math.min(1, band_t + (dx / math.max(1, width)) * freq_scale))
+         local new_freq = math.exp(band_log_min + new_t * (band_log_max - band_log_min))
+         local freq_norm = (new_freq - band.freq_min) / (band.freq_max - band.freq_min)
+         r.TrackFX_SetParamNormalized(track, fx_index, band.freq_idx, math.max(0, math.min(1, freq_norm)))
+         disp_freq = new_freq
+         changed = true
+        end
+        if band.gain_idx and math.abs(dy) > 0 then
+            local new_gain = math.max(-12, math.min(12, (band.gain or 0) - dy * gain_scale))
+            local gain_norm = (new_gain + 12) / 24
+            r.TrackFX_SetParamNormalized(track, fx_index, band.gain_idx, math.max(0, math.min(1, gain_norm)))
+            disp_gain = new_gain
+            changed = true
+        end
+        if changed then
+         r.ImGui_ResetMouseDragDelta(ctx, 0)
+        end
+        if disp_gain then
+         r.ImGui_SetTooltip(ctx, string.format("%s:  %.0f Hz  /  %.1f dB", band.label, disp_freq, disp_gain))
+        else
+         r.ImGui_SetTooltip(ctx, string.format("%s:  %.0f Hz", band.label, disp_freq))
+        end
+     elseif r.ImGui_IsItemHovered(ctx) then
+        if band.gain then
+         r.ImGui_SetTooltip(ctx, string.format("%s:  %.0f Hz  /  %.1f dB", band.label, band.freq, band.gain))
+        else
+         r.ImGui_SetTooltip(ctx, string.format("%s:  %.0f Hz", band.label, band.freq))
+        end
+     end
+  end
+ end
+end
+
 function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
  if not settings.simple_mixer_show_eq or not track then return 0 end
  local fx_index = EQ.FindFX(track, track_guid)
@@ -2020,7 +2227,10 @@ function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
  local header_color = settings.simple_mixer_eq_header_color or 0x3A5A5AFF
  local text_color = settings.simple_mixer_eq_text_color or 0xAAAAAAFF
  local header_height, row_height, filter_row_height = 14, 32, 34
- local eq_height = header_height + 4 + (row_height * 4) + filter_row_height + 4
+ local curve_height = 45
+ settings.simple_mixer_eq_curve_view_tracks = settings.simple_mixer_eq_curve_view_tracks or {}
+ local show_curve = settings.simple_mixer_eq_curve_view_tracks[track_guid] == true
+ local eq_height = header_height + 4 + (show_curve and curve_height + 4 or 0) + (row_height * 4) + filter_row_height + 4
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + eq_height, bg_color, 3)
  r.ImGui_DrawList_AddCircleFilled(draw_list, x + width * 0.75, y + eq_height * 0.3, width * 0.35, 0xFFFFFF04, 24)
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + header_height, header_color, 3, r.ImGui_DrawFlags_RoundCornersTop())
@@ -2028,7 +2238,7 @@ function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
  r.ImGui_DrawList_AddText(draw_list, x + (width - header_w) / 2, y, 0xFFFFFFFF, "EQ")
  if has_eq then
   r.ImGui_SetCursorScreenPos(ctx, x + 12, y)
-  if r.ImGui_InvisibleButton(ctx, "##eq_header_" .. track_guid, width - 24, header_height) then
+  if r.ImGui_InvisibleButton(ctx, "##eq_header_" .. track_guid, width - 34, header_height) then
    local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
    r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
   end
@@ -2049,6 +2259,18 @@ function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
   r.ImGui_SetCursorScreenPos(ctx, x + width - 10, y + 2)
   if r.ImGui_InvisibleButton(ctx, "##eq_bypass_" .. track_guid, btn_size, btn_size) then
    r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.EQ_BYPASS, is_enabled and 0 or 1)
+  end
+  local curve_btn_col = show_curve and 0x4488FFFF or 0x444444FF
+  r.ImGui_DrawList_AddRectFilled(draw_list, x + width - 21, y + 2, x + width - 13, y + 10, curve_btn_col, 2)
+  local tilde_w = r.ImGui_CalcTextSize(ctx, "~")
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, 7, x + width - 21 + (8 - tilde_w * (7 / r.ImGui_GetFontSize(ctx))) * 0.5, y + 1, 0xFFFFFFFF, "~")
+  r.ImGui_SetCursorScreenPos(ctx, x + width - 21, y + 2)
+  if r.ImGui_InvisibleButton(ctx, "##eq_curve_toggle_" .. track_guid, btn_size, btn_size) then
+    settings.simple_mixer_eq_curve_view_tracks[track_guid] = not show_curve
+    SaveMixerSettings()
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+   r.ImGui_SetTooltip(ctx, show_curve and "Verberg EQ curve" or "Toon EQ curve")
   end
   r.ImGui_DrawList_AddRectFilled(draw_list, x + 2, y + 2, x + 10, y + 10, 0x333333FF, 2)
   r.ImGui_SetCursorScreenPos(ctx, x + 2, y + 2)
@@ -2072,7 +2294,13 @@ function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
  local hmf_bg = settings.simple_mixer_eq_hmf_bg or 0x66FF6618
  local lmf_bg = settings.simple_mixer_eq_lmf_bg or 0xFFAA4418
  local lf_bg = settings.simple_mixer_eq_lf_bg or 0xFF666618
- local row_start = y + header_height + 4
+ local content_y = y + header_height + 4
+ if show_curve then
+  EQ.DrawCurve(ctx, draw_list, x + 2, content_y, width - 4, curve_height, track, fx_index)
+  r.ImGui_DrawList_AddRect(draw_list, x + 2, content_y, x + width - 2, content_y + curve_height, 0x333333FF, 2, 0, 1)
+  content_y = content_y + curve_height + 4
+ end
+ local row_start = content_y
  EQ.DrawBandRow(ctx, draw_list, x, row_start, width, row_height, track, fx_index, STRIP_OFFSET.EQ + 11, STRIP_OFFSET.EQ + 12, STRIP_OFFSET.EQ + 13, "HF", hf_bg, 2000, 16000, true, STRIP_OFFSET.EQ + 17)
  EQ.DrawBandRow(ctx, draw_list, x, row_start + row_height, width, row_height, track, fx_index, STRIP_OFFSET.EQ + 8, STRIP_OFFSET.EQ + 9, STRIP_OFFSET.EQ + 10, "HMF", hmf_bg, 1000, 8000, true, nil)
  EQ.DrawBandRow(ctx, draw_list, x, row_start + row_height * 2, width, row_height, track, fx_index, STRIP_OFFSET.EQ + 5, STRIP_OFFSET.EQ + 6, STRIP_OFFSET.EQ + 7, "LMF", lmf_bg, 200, 2000, true, nil)
@@ -2491,6 +2719,7 @@ end
 
 LoadMixerSettings()
 LoadPinnedParams()
+settings.simple_mixer_window_open = true
 
 local function UpdateVUData(track_guid, track)
  if not track then return nil end
@@ -4008,9 +4237,12 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    rv, settings.simple_mixer_show_fx_slots = r.ImGui_Checkbox(mixer_ctx, "FX##QT", settings.simple_mixer_show_fx_slots or false)
    if rv then changed = true end
    r.ImGui_TableNextColumn(mixer_ctx)
-   rv, settings.simple_mixer_show_master = r.ImGui_Checkbox(mixer_ctx, "Mstr##QT", settings.simple_mixer_show_master or false)
+   rv, settings.simple_mixer_show_sendrecv = r.ImGui_Checkbox(mixer_ctx, "Sends##QT", settings.simple_mixer_show_sendrecv or false)
    if rv then changed = true end
    r.ImGui_TableNextRow(mixer_ctx)
+   r.ImGui_TableNextColumn(mixer_ctx)
+   rv, settings.simple_mixer_show_master = r.ImGui_Checkbox(mixer_ctx, "Mstr##QT", settings.simple_mixer_show_master or false)
+   if rv then changed = true end
    r.ImGui_TableNextColumn(mixer_ctx)
    rv, settings.simple_mixer_show_track_icons = r.ImGui_Checkbox(mixer_ctx, "Icon##QT", settings.simple_mixer_show_track_icons ~= false)
    if rv then changed = true end
@@ -4028,6 +4260,36 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
     settings.simple_mixer_hide_all_dividers = not show_dividers
     changed = true
    end
+   r.ImGui_TableNextRow(mixer_ctx)
+   r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_eq = r.ImGui_Checkbox(mixer_ctx, "EQ##QT", settings.simple_mixer_show_eq or false)
+    if rv then
+     if settings.simple_mixer_show_eq then
+      settings.simple_mixer_comp_auto_insert = false
+      settings.simple_mixer_lim_auto_insert = false
+     end
+     changed = true
+    end
+   r.ImGui_TableNextColumn(mixer_ctx)
+   rv, settings.simple_mixer_show_compressor = r.ImGui_Checkbox(mixer_ctx, "Comp##QT", settings.simple_mixer_show_compressor or false)
+    if rv then
+     if settings.simple_mixer_show_compressor then
+      settings.simple_mixer_comp_auto_insert = false
+     end
+     changed = true
+    end
+   r.ImGui_TableNextRow(mixer_ctx)
+   r.ImGui_TableNextColumn(mixer_ctx)
+   rv, settings.simple_mixer_show_limiter = r.ImGui_Checkbox(mixer_ctx, "Lim##QT", settings.simple_mixer_show_limiter or false)
+    if rv then
+     if settings.simple_mixer_show_limiter then
+      settings.simple_mixer_lim_auto_insert = false
+     end
+     changed = true
+    end
+   r.ImGui_TableNextColumn(mixer_ctx)
+   rv, settings.simple_mixer_show_trim = r.ImGui_Checkbox(mixer_ctx, "Trim##QT", settings.simple_mixer_show_trim or false)
+   if rv then changed = true end
    r.ImGui_EndTable(mixer_ctx)
    if changed then SaveMixerSettings() end
   end
@@ -4145,12 +4407,16 @@ local function DrawRoutingIndicator(ctx, draw_list, x, y, width, track, track_gu
  local show_comp = settings.simple_mixer_show_compressor
  local show_lim = settings.simple_mixer_show_limiter
  if not (show_eq or show_comp or show_lim) then return 0 end
- local eq_bypassed = false
- local comp_bypassed = false
- local lim_bypassed = false
+ local has_strip_fx = false
+ local strip_enabled = false
+ local eq_bypassed = true
+ local comp_bypassed = true
+ local lim_bypassed = true
  if track then
   local fx_index = FindChannelStripFX(track, track_guid)
   if fx_index and fx_index >= 0 then
+     has_strip_fx = true
+     strip_enabled = r.TrackFX_GetEnabled(track, fx_index)
    eq_bypassed = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ_BYPASS) < 0.5
    comp_bypassed = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP_BYPASS) < 0.5
    lim_bypassed = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM_BYPASS) < 0.5
@@ -4187,14 +4453,18 @@ local function DrawRoutingIndicator(ctx, draw_list, x, y, width, track, track_gu
  local text_y = y + 9
  for i, lbl in ipairs(labels) do
   local is_visible = (lbl == "EQ" and show_eq) or (lbl == "Comp" and show_comp) or (lbl == "Limit" and show_lim)
+    local is_active = false
   local is_bypassed = (lbl == "EQ" and eq_bypassed) or (lbl == "Comp" and comp_bypassed) or (lbl == "Limit" and lim_bypassed)
+    if has_strip_fx and strip_enabled and not is_bypassed then
+     is_active = true
+    end
   local label_color
   if not is_visible then
    label_color = 0xFFFFFFFF
-  elseif is_bypassed then
-   label_color = 0xFF8800FF
-  else
+    elseif is_active then
    label_color = 0x00FF00FF
+    else
+     label_color = 0xFF8800FF
   end
   local lbl_w = r.ImGui_CalcTextSize(ctx, lbl) * scale
   r.ImGui_DrawList_AddTextEx(draw_list, nil, font_size, text_x, text_y, label_color, lbl)
@@ -4273,6 +4543,32 @@ local function DrawFolderIcon(draw_list, x, y, size, color)
  local tab_h = h * 0.22
  r.ImGui_DrawList_AddRectFilled(draw_list, fx, fy, fx + tab_w, fy + tab_h + 1, color, 1)
  r.ImGui_DrawList_AddRectFilled(draw_list, fx, fy + tab_h, fx + w, fy + h, color, 1)
+end
+
+local function DrawFolderEndIcon(draw_list, x, y, size, color)
+ local w = size * 0.95
+ local h = size * 0.7
+ local fx = x + (size - w) / 2
+ local fy = y + (size - h) / 2
+ local tab_w = w * 0.4
+ local tab_h = h * 0.22
+ r.ImGui_DrawList_AddRectFilled(draw_list, fx + w - tab_w, fy, fx + w, fy + tab_h + 1, color, 1)
+ r.ImGui_DrawList_AddRectFilled(draw_list, fx, fy + tab_h, fx + w, fy + h, color, 1)
+ local arrow_size = h * 0.35
+ local ax = fx + w * 0.5
+ local ay = fy + h * 0.55
+ r.ImGui_DrawList_AddTriangleFilled(draw_list, ax - arrow_size * 0.5, ay - arrow_size * 0.4, ax + arrow_size * 0.5, ay - arrow_size * 0.4, ax, ay + arrow_size * 0.5, color)
+end
+
+local function GetSeparatorColorForTrack(track, fallback)
+ if settings.simple_mixer_track_separator_use_track_color and track then
+  local tc = r.GetTrackColor(track)
+  if tc and tc ~= 0 then
+   local rv, gv, bv = r.ColorFromNative(tc)
+   return r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
+  end
+ end
+ return fallback or settings.simple_mixer_track_separator_color or 0x606060FF
 end
 
 local function GetTrackBlockEnd(start_idx)
@@ -4372,6 +4668,11 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  if settings.simple_mixer_show_eq then
   eq_module_height = 184 + 4
  end
+ if (settings.simple_mixer_modules_scroll_enabled or false) and (settings.simple_mixer_show_eq or settings.simple_mixer_show_compressor or settings.simple_mixer_show_limiter) then
+  comp_module_height = 0
+  lim_module_height = 0
+  eq_module_height = (settings.simple_mixer_modules_scroll_height or 120) + 4
+ end
  local rms_height = 0
  if settings.simple_mixer_show_rms then
   rms_height = 24
@@ -4404,6 +4705,18 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  if has_strip_modules then
   routing_indicator_height = 18 + 4
  end
+
+ local sendrecv_height = 0
+ local sendrecv_divider_height = 0
+ if settings.simple_mixer_show_sendrecv and not settings.simple_mixer_sendrecv_collapsed then
+    local sendrecv_section_height = mixer_state.track_sendrecv_heights[track_guid_for_fx] or settings.simple_mixer_sendrecv_section_height or 72
+    sendrecv_height = sendrecv_section_height + 4
+    sendrecv_divider_height = 6
+ end
+ local sendrecv_handle_height = 0
+ if settings.simple_mixer_show_sendrecv and show_fx_handle then
+    sendrecv_handle_height = settings.simple_mixer_sendrecv_collapsed and 12 or 8
+ end
  
  local fixed_padding = 14
  if not settings.simple_mixer_show_fx_slots then
@@ -4411,7 +4724,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  elseif not settings.simple_mixer_fx_section_collapsed then
   fixed_padding = fixed_padding - 4
  end
- local slider_height = base_slider_height - track_fx_height - track_number_height - vu_meter_height - comp_module_height - lim_module_height - trim_module_height - eq_module_height - fx_divider_height - rms_height - pan_height - width_height - buttons_height - fx_handle_height - name_height - routing_indicator_height - icon_section_height - fixed_padding
+ local slider_height = base_slider_height - track_fx_height - track_number_height - vu_meter_height - comp_module_height - lim_module_height - trim_module_height - eq_module_height - fx_divider_height - sendrecv_height - sendrecv_divider_height - sendrecv_handle_height - rms_height - pan_height - width_height - buttons_height - fx_handle_height - name_height - routing_indicator_height - icon_section_height - fixed_padding
  if slider_height < 50 then slider_height = 50 end
  
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.simple_mixer_channel_rounding or 0)
@@ -4458,6 +4771,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    local icon_y = cy + (num_height - icon_size) / 2
    DrawFolderIcon(draw_list, icon_x, icon_y, icon_size, text_color)
   end
+  if folder_info.is_last_in_folder then
+   local icon_size = num_height - 6
+   local right_offset = is_locked and (icon_size + 6) or 3
+   local icon_x = cx + track_width - icon_size - right_offset
+   local icon_y = cy + (num_height - icon_size) / 2
+   DrawFolderEndIcon(draw_list, icon_x, icon_y, icon_size, text_color)
+  end
   r.ImGui_SetCursorScreenPos(ctx, cx, cy)
   r.ImGui_InvisibleButton(ctx, "##track_num_" .. track_number_str, track_width, num_height)
   if r.ImGui_BeginDragDropSource(ctx) then
@@ -4474,22 +4794,36 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    r.ImGui_EndDragDropTarget(ctx)
   end
   if r.ImGui_IsItemClicked(ctx, 0) then
-   local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
-   local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
-   local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
-   if shift and mixer_state.last_clicked_track_idx then
-    local from_idx = math.min(mixer_state.last_clicked_track_idx, track_idx)
-    local to_idx = math.max(mixer_state.last_clicked_track_idx, track_idx)
-    for i = from_idx, to_idx do
-     local t = r.GetTrack(0, i)
-     if t then r.SetTrackSelected(t, true) end
+   local folder_icon_clicked = false
+   if is_folder then
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    local icon_size = num_height - 6
+    local icon_x = cx + 3
+    local icon_y = cy + (num_height - icon_size) / 2
+    if mx >= icon_x and mx <= icon_x + icon_size and my >= icon_y and my <= icon_y + icon_size then
+     folder_icon_clicked = true
+     local folder_guid = r.GetTrackGUID(track)
+     mixer_state.collapsed_folders[folder_guid] = not (mixer_state.collapsed_folders[folder_guid] or false)
     end
-   elseif ctrl then
-    r.SetTrackSelected(track, not r.IsTrackSelected(track))
-   else
-    r.SetOnlyTrackSelected(track)
    end
-   mixer_state.last_clicked_track_idx = track_idx
+   if not folder_icon_clicked then
+    local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+    local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+    local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
+    if shift and mixer_state.last_clicked_track_idx then
+     local from_idx = math.min(mixer_state.last_clicked_track_idx, track_idx)
+     local to_idx = math.max(mixer_state.last_clicked_track_idx, track_idx)
+     for i = from_idx, to_idx do
+      local t = r.GetTrack(0, i)
+      if t then r.SetTrackSelected(t, true) end
+     end
+    elseif ctrl then
+     r.SetTrackSelected(track, not r.IsTrackSelected(track))
+    else
+     r.SetOnlyTrackSelected(track)
+    end
+    mixer_state.last_clicked_track_idx = track_idx
+   end
   end
   if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
    r.ImGui_OpenPopup(ctx, "FaderContextMenu##" .. idx)
@@ -4524,30 +4858,50 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    end
   end
   
-  if settings.simple_mixer_show_eq then
-   local eq_cx, eq_cy = r.ImGui_GetCursorScreenPos(ctx)
-   local track_guid = r.GetTrackGUID(track)
-   local eq_h = EQ.DrawModule(ctx, draw_list, eq_cx, eq_cy, track_width, 68, track_guid, track)
-   if eq_h > 0 then
-    r.ImGui_Dummy(ctx, track_width, eq_h)
+  if settings.simple_mixer_show_eq or settings.simple_mixer_show_compressor or settings.simple_mixer_show_limiter then
+   modules_scroll = settings.simple_mixer_modules_scroll_enabled or false
+   modules_h = settings.simple_mixer_modules_scroll_height or 120
+   modules_use_child = modules_scroll
+   modules_draw_list = draw_list
+   if modules_use_child then
+    modules_use_child = r.ImGui_BeginChild(ctx, "ModulesScroll##" .. idx, track_width, modules_h, 0, r.ImGui_WindowFlags_NoScrollbar())
+    if modules_use_child then
+    modules_draw_list = r.ImGui_GetWindowDrawList(ctx)
+         if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_None()) then
+            mixer_state.fx_section_hovered = true
+         end
+    end
    end
-  end
-  
-  if settings.simple_mixer_show_compressor then
-   local comp_cx, comp_cy = r.ImGui_GetCursorScreenPos(ctx)
-   local track_guid = r.GetTrackGUID(track)
-   local comp_h = DrawCompressorModule(ctx, draw_list, comp_cx, comp_cy, track_width, settings.simple_mixer_comp_height or 90, track_guid, track)
-   if comp_h > 0 then
-    r.ImGui_Dummy(ctx, track_width, comp_h)
+
+   if settings.simple_mixer_show_eq then
+    local eq_cx, eq_cy = r.ImGui_GetCursorScreenPos(ctx)
+    local track_guid = r.GetTrackGUID(track)
+    local eq_h = EQ.DrawModule(ctx, modules_draw_list, eq_cx, eq_cy, track_width, 68, track_guid, track)
+    if eq_h > 0 then
+     r.ImGui_Dummy(ctx, track_width, eq_h)
+    end
    end
-  end
-  
-  if settings.simple_mixer_show_limiter then
-   local lim_cx, lim_cy = r.ImGui_GetCursorScreenPos(ctx)
-   local track_guid = r.GetTrackGUID(track)
-   local lim_h = Limiter.DrawModule(ctx, draw_list, lim_cx, lim_cy, track_width, settings.simple_mixer_lim_height or 120, track_guid, track)
-   if lim_h > 0 then
-    r.ImGui_Dummy(ctx, track_width, lim_h)
+
+   if settings.simple_mixer_show_compressor then
+    local comp_cx, comp_cy = r.ImGui_GetCursorScreenPos(ctx)
+    local track_guid = r.GetTrackGUID(track)
+    local comp_h = DrawCompressorModule(ctx, modules_draw_list, comp_cx, comp_cy, track_width, settings.simple_mixer_comp_height or 90, track_guid, track)
+    if comp_h > 0 then
+     r.ImGui_Dummy(ctx, track_width, comp_h)
+    end
+   end
+
+   if settings.simple_mixer_show_limiter then
+    local lim_cx, lim_cy = r.ImGui_GetCursorScreenPos(ctx)
+    local track_guid = r.GetTrackGUID(track)
+    local lim_h = Limiter.DrawModule(ctx, modules_draw_list, lim_cx, lim_cy, track_width, settings.simple_mixer_lim_height or 120, track_guid, track)
+    if lim_h > 0 then
+     r.ImGui_Dummy(ctx, track_width, lim_h)
+    end
+   end
+
+   if modules_use_child then
+    r.ImGui_EndChild(ctx)
    end
   end
  else
@@ -4592,29 +4946,374 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    end
   end
   
-  if settings.simple_mixer_show_eq then
-   local eq_cx, eq_cy = r.ImGui_GetCursorScreenPos(ctx)
-   local eq_h = EQ.DrawModule(ctx, draw_list, eq_cx, eq_cy, track_width, 68, "master", track)
-   if eq_h > 0 then
-    r.ImGui_Dummy(ctx, track_width, eq_h)
+  if settings.simple_mixer_show_eq or settings.simple_mixer_show_compressor or settings.simple_mixer_show_limiter then
+   modules_scroll = settings.simple_mixer_modules_scroll_enabled or false
+   modules_h = settings.simple_mixer_modules_scroll_height or 120
+   modules_use_child = modules_scroll
+   modules_draw_list = draw_list
+   if modules_use_child then
+    modules_use_child = r.ImGui_BeginChild(ctx, "ModulesScroll##master", track_width, modules_h, 0, r.ImGui_WindowFlags_NoScrollbar())
+    if modules_use_child then
+    modules_draw_list = r.ImGui_GetWindowDrawList(ctx)
+         if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_None()) then
+            mixer_state.fx_section_hovered = true
+         end
+    end
+   end
+
+   if settings.simple_mixer_show_eq then
+    local eq_cx, eq_cy = r.ImGui_GetCursorScreenPos(ctx)
+    local eq_h = EQ.DrawModule(ctx, modules_draw_list, eq_cx, eq_cy, track_width, 68, "master", track)
+    if eq_h > 0 then
+     r.ImGui_Dummy(ctx, track_width, eq_h)
+    end
+   end
+
+   if settings.simple_mixer_show_compressor then
+    local comp_cx, comp_cy = r.ImGui_GetCursorScreenPos(ctx)
+    local comp_h = DrawCompressorModule(ctx, modules_draw_list, comp_cx, comp_cy, track_width, settings.simple_mixer_comp_height or 90, "master", track)
+    if comp_h > 0 then
+     r.ImGui_Dummy(ctx, track_width, comp_h)
+    end
+   end
+
+   if settings.simple_mixer_show_limiter then
+    local lim_cx, lim_cy = r.ImGui_GetCursorScreenPos(ctx)
+    local lim_h = Limiter.DrawModule(ctx, modules_draw_list, lim_cx, lim_cy, track_width, settings.simple_mixer_lim_height or 120, "master", track)
+    if lim_h > 0 then
+     r.ImGui_Dummy(ctx, track_width, lim_h)
+    end
+   end
+
+   if modules_use_child then
+    r.ImGui_EndChild(ctx)
    end
   end
-  
-  if settings.simple_mixer_show_compressor then
-   local comp_cx, comp_cy = r.ImGui_GetCursorScreenPos(ctx)
-   local comp_h = DrawCompressorModule(ctx, draw_list, comp_cx, comp_cy, track_width, settings.simple_mixer_comp_height or 90, "master", track)
-   if comp_h > 0 then
-    r.ImGui_Dummy(ctx, track_width, comp_h)
+ end
+
+ if settings.simple_mixer_show_sendrecv and not settings.simple_mixer_sendrecv_collapsed then
+    local sendrecv_section_height = mixer_state.track_sendrecv_heights[track_guid_for_fx] or settings.simple_mixer_sendrecv_section_height or 72
+  local sendrecv_row_height = settings.simple_mixer_sendrecv_row_height or 16
+  local show_receives = settings.simple_mixer_sendrecv_show_receives ~= false
+  local send_count = r.GetTrackNumSends(track, 0)
+  local receive_count = show_receives and r.GetTrackNumSends(track, -1) or 0
+  local hw_out_count = is_master and r.GetTrackNumSends(track, 1) or 0
+  local item_count = send_count + receive_count + hw_out_count
+  local section_id = is_master and "master" or idx
+
+  local sr_divider_x, sr_divider_y = r.ImGui_GetCursorScreenPos(ctx)
+  local sr_tr_color = r.GetTrackColor(track)
+  local sr_divider_color = 0x444444FF
+  if sr_tr_color and sr_tr_color ~= 0 then
+   local sr_r_val, sr_g_val, sr_b_val = r.ColorFromNative(sr_tr_color)
+   sr_divider_color = r.ImGui_ColorConvertDouble4ToU32(sr_r_val/255, sr_g_val/255, sr_b_val/255, 1.0)
+  end
+  local sr_draw_list = r.ImGui_GetWindowDrawList(ctx)
+  r.ImGui_DrawList_AddLine(sr_draw_list, sr_divider_x, sr_divider_y, sr_divider_x + track_width, sr_divider_y, sr_divider_color, 1)
+  r.ImGui_Dummy(ctx, 0, 2)
+
+  local sendrecv_bg = settings.simple_mixer_sendrecv_color or 0x2F2F2FFF
+  local send_color = settings.simple_mixer_sendrecv_send_color or 0x3D4A3AFF
+  local receive_color = settings.simple_mixer_sendrecv_receive_color or 0x3A3F4AFF
+  local muted_color = settings.simple_mixer_sendrecv_muted_color or 0x555555FF
+  local sendrecv_text_color = settings.simple_mixer_sendrecv_text_color or 0xBBBBBBFF
+
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), sendrecv_bg)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
+
+  if r.ImGui_BeginChild(ctx, "SendRecvSection##" .. section_id, track_width, sendrecv_section_height, 0, r.ImGui_WindowFlags_None()) then
+   if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_None()) then
+    mixer_state.fx_section_hovered = true
+   end
+
+   local function vol_to_db_text(vol)
+    if not vol or vol <= 0 then return "-inf" end
+    return string.format("%.1f", 20.0 * math.log(vol, 10))
+   end
+
+   local function clip_name(name, max_chars)
+    if not name or name == "" then return "(unnamed)" end
+    if #name <= max_chars then return name end
+    return name:sub(1, max_chars - 2) .. ".."
+   end
+
+   local track_guid = r.GetTrackGUID(track)
+   if not mixer_state.sendrecv_expanded[track_guid] then
+    mixer_state.sendrecv_expanded[track_guid] = {}
+   end
+   local track_expanded_state = mixer_state.sendrecv_expanded[track_guid]
+
+   for send_idx = 0, send_count - 1 do
+    r.ImGui_PushID(ctx, "sr_send_" .. send_idx)
+    local dest_track = r.GetTrackSendInfo_Value(track, 0, send_idx, "P_DESTTRACK")
+    local dest_name = ""
+    if dest_track then
+     local _, dn = r.GetTrackName(dest_track)
+     dest_name = dn or ""
+    end
+    local send_vol = r.GetTrackSendInfo_Value(track, 0, send_idx, "D_VOL")
+    local send_mute = r.GetTrackSendInfo_Value(track, 0, send_idx, "B_MUTE") == 1
+    local mode_val = math.floor(r.GetTrackSendInfo_Value(track, 0, send_idx, "I_SENDMODE") or 0)
+    local mode_txt = "POST"
+    if mode_val == 1 then mode_txt = "PRE" end
+    if mode_val == 3 then mode_txt = "PFX" end
+
+    local row_color = send_mute and muted_color or send_color
+    local compact_label = clip_name(dest_name, 12) .. "  " .. vol_to_db_text(send_vol) .. "dB"
+
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), row_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+    r.ImGui_Button(ctx, compact_label .. "##row", track_width, sendrecv_row_height)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Send to: " .. (dest_name ~= "" and dest_name or "(unnamed)") .. "\nMode: " .. mode_txt .. "\nLevel: " .. vol_to_db_text(send_vol) .. " dB\nState: " .. (send_mute and "Muted" or "Active") .. "\nRight-click for controls")
+    end
+    if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+     r.ImGui_OpenPopup(ctx, "SendMenu##" .. send_idx)
+    end
+    r.ImGui_PopStyleColor(ctx, 2)
+
+    if r.ImGui_BeginPopup(ctx, "SendMenu##" .. send_idx) then
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+     r.ImGui_Text(ctx, "Send to: " .. (dest_name ~= "" and dest_name or "(unnamed)"))
+     r.ImGui_Separator(ctx)
+
+     local send_vol_db = send_vol > 0 and (20.0 * math.log(send_vol, 10)) or -80.0
+     r.ImGui_Text(ctx, "Volume")
+     r.ImGui_SameLine(ctx, 0, 6)
+     r.ImGui_SetNextItemWidth(ctx, 160)
+     local _, new_vol_db = r.ImGui_SliderDouble(ctx, "##pm_sv_" .. send_idx, send_vol_db, -80.0, 12.0, "%.1f dB")
+     if new_vol_db ~= send_vol_db then
+      r.SetTrackSendInfo_Value(track, 0, send_idx, "D_VOL", new_vol_db > -80.0 and (10.0 ^ (new_vol_db / 20.0)) or 0.0)
+     end
+
+     r.ImGui_Text(ctx, "Mode  ")
+     r.ImGui_SameLine(ctx, 0, 6)
+     r.ImGui_SetNextItemWidth(ctx, 80)
+     if r.ImGui_BeginCombo(ctx, "##pm_mode_" .. send_idx, mode_txt) then
+      if r.ImGui_Selectable(ctx, "PRE", mode_val == 1) then r.SetTrackSendInfo_Value(track, 0, send_idx, "I_SENDMODE", 1) end
+      if r.ImGui_Selectable(ctx, "POST", mode_val == 0) then r.SetTrackSendInfo_Value(track, 0, send_idx, "I_SENDMODE", 0) end
+      if r.ImGui_Selectable(ctx, "PFX", mode_val == 3) then r.SetTrackSendInfo_Value(track, 0, send_idx, "I_SENDMODE", 3) end
+      r.ImGui_EndCombo(ctx)
+     end
+
+     r.ImGui_Separator(ctx)
+     if r.ImGui_MenuItem(ctx, send_mute and "Unmute Send" or "Mute Send") then
+      r.SetTrackSendInfo_Value(track, 0, send_idx, "B_MUTE", send_mute and 0 or 1)
+     end
+     if dest_track and r.ImGui_MenuItem(ctx, "Select Dest Track") then
+      r.SetOnlyTrackSelected(dest_track)
+     end
+     if r.ImGui_MenuItem(ctx, "Open Routing") then
+      r.SetOnlyTrackSelected(track)
+      r.Main_OnCommand(40293, 0)
+     end
+     r.ImGui_PopStyleColor(ctx)
+     r.ImGui_EndPopup(ctx)
+    end
+
+    r.ImGui_PopID(ctx)
+   end
+
+   if show_receives then
+    for recv_idx = 0, receive_count - 1 do
+     r.ImGui_PushID(ctx, "sr_recv_" .. recv_idx)
+     local src_track = r.GetTrackSendInfo_Value(track, -1, recv_idx, "P_SRCTRACK")
+     local src_name = ""
+     if src_track then
+      local _, sn = r.GetTrackName(src_track)
+      src_name = sn or ""
+     end
+     local recv_vol = r.GetTrackSendInfo_Value(track, -1, recv_idx, "D_VOL")
+     local recv_mute = r.GetTrackSendInfo_Value(track, -1, recv_idx, "B_MUTE") == 1
+
+     local row_color = recv_mute and muted_color or receive_color
+     local compact_label = clip_name(src_name, 12) .. "  " .. vol_to_db_text(recv_vol) .. "dB"
+
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), row_color)
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+     r.ImGui_Button(ctx, compact_label .. "##rrow", track_width, sendrecv_row_height)
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Receive from: " .. (src_name ~= "" and src_name or "(unnamed)") .. "\nLevel: " .. vol_to_db_text(recv_vol) .. " dB\nState: " .. (recv_mute and "Muted" or "Active") .. "\nRight-click for controls")
+     end
+     if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+      r.ImGui_OpenPopup(ctx, "RecvMenu##" .. recv_idx)
+     end
+     r.ImGui_PopStyleColor(ctx, 2)
+
+     if r.ImGui_BeginPopup(ctx, "RecvMenu##" .. recv_idx) then
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+      r.ImGui_Text(ctx, "Receive from: " .. (src_name ~= "" and src_name or "(unnamed)"))
+      r.ImGui_Separator(ctx)
+
+      local recv_vol_db = recv_vol > 0 and (20.0 * math.log(recv_vol, 10)) or -80.0
+      r.ImGui_Text(ctx, "Volume")
+      r.ImGui_SameLine(ctx, 0, 6)
+      r.ImGui_SetNextItemWidth(ctx, 160)
+      local _, new_vol_db = r.ImGui_SliderDouble(ctx, "##pm_rv_" .. recv_idx, recv_vol_db, -80.0, 12.0, "%.1f dB")
+      if new_vol_db ~= recv_vol_db then
+       r.SetTrackSendInfo_Value(track, -1, recv_idx, "D_VOL", new_vol_db > -80.0 and (10.0 ^ (new_vol_db / 20.0)) or 0.0)
+      end
+
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, recv_mute and "Unmute Receive" or "Mute Receive") then
+       r.SetTrackSendInfo_Value(track, -1, recv_idx, "B_MUTE", recv_mute and 0 or 1)
+      end
+      if src_track and r.ImGui_MenuItem(ctx, "Select Source Track") then
+       r.SetOnlyTrackSelected(src_track)
+      end
+      if r.ImGui_MenuItem(ctx, "Open Routing") then
+       r.SetOnlyTrackSelected(track)
+       r.Main_OnCommand(40293, 0)
+      end
+      r.ImGui_PopStyleColor(ctx)
+      r.ImGui_EndPopup(ctx)
+     end
+
+     r.ImGui_PopID(ctx)
+    end
+   end
+
+   for hw_idx = 0, hw_out_count - 1 do
+    r.ImGui_PushID(ctx, "sr_hw_" .. hw_idx)
+    local dst_chan = math.floor(r.GetTrackSendInfo_Value(track, 1, hw_idx, "I_DSTCHAN") or 0)
+    local _, hw_name = r.GetOutputChannelName(dst_chan)
+    if not hw_name or hw_name == "" then hw_name = "Out " .. (dst_chan + 1) end
+    local hw_vol = r.GetTrackSendInfo_Value(track, 1, hw_idx, "D_VOL")
+    local hw_mute = r.GetTrackSendInfo_Value(track, 1, hw_idx, "B_MUTE") == 1
+
+    local row_color = hw_mute and muted_color or send_color
+    local compact_label = clip_name(hw_name, 10) .. "  " .. vol_to_db_text(hw_vol) .. "dB"
+
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), row_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+    r.ImGui_Button(ctx, compact_label .. "##hwrow", track_width, sendrecv_row_height)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Hardware Output: " .. hw_name .. "\nChannel: " .. (dst_chan + 1) .. "\nLevel: " .. vol_to_db_text(hw_vol) .. " dB\nState: " .. (hw_mute and "Muted" or "Active") .. "\nRight-click for controls")
+    end
+    if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+     r.ImGui_OpenPopup(ctx, "HwMenu##" .. hw_idx)
+    end
+    r.ImGui_PopStyleColor(ctx, 2)
+
+    if r.ImGui_BeginPopup(ctx, "HwMenu##" .. hw_idx) then
+     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+     r.ImGui_Text(ctx, "HW Output: " .. hw_name)
+     r.ImGui_Separator(ctx)
+
+     local hw_vol_db = hw_vol > 0 and (20.0 * math.log(hw_vol, 10)) or -80.0
+     r.ImGui_Text(ctx, "Volume")
+     r.ImGui_SameLine(ctx, 0, 6)
+     r.ImGui_SetNextItemWidth(ctx, 160)
+     local _, new_hw_db = r.ImGui_SliderDouble(ctx, "##pm_hv_" .. hw_idx, hw_vol_db, -80.0, 12.0, "%.1f dB")
+     if new_hw_db ~= hw_vol_db then
+      r.SetTrackSendInfo_Value(track, 1, hw_idx, "D_VOL", new_hw_db > -80.0 and (10.0 ^ (new_hw_db / 20.0)) or 0.0)
+     end
+
+     r.ImGui_Separator(ctx)
+     if r.ImGui_MenuItem(ctx, hw_mute and "Unmute Output" or "Mute Output") then
+      r.SetTrackSendInfo_Value(track, 1, hw_idx, "B_MUTE", hw_mute and 0 or 1)
+     end
+     if r.ImGui_MenuItem(ctx, "Open Routing") then
+      r.SetOnlyTrackSelected(track)
+      r.Main_OnCommand(40293, 0)
+     end
+     r.ImGui_PopStyleColor(ctx)
+     r.ImGui_EndPopup(ctx)
+    end
+
+    r.ImGui_PopID(ctx)
+   end
+
+   if item_count == 0 then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), muted_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+    r.ImGui_Button(ctx, "No Sends/Receives", track_width, sendrecv_row_height)
+    r.ImGui_PopStyleColor(ctx, 2)
+   end
+
+   r.ImGui_EndChild(ctx)
+  end
+
+  r.ImGui_PopStyleVar(ctx)
+  r.ImGui_PopStyleColor(ctx, 1)
+ end
+
+ if settings.simple_mixer_show_sendrecv and show_fx_handle then
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+
+  local handle_height = 8
+  local btn_x, btn_y = r.ImGui_GetCursorScreenPos(ctx)
+  r.ImGui_Button(ctx, "##sendrecvhandle", track_width, handle_height)
+
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local line_y = btn_y + handle_height / 2
+
+  local handle_color = 0x888888FF
+  local track_color = r.GetTrackColor(track)
+  if track_color ~= 0 then
+   local rv, gv, bv = r.ColorFromNative(track_color)
+   handle_color = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
+  end
+
+  local io_label_color = (handle_color & 0xFFFFFF00) | 0xBB
+  r.ImGui_DrawList_AddText(draw_list, btn_x + 2, btn_y - 3, io_label_color, "IO")
+  r.ImGui_DrawList_AddLine(draw_list, btn_x + 20, line_y, btn_x + track_width - 4, line_y, handle_color, 3)
+
+  local ctrl_held = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+  if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Left()) and ctrl_held then
+   mixer_state.sendrecv_sync_resize = true
+   local my_height = mixer_state.track_sendrecv_heights[track_guid_for_fx] or settings.simple_mixer_sendrecv_section_height or 72
+   for guid, _ in pairs(mixer_state.track_sendrecv_heights) do
+    mixer_state.track_sendrecv_heights[guid] = my_height
+   end
+   settings.simple_mixer_sendrecv_section_height = my_height
+  end
+
+  local was_dragging = r.ImGui_IsItemActive(ctx) and r.ImGui_IsMouseDragging(ctx, r.ImGui_MouseButton_Left(), 3)
+  if was_dragging then
+   local _, dy = r.ImGui_GetMouseDelta(ctx)
+   if mixer_state.sendrecv_sync_resize or ctrl_held then
+    local current_height = settings.simple_mixer_sendrecv_section_height or 72
+    local new_height = math.max(30, math.min(300, current_height + dy))
+    settings.simple_mixer_sendrecv_section_height = new_height
+    for guid, _ in pairs(mixer_state.track_sendrecv_heights) do
+     mixer_state.track_sendrecv_heights[guid] = new_height
+    end
+   else
+    local current_height = mixer_state.track_sendrecv_heights[track_guid_for_fx] or settings.simple_mixer_sendrecv_section_height or 72
+    mixer_state.track_sendrecv_heights[track_guid_for_fx] = math.max(30, math.min(300, current_height + dy))
    end
   end
-  
-  if settings.simple_mixer_show_limiter then
-   local lim_cx, lim_cy = r.ImGui_GetCursorScreenPos(ctx)
-   local lim_h = Limiter.DrawModule(ctx, draw_list, lim_cx, lim_cy, track_width, settings.simple_mixer_lim_height or 120, "master", track)
-   if lim_h > 0 then
-    r.ImGui_Dummy(ctx, track_width, lim_h)
-   end
+
+  if r.ImGui_IsItemDeactivated(ctx) then
+   mixer_state.sendrecv_sync_resize = false
   end
+
+    if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Left()) and not r.ImGui_IsMouseDragging(ctx, r.ImGui_MouseButton_Left(), 3) then
+     mixer_state.sendrecv_handle_clicked = true
+    end
+
+    if r.ImGui_IsItemDeactivated(ctx) and mixer_state.sendrecv_handle_clicked then
+     if not r.ImGui_IsMouseDragging(ctx, r.ImGui_MouseButton_Left(), 3) then
+        local drag_x, drag_y = r.ImGui_GetMouseDragDelta(ctx, r.ImGui_MouseButton_Left(), 3)
+        if math.abs(drag_y) < 3 then
+         settings.simple_mixer_sendrecv_collapsed = not settings.simple_mixer_sendrecv_collapsed
+        end
+     end
+     mixer_state.sendrecv_handle_clicked = false
+    end
+
+  if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Click to collapse/expand Sends/Receives\nDrag to resize this track\nCtrl+Drag to sync all tracks")
+   r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS())
+  end
+
+  r.ImGui_PopStyleVar(ctx)
+  r.ImGui_PopStyleColor(ctx, 4)
  end
 
  local rms_position = settings.simple_mixer_rms_position or "top"
@@ -4889,26 +5588,32 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   if r.ImGui_IsItemHovered(ctx) then
    r.ImGui_SetTooltip(ctx, "FX " .. (fx_enabled and "Enabled" or "Bypassed") .. "\nClick to toggle all track FX")
   end
-  local fxbyp_cx = fxbyp_btn_x + btn_width / 2
-  local fxbyp_cy = fxbyp_btn_y + btn_height / 2
-  local fxbyp_size = math.min(btn_width, btn_height) / 2 - 2
-  local fxbyp_color = fx_enabled and icon_color or 0xFFAA00FF
-  local box_size = fxbyp_size * 0.7
+  fxbyp_cx = fxbyp_btn_x + btn_width / 2
+  fxbyp_cy = fxbyp_btn_y + btn_height / 2
+  fxbyp_size = math.min(btn_width, btn_height) / 2 - 2
+  fxbyp_color = fx_enabled and icon_color or 0xFFAA00FF
+  box_size = fxbyp_size * 0.7
   r.ImGui_DrawList_AddRect(draw_list, fxbyp_cx - box_size, fxbyp_cy - box_size * 0.6, fxbyp_cx + box_size, fxbyp_cy + box_size * 0.6, fxbyp_color, 2, 0, 1.5)
-  local knob_radius = box_size * 0.25
-  r.ImGui_DrawList_AddCircleFilled(draw_list, fxbyp_cx - box_size * 0.4, fxbyp_cy, knob_radius, fxbyp_color, 8)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, fxbyp_cx + box_size * 0.4, fxbyp_cy, knob_radius, fxbyp_color, 8)
+  fxbyp_knob_radius = box_size * 0.25
+  r.ImGui_DrawList_AddCircleFilled(draw_list, fxbyp_cx - box_size * 0.4, fxbyp_cy, fxbyp_knob_radius, fxbyp_color, 8)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, fxbyp_cx + box_size * 0.4, fxbyp_cy, fxbyp_knob_radius, fxbyp_color, 8)
   
   r.ImGui_PopStyleColor(ctx, 3)
  end
 
  if settings.simple_mixer_show_fx_slots and not settings.simple_mixer_fx_section_collapsed then
-  local fx_count = r.TrackFX_GetCount(track)
-  local slot_height = settings.simple_mixer_fx_slot_height or 16
-  local show_bypass = settings.simple_mixer_fx_show_bypass_button ~= false
-  local bypass_btn_width = show_bypass and 16 or 0
-  local fx_btn_width = track_width - (show_bypass and bypass_btn_width + 2 or 0)
-  local section_height = mixer_state.track_fx_heights[track_guid_for_fx] or settings.simple_mixer_fx_section_height or 80
+  fx_slot_count = r.TrackFX_GetCount(track)
+  track_fx_enabled = r.GetMediaTrackInfo_Value(track, "I_FXEN") == 1
+  fx_slot_height = settings.simple_mixer_fx_slot_height or 16
+  fx_show_bypass = settings.simple_mixer_fx_show_bypass_button ~= false
+  fx_bypass_btn_width = fx_show_bypass and 16 or 0
+  fx_section_height = mixer_state.track_fx_heights[track_guid_for_fx] or settings.simple_mixer_fx_section_height or 80
+  fx_scrollbar_reserve = 0
+  fx_content_height = (fx_slot_count + 1) * fx_slot_height
+  if fx_content_height > fx_section_height then
+   fx_scrollbar_reserve = 14
+  end
+  fx_btn_width = track_width - (fx_show_bypass and fx_bypass_btn_width + 2 or 0) - fx_scrollbar_reserve
 
   local divider_x, divider_y = r.ImGui_GetCursorScreenPos(ctx)
   local tr_color = r.GetTrackColor(track)
@@ -4923,21 +5628,22 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
-  if r.ImGui_BeginChild(ctx, "FXSection##" .. (is_master and "master" or idx), track_width, section_height, 0, r.ImGui_WindowFlags_None()) then
+  if r.ImGui_BeginChild(ctx, "FXSection##" .. (is_master and "master" or idx), track_width, fx_section_height, 0, r.ImGui_WindowFlags_None()) then
    if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_None()) then
     mixer_state.fx_section_hovered = true
    end
-   for slot = 0, fx_count - 1 do
+   for slot = 0, fx_slot_count - 1 do
     r.ImGui_PushID(ctx, "fx_slot_" .. slot)
     
     local _, fx_name = r.TrackFX_GetFXName(track, slot, "")
     local is_enabled = r.TrackFX_GetEnabled(track, slot)
     local is_offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, slot) or false
+    local is_effectively_enabled = is_enabled and track_fx_enabled
     
     local slot_color
     if is_offline and settings.simple_mixer_fx_slot_show_offline ~= false then
      slot_color = settings.simple_mixer_fx_slot_offline_color or 0x553333FF
-    elseif is_enabled then
+    elseif is_effectively_enabled then
      slot_color = settings.simple_mixer_fx_slot_active_color or 0x444444FF
     else
      slot_color = settings.simple_mixer_fx_slot_bypass_color or 0x666600FF
@@ -4948,8 +5654,8 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), 0.0, 0.5)
     
     local fx_font_size = settings.simple_mixer_fx_font_size or 12
-    if font_mixer then
-     r.ImGui_PushFont(ctx, font_mixer, fx_font_size)
+    if font_simple_mixer then
+     r.ImGui_PushFont(ctx, font_simple_mixer, fx_font_size)
     end
     
     local short_name = fx_name:match("^[^:]+:%s*(.+)$") or fx_name
@@ -4965,7 +5671,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
      short_name = short_name .. ellipsis
     end
     
-    if r.ImGui_Button(ctx, short_name .. "##fx" .. slot, fx_btn_width, slot_height) then
+    if r.ImGui_Button(ctx, short_name .. "##fx" .. slot, fx_btn_width, fx_slot_height) then
      local alt_held = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
      if alt_held then
       r.TrackFX_Delete(track, slot)
@@ -5042,19 +5748,19 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
         r.TrackFX_CopyToTrack(track, slot, track, 0, true)
        end
       end
-      if slot < fx_count - 1 then
+      if slot < fx_slot_count - 1 then
        if r.ImGui_MenuItem(ctx, "Move Down") then
         r.TrackFX_CopyToTrack(track, slot, track, slot + 2, true)
        end
        if r.ImGui_MenuItem(ctx, "Move to Bottom") then
-        r.TrackFX_CopyToTrack(track, slot, track, fx_count, true)
+        r.TrackFX_CopyToTrack(track, slot, track, fx_slot_count, true)
        end
       end
       r.ImGui_EndMenu(ctx)
      end
      r.ImGui_Separator(ctx)
      if r.ImGui_MenuItem(ctx, "Copy FX") then
-      r.TrackFX_CopyToTrack(track, slot, track, fx_count, false)
+      r.TrackFX_CopyToTrack(track, slot, track, fx_slot_count, false)
      end
      r.ImGui_Separator(ctx)
      if r.ImGui_MenuItem(ctx, "Delete FX") then
@@ -5063,17 +5769,28 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
      r.ImGui_EndPopup(ctx)
     end
     
-    if font_mixer then
+    if font_simple_mixer then
      r.ImGui_PopFont(ctx)
     end
     r.ImGui_PopStyleVar(ctx)
     r.ImGui_PopStyleColor(ctx, 2)
     
-    if show_bypass then
+    if fx_show_bypass then
      r.ImGui_SameLine(ctx, 0, 2)
-     local bypass_color = is_enabled and 0x00AA00FF or 0xFF0000FF
+     local bypass_color
+     local bypass_label
+     if is_offline then
+      bypass_color = settings.simple_mixer_fx_slot_offline_color or 0x553333FF
+      bypass_label = "~"
+     elseif is_effectively_enabled then
+      bypass_color = settings.simple_mixer_fx_slot_active_color or 0x00AA00FF
+      bypass_label = "O"
+     else
+      bypass_color = settings.simple_mixer_fx_slot_bypass_color or 0xFF0000FF
+      bypass_label = "X"
+     end
      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), bypass_color)
-     if r.ImGui_Button(ctx, is_enabled and "O" or "X", bypass_btn_width, slot_height) then
+     if r.ImGui_Button(ctx, bypass_label, fx_bypass_btn_width, fx_slot_height) then
       r.TrackFX_SetEnabled(track, slot, not is_enabled)
      end
      r.ImGui_PopStyleColor(ctx, 1)
@@ -5082,7 +5799,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     r.ImGui_PopID(ctx)
    end
    
-   if fx_count == 0 then
+   if fx_slot_count == 0 then
     local dropzone_color = settings.simple_mixer_fx_dropzone_color or 0x2A2A2AFF
     local dropzone_border = settings.simple_mixer_fx_dropzone_border_color or 0x555555FF
     local dropzone_hover = ((dropzone_color & 0xFFFFFF00) | math.min(255, ((dropzone_color & 0xFF) + 0x20))) + 0x10101000
@@ -5091,7 +5808,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), dropzone_hover)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 2)
     local btn_x, btn_y = r.ImGui_GetCursorScreenPos(ctx)
-    local btn_w, btn_h = track_width - 4, slot_height
+    local btn_w, btn_h = track_width - 4, fx_slot_height
     r.ImGui_Button(ctx, "+##fxdrop_empty", btn_w, btn_h)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_DrawList_AddRect(draw_list, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, dropzone_border, 2, 0, 1)
@@ -5129,7 +5846,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), dropzone_hover)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 2)
     local btn_x, btn_y = r.ImGui_GetCursorScreenPos(ctx)
-    local btn_w, btn_h = track_width - 4, slot_height
+    local btn_w, btn_h = track_width - 4, fx_slot_height
     r.ImGui_Button(ctx, "+##fxdrop_end", btn_w, btn_h)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_DrawList_AddRect(draw_list, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, dropzone_border, 2, 0, 1)
@@ -5144,7 +5861,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
        if source_track then
         local same_track = (src_guid == r.GetTrackGUID(track))
         local is_move = same_track
-        r.TrackFX_CopyToTrack(source_track, source_slot, track, fx_count, is_move)
+        r.TrackFX_CopyToTrack(source_track, source_slot, track, fx_slot_count, is_move)
        end
       end
      end
@@ -5187,7 +5904,9 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    handle_color = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
   end
   
-  r.ImGui_DrawList_AddLine(draw_list, btn_x + 4, line_y, btn_x + track_width - 4, line_y, handle_color, 3)
+  local fx_label_color = (handle_color & 0xFFFFFF00) | 0xBB
+  r.ImGui_DrawList_AddText(draw_list, btn_x + 2, btn_y - 3, fx_label_color, "FX")
+  r.ImGui_DrawList_AddLine(draw_list, btn_x + 20, line_y, btn_x + track_width - 4, line_y, handle_color, 3)
   
   local ctrl_held = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
   
@@ -5337,8 +6056,9 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local slider_start_x, slider_start_y = r.ImGui_GetCursorScreenPos(ctx)
  
  local show_meters = settings.simple_mixer_show_meters ~= false
- local fixed_meter_width = math.max(4, math.min(40, settings.simple_mixer_meter_width or 12))
- local slider_actual_width = show_meters and (track_width - fixed_meter_width - 2) or track_width
+ local fixed_meter_width = math.max(4, math.min(track_width, settings.simple_mixer_meter_width or 12))
+ local fader_hidden = show_meters and (fixed_meter_width >= track_width - 10)
+ local slider_actual_width = (show_meters and not fader_hidden) and (track_width - fixed_meter_width - 2) or track_width
  local meter_width = show_meters and fixed_meter_width or 0
  local fader_margin = 20
  
@@ -5362,6 +6082,11 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  
  local fader_style = settings.simple_mixer_fader_style or 0
  local custom_fader = fader_style > 0
+ if fader_hidden then
+  r.ImGui_Dummy(ctx, slider_actual_width, slider_height)
+  r.ImGui_PopItemWidth(ctx)
+  r.ImGui_PopStyleColor(ctx, 1)
+ else
  if custom_fader then
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 0)
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 0, fader_margin)
@@ -5427,9 +6152,8 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  
  r.ImGui_PopItemWidth(ctx)
  r.ImGui_PopStyleColor(ctx, 1)
-
- local knob_data = nil
- if custom_fader then
+ end
+ if custom_fader and not fader_hidden then
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local center_x = slider_start_x + slider_actual_width * 0.5
   local track_line_width = 4
@@ -5450,8 +6174,12 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   normalized = math.max(0, math.min(1, normalized))
   local fader_travel = slider_height - fader_margin * 2
   local knob_y = slider_start_y + slider_height - fader_margin - fader_travel * normalized
-  local knob_width = math.min(slider_actual_width * 0.55, 24)
-  local knob_height = 20
+  local handle_scale = settings.simple_mixer_fader_handle_scale or 1.0
+  handle_scale = math.max(0.5, math.min(2.5, handle_scale))
+  local knob_width = math.min(slider_actual_width * 0.55 * handle_scale, 24 * handle_scale)
+  local knob_height = 20 * handle_scale
+  local max_knob_height = math.max(4, slider_height - fader_margin * 2)
+  if knob_height > max_knob_height then knob_height = max_knob_height end
   local knob_x = center_x - knob_width * 0.5
   local knob_top = knob_y - knob_height * 0.5
   local knob_bottom = knob_y + knob_height * 0.5
@@ -5609,10 +6337,11 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  if show_meters and meter_width > 0 then
   UpdateMeterData(track_guid_for_fx, track)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  local meter_x = slider_start_x + slider_actual_width + 2
+  local meter_x = fader_hidden and slider_start_x or (slider_start_x + slider_actual_width + 2)
   local meter_y = slider_start_y
   local meter_height = slider_height
-  local meter_data = DrawMeter(ctx, draw_list, meter_x, meter_y, meter_width, meter_height, track_guid_for_fx, fader_margin)
+  local meter_draw_width = fader_hidden and track_width or meter_width
+  local meter_data = DrawMeter(ctx, draw_list, meter_x, meter_y, meter_draw_width, meter_height, track_guid_for_fx, fader_margin)
   
   local peak_L_db = PeakToDb(meter_data.peak_L_decay)
   local peak_R_db = PeakToDb(meter_data.peak_R_decay)
@@ -5631,7 +6360,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   end
   if gain_indicator_color and settings.simple_mixer_show_gain_staging ~= false then
    local indicator_y = meter_y - 14
-   local indicator_w = slider_actual_width + meter_width + 2
+   local indicator_w = fader_hidden and track_width or (slider_actual_width + meter_width + 2)
    r.ImGui_DrawList_AddRectFilled(draw_list, slider_start_x, indicator_y, slider_start_x + indicator_w, indicator_y + 12, gain_indicator_color, 2)
    local text_w = r.ImGui_CalcTextSize(ctx, gain_status)
    local text_x = slider_start_x + (indicator_w - text_w) / 2
@@ -6118,7 +6847,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
  r.ImGui_Dummy(ctx, 0, 2)
 
- if not is_master and folder_color ~= 0 and (is_folder or is_child) and not settings.simple_mixer_show_folder_groups then
+ if not is_master and folder_color ~= 0 and (is_folder or is_child) and (settings.simple_mixer_show_folder_group_lines or false) then
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
   local r_val, g_val, b_val = r.ColorFromNative(folder_color)
@@ -6734,8 +7463,9 @@ local function DrawSettingsWindow()
     { label = "Channels", idx = 3 },
     { label = "Strip",    idx = 4 },
     { label = "FX Slots", idx = 5 },
-    { label = "Dividers", idx = 6 },
-    { label = "Folders",  idx = 7 },
+    { label = "Sends",    idx = 6 },
+    { label = "Dividers", idx = 7 },
+    { label = "Folders",  idx = 8 },
    }
    local _gap = 6
    local _active_color = 0x2D7FE6FF
@@ -6802,7 +7532,7 @@ local function DrawSettingsWindow()
       settings.simple_mixer_master_position = "right"
      end
     end
-    
+
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_show_pinned_first = r.ImGui_Checkbox(ctx, "Show Pinned Tracks First", settings.simple_mixer_show_pinned_first or false)
@@ -6810,7 +7540,7 @@ local function DrawSettingsWindow()
     if r.ImGui_IsItemHovered(ctx) then
      r.ImGui_SetTooltip(ctx, "Tracks pinned in REAPER (B_TCPPIN) will be shown at the beginning of the mixer, similar to the master track.")
     end
-    
+
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_show_track_icons = r.ImGui_Checkbox(ctx, "Show Track Icons", settings.simple_mixer_show_track_icons)
@@ -7041,7 +7771,7 @@ local function DrawSettingsWindow()
      r.ImGui_Text(ctx, "Meter Width:")
      r.ImGui_SameLine(ctx)
      r.ImGui_SetNextItemWidth(ctx, 80)
-     rv, settings.simple_mixer_meter_width = r.ImGui_SliderInt(ctx, "##MeterW", settings.simple_mixer_meter_width or 12, 4, 40)
+     rv, settings.simple_mixer_meter_width = r.ImGui_SliderInt(ctx, "##MeterW", settings.simple_mixer_meter_width or 12, 4, 200)
      if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "Width of the peak meter in pixels.\nWider meter = narrower fader.")
      end
@@ -7164,7 +7894,21 @@ local function DrawSettingsWindow()
      r.ImGui_SetTooltip(ctx, "Cyberpunk neon color")
     end
    end
-   
+
+   if (settings.simple_mixer_fader_style or 0) > 0 then
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetNextItemWidth(ctx, 160)
+    local cur_scale = settings.simple_mixer_fader_handle_scale or 1.0
+    local rv_scale, new_scale = r.ImGui_SliderDouble(ctx, "Knob Scale##fader_handle_scale", cur_scale, 0.5, 2.5, "%.2fx")
+    if rv_scale then
+     settings.simple_mixer_fader_handle_scale = new_scale
+     need_save = true
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Schaalt de grootte van de fader-knop")
+    end
+   end
+
    r.ImGui_Separator(ctx)
    r.ImGui_Spacing(ctx)
    r.ImGui_Text(ctx, "Channel Controls:")
@@ -7201,6 +7945,18 @@ local function DrawSettingsWindow()
    r.ImGui_SetNextItemWidth(ctx, -1)
    rv, settings.simple_mixer_channel_rounding = r.ImGui_SliderDouble(ctx, "##ChRnd", settings.simple_mixer_channel_rounding or 0, 0, 10, "%.0f px")
    if rv then MarkTransportPresetChanged() end
+
+   r.ImGui_Text(ctx, "Left Padding:")
+   r.ImGui_SetNextItemWidth(ctx, -1)
+   local lp_val = settings.simple_mixer_left_padding or 0
+   rv, lp_val = r.ImGui_SliderInt(ctx, "##LeftPad", lp_val, 0, 40, "%d px")
+   if rv then
+    settings.simple_mixer_left_padding = lp_val
+    MarkTransportPresetChanged()
+   end
+   if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Ruimte tussen de linkerrand van de mixer en het eerste kanaal")
+   end
    
    r.ImGui_Separator(ctx)
    r.ImGui_Spacing(ctx)
@@ -7426,6 +8182,78 @@ local function DrawSettingsWindow()
     
     r.ImGui_Unindent(ctx, 10)
    end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "Trim:")
+    r.ImGui_Separator(ctx)
+
+    rv, settings.simple_mixer_show_trim = r.ImGui_Checkbox(ctx, "Show Trim", settings.simple_mixer_show_trim or false)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Shows a Trim/Gain staging module on each channel strip.\nUses JS: TK Trim plugin.")
+    end
+    if rv then
+     MarkTransportPresetChanged()
+     if settings.simple_mixer_auto_remove_unused_fx then CleanupUnusedChannelFX() end
+    end
+
+    if settings.simple_mixer_show_trim then
+     r.ImGui_Indent(ctx, 10)
+
+     rv, settings.simple_mixer_trim_auto_insert = r.ImGui_Checkbox(ctx, "Auto-insert##Trim", settings.simple_mixer_trim_auto_insert ~= false)
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Automatically add JS: TK Trim to tracks when clicking 'Add'.")
+     end
+     if rv then MarkTransportPresetChanged() end
+
+     r.ImGui_Spacing(ctx)
+     r.ImGui_Text(ctx, "Colors:")
+     if r.ImGui_BeginTable(ctx, "TrimColorsTable", 2, r.ImGui_TableFlags_None()) then
+      r.ImGui_TableNextRow(ctx)
+      r.ImGui_TableNextColumn(ctx)
+      rv, settings.simple_mixer_trim_bg_color = r.ImGui_ColorEdit4(ctx, "Background##TrimBG", settings.simple_mixer_trim_bg_color or 0x2A2A1AFF, r.ImGui_ColorEditFlags_NoInputs())
+      if rv then MarkTransportPresetChanged() end
+      r.ImGui_TableNextColumn(ctx)
+      rv, settings.simple_mixer_trim_header_color = r.ImGui_ColorEdit4(ctx, "Header##TrimHdr", settings.simple_mixer_trim_header_color or 0x5A5A3AFF, r.ImGui_ColorEditFlags_NoInputs())
+      if rv then MarkTransportPresetChanged() end
+
+      r.ImGui_TableNextRow(ctx)
+      r.ImGui_TableNextColumn(ctx)
+      rv, settings.simple_mixer_trim_knob_color = r.ImGui_ColorEdit4(ctx, "Indicator##TrimKnob", settings.simple_mixer_trim_knob_color or 0xCCCCCCFF, r.ImGui_ColorEditFlags_NoInputs())
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Kleur van de waarde-indicator (niet bij Vintage)") end
+      if rv then MarkTransportPresetChanged() end
+      r.ImGui_TableNextColumn(ctx)
+      rv, settings.simple_mixer_trim_knob_track_color = r.ImGui_ColorEdit4(ctx, "Track##TrimKnobTrk", settings.simple_mixer_trim_knob_track_color or 0x555555FF, r.ImGui_ColorEditFlags_NoInputs())
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Achtergrondkleur van de knob (alleen Classic/Minimal)") end
+      if rv then MarkTransportPresetChanged() end
+
+      r.ImGui_TableNextRow(ctx)
+      r.ImGui_TableNextColumn(ctx)
+      rv, settings.simple_mixer_trim_text_color = r.ImGui_ColorEdit4(ctx, "Text##TrimTxt", settings.simple_mixer_trim_text_color or 0xAAAAAAFF, r.ImGui_ColorEditFlags_NoInputs())
+      if rv then MarkTransportPresetChanged() end
+
+      r.ImGui_EndTable(ctx)
+     end
+
+     r.ImGui_Unindent(ctx, 10)
+    end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "Scroll:")
+    r.ImGui_Separator(ctx)
+
+    rv, settings.simple_mixer_modules_scroll_enabled = r.ImGui_Checkbox(ctx, "Scrollable Modules", settings.simple_mixer_modules_scroll_enabled or false)
+    if rv then MarkTransportPresetChanged() end
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Geeft de EQ/Comp/Lim modules een vaste hoogte.\nScrol via muiswiel.")
+    end
+
+    if settings.simple_mixer_modules_scroll_enabled then
+     r.ImGui_SameLine(ctx)
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     rv, settings.simple_mixer_modules_scroll_height = r.ImGui_SliderInt(ctx, "##ModScrollH", settings.simple_mixer_modules_scroll_height or 120, 40, 400, "Height: %d px")
+     if rv then MarkTransportPresetChanged() end
+    end
+
    
    r.ImGui_Spacing(ctx)
    r.ImGui_Text(ctx, "Compressor (SSL Style):")
@@ -7436,6 +8264,9 @@ local function DrawSettingsWindow()
     r.ImGui_SetTooltip(ctx, "Shows an SSL-style compressor module on each channel strip.\nUses JS: TK 1175 Compressor plugin.")
    end
    if rv then
+    if settings.simple_mixer_show_compressor then
+     settings.simple_mixer_comp_auto_insert = false
+    end
     MarkTransportPresetChanged()
     if settings.simple_mixer_auto_remove_unused_fx then CleanupUnusedChannelFX() end
    end
@@ -7509,6 +8340,9 @@ local function DrawSettingsWindow()
     r.ImGui_SetTooltip(ctx, "Shows a limiter module on each channel strip.\nUses JS: TK Limiter plugin.")
    end
    if rv then
+    if settings.simple_mixer_show_limiter then
+     settings.simple_mixer_lim_auto_insert = false
+    end
     MarkTransportPresetChanged()
     if settings.simple_mixer_auto_remove_unused_fx then CleanupUnusedChannelFX() end
    end
@@ -7574,60 +8408,6 @@ local function DrawSettingsWindow()
    end
    
    r.ImGui_Spacing(ctx)
-   r.ImGui_Text(ctx, "Trim:")
-   r.ImGui_Separator(ctx)
-   
-   rv, settings.simple_mixer_show_trim = r.ImGui_Checkbox(ctx, "Show Trim", settings.simple_mixer_show_trim or false)
-   if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, "Shows a Trim/Gain staging module on each channel strip.\nUses JS: TK Trim plugin.")
-   end
-   if rv then
-    MarkTransportPresetChanged()
-    if settings.simple_mixer_auto_remove_unused_fx then CleanupUnusedChannelFX() end
-   end
-   
-   if settings.simple_mixer_show_trim then
-    r.ImGui_Indent(ctx, 10)
-    
-    rv, settings.simple_mixer_trim_auto_insert = r.ImGui_Checkbox(ctx, "Auto-insert##Trim", settings.simple_mixer_trim_auto_insert ~= false)
-    if r.ImGui_IsItemHovered(ctx) then
-     r.ImGui_SetTooltip(ctx, "Automatically add JS: TK Trim to tracks when clicking 'Add'.")
-    end
-    if rv then MarkTransportPresetChanged() end
-    
-    r.ImGui_Spacing(ctx)
-    r.ImGui_Text(ctx, "Colors:")
-    if r.ImGui_BeginTable(ctx, "TrimColorsTable", 2, r.ImGui_TableFlags_None()) then
-     r.ImGui_TableNextRow(ctx)
-     r.ImGui_TableNextColumn(ctx)
-     rv, settings.simple_mixer_trim_bg_color = r.ImGui_ColorEdit4(ctx, "Background##TrimBG", settings.simple_mixer_trim_bg_color or 0x2A2A1AFF, r.ImGui_ColorEditFlags_NoInputs())
-     if rv then MarkTransportPresetChanged() end
-     r.ImGui_TableNextColumn(ctx)
-     rv, settings.simple_mixer_trim_header_color = r.ImGui_ColorEdit4(ctx, "Header##TrimHdr", settings.simple_mixer_trim_header_color or 0x5A5A3AFF, r.ImGui_ColorEditFlags_NoInputs())
-     if rv then MarkTransportPresetChanged() end
-     
-     r.ImGui_TableNextRow(ctx)
-     r.ImGui_TableNextColumn(ctx)
-     rv, settings.simple_mixer_trim_knob_color = r.ImGui_ColorEdit4(ctx, "Indicator##TrimKnob", settings.simple_mixer_trim_knob_color or 0xCCCCCCFF, r.ImGui_ColorEditFlags_NoInputs())
-     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Kleur van de waarde-indicator (niet bij Vintage)") end
-     if rv then MarkTransportPresetChanged() end
-     r.ImGui_TableNextColumn(ctx)
-     rv, settings.simple_mixer_trim_knob_track_color = r.ImGui_ColorEdit4(ctx, "Track##TrimKnobTrk", settings.simple_mixer_trim_knob_track_color or 0x555555FF, r.ImGui_ColorEditFlags_NoInputs())
-     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Achtergrondkleur van de knob (alleen Classic/Minimal)") end
-     if rv then MarkTransportPresetChanged() end
-     
-     r.ImGui_TableNextRow(ctx)
-     r.ImGui_TableNextColumn(ctx)
-     rv, settings.simple_mixer_trim_text_color = r.ImGui_ColorEdit4(ctx, "Text##TrimTxt", settings.simple_mixer_trim_text_color or 0xAAAAAAFF, r.ImGui_ColorEditFlags_NoInputs())
-     if rv then MarkTransportPresetChanged() end
-     
-     r.ImGui_EndTable(ctx)
-    end
-    
-    r.ImGui_Unindent(ctx, 10)
-   end
-   
-   r.ImGui_Spacing(ctx)
    r.ImGui_Text(ctx, "EQ:")
    r.ImGui_Separator(ctx)
    
@@ -7636,6 +8416,10 @@ local function DrawSettingsWindow()
     r.ImGui_SetTooltip(ctx, "Shows an EQ module on each channel strip.\nUses ReaEQ plugin.")
    end
    if rv then
+    if settings.simple_mixer_show_eq then
+     settings.simple_mixer_comp_auto_insert = false
+     settings.simple_mixer_lim_auto_insert = false
+    end
     MarkTransportPresetChanged()
     if settings.simple_mixer_auto_remove_unused_fx then CleanupUnusedChannelFX() end
    end
@@ -7701,7 +8485,27 @@ local function DrawSettingsWindow()
      r.ImGui_TableNextColumn(ctx)
      rv, settings.simple_mixer_eq_bypass_color = r.ImGui_ColorEdit4(ctx, "Bypass##EQByp", settings.simple_mixer_eq_bypass_color or 0x666600FF, r.ImGui_ColorEditFlags_NoInputs())
      if rv then MarkTransportPresetChanged() end
-     
+
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_eq_curve_color = r.ImGui_ColorEdit4(ctx, "Curve##EQCurve", settings.simple_mixer_eq_curve_color or 0x66DDEEC0, r.ImGui_ColorEditFlags_NoInputs())
+     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Kleur van de EQ curve lijn") end
+     if rv then MarkTransportPresetChanged() end
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_eq_curve_grid_color = r.ImGui_ColorEdit4(ctx, "Grid##EQGrid", settings.simple_mixer_eq_curve_grid_color or 0x33333388, r.ImGui_ColorEditFlags_NoInputs())
+     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Kleur van de curve grid lijnen") end
+     if rv then MarkTransportPresetChanged() end
+
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_eq_curve_zero_color = r.ImGui_ColorEdit4(ctx, "Zero line##EQZero", settings.simple_mixer_eq_curve_zero_color or 0x555555FF, r.ImGui_ColorEditFlags_NoInputs())
+     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Kleur van de 0dB lijn") end
+     if rv then MarkTransportPresetChanged() end
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_eq_curve_bg_color = r.ImGui_ColorEdit4(ctx, "Curve BG##EQCurveBG", settings.simple_mixer_eq_curve_bg_color or 0x0D1A1AFF, r.ImGui_ColorEditFlags_NoInputs())
+     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Achtergrondkleur van de curve visualisatie") end
+     if rv then MarkTransportPresetChanged() end
+
      r.ImGui_EndTable(ctx)
     end
     
@@ -7730,7 +8534,7 @@ local function DrawSettingsWindow()
      r.ImGui_TableNextColumn(ctx)
      r.ImGui_Text(ctx, "Slot Height:")
      r.ImGui_SetNextItemWidth(ctx, -1)
-     rv, settings.simple_mixer_fx_slot_height = r.ImGui_SliderInt(ctx, "##FXSlotH", settings.simple_mixer_fx_slot_height or 16, 12, 24, "%d px")
+     rv, settings.simple_mixer_fx_slot_height = r.ImGui_SliderInt(ctx, "##FXSlotH", settings.simple_mixer_fx_slot_height or 16, 12, 30, "%d px")
      
      r.ImGui_TableNextRow(ctx)
      r.ImGui_TableNextColumn(ctx)
@@ -7780,6 +8584,69 @@ local function DrawSettingsWindow()
   end
   
   if mixer_state.settings_top_tab == 6 then
+   mixer_state.settings_tab = 5
+   r.ImGui_Spacing(ctx)
+   r.ImGui_Text(ctx, "Sends/Receives Configuration:")
+   r.ImGui_Separator(ctx)
+
+    rv, settings.simple_mixer_show_sendrecv = r.ImGui_Checkbox(ctx, "Show Sends/Receives", settings.simple_mixer_show_sendrecv or false)
+    if rv then MarkTransportPresetChanged() end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+
+   rv, settings.simple_mixer_sendrecv_show_receives = r.ImGui_Checkbox(ctx, "Show Receives", settings.simple_mixer_sendrecv_show_receives ~= false)
+   if rv then MarkTransportPresetChanged() end
+
+   rv, settings.simple_mixer_sendrecv_show_detail_mode = r.ImGui_Checkbox(ctx, "Detail Mode", settings.simple_mixer_sendrecv_show_detail_mode ~= false)
+   if rv then MarkTransportPresetChanged() end
+
+   if settings.simple_mixer_sendrecv_show_detail_mode then
+    rv, settings.simple_mixer_sendrecv_expand_by_default = r.ImGui_Checkbox(ctx, "Expand By Default", settings.simple_mixer_sendrecv_expand_by_default or false)
+    if rv then MarkTransportPresetChanged() end
+   end
+
+   r.ImGui_SetNextItemWidth(ctx, -1)
+   rv, settings.simple_mixer_sendrecv_section_height = r.ImGui_SliderInt(ctx, "Section Height##SendRecv", settings.simple_mixer_sendrecv_section_height or 72, 40, 220, "%d px")
+   if rv then MarkTransportPresetChanged() end
+
+   r.ImGui_SetNextItemWidth(ctx, -1)
+   rv, settings.simple_mixer_sendrecv_row_height = r.ImGui_SliderInt(ctx, "Row Height##SendRecv", settings.simple_mixer_sendrecv_row_height or 16, 12, 30, "%d px")
+   if rv then MarkTransportPresetChanged() end
+
+   r.ImGui_Spacing(ctx)
+   r.ImGui_Text(ctx, "Colors:")
+   r.ImGui_Separator(ctx)
+
+   if r.ImGui_BeginTable(ctx, "SendRecvColorsTable", 2, r.ImGui_TableFlags_None()) then
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_sendrecv_send_color = r.ImGui_ColorEdit4(ctx, "Send##SRSend", settings.simple_mixer_sendrecv_send_color or 0x3D4A3AFF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then MarkTransportPresetChanged() end
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_sendrecv_receive_color = r.ImGui_ColorEdit4(ctx, "Receive##SRRecv", settings.simple_mixer_sendrecv_receive_color or 0x3A3F4AFF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then MarkTransportPresetChanged() end
+
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_sendrecv_muted_color = r.ImGui_ColorEdit4(ctx, "Muted##SRMuted", settings.simple_mixer_sendrecv_muted_color or 0x555555FF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then MarkTransportPresetChanged() end
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_sendrecv_text_color = r.ImGui_ColorEdit4(ctx, "Text##SRText", settings.simple_mixer_sendrecv_text_color or 0xBBBBBBFF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then MarkTransportPresetChanged() end
+
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_sendrecv_color = r.ImGui_ColorEdit4(ctx, "Background##SRBg", settings.simple_mixer_sendrecv_color or 0x2F2F2FFF, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then MarkTransportPresetChanged() end
+
+    r.ImGui_EndTable(ctx)
+   end
+
+  end
+  
+  if mixer_state.settings_top_tab == 7 then
    mixer_state.settings_tab = 4
    r.ImGui_Spacing(ctx)
    
@@ -7870,14 +8737,52 @@ local function DrawSettingsWindow()
      end
     end
    end
-   
+
+   r.ImGui_Separator(ctx)
+   r.ImGui_Spacing(ctx)
+   r.ImGui_Text(ctx, "Channel Outline:")
+
+   rv, settings.simple_mixer_track_separator_enabled = r.ImGui_Checkbox(ctx, "Enable##TrackSep", settings.simple_mixer_track_separator_enabled or false)
+   if rv then MarkTransportPresetChanged() end
+   if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Tekent een dunne lijn tussen kanalen voor extra afscheiding")
+   end
+
+   if settings.simple_mixer_track_separator_enabled then
+    r.ImGui_SameLine(ctx)
+    local sep_col = settings.simple_mixer_track_separator_color or 0x606060FF
+    rv, sep_col = r.ImGui_ColorEdit4(ctx, "Color##TrackSepColor", sep_col, r.ImGui_ColorEditFlags_NoInputs())
+    if rv then
+     settings.simple_mixer_track_separator_color = sep_col
+     MarkTransportPresetChanged()
+    end
+
+    r.ImGui_SameLine(ctx)
+    rv, settings.simple_mixer_track_separator_use_track_color = r.ImGui_Checkbox(ctx, "Use Track Color##TrackSepUseColor", settings.simple_mixer_track_separator_use_track_color or false)
+    if rv then MarkTransportPresetChanged() end
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Gebruik de track-kleur voor de outline")
+    end
+
+    r.ImGui_SetNextItemWidth(ctx, 160)
+    local sep_thick = settings.simple_mixer_track_separator_thickness or 1.0
+    rv, sep_thick = r.ImGui_SliderDouble(ctx, "Thickness##TrackSepThk", sep_thick, 0.5, 5.0, "%.1f px")
+    if rv then
+     settings.simple_mixer_track_separator_thickness = sep_thick
+     MarkTransportPresetChanged()
+    end
+   end
+
   end
   
-  if mixer_state.settings_top_tab == 7 then
+  if mixer_state.settings_top_tab == 8 then
    mixer_state.settings_tab = 5
    r.ImGui_Spacing(ctx)
    
    rv, settings.simple_mixer_show_folder_groups = r.ImGui_Checkbox(ctx, "Show Folder Groups", settings.simple_mixer_show_folder_groups or false)
+   if rv then MarkTransportPresetChanged() end
+
+   rv, settings.simple_mixer_show_folder_group_lines = r.ImGui_Checkbox(ctx, "Show Folder Lines", settings.simple_mixer_show_folder_group_lines or false)
    if rv then MarkTransportPresetChanged() end
    
    if settings.simple_mixer_show_folder_groups then
@@ -7934,8 +8839,9 @@ local function DrawSimpleMixerWindow()
  EnsureSimpleMixerFont()
  mixer_state.fx_section_hovered = false
 
- local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+ local window_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoFocusOnAppearing()
  local mixer_ctx = ctx
+ local close_requested = false
 
  local project_mixer_tracks = GetProjectMixerTracks()
  mixer_state.hidden_track_guids = GetProjectMixerHiddenTracks()
@@ -8077,6 +8983,23 @@ local function DrawSimpleMixerWindow()
     DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
     PopSettingsTheme(mixer_ctx)
    end
+   local close_btn_h = 24
+   local sb_win_x, sb_win_y = r.ImGui_GetWindowPos(mixer_ctx)
+   local sb_win_h = r.ImGui_GetWindowHeight(mixer_ctx)
+   r.ImGui_SetCursorScreenPos(mixer_ctx, sb_win_x, sb_win_y + sb_win_h - close_btn_h)
+   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x2A2A2AFF)
+   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x882222FF)
+   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0xAA2222FF)
+   local cb_x, cb_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
+   if r.ImGui_Button(mixer_ctx, "##close_mixer_bottom", sidebar_width, close_btn_h) then
+    close_requested = true
+   end
+   r.ImGui_PopStyleColor(mixer_ctx, 3)
+   local cb_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
+   local cb_cx = cb_x + sidebar_width * 0.5
+   local cb_cy = cb_y + close_btn_h * 0.5
+   r.ImGui_DrawList_AddLine(cb_dl, cb_cx - 5, cb_cy - 5, cb_cx + 5, cb_cy + 5, 0xAAAAAAFF, 1.5)
+   r.ImGui_DrawList_AddLine(cb_dl, cb_cx + 5, cb_cy - 5, cb_cx - 5, cb_cy + 5, 0xAAAAAAFF, 1.5)
    r.ImGui_EndChild(mixer_ctx)
   end
   r.ImGui_PopStyleColor(mixer_ctx, 1)
@@ -8096,7 +9019,15 @@ local function DrawSimpleMixerWindow()
    local function RenderMasterFader()
     local master = r.GetMasterTrack(0)
     if master then
+     local sx, sy = r.ImGui_GetCursorScreenPos(mixer_ctx)
      DrawMixerChannel(mixer_ctx, master, "MASTER", 0, track_width, base_slider_height, true, false, true, nil)
+     if settings.simple_mixer_track_separator_enabled then
+      local dl = r.ImGui_GetForegroundDrawList(mixer_ctx)
+      local sc = GetSeparatorColorForTrack(master, settings.simple_mixer_track_separator_color)
+      local sth = settings.simple_mixer_track_separator_thickness or 1.0
+      r.ImGui_DrawList_AddLine(dl, sx - 1, sy, sx - 1, sy + avail_height, sc, sth)
+      r.ImGui_DrawList_AddLine(dl, sx + track_width, sy, sx + track_width, sy + avail_height, sc, sth)
+     end
     end
    end
 
@@ -8145,7 +9076,15 @@ local function DrawSimpleMixerWindow()
      for pidx, pdata in ipairs(pinned_tracks_data) do
       local _, ptrack_name = r.GetTrackName(pdata.track)
       local show_handle = settings.simple_mixer_show_fx_slots
+      local psx, psy = r.ImGui_GetCursorScreenPos(mixer_ctx)
       DrawMixerChannel(mixer_ctx, pdata.track, ptrack_name, 1000 + pidx, track_width, base_slider_height, false, true, show_handle, nil)
+      if settings.simple_mixer_track_separator_enabled then
+       local dl = r.ImGui_GetForegroundDrawList(mixer_ctx)
+       local sc = GetSeparatorColorForTrack(pdata.track, settings.simple_mixer_track_separator_color)
+       local sth = settings.simple_mixer_track_separator_thickness or 1.0
+       r.ImGui_DrawList_AddLine(dl, psx - 1, psy, psx - 1, psy + avail_height, sc, sth)
+       r.ImGui_DrawList_AddLine(dl, psx + track_width, psy, psx + track_width, psy + avail_height, sc, sth)
+      end
       if pidx < #pinned_tracks_data then
        r.ImGui_SameLine(mixer_ctx, 0, 4)
       end
@@ -8305,6 +9244,11 @@ local function DrawSimpleMixerWindow()
 
      if not first_track_rendered then
       first_track_rendered = true
+      local left_pad = settings.simple_mixer_left_padding or 0
+      if left_pad > 0 then
+       r.ImGui_Dummy(mixer_ctx, left_pad, 1)
+       r.ImGui_SameLine(mixer_ctx, 0, 0)
+      end
      else
       r.ImGui_SameLine(mixer_ctx)
      end
@@ -8528,8 +9472,11 @@ local function DrawSimpleMixerWindow()
      track_positions[idx] = {x = cursor_x, y = cursor_y}
 
      local show_handle = settings.simple_mixer_show_fx_slots
-     local folder_info = {is_folder = false, is_child = false, folder_color = 0, continue_line = false}
+     local folder_info = {is_folder = false, is_child = false, folder_color = 0, continue_line = false, is_last_in_folder = false}
      local folder_depth = r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH")
+     if folder_depth < 0 then
+      folder_info.is_last_in_folder = true
+     end
      if folder_depth == 1 then
       folder_info.is_folder = true
       folder_info.folder_color = r.GetTrackColor(track)
@@ -8589,6 +9536,9 @@ local function DrawSimpleMixerWindow()
      r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
      r.ImGui_InvisibleButton(mixer_ctx, "##AddNewTrackInvisible", remaining_width, avail_height)
      local is_hovered = r.ImGui_IsItemHovered(mixer_ctx)
+     if is_hovered and r.ImGui_IsMouseClicked(mixer_ctx, 0) and not r.ImGui_IsMouseDoubleClicked(mixer_ctx, 0) then
+      r.Main_OnCommand(40297, 0)
+     end
      if is_hovered and r.ImGui_IsMouseDoubleClicked(mixer_ctx, 0) then
       r.Undo_BeginBlock()
       r.InsertTrackAtIndex(r.CountTracks(0), true)
@@ -8689,6 +9639,27 @@ local function DrawSimpleMixerWindow()
         r.ImGui_DrawList_AddLine(dlist, rect_x2, rect_y1, rect_x2, rect_y2, border_color, thickness)
         r.ImGui_DrawList_AddLine(dlist, rect_x1, rect_y2, rect_x2, rect_y2, border_color, thickness)
        end
+      end
+     end
+    end
+
+    if settings.simple_mixer_track_separator_enabled and #sorted_tracks > 0 then
+     local sep_dlist = r.ImGui_GetWindowDrawList(mixer_ctx)
+     local sep_color_default = settings.simple_mixer_track_separator_color or 0x606060FF
+     local sep_thickness = settings.simple_mixer_track_separator_thickness or 1.0
+
+     for i = 1, #sorted_tracks do
+      local pos = track_positions[i]
+      local g = sorted_tracks[i].guid
+      local hidden = mixer_state.hidden_track_guids and mixer_state.hidden_track_guids[g]
+      if pos and not hidden then
+       local sep_color = GetSeparatorColorForTrack(sorted_tracks[i].track, sep_color_default)
+       local lx = pos.x - 1
+       local rx = pos.x + track_width
+       local y1 = pos.y
+       local y2 = pos.y + avail_height
+       r.ImGui_DrawList_AddLine(sep_dlist, lx, y1, lx, y2, sep_color, sep_thickness)
+       r.ImGui_DrawList_AddLine(sep_dlist, rx, y1, rx, y2, sep_color, sep_thickness)
       end
      end
     end
@@ -8873,6 +9844,9 @@ local function DrawSimpleMixerWindow()
  end
  r.ImGui_PopStyleColor(mixer_ctx, 2)
  r.ImGui_PopStyleVar(mixer_ctx, 2)
+ if close_requested then
+  settings.simple_mixer_window_open = false
+ end
  if not open then settings.simple_mixer_window_open = false end
 end
 

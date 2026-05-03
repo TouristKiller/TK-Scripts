@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="2.7.9" author="TouristKiller" time="2026-05-01T21:55:00Z">
+    <version name="2.8.0" author="TouristKiller" time="2026-05-03T14:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -47,16 +47,11 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[    
-    v2.7.9/0.6.9:
-        + Projects: new Producer Metadata editor (right-click project > Edit Metadata...). Music fields (Artist/Album/Title/Genre/Year/Comment) editable, with optional sync to RPP RENDER_METADATA when the project is active.
-        + Projects: organization fields stored in sidecar project_metadata.json (Status: Idea/Tracking/Mixing/Mastering/Released, Rating 0-5, Client, Type: Single/Album/EP/Demo/Sound Design/Score/Other, Deadline, Tags).
-        + Projects info footer: now shows Status (color-coded), Rating (stars), Type, Artist - Title, Album/Year/Genre and Tags. Technical info combined on a single line.
-        + Projects: shared module TKFXBProjectMeta.lua (used by both Standard and Mini variants).
-        + Projects: cover fallbacks. ProjectCovers/ still has highest priority; then automatic lookup of [projectname].png/jpg, cover.*, folder.*, front.*, artwork.* in the project folder, with first image in the folder as last resort.
-        + RPP parser extended: now also reads AUTHOR, NOTES block and RENDER_METADATA block (all ID3:* fields).
-        + Projects toolbar: R (refresh) button now also invalidates per-project caches (RPP info, cover, size, length, files, date) and the metadata cache, so edits to RPP/sidecar are picked up without a script restart.
-        + Projects table: new optional metadata columns (toggle via the columns menu): Status (color-coded), Rating (stars), Type, Artist, Title, Genre, Year, Client, Deadline, Tags. Each column is sortable.
-        + Projects table: header row is now frozen so it remains visible while scrolling.
+    v2.8.0/0.7.0:
+        + Sends/Receives panel: Routing view now offers two modes via a Matrix / Hubs switcher. Hubs view groups all incoming sends per destination track (collapsable), with per-send Vol/Pan/Mute/Phase/Mono/Send mode/Delete controls and an "+ Add source..." button. Right-click a hub or click a source name to select that track in REAPER.
+        + Sends/Receives panel: new filter bar above both views with "Filter tracks..." search, "Only routed" (hide unrouted tracks), "Selected track only" (focus on rows/columns related to the current track), and "Group by folder" (matrix only, tints rows/columns per parent folder). Filter state is persisted.
+        + "Add as send" is now split into two explicit context menu items: "Add to new track as send (active track)" and "Add to new track as send (N selected tracks)". The second item only appears when one or more tracks are selected. The new send track receives a single send from each chosen source track.
+        + "Add as send" now prompts for the new send track's name (configurable: prompt / auto / custom suffix). New ROUTING tab in Settings exposes the folder toggle, folder name, and naming mode (folder name is SWS Auto Color/Icon/Layout friendly).
 ]]></changelog>
     </version>
     </reapack>
@@ -209,7 +204,7 @@
 
 <category name="Mixer">
     <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
-        <version name="1.0.0" author="TouristKiller" time="2026-04-29T16:20:00Z">
+        <version name="1.1.0" author="TouristKiller" time="2026-05-03T14:20:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/icon_browser.lua</source>
@@ -218,10 +213,34 @@
             <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_VU_Meter.jsfx</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
             <changelog><![CDATA[
-   v1.0.0:
-  + Initial standalone release
-  + Extracted from TK_TRANSPORT for independent use
-  + All mixer functionality preserved: VU meters, Compressor, Limiter, EQ, FX slots, Meters, Sidebar, Parameters
+   v1.1.0:
+    + Scalable fader knob via new "Knob Scale" slider (0.5x - 2.5x) in Fader Style section
+    + Channel Outline: thin border on both sides of each strip with adjustable color, thickness, and optional track color
+    + Outline applied to master and pinned channels as well
+    + Left Padding setting for spacing left of the first channel
+    + Folder-end icon (right-aligned) on the last track inside a folder
+    + Clicking the folder icon in a folder track header collapses/expands the folder
+    + FX slot height range extended to 30 px
+    + FX font size slider now works correctly
+    + Clicking empty mixer area deselects all tracks
+    + Send/Receive sectie volledig herwerkt met compacte rows en context-popup bediening
+    + Master hardware outputs toegevoegd in dezelfde routing-sectie met volume-popup
+    + Dynamische Send/Receive layout voor smalle strips (compact + rechtsklik voor detailacties)
+    + Send/Receive achtergrondkleur als losse setting toegevoegd
+    + Send/Receive handle verbeterd met "io" label
+    + FX slots handle verbeterd met "fx" label
+    + S/R hoogteberekening gefixt (incl. divider/handle budget) voor stabielere faderruimte
+    + Meter width limiet verhoogd tot 200 px
+    + Fader verbergt automatisch wanneer meter te breed wordt
+    + Meter render en loud-indicator breedte gecorrigeerd wanneer fader verborgen is
+    + Fixed ImGui style/pop mismatch in hidden-fader pad
+    + EQ curve visualizer toegevoegd als optionele strip boven de EQ controls
+    + EQ curve toggle in EQ header toegevoegd
+    + EQ curve kleurinstellingen toegevoegd (curve, grid, zero line, background)
+    + Band points op de EQ curve toegevoegd met hover tooltips (freq/gain)
+    + Sleepbare EQ band points toegevoegd: horizontaal = frequentie, verticaal = gain
+    + Shift fine adjust toegevoegd voor EQ point dragging
+    + HPF/LPF punten aparte kleuren gegeven en alleen horizontaal sleepbaar gemaakt
 ]]></changelog>
         </version>
     </reapack>
