@@ -1,8 +1,12 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.7.9
+-- @version 0.8.0
 -- @changelog:
 --[[
+v0.8.0:
++ New option "Use Selected Track for Audio" in Settings: routes audio preview through the currently selected track so track FX, volume, pan and sends are applied to the preview
++ Falls back to hardware output when no track is selected
+
 v0.7.9:
 + Cartridge sampler integration: right-click an audio file -> "Add to new track with Cartridge" or "Load sample to focused Cartridge" (active waveform selection is applied as trim)
 + Pitch detection: real-time tunable stability/update/sensitivity sliders + Fast/Balanced/Smooth presets in Settings
@@ -354,6 +358,7 @@ local ui_settings = {
     use_numaplayer = false,
     numaplayer_preset = "",
     use_selected_track_for_midi = false,
+    use_selected_track_for_audio = false,
     saved_search_no_jump = true,
     pitch_stability_time_sec = 0.6,
     pitch_update_interval_sec = 0.2,
@@ -2014,6 +2019,7 @@ local function save_options()
             use_numaplayer = ui_settings.use_numaplayer,
             numaplayer_preset = ui_settings.numaplayer_preset,
             use_selected_track_for_midi = ui_settings.use_selected_track_for_midi,
+            use_selected_track_for_audio = ui_settings.use_selected_track_for_audio,
             pitch_detection_enabled = ui.pitch_detection_enabled,
             custom_folder_names = file_location.custom_folder_names,
             custom_folder_colors = file_location.custom_folder_colors,
@@ -2282,6 +2288,7 @@ local function load_options()
             ui_settings.use_numaplayer = options.use_numaplayer or false
             ui_settings.numaplayer_preset = options.numaplayer_preset or ""
             ui_settings.use_selected_track_for_midi = options.use_selected_track_for_midi or false
+            ui_settings.use_selected_track_for_audio = options.use_selected_track_for_audio or false
             ui.pitch_detection_enabled = options.pitch_detection_enabled ~= nil and options.pitch_detection_enabled or true
             file_location.custom_folder_names = options.custom_folder_names or {}
             file_location.custom_folder_colors = options.custom_folder_colors or {}
@@ -5000,6 +5007,13 @@ local function start_playback(file_path)
         r.UpdateArrange()  
         r.Main_OnCommand(1007, 0)  
         return  
+    end
+    
+    if ui_settings.use_selected_track_for_audio and r.CF_Preview_SetOutputTrack then
+        local sel_track = r.GetSelectedTrack(0, 0)
+        if sel_track then
+            r.CF_Preview_SetOutputTrack(playback.playing_preview, 0, sel_track)
+        end
     end
     
     if playback.use_original_speed then
@@ -11618,6 +11632,16 @@ local function loop()
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "Play MIDI files through the currently selected track instead of creating a preview track.\nIf no track is selected, a message will be shown in the MIDI info field.")
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    local selected_track_audio_changed, new_selected_track_audio = r.ImGui_Checkbox(ctx, "Use Selected Track for Audio", ui_settings.use_selected_track_for_audio)
+                    if selected_track_audio_changed then
+                        ui_settings.use_selected_track_for_audio = new_selected_track_audio
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Route audio preview through the currently selected track,\nso track FX, volume, pan and sends are applied to the preview.\nIf no track is selected, the preview falls back to the hardware output.")
                     end
                     
                     r.ImGui_Spacing(ctx)
