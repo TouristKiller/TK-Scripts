@@ -1,8 +1,21 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.8.0
+-- @version 0.8.1
 -- @changelog:
 --[[
+v0.8.1:
++ New "SLICE" button in waveform preview: detects transients with adjustable sensitivity and draws editable slice markers
++ Sensitivity slider next to SLICE button (re-detects on release)
++ Slice markers are interactive: Alt+click to drag, Alt+double-click on a marker to remove it, Alt+double-click on empty waveform to add a marker
++ Markers shown only for the file they were detected on; SLICE toggles to "CLEAR" when active
++ "INS" button inserts one item per slice on the target track (uses 'Use Selected Track for Audio' setting, otherwise creates a new track) and follows project tempo when 'Use Original Speed' is off
++ "REV" toggle reverses inserted items as a new take and visually flips the waveform display (preview itself still plays forward due to CF_Preview limitation; small overlay indicates this)
++ "FD" toggle next to INS disables REAPER's auto-fades on inserted slices (per-item, no preference change required)
++ Alt + right-click on a slice segment selects it (visual selection + INS will only insert that single slice)
++ "RND" button next to FD generates a random slice order; INS plays in that order. Numbers above each slice show the playback position. Right-click RND clears the order
++ Slice sensitivity range made more useful (lower threshold/floor at high sensitivity)
++ Added Slice/Insert section to the Keyboard Shortcuts panel documenting SLICE, CLEAR, Sens, REV, INS, FD and the Alt+Click / Alt+DoubleClick marker actions
+
 v0.8.0:
 + New option "Use Selected Track for Audio" in Settings: routes audio preview through the currently selected track so track FX, volume, pan and sends are applied to the preview
 + Falls back to hardware output when no track is selected
@@ -198,6 +211,17 @@ local waveform = {
     last_pitch_update = 0,
     pitch_history = {},  -- For smoothing
     stable_pitch_timer = 0,  -- Timer for how long pitch has been stable
+    slices = {},
+    slice_file_path = "",
+    slice_dragging = nil,
+    slice_press_time = 0,
+    slice_press_x = 0,
+    slice_press_index = nil,
+    slice_did_drag = false,
+    slice_reverse = false,
+    slice_no_fades = false,
+    slice_selected_index = nil,
+    slice_random_order = nil,
 }
 
 -- UI State & View Control
@@ -359,6 +383,7 @@ local ui_settings = {
     numaplayer_preset = "",
     use_selected_track_for_midi = false,
     use_selected_track_for_audio = false,
+    slice_sensitivity = 0.5,
     saved_search_no_jump = true,
     pitch_stability_time_sec = 0.6,
     pitch_update_interval_sec = 0.2,
@@ -595,6 +620,82 @@ local function detect_pitch_autocorrelation(audio_buffer, sample_rate)
 
     waveform.pitch_debug = string.format("Low C:%.3f", best_correlation)
     return nil
+end
+
+local function detect_slices(file_path, sensitivity)
+    if not file_path or file_path == "" then return {} end
+    local source = r.PCM_Source_CreateFromFile(file_path)
+    if not source then return {} end
+    local length = r.GetMediaSourceLength(source)
+    if not length or length <= 0 then
+        r.PCM_Source_Destroy(source)
+        return {}
+    end
+
+    local peakrate = 200
+    local total_peaks = math.floor(length * peakrate)
+    if total_peaks < 4 then
+        r.PCM_Source_Destroy(source)
+        return { 0 }
+    end
+    local max_peaks = 200000
+    if total_peaks > max_peaks then
+        peakrate = math.floor(max_peaks / length)
+        if peakrate < 50 then peakrate = 50 end
+        total_peaks = math.floor(length * peakrate)
+    end
+
+    local buf = r.new_array(total_peaks * 2)
+    buf.clear()
+    local ok = r.PCM_Source_GetPeaks(source, peakrate, 0, 1, total_peaks, 0, buf)
+    r.PCM_Source_Destroy(source)
+    if not ok then return {} end
+
+    local amps = {}
+    for i = 1, total_peaks do
+        local mx = buf[i] or 0
+        local mn = buf[total_peaks + i] or 0
+        local a = math.abs(mx)
+        local b = math.abs(mn)
+        amps[i] = (a > b) and a or b
+    end
+
+    local sens = sensitivity or 0.5
+    if sens < 0 then sens = 0 elseif sens > 1 then sens = 1 end
+    local thresh_factor = 0.05 + (1 - sens) * 1.2
+    local abs_floor = 0.005 + (1 - sens) * 0.05
+
+    local avg_window = math.max(5, math.floor(peakrate * 0.05))
+    local retrigger_peaks = math.max(4, math.floor(peakrate * 0.05))
+
+    local slices = { 0 }
+    local last_slice_peak = -retrigger_peaks
+    local running_sum = 0
+    local running_count = 0
+
+    for i = 1, total_peaks do
+        local cur = amps[i]
+        if i > avg_window then
+            running_sum = running_sum - (amps[i - avg_window] or 0)
+            running_count = running_count - 1
+        end
+        running_sum = running_sum + cur
+        running_count = running_count + 1
+        local avg = (running_count > 0) and (running_sum / running_count) or 0
+
+        if i - last_slice_peak >= retrigger_peaks
+            and cur > abs_floor
+            and cur > avg * (1 + thresh_factor)
+        then
+            local t = (i - 1) / peakrate
+            if t > 0.02 then
+                table.insert(slices, t)
+                last_slice_peak = i
+            end
+        end
+    end
+
+    return slices
 end
 
 local function freq_to_note(freq)
@@ -2020,6 +2121,7 @@ local function save_options()
             numaplayer_preset = ui_settings.numaplayer_preset,
             use_selected_track_for_midi = ui_settings.use_selected_track_for_midi,
             use_selected_track_for_audio = ui_settings.use_selected_track_for_audio,
+            slice_sensitivity = ui_settings.slice_sensitivity,
             pitch_detection_enabled = ui.pitch_detection_enabled,
             custom_folder_names = file_location.custom_folder_names,
             custom_folder_colors = file_location.custom_folder_colors,
@@ -2289,6 +2391,7 @@ local function load_options()
             ui_settings.numaplayer_preset = options.numaplayer_preset or ""
             ui_settings.use_selected_track_for_midi = options.use_selected_track_for_midi or false
             ui_settings.use_selected_track_for_audio = options.use_selected_track_for_audio or false
+            ui_settings.slice_sensitivity = options.slice_sensitivity ~= nil and options.slice_sensitivity or 0.5
             ui.pitch_detection_enabled = options.pitch_detection_enabled ~= nil and options.pitch_detection_enabled or true
             file_location.custom_folder_names = options.custom_folder_names or {}
             file_location.custom_folder_colors = options.custom_folder_colors or {}
@@ -7828,6 +7931,240 @@ local function draw_progress_window()
     end
 end
 
+function tk_handle_rnd_button(draw_list, slice_y, fd_x, fd_w, accent_color, text_color)
+    local rnd_text = "RND"
+    local has_order = waveform.slice_random_order and #waveform.slice_random_order == #waveform.slices and #waveform.slices > 1
+    local rnd_color = has_order and accent_color or text_color
+    local rnd_w, rnd_h = r.ImGui_CalcTextSize(ctx, rnd_text)
+    local rnd_x = fd_x + fd_w + 10
+    r.ImGui_DrawList_AddText(draw_list, rnd_x, slice_y, rnd_color, rnd_text)
+    local nmx, nmy = r.ImGui_GetMousePos(ctx)
+    local rnd_hovered = nmx >= rnd_x - 4 and nmx <= rnd_x + rnd_w + 4 and nmy >= slice_y - 4 and nmy <= slice_y + rnd_h + 4
+    if not rnd_hovered then return end
+    if r.ImGui_BeginTooltip(ctx) then
+        if has_order then
+            r.ImGui_Text(ctx, "RND: random order set (numbers shown above slices)")
+            r.ImGui_Text(ctx, "Click: re-shuffle  |  Right-click: clear order")
+        else
+            r.ImGui_Text(ctx, "RND: click to generate a random slice order")
+            r.ImGui_Text(ctx, "INS will play in that order. Right-click to clear")
+        end
+        r.ImGui_EndTooltip(ctx)
+    end
+    if r.ImGui_IsMouseClicked(ctx, 0) then
+        local n = #waveform.slices
+        if n > 1 then
+            math.randomseed(math.floor(r.time_precise() * 1000))
+            local order = {}
+            for i = 1, n do order[i] = i end
+            for i = n, 2, -1 do
+                local j = math.random(i)
+                order[i], order[j] = order[j], order[i]
+            end
+            waveform.slice_random_order = order
+        else
+            waveform.slice_random_order = nil
+        end
+    elseif r.ImGui_IsMouseClicked(ctx, 1) then
+        waveform.slice_random_order = nil
+    end
+end
+
+function tk_draw_slice_play_numbers(draw_list, footer_x, footer_width, waveform_y, footer_y, footer_height, length, visible_start, visible_duration)
+    if waveform.slice_selected_index then return end
+    local order = waveform.slice_random_order
+    if not order or #order ~= #waveform.slices then return end
+    local segs = waveform.shuffle_play_segs
+    local total_play = waveform.shuffle_total_len
+    if not segs or not total_play or total_play <= 0 then return end
+    local boundary_col = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.5, 0.1, 0.85)
+    local boundary_top = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.5, 0.1, 1.0)
+    for play_idx = 1, #segs do
+        local seg = segs[play_idx]
+        local boundary_t = seg.play_start
+        local norm_b = boundary_t / total_play
+        if waveform.slice_reverse then norm_b = 1.0 - norm_b end
+        if play_idx > 1 and norm_b >= visible_start and norm_b <= visible_start + visible_duration then
+            local vp = (norm_b - visible_start) / visible_duration
+            local sx = footer_x + vp * footer_width
+            r.ImGui_DrawList_AddLine(draw_list, sx, waveform_y, sx, footer_y + footer_height, boundary_col, 1)
+            r.ImGui_DrawList_AddTriangleFilled(draw_list, sx - 4, waveform_y, sx + 4, waveform_y, sx, waveform_y + 6, boundary_top)
+        end
+    end
+end
+
+function tk_get_shuffle_cache()
+    local order = waveform.slice_random_order
+    if not order or not waveform.cache or #waveform.cache == 0 then return nil end
+    if waveform.slice_selected_index then return nil end
+    if not waveform.slices or #order ~= #waveform.slices then return nil end
+    if not waveform.cache_file or waveform.cache_file == "" then return nil end
+
+    local sorted_t = {}
+    for _, t in ipairs(waveform.slices) do table.insert(sorted_t, t) end
+    table.sort(sorted_t)
+
+    local sig = ""
+    for _, t in ipairs(sorted_t) do sig = sig .. string.format("%.3f,", t) end
+    local key = waveform.cache_file .. "|" .. table.concat(order, ",") .. "|" .. sig .. "|" .. tostring(#waveform.cache)
+    if waveform.shuffle_cache_key == key and waveform.shuffle_cache then
+        return waveform.shuffle_cache
+    end
+
+    local length = get_file_display_length(waveform.cache_file) or 0
+    if length <= 0 then return nil end
+    local total = #waveform.cache
+
+    local play_segs = {}
+    local cur_t = 0
+    for play_idx = 1, #order do
+        local src = order[play_idx]
+        local s = sorted_t[src]
+        local e = sorted_t[src + 1] or length
+        local dur = e - s
+        play_segs[play_idx] = { play_start = cur_t, src_start = s, dur = dur }
+        cur_t = cur_t + dur
+    end
+
+    local out = {}
+    local src_map = {}
+    for i = 1, total do
+        local play_t = ((i - 0.5) / total) * length
+        local mapped = play_t
+        for k = 1, #play_segs do
+            local seg = play_segs[k]
+            if play_t >= seg.play_start and play_t < seg.play_start + seg.dur then
+                mapped = seg.src_start + (play_t - seg.play_start)
+                break
+            end
+        end
+        local src_idx = math.floor((mapped / length) * total) + 1
+        if src_idx < 1 then src_idx = 1 elseif src_idx > total then src_idx = total end
+        out[i] = waveform.cache[src_idx]
+        src_map[i] = src_idx
+    end
+
+    waveform.shuffle_cache = out
+    waveform.shuffle_src_map = src_map
+    waveform.shuffle_cache_key = key
+    waveform.shuffle_play_segs = play_segs
+    waveform.shuffle_total_len = cur_t
+    return out
+end
+
+function tk_insert_slices_at_cursor(current_file)
+    if not current_file or current_file == "" then return end
+    local source_main = r.PCM_Source_CreateFromFile(current_file)
+    if not source_main then return end
+    local file_len = r.GetMediaSourceLength(source_main) or 0
+    r.PCM_Source_Destroy(source_main)
+    if file_len <= 0 then return end
+
+    local target_track = nil
+    if ui_settings.use_selected_track_for_audio then
+        target_track = r.GetSelectedTrack(0, 0)
+    end
+    if not target_track then
+        local idx = r.CountTracks(0)
+        r.InsertTrackAtIndex(idx, true)
+        target_track = r.GetTrack(0, idx)
+    end
+    if not target_track then return end
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+
+    local sorted = {}
+    for _, t in ipairs(waveform.slices) do table.insert(sorted, t) end
+    table.sort(sorted)
+
+    local sel_idx = waveform.slice_selected_index
+    local only_start, only_end = nil, nil
+    if sel_idx and sorted[sel_idx] then
+        only_start = sorted[sel_idx]
+        only_end = sorted[sel_idx + 1] or file_len
+    end
+
+    local segments = {}
+    for i = 1, #sorted do
+        local s = sorted[i]
+        local e = sorted[i + 1] or file_len
+        local include = (only_start == nil) or (s == only_start and e == only_end)
+        if include then
+            table.insert(segments, { s = s, e = e, idx = i })
+        end
+    end
+
+    local random_order = waveform.slice_random_order
+    if (not sel_idx) and random_order and #random_order == #waveform.slices and #segments > 1 then
+        local reordered = {}
+        for i = 1, #random_order do
+            local target = segments[random_order[i]]
+            if target then table.insert(reordered, target) end
+        end
+        if #reordered == #segments then
+            segments = reordered
+        end
+    end
+
+    local playrate = 1.0
+    if not playback.use_original_speed and playback.effective_playrate and playback.effective_playrate > 0 then
+        playrate = playback.effective_playrate
+    end
+
+    local cur = r.GetCursorPosition()
+    local created_items = {}
+    local fname = current_file:match("[^/\\]+$") or "slice"
+    local no_fades = waveform.slice_no_fades
+
+    for i = 1, #segments do
+        local seg = segments[i]
+        local s = seg.s
+        local e = seg.e
+        local seg_len_proj = (e - s) / playrate
+        if seg_len_proj > 0.001 then
+            local item = r.AddMediaItemToTrack(target_track)
+            local take = r.AddTakeToMediaItem(item)
+            local seg_src = r.PCM_Source_CreateFromFile(current_file)
+            r.SetMediaItemTake_Source(take, seg_src)
+            r.SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", s)
+            r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", playrate)
+            r.SetMediaItemInfo_Value(item, "D_POSITION", cur)
+            r.SetMediaItemInfo_Value(item, "D_LENGTH", seg_len_proj)
+            if no_fades then
+                r.SetMediaItemInfo_Value(item, "D_FADEINLEN", 0)
+                r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN", 0)
+                r.SetMediaItemInfo_Value(item, "D_FADEINLEN_AUTO", 0)
+                r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN_AUTO", 0)
+            end
+            r.GetSetMediaItemTakeInfo_String(take, "P_NAME", fname .. " #" .. seg.idx, true)
+            r.UpdateItemInProject(item)
+            table.insert(created_items, item)
+            cur = cur + seg_len_proj
+        end
+    end
+
+    if waveform.slice_reverse and #created_items > 0 then
+        r.SelectAllMediaItems(0, false)
+        for _, it in ipairs(created_items) do
+            r.SetMediaItemSelected(it, true)
+        end
+        r.Main_OnCommand(41051, 0)
+    end
+
+    if #created_items > 0 then
+        r.SelectAllMediaItems(0, false)
+        for _, it in ipairs(created_items) do
+            r.SetMediaItemSelected(it, true)
+        end
+        r.Main_OnCommand(40441, 0)
+    end
+
+    r.UpdateArrange()
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("TK Media Browser: Insert sliced sample", -1)
+end
+
 local function loop()
     if ui.pending_view_mode then
         ui.current_view_mode = ui.pending_view_mode
@@ -12006,6 +12343,23 @@ local function loop()
                     r.ImGui_BulletText(ctx, "Resolution:        Adjust in Settings (1x-8x detail)")
                     r.ImGui_Spacing(ctx)
                     r.ImGui_Spacing(ctx)
+
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "SLICE / INSERT")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "SLICE Button       Detect transients (uses Sens slider)")
+                    r.ImGui_BulletText(ctx, "CLEAR Button       Remove all slice markers")
+                    r.ImGui_BulletText(ctx, "Sens Slider        Slice detection sensitivity (0.0-1.0)")
+                    r.ImGui_BulletText(ctx, "REV Button         Visual reverse + reverse inserted slices")
+                    r.ImGui_BulletText(ctx, "INS Button         Insert sliced sample on track at cursor")
+                    r.ImGui_BulletText(ctx, "FD Button          Disable auto-fades on inserted slices")
+                    r.ImGui_BulletText(ctx, "RND Button         Click: generate random slice order (numbers shown). Right-click: clear. INS plays in this order")
+                    r.ImGui_BulletText(ctx, "Alt+Click marker   Start drag (move slice marker)")
+                    r.ImGui_BulletText(ctx, "Alt+DoubleClick    On marker: remove / on waveform: add marker")
+                    r.ImGui_BulletText(ctx, "Alt+RightClick     Select slice segment (INS = only that slice)")
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
                     
                     -- Settings & Presets
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
@@ -12238,20 +12592,26 @@ local function loop()
                         
                         if #waveform.spectral_cache > 0 then
                             local total_samples = #waveform.cache
+                            local active_cache = tk_get_shuffle_cache() or waveform.cache
+                            local src_map = waveform.shuffle_src_map
                             local visible_samples = math.floor(total_samples / waveform.zoom_level)
                             local max_scroll = math.max(0, total_samples - visible_samples)
                             local scroll_sample_offset = math.floor(waveform.scroll_offset * max_scroll)
                             
                             for i = 1, visible_samples do
                                 local cache_index = scroll_sample_offset + i
+                                if waveform.slice_reverse then
+                                    cache_index = scroll_sample_offset + (visible_samples - i + 1)
+                                end
                                 if cache_index >= 1 and cache_index <= total_samples then
-                                    local peak = waveform.cache[cache_index] * waveform.vertical_zoom
+                                    local peak = (active_cache[cache_index] or 0) * waveform.vertical_zoom
                                     peak = math.min(peak, 1.0)  
                                     local x = footer_x + (i - 1) * (footer_width / visible_samples)
                                     local y_top = center_y - (peak * waveform_height * 0.45)
                                     local y_bottom = center_y + (peak * waveform_height * 0.45)
                                     
-                                    local spectral_index = math.floor((cache_index / #waveform.cache) * #waveform.spectral_cache) + 1
+                                    local spec_src = (src_map and src_map[cache_index]) or cache_index
+                                    local spectral_index = math.floor((spec_src / #waveform.cache) * #waveform.spectral_cache) + 1
                                     spectral_index = math.min(spectral_index, #waveform.spectral_cache)
                                     local zcr_value = waveform.spectral_cache[spectral_index] or 0.5
                                 
@@ -12308,14 +12668,18 @@ local function loop()
                         local waveform_color = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, 1.0)
                         
                         local total_samples = #waveform.cache
+                        local active_cache = tk_get_shuffle_cache() or waveform.cache
                         local visible_samples = math.floor(total_samples / waveform.zoom_level)
                         local max_scroll = math.max(0, total_samples - visible_samples)
                         local scroll_sample_offset = math.floor(waveform.scroll_offset * max_scroll)
                         
                         for i = 1, visible_samples do
                             local cache_index = scroll_sample_offset + i
+                            if waveform.slice_reverse then
+                                cache_index = scroll_sample_offset + (visible_samples - i + 1)
+                            end
                             if cache_index >= 1 and cache_index <= total_samples then
-                                local peak = waveform.cache[cache_index] * waveform.vertical_zoom
+                                local peak = (active_cache[cache_index] or 0) * waveform.vertical_zoom
                                 peak = math.min(peak, 1.0)  
                                 local x = footer_x + (i - 1) * (footer_width / visible_samples)
                                 local y_top = center_y - (peak * waveform_height * 0.45)
@@ -12350,6 +12714,69 @@ local function loop()
                                 local cursor_x = footer_x + (visible_progress * footer_width)
                                 r.ImGui_DrawList_AddLine(draw_list, cursor_x, footer_y, cursor_x, footer_y + footer_height, 0xFFFF00FF, 2)
                             end
+                    end
+                end
+                if file_to_show and waveform.slice_file_path == file_to_show and #waveform.slices > 0 then
+                    local length = get_file_display_length(file_to_show)
+                    if length and length > 0 then
+                        local visible_duration = 1.0 / waveform.zoom_level
+                        local max_scroll = math.max(0, 1.0 - visible_duration)
+                        local visible_start = waveform.scroll_offset * max_scroll
+                        local visible_end = visible_start + visible_duration
+                        local slice_color = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.5, 0.1, 0.85)
+                        local slice_color_top = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.5, 0.1, 1.0)
+                        local shuffle_active = waveform.slice_random_order
+                            and #waveform.slice_random_order == #waveform.slices
+                            and not waveform.slice_selected_index
+                            and waveform.shuffle_play_segs
+                        if not shuffle_active then
+                            for _, slice_t in ipairs(waveform.slices) do
+                                local norm = slice_t / length
+                                if waveform.slice_reverse then
+                                    norm = 1.0 - norm
+                                end
+                                if norm >= visible_start and norm <= visible_end then
+                                    local vp = (norm - visible_start) / visible_duration
+                                    local sx = footer_x + (vp * footer_width)
+                                    r.ImGui_DrawList_AddLine(draw_list, sx, waveform_y, sx, footer_y + footer_height, slice_color, 1)
+                                    r.ImGui_DrawList_AddTriangleFilled(draw_list, sx - 4, waveform_y, sx + 4, waveform_y, sx, waveform_y + 6, slice_color_top)
+                                end
+                            end
+                        end
+                        tk_draw_slice_play_numbers(draw_list, footer_x, footer_width, waveform_y, footer_y, footer_height, length, visible_start, visible_duration)
+                    end
+                end
+                if not is_midi and not is_image then
+                    local msgs = {}
+                    if waveform.slice_reverse then
+                        table.insert(msgs, "REV: visual + INS only (preview plays forward)")
+                    end
+                    local has_rnd = waveform.slice_random_order
+                        and #waveform.slice_random_order == #waveform.slices
+                        and #waveform.slices > 1
+                        and not waveform.slice_selected_index
+                    if has_rnd then
+                        table.insert(msgs, "RND: visual + INS only (preview plays forward)")
+                    end
+                    if #msgs > 0 then
+                        local sample_w, sample_h = r.ImGui_CalcTextSize(ctx, "M")
+                        local pad_x, pad_y = 6, 2
+                        local row_h = sample_h + pad_y * 2 + 2
+                        local bottom_anchor = footer_y + footer_height - sample_h - 2 - 4
+                        local bg = r.ImGui_ColorConvertDouble4ToU32(0.0, 0.0, 0.0, 0.55)
+                        local border = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.5, 0.1, 0.9)
+                        local txt = r.ImGui_ColorConvertDouble4ToU32(1.0, 0.6, 0.2, 1.0)
+                        for i = #msgs, 1, -1 do
+                            local m = msgs[i]
+                            local tw, th = r.ImGui_CalcTextSize(ctx, m)
+                            local box_y2 = bottom_anchor - (#msgs - i) * row_h
+                            local box_y1 = box_y2 - th - pad_y * 2
+                            local box_x1 = footer_x + 6
+                            local box_x2 = box_x1 + tw + pad_x * 2
+                            r.ImGui_DrawList_AddRectFilled(draw_list, box_x1, box_y1, box_x2, box_y2, bg, 3)
+                            r.ImGui_DrawList_AddRect(draw_list, box_x1, box_y1, box_x2, box_y2, border, 3)
+                            r.ImGui_DrawList_AddText(draw_list, box_x1 + pad_x, box_y1 + pad_y, txt, m)
+                        end
                     end
                 end
                 if waveform.selection_active and waveform.selection_start ~= waveform.selection_end then
@@ -12456,7 +12883,11 @@ local function loop()
             end
             
             r.ImGui_SetCursorScreenPos(ctx, footer_x, footer_y)
+            if r.ImGui_SetNextItemAllowOverlap then
+                r.ImGui_SetNextItemAllowOverlap(ctx)
+            end
             r.ImGui_InvisibleButton(ctx, "##waveform_interaction", footer_width, footer_height)
+            local waveform_item_hovered = r.ImGui_IsItemHovered(ctx)
             
             local accent_color = hsv_to_color(ui_settings.accent_hue)
             local text_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
@@ -12578,7 +13009,118 @@ local function loop()
                     waveform.vertical_zoom = 1.0
                 end
             end
-            
+
+            local slice_hovered = false
+            if is_audio_file and current_file and current_file ~= "" then
+                local has_slices = (#waveform.slices > 0 and waveform.slice_file_path == current_file)
+                local slice_text = has_slices and "CLEAR" or "SLICE"
+                local slice_color = has_slices and accent_color or text_color
+                local slice_w, slice_h = r.ImGui_CalcTextSize(ctx, slice_text)
+                local slice_x = footer_x + 5
+                if waveform.zoom_level > 1.0 or waveform.vertical_zoom ~= 1.0 then
+                    local reset_w = r.ImGui_CalcTextSize(ctx, "RESET")
+                    slice_x = footer_x + 5 + reset_w + 10
+                end
+                local slice_y = footer_y + footer_height - slice_h - 2
+                r.ImGui_DrawList_AddText(draw_list, slice_x, slice_y, slice_color, slice_text)
+                local mxs, mys = r.ImGui_GetMousePos(ctx)
+                slice_hovered = mxs >= slice_x - 4 and mxs <= slice_x + slice_w + 4 and mys >= slice_y - 4 and mys <= slice_y + slice_h + 4
+                if slice_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+                    if has_slices then
+                        waveform.slices = {}
+                        waveform.slice_file_path = ""
+                        waveform.slice_selected_index = nil
+                    else
+                        waveform.slices = detect_slices(current_file, ui_settings.slice_sensitivity)
+                        waveform.slice_file_path = current_file
+                    end
+                end
+
+                local slider_x = slice_x + slice_w + 8
+                local slider_y = slice_y - 2
+                r.ImGui_SetCursorScreenPos(ctx, slider_x, slider_y)
+                r.ImGui_SetNextItemWidth(ctx, 90)
+
+                local sens_accent = hsv_to_color(ui_settings.accent_hue)
+                local sens_accent_active = hsv_to_color(ui_settings.accent_hue, 1.0, 0.6)
+                local sens_bb = ui_settings.button_brightness
+                local sens_frame_bg = r.ImGui_ColorConvertDouble4ToU32(sens_bb, sens_bb, sens_bb, 1.0)
+                local sens_frame_hover = r.ImGui_ColorConvertDouble4ToU32(sens_bb * 1.2, sens_bb * 1.2, sens_bb * 1.2, 1.0)
+                local sens_frame_active = r.ImGui_ColorConvertDouble4ToU32(sens_bb * 1.4, sens_bb * 1.4, sens_bb * 1.4, 1.0)
+                local sens_text_b = ui_settings.button_text_brightness
+                local sens_text_color = r.ImGui_ColorConvertDouble4ToU32(sens_text_b, sens_text_b, sens_text_b, 1.0)
+
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), sens_frame_bg)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), sens_frame_hover)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), sens_frame_active)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), sens_accent)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), sens_accent_active)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sens_text_color)
+
+                local sens_changed, new_sens = r.ImGui_SliderDouble(ctx, "##slice_sens", ui_settings.slice_sensitivity, 0.0, 1.0, "Sens %.2f")
+
+                r.ImGui_PopStyleColor(ctx, 6)
+                r.ImGui_PopStyleVar(ctx, 2)
+
+                if sens_changed then
+                    ui_settings.slice_sensitivity = new_sens
+                end
+                if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+                    save_options()
+                    if has_slices then
+                        waveform.slices = detect_slices(current_file, ui_settings.slice_sensitivity)
+                    end
+                end
+
+                if has_slices then
+                    local rev_text = "REV"
+                    local rev_color = waveform.slice_reverse and accent_color or text_color
+                    local rev_w, rev_h = r.ImGui_CalcTextSize(ctx, rev_text)
+                    local rev_x = slider_x + 90 + 8
+                    local rev_y = slice_y
+                    r.ImGui_DrawList_AddText(draw_list, rev_x, rev_y, rev_color, rev_text)
+                    local rmx, rmy = r.ImGui_GetMousePos(ctx)
+                    local rev_hovered = rmx >= rev_x - 4 and rmx <= rev_x + rev_w + 4 and rmy >= rev_y - 4 and rmy <= rev_y + rev_h + 4
+                    if rev_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+                        waveform.slice_reverse = not waveform.slice_reverse
+                    end
+
+                    local ins_text = "INS"
+                    local ins_color = text_color
+                    local ins_w, ins_h = r.ImGui_CalcTextSize(ctx, ins_text)
+                    local ins_x = rev_x + rev_w + 10
+                    local ins_y = slice_y
+                    r.ImGui_DrawList_AddText(draw_list, ins_x, ins_y, ins_color, ins_text)
+                    local imx, imy = r.ImGui_GetMousePos(ctx)
+                    local ins_hovered = imx >= ins_x - 4 and imx <= ins_x + ins_w + 4 and imy >= ins_y - 4 and imy <= ins_y + ins_h + 4
+
+                    local fd_text = "FD"
+                    local fd_color = waveform.slice_no_fades and accent_color or text_color
+                    local fd_w, fd_h = r.ImGui_CalcTextSize(ctx, fd_text)
+                    local fd_x = ins_x + ins_w + 10
+                    local fd_y = slice_y
+                    r.ImGui_DrawList_AddText(draw_list, fd_x, fd_y, fd_color, fd_text)
+                    local fmx, fmy = r.ImGui_GetMousePos(ctx)
+                    local fd_hovered = fmx >= fd_x - 4 and fmx <= fd_x + fd_w + 4 and fmy >= fd_y - 4 and fmy <= fd_y + fd_h + 4
+                    if fd_hovered then
+                        if r.ImGui_BeginTooltip(ctx) then
+                            r.ImGui_Text(ctx, waveform.slice_no_fades and "FD: no auto-fades on inserted slices" or "FD: auto-fades enabled (REAPER default)")
+                            r.ImGui_EndTooltip(ctx)
+                        end
+                        if r.ImGui_IsMouseClicked(ctx, 0) then
+                            waveform.slice_no_fades = not waveform.slice_no_fades
+                        end
+                    end
+
+                    tk_handle_rnd_button(draw_list, slice_y, fd_x, fd_w, accent_color, text_color)
+                    if ins_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+                        tk_insert_slices_at_cursor(current_file)
+                    end
+                end
+            end
+
             if is_audio_file then
                 local y_offset = footer_y + 20  
                 
@@ -12600,7 +13142,7 @@ local function loop()
                 end
             end
             
-            if r.ImGui_IsItemHovered(ctx) and (playback.selected_file ~= "" or playback.current_playing_file ~= "") then
+            if waveform_item_hovered and (playback.selected_file ~= "" or playback.current_playing_file ~= "") then
                 local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
                 local normalized_x = (mouse_x - footer_x) / footer_width
                 normalized_x = math.max(0, math.min(1, normalized_x))
@@ -12652,8 +13194,142 @@ local function loop()
                     end
                 end
                 
-                if r.ImGui_IsMouseClicked(ctx, 0) and not grid_hovered and not solo_hovered and not spectral_hovered then
+                local slice_marker_handled = false
+                local alt_down = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
+                if alt_down and file_path and file_path == waveform.slice_file_path and #waveform.slices > 0 then
+                    local length_sm = get_file_display_length(file_path) or 0
+                    if length_sm > 0 then
+                        local visible_duration_sm = 1.0 / waveform.zoom_level
+                        local max_scroll_sm = math.max(0, 1.0 - visible_duration_sm)
+                        local visible_start_sm = waveform.scroll_offset * max_scroll_sm
+                        local hit_index = nil
+                        for i, slice_t in ipairs(waveform.slices) do
+                            local norm = slice_t / length_sm
+                            if waveform.slice_reverse then
+                                norm = 1.0 - norm
+                            end
+                            local vp = (norm - visible_start_sm) / visible_duration_sm
+                            local sx = footer_x + vp * footer_width
+                            if math.abs(mouse_x - sx) <= 4 then
+                                hit_index = i
+                                break
+                            end
+                        end
+                        if hit_index and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                            table.remove(waveform.slices, hit_index)
+                            waveform.slice_press_index = nil
+                            waveform.slice_did_drag = false
+                            slice_marker_handled = true
+                        elseif hit_index and r.ImGui_IsMouseClicked(ctx, 0) then
+                            waveform.slice_press_index = hit_index
+                            waveform.slice_press_x = mouse_x
+                            waveform.slice_press_time = r.time_precise()
+                            waveform.slice_did_drag = false
+                            slice_marker_handled = true
+                        elseif (not hit_index) and is_audio_file and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                            local visible_duration_add = 1.0 / waveform.zoom_level
+                            local max_scroll_add = math.max(0, 1.0 - visible_duration_add)
+                            local visible_start_add = waveform.scroll_offset * max_scroll_add
+                            local abs_norm = visible_start_add + normalized_x * visible_duration_add
+                            if waveform.slice_reverse then
+                                abs_norm = 1.0 - abs_norm
+                            end
+                            local new_t = abs_norm * length_sm
+                            local exists = false
+                            for _, st in ipairs(waveform.slices) do
+                                if math.abs(st - new_t) < 0.005 then exists = true break end
+                            end
+                            if not exists then
+                                table.insert(waveform.slices, new_t)
+                                table.sort(waveform.slices)
+                            end
+                            slice_marker_handled = true
+                        elseif r.ImGui_IsMouseClicked(ctx, 1) then
+                            local vd_seg = 1.0 / waveform.zoom_level
+                            local ms_seg = math.max(0, 1.0 - vd_seg)
+                            local vs_seg = waveform.scroll_offset * ms_seg
+                            local an_click = vs_seg + normalized_x * vd_seg
+                            if waveform.slice_reverse then an_click = 1.0 - an_click end
+                            local cursor_t = an_click * length_sm
+                            local sorted_seg = {}
+                            for _, t in ipairs(waveform.slices) do table.insert(sorted_seg, t) end
+                            table.sort(sorted_seg)
+                            local seg_idx, seg_start_t, seg_end_t = nil, nil, nil
+                            for i = 1, #sorted_seg do
+                                local s = sorted_seg[i]
+                                local e = sorted_seg[i + 1] or length_sm
+                                if cursor_t >= s and cursor_t < e then
+                                    seg_idx, seg_start_t, seg_end_t = i, s, e
+                                    break
+                                end
+                            end
+                            if seg_idx then
+                                local s_norm = seg_start_t / length_sm
+                                local e_norm = seg_end_t / length_sm
+                                if waveform.slice_reverse then
+                                    s_norm, e_norm = 1.0 - e_norm, 1.0 - s_norm
+                                end
+                                local s_vp = (s_norm - vs_seg) / vd_seg
+                                local e_vp = (e_norm - vs_seg) / vd_seg
+                                waveform.selection_start = s_vp
+                                waveform.selection_end = e_vp
+                                waveform.selection_active = true
+                                waveform.is_dragging = false
+                                waveform.slice_selected_index = seg_idx
+                                slice_marker_handled = true
+                            end
+                        end
+                    end
+                elseif alt_down and is_audio_file and r.ImGui_IsMouseDoubleClicked(ctx, 0) and file_path then
+                    local length_add = get_file_display_length(file_path) or 0
+                    if length_add > 0 then
+                        local visible_duration_add = 1.0 / waveform.zoom_level
+                        local max_scroll_add = math.max(0, 1.0 - visible_duration_add)
+                        local visible_start_add = waveform.scroll_offset * max_scroll_add
+                        local abs_norm = visible_start_add + normalized_x * visible_duration_add
+                        if waveform.slice_reverse then
+                            abs_norm = 1.0 - abs_norm
+                        end
+                        local new_t = abs_norm * length_add
+                        if waveform.slice_file_path ~= file_path then
+                            waveform.slices = {}
+                            waveform.slice_file_path = file_path
+                        end
+                        table.insert(waveform.slices, new_t)
+                        table.sort(waveform.slices)
+                        slice_marker_handled = true
+                    end
+                end
+
+                if waveform.slice_press_index and r.ImGui_IsMouseDown(ctx, 0) and file_path == waveform.slice_file_path then
+                    local length_sd = get_file_display_length(file_path) or 0
+                    if length_sd > 0 then
+                        if math.abs(mouse_x - waveform.slice_press_x) > 3 then
+                            waveform.slice_did_drag = true
+                        end
+                        if waveform.slice_did_drag then
+                            local visible_duration_sd = 1.0 / waveform.zoom_level
+                            local max_scroll_sd = math.max(0, 1.0 - visible_duration_sd)
+                            local visible_start_sd = waveform.scroll_offset * max_scroll_sd
+                            local abs_norm = visible_start_sd + normalized_x * visible_duration_sd
+                            if waveform.slice_reverse then
+                                abs_norm = 1.0 - abs_norm
+                            end
+                            local new_t = abs_norm * length_sd
+                            local idx = waveform.slice_press_index
+                            local prev_t = waveform.slices[idx - 1] or 0
+                            local next_t = waveform.slices[idx + 1] or length_sd
+                            if new_t < prev_t + 0.005 then new_t = prev_t + 0.005 end
+                            if new_t > next_t - 0.005 then new_t = next_t - 0.005 end
+                            waveform.slices[idx] = new_t
+                        end
+                    end
+                    slice_marker_handled = true
+                end
+
+                if r.ImGui_IsMouseClicked(ctx, 0) and not grid_hovered and not solo_hovered and not spectral_hovered and not slice_marker_handled then
                     waveform.play_cursor_position = normalized_x
+                    waveform.slice_selected_index = nil
                     
                     waveform.selection_active = false
                     waveform.monitor_sel_start = 0
@@ -12680,7 +13356,7 @@ local function loop()
                     end
                 end
                 
-                if r.ImGui_IsMouseClicked(ctx, 1) and not grid_hovered then
+                if r.ImGui_IsMouseClicked(ctx, 1) and not grid_hovered and not slice_marker_handled then
                     waveform.play_cursor_position = 0
                     if file_path and file_path ~= "" and playback.playing_source and playback.state == "playing" then
                         r.PCM_Source_SetPosition(playback.playing_source, 0)
@@ -12691,6 +13367,31 @@ local function loop()
                 if waveform.is_dragging then
                     waveform.selection_end = normalized_x
                 end
+            end
+            if waveform.slice_press_index and not r.ImGui_IsMouseDown(ctx, 0) then
+                local idx = waveform.slice_press_index
+                if not waveform.slice_did_drag then
+                    local sf = waveform.slice_file_path
+                    if sf and sf ~= "" and waveform.slices[idx] then
+                        local source = r.PCM_Source_CreateFromFile(sf)
+                        if source then
+                            local sf_len = r.GetMediaSourceLength(source) or 0
+                            r.PCM_Source_Destroy(source)
+                            local slice_t = waveform.slices[idx]
+                            if sf_len > 0 then
+                                waveform.play_cursor_position = slice_t / sf_len
+                            end
+                            if playback.playing_preview and r.CF_Preview_SetValue then
+                                r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", slice_t)
+                            elseif playback.playing_source then
+                                r.PCM_Source_SetPosition(playback.playing_source, slice_t)
+                                playback.paused_position = slice_t
+                            end
+                        end
+                    end
+                end
+                waveform.slice_press_index = nil
+                waveform.slice_did_drag = false
             end
             if waveform.is_dragging and not r.ImGui_IsMouseDown(ctx, 0) then
                 waveform.is_dragging = false
