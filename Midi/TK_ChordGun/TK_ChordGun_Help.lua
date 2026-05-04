@@ -1,7 +1,7 @@
 -- ChordGun Help Window (separate context)
 -- This runs in its own gfx window without interfering with main script
 -- @noindex
-
+--
 -- Check if already running - prevent multiple instances
 local isRunning = reaper.GetExtState("TK_ChordGun_Help", "running")
 local lastHeartbeat = tonumber(reaper.GetExtState("TK_ChordGun_Help", "heartbeat")) or 0

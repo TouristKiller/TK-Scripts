@@ -1,9 +1,9 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.5.2
+-- @version 2.5.5
 -- @changelog
 --[[
-2.5.2
+2.5.5
 
 [Strum]
 + Bug fix — strum offset is now correctly applied when inserting via Shift+Click (PPQ-per-beat was mis-calculated)

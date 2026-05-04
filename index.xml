@@ -389,9 +389,9 @@ v0.7.9:
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.5.2" author="TouristKiller (based on pandabot ChordGun)" time="2026-05-04T19:00:00Z">
+      <version name="2.5.5" author="TouristKiller (based on pandabot ChordGun)" time="2026-05-04T19:15:00Z">
         <changelog><![CDATA[
-2.5.2
+2.5.5
 [Strum]
 + Bug fix — strum offset is now correctly applied when inserting via Shift+Click (PPQ-per-beat was mis-calculated)
 + Tempo-independent — strum delay (ms) now scales with project BPM so the feel stays consistent across tempos

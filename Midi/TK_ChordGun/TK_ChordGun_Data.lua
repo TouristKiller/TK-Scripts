@@ -1,6 +1,6 @@
 -- @noindex
 -- Data file for TK ChordGun and its helper scripts
-
+--
 local Data = {}
 
 Data.notes = { 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B' }
