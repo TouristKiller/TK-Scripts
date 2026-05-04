@@ -389,256 +389,76 @@ v0.7.9:
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.5.2" author="TouristKiller (based on pandabot ChordGun)" time="2025-12-20T03:30:00Z">
+      <version name="2.5.2" author="TouristKiller (based on pandabot ChordGun)" time="2026-05-04T19:00:00Z">
         <changelog><![CDATA[
-2.5.1
-+ Absolute Chord Storage: Progressions now store chords by root note + chord type (not relative position)
-+ Filter-Independent Playback: Progression plays the exact chords shown, regardless of scale/filter changes
-+ Backwards Compatible: Old preset files still work (fallback to legacy behavior)
-+ Chord Button Highlighting: Correct chord button highlights during progression playback (matches actual chord, not position)
-+ Out-of-Scale Display: Chord display now shows correct out-of-scale color for progression chords
-+ Chord Name Display: Extended chord names (e.g. Amaj#11) now display correctly during playback
-+ Hidden Chord Indicator: Subtle orange overlay when playing chord is not visible in current filter
-+ Piano Visualization Fix: Piano keys now clear properly when releasing chord buttons
-+ Crash Fix: Fixed nil chord access when switching Chord Style filters
+2.5.2
+[Strum]
++ Bug fix — strum offset is now correctly applied when inserting via Shift+Click (PPQ-per-beat was mis-calculated)
++ Tempo-independent — strum delay (ms) now scales with project BPM so the feel stays consistent across tempos
++ Combined right-click popup menu with submenus and check-marks (Speed Mode, Delay ms presets + Custom, Grid 1/8-1/64, Velocity Curve off/up/down/v/^, Ramp Amount presets + Custom) — no separate Ctrl modifier
++ Velocity ramp curves applied to both inserted notes and live preview playback (scale chord, slot, progression incl. repeats and next-slot)
 
-2.5.0
-+ UI Reorganization: Lead button moved to bottom row (between Drop and Melody)
-+ Circle Icon: Circle of Fifths now accessible via icon in chord display area (bottom left)
-+ Chord Style Dropdown: Combined filter with Simple, Standard, Extended, Ambient, Jazz, Pop, Neo-Soul
-+ "All" Checkbox: Toggle to show out-of-scale chords
-+ Track Name Truncation: Long track names truncated to 10 characters
+[Velocity]
++ Default Velocity: New global velocity setting via "Vel:" button in top frame next to Oct:/Inv:. Left-click cycles presets, right-click opens menu (Follow MIDI Editor / 16 / 32 / 48 / 64 / 80 / 96 / 112 / 127 / Custom). Persists between sessions.
++ Per-Slot Velocity: New "V" button on the left side of each progression slot opens a velocity panel with a theme-styled slider (1-127) overriding the global Vel: for that slot. Click "x" to reset to follow global. Persists with progression presets.
 
-2.4.1
-+ MIDI Trigger Cascade Fix: Fixed issue where chord notes could re-trigger other chords
-+ Virtual MIDI Detection: Dynamic detection of virtual MIDI devices (cross-platform)
-+ Channel 16 Bypass: Triggered chords now play on channel 16 to avoid JSFX blocking
-+ Chord Display Fix: Correct chord recognition when using MIDI triggers
-+ Piano Trigger Visualization: Trigger notes shown in separate color on piano
-+ Split Key Display: Keys that are both trigger and chord note show both colors
-+ Theme Support: Unique trigger colors for all 6 themes
+[Time Selection / Insert]
++ Cursor now snaps to start of time selection if it lies outside, so Shift+Click always inserts at the selection start
++ When no time selection is active, length now falls back to MIDI Editor grid (was: very short / 2 sec on new items)
++ New MIDI items are now created at the start of the time selection (was: created from the edit cursor, which placed notes outside or in the middle of the new item)
++ New item length now exactly matches the time selection (1-bar minimum no longer applied in this mode)
++ Newly created MIDI items are now always at least 1 bar (was: 1/2 was too short, shorter lengths jumped to 1 bar inconsistently)
++ Edit cursor only wraps back to time-selection start when Note Length is set to "Time Selection". With fixed note lengths the cursor now keeps moving forward through the item even if a time selection happens to be active.
 
-2.4.0
-+ Voice Leading Modes: Right-click Lead button to choose mode
-  - Average (default): Smooth transitions based on average pitch
-  - Bass (Escalator): Stepwise bass movement for "rolling" progressions
+[Chord Recognition]
++ Added recognition for 6, m6, add9, madd9, 9, 6/9, 11, min11, maj11, 13, min13, maj13
++ Fixed maj13 / 13 patterns to omit the (avoid-note) 11th — Cmaj13 played as C E G B D A is now correctly recognized as Cmaj13 instead of C6
++ Scoring now favors longer/exact patterns so e.g. Cmaj7 no longer mis-recognizes as C6 when both have the same number of matched notes
++ Partial-match recognition: notes may now be omitted from a voicing (1 missing for 4-note chords, 2 for 5+ note chords) — e.g. Cmaj13 without the 9 is still recognized as Cmaj13 instead of Am9/C
++ Core-interval check ensures root, 3rd and 7th are present before scoring — prevents nonsense matches on partial voicings
++ Recognition patterns are now derived from the central chord data table (single source of truth) — no more drift between insert and recognize
++ Fixed Dm9 / C9 / G9 etc. inserting as plain min7 / dom7 — chord data patterns were missing the 9
++ Fixed 11, min11, 13, maj13, min13, maj#11 chord data patterns that were missing the 9 (and 11 in min13)
++ Added madd9 and maj11 to the chord data table (were only in the recognizer before)
+
+[Monitor]
++ Chord/Note display now shows the current octave of the played note(s) as an "Oct: N" indicator centered directly below the chord/note name in the monitor window — useful for live monitoring with controllers like the Launchpad. The octave reflects the lowest currently-held note.
+
+[Inversion]
++ Ctrl+Click on chord button cycles inversion (root → 1st → 2nd → 3rd → root) with visual badge "I1/I2/I3" in top-right corner. Cycle resets after 2 seconds of no Ctrl+Click on the same button.
++ Ctrl+Shift+Click inserts the chord using the current cycle inversion (does NOT advance the cycle, so the badge value is what gets inserted)
++ Ctrl+Alt+Click adds the chord to the selected progression slot using the current cycle inversion (does NOT advance the cycle)
+
+[Tooltips]
++ Tooltips now support multi-line text and are clamped within the window so they no longer extend off-screen
++ Chord-button tooltip rewritten as multi-line list of all click actions
+
+[UI]
++ Note Length dropdown now has visible "Note length" label and is wider so "Time selection" fits
++ Chord Style dropdown widened so all entries are readable
++ Inversion moved to top frame next to Octave (compact "Inv:" / "Oct:" labels) to free space on the chord-name row
++ Chord-name display right-aligned and uses full available width to the right of the dropdowns
++ Top button row shifted slightly left for tighter alignment
++ Removed redundant "Scale:" label from top frame to free space for the new Velocity button
+
+[Drag & Drop]
++ Chord buttons can now be dragged onto progression slots (alternative to Alt+Click). A ghost label follows the cursor and the target slot highlights while dragging.
+
+[Persistence]
++ "Always on Top" and "Tooltips" toggles are now remembered between sessions (saved globally)
++ Preset Loading: Out-of-range scale/chord indices in old preset files are clamped to valid values
+
+[Crash Fixes]
++ Sparse table.concat crash when switching scales (e.g. Pentatonic > Blues) — ProjExtState tables are now self-healing
++ "MediaItem_Take expected" after deleting an item and using Shift+Click — take pointers now validated via ValidatePtr + GetMediaItemTake_Item + TakeIsMIDI
++ Shift+Click insert no longer fails with "attempt to index nil" — `playOrInsertScaleChord` now correctly resolves the selected scale note and chord type before use
+
+[State Management]
++ Chord button highlight no longer stays "stuck" on the slot-chord after Ctrl+Alt+Click → slot select → chord click — `currentlyPlayingChord` is now cleared on every chord-button press
++ New central `resetTransientState()` clears playback overlays (currentlyPlayingChord, slot velocity override, voice-leading reference, drag state, inversion cycle) on stop, slot remove, scale change and progression clear — prevents stale state from leaking between actions
+
 
  ]]></changelog>
-
-<!-- OUDE CHANGELOG (Niet zichtbaar in ReaPack)
-2.3.8
-+ Dyads: Added interval chord types (4th, m3, M3, m2, M2, m6, M6, m7, M7)
-+ Stacked Fifths: Added 5/5 (stacked fifths) and sus2/5 (sus2 stacked) chord types
-+ IDM/Ambient Templates: 16 new progressions inspired by Boards of Canada, Autechre, Aphex Twin
-+ Fifth Stack Voicing: New voicing mode that stacks perfect fifths on each note (BoC-style)
-+ Piano Scroll: Mouse wheel on piano to change octave
-+ Half-beat option: 0.5 beat available for progression slots
-
-2.3.7
-+ Slot Settings Dropdown: Click [+] button on progression slots to open settings panel
-+ Direct arrow controls for Beats, Repeats, Octave, and Inversion
-+ Dropdown appears below the slot, over other content
-+ Click outside dropdown or [+] again to close
-+ Original slot appearance preserved
-
-2.3.6
-+ Progression Templates: 70+ preset progressions (Right-click Load button)
-+ 10 Genre categories: Pop/Rock, Jazz, Blues, Classical, Modal, Minor Keys, EDM, World/Folk
-+ Mode-aware templates: Auto-adapts chord qualities to current scale
-+ Scale validation: Templates filtered by minimum required notes
-+ Safety fix: No more crash when switching scales during progression playback
-
-2.3.4
-+ Theme Bugfix
-
-2.3.3
-+ Custom MIDI Trigger Mapping: Assign any MIDI note to any chord button (Right-click chord)
-+ Column Mode: Trigger entire scale degree columns with single MIDI notes (Right-click trigger button > Mode)
-+ Built-in Preset: "White Keys (C2-B2)" for quick Column Mode setup
-+ Preset System: Save/Load your custom trigger mappings to ChordMaps folder
-+ Visual Indicators: Yellow squares show mapped triggers (top-left for chords, top-right for columns)
-+ Harmonic Compass Redesign: Colored squares in bottom-right corner (replaces border highlight)
-+ Persistent Settings: Harmonic Compass state now saved between sessions
-+ Trigger notes are automatically filtered from chord recognition
-+ Preset Display: Current trigger preset name shown in chord display area
-+ 6 Color Themes: Dark, Light, Color, Neon, Ocean, Mono (click Theme button to cycle)
-
-
-
-2.3.1
-+ Added "Harmonic Compass" (Smart Suggestions): Highlights logical next chords based on functional harmony
-+ Added "Use Selected Chord Types" option to Randomize (Surprise Me) feature (Right-click Dice)
-+ Added Extended Chord Vocabulary (9th, 11th, 13th, 6/9, etc.)
-+ Added "Filter" Dropdown to control chord visibility (Basic, Standard, Jazz)
-+ Added "All" modes to Filter Dropdown (Std All, Jazz All) to show non-scale chords
-+ Replaced "In Scale" toggle with the new Filter Dropdown
-
-
-
-2.3.0
-+ Added Right-Click Context Menu on Chord Buttons
-+ Added "Generate Leading Chords" feature (Right-click > Add ii-V-I)
-+ Added "Tritone Substitution" feature (Right-click > Add ii-bII-I)
-+ Added "Insert to MIDI" option for generated leading chords (Direct insertion)
-+ Added "Add to Progression" option for generated leading chords (Append to slots)
-+ Fixed JSFX Scale Filter syntax error and added Monitor slider
-+ Fixed "Hold" button behavior (now correctly latches notes)
-+ Fixed JSFX button color in Light Theme (now Blue when active)
-+ Fixed crash when inserting generated chords without a selected MIDI item (Auto-creates item)
-
-2.2.9
-+ Added MIDI Trigger Mode: Trigger chords via MIDI keyboard (C1-B1 range)
-+ Added Channel 16 Bypass: Prevents script-generated chords from being distorted by Remap Mode
-+ Added Extended Trigger Mapping: Black keys (C#1-A#1) now trigger scale degrees 8-12 (for Messiaen/10-note scales)
-+ Added "Surprise Me" (Randomize) Dice button to fill empty slots with random chords (weighted I, IV, V, vi)
-+ Added Randomize Settings (Right-click Dice): Progression Length (4/8), Always Start on Tonic, Clear Progression
-+ Added Sync button to sync ChordGun scale with MIDI Editor key snap
-+ Added Fifth Wheel scaling (window size now saves/restores)
-+ Fixed issue with Fifth Wheel window not closing properly
-+ Added "Selection" length option. Time selection is now ONLY used when this option is active.
-+ Improved Workflow: Smart item selection/creation. Keeps items selected for continuous insertion, but allows creating new items by clicking outside existing ones.
-+ Improved Track Selection: Prioritizes Selected Track, then Last Touched Track.
-+ Improved Melody Generator: Uses active track or asks to create new one (no longer sticky)
-+ Fixed crash when playing a progression with empty slots (e.g. empty slot 1). Empty slots are now skipped/silent.
-+ Added Sync Play: Right-click Play button to toggle. Syncs script playback with Reaper transport (Play/Stop).
-+ Improved Playback Timing: Sync Play now prioritizes audio over UI updates for tighter timing.
-+ Added longer note lengths (2 bars, 4 bars, 8 bars)
-+ Changed Note Length selector to a Dropdown menu for easier selection
-+ Renamed "Selection" to "Time Selection" for clarity
-+ Added Per-slot Inversion/Octave storage: Alt+Click now saves the current Octave and Inversion to the progression slot.
-+ Added Hold Slot behavior: Clicking a progression slot now plays the chord as long as the mouse is held down (unless playback is running).
-
-
-2.2.1 /2.2.6
-+ Bug Fixes
-
-2.2.0
-+ Major Refactor: Centralized data management in TK_ChordGun_Data.lua
-+ Added support for 8, 9, and 10 note scales (Extended Messiaen Modes)
-+ Added helper scripts for scale degrees 8, 9, and 10
-+ Added Reset Settings script
-+ Removed legacy Mini version
-+ Added Automatic Voice Leading ("Lead" button) for smooth chord transitions
-+ Added Arpeggiator (Arp) mode with adjustable patterns (Up, Down, Up/Down, Random)
-+ Added Arp speed control (Milliseconds or Grid Sync: 1/4, 1/8, 1/16, etc.)
-+ Added Score View (Staff notation) to the Circle of Fifths window
-+ Added Guitar View (Fretboard) to the Circle of Fifths window
-+ Extended Keyboard Shortcuts to 10 keys (0, ), p, ;, /)
-+ Added Spacebar shortcut to stop all notes
-+ Improved Piano Display to show actual played notes (including inversions/voicings)
-+ Improved UI layout (Chord Text Label position and color)
-+ Added missing 7th chords
-+ Added Light Theme support
-+ Improved Dark Theme visibility for new views
-+ Updated Chromatic View style
-+ General layout improvements
-+ Fixed "ghost notes" bug in Voice Leading
-+ Code cleanup and optimization
-
-2.1.3
-+ Fixed UI layout overlap caused by new chord type (Piano keyboard now positioned correctly below 14th chord row)
-+ Increased base window height to accommodate extra chord row
-
-2.1.2
-+ Added "Minor-Major 7th" chord type (minMaj7) - Essential for Harmonic/Melodic Minor scales
-+ Smart Initial Scaling: Window size now adapts to screen height on first run (prevents oversized window on small screens)
-
-2.1.0
-+ Added "Chromatic" view to Circle of Fifths window (visualizes symmetry of Messiaen modes)
-+ Added "Equivalent Tonic" indicators (Halo rings) in Chromatic view to show limited transpositions
-+ Added Interval Pattern display to chord tooltips (shows steps and cumulative intervals for Messiaen modes)
-+ Added Power Chord (C5) recognition (supports 2-note chords)
-+ Added Melody Generator: Create random melodies based on chord progression (Melody button)
-+ Added Melody Settings (Right-click Melody button): Rhythm Density, Octave Range, Note Selection
-+ Improved Export to Chord Track: Pins track to top, locks height/items, adds to bottom of project
-+ Improved Presets: Now saves/loads Scale Tonic and Scale Type with the progression
-+ Added "Export to Project Regions" (Right-click Insert button)
-+ Added support for running script from Main section (Arrange View) without active MIDI Editor
-+ Added automatic MIDI item creation if no item is selected when inserting chords
-+ Added Font Scale menu options (Small=1.0, Normal=1.25, Big=1.5, Bigger=1.75)
-+ Added "Ratio" menu options (fixed ratio between width and height for non-distorted scaling)
-+ Fixed Inversion logic (prevented compounding inversions)
-+ Fixed MIDI Input sorting (chronological order for better chord detection)
-+ Fixed Melody Generator dissonance (weighted probability for scale notes)
-+ Added "Bass" feature: Add root note 1 or 2 octaves lower (Cycle button: Off, -1, -2)
-+ UI improvements: Reorganized bottom row buttons, polished Chromatic View (dots), restored Fifths View Legend
-+ UI improvements (Right-side button layout, dynamic Chord Display width)
-
-2.0.3 
-+ Fixed bug where scale pattern could be nil during chord recognition, causing crashes (mini)
-
-2.0.0
-+ Added comprehensive scale library with 87 scales across 7 systems
-+ Two-level dropdown system: Scale System → Scale Type
-+ Scale systems: Diatonic (11), Pentatonic (6), Messiaen (32), Jazz (10), World Music (12), Blues & Soul (8), Rock & Metal (8)
-+ Educational tooltips for all scales (description + interval patterns)
-+ World Music: Arabic/Middle Eastern (Hijaz, Persian, Double Harmonic), Japanese (Hirajoshi, In Sen, Iwato), Indian Ragas (Bhairav, Kafi), Hungarian/Gypsy scales
-+ Jazz: Bebop family (4 variants), Modern jazz (Altered, Lydian Dominant, Melodic Minor), Symmetrical diminished scales
-+ Blues & Soul: Blues scales (Major/Minor/Classic), Mixo-Blues, Gospel scales, Soul scale, Dominant Blues
-+ Rock & Metal: Harmonic Minor, Phrygian Dominant, Neapolitan (Minor/Major), Hungarian Major, Super Locrian, Lydian #2, Aeolian b5
-+ Expanded Messiaen from 8 to 32 modes (all transpositions of Mode 1-7)
-+ Expanded Pentatonic from 1 to 6 scales (Major, Minor, Blues, Egyptian, Japanese, Hirajoshi)
-+ Circle of Fifths auto-closes when main window closes
-+ ExtState persistence for both dropdown levels with backwards compatibility
-+ All scale descriptions include: note count, character/mood, musical context, and usage examples
-
-1.3.0
-+ Added 8 Messiaen Modes of Limited Transposition
-+ Modes 1-7.1 with 5-9 notes per scale (symmetrical structures)
-+ Dynamic window width adjusts automatically (5-9 column layouts)
-+ Separate X/Y scaling functions for proper aspect ratio
-+ Keyboard shortcuts extended to support 9 notes (1-9, q-o, a-l, z-.)
-+ Simple numeric scale degree headers (1-9) for non-tonal Messiaen modes
-+ Roman numeral headers preserved for diatonic scales
-+ Circle of Fifths adapts display for Messiaen modes:
-  * Diatonic scales: harmonic distance color coding
-  * Messiaen modes: simplified light blue coloring
-+ Context-aware legend updates automatically
-+ Real-time sync between scale types without closing Circle of Fifths
-
-1.2.2
-+ Some changes to circle of fifths visualization colors and layout
-+ Changed pentatonic scale to better reflect common usage:
-  C Pentatonic: C, D, E, G, A
-  Buttons tonen: I, II, III, V, VI
-
-1.2.0
-+ Added Circle of Fifths visualization window
-+ Interactive circle shows tonic and all scale notes
-+ Harmonic distance color coding (rainbow spectrum)
-+ Click any note to instantly change tonic
-+ Relative minor display below each major note
-+ Sharp/flat notation toggle button
-+ Color legend with scale degree relationships
-+ Brightness boost and thick borders for in-scale notes
-+ Persistent window position across sessions
-+ Real-time bidirectional sync with main window
-+ Scalable UI matching parent window
-
-1.1.0
-+ Added Scale Filter/Remap modes (Off/Filter/Remap button)
-+ Filter mode: blocks notes outside current scale
-+ Remap mode: maps white piano keys to scale notes
-+ Added TK_Scale_Filter.jsfx for live MIDI processing
-+ Setup button: auto-installs JSFX to track's Input FX
-+ Chord recognition system with 13+ chord types
-+ Real-time chord display with scale-aware color coding
-+ Enharmonic spelling based on scale context
-+ Piano keyboard shows remap arrows in Remap mode
-+ All playing notes now show in blue (unified color scheme)
-+ Cross-platform compatible (Windows, macOS, Linux)
-
-1.0.3
-+ Fully resizable window with dynamic scaling
-+ 8-slot chord progression system with playback
-+ Save/load progression presets
-+ INSERT function to add progressions as MIDI
-+ PLAY/STOP progression playback with tempo sync
-+ Configurable beats and repeats per slot
-+ Integrated scrollable help window
-+ Smart window size persistence
-+ Strum mode with adjustable delay
--->
 
         <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun.lua</source>
         <source file="TK_ChordGun/TK_ChordGun_Help.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Help.lua</source>
