@@ -399,6 +399,7 @@ local settings = {
  simple_mixer_eq_curve_bg_color = 0x0D1A1AFF,
  simple_mixer_eq_curve_grid_color = 0x33333388,
  simple_mixer_eq_curve_zero_color = 0x555555FF,
+ simple_mixer_eq_curve_show_dots = true,
  simple_mixer_sidebar_collapsed = true,
  simple_mixer_sidebar_mode = "settings",
  simple_mixer_sidebar_text = "",
@@ -2442,6 +2443,8 @@ function EQ.DrawCurve(ctx, draw_list, x, y, width, height, track, fx_index)
     { label = "LPF", freq = lpf_freq, gain = nil,      active = lpf_on > 0.5,  dot_col = 0x44AAFFFF, freq_idx = STRIP_OFFSET.EQ + 14, freq_min = 4000, freq_max = 20000, gain_idx = nil },
  }
  local dot_r = 3
+ local show_dots = settings.simple_mixer_eq_curve_show_dots ~= false
+ if show_dots then
  for _, band in ipairs(bands) do
   if band.active and band.freq >= 20 and band.freq <= 20000 then
    local t = (math.log(band.freq) - log_min) / (log_max - log_min)
@@ -2494,6 +2497,7 @@ function EQ.DrawCurve(ctx, draw_list, x, y, width, height, track, fx_index)
         end
      end
   end
+ end
  end
 end
 
@@ -9479,12 +9483,16 @@ local function DrawSettingsWindow()
 
      r.ImGui_EndTable(ctx)
     end
+
+    local rv_dots
+    rv_dots, settings.simple_mixer_eq_curve_show_dots = r.ImGui_Checkbox(ctx, "Show band points on curve", settings.simple_mixer_eq_curve_show_dots ~= false)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show draggable EQ band points (dots) on the curve visualization") end
+    if rv_dots then MarkTransportPresetChanged() end
     
     r.ImGui_Unindent(ctx, 10)
    end
    
-  end
-  
+  end  
   if mixer_state.settings_top_tab == 5 then
    mixer_state.settings_tab = 3
    r.ImGui_Spacing(ctx)
