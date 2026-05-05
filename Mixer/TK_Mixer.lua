@@ -1,8 +1,24 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.1.1
+-- @version 1.1.5
 -- @changelog 
 --[[
+  v1.1.5:
+  + Added "+ Add" button in the Sends/Receives section to create sends, receives or hardware outputs directly from the strip
+  + Submenus for Send to Track, Receive from Track, and Hardware Output (stereo + mono) with automatic dedupe of existing routes
+  + Added "Remove" entry in the right-click menu of existing sends, receives and hardware outputs
+  + Added "New Track..." entry in the Send/Receive submenus to create a new track and route to/from it in one step
+  + Added "Auto-add new tracks" toggle in the sidebar: tracks created in REAPER are added to the mixer automatically
+  + Added visual cables between strips for sends/receives, drawn in the source track color
+  + Toggle in Show popup ("Cbl") and full styling controls in the Settings > Sends tab (thickness, opacity, curve, glow, source/destination color)
+  + Cables show direction: square "output" plug at the source, triangular arrow plug at the destination
+  + Optional "Flow animation" toggle in Settings > Sends > Cables (animated dot moving from source to destination)
+  + Patch bar at the bottom of the IO section has a fixed height (8 px) and is included in the strip layout, so the strip bottom no longer falls off-screen when cables are enabled
+  + Cables are no longer drawn for tracks whose IO section is hidden or collapsed
+  + Cables are hidden while any popup/context menu is open, so menus stay fully readable above the strips
+  + Cables are clipped to the scrolling tracks area, so they no longer leak across the sidebar or the right-side master fader
+  + Fixed crash when removing a send/receive (validate destination/source MediaTrack pointer before calling GetTrackName)
+
   v1.1.1:
   + Added CUE Bus mode with active CUE track selection
   + In CUE mode, the fader controls per-track send volume to the active CUE bus
@@ -52,7 +68,7 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('TK Mixer')
 
-local script_version = "1.1.1"
+local script_version = "1.1.5"
 
 local mixer_state = {}
 local TCP_ICON_EXT_KEY = "TK_TCP_ICON"
@@ -111,6 +127,8 @@ mixer_state.track_sendrecv_heights = simple_mixer_track_sendrecv_heights
 mixer_state.hidden_track_guids = {}
 mixer_state.cue_mode_guid = ""
 mixer_state.fx_open_state = simple_mixer_fx_open_state
+mixer_state.strip_rects = {}
+mixer_state.cable_anchors = {}
 mixer_state.editing_track_guid = nil
 mixer_state.editing_track_name = ""
 mixer_state.editing_divider_guid = nil
@@ -217,6 +235,13 @@ local settings = {
  simple_mixer_sendrecv_muted_color = 0x555555FF,
  simple_mixer_sendrecv_text_color = 0xBBBBBBFF,
  simple_mixer_sendrecv_collapsed = false,
+ simple_mixer_show_cables = false,
+ simple_mixer_cables_thickness = 2.5,
+ simple_mixer_cables_alpha = 0.75,
+ simple_mixer_cables_curve_amount = 0.55,
+ simple_mixer_cables_use_dest_color = false,
+ simple_mixer_cables_glow = true,
+ simple_mixer_cables_flow = false,
  simple_mixer_show_master = false,
  simple_mixer_master_position = "left",
  simple_mixer_show_track_buttons = true,
@@ -346,6 +371,7 @@ local settings = {
  simple_mixer_track_name_centered = false,
  simple_mixer_rms_position = "top",
  simple_mixer_auto_all = false,
+ simple_mixer_auto_add_new_tracks = false,
  simple_mixer_button_text_hover_color = nil,
  simple_mixer_button_text_active_color = nil,
  simple_mixer_fader_bg_style = 0,
@@ -3883,6 +3909,135 @@ function CueBus.CopyFromMain(cue_track, project_tracks)
  r.Undo_EndBlock("TK Mixer: Copy main mix to cue", -1)
 end
 
+local SendRecvBuilder = {}
+
+function SendRecvBuilder.GetExistingSendDest(track)
+ local set = {}
+ local count = r.GetTrackNumSends(track, 0)
+ for i = 0, count - 1 do
+  local dst = r.GetTrackSendInfo_Value(track, 0, i, "P_DESTTRACK")
+  if dst then set[r.GetTrackGUID(dst)] = true end
+ end
+ return set
+end
+
+function SendRecvBuilder.GetExistingReceiveSrc(track)
+ local set = {}
+ local count = r.GetTrackNumSends(track, -1)
+ for i = 0, count - 1 do
+  local src = r.GetTrackSendInfo_Value(track, -1, i, "P_SRCTRACK")
+  if src then set[r.GetTrackGUID(src)] = true end
+ end
+ return set
+end
+
+function SendRecvBuilder.AddSend(src, dst)
+ if not src or not dst or src == dst then return -1 end
+ r.Undo_BeginBlock()
+ local idx = r.CreateTrackSend(src, dst)
+ if idx >= 0 then
+  r.SetTrackSendInfo_Value(src, 0, idx, "I_SENDMODE", 0)
+ end
+ r.Undo_EndBlock("TK Mixer: Add send", -1)
+ return idx
+end
+
+function SendRecvBuilder.AddReceive(this_track, other_track)
+ if not this_track or not other_track or this_track == other_track then return -1 end
+ r.Undo_BeginBlock()
+ local idx = r.CreateTrackSend(other_track, this_track)
+ if idx >= 0 then
+  r.SetTrackSendInfo_Value(other_track, 0, idx, "I_SENDMODE", 0)
+ end
+ r.Undo_EndBlock("TK Mixer: Add receive", -1)
+ return idx
+end
+
+function SendRecvBuilder.AddHardwareOut(track, channel, is_stereo)
+ if not track then return -1 end
+ r.Undo_BeginBlock()
+ local idx = r.CreateTrackSend(track, nil)
+ if idx >= 0 then
+  local dstchan = channel
+  if not is_stereo then
+   dstchan = channel | 1024
+  end
+  r.SetTrackSendInfo_Value(track, 1, idx, "I_DSTCHAN", dstchan)
+ end
+ r.Undo_EndBlock("TK Mixer: Add hardware output", -1)
+ return idx
+end
+
+function SendRecvBuilder.PromptNewTrackName(default_name)
+ local ok, retval = r.GetUserInputs("New Track", 1, "Track name:,extrawidth=200", default_name or "")
+ if not ok then return nil end
+ retval = retval and retval:gsub("^%s+", ""):gsub("%s+$", "") or ""
+ if retval == "" then return nil end
+ return retval
+end
+
+function SendRecvBuilder.CreateNewTrackAtEnd(name, color)
+ local idx = r.CountTracks(0)
+ r.InsertTrackAtIndex(idx, true)
+ local new_track = r.GetTrack(0, idx)
+ if new_track and name then
+  r.GetSetMediaTrackInfo_String(new_track, "P_NAME", name, true)
+ end
+ if new_track and color and color ~= 0 then
+  r.SetTrackColor(new_track, color)
+ end
+ return new_track
+end
+
+function SendRecvBuilder.AddSendToNewTrack(src)
+ if not src then return end
+ local name = SendRecvBuilder.PromptNewTrackName("Send Dest")
+ if not name then return end
+ r.Undo_BeginBlock()
+ local new_track = SendRecvBuilder.CreateNewTrackAtEnd(name)
+ if new_track then
+  local idx = r.CreateTrackSend(src, new_track)
+  if idx >= 0 then
+   r.SetTrackSendInfo_Value(src, 0, idx, "I_SENDMODE", 0)
+  end
+ end
+ r.Undo_EndBlock("TK Mixer: Add send to new track", -1)
+end
+
+function SendRecvBuilder.AddReceiveFromNewTrack(this_track)
+ if not this_track then return end
+ local name = SendRecvBuilder.PromptNewTrackName("Receive Src")
+ if not name then return end
+ r.Undo_BeginBlock()
+ local new_track = SendRecvBuilder.CreateNewTrackAtEnd(name)
+ if new_track then
+  local idx = r.CreateTrackSend(new_track, this_track)
+  if idx >= 0 then
+   r.SetTrackSendInfo_Value(new_track, 0, idx, "I_SENDMODE", 0)
+  end
+ end
+ r.Undo_EndBlock("TK Mixer: Add receive from new track", -1)
+end
+
+function SendRecvBuilder.GetHardwareOutputs()
+ local outs = r.GetNumAudioOutputs()
+ local stereo = {}
+ local mono = {}
+ for i = 0, outs - 1 do
+  local _, name = r.GetOutputChannelName(i)
+  if not name or name == "" then name = "Output " .. (i + 1) end
+  mono[#mono + 1] = { label = name, channel = i, is_stereo = false }
+ end
+ for i = 0, outs - 2, 2 do
+  local _, n1 = r.GetOutputChannelName(i)
+  local _, n2 = r.GetOutputChannelName(i + 1)
+  if not n1 or n1 == "" then n1 = tostring(i + 1) end
+  if not n2 or n2 == "" then n2 = tostring(i + 2) end
+  stereo[#stereo + 1] = { label = n1 .. " / " .. n2, channel = i, is_stereo = true }
+ end
+ return stereo, mono
+end
+
 local function DrawMixerSidebarParams(mixer_ctx, sidebar_width)
  local sel_for_top = r.GetSelectedTrack(0, 0) or r.GetMasterTrack(0)
  local btn_width_top = math.floor((sidebar_width - 20) / 2)
@@ -4340,6 +4495,16 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
  end
  if r.ImGui_IsItemHovered(mixer_ctx) then r.ImGui_SetTooltip(mixer_ctx, "Remove All Tracks from Mixer") end
  r.ImGui_Spacing(mixer_ctx)
+ do
+  local rv_aa, new_aa = r.ImGui_Checkbox(mixer_ctx, "Auto-add new tracks##autoaddnew", settings.simple_mixer_auto_add_new_tracks or false)
+  if rv_aa then
+   settings.simple_mixer_auto_add_new_tracks = new_aa
+   SaveMixerSettings()
+  end
+  if r.ImGui_IsItemHovered(mixer_ctx) then
+   r.ImGui_SetTooltip(mixer_ctx, "Automatically add tracks to the mixer when they are created in REAPER")
+  end
+ end
  r.ImGui_Separator(mixer_ctx)
  r.ImGui_Spacing(mixer_ctx)
  if DrawSectionHeader(mixer_ctx, "Show", "simple_mixer_show_open", sidebar_width) then
@@ -4424,6 +4589,10 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    r.ImGui_TableNextColumn(mixer_ctx)
    rv, settings.simple_mixer_show_trim = r.ImGui_Checkbox(mixer_ctx, "Trim##QT", settings.simple_mixer_show_trim or false)
    if rv then changed = true end
+   r.ImGui_TableNextColumn(mixer_ctx)
+   rv, settings.simple_mixer_show_cables = r.ImGui_Checkbox(mixer_ctx, "Cbl##QT", settings.simple_mixer_show_cables or false)
+   if rv then changed = true end
+   if r.ImGui_IsItemHovered(mixer_ctx) then r.ImGui_SetTooltip(mixer_ctx, "Show send/receive cables between strips") end
    r.ImGui_EndTable(mixer_ctx)
    if changed then SaveMixerSettings() end
   end
@@ -4898,10 +5067,14 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
  local sendrecv_height = 0
  local sendrecv_divider_height = 0
+ local patch_bar_height = 0
  if settings.simple_mixer_show_sendrecv and not settings.simple_mixer_sendrecv_collapsed then
     local sendrecv_section_height = mixer_state.track_sendrecv_heights[track_guid_for_fx] or settings.simple_mixer_sendrecv_section_height or 72
     sendrecv_height = sendrecv_section_height + 4
     sendrecv_divider_height = 6
+    if settings.simple_mixer_show_cables then
+     patch_bar_height = 8
+    end
  end
  local sendrecv_handle_height = 0
  if settings.simple_mixer_show_sendrecv and show_fx_handle then
@@ -4914,7 +5087,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  elseif not settings.simple_mixer_fx_section_collapsed then
   fixed_padding = fixed_padding - 4
  end
- local slider_height = base_slider_height - track_fx_height - track_number_height - vu_meter_height - comp_module_height - lim_module_height - trim_module_height - eq_module_height - fx_divider_height - sendrecv_height - sendrecv_divider_height - sendrecv_handle_height - rms_height - pan_height - width_height - buttons_height - fx_handle_height - name_height - routing_indicator_height - icon_section_height - fixed_padding
+ local slider_height = base_slider_height - track_fx_height - track_number_height - vu_meter_height - comp_module_height - lim_module_height - trim_module_height - eq_module_height - fx_divider_height - sendrecv_height - sendrecv_divider_height - sendrecv_handle_height - patch_bar_height - rms_height - pan_height - width_height - buttons_height - fx_handle_height - name_height - routing_indicator_height - icon_section_height - fixed_padding
  if slider_height < 50 then slider_height = 50 end
  
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.simple_mixer_channel_rounding or 0)
@@ -5219,7 +5392,31 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   end
   local sr_draw_list = r.ImGui_GetWindowDrawList(ctx)
   r.ImGui_DrawList_AddLine(sr_draw_list, sr_divider_x, sr_divider_y, sr_divider_x + track_width, sr_divider_y, sr_divider_color, 1)
-  r.ImGui_Dummy(ctx, 0, 2)
+  if settings.simple_mixer_show_cables and mixer_state.cable_anchors then
+   local patch_h = 8
+   local patch_y = sr_divider_y + 1
+   local patch_color
+   if sr_tr_color and sr_tr_color ~= 0 then
+    local pr, pg, pb = r.ColorFromNative(sr_tr_color)
+    patch_color = r.ImGui_ColorConvertDouble4ToU32(pr/255, pg/255, pb/255, 0.95)
+   else
+    patch_color = 0x888888FF
+   end
+   r.ImGui_DrawList_AddRectFilled(sr_draw_list, sr_divider_x, patch_y, sr_divider_x + track_width, patch_y + patch_h, patch_color, 2)
+   r.ImGui_DrawList_AddRect(sr_draw_list, sr_divider_x, patch_y, sr_divider_x + track_width, patch_y + patch_h, 0x000000AA, 2, 0, 1)
+   local anchor_key = is_master and "__master__" or r.GetTrackGUID(track)
+   if anchor_key then
+    mixer_state.cable_anchors[anchor_key] = {
+     x = sr_divider_x + track_width * 0.5,
+     y = patch_y + patch_h,
+     track = track,
+     is_master = is_master,
+    }
+   end
+   r.ImGui_Dummy(ctx, 0, 2 + patch_h)
+  else
+   r.ImGui_Dummy(ctx, 0, 2)
+  end
 
   local sendrecv_bg = settings.simple_mixer_sendrecv_color or 0x2F2F2FFF
   local send_color = settings.simple_mixer_sendrecv_send_color or 0x3D4A3AFF
@@ -5256,7 +5453,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     r.ImGui_PushID(ctx, "sr_send_" .. send_idx)
     local dest_track = r.GetTrackSendInfo_Value(track, 0, send_idx, "P_DESTTRACK")
     local dest_name = ""
-    if dest_track then
+    if dest_track and r.ValidatePtr2(0, dest_track, "MediaTrack*") then
      local _, dn = r.GetTrackName(dest_track)
      dest_name = dn or ""
     end
@@ -5316,6 +5513,12 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
       r.SetOnlyTrackSelected(track)
       r.Main_OnCommand(40293, 0)
      end
+     r.ImGui_Separator(ctx)
+     if r.ImGui_MenuItem(ctx, "Remove Send") then
+      r.Undo_BeginBlock()
+      r.RemoveTrackSend(track, 0, send_idx)
+      r.Undo_EndBlock("TK Mixer: Remove send", -1)
+     end
      r.ImGui_PopStyleColor(ctx)
      r.ImGui_EndPopup(ctx)
     end
@@ -5328,7 +5531,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
      r.ImGui_PushID(ctx, "sr_recv_" .. recv_idx)
      local src_track = r.GetTrackSendInfo_Value(track, -1, recv_idx, "P_SRCTRACK")
      local src_name = ""
-     if src_track then
+     if src_track and r.ValidatePtr2(0, src_track, "MediaTrack*") then
       local _, sn = r.GetTrackName(src_track)
       src_name = sn or ""
      end
@@ -5373,6 +5576,12 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
       if r.ImGui_MenuItem(ctx, "Open Routing") then
        r.SetOnlyTrackSelected(track)
        r.Main_OnCommand(40293, 0)
+      end
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, "Remove Receive") then
+       r.Undo_BeginBlock()
+       r.RemoveTrackSend(track, -1, recv_idx)
+       r.Undo_EndBlock("TK Mixer: Remove receive", -1)
       end
       r.ImGui_PopStyleColor(ctx)
       r.ImGui_EndPopup(ctx)
@@ -5426,12 +5635,122 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
       r.SetOnlyTrackSelected(track)
       r.Main_OnCommand(40293, 0)
      end
+     r.ImGui_Separator(ctx)
+     if r.ImGui_MenuItem(ctx, "Remove Output") then
+      r.Undo_BeginBlock()
+      r.RemoveTrackSend(track, 1, hw_idx)
+      r.Undo_EndBlock("TK Mixer: Remove hardware output", -1)
+     end
      r.ImGui_PopStyleColor(ctx)
      r.ImGui_EndPopup(ctx)
     end
 
     r.ImGui_PopID(ctx)
    end
+
+   r.ImGui_PushID(ctx, "sr_add_" .. tostring(section_id))
+   local add_bg = (send_color & 0xFFFFFF00) | 0x66
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), add_bg)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), send_color)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), send_color)
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+   if r.ImGui_Button(ctx, "+ Add##addsr", track_width, sendrecv_row_height) then
+    r.ImGui_OpenPopup(ctx, "AddSendRecvMenu##" .. tostring(section_id))
+   end
+   r.ImGui_PopStyleColor(ctx, 4)
+
+   if r.ImGui_BeginPopup(ctx, "AddSendRecvMenu##" .. tostring(section_id)) then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), sendrecv_text_color)
+
+    if not is_master then
+     local existing_sends = SendRecvBuilder.GetExistingSendDest(track)
+     if r.ImGui_BeginMenu(ctx, "Send to Track") then
+      if r.ImGui_MenuItem(ctx, "New Track...##snd_new") then
+       SendRecvBuilder.AddSendToNewTrack(track)
+      end
+      r.ImGui_Separator(ctx)
+      local total_tr = r.CountTracks(0)
+      local any = false
+      for ti = 0, total_tr - 1 do
+       local other = r.GetTrack(0, ti)
+       if other and other ~= track then
+        local oguid = r.GetTrackGUID(other)
+        if not existing_sends[oguid] then
+         local _, oname = r.GetTrackName(other)
+         if not oname or oname == "" then oname = "Track " .. (ti + 1) end
+         if r.ImGui_MenuItem(ctx, (ti + 1) .. ": " .. oname .. "##snd_" .. oguid) then
+          SendRecvBuilder.AddSend(track, other)
+         end
+         any = true
+        end
+       end
+      end
+      if not any then
+       r.ImGui_TextDisabled(ctx, "(no available tracks)")
+      end
+      r.ImGui_EndMenu(ctx)
+     end
+
+     if settings.simple_mixer_sendrecv_show_receives ~= false then
+      local existing_recvs = SendRecvBuilder.GetExistingReceiveSrc(track)
+      if r.ImGui_BeginMenu(ctx, "Receive from Track") then
+       if r.ImGui_MenuItem(ctx, "New Track...##rcv_new") then
+        SendRecvBuilder.AddReceiveFromNewTrack(track)
+       end
+       r.ImGui_Separator(ctx)
+       local total_tr = r.CountTracks(0)
+       local any = false
+       for ti = 0, total_tr - 1 do
+        local other = r.GetTrack(0, ti)
+        if other and other ~= track then
+         local oguid = r.GetTrackGUID(other)
+         if not existing_recvs[oguid] then
+          local _, oname = r.GetTrackName(other)
+          if not oname or oname == "" then oname = "Track " .. (ti + 1) end
+          if r.ImGui_MenuItem(ctx, (ti + 1) .. ": " .. oname .. "##rcv_" .. oguid) then
+           SendRecvBuilder.AddReceive(track, other)
+          end
+          any = true
+         end
+        end
+       end
+       if not any then
+        r.ImGui_TextDisabled(ctx, "(no available tracks)")
+       end
+       r.ImGui_EndMenu(ctx)
+      end
+     end
+    end
+
+    if r.ImGui_BeginMenu(ctx, "Hardware Output") then
+     local stereo_outs, mono_outs = SendRecvBuilder.GetHardwareOutputs()
+     if #stereo_outs == 0 and #mono_outs == 0 then
+      r.ImGui_TextDisabled(ctx, "(no hardware outputs)")
+     else
+      for _, hw in ipairs(stereo_outs) do
+       if r.ImGui_MenuItem(ctx, hw.label .. "##hwst_" .. hw.channel) then
+        SendRecvBuilder.AddHardwareOut(track, hw.channel, 1)
+       end
+      end
+      if #mono_outs > 0 then
+       r.ImGui_Separator(ctx)
+       if r.ImGui_BeginMenu(ctx, "Mono") then
+        for _, hw in ipairs(mono_outs) do
+         if r.ImGui_MenuItem(ctx, hw.label .. "##hwmn_" .. hw.channel) then
+          SendRecvBuilder.AddHardwareOut(track, hw.channel, 0)
+         end
+        end
+        r.ImGui_EndMenu(ctx)
+       end
+      end
+     end
+     r.ImGui_EndMenu(ctx)
+    end
+
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_EndPopup(ctx)
+   end
+   r.ImGui_PopID(ctx)
 
    if item_count == 0 then
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), muted_color)
@@ -7414,6 +7733,14 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  r.ImGui_PopID(ctx)
  r.ImGui_EndGroup(ctx)
  r.ImGui_PopStyleVar(ctx)
+ if settings.simple_mixer_show_cables and mixer_state.strip_rects then
+  local rmin_x, rmin_y = r.ImGui_GetItemRectMin(ctx)
+  local rmax_x, rmax_y = r.ImGui_GetItemRectMax(ctx)
+  local key = is_master and "__master__" or r.GetTrackGUID(track)
+  if key then
+   mixer_state.strip_rects[key] = { x1 = rmin_x, y1 = rmin_y, x2 = rmax_x, y2 = rmax_y, track = track, is_master = is_master }
+  end
+ end
  return should_remove or false, should_delete or false, should_delete_selected or false
 end
 
@@ -8900,6 +9227,35 @@ local function DrawSettingsWindow()
     r.ImGui_EndTable(ctx)
    end
 
+   r.ImGui_Spacing(ctx)
+   r.ImGui_Text(ctx, "Cables:")
+   r.ImGui_Separator(ctx)
+
+   rv, settings.simple_mixer_show_cables = r.ImGui_Checkbox(ctx, "Show send/receive cables", settings.simple_mixer_show_cables or false)
+   if rv then MarkTransportPresetChanged() end
+
+   if settings.simple_mixer_show_cables then
+    rv, settings.simple_mixer_cables_thickness = r.ImGui_SliderDouble(ctx, "Thickness##Cab", settings.simple_mixer_cables_thickness or 2.5, 1.0, 8.0, "%.1f px")
+    if rv then MarkTransportPresetChanged() end
+
+    rv, settings.simple_mixer_cables_alpha = r.ImGui_SliderDouble(ctx, "Opacity##Cab", settings.simple_mixer_cables_alpha or 0.75, 0.1, 1.0, "%.2f")
+    if rv then MarkTransportPresetChanged() end
+
+    rv, settings.simple_mixer_cables_curve_amount = r.ImGui_SliderDouble(ctx, "Curve Amount##Cab", settings.simple_mixer_cables_curve_amount or 0.55, 0.0, 1.5, "%.2f")
+    if rv then MarkTransportPresetChanged() end
+
+    rv, settings.simple_mixer_cables_glow = r.ImGui_Checkbox(ctx, "Glow##Cab", settings.simple_mixer_cables_glow ~= false)
+    if rv then MarkTransportPresetChanged() end
+
+    rv, settings.simple_mixer_cables_flow = r.ImGui_Checkbox(ctx, "Flow animation##Cab", settings.simple_mixer_cables_flow or false)
+    if rv then MarkTransportPresetChanged() end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Animated dot moves from source to destination along the cable") end
+
+    rv, settings.simple_mixer_cables_use_dest_color = r.ImGui_Checkbox(ctx, "Use destination color##Cab", settings.simple_mixer_cables_use_dest_color or false)
+    if rv then MarkTransportPresetChanged() end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Off: cable uses source track color\nOn: cable uses destination track color") end
+   end
+
   end
   
   if mixer_state.settings_top_tab == 7 then
@@ -9162,6 +9518,109 @@ local function DrawSettingsWindow()
  PopSettingsTheme(ctx)
  if not open then settings.simple_mixer_settings_popup_open = false end
 end
+
+local function DrawMixerCables(ctx)
+ local rects = mixer_state.strip_rects
+ if not rects then return end
+ if r.ImGui_IsPopupOpen(ctx, "", (r.ImGui_PopupFlags_AnyPopupId and r.ImGui_PopupFlags_AnyPopupId() or 1024) | (r.ImGui_PopupFlags_AnyPopupLevel and r.ImGui_PopupFlags_AnyPopupLevel() or 2048)) then return end
+ local anchors = mixer_state.cable_anchors or {}
+ local thickness = settings.simple_mixer_cables_thickness or 2.5
+ local alpha = settings.simple_mixer_cables_alpha or 0.75
+ if alpha < 0.05 then return end
+ local curve_amount = settings.simple_mixer_cables_curve_amount or 0.55
+ local use_dest_color = settings.simple_mixer_cables_use_dest_color == true
+ local glow = settings.simple_mixer_cables_glow ~= false
+ local draw_list = r.ImGui_GetForegroundDrawList(ctx)
+ local clip = mixer_state.cables_clip_rect
+ if clip then
+  r.ImGui_DrawList_PushClipRect(draw_list, clip.x1, clip.y1, clip.x2, clip.y2, 0)
+ end
+
+ local function track_color_u32(track, fallback_alpha)
+  local c = r.GetTrackColor(track)
+  if c == 0 then return r.ImGui_ColorConvertDouble4ToU32(0.5, 0.7, 1.0, fallback_alpha) end
+  local cr, cg, cb = r.ColorFromNative(c)
+  return r.ImGui_ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, fallback_alpha)
+ end
+
+ local function get_anchor(key)
+  local a = anchors[key]
+  if a then return a.x, a.y end
+  return nil, nil
+ end
+
+ local seen = {}
+ for guid, src_rect in pairs(rects) do
+  local src_track = src_rect.track
+  if src_track and not src_rect.is_master then
+   local sx, sy = get_anchor(guid)
+   if sx then
+    local send_count = r.GetTrackNumSends(src_track, 0)
+    for i = 0, send_count - 1 do
+     local dst_track = r.GetTrackSendInfo_Value(src_track, 0, i, "P_DESTTRACK")
+     if dst_track and dst_track ~= src_track then
+      local dst_is_master = r.GetMasterTrack(0) == dst_track
+      local dst_key = dst_is_master and "__master__" or r.GetTrackGUID(dst_track)
+      local dx, dy = get_anchor(dst_key)
+      if dx then
+       local pair_key = guid .. "->" .. dst_key
+       if not seen[pair_key] then
+        seen[pair_key] = true
+        local muted = r.GetTrackSendInfo_Value(src_track, 0, i, "B_MUTE") == 1
+        local color_track = use_dest_color and dst_track or src_track
+        local cable_alpha = alpha * (muted and 0.35 or 1.0)
+        if cable_alpha > 1 then cable_alpha = 1 end
+        local color = track_color_u32(color_track, cable_alpha)
+
+        local dist = math.abs(dx - sx)
+        local dip = math.max(24, dist * curve_amount)
+        local c1x = sx
+        local c1y = sy + dip
+        local c2x = dx
+        local c2y = dy + dip
+
+        if glow then
+         local glow_alpha = cable_alpha * 0.35
+         if glow_alpha > 1 then glow_alpha = 1 end
+         local glow_color = track_color_u32(color_track, glow_alpha)
+         r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, glow_color, thickness * 2.6, 32)
+        end
+        r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, color, thickness, 32)
+
+        local plug_alpha = math.min(1, cable_alpha + 0.15)
+        local plug_color = track_color_u32(color_track, plug_alpha)
+        local outline_color = r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, math.min(1, cable_alpha + 0.2))
+
+        local out_size = thickness * 1.8
+        r.ImGui_DrawList_AddRectFilled(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, plug_color, 1)
+        r.ImGui_DrawList_AddRect(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, outline_color, 1, 0, 1)
+
+        local arrow_size = thickness * 2.4
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, plug_color)
+        r.ImGui_DrawList_AddTriangle(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, outline_color, 1)
+
+        if settings.simple_mixer_cables_flow and not muted then
+         local cycle = 1.6
+         local t = (r.time_precise() % cycle) / cycle
+         local u = 1 - t
+         local b0 = u*u*u; local b1 = 3*u*u*t; local b2 = 3*u*t*t; local b3 = t*t*t
+         local fx = b0*sx + b1*c1x + b2*c2x + b3*dx
+         local fy = b0*sy + b1*c1y + b2*c2y + b3*dy
+         local dot_color = track_color_u32(color_track, math.min(1, cable_alpha + 0.25))
+         r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, thickness * 1.4, dot_color, 12)
+        end
+       end
+      end
+     end
+    end
+   end
+  end
+ end
+ if clip then
+  r.ImGui_DrawList_PopClipRect(draw_list)
+ end
+end
+
 local function DrawSimpleMixerWindow()
  if not settings.simple_mixer_window_open then return end
 
@@ -9174,6 +9633,23 @@ local function DrawSimpleMixerWindow()
 
  local project_mixer_tracks = GetProjectMixerTracks()
  mixer_state.hidden_track_guids = GetProjectMixerHiddenTracks()
+
+ if settings.simple_mixer_auto_add_new_tracks and not settings.simple_mixer_auto_all then
+  local existing_set = {}
+  for _, g in ipairs(project_mixer_tracks) do existing_set[g] = true end
+  local num_tracks = r.CountTracks(0)
+  local added = false
+  for i = 0, num_tracks - 1 do
+   local track = r.GetTrack(0, i)
+   local guid = r.GetTrackGUID(track)
+   if not existing_set[guid] then
+    table.insert(project_mixer_tracks, guid)
+    existing_set[guid] = true
+    added = true
+   end
+  end
+  if added then SaveProjectMixerTracks(project_mixer_tracks) end
+ end
 
  if settings.simple_mixer_auto_all then
   local visible_guids = {}
@@ -9335,6 +9811,10 @@ local function DrawSimpleMixerWindow()
   r.ImGui_SameLine(mixer_ctx, 0, 4)
 
   if project_mixer_tracks and #project_mixer_tracks > 0 then
+   if settings.simple_mixer_show_cables then
+    mixer_state.strip_rects = {}
+    mixer_state.cable_anchors = {}
+   end
    local track_width = settings.simple_mixer_channel_width or settings.simple_mixer_track_width or 70
    local avail_width, avail_height = r.ImGui_GetContentRegionAvail(mixer_ctx)
    local _, window_padding_y = r.ImGui_GetStyleVar(mixer_ctx, r.ImGui_StyleVar_WindowPadding())
@@ -9427,6 +9907,11 @@ local function DrawSimpleMixerWindow()
    local master_right_width = (settings.simple_mixer_show_master and settings.simple_mixer_master_position == "right") and (track_width + 8) or 0
    local child_width = master_right_width > 0 and (avail_width - master_right_width - pinned_width) or (pinned_width > 0 and (avail_width - pinned_width) or 0)
    if r.ImGui_BeginChild(mixer_ctx, "MixerTracks", child_width, avail_height, r.ImGui_ChildFlags_None(), r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
+    do
+     local _wx, _wy = r.ImGui_GetWindowPos(mixer_ctx)
+     local _ww, _wh = r.ImGui_GetWindowSize(mixer_ctx)
+     mixer_state.cables_clip_rect = { x1 = _wx, y1 = _wy, x2 = _wx + _ww, y2 = _wy + _wh }
+    end
     local mixer_tracks_hovered = r.ImGui_IsWindowHovered(mixer_ctx, r.ImGui_HoveredFlags_ChildWindows())
     local pending_wheel_y = r.ImGui_GetMouseWheel(mixer_ctx)
     local pending_delete = r.ImGui_IsKeyPressed(mixer_ctx, r.ImGui_Key_Delete())
@@ -10083,6 +10568,10 @@ local function DrawSimpleMixerWindow()
      r.ImGui_EndChild(mixer_ctx)
     end
     r.ImGui_PopStyleColor(mixer_ctx, 1)
+   end
+
+   if settings.simple_mixer_show_cables then
+    DrawMixerCables(mixer_ctx)
    end
   else
    local avail_w, avail_h = r.ImGui_GetContentRegionAvail(mixer_ctx)

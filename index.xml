@@ -204,7 +204,7 @@
 
 <category name="Mixer">
     <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
-        <version name="1.1.1" author="TouristKiller" time="2026-05-03T15:30:00Z">
+        <version name="1.1.5" author="TouristKiller" time="2026-05-05T02:10:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/icon_browser.lua</source>
@@ -214,6 +214,22 @@
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
             <changelog><![CDATA[
    
+    v1.1.5:
+    + Added "+ Add" button in the Sends/Receives section to create sends, receives or hardware outputs directly from the strip
+    + Submenus for Send to Track, Receive from Track, and Hardware Output (stereo + mono) with automatic dedupe of existing routes
+    + Added "Remove" entry in the right-click menu of existing sends, receives and hardware outputs
+    + Added "New Track..." entry in the Send/Receive submenus to create a new track and route to/from it in one step
+    + Added "Auto-add new tracks" toggle in the sidebar: tracks created in REAPER are added to the mixer automatically
+    + Added visual cables between strips for sends/receives, drawn in the source track color
+    + Toggle in Show popup ("Cbl") and full styling controls in the Settings > Sends tab (thickness, opacity, curve, glow, source/destination color)
+    + Cables show direction: square "output" plug at the source, triangular arrow plug at the destination
+    + Optional "Flow animation" toggle in Settings > Sends > Cables (animated dot moving from source to destination)
+    + Patch bar at the bottom of the IO section has a fixed height (8 px) and is included in the strip layout, so the strip bottom no longer falls off-screen when cables are enabled
+    + Cables are no longer drawn for tracks whose IO section is hidden or collapsed
+    + Cables are hidden while any popup/context menu is open, so menus stay fully readable above the strips
+    + Cables are clipped to the scrolling tracks area, so they no longer leak across the sidebar or the right-side master fader
+    + Fixed crash when removing a send/receive (validate destination/source MediaTrack pointer before calling GetTrackName)
+
     v1.1.1:
     + Added CUE Bus mode with active CUE track selection
     + In CUE mode, the fader controls per-track send volume to the active CUE bus
