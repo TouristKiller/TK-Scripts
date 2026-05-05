@@ -1,8 +1,13 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.7.0
+-- @version 0.7.1
 -- @changelog:
 --[[ 
+    v0.7.1:
+        + Cross-script integration with TK Mixer Instrument Rack: drag plugins from the Mini browser onto rack FX tiles (insert) or onto the rack background (append)
+        + Publishes drag state and "running"/heartbeat ExtState so TK Mixer can detect, target and toggle the browser
+        + Sets running=false on script exit (clean state for external launchers)
+
     v0.7.0:
         + Sends/Receives panel: Routing view now offers two modes via a Matrix / Hubs switcher. Hubs view groups all incoming sends per destination track (collapsable), with per-send Vol/Pan/Mute/Phase/Mono/Send mode/Delete controls and an "+ Add source..." button. Right-click a hub or click a source name to select that track in REAPER.
         + Sends/Receives panel: new filter bar above both views with "Filter tracks..." search, "Only routed" (hide unrouted tracks), "Selected track only" (focus on rows/columns related to the current track), and "Group by folder" (matrix only, tints rows/columns per parent folder). Filter state is persisted.
@@ -3629,6 +3634,7 @@ local TKFXfonts = {
 
 
 function exit()
+    pcall(function() r.SetExtState("TK_FX_BROWSER_MINI", "running", "false", true) end)
     pcall(function() if save_projects_info and projects then save_projects_info(projects) end end)
     if ctx then
         
@@ -24701,12 +24707,70 @@ end
 
 -- Centralized drag & drop handling function
 function HandleDragAndDrop()
+    if config.enable_drag_add_fx and dragging_fx_name then
+        local pubs = GetDraggedPluginNames() or { dragging_fx_name }
+        if #pubs == 0 then pubs = { dragging_fx_name } end
+        r.SetExtState("TKFXB", "drag_fx", table.concat(pubs, "\n"), false)
+    elseif r.HasExtState("TKFXB", "drag_fx") then
+        r.DeleteExtState("TKFXB", "drag_fx", false)
+    end
     if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
         dragging_fx_name = nil
         potential_drag_fx_name = nil
+        if r.HasExtState("TKFXB", "drag_fx") then r.DeleteExtState("TKFXB", "drag_fx", false) end
         return
     end
     if config.enable_drag_add_fx and dragging_fx_name and r.ImGui_IsMouseReleased(ctx,0) then
+        if r.GetExtState("TKFXB", "drag_consumed") == "1" then
+            r.DeleteExtState("TKFXB", "drag_consumed", false)
+            r.DeleteExtState("TKFXB", "drag_fx", false)
+            dragging_fx_name = nil
+            potential_drag_fx_name = nil
+            drag_drop_target_folder = nil
+            chain_builder_hovered = false
+            info_trackfx_drop_hovered = false
+            info_itemfx_drop_hovered = false
+            info_inputfx_drop_hovered = false
+            return
+        end
+        local mix_target = r.GetExtState("TKMIX", "rack_target")
+        if mix_target and mix_target ~= "" then
+            local guid, idx_str = mix_target:match("^(.-)|(%-?%d+)$")
+            local insert_idx = tonumber(idx_str or "")
+            local target_track = nil
+            if guid and guid ~= "" then
+                local cnt = r.CountTracks(0)
+                for ti = 0, cnt - 1 do
+                    local t = r.GetTrack(0, ti)
+                    if r.GetTrackGUID(t) == guid then target_track = t break end
+                end
+            end
+            if target_track and insert_idx then
+                local plugins = GetDraggedPluginNames()
+                if plugins and #plugins > 0 then
+                    r.Undo_BeginBlock()
+                    for k, pname in ipairs(plugins) do
+                        if insert_idx < 0 then
+                            r.TrackFX_AddByName(target_track, pname, false, -1)
+                        else
+                            r.TrackFX_AddByName(target_track, pname, false, -1000 - (insert_idx + k - 1))
+                        end
+                        LAST_USED_FX = pname
+                    end
+                    r.Undo_EndBlock("Add FX to Mixer Rack", -1)
+                end
+            end
+            r.DeleteExtState("TKMIX", "rack_target", false)
+            r.DeleteExtState("TKFXB", "drag_fx", false)
+            dragging_fx_name = nil
+            potential_drag_fx_name = nil
+            drag_drop_target_folder = nil
+            chain_builder_hovered = false
+            info_trackfx_drop_hovered = false
+            info_itemfx_drop_hovered = false
+            info_inputfx_drop_hovered = false
+            return
+        end
         if drag_drop_target_folder then
             local plugins = GetDraggedPluginNames()
             if drag_drop_target_folder.type == "custom" then
@@ -24833,6 +24897,7 @@ function HandleDragAndDrop()
         end
         dragging_fx_name = nil
         potential_drag_fx_name = nil
+        if r.HasExtState("TKFXB", "drag_fx") then r.DeleteExtState("TKFXB", "drag_fx", false) end
     end
 end
 
@@ -24875,6 +24940,7 @@ function Main()
 
     
     SetRunningState(true)
+    r.SetExtState("TK_FX_BROWSER_MINI", "heartbeat", tostring(r.time_precise()), false)
     MaybeClearCaches()
 
     do
