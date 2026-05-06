@@ -1,8 +1,15 @@
--- @description TK FX BROWSER Mini
+﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.7.1
+-- @version 0.7.2
 -- @changelog:
 --[[ 
+    v0.7.2:
+        + Sends/Receives panel: new Patchbay view (third routing mode next to Matrix and Hubs). Tracks are shown as draggable nodes with input/output pins, sends as bezier cables colored by send mode (post-fader / pre-fader-post-FX / pre-FX), thickness based on send volume. Drag from an output pin to another track's input pin to create a send. Right-click a cable for inline volume/pan/mute/phase/mono/mode/delete controls. Auto-layout via topological columns; node positions persisted per project.
+        + Patchbay: Master track included as virtual node (gold accent). Main-sends shown as cables to Master, drag from a track output pin to the Master input pin to enable main-send, right-click cable for vol/pan/disable.
+        + Sends/Receives panel: now matches the Max variant exactly. Removed the legacy single-track Sends/Receives UI and the "Show Routing" toggle. The panel now renders the Matrix or Hubs view directly with a centered segmented Matrix/Hubs switcher at the bottom.
+        + Sends/Receives Hubs view: auto-scroll to the hub of the currently selected track when the selection changes
+        + Sends/Receives Hubs view: new expand-all and collapse-all icon buttons next to the In/Out/All dropdown
+
     v0.7.1:
         + Cross-script integration with TK Mixer Instrument Rack: drag plugins from the Mini browser onto rack FX tiles (insert) or onto the rack background (append)
         + Publishes drag state and "running"/heartbeat ExtState so TK Mixer can detect, target and toggle the browser
@@ -137,6 +144,7 @@ local script_thumbs_path    = script_path .. "ScriptThumbnails" .. os_separator
 StartBulkScreenshot         = function() end
 local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars             = dofile(script_path .. "TKFXBVariables.lua")
+dofile(script_path .. "TKFXBPatchbay.lua")
 local window_flags          = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
 
 -- OPTIMALISATIE: Localize Globals (Micro-optimization voor loops)
@@ -9236,6 +9244,12 @@ function IsSendTrack(track)
     return name == folder_name
 end
 
+local hub_open_state = {}
+local routing_last_selected_guid = nil
+local routing_scroll_pending = false
+local routing_expand_all_pending = false
+local routing_collapse_all_pending = false
+
 function BuildVisibleRoutingTracks()
     local track_count = r.CountTracks(0)
     local filter = (config.routing_filter_text or ""):lower()
@@ -9259,11 +9273,38 @@ function BuildVisibleRoutingTracks()
     end
 
     local list = {}
+    local filter_partners = nil
+    if filter ~= "" and config.routing_include_partners then
+        filter_partners = {}
+        for i = 0, track_count - 1 do
+            local tr = r.GetTrack(0, i)
+            local _, name = r.GetTrackName(tr)
+            if name:lower():find(filter, 1, true) then
+                filter_partners[tr] = true
+                local ns = r.GetTrackNumSends(tr, 0)
+                for k = 0, ns - 1 do
+                    local d = r.GetTrackSendInfo_Value(tr, 0, k, "P_DESTTRACK")
+                    if d then filter_partners[d] = true end
+                end
+                local nr = r.GetTrackNumSends(tr, -1)
+                for k = 0, nr - 1 do
+                    local s = r.GetTrackSendInfo_Value(tr, -1, k, "P_SRCTRACK")
+                    if s then filter_partners[s] = true end
+                end
+            end
+        end
+    end
     for i = 0, track_count - 1 do
         local tr = r.GetTrack(0, i)
         local _, name = r.GetTrackName(tr)
         local include = true
-        if filter ~= "" and not name:lower():find(filter, 1, true) then include = false end
+        if filter ~= "" then
+            if filter_partners then
+                if not filter_partners[tr] then include = false end
+            else
+                if not name:lower():find(filter, 1, true) then include = false end
+            end
+        end
         if include and only_routed then
             if r.GetTrackNumSends(tr, 0) == 0 and r.GetTrackNumSends(tr, -1) == 0 then
                 include = false
@@ -9301,21 +9342,54 @@ function DrawRoutingFilterBar(is_matrix)
     if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) then SaveConfig() end
     r.ImGui_PopItemWidth(ctx)
     r.ImGui_SameLine(ctx)
-    local ch1, v1 = r.ImGui_Checkbox(ctx, "Only routed", config.routing_only_routed and true or false)
-    if ch1 then config.routing_only_routed = v1; SaveConfig() end
-    r.ImGui_SameLine(ctx)
-    local ch2, v2 = r.ImGui_Checkbox(ctx, "Selected track only", config.routing_only_selected and true or false)
+    if is_matrix then
+        local ch1, v1 = r.ImGui_Checkbox(ctx, "Routed", config.routing_only_routed and true or false)
+        if ch1 then config.routing_only_routed = v1; SaveConfig() end
+        r.ImGui_SameLine(ctx)
+        local chp, vp = r.ImGui_Checkbox(ctx, "Partners", config.routing_include_partners and true or false)
+        if chp then config.routing_include_partners = vp; SaveConfig() end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Include routing partners of filtered tracks") end
+        r.ImGui_SameLine(ctx)
+    end
+    local ch2, v2 = r.ImGui_Checkbox(ctx, "Selected track", config.routing_only_selected and true or false)
     if ch2 then config.routing_only_selected = v2; SaveConfig() end
+    if not is_matrix then
+        r.ImGui_SameLine(ctx)
+        local dir_opts = { "All", "In", "Out" }
+        local cur_dir = config.routing_direction or "All"
+        r.ImGui_PushItemWidth(ctx, 60)
+        if r.ImGui_BeginCombo(ctx, "##routing_direction", cur_dir) then
+            for di = 1, #dir_opts do
+                if r.ImGui_Selectable(ctx, dir_opts[di], cur_dir == dir_opts[di]) then
+                    config.routing_direction = dir_opts[di]
+                    SaveConfig()
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopItemWidth(ctx)
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show incoming, outgoing, or both") end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "\xE2\x96\xBC##expand_all") then
+            routing_expand_all_pending = true
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Expand all hubs") end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "\xE2\x96\xB6##collapse_all") then
+            routing_collapse_all_pending = true
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Collapse all hubs") end
+    end
     if is_matrix then
         r.ImGui_SameLine(ctx)
-        local ch3, v3 = r.ImGui_Checkbox(ctx, "Group by folder", config.routing_group_by_folder and true or false)
+        local ch3, v3 = r.ImGui_Checkbox(ctx, "By folder", config.routing_group_by_folder and true or false)
         if ch3 then config.routing_group_by_folder = v3; SaveConfig() end
     end
 end
 
 function ShowRoutingMatrix()
     DrawRoutingFilterBar(true)
-    r.ImGui_Separator(ctx)
+    r.ImGui_Dummy(ctx, 0, 8)
 
     local visible = BuildVisibleRoutingTracks()
     local n = #visible
@@ -9434,154 +9508,452 @@ end
 
 function ShowRoutingHubs()
     DrawRoutingFilterBar(false)
-    r.ImGui_Separator(ctx)
 
     local filter = (config.routing_filter_text or ""):lower()
     local only_selected = config.routing_only_selected
     local track_count = r.CountTracks(0)
 
+    local cur_sel_guid = (TRACK and r.ValidatePtr(TRACK, "MediaTrack*")) and r.GetTrackGUID(TRACK) or nil
+    if cur_sel_guid ~= routing_last_selected_guid then
+        routing_last_selected_guid = cur_sel_guid
+        routing_scroll_pending = (cur_sel_guid ~= nil)
+    end
+
     local hubs = {}
     for i = 0, track_count - 1 do
         local hub = r.GetTrack(0, i)
         local nrec = r.GetTrackNumSends(hub, -1)
-        if nrec > 0 then
-            local sources = {}
+        local nsnd = r.GetTrackNumSends(hub, 0)
+        if nrec > 0 or nsnd > 0 then
+            local incoming = {}
             for k = 0, nrec - 1 do
                 local src = r.GetTrackSendInfo_Value(hub, -1, k, "P_SRCTRACK")
                 if src and r.ValidatePtr(src, "MediaTrack*") then
-                    local send_idx = GetSendIndex(src, hub)
-                    if send_idx >= 0 then
-                        sources[#sources + 1] = { track = src, send_idx = send_idx }
+                    local sidx = GetSendIndex(src, hub)
+                    if sidx >= 0 then
+                        incoming[#incoming + 1] = { owner = src, send_idx = sidx, other = src }
                     end
                 end
             end
-            if #sources > 0 then
+            local outgoing = {}
+            for k = 0, nsnd - 1 do
+                local dst = r.GetTrackSendInfo_Value(hub, 0, k, "P_DESTTRACK")
+                if dst and r.ValidatePtr(dst, "MediaTrack*") then
+                    outgoing[#outgoing + 1] = { owner = hub, send_idx = k, other = dst }
+                end
+            end
+            if #incoming > 0 or #outgoing > 0 then
                 local _, hname = r.GetTrackName(hub)
-                hubs[#hubs + 1] = { hub = hub, hub_idx = i, name = hname, sources = sources }
+                hubs[#hubs + 1] = { hub = hub, hub_idx = i, name = hname, incoming = incoming, outgoing = outgoing }
             end
         end
     end
 
     if #hubs == 0 then
-        r.ImGui_TextDisabled(ctx, "No sends in project.")
+        r.ImGui_TextDisabled(ctx, "No routing in project.")
         return
+    end
+
+    local function StateColors(state)
+        if state == "all_on"  then return 0x3FAA3FFF, 0x55C055FF, 0x2F8F2FFF
+        elseif state == "mixed" then return 0xC07A1FFF, 0xD08A2FFF, 0xA0660FFF
+        else return 0x3F3F3FFF, 0x555555FF, 0x2F2F2FFF end
+    end
+    local function ToggleButton(label, state, tooltip, w)
+        local bg, hov, act = StateColors(state)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), bg)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hov)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), act)
+        local clicked = r.ImGui_Button(ctx, label, w or 0, 0)
+        r.ImGui_PopStyleColor(ctx, 3)
+        if tooltip and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, tooltip) end
+        return clicked
+    end
+    local function PushXDelete()
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x802020FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xA03030FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x601010FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+    end
+
+    local BTN_M, BTN_PH, BTN_MONO, BTN_MODE, BTN_X = 30, 30, 56, 140, 26
+    local BTN_RST = 38
+    local SPC = 4
+    local ROW_W = BTN_M + SPC + BTN_PH + SPC + BTN_MONO + SPC + BTN_MODE + SPC + BTN_X
+
+    local function RenderSection(h, items, header_label, header_color, section_tag)
+        if #items == 0 then return end
+        r.ImGui_PushID(ctx, section_tag)
+        r.ImGui_Dummy(ctx, 0, 2)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
+        r.ImGui_Text(ctx, string.format("%s  (%d)", header_label, #items))
+        r.ImGui_PopStyleColor(ctx)
+
+        local function GetAggregateState(param)
+            local on, off = 0, 0
+            for bi = 1, #items do
+                local s = items[bi]
+                local v = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, param)
+                if v == 1 then on = on + 1 else off = off + 1 end
+            end
+            if on > 0 and off == 0 then return "all_on"
+            elseif off > 0 and on == 0 then return "all_off"
+            else return "mixed" end
+        end
+        local function GetAggregateMode()
+            local first_mode = nil
+            local mixed = false
+            for bi = 1, #items do
+                local s = items[bi]
+                local m = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, "I_SENDMODE")
+                if first_mode == nil then first_mode = m
+                elseif first_mode ~= m then mixed = true; break end
+            end
+            if mixed then return nil end
+            return first_mode
+        end
+        local function ApplyBulk(param, value, undo_label)
+            r.Undo_BeginBlock()
+            r.PreventUIRefresh(1)
+            for bi = 1, #items do
+                local s = items[bi]
+                r.SetTrackSendInfo_Value(s.owner, 0, s.send_idx, param, value)
+            end
+            r.PreventUIRefresh(-1)
+            r.Undo_EndBlock(undo_label, -1)
+        end
+
+        if #items >= 2 then
+        r.ImGui_PushID(ctx, "bulk_bar")
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), SPC, 4)
+
+        local mute_state = GetAggregateState("B_MUTE")
+        if ToggleButton("M", mute_state, "Toggle mute", BTN_M) then
+            ApplyBulk("B_MUTE", (mute_state == "all_on") and 0 or 1, "Bulk mute")
+        end
+        r.ImGui_SameLine(ctx)
+        local phase_state = GetAggregateState("B_PHASE")
+        if ToggleButton("\xCE\xA6", phase_state, "Toggle phase", BTN_PH) then
+            ApplyBulk("B_PHASE", (phase_state == "all_on") and 0 or 1, "Bulk phase")
+        end
+        r.ImGui_SameLine(ctx)
+        local mono_state = GetAggregateState("B_MONO")
+        local mono_label = (mono_state == "all_on") and "Mono" or (mono_state == "all_off" and "Stereo" or "M/S")
+        if ToggleButton(mono_label, mono_state, "Toggle mono/stereo", BTN_MONO) then
+            ApplyBulk("B_MONO", (mono_state == "all_on") and 0 or 1, "Bulk mono")
+        end
+        r.ImGui_SameLine(ctx)
+        local cur_mode = GetAggregateMode()
+        local mode_names = { "Post-Fader", "Pre-Fader (Post-FX)", "Pre-FX" }
+        local mode_values = { 0, 3, 1 }
+        local cur_label = "mixed"
+        if cur_mode then
+            for k = 1, #mode_values do if mode_values[k] == cur_mode then cur_label = mode_names[k]; break end end
+        end
+        r.ImGui_PushItemWidth(ctx, BTN_MODE)
+        if r.ImGui_BeginCombo(ctx, "##bulk_mode", cur_label) then
+            for k = 1, #mode_names do
+                local sel = (cur_mode == mode_values[k])
+                if r.ImGui_Selectable(ctx, mode_names[k], sel) then
+                    ApplyBulk("I_SENDMODE", mode_values[k], "Bulk send mode")
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopItemWidth(ctx)
+        r.ImGui_SameLine(ctx)
+        PushXDelete()
+        if r.ImGui_Button(ctx, "\xC3\x97##bulk_del", BTN_X, 0) then
+            r.ImGui_OpenPopup(ctx, "ConfirmBulkDelete")
+        end
+        r.ImGui_PopStyleColor(ctx, 4)
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete all in this section") end
+
+        r.ImGui_SameLine(ctx)
+        r.ImGui_Dummy(ctx, 8, 0)
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Vol\xE2\x86\x920", BTN_RST, 0) then
+            ApplyBulk("D_VOL", 1.0, "Bulk reset volume")
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Pan\xE2\x86\x92C", BTN_RST, 0) then
+            ApplyBulk("D_PAN", 0.0, "Bulk center pan")
+        end
+        r.ImGui_PopStyleVar(ctx)
+
+        if r.ImGui_BeginPopup(ctx, "ConfirmBulkDelete") then
+            r.ImGui_Text(ctx, string.format("Delete %d connection%s?", #items, #items == 1 and "" or "s"))
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Button(ctx, "Yes, delete") then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                local to_delete = {}
+                for bi = 1, #items do to_delete[#to_delete + 1] = items[bi] end
+                table.sort(to_delete, function(a, b)
+                    if a.owner == b.owner then return a.send_idx > b.send_idx end
+                    return tostring(a.owner) < tostring(b.owner)
+                end)
+                for di = 1, #to_delete do
+                    local s = to_delete[di]
+                    r.RemoveTrackSend(s.owner, 0, s.send_idx)
+                end
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Bulk delete connections", -1)
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel") then r.ImGui_CloseCurrentPopup(ctx) end
+            r.ImGui_EndPopup(ctx)
+        end
+        r.ImGui_PopID(ctx)
+        r.ImGui_Separator(ctx)
+        end
+
+        for si = 1, #items do
+            local s = items[si]
+            local _, sname = r.GetTrackName(s.other)
+            r.ImGui_PushID(ctx, "row_" .. si)
+            if r.ImGui_Selectable(ctx, sname, false, nil, ROW_W) then
+                r.SetOnlyTrackSelected(s.other)
+                if r.SetMixerScroll then r.SetMixerScroll(s.other) end
+                r.UpdateArrange()
+            end
+            r.ImGui_PushItemWidth(ctx, ROW_W)
+            local vol = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, "D_VOL")
+            local vol_db = vol > 0 and (20 * math.log(vol, 10)) or -150
+            local ch_v, new_db = r.ImGui_SliderDouble(ctx, "##vol", vol_db, -60, 12, "%.1f dB")
+            if ch_v then
+                local nv = math.exp(new_db * math.log(10) / 20)
+                r.SetTrackSendInfo_Value(s.owner, 0, s.send_idx, "D_VOL", nv)
+            end
+            local pan = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, "D_PAN")
+            local ch_p, new_pan = r.ImGui_SliderDouble(ctx, "##pan", pan, -1, 1, "%.2f")
+            if ch_p then
+                r.SetTrackSendInfo_Value(s.owner, 0, s.send_idx, "D_PAN", new_pan)
+            end
+            r.ImGui_PopItemWidth(ctx)
+
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), SPC, 4)
+            local mute = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, "B_MUTE") == 1
+            if ToggleButton("M", mute and "all_on" or "all_off", "Mute", BTN_M) then
+                r.SetTrackSendInfo_Value(s.owner, 0, s.send_idx, "B_MUTE", mute and 0 or 1)
+            end
+            r.ImGui_SameLine(ctx)
+            local phase = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, "B_PHASE") == 1
+            if ToggleButton("\xCE\xA6", phase and "all_on" or "all_off", "Invert phase", BTN_PH) then
+                r.SetTrackSendInfo_Value(s.owner, 0, s.send_idx, "B_PHASE", phase and 0 or 1)
+            end
+            r.ImGui_SameLine(ctx)
+            local mono = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, "B_MONO") == 1
+            if ToggleButton(mono and "Mono" or "Stereo", mono and "all_on" or "all_off", "Mono/Stereo", BTN_MONO) then
+                r.SetTrackSendInfo_Value(s.owner, 0, s.send_idx, "B_MONO", mono and 0 or 1)
+            end
+            r.ImGui_SameLine(ctx)
+            local row_mode = r.GetTrackSendInfo_Value(s.owner, 0, s.send_idx, "I_SENDMODE")
+            local row_mode_names = { "Post-Fader", "Pre-Fader/Post-FX", "Pre-FX" }
+            local row_mode_values = { 0, 3, 1 }
+            local row_idx = 1
+            for k = 1, #row_mode_values do if row_mode_values[k] == row_mode then row_idx = k; break end end
+            r.ImGui_PushItemWidth(ctx, BTN_MODE)
+            if r.ImGui_BeginCombo(ctx, "##mode", row_mode_names[row_idx]) then
+                for k = 1, #row_mode_names do
+                    if r.ImGui_Selectable(ctx, row_mode_names[k], row_idx == k) then
+                        r.SetTrackSendInfo_Value(s.owner, 0, s.send_idx, "I_SENDMODE", row_mode_values[k])
+                    end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            PushXDelete()
+            if r.ImGui_Button(ctx, "\xC3\x97##del", BTN_X, 0) then
+                r.RemoveTrackSend(s.owner, 0, s.send_idx)
+            end
+            r.ImGui_PopStyleColor(ctx, 4)
+            r.ImGui_PopStyleVar(ctx)
+            r.ImGui_PopID(ctx)
+            r.ImGui_Separator(ctx)
+        end
+        r.ImGui_PopID(ctx)
     end
 
     for hi = 1, #hubs do
         local h = hubs[hi]
         local hub_match = filter == "" or h.name:lower():find(filter, 1, true)
-        local visible_sources = {}
-        for si = 1, #h.sources do
-            local s = h.sources[si]
-            local _, sname = r.GetTrackName(s.track)
-            local src_match = filter == "" or sname:lower():find(filter, 1, true)
-            if hub_match or src_match then
-                visible_sources[#visible_sources + 1] = { entry = s, name = sname }
+
+        local function FilterEntries(list)
+            local out = {}
+            for si = 1, #list do
+                local _, n = r.GetTrackName(list[si].other)
+                local m = filter == "" or n:lower():find(filter, 1, true)
+                if hub_match or m then out[#out + 1] = list[si] end
             end
+            return out
         end
+        local vis_in = FilterEntries(h.incoming)
+        local vis_out = FilterEntries(h.outgoing)
+
+        local dir = config.routing_direction or "All"
+        if dir == "In" then vis_out = {}
+        elseif dir == "Out" then vis_in = {} end
+
         if only_selected and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-            local include = (h.hub == TRACK)
-            if not include then
-                for si = 1, #h.sources do
-                    if h.sources[si].track == TRACK then include = true; break end
-                end
-            end
-            if not include then visible_sources = {} end
+            if h.hub ~= TRACK then vis_in = {}; vis_out = {} end
         end
-        if #visible_sources > 0 then
+
+        if #vis_in > 0 or #vis_out > 0 then
             r.ImGui_PushID(ctx, "hub_" .. h.hub_idx)
+            local hub_guid = r.GetTrackGUID(h.hub)
+            if hub_open_state[hub_guid] == nil then hub_open_state[hub_guid] = false end
+            if routing_expand_all_pending then hub_open_state[hub_guid] = true end
+            if routing_collapse_all_pending then hub_open_state[hub_guid] = false end
+            local open = hub_open_state[hub_guid]
             local is_st = IsSendTrack(h.hub)
-            if is_st then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00BFFF55)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x33CCFF77)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x0099CC99)
+
+            local tcol = r.GetTrackColor(h.hub)
+            local r8, g8, b8 = 96, 96, 96
+            if tcol and tcol ~= 0 then r8, g8, b8 = r.ColorFromNative(tcol) end
+            local bar_col = ((r8 & 0xFF) << 24) | ((g8 & 0xFF) << 16) | ((b8 & 0xFF) << 8) | 0xFF
+            local is_selected_hub = (TRACK and r.ValidatePtr(TRACK, "MediaTrack*") and h.hub == TRACK)
+            if is_selected_hub and routing_scroll_pending then
+                r.ImGui_SetScrollHereY(ctx, 0.25)
+                routing_scroll_pending = false
             end
-            local label = string.format("%d: %s   (%d source%s)", h.hub_idx + 1, h.name, #visible_sources, #visible_sources == 1 and "" or "s")
-            local open = r.ImGui_TreeNode(ctx, label)
-            if is_st then r.ImGui_PopStyleColor(ctx, 3) end
+            local bg_col, bg_hov
+            if is_selected_hub then
+                local sr = math.min(255, math.floor(r8 * 0.55 + 35))
+                local sg = math.min(255, math.floor(g8 * 0.55 + 35))
+                local sb = math.min(255, math.floor(b8 * 0.55 + 35))
+                bg_col = ((sr & 0xFF) << 24) | ((sg & 0xFF) << 16) | ((sb & 0xFF) << 8) | 0xFF
+                local hr = math.min(255, sr + 25)
+                local hg = math.min(255, sg + 25)
+                local hb = math.min(255, sb + 25)
+                bg_hov = ((hr & 0xFF) << 24) | ((hg & 0xFF) << 16) | ((hb & 0xFF) << 8) | 0xFF
+            else
+                bg_col = is_st and 0x1A2A38FF or 0x1E1E1EFF
+                bg_hov = is_st and 0x244055FF or 0x2A2A2AFF
+            end
+
+            local draw_list = r.ImGui_GetWindowDrawList(ctx)
+            local p_x, p_y = r.ImGui_GetCursorScreenPos(ctx)
+            local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            local row_h = r.ImGui_GetTextLineHeight(ctx) + 8
+            local bar_w = 5
+            local arrow = open and "\xE2\x96\xBC" or "\xE2\x96\xB6"
+            local count_str = string.format("(%d in - %d out)", #vis_in, #vis_out)
+
+            local count_w = r.ImGui_CalcTextSize(ctx, count_str)
+            local right_pad = 8
+            local count_x = p_x + avail_w - count_w - right_pad
+            local mbtn_w = 22
+            local mbtn_h = row_h - 4
+            local mbtn_x = count_x - mbtn_w - 8
+            local hdr_click_w = math.max(1, mbtn_x - p_x - 4)
+
+            if r.ImGui_InvisibleButton(ctx, "##hub_hdr", hdr_click_w, row_h) then
+                hub_open_state[hub_guid] = not open
+                open = hub_open_state[hub_guid]
+            end
+            local hovered = r.ImGui_IsItemHovered(ctx)
             if r.ImGui_IsItemClicked(ctx, 1) then
                 r.SetOnlyTrackSelected(h.hub)
                 if r.SetMixerScroll then r.SetMixerScroll(h.hub) end
                 r.UpdateArrange()
             end
-            if r.ImGui_BeginItemTooltip and r.ImGui_BeginItemTooltip(ctx) then
-                r.ImGui_Text(ctx, "Right-click: select track in REAPER")
-                r.ImGui_EndTooltip(ctx)
+            if hovered then
+                r.ImGui_SetTooltip(ctx, "Left-click: expand/collapse\nRight-click: select track in REAPER")
             end
-            if open then
-                local win_w = r.ImGui_GetWindowWidth(ctx)
-                for si = 1, #visible_sources do
-                    local s = visible_sources[si].entry
-                    local sname = visible_sources[si].name
-                    r.ImGui_PushID(ctx, "src_" .. si)
-                    if r.ImGui_Selectable(ctx, sname, false, nil, win_w - 40) then
-                        r.SetOnlyTrackSelected(s.track)
-                        if r.SetMixerScroll then r.SetMixerScroll(s.track) end
-                        r.UpdateArrange()
-                    end
-                    r.ImGui_PushItemWidth(ctx, win_w - 60)
-                    local vol = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_VOL")
-                    local vol_db = vol > 0 and (20 * math.log(vol, 10)) or -150
-                    local ch_v, new_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
-                    if ch_v then
-                        local nv = math.exp(new_db * math.log(10) / 20)
-                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_VOL", nv)
-                    end
-                    local pan = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_PAN")
-                    local ch_p, new_pan = r.ImGui_SliderDouble(ctx, "Pan", pan, -1, 1, "%.2f")
-                    if ch_p then
-                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "D_PAN", new_pan)
-                    end
-                    r.ImGui_PopItemWidth(ctx)
+            r.ImGui_DrawList_AddRectFilled(draw_list, p_x, p_y, p_x + bar_w, p_y + row_h, bar_col)
+            r.ImGui_DrawList_AddRectFilled(draw_list, p_x + bar_w, p_y, p_x + avail_w, p_y + row_h, hovered and bg_hov or bg_col)
 
-                    local mute = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MUTE") == 1
-                    local ch_m, new_m = r.ImGui_Checkbox(ctx, "Mute", mute)
-                    if ch_m then
-                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MUTE", new_m and 1 or 0)
+            r.ImGui_DrawList_AddText(draw_list, count_x, p_y + 4, 0xB0B0B0FF, count_str)
+
+            local saved_cx, saved_cy = r.ImGui_GetCursorScreenPos(ctx)
+            local mainsend = r.GetMediaTrackInfo_Value(h.hub, "B_MAINSEND") == 1
+            local m_bg, m_hov, m_act
+            if mainsend then m_bg, m_hov, m_act = 0x3FAA3FFF, 0x55C055FF, 0x2F8F2FFF
+            else m_bg, m_hov, m_act = 0x3F3F3FFF, 0x555555FF, 0x2F2F2FFF end
+            r.ImGui_SetCursorScreenPos(ctx, mbtn_x, p_y + 2)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), m_bg)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), m_hov)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), m_act)
+            if r.ImGui_Button(ctx, "M##mainsend", mbtn_w, mbtn_h) then
+                r.SetMediaTrackInfo_Value(h.hub, "B_MAINSEND", mainsend and 0 or 1)
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemClicked(ctx, 1) then
+                r.ImGui_OpenPopup(ctx, "MasterSendChan")
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                local cur_off = math.floor(r.GetMediaTrackInfo_Value(h.hub, "C_MAINSEND_OFFS") or 0)
+                local off_label
+                if cur_off == 0 then off_label = "1+2 (default)"
+                else off_label = string.format("%d+%d", cur_off + 1, cur_off + 2) end
+                r.ImGui_SetTooltip(ctx, string.format("Master/Parent send: %s\nChannel: %s\nLeft-click: toggle on/off\nRight-click: channel offset", mainsend and "ON" or "OFF", off_label))
+            end
+            if r.ImGui_BeginPopup(ctx, "MasterSendChan") then
+                r.ImGui_Text(ctx, "Master/Parent channels")
+                r.ImGui_Separator(ctx)
+                local cur_nch = math.floor(r.GetMediaTrackInfo_Value(h.hub, "C_MAINSEND_NCH") or 0)
+                local nch_opts = { {0, "All"}, {2, "Stereo (1-2)"}, {1, "Mono (1)"} }
+                for ni = 1, #nch_opts do
+                    local v, lbl = nch_opts[ni][1], nch_opts[ni][2]
+                    if r.ImGui_Selectable(ctx, lbl, cur_nch == v) then
+                        r.SetMediaTrackInfo_Value(h.hub, "C_MAINSEND_NCH", v)
                     end
-                    r.ImGui_SameLine(ctx)
-                    local phase = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_PHASE") == 1
-                    local ch_ph, new_ph = r.ImGui_Checkbox(ctx, "Phase", phase)
-                    if ch_ph then
-                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_PHASE", new_ph and 1 or 0)
-                    end
-                    r.ImGui_SameLine(ctx)
-                    local mono = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MONO") == 1
-                    local ch_mo, new_mo = r.ImGui_Checkbox(ctx, "Mono", mono)
-                    if ch_mo then
-                        r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "B_MONO", new_mo and 1 or 0)
-                    end
-                    r.ImGui_SameLine(ctx)
-                    local cur_mode = r.GetTrackSendInfo_Value(s.track, 0, s.send_idx, "I_SENDMODE")
-                    local mode_names = { "Post-Fader", "Pre-Fader/Post-FX", "Pre-FX" }
-                    local mode_values = { 0, 3, 1 }
-                    local cur_idx = 1
-                    for k = 1, #mode_values do if mode_values[k] == cur_mode then cur_idx = k; break end end
-                    r.ImGui_PushItemWidth(ctx, 130)
-                    if r.ImGui_BeginCombo(ctx, "##mode", mode_names[cur_idx]) then
-                        for k = 1, #mode_names do
-                            if r.ImGui_Selectable(ctx, mode_names[k], cur_idx == k) then
-                                r.SetTrackSendInfo_Value(s.track, 0, s.send_idx, "I_SENDMODE", mode_values[k])
-                            end
-                        end
-                        r.ImGui_EndCombo(ctx)
-                    end
-                    r.ImGui_PopItemWidth(ctx)
-                    r.ImGui_SameLine(ctx)
-                    if r.ImGui_Button(ctx, "X##del") then
-                        r.RemoveTrackSend(s.track, 0, s.send_idx)
-                    end
-                    r.ImGui_PopID(ctx)
-                    r.ImGui_Separator(ctx)
                 end
-                if r.ImGui_Button(ctx, "+ Add source...") then
-                    r.ImGui_OpenPopup(ctx, "AddSourceToHub")
+                r.ImGui_Separator(ctx)
+                r.ImGui_Text(ctx, "Channel offset")
+                r.ImGui_Separator(ctx)
+                local cur_off = math.floor(r.GetMediaTrackInfo_Value(h.hub, "C_MAINSEND_OFFS") or 0)
+                local opts = { {0, "1+2 (default)"}, {2, "3+4"}, {4, "5+6"}, {6, "7+8"}, {8, "9+10"}, {10, "11+12"}, {12, "13+14"}, {14, "15+16"} }
+                for oi = 1, #opts do
+                    local v, lbl = opts[oi][1], opts[oi][2]
+                    if r.ImGui_Selectable(ctx, lbl, cur_off == v) then
+                        r.SetMediaTrackInfo_Value(h.hub, "C_MAINSEND_OFFS", v)
+                    end
                 end
-                if r.ImGui_BeginPopup(ctx, "AddSourceToHub") then
-                    r.ImGui_Text(ctx, "Add send from:")
+                r.ImGui_EndPopup(ctx)
+            end
+            r.ImGui_SetCursorScreenPos(ctx, saved_cx, saved_cy)
+            r.ImGui_Dummy(ctx, 0, 0)
+
+            local prefix = string.format("%s  #%d  ", arrow, h.hub_idx + 1)
+            local prefix_w = r.ImGui_CalcTextSize(ctx, prefix)
+            local name_x = p_x + bar_w + 8 + prefix_w
+            local name_max_w = count_x - name_x - 8
+            local name_disp = h.name
+            local name_w = r.ImGui_CalcTextSize(ctx, name_disp)
+            if name_w > name_max_w and name_max_w > 0 then
+                local lo, hi = 1, #name_disp
+                while lo < hi do
+                    local mid = (lo + hi) // 2
+                    local cand = name_disp:sub(1, mid) .. "..."
+                    if r.ImGui_CalcTextSize(ctx, cand) <= name_max_w then lo = mid + 1 else hi = mid end
+                end
+                name_disp = name_disp:sub(1, math.max(0, lo - 1)) .. "..."
+            end
+            r.ImGui_DrawList_AddText(draw_list, p_x + bar_w + 8, p_y + 4, 0xE6E6E6FF, prefix .. name_disp)
+
+            if open then
+                RenderSection(h, vis_in, "Incoming", 0x88CCFFFF, "sec_in")
+                RenderSection(h, vis_out, "Outgoing", 0xFFCC88FF, "sec_out")
+
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), SPC, 4)
+                if r.ImGui_Button(ctx, "+ Receive from...") then
+                    r.ImGui_OpenPopup(ctx, "AddIncomingToHub")
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "+ Send to...") then
+                    r.ImGui_OpenPopup(ctx, "AddOutgoingFromHub")
+                end
+                r.ImGui_PopStyleVar(ctx)
+
+                if r.ImGui_BeginPopup(ctx, "AddIncomingToHub") then
+                    r.ImGui_Text(ctx, "Add receive from:")
                     r.ImGui_Separator(ctx)
                     local existing = {}
-                    for si = 1, #h.sources do existing[h.sources[si].track] = true end
+                    for si = 1, #h.incoming do existing[h.incoming[si].other] = true end
                     existing[h.hub] = true
                     for ti = 0, track_count - 1 do
                         local cand = r.GetTrack(0, ti)
@@ -9595,11 +9967,50 @@ function ShowRoutingHubs()
                     end
                     r.ImGui_EndPopup(ctx)
                 end
-                r.ImGui_TreePop(ctx)
+                if r.ImGui_BeginPopup(ctx, "AddOutgoingFromHub") then
+                    r.ImGui_Text(ctx, "Add send to:")
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_Selectable(ctx, "+ New track...") then
+                        local default_name = "Send"
+                        local ok, retval = r.GetUserInputs("Name send track", 1, "Track name:,extrawidth=200", default_name)
+                        if ok then
+                            local trimmed = retval and retval:match("^%s*(.-)%s*$") or ""
+                            if trimmed == "" then trimmed = default_name end
+                            r.Undo_BeginBlock()
+                            r.PreventUIRefresh(1)
+                            local new_track = CreateSendTargetTrack(trimmed)
+                            if new_track then
+                                r.CreateTrackSend(h.hub, new_track)
+                            end
+                            r.PreventUIRefresh(-1)
+                            r.Undo_EndBlock("Create new send track", -1)
+                            r.UpdateArrange()
+                        end
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                    r.ImGui_Separator(ctx)
+                    r.ImGui_Text(ctx, "Existing track:")
+                    local existing = {}
+                    for si = 1, #h.outgoing do existing[h.outgoing[si].other] = true end
+                    existing[h.hub] = true
+                    for ti = 0, track_count - 1 do
+                        local cand = r.GetTrack(0, ti)
+                        if not existing[cand] then
+                            local _, cname = r.GetTrackName(cand)
+                            if r.ImGui_Selectable(ctx, cname) then
+                                r.CreateTrackSend(h.hub, cand)
+                                r.ImGui_CloseCurrentPopup(ctx)
+                            end
+                        end
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
             end
             r.ImGui_PopID(ctx)
         end
     end
+    routing_expand_all_pending = false
+    routing_collapse_all_pending = false
 end
 
 function GetSendIndex(src_track, dst_track)
@@ -19317,15 +19728,14 @@ function ShowScreenshotWindow()
     -----------------------------------------------------------------------------------        
             -- SEND/RECEIVE GEDEELTE:
             elseif show_sends_window then
-                local controls_vertical = ShowScreenshotControls()
-                local cur_y = r.ImGui_GetCursorPosY(ctx)
-                r.ImGui_SetCursorPosY(ctx, cur_y)
-                r.ImGui_Separator(ctx)
-                local cur_y2 = r.ImGui_GetCursorPosY(ctx)
-                r.ImGui_SetCursorPosY(ctx, cur_y2 - 4)
-                if controls_vertical then
-                    local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                    r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+                local is_patchbay = config.routing_view_mode == "patchbay"
+                if not is_patchbay then
+                    local controls_vertical = ShowScreenshotControls()
+                    r.ImGui_Separator(ctx)
+                    if controls_vertical then
+                        local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                        r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+                    end
                 end
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local current_y = r.ImGui_GetCursorPosY(ctx)
@@ -19333,329 +19743,71 @@ function ShowScreenshotWindow()
                 local available_height = window_height - current_y - footer_height
 
                 r.ImGui_BeginChild(ctx, "SendsReceivesList", 0, available_height)
-                    
 
-                    r.ImGui_Text(ctx, "SENDS:")
-                    
-                    if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                        local num_sends = r.GetTrackNumSends(TRACK, 0)
-                        for i = 0, num_sends - 1 do
-                            local send_track = r.GetTrackSendInfo_Value(TRACK, 0, i, "P_DESTTRACK")
-                            if r.ValidatePtr(send_track, "MediaTrack*") then
-                                local _, send_name = r.GetTrackName(send_track)
-                                
-                                r.ImGui_PushID(ctx, "send_" .. i)
-                                local window_width = r.ImGui_GetWindowWidth(ctx)
-                                
-                
-                                r.ImGui_PushItemWidth(ctx, window_width - 20)
-                                if r.ImGui_TreeNode(ctx, send_name) then
-                                    -- Volume slider
-                                    r.ImGui_PushItemWidth(ctx, window_width - 60)
-                                    local vol = r.GetTrackSendInfo_Value(TRACK, 0, i, "D_VOL")
-                                    local vol_db = 20 * math.log(vol, 10)
-                                    local changed, new_vol_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
-                                    if changed then
-                                        local new_vol = math.exp(new_vol_db * math.log(10) / 20)
-                                        r.SetTrackSendInfo_Value(TRACK, 0, i, "D_VOL", new_vol)
-                                    end
-                
-                                    -- Pan slider
-                                    local pan = r.GetTrackSendInfo_Value(TRACK, 0, i, "D_PAN")
-                                    local changed_pan, new_pan = r.ImGui_SliderDouble(ctx, "Pan", pan, -1, 1, "%.2f")
-                                    if changed_pan then
-                                        r.SetTrackSendInfo_Value(TRACK, 0, i, "D_PAN", new_pan)
-                                    end
-                                    r.ImGui_PopItemWidth(ctx)
-                
-                                    -- Mute/Solo knoppen
-                                    local mute = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE") == 1
-                                    local changed_mute, new_mute = r.ImGui_Checkbox(ctx, "Mute", mute)
-                                    if changed_mute then
-                                        r.SetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE", new_mute and 1 or 0)
-                                    end
-                                    r.ImGui_SameLine(ctx)
-                                    local all_others_muted = true
-                                    local num_sends = r.GetTrackNumSends(TRACK, 0)
-                                    for j = 0, num_sends - 1 do
-                                        if j ~= i and r.GetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE") == 0 then
-                                            all_others_muted = false
-                                            break
-                                        end
-                                    end
-                                    local is_soloed = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_MUTE") == 0 and all_others_muted
-                                    local changed_solo, new_solo = r.ImGui_Checkbox(ctx, "Solo", is_soloed)
-                                    if changed_solo then
-                                        for j = 0, num_sends - 1 do
-                                            if new_solo then
-                                                r.SetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE", j == i and 0 or 1)
-                                            else
-                                                r.SetTrackSendInfo_Value(TRACK, 0, j, "B_MUTE", 0)
-                                            end
-                                        end
-                                    end
-                                    r.ImGui_SameLine(ctx)
-                                    local phase = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_PHASE") == 1
-                                    local changed_phase, new_phase = r.ImGui_Checkbox(ctx, "Phase", phase)
-                                    if changed_phase then
-                                        r.SetTrackSendInfo_Value(TRACK, 0, i, "B_PHASE", new_phase and 1 or 0)
-                                    end
-                                    r.ImGui_SameLine(ctx)
-                                    local mono = r.GetTrackSendInfo_Value(TRACK, 0, i, "B_MONO") == 1
-                                    local changed_mono, new_mono = r.ImGui_Checkbox(ctx, "Mono", mono)
-                                    if changed_mono then
-                                        r.SetTrackSendInfo_Value(TRACK, 0, i, "B_MONO", new_mono and 1 or 0)
-                                    end
-                                    local current_mode = r.GetTrackSendInfo_Value(TRACK, 0, i, "I_SENDMODE")
-                                    local mode_names = {
-                                        "Post-Fader/Post-Pan",  -- mode 0
-                                        "Pre-Fader/Post-FX",    -- mode 3
-                                        "Pre-Fader/Pre-FX"      -- mode 1
-                                    }
-                                    local mode_values = {0, 3, 1}
-                                    local current_idx = 1
-                                    for i, value in ipairs(mode_values) do
-                                        if value == current_mode then
-                                            current_idx = i
-                                            break
-                                        end
-                                    end
-
-                                    r.ImGui_PushItemWidth(ctx, 100)
-                                    if r.ImGui_BeginCombo(ctx, "##sendmode" .. i, mode_names[current_idx]) then
-                                        for idx, name in ipairs(mode_names) do
-                                            if r.ImGui_Selectable(ctx, name, current_idx == idx) then
-                                                r.SetTrackSendInfo_Value(TRACK, 0, i, "I_SENDMODE", mode_values[idx])
-                                            end
-                                        end
-                                        r.ImGui_EndCombo(ctx)
-                                    end
-                                    r.ImGui_PopItemWidth(ctx)
-                                    r.ImGui_SameLine(ctx)
-                                    if r.ImGui_Button(ctx, "Delete Send") then
-                                        r.RemoveTrackSend(TRACK, 0, i)
-                                    end
-                                    
-                                    r.ImGui_TreePop(ctx)
-                                end
-                                r.ImGui_PopID(ctx)
-                            end
-                        end
-                
-                        if r.ImGui_Button(ctx, "New Send") then
-                            r.ImGui_OpenPopup(ctx, "SelectSendDestination")
-                        end
-
-                        if r.ImGui_BeginPopup(ctx, "SelectSendDestination") then
-                            r.ImGui_Text(ctx, "Create new send to:")
-                            r.ImGui_Separator(ctx)
-
-                            if r.ImGui_Selectable(ctx, "+ New track...") then
-                                local default_name = "Send"
-                                local ok, retval = r.GetUserInputs("Name send track", 1, "Track name:,extrawidth=200", default_name)
-                                if ok then
-                                    local trimmed = retval and retval:match("^%s*(.-)%s*$") or ""
-                                    if trimmed == "" then trimmed = default_name end
-                                    r.Undo_BeginBlock()
-                                    r.PreventUIRefresh(1)
-                                    local new_track = CreateSendTargetTrack(trimmed)
-                                    if new_track and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                        r.CreateTrackSend(TRACK, new_track)
-                                    end
-                                    r.PreventUIRefresh(-1)
-                                    r.Undo_EndBlock("Create new send track", -1)
-                                    r.UpdateArrange()
-                                end
-                                r.ImGui_CloseCurrentPopup(ctx)
-                            end
-
-                            r.ImGui_Separator(ctx)
-                            r.ImGui_Text(ctx, "Existing track:")
-
-                            local track_count = r.CountTracks(0)
-                            for i = 0, track_count - 1 do
-                                local dest_track = r.GetTrack(0, i)
-                                if dest_track and dest_track ~= TRACK then
-                                    local _, track_name = r.GetTrackName(dest_track)
-                                    if r.ImGui_Selectable(ctx, track_name) then
-                                        r.CreateTrackSend(TRACK, dest_track)
-                                        r.ImGui_CloseCurrentPopup(ctx)
-                                    end
-                                end
-                            end
-                            r.ImGui_EndPopup(ctx)
-                        end
-
-                        r.ImGui_Dummy(ctx, 0, 10)  
-                
-                        -- RECEIVES SECTIE
-                        r.ImGui_Separator(ctx)
-                        r.ImGui_Text(ctx, "RECEIVES:")
-                        
-                        local num_receives = r.GetTrackNumSends(TRACK, -1)
-                        for i = 0, num_receives - 1 do
-
-                            local src_track = r.GetTrackSendInfo_Value(TRACK, -1, i, "P_SRCTRACK")
-                            if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
-                                local _, src_name = r.GetTrackName(src_track)
-                                
-                                r.ImGui_PushID(ctx, "receive_" .. i)
-                                local window_width = r.ImGui_GetWindowWidth(ctx)
-                
-                                r.ImGui_PushItemWidth(ctx, window_width - 20)
-                                if r.ImGui_TreeNode(ctx, src_name) then
-                                    -- Volume slider
-                                    r.ImGui_PushItemWidth(ctx, window_width - 60)
-                                    local vol = r.GetTrackSendInfo_Value(TRACK, -1, i, "D_VOL")
-                                    local vol_db = 20 * math.log(vol, 10)
-                                    local changed, new_vol_db = r.ImGui_SliderDouble(ctx, "Vol", vol_db, -60, 12, "%.1f dB")
-                                    if changed then
-                                        local new_vol = math.exp(new_vol_db * math.log(10) / 20)
-                                        r.SetTrackSendInfo_Value(TRACK, -1, i, "D_VOL", new_vol)
-                                    end
-                
-                                    -- Pan slider
-                                    local pan = r.GetTrackSendInfo_Value(TRACK, -1, i, "D_PAN")
-                                    local changed_pan, new_pan = r.ImGui_SliderDouble(ctx, "Pan", pan, -1, 1, "%.2f")
-                                    if changed_pan then
-                                        r.SetTrackSendInfo_Value(TRACK, -1, i, "D_PAN", new_pan)
-                                    end
-                                    r.ImGui_PopItemWidth(ctx)
-                
-                                    -- Mute knop
-                                    local mute = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_MUTE") == 1
-                                    local changed_mute, new_mute = r.ImGui_Checkbox(ctx, "Mute", mute)
-                                    if changed_mute then
-                                        r.SetTrackSendInfo_Value(TRACK, -1, i, "B_MUTE", new_mute and 1 or 0)
-                                    end
-                        
-                                    r.ImGui_SameLine(ctx)
-                                    local all_others_muted = true
-                                    local num_receives = r.GetTrackNumSends(TRACK, -1)
-                                    for j = 0, num_receives - 1 do
-                                        if j ~= i and r.GetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE") == 0 then
-                                            all_others_muted = false
-                                            break
-                                        end
-                                    end
-                                    local is_soloed = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_MUTE") == 0 and all_others_muted
-                                    local changed_solo, new_solo = r.ImGui_Checkbox(ctx, "Solo", is_soloed)
-                                    if changed_solo then
-                                        for j = 0, num_receives - 1 do
-                                            if new_solo then
-                                                r.SetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE", j == i and 0 or 1)
-                                            else
-                                                r.SetTrackSendInfo_Value(TRACK, -1, j, "B_MUTE", 0)
-                                            end
-                                        end
-                                    end
-                                    r.ImGui_SameLine(ctx)
-                                    local phase = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_PHASE") == 1
-                                    local changed_phase, new_phase = r.ImGui_Checkbox(ctx, "Phase", phase)
-                                    if changed_phase then
-                                        r.SetTrackSendInfo_Value(TRACK, -1, i, "B_PHASE", new_phase and 1 or 0)
-                                    end
-                                    r.ImGui_SameLine(ctx)
-                                    local mono = r.GetTrackSendInfo_Value(TRACK, -1, i, "B_MONO") == 1
-                                    local changed_mono, new_mono = r.ImGui_Checkbox(ctx, "Mono", mono)
-                                    if changed_mono then
-                                        r.SetTrackSendInfo_Value(TRACK, -1, i, "B_MONO", new_mono and 1 or 0)
-                                    end
-
-                                    local current_mode = r.GetTrackSendInfo_Value(TRACK, -1, i, "I_SENDMODE")
-                                    local mode_names = {
-                                        "Post-Fader/Post-Pan",  -- mode 0
-                                        "Pre-Fader/Post-FX",    -- mode 3
-                                        "Pre-Fader/Pre-FX"      -- mode 1
-                                    }
-                                    local mode_values = {0, 3, 1}
-                                    local current_idx = 1
-                                    for i, value in ipairs(mode_values) do
-                                        if value == current_mode then
-                                            current_idx = i
-                                            break
-                                        end
-                                    end
-
-                                    r.ImGui_PushItemWidth(ctx, 100)
-                                    if r.ImGui_BeginCombo(ctx, "##receivemode" .. i, mode_names[current_idx]) then
-                                        for idx, name in ipairs(mode_names) do
-                                            if r.ImGui_Selectable(ctx, name, current_idx == idx) then
-                                                r.SetTrackSendInfo_Value(TRACK, -1, i, "I_SENDMODE", mode_values[idx])
-                                            end
-                                        end
-                                        r.ImGui_EndCombo(ctx)
-                                    end
-                                    r.ImGui_PopItemWidth(ctx)
-                                    r.ImGui_SameLine(ctx)
-                                    -- Delete knop
-                                    if r.ImGui_Button(ctx, "Delete Receive") then
-                                        r.RemoveTrackSend(src_track, 0, r.GetTrackSendInfo_Value(TRACK, -1, i, "P_SRCIDX"))
-                                    end
-                                    
-                                    r.ImGui_TreePop(ctx)
-                                end
-                                r.ImGui_PopID(ctx)
-                            end
-                        end
-                        if r.ImGui_Button(ctx, "New Receive") then
-                            r.ImGui_OpenPopup(ctx, "SelectReceiveSource")
-                        end
-                        
-                        if r.ImGui_BeginPopup(ctx, "SelectReceiveSource") then
-                            r.ImGui_Text(ctx, "Select source track:")
-                            r.ImGui_Separator(ctx)
-                            
-                            local track_count = r.CountTracks(0)
-                            for i = 0, track_count - 1 do
-                                local source_track = r.GetTrack(0, i)
-                                if source_track and source_track ~= TRACK then
-                                    local _, track_name = r.GetTrackName(source_track)
-                                    if r.ImGui_Selectable(ctx, track_name) then
-                                        r.CreateTrackSend(source_track, TRACK)
-                                        r.ImGui_CloseCurrentPopup(ctx)
-                                    end
-                                end
-                            end
-                            r.ImGui_EndPopup(ctx)
-                        end
-                    -- end
-                    r.ImGui_Dummy(ctx, 0, 10) 
-                
-                if show_routing_matrix then
-                    if config.routing_view_mode == "hubs" then
-                        ShowRoutingHubs()
-                    else
-                        ShowRoutingMatrix()
-                    end
+                if config.routing_view_mode == "patchbay" then
+                    ShowRoutingPatchbay()
+                elseif config.routing_view_mode == "hubs" then
+                    ShowRoutingHubs()
+                else
+                    ShowRoutingMatrix()
                 end
             r.ImGui_EndChild(ctx)
-            r.ImGui_Separator(ctx)
-            if r.ImGui_Button(ctx, show_routing_matrix and "Hide Routing" or "Show Routing") then
-                show_routing_matrix = not show_routing_matrix
-            end
-            if show_routing_matrix then
-                r.ImGui_SameLine(ctx)
-                local is_matrix = config.routing_view_mode ~= "hubs"
-                if is_matrix then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4477CCFF)
+            do
+                local mode = config.routing_view_mode or "matrix"
+                local btn_w, btn_h = 90, 26
+                local total_w = btn_w * 3
+                local avail = r.ImGui_GetContentRegionAvail(ctx)
+                local cx = r.ImGui_GetCursorPosX(ctx)
+                r.ImGui_SetCursorPosX(ctx, cx + math.max(0, (avail - total_w) * 0.5))
+
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 6)
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 1)
+
+                local accent_bg, accent_hov, accent_act = 0x4477CCFF, 0x5588DDFF, 0x3366BBFF
+                local idle_bg, idle_hov, idle_act       = 0x2A2A2AFF, 0x3A3A3AFF, 0x222222FF
+                local function pushSeg(active)
+                    if active then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_bg)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), accent_hov)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), accent_act)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+                    else
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), idle_bg)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), idle_hov)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), idle_act)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xBBBBBBFF)
+                    end
                 end
-                if r.ImGui_Button(ctx, "Matrix") then
+
+                pushSeg(mode == "matrix")
+                if r.ImGui_Button(ctx, "\xE2\x96\xA6  Matrix", btn_w, btn_h) then
                     config.routing_view_mode = "matrix"
                     SaveConfig()
                 end
-                if is_matrix then r.ImGui_PopStyleColor(ctx) end
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Matrix view: classic routing grid") end
+                r.ImGui_PopStyleColor(ctx, 4)
+
                 r.ImGui_SameLine(ctx)
-                if not is_matrix then
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4477CCFF)
-                end
-                if r.ImGui_Button(ctx, "Hubs") then
+                pushSeg(mode == "hubs")
+                if r.ImGui_Button(ctx, "\xE2\x97\x89  Hubs", btn_w, btn_h) then
                     config.routing_view_mode = "hubs"
                     SaveConfig()
                 end
-                if not is_matrix then r.ImGui_PopStyleColor(ctx) end
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Hub view: per-track receives with bulk controls") end
+                r.ImGui_PopStyleColor(ctx, 4)
+
+                r.ImGui_SameLine(ctx)
+                pushSeg(mode == "patchbay")
+                if r.ImGui_Button(ctx, "\xE2\x97\x86  Patchbay", btn_w, btn_h) then
+                    config.routing_view_mode = "patchbay"
+                    SaveConfig()
+                end
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Patchbay view: node graph with draggable tracks and cable connections") end
+                r.ImGui_PopStyleColor(ctx, 4)
+
+                r.ImGui_PopStyleVar(ctx, 3)
             end
-    end
 --------------------------------------------------------------------------------------
         -- ACTIONS GEDEELTE
         elseif show_action_browser then
