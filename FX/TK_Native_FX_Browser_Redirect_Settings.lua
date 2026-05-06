@@ -1,6 +1,6 @@
 -- @description TK Native FX Browser Redirect - Settings
 -- @author TouristKiller
--- @version 1.3.0
+-- @version 1.3.1
 -- @about
 --   Configuration window for TK Native FX Browser Redirect.
 

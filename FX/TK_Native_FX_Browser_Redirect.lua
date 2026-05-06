@@ -1,6 +1,6 @@
 -- @description TK Native FX Browser Redirect
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.2.1
 -- @about
 --   Replaces REAPER's native "Add FX" / "Replace FX" / "Browse FX" windows
 --   with an alternative FX browser of your choice.
@@ -160,6 +160,16 @@ end
 local killed = {}
 local last_open_time = 0
 local OPEN_DEBOUNCE = 1.0
+local pending_open = 0
+
+local VK_ESCAPE = 0x1B
+
+local function dismissNativeWindow(hwnd)
+    pcall(r.JS_WindowMessage_Post, hwnd, "WM_KEYDOWN", VK_ESCAPE, 0, 0, 0)
+    pcall(r.JS_WindowMessage_Post, hwnd, "WM_KEYUP",   VK_ESCAPE, 0, 0, 0)
+    pcall(r.JS_WindowMessage_Post, hwnd, "WM_CLOSE",   0,         0, 0, 0)
+    pcall(r.JS_Window_Show, hwnd, "HIDE")
+end
 
 local function killNativeBrowsers()
     local hit = false
@@ -182,8 +192,7 @@ local function killNativeBrowsers()
                     if hwnd and r.JS_Window_IsVisible(hwnd) then
                         local title = r.JS_Window_GetTitle(hwnd) or ""
                         if shouldRedirect(title) then
-                            r.JS_Window_Show(hwnd, "HIDE")
-                            r.JS_WindowMessage_Send(hwnd, "WM_CLOSE", 0, 0, 0, 0)
+                            dismissNativeWindow(hwnd)
                             killed[addr] = true
                             hit = true
                         end
@@ -197,7 +206,7 @@ local function killNativeBrowsers()
         local now = r.time_precise()
         if (now - last_open_time) > OPEN_DEBOUNCE then
             last_open_time = now
-            openBrowser()
+            pending_open = 3
         end
     end
 end
@@ -220,6 +229,12 @@ local function loop()
     end
     checkConfigReload()
     killNativeBrowsers()
+    if pending_open > 0 then
+        pending_open = pending_open - 1
+        if pending_open == 0 then
+            openBrowser()
+        end
+    end
     r.defer(loop)
 end
 
