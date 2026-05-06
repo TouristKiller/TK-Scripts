@@ -1,8 +1,12 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.1.7
+-- @version 1.1.9
 -- @changelog 
 --[[
+  v1.1.9:
+  + Added "Flow" toggle in the Show popup (sidebar) next to "Cbl" for quick access to the cables flow animation
+  + Fixed crash "bad argument #1 to 'GetTrackGUID' (MediaTrack expected)" when a send destination pointer was invalid (validates MediaTrack pointer before drawing cables)
+
   v1.1.7:
   + Instrument Rack: drag & drop from TK FX BROWSER / Mini onto FX tiles (insert at position) or onto the rack background (append)
   + Instrument Rack: always-visible "+ Add FX" zone — click to open the configured FX browser (TK FX BROWSER, Mini or Native)
@@ -4910,6 +4914,10 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    rv, settings.simple_mixer_show_cables = r.ImGui_Checkbox(mixer_ctx, "Cbl##QT", settings.simple_mixer_show_cables or false)
    if rv then changed = true end
    if r.ImGui_IsItemHovered(mixer_ctx) then r.ImGui_SetTooltip(mixer_ctx, "Show send/receive cables between strips") end
+   r.ImGui_TableNextColumn(mixer_ctx)
+   rv, settings.simple_mixer_cables_flow = r.ImGui_Checkbox(mixer_ctx, "Flow##QT", settings.simple_mixer_cables_flow or false)
+   if rv then changed = true end
+   if r.ImGui_IsItemHovered(mixer_ctx) then r.ImGui_SetTooltip(mixer_ctx, "Animated flow dot moving along cables") end
    r.ImGui_EndTable(mixer_ctx)
    if changed then SaveMixerSettings() end
    if settings.simple_mixer_show_rack then
@@ -9971,7 +9979,7 @@ local function DrawMixerCables(ctx)
     local send_count = r.GetTrackNumSends(src_track, 0)
     for i = 0, send_count - 1 do
      local dst_track = r.GetTrackSendInfo_Value(src_track, 0, i, "P_DESTTRACK")
-     if dst_track and dst_track ~= src_track then
+     if dst_track and dst_track ~= src_track and r.ValidatePtr2(0, dst_track, "MediaTrack*") then
       local dst_is_master = r.GetMasterTrack(0) == dst_track
       local dst_key = dst_is_master and "__master__" or r.GetTrackGUID(dst_track)
       local dx, dy = get_anchor(dst_key)
