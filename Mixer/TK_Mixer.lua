@@ -1,8 +1,14 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.2
+-- @version 1.2.3
 -- @changelog 
 --[[
+  v1.2.3:
+  + Mini Volume slider (optional, default off) - shows below Pan/Width with logarithmic dB scale (-60..+12 dB)
+  + 0 dB marker on the volume slider, right-click resets to 0 dB
+  + Works in CUE Bus mode (controls send volume to active cue)
+  + Toggle via sidebar Show popup ("Vol") and Settings > Channel > Volume Slider
+
   v1.2.2:
   + Meter: Smooth gradient 
   + Minor UI tweaks and performance improvements
@@ -257,6 +263,7 @@ local settings = {
  simple_mixer_show_rms = true,
  simple_mixer_show_pan = true,
  simple_mixer_show_width = false,
+ simple_mixer_show_volume = false,
  simple_mixer_font = 1,
  simple_mixer_font_size = 12,
  simple_mixer_window_bg_color = 0x1E1E1EFF,
@@ -5229,6 +5236,9 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    if rv then changed = true end
    r.ImGui_TableNextRow(mixer_ctx)
    r.ImGui_TableNextColumn(mixer_ctx)
+   rv, settings.simple_mixer_show_volume = r.ImGui_Checkbox(mixer_ctx, "Vol##QT", settings.simple_mixer_show_volume or false)
+   if rv then changed = true end
+   r.ImGui_TableNextColumn(mixer_ctx)
    rv, settings.simple_mixer_show_meters = r.ImGui_Checkbox(mixer_ctx, "Mtrs##QT", settings.simple_mixer_show_meters ~= false)
    if rv then changed = true end
    r.ImGui_TableNextColumn(mixer_ctx)
@@ -5780,6 +5790,10 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  if settings.simple_mixer_show_width then
   width_height = 14
  end
+ local volume_height = 0
+ if settings.simple_mixer_show_volume then
+  volume_height = 14
+ end
  local buttons_height = 0
  if settings.simple_mixer_show_track_buttons then
   buttons_height = (settings.simple_mixer_track_buttons_height or 16) + 4
@@ -5823,7 +5837,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  elseif not settings.simple_mixer_fx_section_collapsed then
   fixed_padding = fixed_padding - 4
  end
- local slider_height = base_slider_height - track_fx_height - track_number_height - vu_meter_height - comp_module_height - lim_module_height - trim_module_height - eq_module_height - fx_divider_height - sendrecv_height - sendrecv_divider_height - sendrecv_handle_height - patch_bar_height - rms_height - pan_height - width_height - buttons_height - fx_handle_height - name_height - routing_indicator_height - icon_section_height - fixed_padding
+ local slider_height = base_slider_height - track_fx_height - track_number_height - vu_meter_height - comp_module_height - lim_module_height - trim_module_height - eq_module_height - fx_divider_height - sendrecv_height - sendrecv_divider_height - sendrecv_handle_height - patch_bar_height - rms_height - pan_height - width_height - volume_height - buttons_height - fx_handle_height - name_height - routing_indicator_height - icon_section_height - fixed_padding
  if slider_height < 50 then slider_height = 50 end
  
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.simple_mixer_channel_rounding or 0)
@@ -6739,6 +6753,75 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     width_text = string.format("%.0f%%", width_pct)
    end
    r.ImGui_SetTooltip(ctx, "Width: " .. width_text .. " (Right-click to reset)")
+  end
+ end
+
+ if settings.simple_mixer_show_volume then
+  local function _vol_db_to_norm(db)
+   if db <= -60 then return 0 end
+   if db >= 12 then return 1 end
+   return (db + 60) / 72
+  end
+  local function _vol_norm_to_db(n)
+   n = math.max(0, math.min(1, n))
+   return n * 72 - 60
+  end
+
+  local vol_db
+  if _is_cue_mode then
+   vol_db = CueBus.GetSendVolDb(track, _cue_track)
+  else
+   local v = r.GetMediaTrackInfo_Value(track, "D_VOL")
+   if v <= 0 then vol_db = -150 else vol_db = 20 * math.log(v, 10) end
+  end
+
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  r.ImGui_InvisibleButton(ctx, "##volume_slider", track_width, pan_slider_height)
+  local is_active = r.ImGui_IsItemActive(ctx)
+  local is_hovered = r.ImGui_IsItemHovered(ctx)
+
+  if is_active then
+   local mx = r.ImGui_GetMousePos(ctx)
+   local n = (mx - x) / track_width
+   local new_db = _vol_norm_to_db(n)
+   if _is_cue_mode then
+    CueBus.SetSendVolDb(track, _cue_track, new_db)
+   else
+    local new_vol = 10 ^ (new_db / 20)
+    if new_db <= -60 then new_vol = 0 end
+    r.SetMediaTrackInfo_Value(track, "D_VOL", new_vol)
+   end
+   vol_db = new_db
+  end
+
+  if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then
+   if _is_cue_mode then
+    CueBus.SetSendVolDb(track, _cue_track, 0.0)
+   else
+    r.SetMediaTrackInfo_Value(track, "D_VOL", 1.0)
+   end
+   vol_db = 0.0
+  end
+
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + track_width, y + pan_slider_height, control_bg_col, 2)
+
+  local zero_n = _vol_db_to_norm(0)
+  local zero_x = x + zero_n * (track_width - slider_grab_width) + slider_grab_width * 0.5
+  r.ImGui_DrawList_AddLine(draw_list, zero_x, y, zero_x, y + pan_slider_height, 0x666666FF, 1)
+
+  local grab_x = x + _vol_db_to_norm(vol_db) * (track_width - slider_grab_width)
+  local grab_col = is_active and slider_grab_active_col or slider_grab_col
+  r.ImGui_DrawList_AddRectFilled(draw_list, grab_x, y, grab_x + slider_grab_width, y + pan_slider_height, grab_col, 2)
+
+  if is_hovered then
+   local db_text
+   if vol_db <= -60 then
+    db_text = "-inf dB"
+   else
+    db_text = string.format("%+.1f dB", vol_db)
+   end
+   r.ImGui_SetTooltip(ctx, (_is_cue_mode and "Cue Vol: " or "Vol: ") .. db_text .. " (Right-click to reset to 0 dB)")
   end
  end
 
@@ -9322,7 +9405,11 @@ function DrawSettingsWindow()
     rv, settings.simple_mixer_show_pan = r.ImGui_Checkbox(ctx, "Pan Slider", settings.simple_mixer_show_pan ~= false)
     r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_show_width = r.ImGui_Checkbox(ctx, "Width Slider", settings.simple_mixer_show_width or false)
-    
+
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_show_volume = r.ImGui_Checkbox(ctx, "Volume Slider", settings.simple_mixer_show_volume or false)
+
     r.ImGui_EndTable(ctx)
    end
    
@@ -10405,11 +10492,6 @@ function DrawMixerCables(ctx)
         if cable_alpha > 1 then cable_alpha = 1 end
         local seed = (sx or 0) + (dx or 0) * 0.7
         local color = disco and disco_color(seed, cable_alpha) or track_color_u32(color_track, cable_alpha)
-
-        if clip then
-         if sx < clip.x1 then sx = clip.x1 elseif sx > clip.x2 then sx = clip.x2 end
-         if dx < clip.x1 then dx = clip.x1 elseif dx > clip.x2 then dx = clip.x2 end
-        end
 
         local dist = math.abs(dx - sx)
         local dip = math.max(24, dist * curve_amount)
@@ -11835,7 +11917,8 @@ function DrawSimpleMixerWindow()
     do
      local _wx, _wy = r.ImGui_GetWindowPos(mixer_ctx)
      local _ww, _wh = r.ImGui_GetWindowSize(mixer_ctx)
-     mixer_state.cables_clip_rect = { x1 = _wx, y1 = _wy, x2 = _wx + _ww, y2 = _wy + _wh }
+     local extra_right = (right_pinned_width or 0) + (master_right_width or 0)
+     mixer_state.cables_clip_rect = { x1 = _wx, y1 = _wy, x2 = _wx + _ww + extra_right, y2 = _wy + _wh }
     end
     local mixer_tracks_hovered = r.ImGui_IsWindowHovered(mixer_ctx, r.ImGui_HoveredFlags_ChildWindows())
     local pending_wheel_y = r.ImGui_GetMouseWheel(mixer_ctx)
