@@ -1,8 +1,12 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.1
+-- @version 1.2.2
 -- @changelog 
 --[[
+  v1.2.2:
+  + Meter: Smooth gradient 
+  + Minor UI tweaks and performance improvements
+
   v1.2.1:
   + Added "Pin Right (Mixer)" / "Unpin Right (Mixer)" in the track right-click menu — pins the strip to the right side of the mixer (between regular strips and the master fader), independent of REAPER's own TCP/MCP pin
   + Right-pin wins over REAPER's TCP/MCP pin: a track set to both no longer appears twice (left + right)
@@ -358,6 +362,7 @@ local settings = {
  simple_mixer_meter_tick_color_below = 0x888888FF,
  simple_mixer_meter_tick_color_above = 0x000000FF,
  simple_mixer_meter_segment_gap = 1,
+ simple_mixer_meter_smooth = false,
  simple_mixer_meter_decay_speed = 0.92,
  simple_mixer_meter_hold_time = 1.5,
  simple_mixer_meter_color_normal = 0x00CC00FF,
@@ -556,12 +561,16 @@ end
 
 local function IsRightPinned(guid)
  if not guid or guid == "" then return false end
- local list = settings.simple_mixer_right_pinned_guids
- if type(list) ~= "table" then return false end
- for _, g in ipairs(list) do
-  if g == guid then return true end
+ local set = settings._right_pinned_set
+ if not set then
+  set = {}
+  local list = settings.simple_mixer_right_pinned_guids
+  if type(list) == "table" then
+   for _, g in ipairs(list) do set[g] = true end
+  end
+  settings._right_pinned_set = set
  end
- return false
+ return set[guid] == true
 end
 
 local function ToggleRightPin(track)
@@ -575,11 +584,13 @@ local function ToggleRightPin(track)
  for i, g in ipairs(list) do
   if g == guid then
    table.remove(list, i)
+   settings._right_pinned_set = nil
    SaveMixerSettings()
    return
   end
  end
  table.insert(list, guid)
+ settings._right_pinned_set = nil
  SaveMixerSettings()
 end
 
@@ -3928,14 +3939,57 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
   local peak_db = PeakToDb(peak_decay)
   local normalized = DbToNormalized(peak_db)
   if normalized > 0.001 then
-   local segments = 20
-   local total_segments = math.floor(normalized * segments)
-   local segment_height = (mh - (segments - 1) * segment_gap) / segments
-   for i = 0, total_segments - 1 do
-    local seg_normalized = (i + 1) / segments
-    local seg_color = GetMeterColor(seg_normalized)
-    local seg_y = my + mh - (i + 1) * (segment_height + segment_gap)
-    r.ImGui_DrawList_AddRectFilled(draw_list, mx, seg_y, mx + mw, seg_y + segment_height, seg_color)
+   if settings.simple_mixer_meter_smooth then
+    local color_normal = settings.simple_mixer_meter_color_normal or 0x00CC00FF
+    local color_mid    = settings.simple_mixer_meter_color_mid    or 0xCCFF00FF
+    local color_high   = settings.simple_mixer_meter_color_high   or 0xFFFF00FF
+    local color_clip   = settings.simple_mixer_meter_color_clip   or 0xFF0000FF
+    local zero_db = 60 / 66
+    local fill_top = my + mh * (1 - normalized)
+    local fill_bot = my + mh
+    local stops = {
+     { p = 0.0,     col = color_normal },
+     { p = 0.5,     col = color_mid },
+     { p = 0.75,    col = color_high },
+     { p = zero_db, col = color_clip },
+     { p = 1.0,     col = color_clip },
+    }
+    for i = 1, #stops - 1 do
+     local p1 = stops[i].p
+     local p2 = stops[i + 1].p
+     if p2 > 0 and p1 < normalized then
+      local seg_lo = p1
+      local seg_hi = math.min(p2, normalized)
+      local y_lo = my + mh - mh * seg_lo
+      local y_hi = my + mh - mh * seg_hi
+      local col_lo = stops[i].col
+      local col_hi = stops[i + 1].col
+      if seg_hi < p2 then
+       local t = (seg_hi - p1) / (p2 - p1)
+       local function lerp_u32(c1, c2, tt)
+        local r1 = (c1 >> 24) & 0xFF; local g1 = (c1 >> 16) & 0xFF; local b1 = (c1 >> 8) & 0xFF; local a1 = c1 & 0xFF
+        local r2 = (c2 >> 24) & 0xFF; local g2 = (c2 >> 16) & 0xFF; local b2 = (c2 >> 8) & 0xFF; local a2 = c2 & 0xFF
+        local rr = math.floor(r1 + (r2 - r1) * tt + 0.5)
+        local gg = math.floor(g1 + (g2 - g1) * tt + 0.5)
+        local bb = math.floor(b1 + (b2 - b1) * tt + 0.5)
+        local aa = math.floor(a1 + (a2 - a1) * tt + 0.5)
+        return (rr << 24) | (gg << 16) | (bb << 8) | aa
+       end
+       col_hi = lerp_u32(col_lo, col_hi, t)
+      end
+      r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, mx, y_hi, mx + mw, y_lo, col_hi, col_hi, col_lo, col_lo)
+     end
+    end
+   else
+    local segments = 20
+    local total_segments = math.floor(normalized * segments)
+    local segment_height = (mh - (segments - 1) * segment_gap) / segments
+    for i = 0, total_segments - 1 do
+     local seg_normalized = (i + 1) / segments
+     local seg_color = GetMeterColor(seg_normalized)
+     local seg_y = my + mh - (i + 1) * (segment_height + segment_gap)
+     r.ImGui_DrawList_AddRectFilled(draw_list, mx, seg_y, mx + mw, seg_y + segment_height, seg_color)
+    end
    end
   end
   local hold_db = PeakToDb(peak_hold)
@@ -7336,19 +7390,6 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  
  local current_track_id = is_master and "master" or r.GetTrackGUID(track)
  
- if not is_locked and r.ImGui_IsMouseDoubleClicked(ctx, r.ImGui_MouseButton_Left()) then
-  local mx, my = r.ImGui_GetMousePos(ctx)
-  if mx >= slider_start_x and mx <= slider_start_x + slider_actual_width and
-     my >= slider_start_y and my <= slider_start_y + slider_height then
-   if _is_cue_mode then
-    CueBus.SetSendVolDb(track, _cue_track, 0.0)
-   else
-    r.SetMediaTrackInfo_Value(track, "D_VOL", 1.0)
-   end
-   mixer_state.fader_reset_track = current_track_id
-  end
- end
- 
  if mixer_state.fader_reset_track == current_track_id then
   if not r.ImGui_IsMouseDown(ctx, r.ImGui_MouseButton_Left()) then
    mixer_state.fader_reset_track = nil
@@ -7357,7 +7398,26 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  
  local rv, new_vol_db = r.ImGui_VSliderDouble(ctx, "##vol", slider_actual_width, slider_height, volume_db, -60.0, 12.0, slider_format)
  
- if rv and mixer_state.fader_reset_track ~= current_track_id then
+ local just_double_clicked = false
+ if not is_locked and r.ImGui_IsItemActivated(ctx) then
+  mixer_state.last_fader_click = mixer_state.last_fader_click or {}
+  local now = r.time_precise()
+  local last = mixer_state.last_fader_click[current_track_id] or 0
+  if now - last < 0.4 then
+   if _is_cue_mode then
+    CueBus.SetSendVolDb(track, _cue_track, 0.0)
+   else
+    r.SetMediaTrackInfo_Value(track, "D_VOL", 1.0)
+   end
+   mixer_state.fader_reset_track = current_track_id
+   just_double_clicked = true
+   mixer_state.last_fader_click[current_track_id] = 0
+  else
+   mixer_state.last_fader_click[current_track_id] = now
+  end
+ end
+ 
+ if rv and not just_double_clicked and mixer_state.fader_reset_track ~= current_track_id then
   local new_volume = 10.0 ^ (new_vol_db / 20.0)
   local delta_db = new_vol_db - volume_db
   if _is_cue_mode then
@@ -9095,6 +9155,12 @@ function DrawSettingsWindow()
      rv, settings.simple_mixer_meter_width = r.ImGui_SliderInt(ctx, "##MeterW", settings.simple_mixer_meter_width or 12, 4, 200)
      if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "Width of the peak meter in pixels.\nWider meter = narrower fader.")
+     end
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_meter_smooth = r.ImGui_Checkbox(ctx, "Smooth Gradient", settings.simple_mixer_meter_smooth == true)
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Render meter as a smooth color gradient instead of segments.\nColors blend gradually between Normal / Mid / High / Clip.")
      end
      r.ImGui_EndTable(ctx)
     end
@@ -11416,14 +11482,12 @@ function DrawSimpleMixerWindow()
     end
    end
   end
+  local existing_set = {}
+  for _, g in ipairs(project_mixer_tracks) do existing_set[g] = true end
   local needs_update = false
   local new_tracks = {}
   for guid, idx in pairs(visible_guids) do
-   local found = false
-   for _, existing_guid in ipairs(project_mixer_tracks) do
-    if existing_guid == guid then found = true break end
-   end
-   if not found then needs_update = true end
+   if not existing_set[guid] then needs_update = true end
    table.insert(new_tracks, {guid = guid, idx = idx})
   end
   if #new_tracks ~= #project_mixer_tracks then needs_update = true end
