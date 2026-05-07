@@ -1,8 +1,17 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.2.1
 -- @changelog 
 --[[
+  v1.2.1:
+  + Added "Pin Right (Mixer)" / "Unpin Right (Mixer)" in the track right-click menu — pins the strip to the right side of the mixer (between regular strips and the master fader), independent of REAPER's own TCP/MCP pin
+  + Right-pin wins over REAPER's TCP/MCP pin: a track set to both no longer appears twice (left + right)
+  + Right-pinned strips now render their divider/spacer (I_SPACER) between them, matching the center mixer style (line or track style, with track-color when configured)
+  + Instrument Rack: empty parameter knob slot is now interactive — right-click opens a popup with "Pin Last Touched Parameter", "Activate Learn Mode" and a "Pin Parameter..." submenu listing all FX parameters
+  + Instrument Rack: collapse handle in the header — click the small chevron strip on the left to collapse the entire rack to a 14px wide handle; click the handle to expand again (state persists per project)
+  + Internal: script_version is now read from the @version header so it stays in sync with the displayed version
+
+
   v1.2.0:
   + Suppress auto-float of TK_ChannelStrip (EQ/Comp/Lim) and TK_Trim on auto-insert (prevents tens of floating FX windows when loading project templates)
   + Added EQ "Auto-insert" toggle (Settings > EQ section) for consistency with Compressor and Limiter — disabled by default
@@ -309,6 +318,7 @@ local settings = {
  simple_mixer_rack_thumb_height = 90,
  simple_mixer_rack_bg_color = 0x1A1A1AFF,
  simple_mixer_rack_header_height = 28,
+ simple_mixer_rack_body_collapsed = false,
  simple_mixer_rack_pin_track_guid = "",
  simple_mixer_rack_add_fx_target = "tk_fx_browser",
  simple_mixer_show_track_buttons = true,
@@ -331,6 +341,7 @@ local settings = {
  simple_mixer_show_folder_groups = false,
  simple_mixer_show_folder_group_lines = false,
  simple_mixer_show_pinned_first = false,
+ simple_mixer_right_pinned_guids = {},
  simple_mixer_show_track_icons = true,
  simple_mixer_track_icon_opacity = 0.3,
  simple_mixer_track_icon_size = 1.0,
@@ -541,6 +552,35 @@ end
 
 local function SaveMixerSettings()
  mixer_settings_dirty = true
+end
+
+local function IsRightPinned(guid)
+ if not guid or guid == "" then return false end
+ local list = settings.simple_mixer_right_pinned_guids
+ if type(list) ~= "table" then return false end
+ for _, g in ipairs(list) do
+  if g == guid then return true end
+ end
+ return false
+end
+
+local function ToggleRightPin(track)
+ if not track or not r.ValidatePtr2(0, track, "MediaTrack*") then return end
+ local guid = r.GetTrackGUID(track)
+ if not guid or guid == "" then return end
+ if type(settings.simple_mixer_right_pinned_guids) ~= "table" then
+  settings.simple_mixer_right_pinned_guids = {}
+ end
+ local list = settings.simple_mixer_right_pinned_guids
+ for i, g in ipairs(list) do
+  if g == guid then
+   table.remove(list, i)
+   SaveMixerSettings()
+   return
+  end
+ end
+ table.insert(list, guid)
+ SaveMixerSettings()
 end
 
 local function LoadMixerSettings()
@@ -8004,6 +8044,12 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     r.SetMediaTrackInfo_Value(track, "B_TCPPIN", new_val)
     r.SetMediaTrackInfo_Value(track, "B_MCPPIN", new_val)
    end
+
+   local track_guid_for_pin = r.GetTrackGUID(track)
+   local is_right_pinned = IsRightPinned(track_guid_for_pin)
+   if r.ImGui_MenuItem(ctx, is_right_pinned and "Unpin Right (Mixer)" or "Pin Right (Mixer)") then
+    ToggleRightPin(track)
+   end
    
      if r.ImGui_BeginMenu(ctx, "Track Icon") then
       local current_icon = GetMixerIconPath(track)
@@ -8384,7 +8430,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  return should_remove or false, should_delete or false, should_delete_selected or false
 end
 
-local function DrawSectionHeader(ctx, label, setting_key, sidebar_width)
+function DrawSectionHeader(ctx, label, setting_key, sidebar_width)
  if settings[setting_key] == nil then settings[setting_key] = true end
  local is_open = settings[setting_key]
  
@@ -8418,8 +8464,8 @@ local function DrawSectionHeader(ctx, label, setting_key, sidebar_width)
  return is_open
 end
 
-local function MarkTransportPresetChanged() SaveMixerSettings() end
-local function ApplyTcpIconVisibility()
+function MarkTransportPresetChanged() SaveMixerSettings() end
+function ApplyTcpIconVisibility()
  local hide = settings.simple_mixer_hide_tcp_icons
  for i = 0, r.CountTracks(0) - 1 do
   local tr = r.GetTrack(0, i)
@@ -8443,8 +8489,8 @@ local function ApplyTcpIconVisibility()
  end
  r.TrackList_AdjustWindows(false)
 end
-local function ResetVUData() simple_mixer_vu_data = {} mixer_state.vu_data = simple_mixer_vu_data end
-local function CleanupVUJSFX()
+function ResetVUData() simple_mixer_vu_data = {} mixer_state.vu_data = simple_mixer_vu_data end
+function CleanupVUJSFX()
  for i = 0, r.CountTracks(0) - 1 do
   local tr = r.GetTrack(0, i)
   if tr then
@@ -8460,7 +8506,7 @@ local function CleanupVUJSFX()
 end
 local cached_system_fonts = nil
 
-local function LoadCachedFonts()
+function LoadCachedFonts()
  local cached = r.GetExtState("TK_Mixer", "cached_system_fonts")
  if cached and cached ~= "" then
   local fonts_list = {}
@@ -8475,12 +8521,12 @@ local function LoadCachedFonts()
  return false
 end
 
-local function SaveCachedFonts(fonts_list)
+function SaveCachedFonts(fonts_list)
  local str = table.concat(fonts_list, "|")
  r.SetExtState("TK_Mixer", "cached_system_fonts", str, true)
 end
 
-local function ScanSystemFonts()
+function ScanSystemFonts()
  local fonts_list = {}
  local seen = {}
  local function add_font(name)
@@ -8544,19 +8590,19 @@ local function ScanSystemFonts()
  return nil
 end
 
-local function HasCachedSystemFonts()
+function HasCachedSystemFonts()
  if cached_system_fonts then return true end
  return LoadCachedFonts()
 end
 
-local function GetFontList(use_system_fonts)
+function GetFontList(use_system_fonts)
  local builtin = {"Arial","Verdana","Tahoma","Calibri","Consolas","Helvetica","Times New Roman","Courier New"}
  if not use_system_fonts then return builtin end
  if cached_system_fonts then return cached_system_fonts end
  if LoadCachedFonts() then return cached_system_fonts end
  return builtin
 end
-local function GetMixerFontFlags(style)
+function GetMixerFontFlags(style)
  style = style or 1
  local flags = 0
  if style == 2 or style == 4 then flags = flags | r.ImGui_FontFlags_Bold() end
@@ -8564,12 +8610,12 @@ local function GetMixerFontFlags(style)
  return flags
 end
 
-local function RebuildSectionFonts()
+function RebuildSectionFonts()
  font_simple_mixer_dirty = true
  font_loaded = false
 end
 
-local function EnsureSimpleMixerFont()
+function EnsureSimpleMixerFont()
  if not font_simple_mixer_dirty then return end
  local font_name = settings.simple_mixer_font_name or fonts[settings.simple_mixer_font or 1] or "Arial"
  local style = settings.simple_mixer_font_style or 1
@@ -8584,7 +8630,7 @@ end
 local font_styles = { {name="Regular"}, {name="Bold"}, {name="Italic"}, {name="Bold Italic"} }
 local fonts = {"Arial","Verdana","Tahoma","Calibri","Consolas"}
 
-local function PushSettingsTheme(c)
+function PushSettingsTheme(c)
  r.ImGui_PushStyleVar(c, r.ImGui_StyleVar_WindowRounding(), 8)
  r.ImGui_PushStyleVar(c, r.ImGui_StyleVar_FrameRounding(), 4)
  r.ImGui_PushStyleVar(c, r.ImGui_StyleVar_FramePadding(), 4, 2)
@@ -8609,12 +8655,12 @@ local function PushSettingsTheme(c)
  r.ImGui_PushStyleColor(c, r.ImGui_Col_PopupBg(), 0x1E1E1EFF)
 end
 
-local function PopSettingsTheme(c)
+function PopSettingsTheme(c)
  r.ImGui_PopStyleColor(c, 13)
  r.ImGui_PopStyleVar(c, 8)
 end
 
-local function DrawSettingsHeader(c, title)
+function DrawSettingsHeader(c, title)
  local window_width = r.ImGui_GetWindowWidth(c)
  r.ImGui_PushStyleColor(c, r.ImGui_Col_Text(), 0xFF0000FF)
  r.ImGui_Text(c, "TK")
@@ -8660,7 +8706,7 @@ local function DrawSettingsHeader(c, title)
  return close_clicked
 end
 
-local function DrawSettingsWindow()
+function DrawSettingsWindow()
  if not settings.simple_mixer_settings_popup_open then return end
  r.ImGui_SetNextWindowSize(ctx, 560, 560)
  PushSettingsTheme(ctx)
@@ -10223,7 +10269,7 @@ local function DrawSettingsWindow()
  if not open then settings.simple_mixer_settings_popup_open = false end
 end
 
-local function DrawMixerCables(ctx)
+function DrawMixerCables(ctx)
  local rects = mixer_state.strip_rects
  if not rects then return end
  if r.ImGui_IsPopupOpen(ctx, "", (r.ImGui_PopupFlags_AnyPopupId and r.ImGui_PopupFlags_AnyPopupId() or 1024) | (r.ImGui_PopupFlags_AnyPopupLevel and r.ImGui_PopupFlags_AnyPopupLevel() or 2048)) then return end
@@ -10357,7 +10403,7 @@ local function DrawMixerCables(ctx)
  end
 end
 
-local function GetRackPinnedForFX(track, track_guid, fx_index)
+function GetRackPinnedForFX(track, track_guid, fx_index)
  local pinned = simple_mixer_pinned_params[track_guid]
  if not pinned then return {} end
  local list = {}
@@ -10370,7 +10416,35 @@ local function GetRackPinnedForFX(track, track_guid, fx_index)
  return list
 end
 
-local function DrawRackParamKnob(ctx, draw_list, cx, cy, radius, track, fx_index, param_idx, label)
+function RackPinParam(track, fx_index, paramidx)
+ if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+ if not paramidx or paramidx < 0 then return end
+ local tg = r.GetTrackGUID(track)
+ if not simple_mixer_pinned_params[tg] then simple_mixer_pinned_params[tg] = {} end
+ local key = fx_index .. "_" .. paramidx
+ if simple_mixer_pinned_params[tg][key] then return end
+ local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
+ local _, param_name = r.TrackFX_GetParamName(track, fx_index, paramidx, "")
+ local track_idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+ local _, track_name = r.GetTrackName(track)
+ simple_mixer_pinned_params[tg][key] = {
+  track = track,
+  track_num = (track_idx == -1) and "M" or tostring(math.floor(track_idx)),
+  track_name = track_name,
+  fxidx = fx_index,
+  paramidx = paramidx,
+  fx_name = fx_name,
+  param_name = param_name,
+  fx_guid = r.TrackFX_GetFXGUID(track, fx_index)
+ }
+ SavePinnedParams()
+ if r.SNM_AddTCPFXParm then
+  r.SNM_AddTCPFXParm(track, fx_index, paramidx)
+  r.TrackList_AdjustWindows(false)
+ end
+end
+
+function DrawRackParamKnob(ctx, draw_list, cx, cy, radius, track, fx_index, param_idx, label)
  local value = r.TrackFX_GetParam(track, fx_index, param_idx)
  local knob_color = settings.simple_mixer_comp_knob_color or 0xCCCCCCFF
  local track_color = settings.simple_mixer_comp_knob_track_color or 0x555555FF
@@ -10415,7 +10489,7 @@ local function DrawRackParamKnob(ctx, draw_list, cx, cy, radius, track, fx_index
  end
 end
 
-local function GetRackTargetTrack(project_mixer_tracks)
+function GetRackTargetTrack(project_mixer_tracks)
  local pin_guid = settings.simple_mixer_rack_pin_track_guid
  if pin_guid and pin_guid ~= "" then
   local t = r.BR_GetMediaTrackByGUID(0, pin_guid)
@@ -10475,14 +10549,14 @@ function OpenAddFXBrowserForRack(track)
  r.ShowMessageBox("Could not start " .. nice_name .. " automatically.\nPlease start it once from the Actions list.", nice_name, 0)
 end
 
-local function FXAB_Key(track, fx_idx)
+function FXAB_Key(track, fx_idx)
  local tg = r.GetTrackGUID(track) or ""
  local fg = r.TrackFX_GetFXGUID(track, fx_idx) or ""
  if fg == "" then fg = tostring(fx_idx) end
  return tg .. "|" .. fg
 end
 
-local function FXAB_Save()
+function FXAB_Save()
  local proj = r.EnumProjects(-1, "")
  if not proj then return end
  local data = { state = {}, current = {} }
@@ -10498,7 +10572,7 @@ local function FXAB_Save()
  end
 end
 
-local function FXAB_Load()
+function FXAB_Load()
  local proj = r.EnumProjects(-1, "")
  if not proj then return end
  mixer_state.fx_ab_state = {}
@@ -10528,7 +10602,7 @@ local function FXAB_Load()
  end
 end
 
-local function FXAB_Capture(track, fx_idx)
+function FXAB_Capture(track, fx_idx)
  local n = r.TrackFX_GetNumParams(track, fx_idx)
  local snap = {}
  for p = 0, n - 1 do
@@ -10537,7 +10611,7 @@ local function FXAB_Capture(track, fx_idx)
  return snap
 end
 
-local function FXAB_Apply(track, fx_idx, snap)
+function FXAB_Apply(track, fx_idx, snap)
  if not snap then return end
  local n = r.TrackFX_GetNumParams(track, fx_idx)
  for p = 0, n - 1 do
@@ -10546,7 +10620,7 @@ local function FXAB_Apply(track, fx_idx, snap)
  end
 end
 
-local function FXAB_Click(track, fx_idx)
+function FXAB_Click(track, fx_idx)
  local key = FXAB_Key(track, fx_idx)
  local st = mixer_state.fx_ab_state[key]
  if not st or (not st.a and not st.b) then
@@ -10568,21 +10642,21 @@ local function FXAB_Click(track, fx_idx)
  end
 end
 
-local function FXAB_Reset(track, fx_idx)
+function FXAB_Reset(track, fx_idx)
  local key = FXAB_Key(track, fx_idx)
  mixer_state.fx_ab_state[key] = nil
  mixer_state.fx_ab_current[key] = nil
  FXAB_Save()
 end
 
-local function FXAB_CopyTo(track, fx_idx, side)
+function FXAB_CopyTo(track, fx_idx, side)
  local key = FXAB_Key(track, fx_idx)
  mixer_state.fx_ab_state[key] = mixer_state.fx_ab_state[key] or {}
  mixer_state.fx_ab_state[key][side] = FXAB_Capture(track, fx_idx)
  FXAB_Save()
 end
 
-local function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
+function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
  local cur_proj = r.EnumProjects(-1, "")
  if mixer_state.fx_ab_loaded_project ~= cur_proj then
   FXAB_Load()
@@ -10612,6 +10686,22 @@ local function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
  local draw_list = r.ImGui_GetWindowDrawList(ctx)
  local x, y = r.ImGui_GetCursorScreenPos(ctx)
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, settings.simple_mixer_rack_bg_color or 0x1A1A1AFF)
+ if settings.simple_mixer_rack_body_collapsed then
+  r.ImGui_DrawList_AddRectFilled(draw_list, x + 2, y + 2, x + width - 2, y + height - 2, 0x33333388, 2)
+  local cx = x + width * 0.5
+  local label = "<"
+  local lw = r.ImGui_CalcTextSize(ctx, label) * (10 / r.ImGui_GetFontSize(ctx))
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, 10, cx - lw * 0.5, y + 6, 0xCCCCCCFF, label)
+  r.ImGui_SetCursorScreenPos(ctx, x, y)
+  if r.ImGui_InvisibleButton(ctx, "##rack_expand_handle", width, height) then
+   settings.simple_mixer_rack_body_collapsed = false
+   SaveMixerSettings()
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+   r.ImGui_SetTooltip(ctx, "Expand Instrument Rack")
+  end
+  return
+ end
  local header_h = settings.simple_mixer_rack_header_height or 28
  local track_color = 0x444444FF
  local track_num = 0
@@ -10769,7 +10859,22 @@ local function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
    r.ImGui_EndPopup(ctx)
   end
  end
- local label_x = x + 8
+ local strip_w = 8
+ local strip_pad = 4
+ local body_collapsed = settings.simple_mixer_rack_body_collapsed and true or false
+ local strip_color = body_collapsed and 0xFFAA44FF or 0x66666688
+ r.ImGui_DrawList_AddRectFilled(draw_list, x + 2, y + 4, x + 2 + strip_w, y + header_h - 4, strip_color, 2)
+ local chev = body_collapsed and ">" or "v"
+ r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, x + 4, y + (header_h - 10) * 0.5, 0x000000FF, chev)
+ r.ImGui_SetCursorScreenPos(ctx, x + 2, y + 2)
+ if r.ImGui_InvisibleButton(ctx, "##rack_body_collapse", strip_w + 2, header_h - 4) then
+  settings.simple_mixer_rack_body_collapsed = not body_collapsed
+  SaveMixerSettings()
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+  r.ImGui_SetTooltip(ctx, body_collapsed and "Expand Instrument Rack" or "Collapse Instrument Rack")
+ end
+ local label_x = x + 8 + strip_w + strip_pad
  local num_str = track and tostring(track_num) or "-"
  r.ImGui_DrawList_AddTextEx(draw_list, nil, 14, label_x, y + 6, 0x000000CC, num_str)
  local num_w = r.ImGui_CalcTextSize(ctx, num_str)
@@ -11152,6 +11257,48 @@ local function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
        r.ImGui_DrawList_AddCircle(draw_list, cx, cy, knob_radius, 0x44444488, 0, 1)
        local plus_w = r.ImGui_CalcTextSize(ctx, "+") * (10 / r.ImGui_GetFontSize(ctx))
        r.ImGui_DrawList_AddTextEx(draw_list, nil, 10, cx - plus_w * 0.5, cy - 6, 0x66666688, "+")
+       r.ImGui_SetCursorScreenPos(ctx, cx - knob_radius, cy - knob_radius)
+       r.ImGui_InvisibleButton(ctx, "##rkk_empty_" .. i .. "_" .. slot, knob_radius * 2, knob_radius * 2)
+       if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Right-click to pin a parameter")
+       end
+       if r.ImGui_IsItemClicked(ctx, 1) then
+        r.ImGui_OpenPopup(ctx, "##rkk_empty_menu_" .. i .. "_" .. slot)
+       end
+       if r.ImGui_BeginPopup(ctx, "##rkk_empty_menu_" .. i .. "_" .. slot) then
+        local lt_ok, lt_tridx, lt_fxidx, lt_pidx = r.GetLastTouchedFX()
+        local lt_track = nil
+        if lt_ok then
+         if lt_tridx == 0 then lt_track = r.GetMasterTrack(0)
+         else lt_track = r.GetTrack(0, lt_tridx - 1) end
+        end
+        local lt_matches = lt_ok and lt_track == track and lt_fxidx == i
+        local lt_label = "Pin Last Touched Parameter"
+        if lt_matches then
+         local _, lt_pname = r.TrackFX_GetParamName(track, i, lt_pidx, "")
+         lt_label = "Pin Last Touched: " .. (lt_pname or ("Param " .. tostring(lt_pidx)))
+        end
+        if r.ImGui_MenuItem(ctx, lt_label, nil, false, lt_matches) then
+         RackPinParam(track, i, lt_pidx)
+        end
+        if r.ImGui_MenuItem(ctx, "Activate Learn Mode") then
+         mixer_state.param_learn_active = true
+         mixer_state.param_learn_last_check = nil
+        end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_BeginMenu(ctx, "Pin Parameter...") then
+         local pcount = r.TrackFX_GetNumParams(track, i)
+         if pcount > 200 then pcount = 200 end
+         for p = 0, pcount - 1 do
+          local _, pname = r.TrackFX_GetParamName(track, i, p, "")
+          if r.ImGui_MenuItem(ctx, (pname ~= "" and pname or ("Param " .. tostring(p))) .. "##rkkpp_" .. p) then
+           RackPinParam(track, i, p)
+          end
+         end
+         r.ImGui_EndMenu(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+       end
       end
      end
     end
@@ -11225,7 +11372,7 @@ local function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
  r.ImGui_Dummy(ctx, width, height)
 end
 
-local function DrawSimpleMixerWindow()
+function DrawSimpleMixerWindow()
  if not settings.simple_mixer_window_open then return end
 
  EnsureSimpleMixerFont()
@@ -11528,7 +11675,7 @@ local function DrawSimpleMixerWindow()
       if track then
        local is_tcp_pinned = r.GetMediaTrackInfo_Value(track, "B_TCPPIN") == 1
        local is_mcp_pinned = r.GetMediaTrackInfo_Value(track, "B_MCPPIN") == 1
-       if is_tcp_pinned or is_mcp_pinned then
+       if (is_tcp_pinned or is_mcp_pinned) and not IsRightPinned(track_guid) then
         local track_num = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
         local spacer = r.GetMediaTrackInfo_Value(track, "I_SPACER")
         table.insert(pinned_tracks_data, {guid = track_guid, track = track, num = track_num})
@@ -11543,9 +11690,41 @@ local function DrawSimpleMixerWindow()
     table.sort(pinned_spacers, function(a, b) return a.track_num < b.track_num end)
    end
 
+   local right_pinned_data = {}
+   if type(settings.simple_mixer_right_pinned_guids) == "table" and #settings.simple_mixer_right_pinned_guids > 0 then
+    for _, track_guid in ipairs(project_mixer_tracks) do
+     if type(track_guid) == "string" and IsRightPinned(track_guid) then
+      local track = r.BR_GetMediaTrackByGUID(0, track_guid)
+      if track then
+       local track_num = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+       table.insert(right_pinned_data, {guid = track_guid, track = track, num = track_num})
+      end
+     end
+    end
+    table.sort(right_pinned_data, function(a, b) return a.num < b.num end)
+   end
+
    local pinned_width = 0
    if #pinned_tracks_data > 0 then
     pinned_width = (#pinned_tracks_data * (track_width + 4)) + 4
+   end
+
+   local right_pinned_width = 0
+   if #right_pinned_data > 0 then
+    right_pinned_width = (#right_pinned_data * (track_width + 4)) + 4
+    local hide_all = settings.simple_mixer_hide_all_dividers
+    local spacer_style = settings.simple_mixer_spacer_style or "line"
+    local div_w_track = settings.simple_mixer_divider_width or 20
+    for ri, rd in ipairs(right_pinned_data) do
+     if ri > 1 then
+      local sp = r.GetMediaTrackInfo_Value(rd.track, "I_SPACER") or 0
+      local hidden = mixer_state.hidden_dividers[rd.guid] or hide_all
+      if sp > 0 and not hidden then
+       local sw = (spacer_style == "track") and div_w_track or math.max(4, math.min(sp / 4, 20))
+       right_pinned_width = right_pinned_width + sw + 4
+      end
+     end
+    end
    end
 
    if settings.simple_mixer_show_master and settings.simple_mixer_master_position == "left" then
@@ -11584,8 +11763,9 @@ local function DrawSimpleMixerWindow()
    end
 
    local master_right_width = (settings.simple_mixer_show_master and settings.simple_mixer_master_position == "right") and (track_width + 8) or 0
-   local rack_width = (settings.simple_mixer_show_rack and (settings.simple_mixer_rack_width or 220) + 4) or 0
-   local child_width = avail_width - master_right_width - rack_width - (pinned_width > 0 and pinned_width or 0)
+   local rack_actual_width = settings.simple_mixer_rack_body_collapsed and 14 or (settings.simple_mixer_rack_width or 220)
+   local rack_width = (settings.simple_mixer_show_rack and rack_actual_width + 4) or 0
+   local child_width = avail_width - master_right_width - rack_width - (pinned_width > 0 and pinned_width or 0) - (right_pinned_width > 0 and right_pinned_width or 0)
    if child_width < 100 then child_width = 100 end
    if r.ImGui_BeginChild(mixer_ctx, "MixerTracks", child_width, avail_height, r.ImGui_ChildFlags_None(), r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
     do
@@ -11692,7 +11872,8 @@ local function DrawSimpleMixerWindow()
        local is_tcp_pinned = r.GetMediaTrackInfo_Value(track, "B_TCPPIN") == 1
        local is_mcp_pinned = r.GetMediaTrackInfo_Value(track, "B_MCPPIN") == 1
        local is_pinned = is_tcp_pinned or is_mcp_pinned
-       if not (settings.simple_mixer_show_pinned_first and is_pinned) then
+       local is_right_pinned = IsRightPinned(track_guid)
+       if not (settings.simple_mixer_show_pinned_first and is_pinned) and not is_right_pinned then
         table.insert(sorted_tracks, {guid = track_guid, track = track, num = track_num, is_pinned = false})
        end
       end
@@ -12252,6 +12433,63 @@ local function DrawSimpleMixerWindow()
     r.ImGui_EndChild(mixer_ctx)
    end
 
+   if #right_pinned_data > 0 then
+    r.ImGui_SameLine(mixer_ctx, 0, 4)
+    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
+    if r.ImGui_BeginChild(mixer_ctx, "RightPinnedTracks", right_pinned_width, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
+     for ridx, rdata in ipairs(right_pinned_data) do
+      local _, rtrack_name = r.GetTrackName(rdata.track)
+      local show_handle = settings.simple_mixer_show_fx_slots
+      local r_spacer = r.GetMediaTrackInfo_Value(rdata.track, "I_SPACER") or 0
+      local r_divider_hidden = mixer_state.hidden_dividers[rdata.guid] or settings.simple_mixer_hide_all_dividers or false
+      if r_spacer > 0 and ridx > 1 and not r_divider_hidden then
+       local spacer_style = settings.simple_mixer_spacer_style or "line"
+       local dx, dy = r.ImGui_GetCursorScreenPos(mixer_ctx)
+       local dlist = r.ImGui_GetWindowDrawList(mixer_ctx)
+       local divider_height = avail_height - 16
+       local bg_color = settings.simple_mixer_divider_custom_color or 0x444444FF
+       local border_color = settings.simple_mixer_divider_border_custom_color or 0x888888FF
+       local tcol = r.GetTrackColor(rdata.track)
+       if settings.simple_mixer_divider_use_track_color ~= false and tcol ~= 0 then
+        local rv, gv, bv = r.ColorFromNative(tcol)
+        bg_color = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 0.6)
+        border_color = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
+       end
+       if spacer_style == "track" then
+        local dw = settings.simple_mixer_divider_width or 20
+        if settings.simple_mixer_divider_filled then
+         r.ImGui_DrawList_AddRectFilled(dlist, dx + 1, dy + 1, dx + dw - 1, dy + divider_height - 1, bg_color, 2)
+        end
+        if settings.simple_mixer_divider_show_border ~= false then
+         r.ImGui_DrawList_AddRect(dlist, dx + 1, dy + 1, dx + dw - 1, dy + divider_height - 1, border_color, 2, 0, 2)
+        end
+        r.ImGui_Dummy(mixer_ctx, dw, divider_height)
+       else
+        local sw = math.min(r_spacer / 4, 20)
+        if sw < 4 then sw = 4 end
+        r.ImGui_DrawList_AddRectFilled(dlist, dx, dy, dx + sw, dy + divider_height, bg_color, 2)
+        r.ImGui_Dummy(mixer_ctx, sw, divider_height)
+       end
+       r.ImGui_SameLine(mixer_ctx, 0, 4)
+      end
+      local rsx, rsy = r.ImGui_GetCursorScreenPos(mixer_ctx)
+      DrawMixerChannel(mixer_ctx, rdata.track, rtrack_name, 2000 + ridx, track_width, base_slider_height, false, true, show_handle, nil)
+      if settings.simple_mixer_track_separator_enabled then
+       local dl = r.ImGui_GetForegroundDrawList(mixer_ctx)
+       local sc = GetSeparatorColorForTrack(rdata.track, settings.simple_mixer_track_separator_color)
+       local sth = settings.simple_mixer_track_separator_thickness or 1.0
+       r.ImGui_DrawList_AddLine(dl, rsx - 1, rsy, rsx - 1, rsy + avail_height, sc, sth)
+       r.ImGui_DrawList_AddLine(dl, rsx + track_width, rsy, rsx + track_width, rsy + avail_height, sc, sth)
+      end
+      if ridx < #right_pinned_data then
+       r.ImGui_SameLine(mixer_ctx, 0, 4)
+      end
+     end
+     r.ImGui_EndChild(mixer_ctx)
+    end
+    r.ImGui_PopStyleColor(mixer_ctx, 1)
+   end
+
    if settings.simple_mixer_show_master and settings.simple_mixer_master_position == "right" then
     r.ImGui_SameLine(mixer_ctx, 0, 4)
     r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
@@ -12265,8 +12503,9 @@ local function DrawSimpleMixerWindow()
    if settings.simple_mixer_show_rack then
     r.ImGui_SameLine(mixer_ctx, 0, 4)
     r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_rack_bg_color or 0x1A1A1AFF)
-    if r.ImGui_BeginChild(mixer_ctx, "InstrumentRack", settings.simple_mixer_rack_width or 220, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
-     DrawInstrumentRack(mixer_ctx, settings.simple_mixer_rack_width or 220, avail_height, project_mixer_tracks)
+    local _rack_w = settings.simple_mixer_rack_body_collapsed and 14 or (settings.simple_mixer_rack_width or 220)
+    if r.ImGui_BeginChild(mixer_ctx, "InstrumentRack", _rack_w, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
+     DrawInstrumentRack(mixer_ctx, _rack_w, avail_height, project_mixer_tracks)
      r.ImGui_EndChild(mixer_ctx)
     end
     r.ImGui_PopStyleColor(mixer_ctx, 1)
@@ -12370,7 +12609,7 @@ local function DrawSimpleMixerWindow()
  if not open then settings.simple_mixer_window_open = false end
 end
 
-local function HandleMixerIconBrowser()
+function HandleMixerIconBrowser()
  if not IconBrowser or not IconBrowser.show_window then return end
  local ok, selected_icon = pcall(IconBrowser.Show, ctx, settings)
  if not ok then
@@ -12400,7 +12639,7 @@ local function HandleMixerIconBrowser()
  mixer_state.icon_browser_last_applied = apply_key
 end
 
-local function Loop()
+function Loop()
  DrawSimpleMixerWindow()
  DrawSettingsWindow()
  HandleMixerIconBrowser()
