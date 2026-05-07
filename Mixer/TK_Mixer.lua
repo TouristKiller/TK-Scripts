@@ -1,8 +1,18 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.1.9
+-- @version 1.2.0
 -- @changelog 
 --[[
+  v1.2.0:
+  + Suppress auto-float of TK_ChannelStrip (EQ/Comp/Lim) and TK_Trim on auto-insert (prevents tens of floating FX windows when loading project templates)
+  + Added EQ "Auto-insert" toggle (Settings > EQ section) for consistency with Compressor and Limiter — disabled by default
+  + New bottom dock toggle button in sidebar (above the close button), styled to match the close button
+    - Click: minimize/maximize the bottommost docker
+    - Right-click: set custom min/max heights in pixels (0 = auto: 1/3 of main window height for min, full main window height for max)
+    - Includes "Use current height as Min/Max" and "Reset to auto" options
+  + New VU meter style "Digit" — clock-style digital readout with current dB and peak hold dB plus a RST button to reset peak hold
+  + Added VU meter style cycle button (bottom-left of each VU meter) for quick switching between Analog / Analog Light / LED Bars / Digital / Digit
+
   v1.1.9:
   + Added "Flow" toggle in the Show popup (sidebar) next to "Cbl" for quick access to the cables flow animation
   + Fixed crash "bad argument #1 to 'GetTrackGUID' (MediaTrack expected)" when a send destination pointer was invalid (validates MediaTrack pointer before drawing cables)
@@ -99,7 +109,23 @@
 local r = reaper
 local ctx = r.ImGui_CreateContext('TK Mixer')
 
-local script_version = "1.1.6"
+local function ReadScriptVersion()
+ local src = debug.getinfo(1, "S").source:match("@?(.*)")
+ if not src then return "?" end
+ local f = io.open(src, "r")
+ if not f then return "?" end
+ local version = "?"
+ for i = 1, 30 do
+  local line = f:read("*l")
+  if not line then break end
+  local v = line:match("^%-%-%s*@version%s+([%w%.%-_]+)")
+  if v then version = v break end
+ end
+ f:close()
+ return version
+end
+
+local script_version = ReadScriptVersion()
 
 local mixer_state = {}
 local TCP_ICON_EXT_KEY = "TK_TCP_ICON"
@@ -394,6 +420,7 @@ local settings = {
  simple_mixer_eq_bypass_color = 0x666600FF,
  simple_mixer_eq_active_color = 0x00AA88FF,
  simple_mixer_eq_show_labels = true,
+ simple_mixer_eq_auto_insert = false,
  simple_mixer_eq_lf_bg = 0xFF666618,
  simple_mixer_eq_lmf_bg = 0xFFAA4418,
  simple_mixer_eq_hmf_bg = 0x66FF6618,
@@ -409,6 +436,9 @@ local settings = {
  simple_mixer_sidebar_text = "",
  simple_mixer_sidebar_text_size = 14,
  simple_mixer_sidebar_text_color = 0xAAAAAAFF,
+ simple_mixer_bottom_dock_state = "max",
+ simple_mixer_bottom_dock_min_px = 0,
+ simple_mixer_bottom_dock_max_px = 0,
  simple_mixer_presets_open = true,
  simple_mixer_snapshots_open = true,
  simple_mixer_current_snapshot = "",
@@ -530,6 +560,162 @@ local function LoadMixerSettings()
     end
    end
   end
+ end
+end
+
+mixer_state.bottom_dock = mixer_state.bottom_dock or {}
+mixer_state.bottom_dock.os_name = r.GetOS() or ""
+mixer_state.bottom_dock.is_win_or_linux = mixer_state.bottom_dock.os_name:match("Win") or mixer_state.bottom_dock.os_name:match("Other")
+
+function mixer_state.bottom_dock.is_available()
+ return r.APIExists and r.APIExists("JS_Window_ListFind")
+  and r.APIExists("JS_Window_HandleFromAddress")
+  and r.APIExists("JS_Window_GetClientRect")
+  and r.APIExists("JS_Window_IsVisible")
+  and r.APIExists("JS_WindowMessage_Send")
+  and r.APIExists("DockIsChildOfDock")
+  and r.APIExists("DockGetPosition")
+end
+
+function mixer_state.bottom_dock.client_bounds(hwnd)
+ local _, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+ local h = top - bottom
+ if mixer_state.bottom_dock.is_win_or_linux then h = bottom - top end
+ return { l = left, t = top, r = right, b = bottom, w = right - left, h = h }
+end
+
+function mixer_state.bottom_dock.find_bottommost()
+ if not mixer_state.bottom_dock.is_available() then return nil end
+ local _, list = r.JS_Window_ListFind("REAPER_dock", true)
+ if not list or list == "" then return nil end
+ local selected = nil
+ local selected_coord = nil
+ for token in string.gmatch(list, "[^,]+") do
+  local addr = tonumber(token) or 0
+  if addr ~= 0 then
+   local hwnd = r.JS_Window_HandleFromAddress(addr)
+   if hwnd then
+  local dock_id = r.DockIsChildOfDock(hwnd)
+  local pos = r.DockGetPosition(dock_id)
+  if pos == 0 and r.JS_Window_IsVisible(hwnd) then
+   local bounds = mixer_state.bottom_dock.client_bounds(hwnd)
+   local coord = bounds.b
+   if mixer_state.bottom_dock.is_win_or_linux then coord = -coord end
+   if not selected or coord < selected_coord then
+    selected = { hwnd = hwnd, pos = pos, bounds = bounds }
+    selected_coord = coord
+   end
+  end
+   end
+  end
+ end
+ return selected
+end
+
+function mixer_state.bottom_dock.main_height()
+ local main = r.GetMainHwnd and r.GetMainHwnd() or nil
+ if not main then return 0 end
+ local _, l, t, rr, b = r.JS_Window_GetClientRect(main)
+ local h = b - t
+ if h < 0 then h = -h end
+ return h
+end
+
+function mixer_state.bottom_dock.target_min()
+ local custom = tonumber(settings.simple_mixer_bottom_dock_min_px) or 0
+ if custom > 0 then return custom end
+ local mh = mixer_state.bottom_dock.main_height()
+ if mh <= 0 then return 200 end
+ return math.floor(mh / 3)
+end
+
+function mixer_state.bottom_dock.target_max()
+ local custom = tonumber(settings.simple_mixer_bottom_dock_max_px) or 0
+ if custom > 0 then return custom end
+ local mh = mixer_state.bottom_dock.main_height()
+ if mh <= 0 then return 10000 end
+ return mh
+end
+
+function mixer_state.bottom_dock.resize_bottom(dock, wanted_size)
+ if not dock or dock.pos ~= 0 then return false end
+ local base_size = dock.bounds and dock.bounds.h or nil
+ if not base_size then return false end
+ local target = wanted_size
+ if target == "min" then target = mixer_state.bottom_dock.target_min() end
+ if target == "max" then target = mixer_state.bottom_dock.target_max() end
+ target = tonumber(target)
+ if not target then return false end
+ local focused = r.JS_Window_GetFocus and r.JS_Window_GetFocus() or nil
+ local delta = base_size - target
+ r.JS_WindowMessage_Send(dock.hwnd, "WM_LBUTTONDOWN", 1, 0, 0, 0)
+ r.JS_WindowMessage_Send(dock.hwnd, "WM_LBUTTONUP", 0, 0, 0, delta)
+ if focused and r.JS_Window_SetFocus then r.JS_Window_SetFocus(focused) end
+ return true
+end
+
+function mixer_state.bottom_dock.get_state()
+ local dock = mixer_state.bottom_dock.find_bottommost()
+ if not dock then
+  return settings.simple_mixer_bottom_dock_state or "max"
+ end
+ local h = dock.bounds and dock.bounds.h or 0
+ local min_target = mixer_state.bottom_dock.target_min()
+ local max_target = mixer_state.bottom_dock.target_max()
+ local mid = (min_target + max_target) * 0.5
+ if h < mid then return "min" end
+ return "max"
+end
+
+function mixer_state.bottom_dock.toggle()
+ local dock = mixer_state.bottom_dock.find_bottommost()
+ if not dock then return false end
+ local state = mixer_state.bottom_dock.get_state()
+ local ok
+ if state == "min" then
+  ok = mixer_state.bottom_dock.resize_bottom(dock, "max")
+  if ok then settings.simple_mixer_bottom_dock_state = "max" end
+ else
+  ok = mixer_state.bottom_dock.resize_bottom(dock, "min")
+  if ok then settings.simple_mixer_bottom_dock_state = "min" end
+ end
+ if ok then SaveMixerSettings() end
+ return ok
+end
+
+function DrawBottomDockToggleButton(mixer_ctx, sidebar_width, sb_win_x, sb_win_y, sb_win_h, close_btn_h)
+ local dock_btn_h = 20
+ local dock_state = mixer_state.bottom_dock.get_state()
+ local can_toggle = mixer_state.bottom_dock.is_available()
+ r.ImGui_SetCursorScreenPos(mixer_ctx, sb_win_x, sb_win_y + sb_win_h - close_btn_h - dock_btn_h - 2)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x2A2A2AFF)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x882222FF)
+ r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0xAA2222FF)
+ local db_x, db_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
+ if r.ImGui_Button(mixer_ctx, "##dock_toggle_bottom", sidebar_width, dock_btn_h) then
+  if can_toggle then
+   mixer_state.bottom_dock.toggle()
+  end
+ end
+ r.ImGui_PopStyleColor(mixer_ctx, 3)
+ if r.ImGui_IsItemHovered(mixer_ctx) then
+  if can_toggle then
+   r.ImGui_SetTooltip(mixer_ctx, dock_state == "min" and "Maximize bottom docker" or "Minimize bottom docker")
+  else
+   r.ImGui_SetTooltip(mixer_ctx, "Requires js_ReaScriptAPI")
+  end
+ end
+ local db_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
+ local db_cx = db_x + sidebar_width * 0.5
+ local db_cy = db_y + dock_btn_h * 0.5
+ local arm = 5
+ local color = can_toggle and 0xAAAAAAFF or 0x666666FF
+ if dock_state == "min" then
+  r.ImGui_DrawList_AddLine(db_dl, db_cx - arm, db_cy + 2, db_cx, db_cy - 3, color, 1.5)
+  r.ImGui_DrawList_AddLine(db_dl, db_cx, db_cy - 3, db_cx + arm, db_cy + 2, color, 1.5)
+ else
+  r.ImGui_DrawList_AddLine(db_dl, db_cx - arm, db_cy - 2, db_cx, db_cy + 3, color, 1.5)
+  r.ImGui_DrawList_AddLine(db_dl, db_cx, db_cy + 3, db_cx + arm, db_cy - 2, color, 1.5)
  end
 end
 
@@ -1038,6 +1224,7 @@ end
 local function InsertChannelStripFX(track, track_guid)
  local fx_index = r.TrackFX_AddByName(track, "JS:TK_ChannelStrip", false, -1)
  if fx_index >= 0 then
+    r.TrackFX_Show(track, fx_index, 2)
     r.TrackFX_Show(track, fx_index, 0)
   r.TrackFX_SetEnabled(track, fx_index, true)
   channelstrip_fx_cache[track_guid] = {fx_index = fx_index}
@@ -2046,6 +2233,7 @@ function Trim.InsertFX(track, track_guid)
  end
  local fx_index = r.TrackFX_AddByName(track, "JS:TK_Trim", false, insert_pos)
  if fx_index >= 0 then
+    r.TrackFX_Show(track, fx_index, 2)
     r.TrackFX_Show(track, fx_index, 0)
   r.TrackFX_SetEnabled(track, fx_index, true)
   Trim.fx_cache[track_guid] = {fx_index = fx_index}
@@ -2508,6 +2696,9 @@ end
 function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
  if not settings.simple_mixer_show_eq or not track then return 0 end
  local fx_index = EQ.FindFX(track, track_guid)
+ if fx_index < 0 and settings.simple_mixer_eq_auto_insert ~= false and not track_guid:match("^MASTER") then
+  fx_index = EQ.InsertFX(track, track_guid)
+ end
  local has_eq = fx_index >= 0
  local bg_color = settings.simple_mixer_eq_bg_color or 0x1A2A2AFF
  local header_color = settings.simple_mixer_eq_header_color or 0x3A5A5AFF
@@ -3348,7 +3539,77 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         
         local border_color = 0xAAAAAFFF
         r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, border_color, 4, 0, 1)
-        
+
+    elseif vu_style == 4 then
+        local panel_bg = 0x101820FF
+        local panel_inner = 0x0A1218FF
+        local digit_on = 0x55FF66FF
+        local hold_on = 0xFFAA22FF
+        local clip_on = 0xFF3333FF
+        local label_col = 0x66AA88FF
+
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, panel_bg, 4)
+        r.ImGui_DrawList_AddRectFilled(draw_list, x + 3, y + 3, x + width - 3, y + vu_height - 3, panel_inner, 3)
+
+        local current_db = data.raw_db or data.peak_combined or -60
+        if current_db < -99 then current_db = -99 end
+        if current_db > 99 then current_db = 99 end
+        local hold_db = data.raw_peak_db or current_db
+        if hold_db < -99 then hold_db = -99 end
+        if hold_db > 99 then hold_db = 99 end
+
+        local function fmt(v)
+            if v <= -99 then return "-oo" end
+            return string.format("%+.1f", v)
+        end
+
+        local cur_text = fmt(current_db)
+        local hold_text = fmt(hold_db)
+
+        local font_h = math.max(10, math.floor(vu_height * 0.42))
+        local cx_inner = x + 6
+        local row1_y = y + 4
+        local row2_y = y + vu_height - font_h - 4
+
+        local cur_color = is_clipping and clip_on or digit_on
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, font_h, cx_inner, row1_y, cur_color, cur_text)
+        local cur_w = r.ImGui_CalcTextSize(ctx, cur_text)
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, math.max(8, math.floor(font_h * 0.55)), cx_inner + cur_w + 3, row1_y + math.floor(font_h * 0.35), label_col, "dB")
+
+        local hold_font_h = math.max(8, math.floor(font_h * 0.7))
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, math.max(7, math.floor(hold_font_h * 0.7)), cx_inner, row2_y + math.floor(hold_font_h * 0.25), label_col, "PK")
+        local pk_w = r.ImGui_CalcTextSize(ctx, "PK")
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, hold_font_h, cx_inner + pk_w + 4, row2_y, hold_on, hold_text)
+
+        local rst_font = 9
+        local rst_text = "RST"
+        local rst_tw, rst_th = r.ImGui_CalcTextSize(ctx, rst_text)
+        local btn_w = math.max(20, math.floor(rst_tw + 8))
+        local btn_h = math.max(12, math.floor(rst_th + 4))
+        local btn_x_p = x + width - btn_w - 4
+        local btn_y_p = y + vu_height - btn_h - 4
+        local saved_pcx, saved_pcy = r.ImGui_GetCursorScreenPos(ctx)
+        r.ImGui_SetCursorScreenPos(ctx, btn_x_p, btn_y_p)
+        r.ImGui_PushID(ctx, "vu_peak_reset_" .. tostring(track_guid))
+        if r.ImGui_InvisibleButton(ctx, "##peak_reset", btn_w, btn_h) then
+            data.smoothed_peak_vu = -20
+            data.peak_hold = -20
+            data.raw_peak_db = data.raw_db or -60
+            data.peak_hold_time = 0
+            data.raw_peak_hold_time = 0
+            data.max_peak = 0
+        end
+        local pk_hov = r.ImGui_IsItemHovered(ctx)
+        if pk_hov then r.ImGui_SetTooltip(ctx, "Reset peak hold") end
+        local pk_bg = pk_hov and 0x223340FF or 0x152028FF
+        r.ImGui_DrawList_AddRectFilled(draw_list, btn_x_p, btn_y_p, btn_x_p + btn_w, btn_y_p + btn_h, pk_bg, 2)
+        r.ImGui_DrawList_AddRect(draw_list, btn_x_p, btn_y_p, btn_x_p + btn_w, btn_y_p + btn_h, label_col, 2, 0, 1)
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, rst_font, btn_x_p + (btn_w - rst_tw) * 0.5, btn_y_p + (btn_h - rst_th) * 0.5, hold_on, rst_text)
+        r.ImGui_PopID(ctx)
+        r.ImGui_SetCursorScreenPos(ctx, saved_pcx, saved_pcy)
+
+        r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, 0x223040FF, 4, 0, 1)
+
     else
         local needle_color = 0xFFFFFFFF
         
@@ -3473,7 +3734,37 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         local border_color = 0x333333FF
         r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, border_color, 4, 0, 1)
     end
-    
+
+    do
+        local btn_size = 10
+        local btn_pad = 2
+        local btn_x = x + btn_pad
+        local btn_y = y + vu_height - btn_size - btn_pad
+        local saved_cx, saved_cy = r.ImGui_GetCursorScreenPos(ctx)
+        r.ImGui_SetCursorScreenPos(ctx, btn_x, btn_y)
+        r.ImGui_PushID(ctx, "vu_style_btn_" .. tostring(track_guid))
+        if r.ImGui_InvisibleButton(ctx, "##vu_style", btn_size, btn_size) then
+            local cur = settings.simple_mixer_vu_style or 0
+            settings.simple_mixer_vu_style = (cur + 1) % 5
+            if SaveMixerSettings then SaveMixerSettings() end
+        end
+        local hovered = r.ImGui_IsItemHovered(ctx)
+        if hovered then
+            local names = {"Analog", "Analog Light", "LED Bars", "Digital", "Digit"}
+            local cur = settings.simple_mixer_vu_style or 0
+            r.ImGui_SetTooltip(ctx, "VU style: " .. (names[cur + 1] or "?") .. "\nClick to cycle")
+        end
+        local icon_color = hovered and 0xFFFFFFFF or 0x888888FF
+        local cx = btn_x + btn_size * 0.5
+        local cy = btn_y + btn_size * 0.5
+        for i = 0, 2 do
+            local dy = (i - 1) * 3
+            r.ImGui_DrawList_AddLine(draw_list, cx - 3, cy + dy, cx + 3, cy + dy, icon_color, 1)
+        end
+        r.ImGui_PopID(ctx)
+        r.ImGui_SetCursorScreenPos(ctx, saved_cx, saved_cy)
+    end
+
     return vu_height + 4
 end
 
@@ -4885,6 +5176,7 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
     rv, settings.simple_mixer_show_eq = r.ImGui_Checkbox(mixer_ctx, "EQ##QT", settings.simple_mixer_show_eq or false)
     if rv then
      if settings.simple_mixer_show_eq then
+      settings.simple_mixer_eq_auto_insert = false
       settings.simple_mixer_comp_auto_insert = false
       settings.simple_mixer_lim_auto_insert = false
      end
@@ -9121,7 +9413,7 @@ local function DrawSettingsWindow()
     
     r.ImGui_Text(ctx, "Style:")
     r.ImGui_SameLine(ctx)
-    local vu_styles = {"Analog", "Analog Light", "LED Bars", "Digital"}
+    local vu_styles = {"Analog", "Analog Light", "LED Bars", "Digital", "Digit"}
     local current_vu_style = settings.simple_mixer_vu_style or 0
     r.ImGui_SetNextItemWidth(ctx, 110)
     if r.ImGui_BeginCombo(ctx, "##VUStyle", vu_styles[current_vu_style + 1] or "Analog") then
@@ -9400,6 +9692,7 @@ local function DrawSettingsWindow()
    end
    if rv then
     if settings.simple_mixer_show_eq then
+     settings.simple_mixer_eq_auto_insert = false
      settings.simple_mixer_comp_auto_insert = false
      settings.simple_mixer_lim_auto_insert = false
     end
@@ -9410,6 +9703,13 @@ local function DrawSettingsWindow()
    if settings.simple_mixer_show_eq then
     r.ImGui_Indent(ctx, 10)
     
+    rv, settings.simple_mixer_eq_auto_insert = r.ImGui_Checkbox(ctx, "Auto-insert##EQ", settings.simple_mixer_eq_auto_insert ~= false)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Automatically add ReaEQ to tracks when clicking 'Add'.")
+    end
+    if rv then MarkTransportPresetChanged() end
+    
+    r.ImGui_SameLine(ctx)
     rv, settings.simple_mixer_eq_show_labels = r.ImGui_Checkbox(ctx, "Labels##EQ", settings.simple_mixer_eq_show_labels ~= false)
     if rv then MarkTransportPresetChanged() end
     
@@ -11014,7 +11314,9 @@ local function DrawSimpleMixerWindow()
 
   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_ScrollbarSize(), 4)
-  if r.ImGui_BeginChild(mixer_ctx, "SidebarPanel", sidebar_width, full_avail_height, 0, 0) then
+  mixer_state.bottom_dock.bottom_h = 24 + 20 + 1
+  r.ImGui_BeginGroup(mixer_ctx)
+  if r.ImGui_BeginChild(mixer_ctx, "SidebarPanel", sidebar_width, full_avail_height - mixer_state.bottom_dock.bottom_h, 0, 0) then
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x00000000)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x44444488)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0x66666688)
@@ -11093,25 +11395,96 @@ local function DrawSimpleMixerWindow()
     DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
     PopSettingsTheme(mixer_ctx)
    end
+   r.ImGui_EndChild(mixer_ctx)
+  end
+  if r.ImGui_BeginChild(mixer_ctx, "SidebarBottom", sidebar_width, mixer_state.bottom_dock.bottom_h, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
+   r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 1)
    local close_btn_h = 24
-   local sb_win_x, sb_win_y = r.ImGui_GetWindowPos(mixer_ctx)
-   local sb_win_h = r.ImGui_GetWindowHeight(mixer_ctx)
-   r.ImGui_SetCursorScreenPos(mixer_ctx, sb_win_x, sb_win_y + sb_win_h - close_btn_h)
+   local dock_btn_h = 20
+   local sb2_x, sb2_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x2A2A2AFF)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x882222FF)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0xAA2222FF)
+   local dock_state = mixer_state.bottom_dock.get_state()
+   local can_toggle = mixer_state.bottom_dock.is_available()
+   if r.ImGui_Button(mixer_ctx, "##dock_toggle_bottom", sidebar_width, dock_btn_h) then
+    if can_toggle then mixer_state.bottom_dock.toggle() end
+   end
+   if r.ImGui_IsItemClicked(mixer_ctx, 1) then
+    r.ImGui_OpenPopup(mixer_ctx, "##dock_size_popup")
+   end
+   if r.ImGui_IsItemHovered(mixer_ctx) then
+    if can_toggle then
+     r.ImGui_SetTooltip(mixer_ctx, (dock_state == "min" and "Maximize bottom docker" or "Minimize bottom docker") .. "\nRight-click: set min/max heights")
+    else
+     r.ImGui_SetTooltip(mixer_ctx, "Requires js_ReaScriptAPI")
+    end
+   end
+   if r.ImGui_BeginPopup(mixer_ctx, "##dock_size_popup") then
+    r.ImGui_Text(mixer_ctx, "Bottom dock heights (px)")
+    r.ImGui_Separator(mixer_ctx)
+    r.ImGui_Text(mixer_ctx, "Use 0 = auto (1/3 / full main window)")
+    r.ImGui_SetNextItemWidth(mixer_ctx, 120)
+    local rv_min, new_min = r.ImGui_InputInt(mixer_ctx, "Min height", settings.simple_mixer_bottom_dock_min_px or 0, 10, 50)
+    if rv_min then
+     if new_min < 0 then new_min = 0 end
+     settings.simple_mixer_bottom_dock_min_px = new_min
+     SaveMixerSettings()
+    end
+    r.ImGui_SetNextItemWidth(mixer_ctx, 120)
+    local rv_max, new_max = r.ImGui_InputInt(mixer_ctx, "Max height", settings.simple_mixer_bottom_dock_max_px or 0, 10, 50)
+    if rv_max then
+     if new_max < 0 then new_max = 0 end
+     settings.simple_mixer_bottom_dock_max_px = new_max
+     SaveMixerSettings()
+    end
+    r.ImGui_Spacing(mixer_ctx)
+    if r.ImGui_Button(mixer_ctx, "Use current height as Min", 200) then
+     local d = mixer_state.bottom_dock.find_bottommost()
+     if d and d.bounds then
+      settings.simple_mixer_bottom_dock_min_px = math.floor(d.bounds.h)
+      SaveMixerSettings()
+     end
+    end
+    if r.ImGui_Button(mixer_ctx, "Use current height as Max", 200) then
+     local d = mixer_state.bottom_dock.find_bottommost()
+     if d and d.bounds then
+      settings.simple_mixer_bottom_dock_max_px = math.floor(d.bounds.h)
+      SaveMixerSettings()
+     end
+    end
+    r.ImGui_Spacing(mixer_ctx)
+    if r.ImGui_Button(mixer_ctx, "Reset to auto", 200) then
+     settings.simple_mixer_bottom_dock_min_px = 0
+     settings.simple_mixer_bottom_dock_max_px = 0
+     SaveMixerSettings()
+    end
+    r.ImGui_EndPopup(mixer_ctx)
+   end
+   local sb2_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
+   local arrow_color = can_toggle and 0xAAAAAAFF or 0x666666FF
+   local db_cx = sb2_x + sidebar_width * 0.5
+   local db_cy = sb2_y + dock_btn_h * 0.5
+   if dock_state == "min" then
+    r.ImGui_DrawList_AddLine(sb2_dl, db_cx - 5, db_cy + 2, db_cx, db_cy - 3, arrow_color, 1.5)
+    r.ImGui_DrawList_AddLine(sb2_dl, db_cx, db_cy - 3, db_cx + 5, db_cy + 2, arrow_color, 1.5)
+   else
+    r.ImGui_DrawList_AddLine(sb2_dl, db_cx - 5, db_cy - 2, db_cx, db_cy + 3, arrow_color, 1.5)
+    r.ImGui_DrawList_AddLine(sb2_dl, db_cx, db_cy + 3, db_cx + 5, db_cy - 2, arrow_color, 1.5)
+   end
    local cb_x, cb_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
    if r.ImGui_Button(mixer_ctx, "##close_mixer_bottom", sidebar_width, close_btn_h) then
     close_requested = true
    end
    r.ImGui_PopStyleColor(mixer_ctx, 3)
-   local cb_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
    local cb_cx = cb_x + sidebar_width * 0.5
    local cb_cy = cb_y + close_btn_h * 0.5
-   r.ImGui_DrawList_AddLine(cb_dl, cb_cx - 5, cb_cy - 5, cb_cx + 5, cb_cy + 5, 0xAAAAAAFF, 1.5)
-   r.ImGui_DrawList_AddLine(cb_dl, cb_cx + 5, cb_cy - 5, cb_cx - 5, cb_cy + 5, 0xAAAAAAFF, 1.5)
+   r.ImGui_DrawList_AddLine(sb2_dl, cb_cx - 5, cb_cy - 5, cb_cx + 5, cb_cy + 5, 0xAAAAAAFF, 1.5)
+   r.ImGui_DrawList_AddLine(sb2_dl, cb_cx + 5, cb_cy - 5, cb_cx - 5, cb_cy + 5, 0xAAAAAAFF, 1.5)
+   r.ImGui_PopStyleVar(mixer_ctx)
    r.ImGui_EndChild(mixer_ctx)
   end
+  r.ImGui_EndGroup(mixer_ctx)
   r.ImGui_PopStyleVar(mixer_ctx)
   r.ImGui_PopStyleColor(mixer_ctx, 1)
   r.ImGui_SameLine(mixer_ctx, 0, 4)
