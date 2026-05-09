@@ -1,8 +1,11 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.7.2
+-- @version 0.7.3
 -- @changelog:
 --[[ 
+    v0.7.3:
+        + Patchbay: left-click a track node to open a popup with the track's FX list. Click an FX entry to toggle its floating window; "Open FX Chain" entry at the bottom. Dragging a node still works (drag is detected and suppresses the popup).
+
     v0.7.2:
         + Sends/Receives panel: new Patchbay view (third routing mode next to Matrix and Hubs). Tracks are shown as draggable nodes with input/output pins, sends as bezier cables colored by send mode (post-fader / pre-fader-post-FX / pre-FX), thickness based on send volume. Drag from an output pin to another track's input pin to create a send. Right-click a cable for inline volume/pan/mute/phase/mono/mode/delete controls. Auto-layout via topological columns; node positions persisted per project.
         + Patchbay: Master track included as virtual node (gold accent). Main-sends shown as cables to Master, drag from a track output pin to the Master input pin to enable main-send, right-click cable for vol/pan/disable.

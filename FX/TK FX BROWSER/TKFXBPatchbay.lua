@@ -27,6 +27,10 @@ local last_save_time = 0
 local hovered_input_guid = nil
 local pending_auto_layout = false
 local pending_center_view = false
+local pb_press_guid = nil
+local pb_press_dragged = false
+local pb_open_fx_for = nil
+local fx_popup_track = nil
 
 local function GetCtx()
     return _G.ctx
@@ -409,6 +413,54 @@ local function RenderRightClickPopup()
     end
 end
 
+local function RenderFXListPopup()
+    local ctx = GetCtx()
+    if not fx_popup_track then return end
+    if not r.ValidatePtr(fx_popup_track, "MediaTrack*") then
+        fx_popup_track = nil
+        return
+    end
+    if r.ImGui_BeginPopup(ctx, "PatchbayFXListPopup") then
+        local tr = fx_popup_track
+        local _, tname = r.GetTrackName(tr)
+        local tnum = math.floor(r.GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER") or 0)
+        r.ImGui_Text(ctx, string.format("#%d  %s", tnum, tname))
+        r.ImGui_Separator(ctx)
+        local count = r.TrackFX_GetCount(tr)
+        if count == 0 then
+            r.ImGui_TextDisabled(ctx, "No FX on this track.")
+        else
+            for i = 0, count - 1 do
+                local _, fxname = r.TrackFX_GetFXName(tr, i, "")
+                local enabled = r.TrackFX_GetEnabled(tr, i)
+                local offline = r.TrackFX_GetOffline(tr, i)
+                local floating = r.TrackFX_GetFloatingWindow(tr, i) ~= nil
+                local prefix = floating and "* " or "  "
+                local suffix = ""
+                if not enabled then suffix = suffix .. "  [bypass]" end
+                if offline then suffix = suffix .. "  [offline]" end
+                local label = string.format("%s%d: %s%s", prefix, i + 1, fxname or "", suffix)
+                if r.ImGui_Selectable(ctx, label) then
+                    if floating then
+                        r.TrackFX_Show(tr, i, 2)
+                    else
+                        r.TrackFX_Show(tr, i, 3)
+                    end
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+            end
+        end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Selectable(ctx, "Open FX Chain") then
+            r.TrackFX_Show(tr, 0, 1)
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+    else
+        fx_popup_track = nil
+    end
+end
+
 function ShowRoutingPatchbay()
     local ctx = GetCtx()
     DrawRoutingFilterBar(false)
@@ -774,15 +826,27 @@ function ShowRoutingPatchbay()
                     r.UpdateArrange()
                 end
             end
+            if body_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+                pb_press_guid = g
+                pb_press_dragged = false
+            end
             if body_active and pending_connection == nil then
                 local ddx, ddy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
                 if ddx ~= 0 or ddy ~= 0 then
                     dragging_node_guid = g
+                    pb_press_dragged = true
                     node_positions[g].x = node_positions[g].x + ddx / canvas_zoom
                     node_positions[g].y = node_positions[g].y + ddy / canvas_zoom
                     r.ImGui_ResetMouseDragDelta(ctx, 0)
                     layout_dirty = true
                 end
+            end
+            if pb_press_guid == g and r.ImGui_IsMouseReleased(ctx, 0) then
+                if not pb_press_dragged and body_hovered and not is_master_node then
+                    pb_open_fx_for = tr.track
+                end
+                pb_press_guid = nil
+                pb_press_dragged = false
             end
 
             r.ImGui_SetCursorScreenPos(ctx, in_x - pin_r, in_y - pin_r)
@@ -869,5 +933,11 @@ function ShowRoutingPatchbay()
     if request_open_popup then
         r.ImGui_OpenPopup(ctx, "PatchbaySendPopup")
     end
+    if pb_open_fx_for and r.ValidatePtr(pb_open_fx_for, "MediaTrack*") then
+        fx_popup_track = pb_open_fx_for
+        r.ImGui_OpenPopup(ctx, "PatchbayFXListPopup")
+    end
+    pb_open_fx_for = nil
     RenderRightClickPopup()
+    RenderFXListPopup()
 end
