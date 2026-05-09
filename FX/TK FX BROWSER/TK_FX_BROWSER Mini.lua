@@ -1,8 +1,11 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.7.4
+-- @version 0.7.5
 -- @changelog:
 --[[ 
+    v0.7.5:
+        + Projects: massive performance fix. Per-row preview/cover lookups (GetProjectPreviewPath / GetProjectCoverPath) are now cached per project instead of doing disk I/O (EnumerateFiles, file_exists, JS_File_Stat) every frame for every visible row. Frame rate restored from 5-6 fps back to 30 fps with the Projects view open. Caches are invalidated on Refresh (R) and when previews are created/deleted.
+
     v0.7.4:
         + Patchbay: M/S toggle buttons on each node (bottom-right, next to the stats text) for instant Mute/Solo without leaving the routing view.
         + Patchbay: rubber-band multi-select via right-drag on empty canvas (Shift = add to existing selection). Selected nodes get a green border and drag together as a group.
@@ -8813,12 +8816,12 @@ function DeletePreviewFile(project_path, full_path)
         end
         if type(filtered_projects) == "table" then
             for _, p in ipairs(filtered_projects) do
-                if p.path == project_path then p.cached_length = nil end
+                if p.path == project_path then p.cached_length = nil; p.cached_has_preview = nil; p.cached_preview_path = nil end
             end
         end
         if type(projects) == "table" then
             for _, p in ipairs(projects) do
-                if p.path == project_path then p.cached_length = nil end
+                if p.path == project_path then p.cached_length = nil; p.cached_has_preview = nil; p.cached_preview_path = nil end
             end
         end
         if current_project_info and current_project_info.path == project_path then
@@ -8921,12 +8924,12 @@ function DoMakeProjectPreview(project_path, mode, range_s, range_e)
 
     if type(filtered_projects) == "table" then
         for _, p in ipairs(filtered_projects) do
-            if p.path == project_path then p.cached_length = nil end
+            if p.path == project_path then p.cached_length = nil; p.cached_has_preview = nil; p.cached_preview_path = nil end
         end
     end
     if type(projects) == "table" then
         for _, p in ipairs(projects) do
-            if p.path == project_path then p.cached_length = nil end
+            if p.path == project_path then p.cached_length = nil; p.cached_has_preview = nil; p.cached_preview_path = nil end
         end
     end
 
@@ -9011,12 +9014,12 @@ function DoMakeProjectPreviewCustom(project_path)
 
     if type(filtered_projects) == "table" then
         for _, p in ipairs(filtered_projects) do
-            if p.path == project_path then p.cached_length = nil end
+            if p.path == project_path then p.cached_length = nil; p.cached_has_preview = nil; p.cached_preview_path = nil end
         end
     end
     if type(projects) == "table" then
         for _, p in ipairs(projects) do
-            if p.path == project_path then p.cached_length = nil end
+            if p.path == project_path then p.cached_length = nil; p.cached_has_preview = nil; p.cached_preview_path = nil end
         end
     end
 
@@ -18727,6 +18730,8 @@ function ShowScreenshotWindow()
                         p.cached_media = nil
                         p.cached_length = nil
                         p.cached_date = nil
+                        p.cached_has_preview = nil
+                        p.cached_preview_path = nil
                     end
                 end
                 project_cover_loaded_for = nil
@@ -19058,9 +19063,16 @@ function ShowScreenshotWindow()
                     r.ImGui_TableNextRow(ctx)
                     r.ImGui_TableNextColumn(ctx)
 
-                    local preview_path = GetProjectPreviewPath(project.path)
-                    local has_preview = preview_path ~= nil
-                    local has_cover = GetProjectCoverPath(project.path) ~= nil
+                    if project.cached_has_preview == nil then
+                        project.cached_preview_path = GetProjectPreviewPath(project.path)
+                        project.cached_has_preview = project.cached_preview_path ~= nil
+                    end
+                    if project.cached_cover == nil then
+                        project.cached_cover = GetProjectCoverPath(project.path) ~= nil
+                    end
+                    local preview_path = project.cached_preview_path
+                    local has_preview = project.cached_has_preview
+                    local has_cover = project.cached_cover
 
                     if has_preview then
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x50FA7BFF)
