@@ -1,7 +1,10 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.4
+-- @version 1.2.5
 --[[
+v1.2.5
+  + Cables: new "Selected tracks only" option — only show cables connected to currently selected tracks (Settings > Cables)
+
 v1.2.4
   + Meters: smoother fall, configurable release speed (dB/sec) — now consistent at any framerate
   + Meters: support for up to 8 channels (surround / multichannel busses)
@@ -324,6 +327,7 @@ local settings = {
  simple_mixer_cables_use_dest_color = false,
  simple_mixer_cables_glow = true,
  simple_mixer_cables_flow = false,
+ simple_mixer_cables_selected_only = false,
  simple_mixer_show_master = false,
  simple_mixer_master_position = "left",
  simple_mixer_show_rack = true,
@@ -10471,6 +10475,10 @@ function DrawSettingsWindow()
     rv, settings.simple_mixer_cables_use_dest_color = r.ImGui_Checkbox(ctx, "Use destination color##Cab", settings.simple_mixer_cables_use_dest_color or false)
     if rv then MarkTransportPresetChanged() end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Off: cable uses source track color\nOn: cable uses destination track color") end
+
+    rv, settings.simple_mixer_cables_selected_only = r.ImGui_Checkbox(ctx, "Selected tracks only##Cab", settings.simple_mixer_cables_selected_only or false)
+    if rv then MarkTransportPresetChanged() end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Only show cables connected to currently selected tracks") end
    end
 
   end
@@ -10821,6 +10829,7 @@ function DrawMixerCables(ctx)
  end
 
  local seen = {}
+ local selected_only = settings.simple_mixer_cables_selected_only == true
  for guid, anchor in pairs(anchors) do
   local src_track = anchor.track
   if src_track and not anchor.is_master and guid ~= "__master__" then
@@ -10850,6 +10859,13 @@ function DrawMixerCables(ctx)
        local pair_key = guid .. "->" .. dst_key
        if not seen[pair_key] then
         seen[pair_key] = true
+        local skip_cable = false
+        if selected_only then
+         local src_sel = r.IsTrackSelected(src_track)
+         local dst_sel = r.IsTrackSelected(dst_track)
+         if not (src_sel or dst_sel) then skip_cable = true end
+        end
+        if not skip_cable then
         local muted = r.GetTrackSendInfo_Value(src_track, 0, i, "B_MUTE") == 1
         local color_track = use_dest_color and dst_track or src_track
         local cable_alpha = alpha * (muted and 0.35 or 1.0)
@@ -10930,6 +10946,7 @@ function DrawMixerCables(ctx)
          r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, thickness * 1.4, dot_color, 12)
         end
         if pushed_clip then r.ImGui_DrawList_PopClipRect(draw_list) end
+        end
        end
       end
      end
