@@ -1,13 +1,13 @@
--- @description TK Native FX Browser Redirect
+﻿-- @description TK Native FX Browser Redirect
 -- @author TouristKiller
--- @version 1.2.1
+-- @version 1.3.1
 -- @about
 --   Replaces REAPER's native "Add FX" / "Replace FX" / "Browse FX" windows
---   with an alternative FX browser of your choice.
+--   with the FX browser action configured by command ID.
 --   Requires js_ReaScriptAPI.
 --
 --   Run this action again to stop the monitor (toggle).
---   Configure the alternative via:
+--   Configure the command ID via:
 --     "TK Native FX Browser Redirect - Settings"
 
 local r = reaper
@@ -18,39 +18,32 @@ if not r.JS_Window_ArrayFind then
     return
 end
 
-local NS         = "TK_FX_REDIRECT"
-local CONFIG_NS  = "TK_FX_REDIRECT_CONFIG"
+local NS        = "TK_FX_REDIRECT"
+local CONFIG_NS = "TK_FX_REDIRECT_CONFIG"
 
-local DEFAULTS = {
-    script_path              = "TK Scripts/FX/TK_FX_BROWSER.lua",
-    command_id               = "",
-    action_name_match        = "TK_FX_BROWSER.lua",
-    running_extstate_section = "TK_FX_BROWSER",
-    running_extstate_key     = "running",
-    visibility_extstate_key  = "visibility",
-    ignore_titles            = "TK FX BROWSER\nTK FX Browser\nDSG Plugin\nSexan FX Browser",
-}
-
-local function getCfg(key)
-    local v = r.GetExtState(CONFIG_NS, key)
-    if v == nil or v == "" then return DEFAULTS[key] end
-    return v
+local function trim(s)
+    return (s or ""):match("^%s*(.-)%s*$")
 end
 
-local function loadConfig()
-    local cfg = {}
-    for k in pairs(DEFAULTS) do cfg[k] = getCfg(k) end
-    cfg.ignore_title_substrings = {}
-    for line in (cfg.ignore_titles or ""):gmatch("[^\r\n]+") do
-        local trimmed = line:match("^%s*(.-)%s*$")
-        if trimmed ~= "" then
-            cfg.ignore_title_substrings[#cfg.ignore_title_substrings + 1] = trimmed
-        end
-    end
-    return cfg
+local function getCommandID()
+    return trim(r.GetExtState(CONFIG_NS, "command_id"))
 end
 
-local CONFIG = loadConfig()
+local function resolveCommandID(command_id)
+    command_id = trim(command_id)
+    if command_id == "" then return 0 end
+
+    local numeric = tonumber(command_id)
+    if numeric and numeric ~= 0 then return numeric end
+
+    local cmd = r.NamedCommandLookup(command_id)
+    if cmd and cmd ~= 0 then return cmd end
+
+    return 0
+end
+
+local COMMAND_ID = getCommandID()
+local BROWSER_CMD = resolveCommandID(COMMAND_ID)
 
 local _, _, sectionID, cmdID = r.get_action_context()
 
@@ -77,83 +70,69 @@ local TITLE_PREFIXES = {
     "Replace FX",
 }
 
+local IGNORE_TITLE_SUBSTRINGS = {
+    "TK FX BROWSER",
+    "TK FX Browser",
+    "DSG Plugin",
+    "Sexan FX Browser",
+}
+
 local function shouldRedirect(title)
     if not title or title == "" then return false end
-    for _, sub in ipairs(CONFIG.ignore_title_substrings) do
+
+    for _, sub in ipairs(IGNORE_TITLE_SUBSTRINGS) do
         if title:find(sub, 1, true) then return false end
     end
+
     for _, prefix in ipairs(TITLE_PREFIXES) do
         if title:sub(1, #prefix) == prefix then
             return true
         end
     end
+
     return false
 end
 
-local function resolveScriptPath(p)
-    if not p or p == "" then return nil end
-    if p:match("^[A-Za-z]:[/\\]") or p:sub(1, 1) == "/" then
-        return p
-    end
-    return r.GetResourcePath() .. "/Scripts/" .. p
+local function refreshCommandID()
+    COMMAND_ID = getCommandID()
+    BROWSER_CMD = resolveCommandID(COMMAND_ID)
 end
 
-local function findActionIDByName(needle)
-    if not needle or needle == "" or not r.kbd_enumerateActions then return 0 end
-    local i = 0
-    while true do
-        local cmd, name = r.kbd_enumerateActions(0, i)
-        if not cmd or cmd == 0 then break end
-        if name and name:find(needle, 1, true) then
-            return cmd
+local function showRunningTKBrowser()
+    local sections = {
+        "TK_FX_BROWSER",
+        "TK_FX_BROWSER_MINI",
+    }
+
+    for _, section in ipairs(sections) do
+        if r.GetExtState(section, "running") == "true" then
+            if r.GetExtState(section, "visibility") == "hidden" then
+                r.SetExtState(section, "visibility", "visible", true)
+            end
+            return true
         end
-        i = i + 1
-        if i > 50000 then break end
     end
-    return 0
+
+    return false
 end
-
-local function resolveBrowserCmd()
-    if CONFIG.command_id and CONFIG.command_id ~= "" then
-        local cmd = r.NamedCommandLookup(CONFIG.command_id)
-        if cmd and cmd ~= 0 then return cmd end
-    end
-
-    local path = resolveScriptPath(CONFIG.script_path)
-    if path and r.file_exists(path) and r.AddRemoveReaScript then
-        local cmd = r.AddRemoveReaScript(true, 0, path, true)
-        if cmd and cmd ~= 0 then return cmd end
-    end
-
-    local cmd = findActionIDByName(CONFIG.action_name_match)
-    if cmd and cmd ~= 0 then return cmd end
-
-    return 0
-end
-
-local BROWSER_CMD = resolveBrowserCmd()
 
 local function openBrowser()
-    local sect = CONFIG.running_extstate_section
-    if sect and sect ~= "" then
-        if r.GetExtState(sect, CONFIG.running_extstate_key or "running") == "true" then
-            if CONFIG.visibility_extstate_key and CONFIG.visibility_extstate_key ~= "" then
-                r.SetExtState(sect, CONFIG.visibility_extstate_key, "visible", true)
-            end
+    if showRunningTKBrowser() then
+        return
+    end
+
+    if BROWSER_CMD == 0 then
+        BROWSER_CMD = resolveCommandID(COMMAND_ID)
+    end
+
+    if BROWSER_CMD ~= 0 then
+        if r.GetToggleCommandStateEx and r.GetToggleCommandStateEx(0, BROWSER_CMD) == 1 then
             return
         end
-    end
-    if BROWSER_CMD == 0 then
-        BROWSER_CMD = resolveBrowserCmd()
-    end
-    if BROWSER_CMD ~= 0 then
         r.Main_OnCommand(BROWSER_CMD, 0)
-        if sect and sect ~= "" and CONFIG.visibility_extstate_key and CONFIG.visibility_extstate_key ~= "" then
-            r.SetExtState(sect, CONFIG.visibility_extstate_key, "visible", true)
-        end
     else
-        r.ShowConsoleMsg("[TK FX REDIRECT] Could not find an alternative FX browser.\n" ..
-            "Open 'TK Native FX Browser Redirect - Settings' to configure it.\n")
+        r.ShowConsoleMsg("[TK FX REDIRECT] No valid alternative FX browser command ID configured.\n" ..
+            "Open 'TK Native FX Browser Redirect - Settings' and enter a command ID.\n")
     end
 end
 
@@ -216,10 +195,40 @@ local function checkConfigReload()
     local now = r.time_precise()
     if now - last_config_check < 1.0 then return end
     last_config_check = now
+
     if r.GetExtState(CONFIG_NS, "_changed") == "1" then
         r.SetExtState(CONFIG_NS, "_changed", "0", false)
-        CONFIG = loadConfig()
-        BROWSER_CMD = resolveBrowserCmd()
+        refreshCommandID()
+    end
+end
+
+local SCAN_INTERVAL = 0.15
+local BURST_DURATION = 0.8
+local last_scan = 0
+local burst_until = 0
+local last_mouse_state = 0
+local last_vkeys_hash = 0
+
+local function inputBurstTrigger(now)
+    local mouse = r.JS_Mouse_GetState and r.JS_Mouse_GetState(31) or 0
+    if mouse ~= 0 and last_mouse_state == 0 then
+        burst_until = now + BURST_DURATION
+    end
+    last_mouse_state = mouse
+
+    if r.JS_VKeys_GetState then
+        local state = r.JS_VKeys_GetState(0)
+        if state and state ~= "" then
+            local hash = 0
+            for i = 1, #state do
+                local b = state:byte(i)
+                if b ~= 0 then hash = hash + i * b end
+            end
+            if hash ~= last_vkeys_hash and hash ~= 0 then
+                burst_until = now + BURST_DURATION
+            end
+            last_vkeys_hash = hash
+        end
     end
 end
 
@@ -227,14 +236,23 @@ local function loop()
     if r.GetExtState(NS, "stop") == "1" then
         return
     end
+
     checkConfigReload()
-    killNativeBrowsers()
+
+    local now = r.time_precise()
+    inputBurstTrigger(now)
+    if now < burst_until and (now - last_scan) >= SCAN_INTERVAL then
+        last_scan = now
+        killNativeBrowsers()
+    end
+
     if pending_open > 0 then
         pending_open = pending_open - 1
         if pending_open == 0 then
             openBrowser()
         end
     end
+
     r.defer(loop)
 end
 
