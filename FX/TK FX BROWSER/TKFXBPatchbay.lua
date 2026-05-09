@@ -31,6 +31,10 @@ local pb_press_guid = nil
 local pb_press_dragged = false
 local pb_open_fx_for = nil
 local fx_popup_track = nil
+local pb_selected_set = {}
+local pb_rubber_active = false
+local pb_rubber_start_x = 0
+local pb_rubber_start_y = 0
 
 local function GetCtx()
     return _G.ctx
@@ -735,6 +739,15 @@ function ShowRoutingPatchbay()
         end
     end
 
+    if not hovered_cable and bg_hovered and not pb_rubber_active and pending_connection == nil and r.ImGui_IsMouseClicked(ctx, 1) then
+        local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
+        local mod_shift = r.ImGui_Mod_Shift and r.ImGui_Mod_Shift() or 0
+        local shift_held = (mods & mod_shift) ~= 0
+        if not shift_held then pb_selected_set = {} end
+        pb_rubber_active = true
+        pb_rubber_start_x, pb_rubber_start_y = r.ImGui_GetMousePos(ctx)
+    end
+
     for i = 1, #tracks do
         local tr = tracks[i]
         local g = tr.guid
@@ -742,6 +755,7 @@ function ShowRoutingPatchbay()
         if x1 then
             local is_selected = (_G.TRACK == tr.track)
             local is_master_node = tr.is_master
+            local is_multi = pb_selected_set[g] == true
 
             local bar_col
             if is_master_node then
@@ -757,17 +771,17 @@ function ShowRoutingPatchbay()
             if is_master_node then
                 body_col = is_selected and 0x3A3024FF or 0x2A2620FF
             else
-                body_col = is_selected and 0x3A3F4AFF or 0x222428FF
+                body_col = is_selected and 0x3A3F4AFF or (is_multi and 0x2A3340FF or 0x222428FF)
             end
             r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, body_col, 6)
             r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x1 + 5, y2, bar_col, 6)
             local border
             if is_master_node then
-                border = is_selected and 0xFFD060FF or 0x886633FF
+                border = (is_selected and 0xFFD060FF) or (is_multi and 0xCCFF88FF) or 0x886633FF
             else
-                border = is_selected and 0x88BBFFFF or 0x3A3A3AFF
+                border = (is_selected and 0x88BBFFFF) or (is_multi and 0xCCFF88FF) or 0x3A3A3AFF
             end
-            r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, border, 6, nil, is_selected and 2 or 1)
+            r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, border, 6, nil, (is_selected or is_multi) and 2 or 1)
 
             local label
             if is_master_node then
@@ -792,18 +806,15 @@ function ShowRoutingPatchbay()
                 local nsnd = r.GetTrackNumSends(tr.track, 0)
                 stats = string.format("%d in / %d out", nrec, nsnd)
             end
-            r.ImGui_DrawList_AddText(draw_list, x1 + 10, y2 - 18, 0xAAAAAAFF, stats)
+            local stats_max_w = (NODE_W * canvas_zoom) - 24
+            if not is_master_node then stats_max_w = stats_max_w - (2 * (14 * canvas_zoom) + 10) end
+            local stats_trunc = TruncateText(ctx, stats, stats_max_w)
+            r.ImGui_DrawList_AddText(draw_list, x1 + 10, y2 - 18, 0xAAAAAAFF, stats_trunc)
 
             local in_x, in_y = PinPos(g, "in")
             local out_x, out_y = PinPos(g, "out")
             local pin_r = PIN_R * canvas_zoom
             if pin_r < 4 then pin_r = 4 end
-            r.ImGui_DrawList_AddCircleFilled(draw_list, in_x, in_y, pin_r, 0x88CCFFFF)
-            r.ImGui_DrawList_AddCircle(draw_list, in_x, in_y, pin_r, 0x000000FF, nil, 1)
-            if not is_master_node then
-                r.ImGui_DrawList_AddCircleFilled(draw_list, out_x, out_y, pin_r, 0xFFCC88FF)
-                r.ImGui_DrawList_AddCircle(draw_list, out_x, out_y, pin_r, 0x000000FF, nil, 1)
-            end
 
             r.ImGui_PushID(ctx, "node_" .. g)
 
@@ -827,16 +838,48 @@ function ShowRoutingPatchbay()
                 end
             end
             if body_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
-                pb_press_guid = g
-                pb_press_dragged = false
+                local pin_r_hit = PIN_R * canvas_zoom
+                if pin_r_hit < 4 then pin_r_hit = 4 end
+                local hit_r = pin_r_hit + 4
+                local hit_out = nil
+                for hi = 1, #tracks do
+                    if not tracks[hi].is_master then
+                        local ox, oy = PinPos(tracks[hi].guid, "out")
+                        if ox then
+                            local ddx = mx - ox
+                            local ddy = my - oy
+                            if ddx * ddx + ddy * ddy <= hit_r * hit_r then
+                                hit_out = tracks[hi]
+                                break
+                            end
+                        end
+                    end
+                end
+                if hit_out then
+                    pending_connection = { src = hit_out.track, src_guid = hit_out.guid }
+                else
+                    pb_press_guid = g
+                    pb_press_dragged = false
+                end
             end
             if body_active and pending_connection == nil then
                 local ddx, ddy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
                 if ddx ~= 0 or ddy ~= 0 then
                     dragging_node_guid = g
                     pb_press_dragged = true
-                    node_positions[g].x = node_positions[g].x + ddx / canvas_zoom
-                    node_positions[g].y = node_positions[g].y + ddy / canvas_zoom
+                    local dwx = ddx / canvas_zoom
+                    local dwy = ddy / canvas_zoom
+                    if pb_selected_set[g] then
+                        for sg, _ in pairs(pb_selected_set) do
+                            if node_positions[sg] then
+                                node_positions[sg].x = node_positions[sg].x + dwx
+                                node_positions[sg].y = node_positions[sg].y + dwy
+                            end
+                        end
+                    else
+                        node_positions[g].x = node_positions[g].x + dwx
+                        node_positions[g].y = node_positions[g].y + dwy
+                    end
                     r.ImGui_ResetMouseDragDelta(ctx, 0)
                     layout_dirty = true
                 end
@@ -848,6 +891,72 @@ function ShowRoutingPatchbay()
                 pb_press_guid = nil
                 pb_press_dragged = false
             end
+
+            if not is_master_node then
+                local btn_size = 14 * canvas_zoom
+                if btn_size < 10 then btn_size = 10 end
+                local btn_y1 = y2 - btn_size - 3
+                local btn_y2 = btn_y1 + btn_size
+                local s_x2 = x2 - 6
+                local s_x1 = s_x2 - btn_size
+                local m_x2 = s_x1 - 4
+                local m_x1 = m_x2 - btn_size
+
+                local mute_on = r.GetMediaTrackInfo_Value(tr.track, "B_MUTE") == 1
+                local solo_on = r.GetMediaTrackInfo_Value(tr.track, "I_SOLO") ~= 0
+                local m_col = mute_on and 0xCC3333FF or 0x4A4A4AFF
+                local s_col = solo_on and 0xCCBB33FF or 0x4A4A4AFF
+                r.ImGui_DrawList_AddRectFilled(draw_list, m_x1, btn_y1, m_x2, btn_y2, m_col, 3)
+                r.ImGui_DrawList_AddRect(draw_list, m_x1, btn_y1, m_x2, btn_y2, 0x000000AA, 3)
+                r.ImGui_DrawList_AddRectFilled(draw_list, s_x1, btn_y1, s_x2, btn_y2, s_col, 3)
+                r.ImGui_DrawList_AddRect(draw_list, s_x1, btn_y1, s_x2, btn_y2, 0x000000AA, 3)
+                local tw_m = r.ImGui_CalcTextSize(ctx, "M")
+                local tw_s = r.ImGui_CalcTextSize(ctx, "S")
+                r.ImGui_DrawList_AddText(draw_list, m_x1 + (btn_size - tw_m) * 0.5, btn_y1 + (btn_size - 12) * 0.5, 0xFFFFFFFF, "M")
+                r.ImGui_DrawList_AddText(draw_list, s_x1 + (btn_size - tw_s) * 0.5, btn_y1 + (btn_size - 12) * 0.5, 0xFFFFFFFF, "S")
+
+                if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+                r.ImGui_SetCursorScreenPos(ctx, m_x1, btn_y1)
+                r.ImGui_InvisibleButton(ctx, "##mute_btn", btn_size, btn_size)
+                if r.ImGui_IsItemClicked(ctx, 0) then
+                    r.Undo_BeginBlock()
+                    r.SetMediaTrackInfo_Value(tr.track, "B_MUTE", mute_on and 0 or 1)
+                    r.Undo_EndBlock("Patchbay: toggle mute", -1)
+                end
+
+                if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+                r.ImGui_SetCursorScreenPos(ctx, s_x1, btn_y1)
+                r.ImGui_InvisibleButton(ctx, "##solo_btn", btn_size, btn_size)
+                if r.ImGui_IsItemClicked(ctx, 0) then
+                    r.Undo_BeginBlock()
+                    r.SetMediaTrackInfo_Value(tr.track, "I_SOLO", solo_on and 0 or 2)
+                    r.Undo_EndBlock("Patchbay: toggle solo", -1)
+                end
+            end
+
+            r.ImGui_PopID(ctx)
+        end
+    end
+
+    for i = 1, #tracks do
+        local tr = tracks[i]
+        local g = tr.guid
+        local x1, y1, x2, y2 = NodeRect(g)
+        if x1 then
+            local is_master_node = tr.is_master
+            local in_x, in_y = PinPos(g, "in")
+            local out_x, out_y = PinPos(g, "out")
+            local pin_r = PIN_R * canvas_zoom
+            if pin_r < 4 then pin_r = 4 end
+
+            r.ImGui_DrawList_AddCircleFilled(draw_list, in_x, in_y, pin_r, 0x88CCFFFF)
+            r.ImGui_DrawList_AddCircle(draw_list, in_x, in_y, pin_r, 0x000000FF, nil, 1)
+            if not is_master_node then
+                r.ImGui_DrawList_AddCircleFilled(draw_list, out_x, out_y, pin_r, 0xFFCC88FF)
+                r.ImGui_DrawList_AddCircle(draw_list, out_x, out_y, pin_r, 0x000000FF, nil, 1)
+            end
+
+            r.ImGui_PushID(ctx, "pins_" .. g)
 
             r.ImGui_SetCursorScreenPos(ctx, in_x - pin_r, in_y - pin_r)
             r.ImGui_InvisibleButton(ctx, "##pin_in", pin_r * 2, pin_r * 2)
@@ -875,6 +984,35 @@ function ShowRoutingPatchbay()
 
     if pending_connection then
         local sx, sy = PinPos(pending_connection.src_guid, "out")
+        do
+            local pin_r = PIN_R * canvas_zoom
+            if pin_r < 4 then pin_r = 4 end
+            local hit_r = pin_r + 6
+            local best_g = nil
+            local best_d2 = hit_r * hit_r
+            for i = 1, #tracks do
+                local tg = tracks[i].guid
+                if tg ~= pending_connection.src_guid then
+                    local ix, iy = PinPos(tg, "in")
+                    if ix then
+                        local ddx = mx - ix
+                        local ddy = my - iy
+                        local d2 = ddx * ddx + ddy * ddy
+                        if d2 <= best_d2 then
+                            best_d2 = d2
+                            best_g = tg
+                        end
+                    end
+                end
+            end
+            if best_g then
+                hovered_input_guid = best_g
+                local hx, hy = PinPos(best_g, "in")
+                if hx then
+                    r.ImGui_DrawList_AddCircle(draw_list, hx, hy, pin_r + 2, 0xFFFFFFFF, nil, 2)
+                end
+            end
+        end
         if sx then
             local target_x, target_y = mx, my
             local color = 0xFFCC88FF
@@ -908,6 +1046,26 @@ function ShowRoutingPatchbay()
         end
     end
 
+    if pb_rubber_active then
+        local cmx, cmy = r.ImGui_GetMousePos(ctx)
+        local rx1 = math.min(pb_rubber_start_x, cmx)
+        local ry1 = math.min(pb_rubber_start_y, cmy)
+        local rx2 = math.max(pb_rubber_start_x, cmx)
+        local ry2 = math.max(pb_rubber_start_y, cmy)
+        r.ImGui_DrawList_AddRectFilled(draw_list, rx1, ry1, rx2, ry2, 0x88BBFF22)
+        r.ImGui_DrawList_AddRect(draw_list, rx1, ry1, rx2, ry2, 0x88BBFFCC, 0, nil, 1)
+        if r.ImGui_IsMouseReleased(ctx, 1) then
+            for i = 1, #tracks do
+                local g2 = tracks[i].guid
+                local nx1, ny1, nx2, ny2 = NodeRect(g2)
+                if nx1 and not (nx2 < rx1 or nx1 > rx2 or ny2 < ry1 or ny1 > ry2) then
+                    pb_selected_set[g2] = true
+                end
+            end
+            pb_rubber_active = false
+        end
+    end
+
     if r.ImGui_IsMouseReleased(ctx, 0) then
         if dragging_node_guid then
             dragging_node_guid = nil
@@ -921,7 +1079,7 @@ function ShowRoutingPatchbay()
 
     r.ImGui_EndChild(ctx)
     do
-        local hint = "Drag node = move  |  Drag pin = connect  |  Middle/empty drag = pan  |  Wheel = zoom  |  Right-click cable = options"
+        local hint = "Drag node = move  |  Drag pin = connect  |  Left-drag empty = pan  |  Right-drag empty = select (Shift = add)  |  Wheel = zoom  |  Right-click cable = options"
         local tw = r.ImGui_CalcTextSize(ctx, hint)
         local fw = r.ImGui_GetContentRegionAvail(ctx)
         local off = (fw - tw) * 0.5

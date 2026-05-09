@@ -1,8 +1,13 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.7.3
+-- @version 0.7.4
 -- @changelog:
 --[[ 
+    v0.7.4:
+        + Patchbay: M/S toggle buttons on each node (bottom-right, next to the stats text) for instant Mute/Solo without leaving the routing view.
+        + Patchbay: rubber-band multi-select via right-drag on empty canvas (Shift = add to existing selection). Selected nodes get a green border and drag together as a group.
+        + Patchbay: fixed pin hit-testing when nodes overlap horizontally (an output/input pin hidden under a later-drawn node body is now reliably clickable; pins are rendered in a second pass on top of all node bodies). Drag start uses a global radius hit-test on output pins, and drag-target detection during connect uses manual proximity to input pins so connecting in either direction works regardless of node z-order.
+
     v0.7.3:
         + Patchbay: left-click a track node to open a popup with the track's FX list. Click an FX entry to toggle its floating window; "Open FX Chain" entry at the bottom. Dragging a node still works (drag is detected and suppresses the popup).
 
