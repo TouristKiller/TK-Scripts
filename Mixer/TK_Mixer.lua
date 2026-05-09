@@ -1,7 +1,12 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.6
+-- @version 1.2.7
 --[[
+v1.2.7
+  + Cables: no longer drawn when the IO/Sends section is collapsed (also fixes phantom cables between two off-screen tracks)
+  + Layout: fixed master channel on the left pushing the right-pinned tracks and Instrument Rack out of view
+  + Layout: small visual gap between the regular tracks area and the right-pinned strip
+
 v1.2.5
   + Cables: new "Selected tracks only" option — only show cables connected to currently selected tracks (Settings > Cables)
 
@@ -12304,9 +12309,11 @@ function DrawSimpleMixerWindow()
    end
 
    local master_right_width = (settings.simple_mixer_show_master and settings.simple_mixer_master_position == "right") and (track_width + 8) or 0
+   local master_left_width = (settings.simple_mixer_show_master and settings.simple_mixer_master_position == "left") and (track_width + 8) or 0
    local rack_actual_width = settings.simple_mixer_rack_body_collapsed and 14 or (settings.simple_mixer_rack_width or 220)
    local rack_width = (settings.simple_mixer_show_rack and rack_actual_width + 4) or 0
-   local child_width = avail_width - master_right_width - rack_width - (pinned_width > 0 and pinned_width or 0) - (right_pinned_width > 0 and right_pinned_width or 0)
+   local right_pinned_gap = (#right_pinned_data > 0) and 3 or 0
+   local child_width = avail_width - master_right_width - master_left_width - rack_width - (pinned_width > 0 and pinned_width or 0) - (right_pinned_width > 0 and right_pinned_width or 0) - right_pinned_gap
    if child_width < 100 then child_width = 100 end
    if r.ImGui_BeginChild(mixer_ctx, "MixerTracks", child_width, avail_height, r.ImGui_ChildFlags_None(), r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
     do
@@ -12981,7 +12988,7 @@ function DrawSimpleMixerWindow()
    end
 
    if #right_pinned_data > 0 then
-    r.ImGui_SameLine(mixer_ctx, 0, 4)
+    r.ImGui_SameLine(mixer_ctx, 0, 4 + 3)
     r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
     if r.ImGui_BeginChild(mixer_ctx, "RightPinnedTracks", right_pinned_width, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
      for ridx, rdata in ipairs(right_pinned_data) do
