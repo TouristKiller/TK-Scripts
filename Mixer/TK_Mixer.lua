@@ -1,132 +1,133 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.3
--- @changelog 
+-- @version 1.2.4
 --[[
-  v1.2.3:
-  + Mini Volume slider (optional, default off) - shows below Pan/Width with logarithmic dB scale (-60..+12 dB)
-  + 0 dB marker on the volume slider, right-click resets to 0 dB
-  + Works in CUE Bus mode (controls send volume to active cue)
-  + Toggle via sidebar Show popup ("Vol") and Settings > Channel > Volume Slider
-
-  v1.2.2:
-  + Meter: Smooth gradient 
-  + Minor UI tweaks and performance improvements
-
-  v1.2.1:
-  + Added "Pin Right (Mixer)" / "Unpin Right (Mixer)" in the track right-click menu — pins the strip to the right side of the mixer (between regular strips and the master fader), independent of REAPER's own TCP/MCP pin
-  + Right-pin wins over REAPER's TCP/MCP pin: a track set to both no longer appears twice (left + right)
-  + Right-pinned strips now render their divider/spacer (I_SPACER) between them, matching the center mixer style (line or track style, with track-color when configured)
-  + Instrument Rack: empty parameter knob slot is now interactive — right-click opens a popup with "Pin Last Touched Parameter", "Activate Learn Mode" and a "Pin Parameter..." submenu listing all FX parameters
-  + Instrument Rack: collapse handle in the header — click the small chevron strip on the left to collapse the entire rack to a 14px wide handle; click the handle to expand again (state persists per project)
-  + Internal: script_version is now read from the @version header so it stays in sync with the displayed version
-
-
-  v1.2.0:
-  + Suppress auto-float of TK_ChannelStrip (EQ/Comp/Lim) and TK_Trim on auto-insert (prevents tens of floating FX windows when loading project templates)
-  + Added EQ "Auto-insert" toggle (Settings > EQ section) for consistency with Compressor and Limiter — disabled by default
-  + New bottom dock toggle button in sidebar (above the close button), styled to match the close button
-    - Click: minimize/maximize the bottommost docker
-    - Right-click: set custom min/max heights in pixels (0 = auto: 1/3 of main window height for min, full main window height for max)
-    - Includes "Use current height as Min/Max" and "Reset to auto" options
-  + New VU meter style "Digit" — clock-style digital readout with current dB and peak hold dB plus a RST button to reset peak hold
-  + Added VU meter style cycle button (bottom-left of each VU meter) for quick switching between Analog / Analog Light / LED Bars / Digital / Digit
-
-  v1.1.9:
-  + Added "Flow" toggle in the Show popup (sidebar) next to "Cbl" for quick access to the cables flow animation
-  + Fixed crash "bad argument #1 to 'GetTrackGUID' (MediaTrack expected)" when a send destination pointer was invalid (validates MediaTrack pointer before drawing cables)
-
-  v1.1.7:
-  + Instrument Rack: drag & drop from TK FX BROWSER / Mini onto FX tiles (insert at position) or onto the rack background (append)
-  + Instrument Rack: always-visible "+ Add FX" zone — click to open the configured FX browser (TK FX BROWSER, Mini or Native)
-  + Mixer FX slot "+" dropzone (empty track + end-of-chain) opens the same browser on double-click
-  + New setting: "Instrument Rack > Add FX target" (TK FX BROWSER / Mini / Native)
-  + Toggle behavior: clicking the add-FX zone opens or hides the running TK FX BROWSER / Mini, or auto-starts the script when not running
-  + Sidebar scrollbar made narrower (4px)
-  + Instrument Rack: per-FX A/B snapshots in the tile toolbar (pure-toggle click, right-click menu for Capture/Copy/Reset, persistent per project via ProjExtState)
-  + Instrument Rack: clickable bypass LED in the tile header (green/red)
-  + Instrument Rack: redesigned FX tile header (name + chevron + LED on row 1, A/B + W (wet/dry) + O (offline) + P (preset) + x (delete) toolbar on row 2)
-  + Instrument Rack: per-FX W button with wet/dry slider popup (right-click resets to 1)
-  + Instrument Rack: per-FX O button toggles offline (red when offline)
-  + Instrument Rack: per-FX P button popup (Prev / Next / Default preset, current preset shown in tooltip)
-  + Instrument Rack: per-FX x button (right-aligned) with confirmation popup to delete the FX
-  + Instrument Rack: track header F button toggles freeze/unfreeze (blue when track is frozen)
-  + Instrument Rack: track header S button opens a Send / Receive / Hardware Output menu (same as the IO section "+ Add" button)
-  + Instrument Rack: track name truncates with ellipsis and shows full name in tooltip when too long
-  + Instrument Rack: input FX rendered below output FX with an "Input FX" divider
-  + Instrument Rack: cross-context drag & drop fixed by polling JS_Mouse_GetState / GetMousePosition and publishing TKMIX/rack_target during hover
-  + Settings window no longer opens automatically on script start (always closed at startup, must be opened explicitly)
-
-  v1.1.6:
-  + Added optional Compressor transfer curve view (toggle in the Comp module header) — shows input/output dB curve with threshold lines and 1:1 reference, reflects threshold/ratio/makeup live
-  + Added optional Limiter transfer curve view (toggle in the Lim module header) — brick-wall curve with threshold and ceiling lines
-  + Per-track toggle (state stored in mixer settings, per project)
-  + Easter egg: double-click on a cable plug (square or arrow) for 5 seconds of disco cables
-
-  v1.1.5:
-  + Added "+ Add" button in the Sends/Receives section to create sends, receives or hardware outputs directly from the strip
-  + Submenus for Send to Track, Receive from Track, and Hardware Output (stereo + mono) with automatic dedupe of existing routes
-  + Added "Remove" entry in the right-click menu of existing sends, receives and hardware outputs
-  + Added "New Track..." entry in the Send/Receive submenus to create a new track and route to/from it in one step
-  + Added "Auto-add new tracks" toggle in the sidebar: tracks created in REAPER are added to the mixer automatically
-  + Added visual cables between strips for sends/receives, drawn in the source track color
-  + Toggle in Show popup ("Cbl") and full styling controls in the Settings > Sends tab (thickness, opacity, curve, glow, source/destination color)
-  + Cables show direction: square "output" plug at the source, triangular arrow plug at the destination
-  + Optional "Flow animation" toggle in Settings > Sends > Cables (animated dot moving from source to destination)
-  + Patch bar at the bottom of the IO section has a fixed height (8 px) and is included in the strip layout, so the strip bottom no longer falls off-screen when cables are enabled
-  + Cables are no longer drawn for tracks whose IO section is hidden or collapsed
-  + Cables are hidden while any popup/context menu is open, so menus stay fully readable above the strips
-  + Cables are clipped to the scrolling tracks area, so they no longer leak across the sidebar or the right-side master fader
-  + Fixed crash when removing a send/receive (validate destination/source MediaTrack pointer before calling GetTrackName)
-
-  v1.1.1:
-  + Added CUE Bus mode with active CUE track selection
-  + In CUE mode, the fader controls per-track send volume to the active CUE bus
-  + Added per-CUE color setting, linked to fader highlight and CUE badge
-  + Moved the CUE section to the bottom of the sidebar
-  + Replaced CUE selection dropdown in the sidebar with radio buttons
-  + Selected track label in the sidebar now uses the track color as background
-  + CUE badge is always visible on CUE tracks; active CUE shows a green indicator lamp
-  + Made CUE badge adaptive on narrow strips (CUE, C, or lamp only)
-  + In CUE mode, mute and pan are now per-send (cue-specific)
-
-  v1.1.0:
-  + Scalable fader knob via new "Knob Scale" slider (0.5x - 2.5x) in Fader Style section
-  + Channel Outline: thin border on both sides of each strip with adjustable color, thickness, and optional track color
-  + Outline applied to master and pinned channels as well
-  + Left Padding setting for spacing left of the first channel
-  + Folder-end icon (right-aligned) on the last track inside a folder
-  + Clicking the folder icon in a folder track header collapses/expands the folder
-  + FX slot height range extended to 30 px
-  + FX font size slider now works correctly
-  + Clicking empty mixer area deselects all tracks
-    + Send/Receive section completely reworked with compact rows and context-popup control
-    + Master hardware outputs added in the same routing section with volume popup
-    + Dynamic Send/Receive layout for narrow strips (compact + right-click for detailed actions)
-    + Send/Receive background color added as a separate setting
-    + Send/Receive handle improved with "io" label
-    + FX slots handle improved with "fx" label
-    + S/R height calculation fixed (including divider/handle budget) for more stable fader space
-    + Meter width limit increased to 200 px
-    + Fader automatically hides when meter becomes too wide
-    + Meter render and loud-indicator width corrected when fader is hidden
-    + Fixed ImGui style/pop mismatch in hidden-fader pad
-    + EQ curve visualizer added as an optional strip above the EQ controls
-    + EQ curve toggle in EQ header added
-    + EQ curve color settings added (curve, grid, zero line, background)
-    + Band points on the EQ curve added with hover tooltips (freq/gain)
-    + Draggable EQ band points added: horizontal = frequency, vertical = gain
-    + Shift fine adjust added for EQ point dragging
-    + HPF/LPF points given separate colors and only horizontally draggable
-
-  v1.0.0:
-  + Initial standalone release
-  + Extracted from TK_TRANSPORT for independent use
-  + All mixer functionality preserved: VU meters, Compressor, Limiter, EQ, FX slots, Meters, Sidebar, Parameters
+v1.2.4
+  + Meters: smoother fall, configurable release speed (dB/sec) — now consistent at any framerate
+  + Meters: support for up to 8 channels (surround / multichannel busses)
+  + Meters: click anywhere on the meter to reset the max-peak / clip indicator
+  + Meters: choice between Post-fader and Pre-fader metering; small "PRE" badge appears at the bottom in pre-fader mode
+  + Meters: K-system calibration slider (-26..-8 dBFS) so 0 dB on the meter matches your own reference level
+  + VU Meter: same K-system calibration slider, replacing the old fixed +18 dB reference
+  + VU Meter: larger dial — easier to read on narrow strips
+  + VU Meter: realistic scale (like a real analog VU meter), with extra tick marks around 0 VU
+  + VU Meter: new TK_VU_Meter JSFX following the IEC 60268-17 standard — reads the same as Zenomod and other reference VU meters
+  + Cables: stay visible when one of the tracks is off-screen (runs neatly off the edge)
+  + Cables: pass underneath the master channel, except when the connection is on a pinned track (left or right) — then the cable runs neatly over the pinned strip
+  + Setting: Settings > Channel > Meter > Tap (Post / Pre selector)
   ]]--
 
-local r = reaper
+local r = setmetatable({}, { __index = reaper })
+local _orig_GetTrackGUID = reaper.GetTrackGUID
+local _track_guid_frame_cache = setmetatable({}, { __mode = "k" })
+r.GetTrackGUID = function(track)
+ local g = _track_guid_frame_cache[track]
+ if g then return g end
+ g = _orig_GetTrackGUID(track)
+ if g then _track_guid_frame_cache[track] = g end
+ return g
+end
+
+local _orig_GetMediaTrackInfo_Value = reaper.GetMediaTrackInfo_Value
+local _track_info_frame_cache = setmetatable({}, { __mode = "k" })
+local _CACHEABLE_TRACK_INFO_KEYS = {
+ IP_TRACKNUMBER = true, B_TCPPIN = true, B_MCPPIN = true, I_SPACER = true,
+ I_NCHAN = true, B_SHOWINTCP = true, B_SHOWINMIXER = true, I_FOLDERDEPTH = true,
+ I_FOLDERCOMPACT = true, I_RECARM = true, I_RECMON = true, I_RECINPUT = true,
+ B_MUTE = true, I_SOLO = true, B_PHASE = true, I_SELECTED = true,
+ I_CUSTOMCOLOR = true, I_HEIGHTOVERRIDE = true,
+}
+r.GetMediaTrackInfo_Value = function(track, key)
+ if not _CACHEABLE_TRACK_INFO_KEYS[key] then
+  return _orig_GetMediaTrackInfo_Value(track, key)
+ end
+ local sub = _track_info_frame_cache[track]
+ if sub then
+  local v = sub[key]
+  if v ~= nil then return v end
+ else
+  sub = {}
+  _track_info_frame_cache[track] = sub
+ end
+ local v = _orig_GetMediaTrackInfo_Value(track, key)
+ sub[key] = v
+ return v
+end
+
+local _orig_GetTrackColor = reaper.GetTrackColor
+local _track_color_frame_cache = setmetatable({}, { __mode = "k" })
+r.GetTrackColor = function(track)
+ local c = _track_color_frame_cache[track]
+ if c ~= nil then return c end
+ c = _orig_GetTrackColor(track)
+ _track_color_frame_cache[track] = c
+ return c
+end
+
+local _orig_IsTrackSelected = reaper.IsTrackSelected
+local _track_selected_frame_cache = setmetatable({}, { __mode = "k" })
+r.IsTrackSelected = function(track)
+ local s = _track_selected_frame_cache[track]
+ if s ~= nil then return s end
+ s = _orig_IsTrackSelected(track)
+ _track_selected_frame_cache[track] = s
+ return s
+end
+
+local _orig_SetMediaTrackInfo_Value = reaper.SetMediaTrackInfo_Value
+r.SetMediaTrackInfo_Value = function(track, key, value)
+ local sub = _track_info_frame_cache[track]
+ if sub then sub[key] = nil end
+ if key == "I_CUSTOMCOLOR" then _track_color_frame_cache[track] = nil end
+ if key == "I_SELECTED" then _track_selected_frame_cache[track] = nil end
+ return _orig_SetMediaTrackInfo_Value(track, key, value)
+end
+
+local _orig_SetTrackSelected = reaper.SetTrackSelected
+r.SetTrackSelected = function(track, selected)
+ _track_selected_frame_cache[track] = nil
+ return _orig_SetTrackSelected(track, selected)
+end
+
+local function ClearTrackGUIDFrameCache()
+ _track_guid_frame_cache = setmetatable({}, { __mode = "k" })
+ _track_info_frame_cache = setmetatable({}, { __mode = "k" })
+ _track_color_frame_cache = setmetatable({}, { __mode = "k" })
+ _track_selected_frame_cache = setmetatable({}, { __mode = "k" })
+end
 local ctx = r.ImGui_CreateContext('TK Mixer')
+
+local _project_path_cache = { t = -1, val = nil }
+local function GetProjectPathCached()
+ local now = r.time_precise()
+ if (now - _project_path_cache.t) < 1.0 and _project_path_cache.val ~= nil then
+  return _project_path_cache.val
+ end
+ local v = r.GetProjectPath("")
+ _project_path_cache.t = now
+ _project_path_cache.val = v
+ return v
+end
+
+local _textsize_cache = {}
+local _textsize_cache_count = 0
+local function CalcTextSizeCached(text)
+ local cached = _textsize_cache[text]
+ if cached then return cached[1], cached[2] end
+ local w, h = r.ImGui_CalcTextSize(ctx, text)
+ if _textsize_cache_count > 32768 then
+  _textsize_cache = {}
+  _textsize_cache_count = 0
+ end
+ _textsize_cache[text] = { w, h }
+ _textsize_cache_count = _textsize_cache_count + 1
+ return w, h
+end
+
+local function InvalidateTextSizeCache()
+ _textsize_cache = {}
+ _textsize_cache_count = 0
+end
 
 local function ReadScriptVersion()
  local src = debug.getinfo(1, "S").source:match("@?(.*)")
@@ -281,6 +282,7 @@ local settings = {
  simple_mixer_button_border_color = 0xFFFFFFFF,
  simple_mixer_button_text_color = 0xFFFFFFFF,
  simple_mixer_channel_text_color = 0xFFFFFFFF,
+ simple_mixer_channel_text_auto = false,
  simple_mixer_control_bg_color = 0x333333FF,
  simple_mixer_slider_handle_color = 0x888888FF,
  simple_mixer_rms_button_off_color = 0x404040FF,
@@ -371,7 +373,12 @@ local settings = {
  simple_mixer_meter_segment_gap = 1,
  simple_mixer_meter_smooth = false,
  simple_mixer_meter_decay_speed = 0.92,
+ simple_mixer_meter_decay_db_per_sec = 24,
+ simple_mixer_meter_hold_release_db_per_sec = 12,
  simple_mixer_meter_hold_time = 1.5,
+ simple_mixer_meter_tap = "post",
+ simple_mixer_meter_pre_calibration = -18,
+
  simple_mixer_meter_color_normal = 0x00CC00FF,
  simple_mixer_meter_color_mid = 0xCCFF00FF,
  simple_mixer_meter_color_high = 0xFFFF00FF,
@@ -379,6 +386,7 @@ local settings = {
  simple_mixer_meter_bg_color = 0x1A1A1AFF,
  simple_mixer_show_vu_meter = false,
  simple_mixer_vu_pre_fader = false,
+ simple_mixer_vu_pre_calibration = -18,
  simple_mixer_vu_height = 50,
  simple_mixer_vu_bg_color = 0x2A2015FF,
  simple_mixer_vu_color_normal = 0xC9A855FF,
@@ -459,9 +467,6 @@ local settings = {
  simple_mixer_sidebar_text = "",
  simple_mixer_sidebar_text_size = 14,
  simple_mixer_sidebar_text_color = 0xAAAAAAFF,
- simple_mixer_bottom_dock_state = "max",
- simple_mixer_bottom_dock_min_px = 0,
- simple_mixer_bottom_dock_max_px = 0,
  simple_mixer_presets_open = true,
  simple_mixer_snapshots_open = true,
  simple_mixer_current_snapshot = "",
@@ -481,6 +486,7 @@ local settings = {
  simple_mixer_rms_position = "top",
  simple_mixer_auto_all = false,
  simple_mixer_auto_add_new_tracks = false,
+ simple_mixer_show_fps = false,
  simple_mixer_button_text_hover_color = nil,
  simple_mixer_button_text_active_color = nil,
  simple_mixer_fader_bg_style = 0,
@@ -538,7 +544,7 @@ local function EnsureMixerSettingsFolder()
 end
 
 local function GetMixerSettingsFilename()
- local project_path = r.GetProjectPath("")
+ local project_path = GetProjectPathCached()
  local project_name = r.GetProjectName(0, "")
  return mixer_settings_path .. project_name:gsub("%.rpp$", "") .. "_mixer.json"
 end
@@ -592,12 +598,14 @@ local function ToggleRightPin(track)
   if g == guid then
    table.remove(list, i)
    settings._right_pinned_set = nil
+   mixer_state.scan_invalidate_counter = (mixer_state.scan_invalidate_counter or 0) + 1
    SaveMixerSettings()
    return
   end
  end
  table.insert(list, guid)
  settings._right_pinned_set = nil
+ mixer_state.scan_invalidate_counter = (mixer_state.scan_invalidate_counter or 0) + 1
  SaveMixerSettings()
 end
 
@@ -621,162 +629,6 @@ local function LoadMixerSettings()
  end
 end
 
-mixer_state.bottom_dock = mixer_state.bottom_dock or {}
-mixer_state.bottom_dock.os_name = r.GetOS() or ""
-mixer_state.bottom_dock.is_win_or_linux = mixer_state.bottom_dock.os_name:match("Win") or mixer_state.bottom_dock.os_name:match("Other")
-
-function mixer_state.bottom_dock.is_available()
- return r.APIExists and r.APIExists("JS_Window_ListFind")
-  and r.APIExists("JS_Window_HandleFromAddress")
-  and r.APIExists("JS_Window_GetClientRect")
-  and r.APIExists("JS_Window_IsVisible")
-  and r.APIExists("JS_WindowMessage_Send")
-  and r.APIExists("DockIsChildOfDock")
-  and r.APIExists("DockGetPosition")
-end
-
-function mixer_state.bottom_dock.client_bounds(hwnd)
- local _, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
- local h = top - bottom
- if mixer_state.bottom_dock.is_win_or_linux then h = bottom - top end
- return { l = left, t = top, r = right, b = bottom, w = right - left, h = h }
-end
-
-function mixer_state.bottom_dock.find_bottommost()
- if not mixer_state.bottom_dock.is_available() then return nil end
- local _, list = r.JS_Window_ListFind("REAPER_dock", true)
- if not list or list == "" then return nil end
- local selected = nil
- local selected_coord = nil
- for token in string.gmatch(list, "[^,]+") do
-  local addr = tonumber(token) or 0
-  if addr ~= 0 then
-   local hwnd = r.JS_Window_HandleFromAddress(addr)
-   if hwnd then
-  local dock_id = r.DockIsChildOfDock(hwnd)
-  local pos = r.DockGetPosition(dock_id)
-  if pos == 0 and r.JS_Window_IsVisible(hwnd) then
-   local bounds = mixer_state.bottom_dock.client_bounds(hwnd)
-   local coord = bounds.b
-   if mixer_state.bottom_dock.is_win_or_linux then coord = -coord end
-   if not selected or coord < selected_coord then
-    selected = { hwnd = hwnd, pos = pos, bounds = bounds }
-    selected_coord = coord
-   end
-  end
-   end
-  end
- end
- return selected
-end
-
-function mixer_state.bottom_dock.main_height()
- local main = r.GetMainHwnd and r.GetMainHwnd() or nil
- if not main then return 0 end
- local _, l, t, rr, b = r.JS_Window_GetClientRect(main)
- local h = b - t
- if h < 0 then h = -h end
- return h
-end
-
-function mixer_state.bottom_dock.target_min()
- local custom = tonumber(settings.simple_mixer_bottom_dock_min_px) or 0
- if custom > 0 then return custom end
- local mh = mixer_state.bottom_dock.main_height()
- if mh <= 0 then return 200 end
- return math.floor(mh / 3)
-end
-
-function mixer_state.bottom_dock.target_max()
- local custom = tonumber(settings.simple_mixer_bottom_dock_max_px) or 0
- if custom > 0 then return custom end
- local mh = mixer_state.bottom_dock.main_height()
- if mh <= 0 then return 10000 end
- return mh
-end
-
-function mixer_state.bottom_dock.resize_bottom(dock, wanted_size)
- if not dock or dock.pos ~= 0 then return false end
- local base_size = dock.bounds and dock.bounds.h or nil
- if not base_size then return false end
- local target = wanted_size
- if target == "min" then target = mixer_state.bottom_dock.target_min() end
- if target == "max" then target = mixer_state.bottom_dock.target_max() end
- target = tonumber(target)
- if not target then return false end
- local focused = r.JS_Window_GetFocus and r.JS_Window_GetFocus() or nil
- local delta = base_size - target
- r.JS_WindowMessage_Send(dock.hwnd, "WM_LBUTTONDOWN", 1, 0, 0, 0)
- r.JS_WindowMessage_Send(dock.hwnd, "WM_LBUTTONUP", 0, 0, 0, delta)
- if focused and r.JS_Window_SetFocus then r.JS_Window_SetFocus(focused) end
- return true
-end
-
-function mixer_state.bottom_dock.get_state()
- local dock = mixer_state.bottom_dock.find_bottommost()
- if not dock then
-  return settings.simple_mixer_bottom_dock_state or "max"
- end
- local h = dock.bounds and dock.bounds.h or 0
- local min_target = mixer_state.bottom_dock.target_min()
- local max_target = mixer_state.bottom_dock.target_max()
- local mid = (min_target + max_target) * 0.5
- if h < mid then return "min" end
- return "max"
-end
-
-function mixer_state.bottom_dock.toggle()
- local dock = mixer_state.bottom_dock.find_bottommost()
- if not dock then return false end
- local state = mixer_state.bottom_dock.get_state()
- local ok
- if state == "min" then
-  ok = mixer_state.bottom_dock.resize_bottom(dock, "max")
-  if ok then settings.simple_mixer_bottom_dock_state = "max" end
- else
-  ok = mixer_state.bottom_dock.resize_bottom(dock, "min")
-  if ok then settings.simple_mixer_bottom_dock_state = "min" end
- end
- if ok then SaveMixerSettings() end
- return ok
-end
-
-function DrawBottomDockToggleButton(mixer_ctx, sidebar_width, sb_win_x, sb_win_y, sb_win_h, close_btn_h)
- local dock_btn_h = 20
- local dock_state = mixer_state.bottom_dock.get_state()
- local can_toggle = mixer_state.bottom_dock.is_available()
- r.ImGui_SetCursorScreenPos(mixer_ctx, sb_win_x, sb_win_y + sb_win_h - close_btn_h - dock_btn_h - 2)
- r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x2A2A2AFF)
- r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x882222FF)
- r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0xAA2222FF)
- local db_x, db_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
- if r.ImGui_Button(mixer_ctx, "##dock_toggle_bottom", sidebar_width, dock_btn_h) then
-  if can_toggle then
-   mixer_state.bottom_dock.toggle()
-  end
- end
- r.ImGui_PopStyleColor(mixer_ctx, 3)
- if r.ImGui_IsItemHovered(mixer_ctx) then
-  if can_toggle then
-   r.ImGui_SetTooltip(mixer_ctx, dock_state == "min" and "Maximize bottom docker" or "Minimize bottom docker")
-  else
-   r.ImGui_SetTooltip(mixer_ctx, "Requires js_ReaScriptAPI")
-  end
- end
- local db_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
- local db_cx = db_x + sidebar_width * 0.5
- local db_cy = db_y + dock_btn_h * 0.5
- local arm = 5
- local color = can_toggle and 0xAAAAAAFF or 0x666666FF
- if dock_state == "min" then
-  r.ImGui_DrawList_AddLine(db_dl, db_cx - arm, db_cy + 2, db_cx, db_cy - 3, color, 1.5)
-  r.ImGui_DrawList_AddLine(db_dl, db_cx, db_cy - 3, db_cx + arm, db_cy + 2, color, 1.5)
- else
-  r.ImGui_DrawList_AddLine(db_dl, db_cx - arm, db_cy - 2, db_cx, db_cy + 3, color, 1.5)
-  r.ImGui_DrawList_AddLine(db_dl, db_cx, db_cy + 3, db_cx + arm, db_cy - 2, color, 1.5)
- end
-end
-
 local _cached_project_tracks = nil
 local _cached_project_tracks_key = nil
 local _cached_hidden_tracks = nil
@@ -785,7 +637,7 @@ local _cached_hidden_tracks_key = nil
 local SaveProjectMixerTracks
 
 local function GetProjectMixerTracks()
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return {} end
  if _cached_project_tracks_key == project_file and _cached_project_tracks then
   return _cached_project_tracks
@@ -823,17 +675,18 @@ local function GetProjectMixerTracks()
 end
 
 SaveProjectMixerTracks = function(tracks)
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return end
  local key = "simple_mixer_tracks_" .. project_file
  local tracks_json = json.encode(tracks)
  r.SetExtState(EXT_STATE_KEY, key, tracks_json, true)
  _cached_project_tracks = tracks
  _cached_project_tracks_key = project_file
+ mixer_state.scan_invalidate_counter = (mixer_state.scan_invalidate_counter or 0) + 1
 end
 
 local function GetProjectMixerPresets()
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return {} end
  local key = "simple_mixer_presets_" .. project_file
  local presets_json = r.GetExtState(EXT_STATE_KEY, key)
@@ -847,7 +700,7 @@ local function GetProjectMixerPresets()
 end
 
 local function SaveProjectMixerPresets(presets)
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return end
  local key = "simple_mixer_presets_" .. project_file
  local presets_json = json.encode(presets)
@@ -918,7 +771,7 @@ local function LoadMixerPreset(name)
 end
 
 local function GetProjectSnapshots()
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return {} end
  local key = "simple_mixer_snapshots_" .. project_file
  local js = r.GetExtState(EXT_STATE_KEY, key)
@@ -930,7 +783,7 @@ local function GetProjectSnapshots()
 end
 
 local function SaveProjectSnapshots(snapshots)
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return end
  local key = "simple_mixer_snapshots_" .. project_file
  r.SetExtState(EXT_STATE_KEY, key, json.encode(snapshots or {}), true)
@@ -1201,7 +1054,7 @@ local function AddParamToTCP(track, fxidx, paramidx)
 end
 
 local function GetProjectMixerHiddenTracks_impl()
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return {} end
  if _cached_hidden_tracks_key == project_file and _cached_hidden_tracks then
   return _cached_hidden_tracks
@@ -1226,7 +1079,7 @@ end
 GetProjectMixerHiddenTracks = GetProjectMixerHiddenTracks_impl
 
 SaveProjectMixerHiddenTracks = function(hidden)
- local project_file = r.GetProjectPath("")
+ local project_file = GetProjectPathCached()
  if project_file == "" then return end
  local key = "simple_mixer_hidden_tracks_" .. project_file
  local list = {}
@@ -1239,9 +1092,30 @@ SaveProjectMixerHiddenTracks = function(hidden)
  r.SetExtState(EXT_STATE_KEY, key, json.encode(list), true)
  _cached_hidden_tracks = hidden
  _cached_hidden_tracks_key = project_file
+ mixer_state.scan_invalidate_counter = (mixer_state.scan_invalidate_counter or 0) + 1
 end
 
 local channelstrip_fx_cache = {}
+
+function GetChannelTextColor(track)
+ if not settings.simple_mixer_channel_text_auto then
+  return settings.simple_mixer_channel_text_color or 0xFFFFFFFF
+ end
+ if not track or track == 0 then
+  return settings.simple_mixer_channel_text_color or 0xFFFFFFFF
+ end
+ local tc = r.GetTrackColor(track)
+ if not tc or tc == 0 then
+  return settings.simple_mixer_channel_text_color or 0xFFFFFFFF
+ end
+ local rv, gv, bv = r.ColorFromNative(tc)
+ local lum = (0.2126 * rv + 0.7152 * gv + 0.0722 * bv) / 255
+ if lum > 0.55 then
+  return 0x000000FF
+ else
+  return 0xFFFFFFFF
+ end
+end
 
 local STRIP_OFFSET = {
  EQ = 0,
@@ -1253,30 +1127,97 @@ local STRIP_OFFSET = {
  LIM_BYPASS = 36
 }
 
-local function FindChannelStripFX(track, track_guid)
- if channelstrip_fx_cache[track_guid] then
-  local cached = channelstrip_fx_cache[track_guid]
+local _fx_param_cache = {}
+local FX_PARAM_CACHE_TTL = 0.05
+
+local function GetTrackFXParamCached(track, fx_index, param_idx)
+ if not track or fx_index < 0 then return 0 end
+ local key = tostring(track) .. "|" .. fx_index
+ local entry = _fx_param_cache[key]
+ local now = r.time_precise()
+ if entry then
+  local last = entry.ts[param_idx]
+  if last and (now - last) < FX_PARAM_CACHE_TTL then
+   return entry.params[param_idx]
+  end
+ else
+  entry = { params = {}, ts = {}, enabled_t = -1 }
+  _fx_param_cache[key] = entry
+ end
+ local v = r.TrackFX_GetParam(track, fx_index, param_idx)
+ entry.params[param_idx] = v
+ entry.ts[param_idx] = now
+ return v
+end
+
+local function GetTrackFXEnabledCached(track, fx_index)
+ if not track or fx_index < 0 then return false end
+ local key = tostring(track) .. "|" .. fx_index
+ local entry = _fx_param_cache[key]
+ local now = r.time_precise()
+ if entry and entry.enabled_t and (now - entry.enabled_t) > 0 and (now - entry.enabled_t) < FX_PARAM_CACHE_TTL then
+  return entry.enabled
+ end
+ if not entry then
+  entry = { params = {}, ts = {}, enabled_t = -1 }
+  _fx_param_cache[key] = entry
+ end
+ local en = r.TrackFX_GetEnabled(track, fx_index)
+ entry.enabled = en
+ entry.enabled_t = now
+ return en
+end
+
+local function InvalidateFXParamCache(track, fx_index, param_idx)
+ if not track then return end
+ local key = tostring(track) .. "|" .. fx_index
+ local entry = _fx_param_cache[key]
+ if not entry then return end
+ if param_idx then
+  entry.ts[param_idx] = nil
+ else
+  entry.ts = {}
+  entry.enabled_t = -1
+ end
+end
+
+function FindOrValidateCachedFX(cache, track, track_guid, p1, p2)
+ local cached = cache[track_guid]
+ local now = r.time_precise()
+ local fx_count = r.TrackFX_GetCount(track)
+ if cached and cached.fx_count == fx_count and cached.last_validation
+    and (now - cached.last_validation) < 0.5 then
+  return cached.fx_index, cached
+ end
+ if cached and cached.fx_index >= 0 and cached.fx_index < fx_count then
   local retval, fx_name = r.TrackFX_GetFXName(track, cached.fx_index, "")
   if retval then
-   local name_lower = fx_name:lower()
-   if name_lower:find("tk channel strip") or name_lower:find("tk_channelstrip") then
-    return cached.fx_index
+   local lo = fx_name:lower()
+   if lo:find(p1, 1, true) or lo:find(p2, 1, true) then
+    cached.fx_count = fx_count
+    cached.last_validation = now
+    return cached.fx_index, cached
    end
   end
-  channelstrip_fx_cache[track_guid] = nil
+  cache[track_guid] = nil
  end
- local fx_count = r.TrackFX_GetCount(track)
  for i = 0, fx_count - 1 do
   local retval, fx_name = r.TrackFX_GetFXName(track, i, "")
   if retval then
-   local name_lower = fx_name:lower()
-   if name_lower:find("tk channel strip") or name_lower:find("tk_channelstrip") then
-    channelstrip_fx_cache[track_guid] = {fx_index = i}
-    return i
+   local lo = fx_name:lower()
+   if lo:find(p1, 1, true) or lo:find(p2, 1, true) then
+    local entry = {fx_index = i, fx_count = fx_count, last_validation = now}
+    cache[track_guid] = entry
+    return i, entry
    end
   end
  end
- return -1
+ return -1, nil
+end
+
+local function FindChannelStripFX(track, track_guid)
+ local idx = FindOrValidateCachedFX(channelstrip_fx_cache, track, track_guid, "tk channel strip", "tk_channelstrip")
+ return idx
 end
 
 local function InsertChannelStripFX(track, track_guid)
@@ -1285,7 +1226,7 @@ local function InsertChannelStripFX(track, track_guid)
     r.TrackFX_Show(track, fx_index, 2)
     r.TrackFX_Show(track, fx_index, 0)
   r.TrackFX_SetEnabled(track, fx_index, true)
-  channelstrip_fx_cache[track_guid] = {fx_index = fx_index}
+  channelstrip_fx_cache[track_guid] = {fx_index = fx_index, fx_count = r.TrackFX_GetCount(track), last_validation = r.time_precise()}
   local routing_order = settings.simple_mixer_strip_routing_order or 0
   r.TrackFX_SetParam(track, fx_index, STRIP_OFFSET.ROUTING, routing_order)
   r.TrackFX_SetParam(track, fx_index, STRIP_OFFSET.EQ_BYPASS, 0)
@@ -1408,13 +1349,13 @@ end
 
 local function GetCompressorParams(track, fx_index)
  if fx_index < 0 then return nil end
- local plugin_enabled = r.TrackFX_GetEnabled(track, fx_index)
- local thresh = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP + 0)
- local ratio = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP + 1)
- local makeup = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP + 2)
- local attack = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP + 3)
- local release = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP + 4)
- local mix = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP + 5)
+ local plugin_enabled = GetTrackFXEnabledCached(track, fx_index)
+ local thresh = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.COMP + 0)
+ local ratio = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.COMP + 1)
+ local makeup = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.COMP + 2)
+ local attack = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.COMP + 3)
+ local release = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.COMP + 4)
+ local mix = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.COMP + 5)
  local gr_db = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP + 6)
  local params = {
   threshold = (thresh + 60) / 60,
@@ -1423,7 +1364,7 @@ local function GetCompressorParams(track, fx_index)
   attack = (attack - 20) / 1980,
   release = (release - 20) / 980,
   mix = mix / 100,
-  enabled = plugin_enabled and r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.COMP_BYPASS) == 1
+  enabled = plugin_enabled and GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.COMP_BYPASS) == 1
  }
  local gr = math.min(1, math.abs(gr_db) / 20)
  params.gr = gr
@@ -1433,6 +1374,7 @@ end
 local function SetCompressorParam(track, fx_index, param_idx, value)
  if fx_index < 0 then return end
  r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.COMP + param_idx, value)
+ InvalidateFXParamCache(track, fx_index, STRIP_OFFSET.COMP + param_idx)
 end
 
 local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_val, knob_color, is_bipolar, style, track_color)
@@ -1443,19 +1385,20 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
  local center_angle = math.pi * 1.5
  local angle_range = end_angle - start_angle
  local value_angle = start_angle + norm_val * angle_range
+ local seg = radius < 8 and 12 or (radius < 14 and 18 or 24)
  if style == 0 then
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x + 1, center_y + 1, radius, 0x00000066, 32)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, track_color, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x + 1, center_y + 1, radius, 0x00000066, seg)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, track_color, seg)
   local arc_radius = radius - 2
   if is_bipolar then
    if norm_val > 0.5 then
-    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, arc_radius, center_angle, value_angle, 32)
+    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, arc_radius, center_angle, value_angle, seg)
    elseif norm_val < 0.5 then
-    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, arc_radius, value_angle, center_angle, 32)
+    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, arc_radius, value_angle, center_angle, seg)
    end
   else
    if norm_val > 0.01 then
-    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, arc_radius, start_angle, value_angle, 32)
+    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, arc_radius, start_angle, value_angle, seg)
    end
   end
   r.ImGui_DrawList_PathStroke(draw_list, knob_color, 0, 2.5)
@@ -1465,11 +1408,11 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
    local py = center_y + math.sin(value_angle) * radius * 0.85
    r.ImGui_DrawList_AddLine(draw_list, center_x, center_y, px, py, knob_color, 2)
   end
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius * 0.45, knob_color, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius * 0.45, knob_color, seg)
  elseif style == 1 then
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, 0x00000066, 32)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 1, 0x3A3A3AFF, 32)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 3, 0x2A2A2AFF, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, 0x00000066, seg)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 1, 0x3A3A3AFF, seg)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 3, 0x2A2A2AFF, seg)
   local pointer_inner = radius * 0.35
   local pointer_outer = radius - 2
   local inner_x = center_x + math.cos(value_angle) * pointer_inner
@@ -1479,10 +1422,10 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
   r.ImGui_DrawList_AddLine(draw_list, inner_x, inner_y, outer_x, outer_y, knob_color, 2)
   r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, math.max(2, radius * 0.3), 0x1A1A1AFF, 16)
  elseif style == 2 then
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, 0x1A1510FF, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, 0x1A1510FF, seg)
   local metal_color = 0x6B5335FF
   local metal_highlight = 0x9A8355FF
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 2, metal_color, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 2, metal_color, seg)
   local tick_count = math.max(5, math.floor(radius / 2))
   for i = 0, tick_count do
    local tick_angle = start_angle + (i / tick_count) * angle_range
@@ -1494,15 +1437,15 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
    local ty2 = center_y + math.sin(tick_angle) * tick_outer
    r.ImGui_DrawList_AddLine(draw_list, tx1, ty1, tx2, ty2, 0xFFFFFF33, 1)
   end
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 4, metal_highlight, 32)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x + 1, center_y + 1, radius - 6, metal_color, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius - 4, metal_highlight, seg)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x + 1, center_y + 1, radius - 6, metal_color, seg)
   local pointer_length = radius - 2
   local pointer_x = center_x + math.cos(value_angle) * pointer_length
   local pointer_y = center_y + math.sin(value_angle) * pointer_length
   r.ImGui_DrawList_AddLine(draw_list, center_x, center_y, pointer_x, pointer_y, 0x000000FF, 2)
   r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, math.max(2, radius * 0.2), 0x000000FF, 16)
  elseif style == 3 then
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, 0x0A0A0AFF, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, radius, 0x0A0A0AFF, seg)
   local led_count = math.max(7, math.floor(radius))
   local led_radius = math.max(1, radius * 0.08)
   for i = 0, led_count - 1 do
@@ -1526,23 +1469,23 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, led_radius, led_color, 8)
   end
   local inner_radius = radius - led_radius * 2 - 3
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, inner_radius, 0x1A1A1AFF, 32)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, inner_radius, 0x1A1A1AFF, seg)
   local dot_dist = inner_radius * 0.6
   local dot_x = center_x + math.cos(value_angle) * dot_dist
   local dot_y = center_y + math.sin(value_angle) * dot_dist
   r.ImGui_DrawList_AddCircleFilled(draw_list, dot_x, dot_y, math.max(1, radius * 0.1), knob_color, 8)
  elseif style == 4 then
-  r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, start_angle, end_angle, 32)
+  r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, start_angle, end_angle, seg)
   r.ImGui_DrawList_PathStroke(draw_list, track_color, 0, 3)
   if norm_val > 0.01 then
    if is_bipolar then
     if norm_val > 0.5 then
-     r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, center_angle, value_angle, 32)
+     r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, center_angle, value_angle, seg)
     else
-     r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, value_angle, center_angle, 32)
+     r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, value_angle, center_angle, seg)
     end
    else
-    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, start_angle, value_angle, 32)
+    r.ImGui_DrawList_PathArcTo(draw_list, center_x, center_y, radius - 2, start_angle, value_angle, seg)
    end
    r.ImGui_DrawList_PathStroke(draw_list, knob_color, 0, 3)
   end
@@ -1550,8 +1493,8 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
   local dot_x = center_x + math.cos(value_angle) * dot_dist
   local dot_y = center_y + math.sin(value_angle) * dot_dist
   local dot_size = math.max(2, radius * 0.25)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, dot_x, dot_y, dot_size, knob_color, 16)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, math.max(2, radius * 0.2), track_color, 16)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, dot_x, dot_y, dot_size, knob_color, math.min(seg, 12))
+  r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, center_y, math.max(2, radius * 0.2), track_color, math.min(seg, 12))
  elseif style == 5 then
   if not mixer_state.knob_image_loaded then
    local knob_image_path = script_path .. "Images" .. os_separator .. "knob01.png"
@@ -1832,14 +1775,23 @@ local function DrawDynamicsCurve(ctx, draw_list, x, y, width, height, opts)
    return out
   end
  end
- local n = math.max(20, math.floor(width))
- local prev_px, prev_py
- for i = 0, n do
-  local input_db = db_min + (i / n) * (db_max - db_min)
-  local out_db = math.max(db_min, math.min(db_max, calc_out(input_db)))
-  local px, py = dbx(input_db), dby(out_db)
-  if prev_px then r.ImGui_DrawList_AddLine(draw_list, prev_px, prev_py, px, py, curve_col, 1.5) end
-  prev_px, prev_py = px, py
+ local n = math.max(20, math.min(60, math.floor(width * 0.6)))
+ if r.ImGui_DrawList_PathLineTo and r.ImGui_DrawList_PathStroke then
+  for i = 0, n do
+   local input_db = db_min + (i / n) * (db_max - db_min)
+   local out_db = math.max(db_min, math.min(db_max, calc_out(input_db)))
+   r.ImGui_DrawList_PathLineTo(draw_list, dbx(input_db), dby(out_db))
+  end
+  r.ImGui_DrawList_PathStroke(draw_list, curve_col, 0, 1.5)
+ else
+  local prev_px, prev_py
+  for i = 0, n do
+   local input_db = db_min + (i / n) * (db_max - db_min)
+   local out_db = math.max(db_min, math.min(db_max, calc_out(input_db)))
+   local px, py = dbx(input_db), dby(out_db)
+   if prev_px then r.ImGui_DrawList_AddLine(draw_list, prev_px, prev_py, px, py, curve_col, 1.5) end
+   prev_px, prev_py = px, py
+  end
  end
 end
 
@@ -1866,11 +1818,6 @@ local function DrawCompressorModule(ctx, draw_list, x, y, width, height, track_g
  local knob_radius = 8
  local row_height = 32
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + comp_height, bg_color, 3)
- local gloss_x = x + width * 0.25
- local gloss_y = y + comp_height * 0.3
- local gloss_radius = width * 0.4
- r.ImGui_DrawList_AddCircleFilled(draw_list, gloss_x, gloss_y, gloss_radius, 0xFFFFFF08, 24)
- r.ImGui_DrawList_AddCircleFilled(draw_list, gloss_x, gloss_y, gloss_radius * 0.6, 0xFFFFFF06, 24)
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + header_height, header_color, 3, r.ImGui_DrawFlags_RoundCornersTop())
  local header_text = "COMP"
  local header_w = r.ImGui_CalcTextSize(ctx, header_text)
@@ -1901,6 +1848,7 @@ local function DrawCompressorModule(ctx, draw_list, x, y, width, height, track_g
   r.ImGui_SetCursorScreenPos(ctx, bypass_btn_x, bypass_btn_y)
   if r.ImGui_InvisibleButton(ctx, "##comp_bypass_" .. track_guid, bypass_btn_size, bypass_btn_size) then
    r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.COMP_BYPASS, is_enabled and 0 or 1)
+   InvalidateFXParamCache(track, fx_index, STRIP_OFFSET.COMP_BYPASS)
   end
   local remove_btn_x = x + 2
   local remove_btn_y = y + 2
@@ -2001,13 +1949,13 @@ end
 
 function Limiter.GetParams(track, fx_index)
  if fx_index < 0 then return nil end
- local plugin_enabled = r.TrackFX_GetEnabled(track, fx_index)
- local thresh = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM + 0)
- local lookahead = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM + 1)
- local attack = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM + 2)
- local hold = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM + 3)
- local release = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM + 4)
- local limit = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM + 5)
+ local plugin_enabled = GetTrackFXEnabledCached(track, fx_index)
+ local thresh = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.LIM + 0)
+ local lookahead = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.LIM + 1)
+ local attack = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.LIM + 2)
+ local hold = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.LIM + 3)
+ local release = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.LIM + 4)
+ local limit = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.LIM + 5)
  local gr_db = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM + 6)
  local params = {
   threshold = (thresh + 20) / 19.9,
@@ -2016,7 +1964,7 @@ function Limiter.GetParams(track, fx_index)
   hold = hold / 10,
   release = release / 1000,
   limit = (limit + 6) / 6,
-  enabled = plugin_enabled and r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.LIM_BYPASS) == 1,
+  enabled = plugin_enabled and GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.LIM_BYPASS) == 1,
   gr = math.min(1, math.abs(gr_db) / 20)
  }
  return params
@@ -2024,6 +1972,7 @@ end
 
 function Limiter.SetParam(track, fx_index, param_idx, value)
  r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.LIM + param_idx, value)
+ InvalidateFXParamCache(track, fx_index, STRIP_OFFSET.LIM + param_idx)
 end
 
 function Limiter.DrawKnob(ctx, draw_list, x, y, radius, value, label, track, fx_index, param_idx)
@@ -2151,8 +2100,6 @@ function Limiter.DrawModule(ctx, draw_list, x, y, width, height, track_guid, tra
  local curve_extra = show_curve and (curve_h + 4) or 0
  local lim_height, header_height, knob_radius, row_height = 120 + curve_extra, 14, 8, 32
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + lim_height, bg_color, 3)
- r.ImGui_DrawList_AddCircleFilled(draw_list, x + width * 0.25, y + lim_height * 0.3, width * 0.4, 0xFFFFFF08, 24)
- r.ImGui_DrawList_AddCircleFilled(draw_list, x + width * 0.25, y + lim_height * 0.3, width * 0.24, 0xFFFFFF06, 24)
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + header_height, header_color, 3, r.ImGui_DrawFlags_RoundCornersTop())
  local header_w = r.ImGui_CalcTextSize(ctx, "LIMIT")
  r.ImGui_DrawList_AddText(draw_list, x + (width - header_w) / 2, y, 0xFFFFFFFF, "LIMIT")
@@ -2180,6 +2127,7 @@ function Limiter.DrawModule(ctx, draw_list, x, y, width, height, track_guid, tra
   if r.ImGui_InvisibleButton(ctx, "##lim_bypass_" .. track_guid, btn_size, btn_size) then
    local is_enabled = params and params.enabled
    r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.LIM_BYPASS, is_enabled and 0 or 1)
+   InvalidateFXParamCache(track, fx_index, STRIP_OFFSET.LIM_BYPASS)
   end
   local remove_btn_x = x + 2
   local remove_btn_y = y + 2
@@ -2252,31 +2200,8 @@ local Trim = {
 }
 
 function Trim.FindFX(track, track_guid)
- if Trim.fx_cache[track_guid] then
-  local cached = Trim.fx_cache[track_guid]
-  if cached.fx_index >= 0 then
-   local retval, fx_name = r.TrackFX_GetFXName(track, cached.fx_index, "")
-   if retval then
-    local name_lower = fx_name:lower()
-    if name_lower:find("tk_trim") or name_lower:find("tk trim") then
-     return cached.fx_index
-    end
-   end
-  end
-  Trim.fx_cache[track_guid] = nil
- end
- local fx_count = r.TrackFX_GetCount(track)
- for i = 0, fx_count - 1 do
-  local retval, fx_name = r.TrackFX_GetFXName(track, i, "")
-  if retval then
-   local name_lower = fx_name:lower()
-   if name_lower:find("tk_trim") or name_lower:find("tk trim") then
-    Trim.fx_cache[track_guid] = {fx_index = i}
-    return i
-   end
-  end
- end
- return -1
+ local idx = FindOrValidateCachedFX(Trim.fx_cache, track, track_guid, "tk_trim", "tk trim")
+ return idx
 end
 
 function Trim.InsertFX(track, track_guid)
@@ -2294,7 +2219,7 @@ function Trim.InsertFX(track, track_guid)
     r.TrackFX_Show(track, fx_index, 2)
     r.TrackFX_Show(track, fx_index, 0)
   r.TrackFX_SetEnabled(track, fx_index, true)
-  Trim.fx_cache[track_guid] = {fx_index = fx_index}
+  Trim.fx_cache[track_guid] = {fx_index = fx_index, fx_count = r.TrackFX_GetCount(track), last_validation = r.time_precise()}
  end
  return fx_index
 end
@@ -2414,7 +2339,8 @@ function Trim.DrawModule(ctx, draw_list, x, y, width, track_guid, track)
 end
 
 local EQ = {
- fx_cache = {}
+ fx_cache = {},
+ curve_cache = setmetatable({}, { __mode = "v" })
 }
 
 function EQ.FindFX(track, track_guid)
@@ -2464,6 +2390,7 @@ function EQ.DrawKnob(ctx, draw_list, x, y, radius, value, min_val, max_val, is_b
    local new_val = math.max(min_val, math.min(max_val, value - dy * range * 0.005))
    local new_norm = (new_val - min_val) / (max_val - min_val)
    r.TrackFX_SetParamNormalized(track, fx_index, param_idx, new_norm)
+   InvalidateFXParamCache(track, fx_index, param_idx)
    r.ImGui_ResetMouseDragDelta(ctx, 0)
   end
  end
@@ -2472,13 +2399,13 @@ function EQ.DrawKnob(ctx, draw_list, x, y, radius, value, min_val, max_val, is_b
 end
 
 function EQ.DrawBandRow(ctx, draw_list, x, y, width, row_height, track, fx_index, freq_param, gain_param, q_param, label, bg_color, freq_min, freq_max, show_divider, type_param)
- local freq_val = r.TrackFX_GetParam(track, fx_index, freq_param)
- local gain_val = r.TrackFX_GetParam(track, fx_index, gain_param)
- local q_val = r.TrackFX_GetParam(track, fx_index, q_param)
+ local freq_val = GetTrackFXParamCached(track, fx_index, freq_param)
+ local gain_val = GetTrackFXParamCached(track, fx_index, gain_param)
+ local q_val = GetTrackFXParamCached(track, fx_index, q_param)
  local is_bell = true
  local has_type_toggle = type_param ~= nil
  if has_type_toggle then
-  is_bell = r.TrackFX_GetParam(track, fx_index, type_param) > 0.5
+  is_bell = GetTrackFXParamCached(track, fx_index, type_param) > 0.5
  end
  local knob_radius = 7
  local label_height = 12
@@ -2570,10 +2497,10 @@ function EQ.DrawBandRow(ctx, draw_list, x, y, width, row_height, track, fx_index
 end
 
 function EQ.DrawFilterRow(ctx, draw_list, x, y, width, row_height, track, fx_index)
- local hpf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 0)
- local hpf_on = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 1)
- local lpf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 14)
- local lpf_on = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 15)
+ local hpf_freq = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 0)
+ local hpf_on = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 1)
+ local lpf_freq = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 14)
+ local lpf_on = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 15)
  local knob_radius = 8
  local knob_color = settings.simple_mixer_eq_knob_color or 0xCCCCCCFF
  local text_color = settings.simple_mixer_eq_text_color or 0xAAAAAAFF
@@ -2594,9 +2521,11 @@ function EQ.DrawFilterRow(ctx, draw_list, x, y, width, row_height, track, fx_ind
  local lpf_hov, lpf_act, lpf_rclick = EQ.DrawKnob(ctx, draw_list, lpf_knob_x, knob_y, knob_radius, lpf_freq, 4000, 20000, false, lpf_btn_color, "lpf", track, fx_index, STRIP_OFFSET.EQ + 14)
  if hpf_rclick then
   r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.EQ + 1, hpf_on > 0.5 and 0 or 1)
+  InvalidateFXParamCache(track, fx_index, STRIP_OFFSET.EQ + 1)
  end
  if lpf_rclick then
   r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.EQ + 15, lpf_on > 0.5 and 0 or 1)
+  InvalidateFXParamCache(track, fx_index, STRIP_OFFSET.EQ + 15)
  end
  if hpf_hov or hpf_act then
   r.ImGui_SetTooltip(ctx, string.format("HPF: %.0f Hz%s", hpf_freq, hpf_on > 0.5 and "" or " (OFF)"))
@@ -2634,32 +2563,35 @@ function EQ.DrawCurve(ctx, draw_list, x, y, width, height, track, fx_index)
  r.ImGui_DrawList_AddLine(draw_list, x, cy, x + width, cy, settings.simple_mixer_eq_curve_zero_color or 0x555555FF, 1)
  local log_min = math.log(20)
  local log_max = math.log(20000)
- for _, db_mark in ipairs({-12, -6, 6, 12}) do
-  local gy = cy - db_mark * px_per_db
-  r.ImGui_DrawList_AddLine(draw_list, x, gy, x + width, gy, settings.simple_mixer_eq_curve_grid_color or 0x33333388, 1)
+ if width >= 80 then
+  local grid_col = settings.simple_mixer_eq_curve_grid_color or 0x33333388
+  for _, db_mark in ipairs({-12, -6, 6, 12}) do
+   local gy = cy - db_mark * px_per_db
+   r.ImGui_DrawList_AddLine(draw_list, x, gy, x + width, gy, grid_col, 1)
+  end
+  for _, fm in ipairs({100, 1000, 10000}) do
+   local fx = x + (math.log(fm) - log_min) / (log_max - log_min) * width
+   r.ImGui_DrawList_AddLine(draw_list, fx, y, fx, y + height, grid_col, 1)
+  end
  end
- for _, fm in ipairs({100, 1000, 10000}) do
-  local fx = x + (math.log(fm) - log_min) / (log_max - log_min) * width
-  r.ImGui_DrawList_AddLine(draw_list, fx, y, fx, y + height, settings.simple_mixer_eq_curve_grid_color or 0x33333388, 1)
- end
- local hpf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 0)
- local hpf_on   = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 1)
- local lf_freq  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 2)
- local lf_gain  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 3)
- local lf_q     = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 4)
- local lf_bell  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 16) > 0.5
- local lmf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 5)
- local lmf_gain = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 6)
- local lmf_q    = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 7)
- local hmf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 8)
- local hmf_gain = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 9)
- local hmf_q    = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 10)
- local hf_freq  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 11)
- local hf_gain  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 12)
- local hf_q     = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 13)
- local hf_bell  = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 17) > 0.5
- local lpf_freq = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 14)
- local lpf_on   = r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ + 15)
+ local hpf_freq = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 0)
+ local hpf_on   = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 1)
+ local lf_freq  = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 2)
+ local lf_gain  = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 3)
+ local lf_q     = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 4)
+ local lf_bell  = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 16) > 0.5
+ local lmf_freq = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 5)
+ local lmf_gain = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 6)
+ local lmf_q    = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 7)
+ local hmf_freq = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 8)
+ local hmf_gain = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 9)
+ local hmf_q    = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 10)
+ local hf_freq  = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 11)
+ local hf_gain  = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 12)
+ local hf_q     = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 13)
+ local hf_bell  = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 17) > 0.5
+ local lpf_freq = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 14)
+ local lpf_on   = GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ + 15)
  local function calc_db(freq)
   local db = 0
   if hpf_on > 0.5 then db = db + EQ_FilterDB(freq, hpf_freq, true) end
@@ -2670,31 +2602,71 @@ function EQ.DrawCurve(ctx, draw_list, x, y, width, height, track, fx_index)
   if lpf_on > 0.5 then db = db + EQ_FilterDB(freq, lpf_freq, false) end
   return math.max(-max_db, math.min(max_db, db))
  end
- local n = math.max(40, math.floor(width))
+ local n = math.max(30, math.min(60, math.floor(width * 0.75)))
  local curve_col = settings.simple_mixer_eq_curve_color or 0x66DDEEC0
- local prev_px, prev_py = nil, nil
- for i = 0, n do
-  local t = i / n
-  local freq = math.exp(log_min + t * (log_max - log_min))
-  local db = calc_db(freq)
-  local px = x + t * width
-  local py = cy - db * px_per_db
-  if prev_px then
-   r.ImGui_DrawList_AddLine(draw_list, prev_px, prev_py, px, py, curve_col, 1.5)
+ local hash = string.format("%g_%g_%g_%g_%g_%d_%g_%g_%g_%g_%g_%g_%g_%g_%g_%d_%g_%g_%d",
+  hpf_freq, hpf_on, lf_freq, lf_gain, lf_q, lf_bell and 1 or 0,
+  lmf_freq, lmf_gain, lmf_q, hmf_freq, hmf_gain, hmf_q,
+  hf_freq, hf_gain, hf_q, hf_bell and 1 or 0,
+  lpf_freq, lpf_on, n)
+ local cache_key = r.GetTrackGUID(track) or tostring(track)
+ local cached_curve = EQ.curve_cache[cache_key]
+ local rel_pts
+ if cached_curve and cached_curve.hash == hash then
+  rel_pts = cached_curve.rel
+ else
+  rel_pts = {}
+  for i = 0, n do
+   local t = i / n
+   local freq = math.exp(log_min + t * (log_max - log_min))
+   local db = calc_db(freq)
+   rel_pts[#rel_pts+1] = t
+   rel_pts[#rel_pts+1] = db
   end
-  prev_px, prev_py = px, py
+  EQ.curve_cache[cache_key] = {hash = hash, rel = rel_pts}
  end
- local bands = {
-    { label = "HPF", freq = hpf_freq, gain = nil,      active = hpf_on > 0.5,  dot_col = 0xFF6644FF, freq_idx = STRIP_OFFSET.EQ + 0,  freq_min = 20,   freq_max = 500,   gain_idx = nil },
-    { label = "LF",  freq = lf_freq,  gain = lf_gain,  active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 2,  freq_min = 40,   freq_max = 600,   gain_idx = STRIP_OFFSET.EQ + 3 },
-    { label = "LMF", freq = lmf_freq, gain = lmf_gain, active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 5,  freq_min = 200,  freq_max = 2000,  gain_idx = STRIP_OFFSET.EQ + 6 },
-    { label = "HMF", freq = hmf_freq, gain = hmf_gain, active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 8,  freq_min = 1000, freq_max = 8000,  gain_idx = STRIP_OFFSET.EQ + 9 },
-    { label = "HF",  freq = hf_freq,  gain = hf_gain,  active = true,           dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 11, freq_min = 2000, freq_max = 16000, gain_idx = STRIP_OFFSET.EQ + 12 },
-    { label = "LPF", freq = lpf_freq, gain = nil,      active = lpf_on > 0.5,  dot_col = 0x44AAFFFF, freq_idx = STRIP_OFFSET.EQ + 14, freq_min = 4000, freq_max = 20000, gain_idx = nil },
- }
- local dot_r = 3
- local show_dots = settings.simple_mixer_eq_curve_show_dots ~= false
+ local prev_px, prev_py = nil, nil
+ if r.ImGui_DrawList_PathLineTo and r.ImGui_DrawList_PathStroke then
+  for i = 1, #rel_pts - 1, 2 do
+   local t = rel_pts[i]
+   local db = rel_pts[i+1]
+   local px = x + t * width
+   local py = cy - db * px_per_db
+   r.ImGui_DrawList_PathLineTo(draw_list, px, py)
+  end
+  r.ImGui_DrawList_PathStroke(draw_list, curve_col, 0, 1.5)
+ else
+  for i = 1, #rel_pts - 1, 2 do
+   local t = rel_pts[i]
+   local db = rel_pts[i+1]
+   local px = x + t * width
+   local py = cy - db * px_per_db
+   if prev_px then
+    r.ImGui_DrawList_AddLine(draw_list, prev_px, prev_py, px, py, curve_col, 1.5)
+   end
+   prev_px, prev_py = px, py
+  end
+ end
+ local show_dots = (settings.simple_mixer_eq_curve_show_dots ~= false)
  if show_dots then
+ if not EQ._bands_buf then
+  EQ._bands_buf = {
+   { label = "HPF", dot_col = 0xFF6644FF, freq_idx = STRIP_OFFSET.EQ + 0,  freq_min = 20,   freq_max = 500,   gain_idx = nil },
+   { label = "LF",  dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 2,  freq_min = 40,   freq_max = 600,   gain_idx = STRIP_OFFSET.EQ + 3 },
+   { label = "LMF", dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 5,  freq_min = 200,  freq_max = 2000,  gain_idx = STRIP_OFFSET.EQ + 6 },
+   { label = "HMF", dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 8,  freq_min = 1000, freq_max = 8000,  gain_idx = STRIP_OFFSET.EQ + 9 },
+   { label = "HF",  dot_col = 0xFFFFFFCC, freq_idx = STRIP_OFFSET.EQ + 11, freq_min = 2000, freq_max = 16000, gain_idx = STRIP_OFFSET.EQ + 12 },
+   { label = "LPF", dot_col = 0x44AAFFFF, freq_idx = STRIP_OFFSET.EQ + 14, freq_min = 4000, freq_max = 20000, gain_idx = nil },
+  }
+ end
+ local bands = EQ._bands_buf
+ bands[1].freq = hpf_freq; bands[1].gain = nil;      bands[1].active = hpf_on > 0.5
+ bands[2].freq = lf_freq;  bands[2].gain = lf_gain;  bands[2].active = true
+ bands[3].freq = lmf_freq; bands[3].gain = lmf_gain; bands[3].active = true
+ bands[4].freq = hmf_freq; bands[4].gain = hmf_gain; bands[4].active = true
+ bands[5].freq = hf_freq;  bands[5].gain = hf_gain;  bands[5].active = true
+ bands[6].freq = lpf_freq; bands[6].gain = nil;      bands[6].active = lpf_on > 0.5
+ local dot_r = 3
  for _, band in ipairs(bands) do
   if band.active and band.freq >= 20 and band.freq <= 20000 then
    local t = (math.log(band.freq) - log_min) / (log_max - log_min)
@@ -2767,7 +2739,6 @@ function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
  local show_curve = settings.simple_mixer_eq_curve_view_tracks[track_guid] == true
  local eq_height = header_height + 4 + (show_curve and curve_height + 4 or 0) + (row_height * 4) + filter_row_height + 4
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + eq_height, bg_color, 3)
- r.ImGui_DrawList_AddCircleFilled(draw_list, x + width * 0.75, y + eq_height * 0.3, width * 0.35, 0xFFFFFF04, 24)
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + header_height, header_color, 3, r.ImGui_DrawFlags_RoundCornersTop())
  local header_w = r.ImGui_CalcTextSize(ctx, "EQ")
  r.ImGui_DrawList_AddText(draw_list, x + (width - header_w) / 2, y, 0xFFFFFFFF, "EQ")
@@ -2787,13 +2758,14 @@ function EQ.DrawModule(ctx, draw_list, x, y, width, height, track_guid, track)
    r.ImGui_EndPopup(ctx)
   end
   local btn_size = 8
-  local plugin_enabled = r.TrackFX_GetEnabled(track, fx_index)
-  local is_enabled = plugin_enabled and r.TrackFX_GetParam(track, fx_index, STRIP_OFFSET.EQ_BYPASS) == 1
+  local plugin_enabled = GetTrackFXEnabledCached(track, fx_index)
+  local is_enabled = plugin_enabled and GetTrackFXParamCached(track, fx_index, STRIP_OFFSET.EQ_BYPASS) == 1
   local btn_color = is_enabled and (settings.simple_mixer_eq_active_color or 0x00AA88FF) or (settings.simple_mixer_eq_bypass_color or 0x666600FF)
   r.ImGui_DrawList_AddRectFilled(draw_list, x + width - 10, y + 2, x + width - 2, y + 10, btn_color, 2)
   r.ImGui_SetCursorScreenPos(ctx, x + width - 10, y + 2)
   if r.ImGui_InvisibleButton(ctx, "##eq_bypass_" .. track_guid, btn_size, btn_size) then
    r.TrackFX_SetParamNormalized(track, fx_index, STRIP_OFFSET.EQ_BYPASS, is_enabled and 0 or 1)
+   InvalidateFXParamCache(track, fx_index, STRIP_OFFSET.EQ_BYPASS)
   end
   local curve_btn_col = show_curve and 0x4488FFFF or 0x444444FF
   r.ImGui_DrawList_AddRectFilled(draw_list, x + width - 21, y + 2, x + width - 13, y + 10, curve_btn_col, 2)
@@ -3180,36 +3152,20 @@ local function EnsureVUJSFX(track)
   r.gmem_attach("TK_VU_Meters")
   vu_gmem_attached = true
  end
- if vu_jsfx_cache[track_guid] then
-  local cached = vu_jsfx_cache[track_guid]
-  if cached.fx_index >= 0 then
-   local retval, fx_name = r.TrackFX_GetFXName(track, cached.fx_index, "")
-   if retval then
-    local name_lower = fx_name:lower()
-    if name_lower:find("tk_vu_meter") or name_lower:find("tk vu meter") then
-     return cached.fx_index, cached.slot_id
-    end
+ local idx, entry = FindOrValidateCachedFX(vu_jsfx_cache, track, track_guid, "tk_vu_meter", "tk vu meter")
+ if idx >= 0 then
+  if not entry.slot_id then
+   local slot_id = vu_track_slots[track_guid]
+   if not slot_id then
+    vu_track_slot_counter = vu_track_slot_counter + 1
+    slot_id = vu_track_slot_counter
+    vu_track_slots[track_guid] = slot_id
+    r.TrackFX_SetParam(track, idx, 0, slot_id)
    end
+   r.TrackFX_SetParam(track, idx, 1, settings.simple_mixer_vu_pre_calibration or -18)
+   entry.slot_id = slot_id
   end
-  vu_jsfx_cache[track_guid] = nil
- end
- local fx_count = r.TrackFX_GetCount(track)
- for i = 0, fx_count - 1 do
-  local retval, fx_name = r.TrackFX_GetFXName(track, i, "")
-  if retval then
-   local name_lower = fx_name:lower()
-   if name_lower:find("tk_vu_meter") or name_lower:find("tk vu meter") then
-    local slot_id = vu_track_slots[track_guid]
-    if not slot_id then
-     vu_track_slot_counter = vu_track_slot_counter + 1
-     slot_id = vu_track_slot_counter
-     vu_track_slots[track_guid] = slot_id
-     r.TrackFX_SetParam(track, i, 0, slot_id)
-    end
-    vu_jsfx_cache[track_guid] = {fx_index = i, slot_id = slot_id}
-    return i, slot_id
-   end
-  end
+  return idx, entry.slot_id
  end
  local fx_index = r.TrackFX_AddByName(track, "JS:TK_VU_Meter", false, -1)
  if fx_index >= 0 then
@@ -3217,9 +3173,10 @@ local function EnsureVUJSFX(track)
   local slot_id = vu_track_slot_counter
   vu_track_slots[track_guid] = slot_id
   r.TrackFX_SetParam(track, fx_index, 0, slot_id)
+  r.TrackFX_SetParam(track, fx_index, 1, settings.simple_mixer_vu_pre_calibration or -18)
   r.TrackFX_SetEnabled(track, fx_index, true)
   r.TrackFX_Show(track, fx_index, 0)
-  vu_jsfx_cache[track_guid] = {fx_index = fx_index, slot_id = slot_id}
+  vu_jsfx_cache[track_guid] = {fx_index = fx_index, slot_id = slot_id, fx_count = r.TrackFX_GetCount(track), last_validation = r.time_precise()}
   return fx_index, slot_id
  end
  return -1, 0
@@ -3293,12 +3250,13 @@ local function UpdateVUData(track_guid, track)
   data.smoothed_input = data.smoothed_input + (data.peak_combined - data.smoothed_input) * input_coef
  end
  local use_pre_fader = settings.simple_mixer_vu_pre_fader
- local vu_reference = use_pre_fader and 18 or 0
+ local vu_cal = settings.simple_mixer_vu_pre_calibration or -18
+ local vu_reference = use_pre_fader and (-vu_cal) or 0
  data.raw_db = data.peak_combined
  data.is_pre_fader = use_pre_fader
  local hold_duration = 2.0
  if use_pre_fader then
-  local target_vu = data.smoothed_input + vu_reference
+  local target_vu = data.peak_combined
   target_vu = math.max(-20, math.min(3, target_vu))
   data.smoothed_vu = target_vu
   if data.smoothed_vu > data.peak_hold then
@@ -3340,6 +3298,20 @@ local function UpdateVUData(track_guid, track)
  data.display_value = (data.smoothed_vu - (-20)) / 23
  simple_mixer_vu_data[track_guid] = data
  return data
+end
+
+local VU_SCALE_ANCHORS = { {-20, 0.0}, {-10, 0.2}, {-5, 0.4}, {-2, 0.6}, {0, 0.8}, {3, 1.0} }
+local function VUDbToT(db)
+    if db <= VU_SCALE_ANCHORS[1][1] then return 0 end
+    if db >= VU_SCALE_ANCHORS[#VU_SCALE_ANCHORS][1] then return 1 end
+    for i = 1, #VU_SCALE_ANCHORS - 1 do
+        local a, b = VU_SCALE_ANCHORS[i], VU_SCALE_ANCHORS[i + 1]
+        if db >= a[1] and db <= b[1] then
+            local frac = (db - a[1]) / (b[1] - a[1])
+            return a[2] + frac * (b[2] - a[2])
+        end
+    end
+    return 0
 end
 
 local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, track)
@@ -3417,7 +3389,35 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         local led_y = y + vu_height - led_radius - 3
         local led_color = is_clipping and 0xFF0000FF or 0x440000FF
         r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, led_radius, led_color)
-        
+
+        do
+            local val_db
+            if data.is_pre_fader then
+                val_db = data.smoothed_vu or -20
+            else
+                val_db = data.raw_db or data.peak_combined or -60
+            end
+            local val_text
+            if val_db <= -60 then
+                val_text = "-inf"
+            else
+                val_text = string.format("%+.1f", val_db)
+            end
+            local badge_font = 9
+            local base_tw, base_th = CalcTextSizeCached(val_text)
+            local scale = badge_font / r.ImGui_GetFontSize(ctx)
+            local tw, th = base_tw * scale, base_th * scale
+            local pad_x, pad_y = 4, 1
+            local bx1 = x + width * 0.5 - (tw + pad_x * 2) * 0.5
+            local by1 = y + vu_height * 0.5 - (th + pad_y * 2) * 0.5
+            local bx2 = bx1 + tw + pad_x * 2
+            local by2 = by1 + th + pad_y * 2
+            r.ImGui_DrawList_AddRectFilled(draw_list, bx1, by1, bx2, by2, 0x000000CC, 2)
+            r.ImGui_DrawList_AddRect(draw_list, bx1, by1, bx2, by2, 0x444444FF, 2, 0, 1)
+            local val_color = is_clipping and 0xFF6666FF or 0xFFFFFFFF
+            r.ImGui_DrawList_AddTextEx(draw_list, nil, badge_font, bx1 + pad_x, by1 + pad_y, val_color, val_text)
+        end
+
         r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + vu_height, 0x333333FF, 3, 0, 1)
         
     elseif vu_style == 3 then
@@ -3473,7 +3473,7 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         else
             db_text = string.format("%.0f", needle_vu - 3)
         end
-        local text_w = r.ImGui_CalcTextSize(ctx, db_text)
+        local text_w = CalcTextSizeCached(db_text)
         local text_color = is_clipping and 0xFF4444FF or 0x888888FF
         r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, x + width - text_w - 4, y + vu_height - 11, text_color, db_text)
         
@@ -3490,8 +3490,8 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         r.ImGui_DrawList_PushClipRect(draw_list, x, y, x + width, y + vu_height, true)
         
         local center_x = x + width / 2
-        local max_radius = vu_height * 0.85
-        local radius = math.min(width * 0.55, max_radius)
+        local max_radius = vu_height * 0.91
+        local radius = math.min(width * 0.68, max_radius)
         local pivot_y = y + vu_height + radius * 0.15
         local inner_radius = radius * 0.90
         
@@ -3499,7 +3499,29 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         local end_angle = math.pi * 0.32
         local angle_range = start_angle - end_angle
         
-        local segments = 40
+        local segments = 24
+        local zero_t = VUDbToT(0)
+        if r.ImGui_DrawList_PathLineTo and r.ImGui_DrawList_PathStroke then
+            local boundary = math.ceil(zero_t * segments)
+            if boundary < 0 then boundary = 0 end
+            if boundary > segments then boundary = segments end
+            if boundary > 0 then
+                for i = 0, boundary do
+                    local t = i / segments
+                    local a = start_angle - t * angle_range
+                    r.ImGui_DrawList_PathLineTo(draw_list, center_x + math.cos(a) * radius, pivot_y - math.sin(a) * radius)
+                end
+                r.ImGui_DrawList_PathStroke(draw_list, light_scale, 0, 1.5)
+            end
+            if boundary < segments then
+                for i = boundary, segments do
+                    local t = i / segments
+                    local a = start_angle - t * angle_range
+                    r.ImGui_DrawList_PathLineTo(draw_list, center_x + math.cos(a) * radius, pivot_y - math.sin(a) * radius)
+                end
+                r.ImGui_DrawList_PathStroke(draw_list, light_red, 0, 1.5)
+            end
+        else
         for i = 0, segments - 1 do
             local t1 = i / segments
             local t2 = (i + 1) / segments
@@ -3511,14 +3533,14 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
             local x2 = center_x + math.cos(a2) * radius
             local y2 = pivot_y - math.sin(a2) * radius
             
-            local db_at_t = -20 + t1 * 23
-            local arc_color = db_at_t >= 0 and light_red or light_scale
+            local arc_color = t1 >= zero_t and light_red or light_scale
             r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, arc_color, 1.5)
         end
+        end
         
-        local tick_db_values = {-20, -10, -7, -5, -3, 0, 3}
+        local tick_db_values = {-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3}
         for _, db in ipairs(tick_db_values) do
-            local t = (db - (-20)) / 23
+            local t = VUDbToT(db)
             local angle = start_angle - t * angle_range
             
             local tick_outer = radius
@@ -3532,9 +3554,9 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
             local tick_color = db >= 0 and light_red or light_scale
             r.ImGui_DrawList_AddLine(draw_list, x_inner, y_inner, x_outer, y_outer, tick_color, 1)
             
-            local label = tostring(math.abs(db))
+            local label = db > 0 and ("+" .. tostring(db)) or tostring(math.abs(db))
             local vu_font_size = 7
-            local base_text_w, base_text_h = r.ImGui_CalcTextSize(ctx, label)
+            local base_text_w, base_text_h = CalcTextSizeCached(label)
             local font_scale = vu_font_size / r.ImGui_GetFontSize(ctx)
             local text_w, text_h = base_text_w * font_scale, base_text_h * font_scale
             local label_radius = radius + 5
@@ -3550,7 +3572,7 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         
         local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
         peak_vu = math.max(-20, math.min(3, peak_vu))
-        local peak_t = (peak_vu - (-20)) / 23
+        local peak_t = VUDbToT(peak_vu)
         local peak_angle = start_angle - peak_t * angle_range
         local peak_tip_x = center_x + math.cos(peak_angle) * needle_length
         local peak_tip_y = pivot_y - math.sin(peak_angle) * needle_length
@@ -3558,7 +3580,7 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         
         local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
         needle_vu = math.max(-20, math.min(3, needle_vu))
-        local needle_t = (needle_vu - (-20)) / 23
+        local needle_t = VUDbToT(needle_vu)
         local needle_angle = start_angle - needle_t * angle_range
         local needle_tip_x = center_x + math.cos(needle_angle) * needle_length
         local needle_tip_y = pivot_y - math.sin(needle_angle) * needle_length
@@ -3566,7 +3588,7 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         
         local vu_text = "VU"
         local vu_text_font_size = 10
-        local base_vu_text_w = r.ImGui_CalcTextSize(ctx, vu_text)
+        local base_vu_text_w = CalcTextSizeCached(vu_text)
         local vu_text_scale = vu_text_font_size / r.ImGui_GetFontSize(ctx)
         local vu_text_w = base_vu_text_w * vu_text_scale
         local vu_text_x = center_x - vu_text_w / 2
@@ -3584,15 +3606,20 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         local pivot_radius = 8
         local pivot_center_y = y + vu_height
         local pivot_color = 0xBBB8B0FF
-        local pivot_segments = 16
-        for i = 0, pivot_segments - 1 do
-            local a1 = (i / pivot_segments) * math.pi
-            local a2 = ((i + 1) / pivot_segments) * math.pi
-            local px1 = center_x + math.cos(a1) * pivot_radius
-            local py1 = pivot_center_y - math.sin(a1) * pivot_radius
-            local px2 = center_x + math.cos(a2) * pivot_radius
-            local py2 = pivot_center_y - math.sin(a2) * pivot_radius
-            r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+        if r.ImGui_DrawList_PathArcTo and r.ImGui_DrawList_PathFillConvex then
+            r.ImGui_DrawList_PathArcTo(draw_list, center_x, pivot_center_y, pivot_radius, math.pi, 2 * math.pi, 10)
+            r.ImGui_DrawList_PathFillConvex(draw_list, pivot_color)
+        else
+            local pivot_segments = 10
+            for i = 0, pivot_segments - 1 do
+                local a1 = (i / pivot_segments) * math.pi
+                local a2 = ((i + 1) / pivot_segments) * math.pi
+                local px1 = center_x + math.cos(a1) * pivot_radius
+                local py1 = pivot_center_y - math.sin(a1) * pivot_radius
+                local px2 = center_x + math.cos(a2) * pivot_radius
+                local py2 = pivot_center_y - math.sin(a2) * pivot_radius
+                r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+            end
         end
         
         local border_color = 0xAAAAAFFF
@@ -3609,10 +3636,17 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + vu_height, panel_bg, 4)
         r.ImGui_DrawList_AddRectFilled(draw_list, x + 3, y + 3, x + width - 3, y + vu_height - 3, panel_inner, 3)
 
-        local current_db = data.raw_db or data.peak_combined or -60
+        local unit_label = data.is_pre_fader and "VU" or "dB"
+        local current_db, hold_db
+        if data.is_pre_fader then
+            current_db = data.smoothed_vu or -20
+            hold_db = data.smoothed_peak_vu or current_db
+        else
+            current_db = data.raw_db or data.peak_combined or -60
+            hold_db = data.raw_peak_db or current_db
+        end
         if current_db < -99 then current_db = -99 end
         if current_db > 99 then current_db = 99 end
-        local hold_db = data.raw_peak_db or current_db
         if hold_db < -99 then hold_db = -99 end
         if hold_db > 99 then hold_db = 99 end
 
@@ -3631,17 +3665,19 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
 
         local cur_color = is_clipping and clip_on or digit_on
         r.ImGui_DrawList_AddTextEx(draw_list, nil, font_h, cx_inner, row1_y, cur_color, cur_text)
-        local cur_w = r.ImGui_CalcTextSize(ctx, cur_text)
-        r.ImGui_DrawList_AddTextEx(draw_list, nil, math.max(8, math.floor(font_h * 0.55)), cx_inner + cur_w + 3, row1_y + math.floor(font_h * 0.35), label_col, "dB")
+        local cur_w_base = CalcTextSizeCached(cur_text)
+        local cur_w = cur_w_base * (font_h / r.ImGui_GetFontSize(ctx))
+        r.ImGui_DrawList_AddTextEx(draw_list, nil, math.max(8, math.floor(font_h * 0.55)), cx_inner + cur_w + 4, row1_y + math.floor(font_h * 0.35), label_col, unit_label)
 
         local hold_font_h = math.max(8, math.floor(font_h * 0.7))
         r.ImGui_DrawList_AddTextEx(draw_list, nil, math.max(7, math.floor(hold_font_h * 0.7)), cx_inner, row2_y + math.floor(hold_font_h * 0.25), label_col, "PK")
-        local pk_w = r.ImGui_CalcTextSize(ctx, "PK")
+        local pk_w_base = CalcTextSizeCached("PK")
+        local pk_w = pk_w_base * (math.max(7, math.floor(hold_font_h * 0.7)) / r.ImGui_GetFontSize(ctx))
         r.ImGui_DrawList_AddTextEx(draw_list, nil, hold_font_h, cx_inner + pk_w + 4, row2_y, hold_on, hold_text)
 
         local rst_font = 9
         local rst_text = "RST"
-        local rst_tw, rst_th = r.ImGui_CalcTextSize(ctx, rst_text)
+        local rst_tw, rst_th = CalcTextSizeCached(rst_text)
         local btn_w = math.max(20, math.floor(rst_tw + 8))
         local btn_h = math.max(12, math.floor(rst_th + 4))
         local btn_x_p = x + width - btn_w - 4
@@ -3676,24 +3712,46 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         r.ImGui_DrawList_PushClipRect(draw_list, x, y, x + width, y + vu_height, true)
         
         local center_x = x + width / 2
-        local max_radius = vu_height * 0.85
-        local radius = math.min(width * 0.55, max_radius)
+        local max_radius = vu_height * 0.91
+        local radius = math.min(width * 0.68, max_radius)
         local pivot_y = y + vu_height + radius * 0.15
         local inner_radius = radius * 0.90
         
-        local glow_layers = 7
+        local glow_layers = 3
         for i = glow_layers, 1, -1 do
-            local glow_radius = radius * (0.25 + i * 0.13)
-            local alpha = math.floor(20 - i * 2)
+            local glow_radius = radius * (0.25 + i * 0.30)
+            local alpha = math.floor(18 - i * 4)
             local glow_color = (0xFFAA40 * 256) + alpha
-            r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, pivot_y, glow_radius, glow_color, 32)
+            r.ImGui_DrawList_AddCircleFilled(draw_list, center_x, pivot_y, glow_radius, glow_color, 18)
         end
         
         local start_angle = math.pi * 0.68
         local end_angle = math.pi * 0.32
         local angle_range = start_angle - end_angle
         
-        local segments = 40
+        local segments = 24
+        local zero_t = VUDbToT(0)
+        if r.ImGui_DrawList_PathLineTo and r.ImGui_DrawList_PathStroke then
+            local boundary = math.ceil(zero_t * segments)
+            if boundary < 0 then boundary = 0 end
+            if boundary > segments then boundary = segments end
+            if boundary > 0 then
+                for i = 0, boundary do
+                    local t = i / segments
+                    local a = start_angle - t * angle_range
+                    r.ImGui_DrawList_PathLineTo(draw_list, center_x + math.cos(a) * radius, pivot_y - math.sin(a) * radius)
+                end
+                r.ImGui_DrawList_PathStroke(draw_list, scale_color, 0, 1.5)
+            end
+            if boundary < segments then
+                for i = boundary, segments do
+                    local t = i / segments
+                    local a = start_angle - t * angle_range
+                    r.ImGui_DrawList_PathLineTo(draw_list, center_x + math.cos(a) * radius, pivot_y - math.sin(a) * radius)
+                end
+                r.ImGui_DrawList_PathStroke(draw_list, red_color, 0, 1.5)
+            end
+        else
         for i = 0, segments - 1 do
             local t1 = i / segments
             local t2 = (i + 1) / segments
@@ -3705,14 +3763,14 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
             local x2 = center_x + math.cos(a2) * radius
             local y2 = pivot_y - math.sin(a2) * radius
             
-            local db_at_t = -20 + t1 * 23
-            local arc_color = db_at_t >= 0 and red_color or scale_color
+            local arc_color = t1 >= zero_t and red_color or scale_color
             r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, arc_color, 1.5)
         end
+        end
         
-        local tick_db_values = {-20, -10, -7, -5, -3, 0, 3}
+        local tick_db_values = {-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3}
         for _, db in ipairs(tick_db_values) do
-            local t = (db - (-20)) / 23
+            local t = VUDbToT(db)
             local angle = start_angle - t * angle_range
             
             local tick_outer = radius
@@ -3726,9 +3784,9 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
             local tick_color = db >= 0 and red_color or scale_color
             r.ImGui_DrawList_AddLine(draw_list, x_inner, y_inner, x_outer, y_outer, tick_color, 1)
             
-            local label = tostring(math.abs(db))
+            local label = db > 0 and ("+" .. tostring(db)) or tostring(math.abs(db))
             local vu_font_size = 7
-            local base_text_w, base_text_h = r.ImGui_CalcTextSize(ctx, label)
+            local base_text_w, base_text_h = CalcTextSizeCached(label)
             local font_scale = vu_font_size / r.ImGui_GetFontSize(ctx)
             local text_w, text_h = base_text_w * font_scale, base_text_h * font_scale
             local label_radius = radius + 5
@@ -3744,7 +3802,7 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         
         local peak_vu = data.smoothed_peak_vu or (data.smoothed_peak_db + 18)
         peak_vu = math.max(-20, math.min(3, peak_vu))
-        local peak_t = (peak_vu - (-20)) / 23
+        local peak_t = VUDbToT(peak_vu)
         local peak_angle = start_angle - peak_t * angle_range
         local peak_tip_x = center_x + math.cos(peak_angle) * needle_length
         local peak_tip_y = pivot_y - math.sin(peak_angle) * needle_length
@@ -3752,7 +3810,7 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         
         local needle_vu = data.smoothed_vu or (data.smoothed_db + 18)
         needle_vu = math.max(-20, math.min(3, needle_vu))
-        local needle_t = (needle_vu - (-20)) / 23
+        local needle_t = VUDbToT(needle_vu)
         local needle_angle = start_angle - needle_t * angle_range
         local needle_tip_x = center_x + math.cos(needle_angle) * needle_length
         local needle_tip_y = pivot_y - math.sin(needle_angle) * needle_length
@@ -3760,7 +3818,7 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         
         local vu_text = "VU"
         local vu_text_font_size = 10
-        local base_vu_text_w = r.ImGui_CalcTextSize(ctx, vu_text)
+        local base_vu_text_w = CalcTextSizeCached(vu_text)
         local vu_text_scale = vu_text_font_size / r.ImGui_GetFontSize(ctx)
         local vu_text_w = base_vu_text_w * vu_text_scale
         local vu_text_x = center_x - vu_text_w / 2
@@ -3778,15 +3836,20 @@ local function DrawVUMeter(ctx, draw_list, x, y, width, height, track_guid, trac
         local pivot_radius = 8
         local pivot_center_y = y + vu_height
         local pivot_color = 0x000000FF
-        local pivot_segments = 16
-        for i = 0, pivot_segments - 1 do
-            local a1 = (i / pivot_segments) * math.pi
-            local a2 = ((i + 1) / pivot_segments) * math.pi
-            local px1 = center_x + math.cos(a1) * pivot_radius
-            local py1 = pivot_center_y - math.sin(a1) * pivot_radius
-            local px2 = center_x + math.cos(a2) * pivot_radius
-            local py2 = pivot_center_y - math.sin(a2) * pivot_radius
-            r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+        if r.ImGui_DrawList_PathArcTo and r.ImGui_DrawList_PathFillConvex then
+            r.ImGui_DrawList_PathArcTo(draw_list, center_x, pivot_center_y, pivot_radius, math.pi, 2 * math.pi, 10)
+            r.ImGui_DrawList_PathFillConvex(draw_list, pivot_color)
+        else
+            local pivot_segments = 10
+            for i = 0, pivot_segments - 1 do
+                local a1 = (i / pivot_segments) * math.pi
+                local a2 = ((i + 1) / pivot_segments) * math.pi
+                local px1 = center_x + math.cos(a1) * pivot_radius
+                local py1 = pivot_center_y - math.sin(a1) * pivot_radius
+                local px2 = center_x + math.cos(a2) * pivot_radius
+                local py2 = pivot_center_y - math.sin(a2) * pivot_radius
+                r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x, pivot_center_y, px1, py1, px2, py2, pivot_color)
+            end
         end
         
         local border_color = 0x333333FF
@@ -3845,40 +3908,108 @@ local STRIP_OFFSET = {
     LIM_BYPASS = 36
 }
 
+local function ComputeChannelGains(track, nch)
+ local gains = {}
+ for i = 1, nch do gains[i] = 1 end
+ local muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
+ if muted then
+  for i = 1, nch do gains[i] = 0 end
+  return gains
+ end
+ local vol = r.GetMediaTrackInfo_Value(track, "D_VOL") or 1
+ if vol < 0 then vol = -vol end
+ local pan_mode = math.floor(r.GetMediaTrackInfo_Value(track, "I_PANMODE") or -1)
+ if pan_mode < 0 then
+  pan_mode = math.floor(r.SNM_GetIntConfigVar and r.SNM_GetIntConfigVar("panmode", 3) or 3)
+ end
+ local pan = r.GetMediaTrackInfo_Value(track, "D_PAN") or 0
+ local L_gain, R_gain = 1, 1
+ if pan_mode == 6 then
+  local pl = r.GetMediaTrackInfo_Value(track, "D_DUALPANL") or -1
+  local pr = r.GetMediaTrackInfo_Value(track, "D_DUALPANR") or 1
+  L_gain = (pl <= 0) and 1 or (1 - pl)
+  R_gain = (pr >= 0) and 1 or (1 + pr)
+ elseif pan_mode == 5 then
+  local pan_law = r.GetMediaTrackInfo_Value(track, "D_PANLAW")
+  if pan_law <= 0 then pan_law = 1 end
+  local norm = (pan + 1) * 0.5
+  local angle = norm * (math.pi / 2)
+  L_gain = math.cos(angle) * pan_law
+  R_gain = math.sin(angle) * pan_law
+  if L_gain > 1 then L_gain = 1 end
+  if R_gain > 1 then R_gain = 1 end
+ else
+  if pan <= 0 then
+   L_gain = 1; R_gain = 1 + pan
+  else
+   L_gain = 1 - pan; R_gain = 1
+  end
+ end
+ gains[1] = vol * L_gain
+ if nch >= 2 then gains[2] = vol * R_gain end
+ for i = 3, nch do gains[i] = vol end
+ return gains
+end
+
 local function UpdateMeterData(track_guid, track)
  if not track then return end
- if not simple_mixer_meter_data[track_guid] then
-  simple_mixer_meter_data[track_guid] = {
-   peak_L = 0, peak_R = 0, peak_L_decay = 0, peak_R_decay = 0,
-   peak_L_hold = 0, peak_R_hold = 0, hold_time_L = 0, hold_time_R = 0, max_peak = 0
-  }
- end
+ local nch = math.floor(r.GetMediaTrackInfo_Value(track, "I_NCHAN") or 2)
+ if nch < 1 then nch = 1 end
+ if nch > 8 then nch = 8 end
  local data = simple_mixer_meter_data[track_guid]
- local current_time = r.time_precise()
- local decay_speed = settings.simple_mixer_meter_decay_speed or 0.92
+ if not data or data.nch ~= nch then
+  local prev_max = data and data.max_peak or 0
+  data = {
+   nch = nch, peaks = {}, decay = {}, hold = {}, hold_time = {},
+   max_peak = prev_max, last_time = nil,
+  }
+  for ch = 1, nch do
+   data.peaks[ch] = 0; data.decay[ch] = 0; data.hold[ch] = 0; data.hold_time[ch] = 0
+  end
+  simple_mixer_meter_data[track_guid] = data
+ end
+ local now = r.time_precise()
+ local dt = data.last_time and (now - data.last_time) or 0
+ if dt < 0 then dt = 0 elseif dt > 0.1 then dt = 0.1 end
+ data.last_time = now
+ local decay_db_per_sec = settings.simple_mixer_meter_decay_db_per_sec or 24
+ local decay_factor = 10 ^ (-decay_db_per_sec * dt / 20)
  local hold_time = settings.simple_mixer_meter_hold_time or 1.5
- local peak_L = r.Track_GetPeakInfo(track, 0)
- local peak_R = r.Track_GetPeakInfo(track, 1)
- if peak_L > data.peak_L_decay then data.peak_L_decay = peak_L
- else data.peak_L_decay = data.peak_L_decay * decay_speed end
- if peak_R > data.peak_R_decay then data.peak_R_decay = peak_R
- else data.peak_R_decay = data.peak_R_decay * decay_speed end
- if peak_L >= data.peak_L_hold then
-  data.peak_L_hold = peak_L
-  data.hold_time_L = current_time
- elseif current_time - data.hold_time_L > hold_time then
-  data.peak_L_hold = data.peak_L_hold * 0.95
+ local hold_release_db_per_sec = settings.simple_mixer_meter_hold_release_db_per_sec or 12
+ local hold_decay = 10 ^ (-hold_release_db_per_sec * dt / 20)
+ local tap = settings.simple_mixer_meter_tap or "post"
+ local gains = (tap == "pre") and ComputeChannelGains(track, nch) or nil
+ local cal_gain = 1
+ if tap == "pre" then
+  local cal = settings.simple_mixer_meter_pre_calibration or -18
+  cal_gain = 10 ^ (-cal / 20)
  end
- if peak_R >= data.peak_R_hold then
-  data.peak_R_hold = peak_R
-  data.hold_time_R = current_time
- elseif current_time - data.hold_time_R > hold_time then
-  data.peak_R_hold = data.peak_R_hold * 0.95
+ local current_max = 0
+ for ch = 1, nch do
+  local p = r.Track_GetPeakInfo(track, ch - 1) or 0
+  if gains then
+   local g = gains[ch] or 1
+   if g > 1e-6 then p = p / g else p = 0 end
+   p = p * cal_gain
+  end
+  data.peaks[ch] = p
+  if p > data.decay[ch] then data.decay[ch] = p
+  else data.decay[ch] = data.decay[ch] * decay_factor end
+  if p >= data.hold[ch] then
+   data.hold[ch] = p
+   data.hold_time[ch] = now
+  elseif now - (data.hold_time[ch] or 0) > hold_time then
+   data.hold[ch] = data.hold[ch] * hold_decay
+  end
+  if p > current_max then current_max = p end
  end
- local current_max = math.max(peak_L, peak_R)
  if current_max > (data.max_peak or 0) then data.max_peak = current_max end
- data.peak_L = peak_L
- data.peak_R = peak_R
+ data.peak_L = data.peaks[1] or 0
+ data.peak_R = data.peaks[2] or data.peaks[1] or 0
+ data.peak_L_decay = data.decay[1] or 0
+ data.peak_R_decay = data.decay[2] or data.decay[1] or 0
+ data.peak_L_hold = data.hold[1] or 0
+ data.peak_R_hold = data.hold[2] or data.hold[1] or 0
 end
 
 local function PeakToDb(peak)
@@ -3910,8 +4041,10 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
  fader_margin = fader_margin or 0
  local data = simple_mixer_meter_data[track_guid]
  if not data then
-  data = { peak_L = 0, peak_R = 0, peak_L_decay = 0, peak_R_decay = 0, peak_L_hold = 0, peak_R_hold = 0, max_peak = 0 }
+  data = { nch = 2, peaks = {0,0}, decay = {0,0}, hold = {0,0}, hold_time = {0,0}, max_peak = 0,
+   peak_L = 0, peak_R = 0, peak_L_decay = 0, peak_R_decay = 0, peak_L_hold = 0, peak_R_hold = 0 }
  end
+ local nch = data.nch or 2
  local meter_bg = settings.simple_mixer_meter_bg_color or 0x1A1A1AFF
  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, meter_bg)
  local hold_color = 0xFFFFFFFF
@@ -3925,8 +4058,17 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
  if is_clipping then
   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + peak_display_height, 0xFF0000FF)
  end
- local peak_text = max_peak_db > -100 and string.format("%.1f", max_peak_db) or "-∞"
- local text_w, text_h = r.ImGui_CalcTextSize(ctx, peak_text)
+ local last_peak_db = data.last_peak_text_db
+ local last_peak_text = data.last_peak_text
+ local peak_text
+ if last_peak_text and last_peak_db and math.abs(max_peak_db - last_peak_db) < 0.1 then
+  peak_text = last_peak_text
+ else
+  peak_text = max_peak_db > -100 and string.format("%.1f", max_peak_db) or "-∞"
+  data.last_peak_text = peak_text
+  data.last_peak_text_db = max_peak_db
+ end
+ local text_w, text_h = CalcTextSizeCached(peak_text)
  text_w = text_w * 0.7
  text_h = text_h * 0.7
  local text_x = x + (width - text_w) / 2
@@ -3934,15 +4076,28 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
  local text_color = is_clipping and 0xFFFFFFFF or 0xCCCCCCFF
  r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, text_x, text_y, text_color, peak_text)
  local mx, my = r.ImGui_GetMousePos(ctx)
- if mx >= x and mx <= x + width and my >= y and my <= y + peak_display_height then
+ if mx >= x and mx <= x + width and my >= y and my <= y + height then
   if r.ImGui_IsMouseClicked(ctx, 0) then data.max_peak = 0 end
  end
  local meter_y = y + peak_display_height + 2
  local meter_height = height - peak_display_height - 2
  local tick_db_values = {0, -6, -12, -24, -48}
- local meter_width = math.floor(width / 2 - 1)
- local current_peak_db = math.max(PeakToDb(data.peak_L_decay), PeakToDb(data.peak_R_decay))
- local function DrawSingleMeter(mx, my, mw, mh, peak_decay, peak_hold)
+ local display_nch = nch
+ local min_bar_w = 2
+ if display_nch > 1 then
+  while display_nch > 1 and (width - (display_nch - 1)) / display_nch < min_bar_w do
+   display_nch = display_nch - 1
+  end
+ end
+ local gap = (display_nch > 1) and 1 or 0
+ local bar_w = math.floor((width - gap * (display_nch - 1)) / display_nch)
+ if bar_w < 1 then bar_w = 1 end
+ local current_peak_db = -150
+ for i = 1, display_nch do
+  local d = PeakToDb(data.decay[i] or 0)
+  if d > current_peak_db then current_peak_db = d end
+ end
+ local function DrawSingleMeter(bx, by, bw, bh, peak_decay, peak_hold)
   local peak_db = PeakToDb(peak_decay)
   local normalized = DbToNormalized(peak_db)
   if normalized > 0.001 then
@@ -3952,8 +4107,6 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
     local color_high   = settings.simple_mixer_meter_color_high   or 0xFFFF00FF
     local color_clip   = settings.simple_mixer_meter_color_clip   or 0xFF0000FF
     local zero_db = 60 / 66
-    local fill_top = my + mh * (1 - normalized)
-    local fill_bot = my + mh
     local stops = {
      { p = 0.0,     col = color_normal },
      { p = 0.5,     col = color_mid },
@@ -3967,8 +4120,8 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
      if p2 > 0 and p1 < normalized then
       local seg_lo = p1
       local seg_hi = math.min(p2, normalized)
-      local y_lo = my + mh - mh * seg_lo
-      local y_hi = my + mh - mh * seg_hi
+      local y_lo = by + bh - bh * seg_lo
+      local y_hi = by + bh - bh * seg_hi
       local col_lo = stops[i].col
       local col_hi = stops[i + 1].col
       if seg_hi < p2 then
@@ -3984,30 +4137,34 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
        end
        col_hi = lerp_u32(col_lo, col_hi, t)
       end
-      r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, mx, y_hi, mx + mw, y_lo, col_hi, col_hi, col_lo, col_lo)
+      r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, bx, y_hi, bx + bw, y_lo, col_hi, col_hi, col_lo, col_lo)
      end
     end
    else
     local segments = 20
     local total_segments = math.floor(normalized * segments)
-    local segment_height = (mh - (segments - 1) * segment_gap) / segments
+    local segment_height = (bh - (segments - 1) * segment_gap) / segments
     for i = 0, total_segments - 1 do
      local seg_normalized = (i + 1) / segments
      local seg_color = GetMeterColor(seg_normalized)
-     local seg_y = my + mh - (i + 1) * (segment_height + segment_gap)
-     r.ImGui_DrawList_AddRectFilled(draw_list, mx, seg_y, mx + mw, seg_y + segment_height, seg_color)
+     local seg_y = by + bh - (i + 1) * (segment_height + segment_gap)
+     r.ImGui_DrawList_AddRectFilled(draw_list, bx, seg_y, bx + bw, seg_y + segment_height, seg_color)
     end
    end
   end
   local hold_db = PeakToDb(peak_hold)
   local hold_normalized = DbToNormalized(hold_db)
   if hold_normalized > 0.01 then
-   local hold_y = my + mh - (mh * hold_normalized)
-   r.ImGui_DrawList_AddLine(draw_list, mx, hold_y, mx + mw, hold_y, hold_color, 2)
+   local hold_y = by + bh - (bh * hold_normalized)
+   r.ImGui_DrawList_AddLine(draw_list, bx, hold_y, bx + bw, hold_y, hold_color, 2)
   end
  end
- DrawSingleMeter(x, meter_y, meter_width, meter_height, data.peak_L_decay, data.peak_L_hold)
- DrawSingleMeter(x + meter_width + 2, meter_y, meter_width, meter_height, data.peak_R_decay, data.peak_R_hold)
+ local total_used_w = bar_w * display_nch + gap * (display_nch - 1)
+ local start_x = x + math.floor((width - total_used_w) / 2)
+ for i = 1, display_nch do
+  local bx = start_x + (i - 1) * (bar_w + gap)
+  DrawSingleMeter(bx, meter_y, bar_w, meter_height, data.decay[i] or 0, data.hold[i] or 0)
+ end
  if show_ticks then
   for _, db_val in ipairs(tick_db_values) do
    local tick_normalized = DbToNormalized(db_val)
@@ -4016,9 +4173,10 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
     local tick_color = (current_peak_db >= db_val) and tick_color_above or tick_color_below
     local label = (db_val == 0 and "-0-" or (tostring(db_val) .. "-"))
     local tick_font_size = settings.simple_mixer_meter_tick_size or 8
-    local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
-    text_w = text_w * (tick_font_size / r.ImGui_GetFontSize(ctx))
-    text_h = text_h * (tick_font_size / r.ImGui_GetFontSize(ctx))
+    local text_w, text_h = CalcTextSizeCached(label)
+    local font_size = r.ImGui_GetFontSize(ctx)
+    text_w = text_w * (tick_font_size / font_size)
+    text_h = text_h * (tick_font_size / font_size)
     local text_x = x + (width - text_w) / 2
     local text_y = tick_y - text_h / 2
     if text_y > meter_y + 2 and text_y < meter_y + meter_height - text_h - 2 then
@@ -4027,6 +4185,21 @@ local function DrawMeter(ctx, draw_list, x, y, width, height, track_guid, fader_
      r.ImGui_DrawList_AddLine(draw_list, x, tick_y, x + width, tick_y, tick_color, 1)
     end
    end
+  end
+ end
+ if (settings.simple_mixer_meter_tap or "post") == "pre" then
+  local cal_v = settings.simple_mixer_meter_pre_calibration or -18
+  local pre_label = string.format("PRE %d", cal_v)
+  local pre_font_size = 8
+  local pre_w, pre_h = CalcTextSizeCached(pre_label)
+  local font_size = r.ImGui_GetFontSize(ctx)
+  pre_w = pre_w * (pre_font_size / font_size)
+  pre_h = pre_h * (pre_font_size / font_size)
+  if pre_w + 2 <= width then
+   local pre_x = x + (width - pre_w) / 2
+   local pre_y = y + height - pre_h - 1
+   r.ImGui_DrawList_AddRectFilled(draw_list, pre_x - 1, pre_y, pre_x + pre_w + 1, pre_y + pre_h + 1, 0x000000A0)
+   r.ImGui_DrawList_AddTextEx(draw_list, nil, pre_font_size, pre_x, pre_y, 0xFFCC33FF, pre_label)
   end
  end
  return data
@@ -4522,21 +4695,37 @@ function CueBus.ScanTracks()
  return result
 end
 
+local _cue_active_cache_frame = -1
+local _cue_active_cache_track = nil
 function CueBus.GetActiveCueTrack()
+ local frame = mixer_state.frame_counter or 0
+ if _cue_active_cache_frame == frame then
+  return _cue_active_cache_track
+ end
  local guid = mixer_state.cue_mode_guid
- if not guid or guid == "" then return nil end
+ if not guid or guid == "" then
+  _cue_active_cache_frame = frame
+  _cue_active_cache_track = nil
+  return nil
+ end
  local track = r.BR_GetMediaTrackByGUID(0, guid)
  if not track then
   mixer_state.cue_mode_guid = ""
   settings.simple_mixer_cue_mode_guid = ""
+  _cue_active_cache_frame = frame
+  _cue_active_cache_track = nil
   return nil
  end
  local _, name = r.GetTrackName(track)
  if name:sub(1, 4) ~= "CUE:" then
   mixer_state.cue_mode_guid = ""
   settings.simple_mixer_cue_mode_guid = ""
+  _cue_active_cache_frame = frame
+  _cue_active_cache_track = nil
   return nil
  end
+ _cue_active_cache_frame = frame
+ _cue_active_cache_track = track
  return track
 end
 
@@ -5099,7 +5288,7 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
  end
  r.ImGui_Spacing(mixer_ctx)
  if DrawSectionHeader(mixer_ctx, "Project Snapshot", "simple_mixer_snapshots_open", sidebar_width) then
-  local proj_path = r.GetProjectPath("")
+  local proj_path = GetProjectPathCached()
   if proj_path == "" then
    r.ImGui_TextWrapped(mixer_ctx, "Open or save a project to use Snapshots.")
   else
@@ -5244,10 +5433,17 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    r.ImGui_TableNextColumn(mixer_ctx)
    rv, settings.simple_mixer_show_vu_meter = r.ImGui_Checkbox(mixer_ctx, "VU##QT", settings.simple_mixer_show_vu_meter or false)
    if rv then changed = true end
-   r.ImGui_TableNextRow(mixer_ctx)
-   r.ImGui_TableNextColumn(mixer_ctx)
-   rv, settings.simple_mixer_show_fx_slots = r.ImGui_Checkbox(mixer_ctx, "FX##QT", settings.simple_mixer_show_fx_slots or false)
-   if rv then changed = true end
+    r.ImGui_TableNextRow(mixer_ctx)
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_fx_slots = r.ImGui_Checkbox(mixer_ctx, "FX##QT", settings.simple_mixer_show_fx_slots or false)
+    if rv then changed = true end
+    r.ImGui_TableNextRow(mixer_ctx)
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_fps = r.ImGui_Checkbox(mixer_ctx, "FPS##QT", settings.simple_mixer_show_fps or false)
+    if rv then changed = true end
+    if r.ImGui_IsItemHovered(mixer_ctx) then
+     r.ImGui_SetTooltip(mixer_ctx, "Toon FPS counter en max frame time (linksboven in REAPER)")
+    end
    r.ImGui_TableNextColumn(mixer_ctx)
    rv, settings.simple_mixer_show_sendrecv = r.ImGui_Checkbox(mixer_ctx, "Sends##QT", settings.simple_mixer_show_sendrecv or false)
    if rv then changed = true end
@@ -5600,7 +5796,7 @@ local function IsTrackLocked(track)
  local guid = r.GetTrackGUID(track)
  local now = r.time_precise()
  local entry = track_lock_cache[guid]
- if entry and (now - entry.t) < 0.5 then
+ if entry and (now - entry.t) < entry.ttl then
   return entry.locked
  end
  local _, chunk = r.GetTrackStateChunk(track, "", false)
@@ -5611,7 +5807,7 @@ local function IsTrackLocked(track)
    locked = true
   end
  end
- track_lock_cache[guid] = { t = now, locked = locked }
+ track_lock_cache[guid] = { t = now, locked = locked, ttl = 30.0 + math.random() * 5.0 }
  return locked
 end
 
@@ -5729,6 +5925,28 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
  local should_remove = false
  local should_delete = false
  local should_delete_selected = false
+if (not is_master) then
+  if r.ImGui_IsRectVisible then
+   local visible = r.ImGui_IsRectVisible(ctx, track_width, base_slider_height)
+   if not visible then
+    if settings.simple_mixer_show_cables and mixer_state.cable_anchors and track then
+     local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
+     local guid = r.GetTrackGUID(track)
+     if guid then
+      mixer_state.cable_anchors[guid] = {
+       x = cx + track_width * 0.5,
+       y = cy + base_slider_height * 0.5,
+       track = track,
+       is_master = is_master,
+       offscreen = 1,
+      }
+     end
+    end
+    r.ImGui_Dummy(ctx, track_width, base_slider_height)
+    return should_remove, should_delete, should_delete_selected
+   end
+  end
+ end
  folder_info = folder_info or {}
  local is_folder = folder_info.is_folder or false
  local is_child = folder_info.is_child or false
@@ -5889,9 +6107,9 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   local text_w = r.ImGui_CalcTextSize(ctx, track_number_str)
   local text_x = cx + (track_width - text_w) / 2
   local text_y = cy + (num_height - r.ImGui_GetTextLineHeight(ctx)) / 2
-  local text_color = settings.simple_mixer_channel_text_color or 0xFFFFFFFF
+  local text_color = GetChannelTextColor(track)
   r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, track_number_str)
-  if IsTrackLocked(track) then
+  if is_locked then
    local icon_size = num_height - 6
    local icon_x = cx + track_width - icon_size - 3
    local icon_y = cy + (num_height - icon_size) / 2
@@ -6008,7 +6226,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    if settings.simple_mixer_show_eq then
     local eq_cx, eq_cy = r.ImGui_GetCursorScreenPos(ctx)
     local track_guid = r.GetTrackGUID(track)
-    local eq_h = EQ.DrawModule(ctx, modules_draw_list, eq_cx, eq_cy, track_width, 68, track_guid, track)
+    local eq_mh = 68
+    local eq_h
+    if r.ImGui_IsRectVisible and not r.ImGui_IsRectVisible(ctx, track_width, eq_mh) then
+     eq_h = eq_mh
+    else
+     eq_h = EQ.DrawModule(ctx, modules_draw_list, eq_cx, eq_cy, track_width, eq_mh, track_guid, track)
+    end
     if eq_h > 0 then
      r.ImGui_Dummy(ctx, track_width, eq_h)
     end
@@ -6017,7 +6241,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    if settings.simple_mixer_show_compressor then
     local comp_cx, comp_cy = r.ImGui_GetCursorScreenPos(ctx)
     local track_guid = r.GetTrackGUID(track)
-    local comp_h = DrawCompressorModule(ctx, modules_draw_list, comp_cx, comp_cy, track_width, settings.simple_mixer_comp_height or 90, track_guid, track)
+    local comp_mh = settings.simple_mixer_comp_height or 90
+    local comp_h
+    if r.ImGui_IsRectVisible and not r.ImGui_IsRectVisible(ctx, track_width, comp_mh) then
+     comp_h = comp_mh
+    else
+     comp_h = DrawCompressorModule(ctx, modules_draw_list, comp_cx, comp_cy, track_width, comp_mh, track_guid, track)
+    end
     if comp_h > 0 then
      r.ImGui_Dummy(ctx, track_width, comp_h)
     end
@@ -6026,7 +6256,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
    if settings.simple_mixer_show_limiter then
     local lim_cx, lim_cy = r.ImGui_GetCursorScreenPos(ctx)
     local track_guid = r.GetTrackGUID(track)
-    local lim_h = Limiter.DrawModule(ctx, modules_draw_list, lim_cx, lim_cy, track_width, settings.simple_mixer_lim_height or 120, track_guid, track)
+    local lim_mh = settings.simple_mixer_lim_height or 120
+    local lim_h
+    if r.ImGui_IsRectVisible and not r.ImGui_IsRectVisible(ctx, track_width, lim_mh) then
+     lim_h = lim_mh
+    else
+     lim_h = Limiter.DrawModule(ctx, modules_draw_list, lim_cx, lim_cy, track_width, lim_mh, track_guid, track)
+    end
     if lim_h > 0 then
      r.ImGui_Dummy(ctx, track_width, lim_h)
     end
@@ -6095,7 +6331,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
    if settings.simple_mixer_show_eq then
     local eq_cx, eq_cy = r.ImGui_GetCursorScreenPos(ctx)
-    local eq_h = EQ.DrawModule(ctx, modules_draw_list, eq_cx, eq_cy, track_width, 68, "master", track)
+    local eq_mh = 68
+    local eq_h
+    if r.ImGui_IsRectVisible and not r.ImGui_IsRectVisible(ctx, track_width, eq_mh) then
+     eq_h = eq_mh
+    else
+     eq_h = EQ.DrawModule(ctx, modules_draw_list, eq_cx, eq_cy, track_width, eq_mh, "master", track)
+    end
     if eq_h > 0 then
      r.ImGui_Dummy(ctx, track_width, eq_h)
     end
@@ -6103,7 +6345,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
    if settings.simple_mixer_show_compressor then
     local comp_cx, comp_cy = r.ImGui_GetCursorScreenPos(ctx)
-    local comp_h = DrawCompressorModule(ctx, modules_draw_list, comp_cx, comp_cy, track_width, settings.simple_mixer_comp_height or 90, "master", track)
+    local comp_mh = settings.simple_mixer_comp_height or 90
+    local comp_h
+    if r.ImGui_IsRectVisible and not r.ImGui_IsRectVisible(ctx, track_width, comp_mh) then
+     comp_h = comp_mh
+    else
+     comp_h = DrawCompressorModule(ctx, modules_draw_list, comp_cx, comp_cy, track_width, comp_mh, "master", track)
+    end
     if comp_h > 0 then
      r.ImGui_Dummy(ctx, track_width, comp_h)
     end
@@ -6111,7 +6359,13 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
    if settings.simple_mixer_show_limiter then
     local lim_cx, lim_cy = r.ImGui_GetCursorScreenPos(ctx)
-    local lim_h = Limiter.DrawModule(ctx, modules_draw_list, lim_cx, lim_cy, track_width, settings.simple_mixer_lim_height or 120, "master", track)
+    local lim_mh = settings.simple_mixer_lim_height or 120
+    local lim_h
+    if r.ImGui_IsRectVisible and not r.ImGui_IsRectVisible(ctx, track_width, lim_mh) then
+     lim_h = lim_mh
+    else
+     lim_h = Limiter.DrawModule(ctx, modules_draw_list, lim_cx, lim_cy, track_width, lim_mh, "master", track)
+    end
     if lim_h > 0 then
      r.ImGui_Dummy(ctx, track_width, lim_h)
     end
@@ -7452,7 +7706,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   DrawFaderBackground(ctx, draw_list, slider_start_x, slider_start_y, slider_actual_width, slider_height, rounding, track_color_rgb, fader_margin)
  end
  
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.simple_mixer_channel_text_color or 0xFFFFFFFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetChannelTextColor(track))
  r.ImGui_PushItemWidth(ctx, slider_actual_width)
  
  local fader_style = settings.simple_mixer_fader_style or 0
@@ -7715,7 +7969,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
 
  if custom_fader then
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  local text_color = settings.simple_mixer_channel_text_color or 0xFFFFFFFF
+  local text_color = 0xCCCCCCFF
   local vol_text = string.format("%.1f", volume_db)
   local text_w, text_h = r.ImGui_CalcTextSize(ctx, vol_text)
   local text_x = slider_start_x + (slider_actual_width - text_w) * 0.5
@@ -8186,6 +8440,8 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
     local new_val = is_pinned and 0 or 1
     r.SetMediaTrackInfo_Value(track, "B_TCPPIN", new_val)
     r.SetMediaTrackInfo_Value(track, "B_MCPPIN", new_val)
+    mixer_state.scan_invalidate_counter = (mixer_state.scan_invalidate_counter or 0) + 1
+    r.TrackList_AdjustWindows(false)
    end
 
    local track_guid_for_pin = r.GetTrackGUID(track)
@@ -8424,7 +8680,7 @@ local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_s
   end
  end
  if not name_color_pushed then
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), settings.simple_mixer_channel_text_color or 0xFFFFFFFF)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetChannelTextColor(track))
   name_color_pushed = true
  end
  
@@ -8639,7 +8895,7 @@ function CleanupVUJSFX()
   if tr then
    for fx = r.TrackFX_GetCount(tr) - 1, 0, -1 do
     local _, fname = r.TrackFX_GetFXName(tr, fx, "")
-    if fname:match("TK_VU_Meter") then r.TrackFX_Delete(tr, fx) end
+    if fname:match("TK_VU_Meter") or fname:match("TK VU Meter") then r.TrackFX_Delete(tr, fx) end
    end
   end
  end
@@ -8756,6 +9012,7 @@ end
 function RebuildSectionFonts()
  font_simple_mixer_dirty = true
  font_loaded = false
+ InvalidateTextSizeCache()
 end
 
 function EnsureSimpleMixerFont()
@@ -9168,6 +9425,11 @@ function DrawSettingsWindow()
     
     r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_channel_text_color = r.ImGui_ColorEdit4(ctx, "Text Color##MixerText", settings.simple_mixer_channel_text_color or 0xFFFFFFFF, r.ImGui_ColorEditFlags_NoInputs())
+    r.ImGui_SameLine(ctx)
+    rv, settings.simple_mixer_channel_text_auto = r.ImGui_Checkbox(ctx, "Auto##MixerTextAuto", settings.simple_mixer_channel_text_auto or false)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Automatically pick black or white text based on the track color brightness")
+    end
     
     r.ImGui_EndTable(ctx)
    end
@@ -9255,11 +9517,35 @@ function DrawSettingsWindow()
     if r.ImGui_BeginTable(ctx, "MeterBehaviorTable", 2, r.ImGui_TableFlags_None()) then
      r.ImGui_TableNextRow(ctx)
      r.ImGui_TableNextColumn(ctx)
-     r.ImGui_Text(ctx, "Decay Speed:")
+     r.ImGui_Text(ctx, "Tap:")
      r.ImGui_SetNextItemWidth(ctx, -1)
-     rv, settings.simple_mixer_meter_decay_speed = r.ImGui_SliderDouble(ctx, "##Decay", settings.simple_mixer_meter_decay_speed or 0.92, 0.8, 0.99, "%.2f")
+     local tap_options = "Post-fader\0Pre-fader\0"
+     local current_tap = (settings.simple_mixer_meter_tap == "pre") and 1 or 0
+     local rv2, new_tap = r.ImGui_Combo(ctx, "##MtrTap", current_tap, tap_options)
+     if rv2 then
+      settings.simple_mixer_meter_tap = (new_tap == 1) and "pre" or "post"
+     end
      if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "How fast the meter falls back (higher = slower)")
+      r.ImGui_SetTooltip(ctx, "Where the meter taps the signal:\nPost-fader = after volume + pan (REAPER native)\nPre-fader = before fader, with pan compensation\n(supports Balance, Stereo Pan and Dual Pan modes)")
+     end
+
+     r.ImGui_TableNextColumn(ctx)
+     local pre_active = (settings.simple_mixer_meter_tap == "pre")
+     if not pre_active then r.ImGui_BeginDisabled(ctx) end
+     r.ImGui_Text(ctx, "Calibration (Pre):")
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     rv, settings.simple_mixer_meter_pre_calibration = r.ImGui_SliderInt(ctx, "##PreCal", settings.simple_mixer_meter_pre_calibration or -18, -26, -8, "%d dBFS")
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Reference level (K-system): the dBFS value that maps to 0 dB on the meter.\n-18 dBFS = EBU R128 / K-18\n-20 dBFS = SMPTE / K-20\n-14 dBFS = K-14\nOnly active in Pre-fader mode.")
+     end
+     if not pre_active then r.ImGui_EndDisabled(ctx) end
+
+     r.ImGui_TableNextColumn(ctx)
+     r.ImGui_Text(ctx, "Decay (dB/s):")
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     rv, settings.simple_mixer_meter_decay_db_per_sec = r.ImGui_SliderDouble(ctx, "##DecayDb", settings.simple_mixer_meter_decay_db_per_sec or 24, 6, 96, "%.0f dB/s")
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "How fast the meter falls back, in dB per second.\nREAPER native ≈ 24 dB/s.\nFrame-rate independent.")
      end
      
      r.ImGui_TableNextColumn(ctx)
@@ -9267,7 +9553,15 @@ function DrawSettingsWindow()
      r.ImGui_SetNextItemWidth(ctx, -1)
      rv, settings.simple_mixer_meter_hold_time = r.ImGui_SliderDouble(ctx, "##Hold", settings.simple_mixer_meter_hold_time or 1.5, 0.5, 3.0, "%.1f s")
      if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "How long the peak indicator stays visible")
+      r.ImGui_SetTooltip(ctx, "How long the peak indicator stays visible before it starts to fall")
+     end
+
+     r.ImGui_TableNextColumn(ctx)
+     r.ImGui_Text(ctx, "Hold Release (dB/s):")
+     r.ImGui_SetNextItemWidth(ctx, -1)
+     rv, settings.simple_mixer_meter_hold_release_db_per_sec = r.ImGui_SliderDouble(ctx, "##HoldRel", settings.simple_mixer_meter_hold_release_db_per_sec or 12, 3, 60, "%.0f dB/s")
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "How fast the peak hold line falls after the hold time has elapsed.\nLower = slower.")
      end
      r.ImGui_EndTable(ctx)
     end
@@ -9653,6 +9947,26 @@ function DrawSettingsWindow()
       r.ImGui_SetTooltip(ctx, "Removes the TK_VU_Meter JSFX from all tracks.\\nUseful when switching to Post-Fader mode.")
      end
     end
+
+    if not settings.simple_mixer_vu_pre_fader then r.ImGui_BeginDisabled(ctx) end
+    r.ImGui_Text(ctx, "Calibration (Pre):")
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetNextItemWidth(ctx, 150)
+    rv, settings.simple_mixer_vu_pre_calibration = r.ImGui_SliderInt(ctx, "##VUPreCal", settings.simple_mixer_vu_pre_calibration or -18, -26, -8, "%d dBFS")
+    if rv then
+     local cal_val = settings.simple_mixer_vu_pre_calibration or -18
+     for guid, info in pairs(vu_jsfx_cache) do
+      local tr = r.BR_GetMediaTrackByGUID(0, guid)
+      if tr and info and info.fx_index then
+       r.TrackFX_SetParam(tr, info.fx_index, 1, cal_val)
+      end
+     end
+     SaveMixerSettings()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Reference level (K-system): the dBFS value that maps to 0 VU.\n-18 dBFS = EBU R128 / K-18 (default)\n-20 dBFS = SMPTE / K-20\n-14 dBFS = K-14\nOnly active in Pre-Fader mode.")
+    end
+    if not settings.simple_mixer_vu_pre_fader then r.ImGui_EndDisabled(ctx) end
     
     r.ImGui_Unindent(ctx, 10)
    end
@@ -10435,15 +10749,25 @@ function DrawMixerCables(ctx)
  local glow = settings.simple_mixer_cables_glow ~= false
  local draw_list = r.ImGui_GetForegroundDrawList(ctx)
  local clip = mixer_state.cables_clip_rect
- if clip then
-  r.ImGui_DrawList_PushClipRect(draw_list, clip.x1, clip.y1, clip.x2, clip.y2, 0)
- end
+ local clip_narrow_x1 = clip and clip.x1 or nil
+ local clip_narrow_x2 = clip and clip.x2 or nil
+ local clip_wide_x1 = clip and (clip.x1_wide or clip.x1) or nil
+ local clip_wide_x2 = clip and (clip.x2_wide or clip.x2) or nil
 
+ local _color_cache = {}
  local function track_color_u32(track, fallback_alpha)
-  local c = r.GetTrackColor(track)
-  if c == 0 then return r.ImGui_ColorConvertDouble4ToU32(0.5, 0.7, 1.0, fallback_alpha) end
-  local cr, cg, cb = r.ColorFromNative(c)
-  return r.ImGui_ColorConvertDouble4ToU32(cr/255, cg/255, cb/255, fallback_alpha)
+  local base = _color_cache[track]
+  if not base then
+   local c = r.GetTrackColor(track)
+   if c == 0 then
+    base = { 0.5, 0.7, 1.0 }
+   else
+    local cr, cg, cb = r.ColorFromNative(c)
+    base = { cr/255, cg/255, cb/255 }
+   end
+   _color_cache[track] = base
+  end
+  return r.ImGui_ColorConvertDouble4ToU32(base[1], base[2], base[3], fallback_alpha)
  end
 
  local function get_anchor(key)
@@ -10452,9 +10776,25 @@ function DrawMixerCables(ctx)
   return nil, nil
  end
 
+ local function in_clip(x, y)
+  if not clip then return true end
+  return x >= clip.x1 and x <= clip.x2 and y >= clip.y1 and y <= clip.y2
+ end
+
  local function anchor_visible(ax, ay)
   return true
  end
+
+ local proj_state = r.GetProjectStateChangeCount(0)
+ local inv = mixer_state.scan_invalidate_counter or 0
+ local cables_sig = proj_state .. "|" .. inv
+ local pair_cache = mixer_state.cable_pairs_cache
+ if not pair_cache or pair_cache.sig ~= cables_sig then
+  pair_cache = { sig = cables_sig, by_src = {} }
+  mixer_state.cable_pairs_cache = pair_cache
+ end
+ local pairs_by_src = pair_cache.by_src
+ local master_track = r.GetMasterTrack(0)
 
  local now = r.time_precise()
  local disco_until = mixer_state.disco_until or 0
@@ -10469,18 +10809,42 @@ function DrawMixerCables(ctx)
   return r.ImGui_ColorConvertDouble4ToU32(cr, cg, cb, a)
  end
 
+ local sum_y, count_y = 0, 0
+ for _, a in pairs(anchors) do
+  if not a.offscreen then sum_y = sum_y + a.y; count_y = count_y + 1 end
+ end
+ if count_y > 0 then
+  local fallback_y = sum_y / count_y
+  for _, a in pairs(anchors) do
+   if a.offscreen then a.y = fallback_y end
+  end
+ end
+
  local seen = {}
- for guid, src_rect in pairs(rects) do
-  local src_track = src_rect.track
-  if src_track and not src_rect.is_master then
-   local sx, sy = get_anchor(guid)
+ for guid, anchor in pairs(anchors) do
+  local src_track = anchor.track
+  if src_track and not anchor.is_master and guid ~= "__master__" then
+   local sx, sy = anchor.x, anchor.y
    if sx and anchor_visible(sx, sy) then
-    local send_count = r.GetTrackNumSends(src_track, 0)
-    for i = 0, send_count - 1 do
-     local dst_track = r.GetTrackSendInfo_Value(src_track, 0, i, "P_DESTTRACK")
-     if dst_track and dst_track ~= src_track and r.ValidatePtr2(0, dst_track, "MediaTrack*") then
-      local dst_is_master = r.GetMasterTrack(0) == dst_track
-      local dst_key = dst_is_master and "__master__" or r.GetTrackGUID(dst_track)
+    local cached_pairs = pairs_by_src[guid]
+    if not cached_pairs then
+     cached_pairs = {}
+     local send_count = r.GetTrackNumSends(src_track, 0)
+     for i = 0, send_count - 1 do
+      local dst_track = r.GetTrackSendInfo_Value(src_track, 0, i, "P_DESTTRACK")
+      if dst_track and dst_track ~= src_track and r.ValidatePtr2(0, dst_track, "MediaTrack*") then
+       local dst_is_master = master_track == dst_track
+       local dst_key = dst_is_master and "__master__" or r.GetTrackGUID(dst_track)
+       cached_pairs[#cached_pairs + 1] = { send_idx = i, dst_track = dst_track, dst_key = dst_key }
+      end
+     end
+     pairs_by_src[guid] = cached_pairs
+    end
+    for _, pair in ipairs(cached_pairs) do
+     local dst_track = pair.dst_track
+     local dst_key = pair.dst_key
+     local i = pair.send_idx
+     if r.ValidatePtr2(0, dst_track, "MediaTrack*") then
       local dx, dy = get_anchor(dst_key)
       if dx and anchor_visible(dx, dy) then
        local pair_key = guid .. "->" .. dst_key
@@ -10495,10 +10859,24 @@ function DrawMixerCables(ctx)
 
         local dist = math.abs(dx - sx)
         local dip = math.max(24, dist * curve_amount)
+        if dip > 220 then dip = 220 end
         local c1x = sx
         local c1y = sy + dip
         local c2x = dx
         local c2y = dy + dip
+
+        local rps = mixer_state.right_pinned_set or {}
+        local lps = mixer_state.left_pinned_set or {}
+        local needs_wide_right = clip_narrow_x2 and clip_wide_x2 and clip_wide_x2 > clip_narrow_x2 and (rps[guid] or rps[dst_key])
+        local needs_wide_left = clip_narrow_x1 and clip_wide_x1 and clip_wide_x1 < clip_narrow_x1 and (lps[guid] or lps[dst_key])
+        local needs_wide = needs_wide_right or needs_wide_left
+        local pushed_clip = false
+        if clip then
+         local cx1 = needs_wide_left and clip_wide_x1 or clip_narrow_x1
+         local cx2 = needs_wide_right and clip_wide_x2 or clip_narrow_x2
+         r.ImGui_DrawList_PushClipRect(draw_list, cx1, clip.y1, cx2, clip.y2, 0)
+         pushed_clip = true
+        end
 
         if glow then
          local glow_alpha = cable_alpha * 0.35
@@ -10513,16 +10891,28 @@ function DrawMixerCables(ctx)
         local outline_color = r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, math.min(1, cable_alpha + 0.2))
 
         local out_size = thickness * 1.8
-        r.ImGui_DrawList_AddRectFilled(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, plug_color, 1)
-        r.ImGui_DrawList_AddRect(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, outline_color, 1, 0, 1)
+        local effective_x1 = needs_wide_left and clip_wide_x1 or clip_narrow_x1
+        local effective_x2 = needs_wide_right and clip_wide_x2 or clip_narrow_x2
+        local function in_eff(x, y)
+         if not clip then return true end
+         return x >= effective_x1 and x <= effective_x2 and y >= clip.y1 and y <= clip.y2
+        end
+        local src_visible = in_eff(sx, sy)
+        local dst_visible = in_eff(dx, dy)
+        if src_visible then
+         r.ImGui_DrawList_AddRectFilled(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, plug_color, 1)
+         r.ImGui_DrawList_AddRect(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, outline_color, 1, 0, 1)
+        end
 
         local arrow_size = thickness * 2.4
-        r.ImGui_DrawList_AddTriangleFilled(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, plug_color)
-        r.ImGui_DrawList_AddTriangle(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, outline_color, 1)
+        if dst_visible then
+         r.ImGui_DrawList_AddTriangleFilled(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, plug_color)
+         r.ImGui_DrawList_AddTriangle(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, outline_color, 1)
+        end
 
         if mouse_dbl and not disco and mx and my then
-         local hit_src = mx >= sx - out_size - 2 and mx <= sx + out_size + 2 and my >= sy - out_size - 2 and my <= sy + out_size + 2
-         local hit_dst = mx >= dx - arrow_size - 2 and mx <= dx + arrow_size + 2 and my >= dy - 2 and my <= dy + arrow_size + 2
+         local hit_src = src_visible and mx >= sx - out_size - 2 and mx <= sx + out_size + 2 and my >= sy - out_size - 2 and my <= sy + out_size + 2
+         local hit_dst = dst_visible and mx >= dx - arrow_size - 2 and mx <= dx + arrow_size + 2 and my >= dy - 2 and my <= dy + arrow_size + 2
          if hit_src or hit_dst then
           mixer_state.disco_until = now + 5.0
           disco = true
@@ -10539,15 +10929,13 @@ function DrawMixerCables(ctx)
          local dot_color = disco and disco_color(seed + 41, math.min(1, cable_alpha + 0.25)) or track_color_u32(color_track, math.min(1, cable_alpha + 0.25))
          r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, thickness * 1.4, dot_color, 12)
         end
+        if pushed_clip then r.ImGui_DrawList_PopClipRect(draw_list) end
        end
       end
      end
     end
    end
   end
- end
- if clip then
-  r.ImGui_DrawList_PopClipRect(draw_list)
  end
 end
 
@@ -10889,8 +11277,17 @@ function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
   local fz_y = pin_y
   local is_frozen = false
   do
-   local _, chunk = r.GetTrackStateChunk(track, "", false)
-   if chunk and chunk:find("<FREEZE") then is_frozen = true end
+   local fz_guid = r.GetTrackGUID(track)
+   local now_fz = r.time_precise()
+   mixer_state._freeze_cache = mixer_state._freeze_cache or {}
+   local fz_entry = mixer_state._freeze_cache[fz_guid]
+   if fz_entry and (now_fz - fz_entry.t) < fz_entry.ttl then
+    is_frozen = fz_entry.frozen
+   else
+    local _, chunk = r.GetTrackStateChunk(track, "", false)
+    if chunk and chunk:find("<FREEZE") then is_frozen = true end
+    mixer_state._freeze_cache[fz_guid] = { t = now_fz, frozen = is_frozen, ttl = 2.0 + math.random() * 0.8 }
+   end
   end
   r.ImGui_DrawList_AddRectFilled(draw_list, fz_x, fz_y, fz_x + fz_size, fz_y + fz_size, is_frozen and 0x44AAFFFF or 0x33333388, 2)
   r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, fz_x + 3, fz_y + 1, 0x000000FF, "F")
@@ -11523,6 +11920,7 @@ end
 function DrawSimpleMixerWindow()
  if not settings.simple_mixer_window_open then return end
 
+ mixer_state.frame_counter = (mixer_state.frame_counter or 0) + 1
  EnsureSimpleMixerFont()
  mixer_state.fx_section_hovered = false
 
@@ -11533,53 +11931,68 @@ function DrawSimpleMixerWindow()
  local project_mixer_tracks = GetProjectMixerTracks()
  mixer_state.hidden_track_guids = GetProjectMixerHiddenTracks()
 
- if settings.simple_mixer_auto_add_new_tracks and not settings.simple_mixer_auto_all then
-  local existing_set = {}
-  for _, g in ipairs(project_mixer_tracks) do existing_set[g] = true end
-  local num_tracks = r.CountTracks(0)
-  local added = false
-  for i = 0, num_tracks - 1 do
-   local track = r.GetTrack(0, i)
-   local guid = r.GetTrackGUID(track)
-   if not existing_set[guid] then
-    table.insert(project_mixer_tracks, guid)
-    existing_set[guid] = true
-    added = true
-   end
-  end
-  if added then SaveProjectMixerTracks(project_mixer_tracks) end
- end
+ do
+  local proj_state = r.GetProjectStateChangeCount(0)
+  local inv = mixer_state.scan_invalidate_counter or 0
+  local now = r.time_precise()
+  local last_state = mixer_state.last_auto_scan_state
+  local last_inv = mixer_state.last_auto_scan_inv
+  local last_time = mixer_state.last_auto_scan_time or 0
+  local need_scan = (proj_state ~= last_state) or (inv ~= last_inv) or ((now - last_time) > 0.25)
+  if need_scan then
+   mixer_state.last_auto_scan_state = proj_state
+   mixer_state.last_auto_scan_inv = inv
+   mixer_state.last_auto_scan_time = now
 
- if settings.simple_mixer_auto_all then
-  local visible_guids = {}
-  local num_tracks = r.CountTracks(0)
-  for i = 0, num_tracks - 1 do
-   local track = r.GetTrack(0, i)
-   local is_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
-   if is_visible then
-    local guid = r.GetTrackGUID(track)
-    local spacer = r.GetMediaTrackInfo_Value(track, "I_SPACER")
-    if not mixer_state.hidden_track_guids[guid] or spacer > 0 then
-     visible_guids[guid] = i
+   if settings.simple_mixer_auto_add_new_tracks and not settings.simple_mixer_auto_all then
+    local existing_set = {}
+    for _, g in ipairs(project_mixer_tracks) do existing_set[g] = true end
+    local num_tracks = r.CountTracks(0)
+    local added = false
+    for i = 0, num_tracks - 1 do
+     local track = r.GetTrack(0, i)
+     local guid = r.GetTrackGUID(track)
+     if not existing_set[guid] then
+      table.insert(project_mixer_tracks, guid)
+      existing_set[guid] = true
+      added = true
+     end
+    end
+    if added then SaveProjectMixerTracks(project_mixer_tracks) end
+   end
+
+   if settings.simple_mixer_auto_all then
+    local visible_guids = {}
+    local num_tracks = r.CountTracks(0)
+    for i = 0, num_tracks - 1 do
+     local track = r.GetTrack(0, i)
+     local is_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
+     if is_visible then
+      local guid = r.GetTrackGUID(track)
+      local spacer = r.GetMediaTrackInfo_Value(track, "I_SPACER")
+      if not mixer_state.hidden_track_guids[guid] or spacer > 0 then
+       visible_guids[guid] = i
+      end
+     end
+    end
+    local existing_set = {}
+    for _, g in ipairs(project_mixer_tracks) do existing_set[g] = true end
+    local needs_update = false
+    local new_tracks = {}
+    for guid, idx in pairs(visible_guids) do
+     if not existing_set[guid] then needs_update = true end
+     table.insert(new_tracks, {guid = guid, idx = idx})
+    end
+    if #new_tracks ~= #project_mixer_tracks then needs_update = true end
+    if needs_update then
+     table.sort(new_tracks, function(a, b) return a.idx < b.idx end)
+     project_mixer_tracks = {}
+     for _, t in ipairs(new_tracks) do
+      table.insert(project_mixer_tracks, t.guid)
+     end
+     SaveProjectMixerTracks(project_mixer_tracks)
     end
    end
-  end
-  local existing_set = {}
-  for _, g in ipairs(project_mixer_tracks) do existing_set[g] = true end
-  local needs_update = false
-  local new_tracks = {}
-  for guid, idx in pairs(visible_guids) do
-   if not existing_set[guid] then needs_update = true end
-   table.insert(new_tracks, {guid = guid, idx = idx})
-  end
-  if #new_tracks ~= #project_mixer_tracks then needs_update = true end
-  if needs_update then
-   table.sort(new_tracks, function(a, b) return a.idx < b.idx end)
-   project_mixer_tracks = {}
-   for _, t in ipairs(new_tracks) do
-    table.insert(project_mixer_tracks, t.guid)
-   end
-   SaveProjectMixerTracks(project_mixer_tracks)
   end
  end
 
@@ -11607,9 +12020,9 @@ function DrawSimpleMixerWindow()
 
   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_ScrollbarSize(), 4)
-  mixer_state.bottom_dock.bottom_h = 24 + 20 + 1
+  local sidebar_bottom_h = 24 + 1
   r.ImGui_BeginGroup(mixer_ctx)
-  if r.ImGui_BeginChild(mixer_ctx, "SidebarPanel", sidebar_width, full_avail_height - mixer_state.bottom_dock.bottom_h, 0, 0) then
+  if r.ImGui_BeginChild(mixer_ctx, "SidebarPanel", sidebar_width, full_avail_height - sidebar_bottom_h, 0, 0) then
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x00000000)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x44444488)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0x66666688)
@@ -11690,81 +12103,13 @@ function DrawSimpleMixerWindow()
    end
    r.ImGui_EndChild(mixer_ctx)
   end
-  if r.ImGui_BeginChild(mixer_ctx, "SidebarBottom", sidebar_width, mixer_state.bottom_dock.bottom_h, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
+  if r.ImGui_BeginChild(mixer_ctx, "SidebarBottom", sidebar_width, sidebar_bottom_h, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
    r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 1)
    local close_btn_h = 24
-   local dock_btn_h = 20
-   local sb2_x, sb2_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x2A2A2AFF)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x882222FF)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0xAA2222FF)
-   local dock_state = mixer_state.bottom_dock.get_state()
-   local can_toggle = mixer_state.bottom_dock.is_available()
-   if r.ImGui_Button(mixer_ctx, "##dock_toggle_bottom", sidebar_width, dock_btn_h) then
-    if can_toggle then mixer_state.bottom_dock.toggle() end
-   end
-   if r.ImGui_IsItemClicked(mixer_ctx, 1) then
-    r.ImGui_OpenPopup(mixer_ctx, "##dock_size_popup")
-   end
-   if r.ImGui_IsItemHovered(mixer_ctx) then
-    if can_toggle then
-     r.ImGui_SetTooltip(mixer_ctx, (dock_state == "min" and "Maximize bottom docker" or "Minimize bottom docker") .. "\nRight-click: set min/max heights")
-    else
-     r.ImGui_SetTooltip(mixer_ctx, "Requires js_ReaScriptAPI")
-    end
-   end
-   if r.ImGui_BeginPopup(mixer_ctx, "##dock_size_popup") then
-    r.ImGui_Text(mixer_ctx, "Bottom dock heights (px)")
-    r.ImGui_Separator(mixer_ctx)
-    r.ImGui_Text(mixer_ctx, "Use 0 = auto (1/3 / full main window)")
-    r.ImGui_SetNextItemWidth(mixer_ctx, 120)
-    local rv_min, new_min = r.ImGui_InputInt(mixer_ctx, "Min height", settings.simple_mixer_bottom_dock_min_px or 0, 10, 50)
-    if rv_min then
-     if new_min < 0 then new_min = 0 end
-     settings.simple_mixer_bottom_dock_min_px = new_min
-     SaveMixerSettings()
-    end
-    r.ImGui_SetNextItemWidth(mixer_ctx, 120)
-    local rv_max, new_max = r.ImGui_InputInt(mixer_ctx, "Max height", settings.simple_mixer_bottom_dock_max_px or 0, 10, 50)
-    if rv_max then
-     if new_max < 0 then new_max = 0 end
-     settings.simple_mixer_bottom_dock_max_px = new_max
-     SaveMixerSettings()
-    end
-    r.ImGui_Spacing(mixer_ctx)
-    if r.ImGui_Button(mixer_ctx, "Use current height as Min", 200) then
-     local d = mixer_state.bottom_dock.find_bottommost()
-     if d and d.bounds then
-      settings.simple_mixer_bottom_dock_min_px = math.floor(d.bounds.h)
-      SaveMixerSettings()
-     end
-    end
-    if r.ImGui_Button(mixer_ctx, "Use current height as Max", 200) then
-     local d = mixer_state.bottom_dock.find_bottommost()
-     if d and d.bounds then
-      settings.simple_mixer_bottom_dock_max_px = math.floor(d.bounds.h)
-      SaveMixerSettings()
-     end
-    end
-    r.ImGui_Spacing(mixer_ctx)
-    if r.ImGui_Button(mixer_ctx, "Reset to auto", 200) then
-     settings.simple_mixer_bottom_dock_min_px = 0
-     settings.simple_mixer_bottom_dock_max_px = 0
-     SaveMixerSettings()
-    end
-    r.ImGui_EndPopup(mixer_ctx)
-   end
    local sb2_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
-   local arrow_color = can_toggle and 0xAAAAAAFF or 0x666666FF
-   local db_cx = sb2_x + sidebar_width * 0.5
-   local db_cy = sb2_y + dock_btn_h * 0.5
-   if dock_state == "min" then
-    r.ImGui_DrawList_AddLine(sb2_dl, db_cx - 5, db_cy + 2, db_cx, db_cy - 3, arrow_color, 1.5)
-    r.ImGui_DrawList_AddLine(sb2_dl, db_cx, db_cy - 3, db_cx + 5, db_cy + 2, arrow_color, 1.5)
-   else
-    r.ImGui_DrawList_AddLine(sb2_dl, db_cx - 5, db_cy - 2, db_cx, db_cy + 3, arrow_color, 1.5)
-    r.ImGui_DrawList_AddLine(sb2_dl, db_cx, db_cy + 3, db_cx + 5, db_cy - 2, arrow_color, 1.5)
-   end
    local cb_x, cb_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
    if r.ImGui_Button(mixer_ctx, "##close_mixer_bottom", sidebar_width, close_btn_h) then
     close_requested = true
@@ -11812,49 +12157,82 @@ function DrawSimpleMixerWindow()
     end
    end
 
-   local pinned_tracks_data = {}
-   local pinned_spacers = {}
-   if settings.simple_mixer_show_pinned_first then
-    for _, track_guid in ipairs(project_mixer_tracks) do
-     if type(track_guid) == "string" then
-      local track = r.BR_GetMediaTrackByGUID(0, track_guid)
-      if track then
-       local is_tcp_pinned = r.GetMediaTrackInfo_Value(track, "B_TCPPIN") == 1
-       local is_mcp_pinned = r.GetMediaTrackInfo_Value(track, "B_MCPPIN") == 1
-       if (is_tcp_pinned or is_mcp_pinned) and not IsRightPinned(track_guid) then
-        local track_num = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
-        local spacer = r.GetMediaTrackInfo_Value(track, "I_SPACER")
-        table.insert(pinned_tracks_data, {guid = track_guid, track = track, num = track_num})
-        if spacer > 0 then
-         table.insert(pinned_spacers, {track_num = track_num, spacer = spacer, track_guid = track_guid, track = track})
+   local pinned_tracks_data
+   local pinned_spacers
+   local right_pinned_data
+   do
+    local rpg = settings.simple_mixer_right_pinned_guids
+    local rpg_str = ""
+    if type(rpg) == "table" then
+     for i = 1, #rpg do rpg_str = rpg_str .. (rpg[i] or "") .. "," end
+    end
+    local sig = (r.GetProjectStateChangeCount(0))
+     .. "|" .. (mixer_state.scan_invalidate_counter or 0)
+     .. "|" .. tostring(settings.simple_mixer_show_pinned_first and true or false)
+     .. "|" .. #project_mixer_tracks
+     .. "|" .. rpg_str
+    local cache = mixer_state.pinned_data_cache
+    if cache and cache.sig == sig then
+     pinned_tracks_data = cache.pinned
+     pinned_spacers = cache.spacers
+     right_pinned_data = cache.right
+    else
+     pinned_tracks_data = {}
+     pinned_spacers = {}
+     if settings.simple_mixer_show_pinned_first then
+      for _, track_guid in ipairs(project_mixer_tracks) do
+       if type(track_guid) == "string" then
+        local track = r.BR_GetMediaTrackByGUID(0, track_guid)
+        if track then
+         local is_tcp_pinned = r.GetMediaTrackInfo_Value(track, "B_TCPPIN") == 1
+         local is_mcp_pinned = r.GetMediaTrackInfo_Value(track, "B_MCPPIN") == 1
+         if (is_tcp_pinned or is_mcp_pinned) and not IsRightPinned(track_guid) then
+          local track_num = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+          local spacer = r.GetMediaTrackInfo_Value(track, "I_SPACER")
+          table.insert(pinned_tracks_data, {guid = track_guid, track = track, num = track_num})
+          if spacer > 0 then
+           table.insert(pinned_spacers, {track_num = track_num, spacer = spacer, track_guid = track_guid, track = track})
+          end
+         end
         end
        end
       end
+      table.sort(pinned_tracks_data, function(a, b) return a.num < b.num end)
+      table.sort(pinned_spacers, function(a, b) return a.track_num < b.track_num end)
      end
-    end
-    table.sort(pinned_tracks_data, function(a, b) return a.num < b.num end)
-    table.sort(pinned_spacers, function(a, b) return a.track_num < b.track_num end)
-   end
 
-   local right_pinned_data = {}
-   if type(settings.simple_mixer_right_pinned_guids) == "table" and #settings.simple_mixer_right_pinned_guids > 0 then
-    for _, track_guid in ipairs(project_mixer_tracks) do
-     if type(track_guid) == "string" and IsRightPinned(track_guid) then
-      local track = r.BR_GetMediaTrackByGUID(0, track_guid)
-      if track then
-       local track_num = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
-       table.insert(right_pinned_data, {guid = track_guid, track = track, num = track_num})
+     right_pinned_data = {}
+     if type(rpg) == "table" and #rpg > 0 then
+      for _, track_guid in ipairs(project_mixer_tracks) do
+       if type(track_guid) == "string" and IsRightPinned(track_guid) then
+        local track = r.BR_GetMediaTrackByGUID(0, track_guid)
+        if track then
+         local track_num = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+         table.insert(right_pinned_data, {guid = track_guid, track = track, num = track_num})
+        end
+       end
       end
+      table.sort(right_pinned_data, function(a, b) return a.num < b.num end)
      end
+     mixer_state.pinned_data_cache = { sig = sig, pinned = pinned_tracks_data, spacers = pinned_spacers, right = right_pinned_data }
     end
-    table.sort(right_pinned_data, function(a, b) return a.num < b.num end)
    end
 
    local pinned_width = 0
    if #pinned_tracks_data > 0 then
     pinned_width = (#pinned_tracks_data * (track_width + 4)) + 4
    end
+   local left_pinned_set = {}
+   for _, pd in ipairs(pinned_tracks_data) do
+    left_pinned_set[pd.guid] = true
+   end
+   mixer_state.left_pinned_set = left_pinned_set
 
+   local right_pinned_set = {}
+   for _, rd in ipairs(right_pinned_data) do
+    right_pinned_set[rd.guid] = true
+   end
+   mixer_state.right_pinned_set = right_pinned_set
    local right_pinned_width = 0
    if #right_pinned_data > 0 then
     right_pinned_width = (#right_pinned_data * (track_width + 4)) + 4
@@ -11917,8 +12295,13 @@ function DrawSimpleMixerWindow()
     do
      local _wx, _wy = r.ImGui_GetWindowPos(mixer_ctx)
      local _ww, _wh = r.ImGui_GetWindowSize(mixer_ctx)
-     local extra_right = (right_pinned_width or 0) + (master_right_width or 0)
-     mixer_state.cables_clip_rect = { x1 = _wx, y1 = _wy, x2 = _wx + _ww + extra_right, y2 = _wy + _wh }
+     mixer_state.cables_clip_rect = {
+      x1 = _wx, y1 = _wy,
+      x2 = _wx + _ww,
+      x1_wide = _wx - (pinned_width or 0),
+      x2_wide = _wx + _ww + (right_pinned_width or 0),
+      y2 = _wy + _wh,
+     }
     end
     local mixer_tracks_hovered = r.ImGui_IsWindowHovered(mixer_ctx, r.ImGui_HoveredFlags_ChildWindows())
     local pending_wheel_y = r.ImGui_GetMouseWheel(mixer_ctx)
@@ -12786,10 +13169,61 @@ function HandleMixerIconBrowser()
  mixer_state.icon_browser_last_applied = apply_key
 end
 
+_perf_prev_t = nil
+_perf_frames = 0
+_perf_fps_t0 = nil
+_perf_fps = 0
+_perf_max_dt = 0
+_perf_spike_count = 0
+
+
 function Loop()
+ local _t_start = r.time_precise()
+ ClearTrackGUIDFrameCache()
+ if _perf_prev_t then
+  local dt_ms = (_t_start - _perf_prev_t) * 1000
+  if dt_ms > _perf_max_dt then _perf_max_dt = dt_ms end
+ end
+ _perf_prev_t = _t_start
+ _perf_frames = _perf_frames + 1
+ if not _perf_fps_t0 then _perf_fps_t0 = _t_start end
+ local elapsed = _t_start - _perf_fps_t0
+ if elapsed >= 0.5 then
+  _perf_fps = _perf_frames / elapsed
+  _perf_frames = 0
+  _perf_fps_t0 = _t_start
+ end
+
  DrawSimpleMixerWindow()
  DrawSettingsWindow()
  HandleMixerIconBrowser()
+
+ if settings.simple_mixer_show_fps and ctx then
+  local flags = 0
+  if r.ImGui_WindowFlags_NoDecoration then flags = flags | r.ImGui_WindowFlags_NoDecoration() end
+  if r.ImGui_WindowFlags_AlwaysAutoResize then flags = flags | r.ImGui_WindowFlags_AlwaysAutoResize() end
+  if r.ImGui_WindowFlags_NoFocusOnAppearing then flags = flags | r.ImGui_WindowFlags_NoFocusOnAppearing() end
+  if r.ImGui_WindowFlags_NoNav then flags = flags | r.ImGui_WindowFlags_NoNav() end
+  if r.ImGui_WindowFlags_TopMost then flags = flags | r.ImGui_WindowFlags_TopMost() end
+  if r.ImGui_SetNextWindowBgAlpha then r.ImGui_SetNextWindowBgAlpha(ctx, 0.75) end
+  if r.ImGui_SetNextWindowPos and r.ImGui_Cond_FirstUseEver then
+   r.ImGui_SetNextWindowPos(ctx, 40, 40, r.ImGui_Cond_FirstUseEver())
+  end
+  local visible = r.ImGui_Begin(ctx, "TK Mixer FPS##tkmixerfps", true, flags)
+  if visible then
+   local col = 0x66FF66FF
+   if _perf_fps < 30 then col = 0xFFAA22FF end
+   if _perf_fps < 15 then col = 0xFF4444FF end
+   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), col)
+   r.ImGui_Text(ctx, string.format("FPS %.0f", _perf_fps))
+   r.ImGui_PopStyleColor(ctx)
+   r.ImGui_SameLine(ctx)
+   r.ImGui_Text(ctx, string.format(" max %.1fms", _perf_max_dt))
+  end
+  r.ImGui_End(ctx)
+  _perf_max_dt = 0
+ end
+
  if settings.simple_mixer_window_open then
   r.defer(Loop)
  elseif mixer_settings_dirty then

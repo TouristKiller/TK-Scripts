@@ -1,42 +1,94 @@
 desc:TK VU Meter (Pre-Fader)
 author:TouristKiller
-version:1.2
+version:2.3
 
 options:gmem=TK_VU_Meters
 
 slider1:0<0,1000,1>Track Slot ID
-slider2:0<-60,6,0.1>Peak L (dB) [Output]
-slider3:0<-60,6,0.1>Peak R (dB) [Output]
-slider4:0<-60,6,0.1>Peak Max (dB) [Output]
+slider2:-18<-60,0,1>Ref Level (dBFS)
+slider3:300<50,1000,1>Rise Time (ms)
+slider4:1.25<0,5,0.01>Overshoot (%)
 
 @init
-ext_noinit = 1;
-peak_l = 0;
-peak_r = 0;
-decay_coef = exp(-1.0 / (srate * 0.05));
-slot_id = slider1;
+ref_dbfs = slider2;
+offset = 0.0074;
+dt = 10 / srate;
+nd_posL = nd_posR = 0;
+nd_speedL = nd_speedR = 0;
+smpL_sum = smpR_sum = 0;
+scnt = 0;
+last_srate = srate;
+
+function compute_ballistics()
+(
+  ovs_pct = slider4;
+  ovs_pct > 0.01 ? (
+    ln_os = log(ovs_pct / 100);
+    zeta  = -ln_os / sqrt($pi*$pi + ln_os*ln_os);
+  ) : (
+    zeta = 1;
+  );
+  alpha = -3.060 * zeta + 4.017;
+  t_corr = (slider3 * alpha) / 1000;
+  zeta < 1.0 ? (
+    wn = -log(0.01 * sqrt(1 - zeta*zeta)) / (zeta * t_corr);
+  ) : (
+    wn = 5.8 / t_corr;
+  );
+  mom = 0.1 / (wn * wn);
+  damp = exp(-2 * zeta * wn * (10 / srate));
+  dt_div_mom = dt / mom;
+  fact_up = 10 ^ ((-slider2 - 10) / 20) * 0.3785;
+);
+
+compute_ballistics();
 
 @slider
-slot_id = slider1;
-
-@sample
-abs_l = abs(spl0);
-abs_r = abs(spl1);
-
-peak_l = max(abs_l, peak_l * decay_coef);
-peak_r = max(abs_r, peak_r * decay_coef);
+compute_ballistics();
 
 @block
-peak_l_db = peak_l > 0.0000001 ? 20 * log10(peak_l) : -60;
-peak_r_db = peak_r > 0.0000001 ? 20 * log10(peak_r) : -60;
-peak_max_db = max(peak_l_db, peak_r_db);
+last_srate != srate ? (
+  dt = 10 / srate;
+  compute_ballistics();
+  last_srate = srate;
+);
 
-slider2 = max(-60, min(6, peak_l_db));
-slider3 = max(-60, min(6, peak_r_db));
-slider4 = max(-60, min(6, peak_max_db));
+ampL = nd_posL * 0.1 + offset;
+ampR = nd_posR * 0.1 + offset;
+vu_l_db = ampL > 0 ? (log(ampL / 0.07589) * 8.6858896380650) : (-20.2);
+vu_r_db = ampR > 0 ? (log(ampR / 0.07589) * 8.6858896380650) : (-20.2);
+vu_max_db = max(vu_l_db, vu_r_db);
 
+slot_id = slider1;
 slot_id > 0 ? (
-  gmem[slot_id * 3] = slider2;
-  gmem[slot_id * 3 + 1] = slider3;
-  gmem[slot_id * 3 + 2] = slider4;
+  gmem[slot_id * 3]     = vu_l_db;
+  gmem[slot_id * 3 + 1] = vu_r_db;
+  gmem[slot_id * 3 + 2] = vu_max_db;
+);
+
+@sample
+smpL_sum += abs(spl0);
+smpR_sum += abs(spl1);
+scnt += 1;
+scnt == 10 ? (
+  smpL = smpL_sum * 0.1;
+  smpR = smpR_sum * 0.1;
+
+  force = smpL * fact_up - (nd_posL * 0.1 + offset);
+  nd_speedL += force * dt_div_mom;
+  nd_speedL = nd_speedL * damp;
+  nd_posL += nd_speedL * dt;
+  nd_posL < 0 || nd_posL > 1 ? nd_speedL = 0;
+  nd_posL = min(max(nd_posL, 0), 1);
+
+  force = smpR * fact_up - (nd_posR * 0.1 + offset);
+  nd_speedR += force * dt_div_mom;
+  nd_speedR = nd_speedR * damp;
+  nd_posR += nd_speedR * dt;
+  nd_posR < 0 || nd_posR > 1 ? nd_speedR = 0;
+  nd_posR = min(max(nd_posR, 0), 1);
+
+  smpL_sum = 0;
+  smpR_sum = 0;
+  scnt = 0;
 );
