@@ -1,6 +1,6 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.5
+-- @version 1.2.6
 --[[
 v1.2.5
   + Cables: new "Selected tracks only" option — only show cables connected to currently selected tracks (Settings > Cables)
@@ -5933,7 +5933,7 @@ if (not is_master) then
   if r.ImGui_IsRectVisible then
    local visible = r.ImGui_IsRectVisible(ctx, track_width, base_slider_height)
    if not visible then
-    if settings.simple_mixer_show_cables and mixer_state.cable_anchors and track then
+    if settings.simple_mixer_show_cables and settings.simple_mixer_show_sendrecv and not settings.simple_mixer_sendrecv_collapsed and mixer_state.cable_anchors and track then
      local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
      local guid = r.GetTrackGUID(track)
      if guid then
