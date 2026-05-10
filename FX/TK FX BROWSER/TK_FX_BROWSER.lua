@@ -1,8 +1,15 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.8.6
+-- @version 2.8.7
 -- @changelog:
 --[[ 
+    v2.8.7:
+        + Patchbay: node width is now configurable via Settings > ROUTING tab (80–400 px, default 180). Auto-layout column spacing scales proportionally.
+        + Hubs: "All Tracks" toggle to show tracks without sends/receives.
+        + Patchbay: "Only Explicit Sends/Receives" toggle to filter out Master-only tracks.
+        + Screenshot toolbar: close button (red dot) added next to gear; only visible when the main window is hidden (config.hide_main_window = true).
+        + Bugfix: Operator precedence in explicit routing filter.
+
     v2.8.6:
         + Parser Test 
     v2.8.5:
@@ -1209,6 +1216,9 @@ function SetDefaultConfig()
         routing_only_routed = false,
         routing_only_selected = false,
         routing_group_by_folder = false,
+        routing_hubs_show_all_tracks = false,
+        patchbay_only_explicit_routing = false,
+        patchbay_node_width = 180,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
         font_size = 11,  -- Default font size
         custom_folder_use_default_font = true,
@@ -6721,6 +6731,19 @@ function ShowConfigWindow()
                 r.ImGui_Text(ctx, '= "<plugin> ' .. (config.sends_track_name_custom or "Send") .. '"')
             end
 
+            NewSection("PATCHBAY:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Node width")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, 180)
+            local ch_nw, v_nw = r.ImGui_SliderInt(ctx, "##patchbay_node_width", config.patchbay_node_width or 180, 80, 400)
+            if ch_nw then
+                config.patchbay_node_width = v_nw
+                SaveConfig()
+            end
+            r.ImGui_PopItemWidth(ctx)
+
             r.ImGui_SetCursorPosY(ctx, window_height - 30)
             r.ImGui_Separator(ctx)
             local button_width = (window_width - 20) / 3
@@ -10074,6 +10097,12 @@ function DrawRoutingFilterBar(is_matrix)
         end
         r.ImGui_PopItemWidth(ctx)
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show incoming, outgoing, or both") end
+        if config.routing_view_mode == "hubs" then
+            r.ImGui_SameLine(ctx)
+            local ch_all, v_all = r.ImGui_Checkbox(ctx, "All tracks", config.routing_hubs_show_all_tracks and true or false)
+            if ch_all then config.routing_hubs_show_all_tracks = v_all; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show tracks without sends/receives as empty hubs") end
+        end
         r.ImGui_SameLine(ctx)
         if r.ImGui_Button(ctx, "\xE2\x96\xBC##expand_all") then
             routing_expand_all_pending = true
@@ -10216,6 +10245,7 @@ function ShowRoutingHubs()
 
     local filter = (config.routing_filter_text or ""):lower()
     local only_selected = config.routing_only_selected
+    local show_all_tracks = config.routing_hubs_show_all_tracks == true
     local track_count = r.CountTracks(0)
 
     local cur_sel_guid = (TRACK and r.ValidatePtr(TRACK, "MediaTrack*")) and r.GetTrackGUID(TRACK) or nil
@@ -10229,7 +10259,7 @@ function ShowRoutingHubs()
         local hub = r.GetTrack(0, i)
         local nrec = r.GetTrackNumSends(hub, -1)
         local nsnd = r.GetTrackNumSends(hub, 0)
-        if nrec > 0 or nsnd > 0 then
+        if nrec > 0 or nsnd > 0 or show_all_tracks then
             local incoming = {}
             for k = 0, nrec - 1 do
                 local src = r.GetTrackSendInfo_Value(hub, -1, k, "P_SRCTRACK")
@@ -10247,7 +10277,7 @@ function ShowRoutingHubs()
                     outgoing[#outgoing + 1] = { owner = hub, send_idx = k, other = dst }
                 end
             end
-            if #incoming > 0 or #outgoing > 0 then
+            if #incoming > 0 or #outgoing > 0 or show_all_tracks then
                 local _, hname = r.GetTrackName(hub)
                 hubs[#hubs + 1] = { hub = hub, hub_idx = i, name = hname, incoming = incoming, outgoing = outgoing }
             end
@@ -10255,7 +10285,7 @@ function ShowRoutingHubs()
     end
 
     if #hubs == 0 then
-        r.ImGui_TextDisabled(ctx, "No routing in project.")
+        r.ImGui_TextDisabled(ctx, "No tracks match filter.")
         return
     end
 
@@ -10506,7 +10536,12 @@ function ShowRoutingHubs()
             if h.hub ~= TRACK then vis_in = {}; vis_out = {} end
         end
 
-        if #vis_in > 0 or #vis_out > 0 then
+        local show_empty_hub = show_all_tracks and hub_match
+        if only_selected and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") and h.hub ~= TRACK then
+            show_empty_hub = false
+        end
+
+        if #vis_in > 0 or #vis_out > 0 or show_empty_hub then
             r.ImGui_PushID(ctx, "hub_" .. h.hub_idx)
             local hub_guid = r.GetTrackGUID(h.hub)
             if hub_open_state[hub_guid] == nil then hub_open_state[hub_guid] = false end
@@ -12987,9 +13022,20 @@ function ShowScreenshotControls()
     local button_width = 20
     local button_height = 20
 
-    r.ImGui_SetCursorPos(ctx, window_width - button_width - 2, -2)
+    local close_visible = config.hide_main_window == true
+    local gear_x = window_width - button_width - 2
+    if close_visible then gear_x = gear_x - button_width - 4 end
+
+    r.ImGui_SetCursorPos(ctx, gear_x, -2)
     if DrawIconButton("gear", button_height) then
         r.ImGui_OpenPopup(ctx, "ScreenshotControlsMenu")
+    end
+
+    if close_visible then
+        r.ImGui_SetCursorPos(ctx, window_width - button_width - 2, -2)
+        if DrawIconButton("close", button_height, 0xFF0000FF) then
+            SHOULD_CLOSE_SCRIPT = true
+        end
     end
 
     if r.ImGui_BeginPopup(ctx, "ScreenshotControlsMenu") then
@@ -20387,14 +20433,11 @@ function ShowScreenshotWindow()
     -----------------------------------------------------------------------------------        
             -- SEND/RECEIVE GEDEELTE:
             elseif show_sends_window then
-                local is_patchbay = config.routing_view_mode == "patchbay"
-                if not is_patchbay then
-                    local controls_vertical = ShowScreenshotControls()
-                    r.ImGui_Separator(ctx)
-                    if controls_vertical then
-                        local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                        r.ImGui_Dummy(ctx, 0, line_height * 1.5)
-                    end
+                local controls_vertical = ShowScreenshotControls()
+                r.ImGui_Separator(ctx)
+                if controls_vertical then
+                    local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                    r.ImGui_Dummy(ctx, 0, line_height * 1.5)
                 end
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local current_y = r.ImGui_GetCursorPosY(ctx)

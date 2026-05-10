@@ -2,10 +2,9 @@ local r = reaper
 
 local PB = {}
 
-local NODE_W = 180
+local NODE_W_DEFAULT = 180
 local NODE_H = 60
 local PIN_R = 6
-local COL_W = 240
 local ROW_H = 80
 local GRID = 40
 local MASTER_GUID = "__MASTER__"
@@ -42,6 +41,15 @@ end
 
 local function GetConfig()
     return _G.config
+end
+
+local function NodeW()
+    local cfg = GetConfig()
+    return (cfg and cfg.patchbay_node_width) or NODE_W_DEFAULT
+end
+
+local function ColW()
+    return NodeW() + 60
 end
 
 local function HasGuid(guid)
@@ -105,8 +113,10 @@ local function GetCurrentProjectKey()
 end
 
 local function CollectVisibleTracks()
-    local filter = ((GetConfig().routing_filter_text or "")):lower()
-    local only_selected = GetConfig().routing_only_selected
+    local cfg = GetConfig()
+    local filter = ((cfg.routing_filter_text or "")):lower()
+    local only_selected = cfg.routing_only_selected
+    local only_explicit = cfg.patchbay_only_explicit_routing == true
     local TRACK_SEL = _G.TRACK
     local n = r.CountTracks(0)
     local list = {}
@@ -118,7 +128,30 @@ local function CollectVisibleTracks()
         local nsnd = r.GetTrackNumSends(t, 0)
         local mainsend = r.GetMediaTrackInfo_Value(t, "B_MAINSEND") == 1
         if mainsend then any_mainsend = true end
-        local has_routing = (nrec > 0 or nsnd > 0 or mainsend)
+
+        local has_explicit_receive = false
+        for k = 0, nrec - 1 do
+            local src = r.GetTrackSendInfo_Value(t, -1, k, "P_SRCTRACK")
+            if src and r.ValidatePtr(src, "MediaTrack*") then
+                local src_nsnd = r.GetTrackNumSends(src, 0)
+                for si = 0, src_nsnd - 1 do
+                    local sd = r.GetTrackSendInfo_Value(src, 0, si, "P_DESTTRACK")
+                    if sd == t then
+                        has_explicit_receive = true
+                        break
+                    end
+                end
+            end
+            if has_explicit_receive then break end
+        end
+
+        local has_explicit = (nsnd > 0 or has_explicit_receive)
+        local has_routing
+        if only_explicit then
+            has_routing = has_explicit
+        else
+            has_routing = (has_explicit or mainsend)
+        end
         local match_filter = filter == "" or name:lower():find(filter, 1, true) ~= nil
         local match_sel = true
         if only_selected and TRACK_SEL and r.ValidatePtr(TRACK_SEL, "MediaTrack*") then
@@ -136,8 +169,13 @@ local function CollectVisibleTracks()
     end
     local nmsnd = r.GetTrackNumSends(master, 0)
     local nmrec = r.GetTrackNumSends(master, -1)
-    local master_has_routing = any_mainsend or nmsnd > 0 or nmrec > 0
-    local show_master = GetConfig().patchbay_show_master ~= false
+    local master_has_routing
+    if only_explicit then
+        master_has_routing = (nmsnd > 0 or nmrec > 0)
+    else
+        master_has_routing = (any_mainsend or nmsnd > 0 or nmrec > 0)
+    end
+    local show_master = cfg.patchbay_show_master ~= false
     if show_master and master_has_routing and master_match_filter and master_match_sel then
         list[#list + 1] = { track = master, idx = -1, name = "MASTER", guid = MASTER_GUID, is_master = true }
     end
@@ -200,11 +238,11 @@ local function AutoLayout(tracks)
         local cl = columns[ci] or {}
         if #cl > max_rows then max_rows = #cl end
         for ri = 1, #cl do
-            node_positions[cl[ri].guid] = { x = ci * COL_W + 40, y = (ri - 1) * ROW_H + 40 }
+            node_positions[cl[ri].guid] = { x = ci * ColW() + 40, y = (ri - 1) * ROW_H + 40 }
         end
     end
     if master_entry then
-        local mx = col * COL_W + 40
+        local mx = col * ColW() + 40
         local my = math.max(40, ((max_rows - 1) * ROW_H) * 0.5 + 40)
         node_positions[MASTER_GUID] = { x = mx, y = my }
     end
@@ -228,7 +266,7 @@ local function EnsurePositions(tracks)
     for i = 1, #tracks do
         local g = tracks[i].guid
         if not node_positions[g] then
-            node_positions[g] = { x = max_x + COL_W, y = next_y }
+            node_positions[g] = { x = max_x + ColW(), y = next_y }
             next_y = next_y + ROW_H
             layout_dirty = true
         end
@@ -513,6 +551,13 @@ function ShowRoutingPatchbay()
             cfg.patchbay_show_master = new_val
             if _G.SaveConfig then _G.SaveConfig() end
         end
+        r.ImGui_SameLine(ctx)
+        local only_explicit = cfg.patchbay_only_explicit_routing == true
+        local changed_explicit, new_explicit = r.ImGui_Checkbox(ctx, "Only explicit sends/receives", only_explicit)
+        if changed_explicit then
+            cfg.patchbay_only_explicit_routing = new_explicit
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
     end
     local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
     local hint_h = 22
@@ -602,7 +647,7 @@ function ShowRoutingPatchbay()
             local p = node_positions[tracks[i].guid]
             if p then
                 local x1, y1 = p.x, p.y
-                local x2, y2 = p.x + NODE_W, p.y + NODE_H
+                local x2, y2 = p.x + NodeW(), p.y + NODE_H
                 if not min_x then
                     min_x, min_y, max_x, max_y = x1, y1, x2, y2
                 else
@@ -630,7 +675,7 @@ function ShowRoutingPatchbay()
         if not p then return nil end
         local x1 = origin_x + canvas_offset_x + p.x * canvas_zoom
         local y1 = origin_y + canvas_offset_y + p.y * canvas_zoom
-        return x1, y1, x1 + NODE_W * canvas_zoom, y1 + NODE_H * canvas_zoom
+        return x1, y1, x1 + NodeW() * canvas_zoom, y1 + NODE_H * canvas_zoom
     end
 
     local function PinPos(g, side)
@@ -789,7 +834,7 @@ function ShowRoutingPatchbay()
             else
                 label = string.format("#%d  %s", tr.idx + 1, tr.name)
             end
-            local trunc = TruncateText(ctx, label, NODE_W * canvas_zoom - 14)
+            local trunc = TruncateText(ctx, label, NodeW() * canvas_zoom - 14)
             r.ImGui_DrawList_AddText(draw_list, x1 + 10, y1 + 6, is_master_node and 0xFFE090FF or 0xEEEEEEFF, trunc)
 
             local stats
@@ -806,7 +851,7 @@ function ShowRoutingPatchbay()
                 local nsnd = r.GetTrackNumSends(tr.track, 0)
                 stats = string.format("%d in / %d out", nrec, nsnd)
             end
-            local stats_max_w = (NODE_W * canvas_zoom) - 24
+            local stats_max_w = (NodeW() * canvas_zoom) - 24
             if not is_master_node then stats_max_w = stats_max_w - (2 * (14 * canvas_zoom) + 10) end
             local stats_trunc = TruncateText(ctx, stats, stats_max_w)
             r.ImGui_DrawList_AddText(draw_list, x1 + 10, y2 - 18, 0xAAAAAAFF, stats_trunc)
@@ -820,7 +865,7 @@ function ShowRoutingPatchbay()
 
             r.ImGui_SetCursorScreenPos(ctx, x1, y1)
             if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
-            r.ImGui_InvisibleButton(ctx, "##body", NODE_W * canvas_zoom, NODE_H * canvas_zoom)
+            r.ImGui_InvisibleButton(ctx, "##body", NodeW() * canvas_zoom, NODE_H * canvas_zoom)
             local body_active = r.ImGui_IsItemActive(ctx)
             local body_hovered = r.ImGui_IsItemHovered(ctx)
             if body_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
