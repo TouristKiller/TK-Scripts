@@ -1,8 +1,10 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.7.5
+-- @version 0.7.6
 -- @changelog:
 --[[ 
+    v0.7.6:
+        + Parser Test 
     v0.7.5:
         + Projects: massive performance fix. Per-row preview/cover lookups (GetProjectPreviewPath / GetProjectCoverPath) are now cached per project instead of doing disk I/O (EnumerateFiles, file_exists, JS_File_Stat) every frame for every visible row. Frame rate restored from 5-6 fps back to 30 fps with the Projects view open. Caches are invalidated on Refresh (R) and when previews are created/deleted.
 
@@ -3026,6 +3028,7 @@ local native_folders_ini_path = r.GetResourcePath() .. os_separator .. "reaper-f
 
 local native_fx_reverse_lookup = nil
 local native_fx_normalized_lookup = nil
+local native_fx_identifier_lookup = nil
 
 local _nf_cache_folders_list = nil
 local _nf_cache_folder_data = nil
@@ -3037,15 +3040,53 @@ local function InvalidateNativeFolderCache()
     _nf_cache_folder_data = nil
     _nf_cache_nb_folders = nil
     _nf_cache_names = nil
+    native_fx_reverse_lookup = nil
+    native_fx_normalized_lookup = nil
+    native_fx_identifier_lookup = nil
+end
+
+local function AddNativeFxLookupKey(map, key, name)
+    if not key or key == "" or not name or name == "" then return end
+    key = tostring(key):gsub("\\", "/"):lower()
+    if key ~= "" and not map[key] then map[key] = name end
+
+    local normalized = key:gsub(" ", "_"):gsub("-", "_")
+    if normalized ~= "" and not map[normalized] then map[normalized] = name end
+end
+
+local function AddNativeFxIdentifierVariants(map, ident, name)
+    if not ident or ident == "" then return end
+
+    local value = tostring(ident):gsub("\\", "/")
+    AddNativeFxLookupKey(map, value, name)
+
+    local base = value:match("([^/]+)$")
+    AddNativeFxLookupKey(map, base, name)
+
+    local lower = value:lower()
+    local vst3_pos = lower:find("%.vst3", 1, true)
+    if vst3_pos then
+        local bundle = value:sub(1, vst3_pos + 4)
+        AddNativeFxLookupKey(map, bundle, name)
+        AddNativeFxLookupKey(map, bundle:match("([^/]+)$"), name)
+
+        local suffix = value:sub(vst3_pos + 5):match("^(<.+)")
+        if suffix then
+            AddNativeFxLookupKey(map, bundle .. suffix, name)
+            AddNativeFxLookupKey(map, (bundle .. suffix):match("([^/]+)$"), name)
+        end
+    end
 end
 
 function BuildNativeFxReverseLookup()
     native_fx_reverse_lookup = {}
     native_fx_normalized_lookup = {}
+    native_fx_identifier_lookup = {}
     for i = 0, math.huge do
         local retval, name, ident = r.EnumInstalledFX(i)
         if not retval then break end
         native_fx_reverse_lookup[name] = ident
+        AddNativeFxIdentifierVariants(native_fx_identifier_lookup, ident, name)
         local norm = name:lower()
         norm = norm:gsub("^vst3?i?:%s*", "")
         norm = norm:gsub("^js:%s*", "")
@@ -3096,6 +3137,90 @@ function GetNativeFxType(plugin_name)
     if plugin_name:match("^LV2") then return "1" end
     if plugin_name:match("^AU") then return "5" end
     return nil
+end
+
+function ResolveNativeFolderItem(item_path)
+    if not item_path or item_path == "" then return nil end
+    if not native_fx_identifier_lookup then
+        BuildNativeFxReverseLookup()
+    end
+
+    local candidates = {}
+    local function add(v)
+        if v and v ~= "" then candidates[#candidates + 1] = v end
+    end
+
+    local value = tostring(item_path):gsub("\\", "/")
+    add(value)
+    add(value:match("([^/]+)$"))
+
+    local lower = value:lower()
+    local vst3_pos = lower:find("%.vst3", 1, true)
+    if vst3_pos then
+        local bundle = value:sub(1, vst3_pos + 4)
+        add(bundle)
+        add(bundle:match("([^/]+)$"))
+
+        local suffix = value:sub(vst3_pos + 5):match("^(<.+)")
+        if suffix then
+            add(bundle .. suffix)
+            add((bundle .. suffix):match("([^/]+)$"))
+        end
+    end
+
+    for _, candidate in ipairs(candidates) do
+        local key = tostring(candidate):gsub("\\", "/"):lower()
+        local found = native_fx_identifier_lookup[key]
+        if found then return found end
+
+        key = key:gsub(" ", "_"):gsub("-", "_")
+        found = native_fx_identifier_lookup[key]
+        if found then return found end
+    end
+
+    return nil
+end
+
+function GetNativeFolderResolvedPlugins(folder_idx)
+    local _, folder_data = ParseNativeFoldersINI()
+    local fd = folder_data and folder_data[folder_idx]
+    if not fd then return {} end
+
+    local plugins = {}
+    local seen = {}
+    for i = 0, (fd.nb or 0) - 1 do
+        local fx_type = tostring(fd.types[i] or "")
+        local item = fd.items[i]
+        local fx_name
+
+        if fx_type == "1000" and item and item ~= "" then
+            fx_name = item .. ".RfxChain"
+        elseif fx_type ~= "1048576" then
+            fx_name = ResolveNativeFolderItem(item)
+        end
+
+        if fx_name and not seen[fx_name] then
+            plugins[#plugins + 1] = fx_name
+            seen[fx_name] = true
+        end
+    end
+
+    return plugins
+end
+
+function CountNativeFolderPluginItems(folder_idx)
+    local _, folder_data = ParseNativeFoldersINI()
+    local fd = folder_data and folder_data[folder_idx]
+    if not fd then return 0 end
+
+    local count = 0
+    for i = 0, (fd.nb or 0) - 1 do
+        local fx_type = tostring(fd.types[i] or "")
+        if fx_type ~= "1048576" then
+            count = count + 1
+        end
+    end
+    return count
 end
 
 function ParseNativeFoldersINI()
@@ -4347,20 +4472,43 @@ end
 
 local folders_category = {}
 function initFoldersCategory()
-    for i = 1, #CAT_TEST do
+    folders_category = {}
+    for i = 1, #(CAT_TEST or {}) do
         if CAT_TEST[i].name == "FOLDERS" then
-            folders_category = CAT_TEST[i].list
+            folders_category = CAT_TEST[i].list or {}
             break
         end
     end
     local ini_names = GetNativeFolderNamesInOrder and GetNativeFolderNamesInOrder() or {}
     for _, entry in ipairs(ini_names) do
         local found = false
+        local native_item_count = CountNativeFolderPluginItems and CountNativeFolderPluginItems(entry.idx) or 0
+        local resolved_fx = nil
         for _, fc in ipairs(folders_category) do
-            if fc.name == entry.name then found = true break end
+            if fc.name == entry.name then
+                found = true
+                fc.fx = fc.fx or {}
+                if native_item_count > #fc.fx then
+                    resolved_fx = GetNativeFolderResolvedPlugins and GetNativeFolderResolvedPlugins(entry.idx) or {}
+                end
+                if resolved_fx and #resolved_fx > #fc.fx then
+                    fc.fx = resolved_fx
+                elseif resolved_fx then
+                    local seen = {}
+                    for _, fx in ipairs(fc.fx) do seen[fx] = true end
+                    for _, fx in ipairs(resolved_fx) do
+                        if not seen[fx] then
+                            fc.fx[#fc.fx + 1] = fx
+                            seen[fx] = true
+                        end
+                    end
+                end
+                break
+            end
         end
         if not found then
-            folders_category[#folders_category + 1] = { name = entry.name, fx = {} }
+            resolved_fx = GetNativeFolderResolvedPlugins and GetNativeFolderResolvedPlugins(entry.idx) or {}
+            folders_category[#folders_category + 1] = { name = entry.name, fx = resolved_fx }
         end
     end
 end
@@ -4517,6 +4665,11 @@ function ShowPluginManagerTab()
     end
     if r.ImGui_Button(ctx, "Update Plugin List", 110) then
         FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
+        PLUGIN_LIST = FX_LIST_TEST
+        if initFoldersCategory then initFoldersCategory() end
+        BuildPluginCache()
+        ClearPerformanceCaches()
+        InitializeFilteredPlugins()
     end
     r.ImGui_SameLine(ctx)
 
@@ -12487,6 +12640,7 @@ function ShowScreenshotControls()
         if r.ImGui_MenuItem(ctx, "Update Plugins") then
             FX_LIST_TEST, CAT_TEST, FX_DEV_LIST_FILE = MakeFXFiles()
             PLUGIN_LIST = FX_LIST_TEST
+            if initFoldersCategory then initFoldersCategory() end
             BuildPluginCache()
             ClearPerformanceCaches()
             InitializeFilteredPlugins()
