@@ -1,7 +1,11 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.7
+-- @version 1.2.8
 --[[
+v1.2.8
+    + Tracks: optional "Scroll Selected Track Into View" mode to auto-center the selected track in the mixer area
+    + Master: new display mode "Separate Window" with optional open state and remembered window position/size
+
 v1.2.7
   + Cables: no longer drawn when the IO/Sends section is collapsed (also fixes phantom cables between two off-screen tracks)
   + Layout: fixed master channel on the left pushing the right-pinned tracks and Instrument Rack out of view
@@ -228,6 +232,8 @@ mixer_state.sendrecv_handle_clicked = false
 mixer_state.fader_reset_track = nil
 mixer_state.icon_target_track = nil
 mixer_state.last_clicked_track_idx = nil
+mixer_state.auto_scroll_selected_track_last_signature = nil
+mixer_state.auto_scroll_selected_track_pending_guid = nil
 mixer_state.settings_tab = 0
 mixer_state.sendrecv_expanded = {}
 mixer_state.select_settings_tab = nil
@@ -335,6 +341,13 @@ local settings = {
  simple_mixer_cables_selected_only = false,
  simple_mixer_show_master = false,
  simple_mixer_master_position = "left",
+ simple_mixer_master_display_mode = "inline",
+ simple_mixer_master_window_open = false,
+ simple_mixer_master_window_x = -1,
+ simple_mixer_master_window_y = -1,
+ simple_mixer_master_window_width = 110,
+ simple_mixer_master_window_height = 700,
+ simple_mixer_scroll_selected_track_into_view = false,
  simple_mixer_show_rack = true,
  simple_mixer_rack_width = 220,
  simple_mixer_rack_thumb_height = 90,
@@ -9196,18 +9209,63 @@ function DrawSettingsWindow()
     r.ImGui_TableNextColumn(ctx)
     r.ImGui_SetNextItemWidth(ctx, -1)
     rv, settings.simple_mixer_channel_width = r.ImGui_SliderInt(ctx, "##ChannelW", settings.simple_mixer_channel_width or 70, 60, 160, "%d px")
+
+    r.ImGui_TableNextRow(ctx)
+    r.ImGui_TableNextColumn(ctx)
+    rv, settings.simple_mixer_scroll_selected_track_into_view = r.ImGui_Checkbox(ctx, "Scroll Selected Track Into View", settings.simple_mixer_scroll_selected_track_into_view or false)
+    if rv then SaveMixerSettings() end
+    r.ImGui_TableNextColumn(ctx)
+    if r.ImGui_IsItemHovered(ctx) then
+     r.ImGui_SetTooltip(ctx, "Automatically centers the track area on the selected track.")
+    end
     
     r.ImGui_TableNextRow(ctx)
     r.ImGui_TableNextColumn(ctx)
     rv, settings.simple_mixer_show_master = r.ImGui_Checkbox(ctx, "Show Master", settings.simple_mixer_show_master or false)
+    if rv then SaveMixerSettings() end
     r.ImGui_TableNextColumn(ctx)
     if settings.simple_mixer_show_master then
+     local master_display_mode = settings.simple_mixer_master_display_mode or "inline"
+     if master_display_mode ~= "inline" and master_display_mode ~= "separate" then
+      master_display_mode = "inline"
+      settings.simple_mixer_master_display_mode = "inline"
+      SaveMixerSettings()
+     end
+     if r.ImGui_RadioButton(ctx, "Inline", master_display_mode == "inline") then
+      settings.simple_mixer_master_display_mode = "inline"
+      SaveMixerSettings()
+     end
+     r.ImGui_SameLine(ctx)
+     if r.ImGui_RadioButton(ctx, "Separate Window", master_display_mode == "separate") then
+      settings.simple_mixer_master_display_mode = "separate"
+      SaveMixerSettings()
+     end
+    end
+
+    if settings.simple_mixer_show_master and (settings.simple_mixer_master_display_mode or "inline") == "inline" then
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     r.ImGui_Text(ctx, "Master Position:")
+     r.ImGui_TableNextColumn(ctx)
      if r.ImGui_RadioButton(ctx, "Left", settings.simple_mixer_master_position == "left") then
       settings.simple_mixer_master_position = "left"
+      SaveMixerSettings()
      end
      r.ImGui_SameLine(ctx)
      if r.ImGui_RadioButton(ctx, "Right", settings.simple_mixer_master_position == "right") then
       settings.simple_mixer_master_position = "right"
+      SaveMixerSettings()
+     end
+    end
+
+    if settings.simple_mixer_show_master and (settings.simple_mixer_master_display_mode or "inline") == "separate" then
+     r.ImGui_TableNextRow(ctx)
+     r.ImGui_TableNextColumn(ctx)
+     rv, settings.simple_mixer_master_window_open = r.ImGui_Checkbox(ctx, "Master Window Open", settings.simple_mixer_master_window_open or false)
+     if rv then SaveMixerSettings() end
+     r.ImGui_TableNextColumn(ctx)
+     if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Show the master in a separate dockable window.")
      end
     end
 
@@ -11939,6 +11997,20 @@ function DrawInstrumentRack(ctx, width, height, project_mixer_tracks)
  r.ImGui_Dummy(ctx, width, height)
 end
 
+local function DrawMasterFaderChannel(mixer_ctx, track_width, base_slider_height, avail_height)
+ local master = r.GetMasterTrack(0)
+ if not master then return end
+ local sx, sy = r.ImGui_GetCursorScreenPos(mixer_ctx)
+ DrawMixerChannel(mixer_ctx, master, "MASTER", 0, track_width, base_slider_height, true, false, true, nil)
+ if settings.simple_mixer_track_separator_enabled then
+  local dl = r.ImGui_GetForegroundDrawList(mixer_ctx)
+  local sc = GetSeparatorColorForTrack(master, settings.simple_mixer_track_separator_color)
+  local sth = settings.simple_mixer_track_separator_thickness or 1.0
+  r.ImGui_DrawList_AddLine(dl, sx - 1, sy, sx - 1, sy + avail_height, sc, sth)
+  r.ImGui_DrawList_AddLine(dl, sx + track_width, sy, sx + track_width, sy + avail_height, sc, sth)
+ end
+end
+
 function DrawSimpleMixerWindow()
  if not settings.simple_mixer_window_open then return end
 
@@ -12164,20 +12236,12 @@ function DrawSimpleMixerWindow()
    if base_slider_height < 100 then base_slider_height = 100 end
    slider_height = base_slider_height
 
-   local function RenderMasterFader()
-    local master = r.GetMasterTrack(0)
-    if master then
-     local sx, sy = r.ImGui_GetCursorScreenPos(mixer_ctx)
-     DrawMixerChannel(mixer_ctx, master, "MASTER", 0, track_width, base_slider_height, true, false, true, nil)
-     if settings.simple_mixer_track_separator_enabled then
-      local dl = r.ImGui_GetForegroundDrawList(mixer_ctx)
-      local sc = GetSeparatorColorForTrack(master, settings.simple_mixer_track_separator_color)
-      local sth = settings.simple_mixer_track_separator_thickness or 1.0
-      r.ImGui_DrawList_AddLine(dl, sx - 1, sy, sx - 1, sy + avail_height, sc, sth)
-      r.ImGui_DrawList_AddLine(dl, sx + track_width, sy, sx + track_width, sy + avail_height, sc, sth)
-     end
+    local master_display_mode = settings.simple_mixer_master_display_mode or "inline"
+    if master_display_mode ~= "inline" and master_display_mode ~= "separate" then
+     master_display_mode = "inline"
+     settings.simple_mixer_master_display_mode = "inline"
     end
-   end
+    local show_master_inline = (settings.simple_mixer_show_master and master_display_mode == "inline")
 
    local pinned_tracks_data
    local pinned_spacers
@@ -12273,10 +12337,10 @@ function DrawSimpleMixerWindow()
     end
    end
 
-   if settings.simple_mixer_show_master and settings.simple_mixer_master_position == "left" then
+     if show_master_inline and settings.simple_mixer_master_position == "left" then
     r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
     if r.ImGui_BeginChild(mixer_ctx, "MasterFaderLeft", track_width + 4, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
-     RenderMasterFader()
+         DrawMasterFaderChannel(mixer_ctx, track_width, base_slider_height, avail_height)
      r.ImGui_EndChild(mixer_ctx)
     end
     r.ImGui_PopStyleColor(mixer_ctx, 1)
@@ -12308,8 +12372,8 @@ function DrawSimpleMixerWindow()
     r.ImGui_SameLine(mixer_ctx, 0, 4)
    end
 
-   local master_right_width = (settings.simple_mixer_show_master and settings.simple_mixer_master_position == "right") and (track_width + 8) or 0
-   local master_left_width = (settings.simple_mixer_show_master and settings.simple_mixer_master_position == "left") and (track_width + 8) or 0
+    local master_right_width = (show_master_inline and settings.simple_mixer_master_position == "right") and (track_width + 8) or 0
+    local master_left_width = (show_master_inline and settings.simple_mixer_master_position == "left") and (track_width + 8) or 0
    local rack_actual_width = settings.simple_mixer_rack_body_collapsed and 14 or (settings.simple_mixer_rack_width or 220)
    local rack_width = (settings.simple_mixer_show_rack and rack_actual_width + 4) or 0
    local right_pinned_gap = (#right_pinned_data > 0) and 3 or 0
@@ -12434,6 +12498,32 @@ function DrawSimpleMixerWindow()
      end
     end
     table.sort(sorted_tracks, function(a, b) return a.num < b.num end)
+
+        if settings.simple_mixer_scroll_selected_track_into_view then
+         local auto_scroll_target_track = nil
+         if mixer_state.last_clicked_track_idx ~= nil then
+            local clicked_track = r.GetTrack(0, mixer_state.last_clicked_track_idx)
+            if clicked_track and r.ValidatePtr(clicked_track, "MediaTrack*") and r.IsTrackSelected(clicked_track) then
+             auto_scroll_target_track = clicked_track
+            end
+         end
+         if not auto_scroll_target_track then
+            auto_scroll_target_track = r.GetSelectedTrack(0, 0)
+         end
+         local auto_scroll_target_guid = nil
+         if auto_scroll_target_track and r.ValidatePtr(auto_scroll_target_track, "MediaTrack*") then
+            auto_scroll_target_guid = r.GetTrackGUID(auto_scroll_target_track)
+         end
+         local selected_count = r.CountSelectedTracks(0)
+         local selection_signature = tostring(selected_count) .. "|" .. (auto_scroll_target_guid or "")
+         if mixer_state.auto_scroll_selected_track_last_signature ~= selection_signature then
+            mixer_state.auto_scroll_selected_track_last_signature = selection_signature
+            mixer_state.auto_scroll_selected_track_pending_guid = auto_scroll_target_guid
+         end
+        else
+            mixer_state.auto_scroll_selected_track_last_signature = nil
+            mixer_state.auto_scroll_selected_track_pending_guid = nil
+        end
 
     if settings.simple_mixer_show_folder_groups then
      for idx, track_data in ipairs(sorted_tracks) do
@@ -12754,6 +12844,31 @@ function DrawSimpleMixerWindow()
      ::continue_track_loop::
     end
 
+    if settings.simple_mixer_scroll_selected_track_into_view then
+     local pending_guid = mixer_state.auto_scroll_selected_track_pending_guid
+     if pending_guid and pending_guid ~= "" then
+      local target_idx = nil
+      for i, track_data in ipairs(sorted_tracks) do
+       if track_data.guid == pending_guid then
+        target_idx = i
+        break
+       end
+      end
+      if target_idx and track_positions[target_idx] then
+       local child_x = select(1, r.ImGui_GetWindowPos(mixer_ctx))
+       local scroll_x = r.ImGui_GetScrollX(mixer_ctx)
+       local track_screen_x = track_positions[target_idx].x
+       local track_local_x = (track_screen_x - child_x) + scroll_x
+       local target_scroll_x = track_local_x + (track_width * 0.5) - (child_width * 0.5)
+       local max_scroll_x = r.ImGui_GetScrollMaxX(mixer_ctx)
+       if target_scroll_x < 0 then target_scroll_x = 0 end
+       if max_scroll_x and target_scroll_x > max_scroll_x then target_scroll_x = max_scroll_x end
+       r.ImGui_SetScrollX(mixer_ctx, target_scroll_x)
+      end
+     end
+     mixer_state.auto_scroll_selected_track_pending_guid = nil
+    end
+
     local remaining_width = r.ImGui_GetContentRegionAvail(mixer_ctx)
     if remaining_width > 10 then
      if first_track_rendered then
@@ -13044,11 +13159,11 @@ function DrawSimpleMixerWindow()
     r.ImGui_PopStyleColor(mixer_ctx, 1)
    end
 
-   if settings.simple_mixer_show_master and settings.simple_mixer_master_position == "right" then
+     if show_master_inline and settings.simple_mixer_master_position == "right" then
     r.ImGui_SameLine(mixer_ctx, 0, 4)
     r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
     if r.ImGui_BeginChild(mixer_ctx, "MasterFaderRight", track_width + 4, avail_height, 0, r.ImGui_WindowFlags_NoScrollbar()) then
-     RenderMasterFader()
+         DrawMasterFaderChannel(mixer_ctx, track_width, base_slider_height, avail_height)
      r.ImGui_EndChild(mixer_ctx)
     end
     r.ImGui_PopStyleColor(mixer_ctx, 1)
@@ -13163,6 +13278,75 @@ function DrawSimpleMixerWindow()
  if not open then settings.simple_mixer_window_open = false end
 end
 
+function DrawMasterSeparateWindow()
+ if not settings.simple_mixer_show_master then return end
+ if (settings.simple_mixer_master_display_mode or "inline") ~= "separate" then return end
+ if not settings.simple_mixer_master_window_open then return end
+
+ EnsureSimpleMixerFont()
+
+ local flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoFocusOnAppearing()
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
+ r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 1)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
+ r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), settings.simple_mixer_border_color or 0x444444FF)
+
+ r.ImGui_SetNextWindowSize(ctx, settings.simple_mixer_master_window_width or 110, settings.simple_mixer_master_window_height or 700, r.ImGui_Cond_FirstUseEver())
+ if settings.simple_mixer_remember_state ~= false then
+  local sx = settings.simple_mixer_master_window_x
+  local sy = settings.simple_mixer_master_window_y
+  if sx and sy and sx > -1 and sy > -1 then
+   r.ImGui_SetNextWindowPos(ctx, sx, sy, r.ImGui_Cond_FirstUseEver())
+  end
+ end
+
+ local visible, open = r.ImGui_Begin(ctx, "TK Mixer Master", true, flags)
+ if visible then
+  if font_simple_mixer then
+   r.ImGui_PushFont(ctx, font_simple_mixer, settings.simple_mixer_font_size or 12)
+  end
+  local track_width = settings.simple_mixer_channel_width or settings.simple_mixer_track_width or 70
+  local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
+  local base_slider_height = avail_h
+  if base_slider_height < 100 then base_slider_height = 100 end
+
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
+  if r.ImGui_BeginChild(ctx, "MasterFaderSeparate", math.max(avail_w, track_width + 4), avail_h, 0, r.ImGui_WindowFlags_NoScrollbar()) then
+   DrawMasterFaderChannel(ctx, track_width, base_slider_height, avail_h)
+   r.ImGui_EndChild(ctx)
+  end
+  r.ImGui_PopStyleColor(ctx, 1)
+
+  if settings.simple_mixer_remember_state ~= false then
+   local wx, wy = r.ImGui_GetWindowPos(ctx)
+   local ww, wh = r.ImGui_GetWindowSize(ctx)
+   local sx = settings.simple_mixer_master_window_x or -1
+   local sy = settings.simple_mixer_master_window_y or -1
+   local sw = settings.simple_mixer_master_window_width or 110
+   local sh = settings.simple_mixer_master_window_height or 700
+   if math.abs(wx - sx) > 1 or math.abs(wy - sy) > 1 or math.abs(ww - sw) > 1 or math.abs(wh - sh) > 1 then
+    settings.simple_mixer_master_window_x = math.floor(wx)
+    settings.simple_mixer_master_window_y = math.floor(wy)
+    settings.simple_mixer_master_window_width = math.floor(ww)
+    settings.simple_mixer_master_window_height = math.floor(wh)
+    SaveMixerSettings()
+   end
+  end
+
+  if font_simple_mixer then
+   r.ImGui_PopFont(ctx)
+  end
+  r.ImGui_End(ctx)
+ end
+
+ r.ImGui_PopStyleColor(ctx, 2)
+ r.ImGui_PopStyleVar(ctx, 2)
+ if not open and settings.simple_mixer_master_window_open then
+  settings.simple_mixer_master_window_open = false
+  SaveMixerSettings()
+ end
+end
+
 function HandleMixerIconBrowser()
  if not IconBrowser or not IconBrowser.show_window then return end
  local ok, selected_icon = pcall(IconBrowser.Show, ctx, settings)
@@ -13219,6 +13403,7 @@ function Loop()
  end
 
  DrawSimpleMixerWindow()
+ DrawMasterSeparateWindow()
  DrawSettingsWindow()
  HandleMixerIconBrowser()
 
