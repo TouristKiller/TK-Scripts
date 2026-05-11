@@ -30,11 +30,11 @@ local r = reaper
 -- Get script path
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 
--- Verify TKFXBPatchbay exists (same folder)
-local patchbay_path = script_path .. "TKFXBPatchbay.lua"
+-- Verify TKFXBPatchbay_Standalone exists (same folder)
+local patchbay_path = script_path .. "TKFXBPatchbay_Standalone.lua"
 if not r.file_exists(patchbay_path) then
     r.ShowMessageBox(
-        "Cannot find TKFXBPatchbay.lua in:\n" .. patchbay_path .. "\n\n" ..
+        "Cannot find TKFXBPatchbay_Standalone.lua in:\n" .. patchbay_path .. "\n\n" ..
         "Please ensure the Patchbay module is in the same folder.",
         "TK Patchbay Viewer - Missing Dependency",
         0
