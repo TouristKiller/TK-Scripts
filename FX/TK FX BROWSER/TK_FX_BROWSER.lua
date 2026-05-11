@@ -1,8 +1,16 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.8.7
+-- @version 2.9.0
 -- @changelog:
 --[[ 
+    v2.8.8:
+        + Patchbay workflow overhaul: pin/unpin nodes, collapse/expand nodes, persistent state (layout, pin, collapse) and improved drag behavior with pin-lock support.
+        + Routing productivity: compact bulk actions, node context group routing actions, Ctrl-multiselect improvements and explicit focus behavior.
+        + Snapshot system: project-bound patchbay snapshots with save/load/delete recall for layout + filter + view state.
+        + Layout controls: preset layouts (Compact/Hybrid/Wide) and Align Grid for fast cleanup without full auto-layout.
+        + Folder-aware visuals: folder badges, parent/child collapsed indicators (F/C) and subtle folder-color node tinting for folder groups.
+        + Visual clarity updates: dedicated (dimmed) warm color for routes to Master and clearer patchbay filter naming ("Focus selected").
+
     v2.8.7:
         + Patchbay: node width is now configurable via Settings > ROUTING tab (80–400 px, default 180). Auto-layout column spacing scales proportionally.
         + Hubs: "All Tracks" toggle to show tracks without sends/receives.
@@ -10064,13 +10072,69 @@ function BuildVisibleRoutingTracks()
 end
 
 function DrawRoutingFilterBar(is_matrix)
+    local function RoutingTextButton(id, label, w)
+        local h = r.ImGui_GetFrameHeight(ctx)
+        local clicked = r.ImGui_InvisibleButton(ctx, id, w, h)
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+        local _, y2 = r.ImGui_GetItemRectMax(ctx)
+        local hovered = r.ImGui_IsItemHovered(ctx)
+        local active = r.ImGui_IsItemActive(ctx)
+        local col = 0xD0D0D0FF
+        if hovered then col = 0x7AA2F7FF end
+        if active then col = 0x9CB6F9FF end
+        local th = r.ImGui_GetTextLineHeight(ctx)
+        r.ImGui_DrawList_AddText(dl, x1 + 4, y1 + ((y2 - y1 - th) * 0.5), col, label)
+        return clicked
+    end
+
     r.ImGui_PushItemWidth(ctx, 160)
     local ch_f, v_f = r.ImGui_InputTextWithHint(ctx, "##routing_filter", "Filter tracks...", config.routing_filter_text or "")
     if ch_f then config.routing_filter_text = v_f end
     if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) then SaveConfig() end
     r.ImGui_PopItemWidth(ctx)
-    r.ImGui_SameLine(ctx)
+    if not is_matrix and config.routing_view_mode == "patchbay" then
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 130)
+        local ch_nw, v_nw = r.ImGui_SliderInt(ctx, "##patchbay_node_width_filter", config.patchbay_node_width or 180, 80, 400)
+        if ch_nw then
+            config.patchbay_node_width = v_nw
+            SaveConfig()
+        end
+        r.ImGui_SameLine(ctx)
+        if RoutingTextButton("##patchbay_zoom_out", "-", 16) and _G.PatchbayZoomStep then
+            _G.PatchbayZoomStep(1 / 1.2)
+        end
+        r.ImGui_SameLine(ctx)
+        local zoom_label = _G.PatchbayZoomPercent and string.format("%d%%", _G.PatchbayZoomPercent()) or "100%"
+        r.ImGui_Text(ctx, zoom_label)
+        r.ImGui_SameLine(ctx)
+        if RoutingTextButton("##patchbay_zoom_in", "+", 16) and _G.PatchbayZoomStep then
+            _G.PatchbayZoomStep(1.2)
+        end
+        r.ImGui_SameLine(ctx)
+        if RoutingTextButton("##patchbay_zoom_reset", "1:1", 28) and _G.PatchbayZoomReset then
+            _G.PatchbayZoomReset()
+        end
+        r.ImGui_SameLine(ctx)
+        if RoutingTextButton("##patchbay_zoom_fit", "Fit", 22) and _G.PatchbayZoomFit then
+            _G.PatchbayZoomFit()
+        end
+        r.ImGui_SameLine(ctx)
+        local lock_mode = (config and config.patchbay_lock_mode) or "none"
+        local lock_text = "Lock: Off"
+        local lock_col = 0x9AA0A6FF
+        if lock_mode == "layout" then
+            lock_text = "Lock: Layout"
+            lock_col = 0xE3C06FFF
+        elseif lock_mode == "all" then
+            lock_text = "Lock: All"
+            lock_col = 0xE36D6DFF
+        end
+        r.ImGui_TextColored(ctx, lock_col, lock_text)
+    end
     if is_matrix then
+        r.ImGui_SameLine(ctx)
         local ch1, v1 = r.ImGui_Checkbox(ctx, "Routed", config.routing_only_routed and true or false)
         if ch1 then config.routing_only_routed = v1; SaveConfig() end
         r.ImGui_SameLine(ctx)
@@ -10078,10 +10142,14 @@ function DrawRoutingFilterBar(is_matrix)
         if chp then config.routing_include_partners = vp; SaveConfig() end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Include routing partners of filtered tracks") end
         r.ImGui_SameLine(ctx)
+        local ch2, v2 = r.ImGui_Checkbox(ctx, "Focus selected", config.routing_only_selected and true or false)
+        if ch2 then config.routing_only_selected = v2; SaveConfig() end
+    elseif config.routing_view_mode ~= "patchbay" then
+        r.ImGui_SameLine(ctx)
+        local ch2, v2 = r.ImGui_Checkbox(ctx, "Focus selected", config.routing_only_selected and true or false)
+        if ch2 then config.routing_only_selected = v2; SaveConfig() end
     end
-    local ch2, v2 = r.ImGui_Checkbox(ctx, "Selected track", config.routing_only_selected and true or false)
-    if ch2 then config.routing_only_selected = v2; SaveConfig() end
-    if not is_matrix then
+    if not is_matrix and config.routing_view_mode == "hubs" then
         r.ImGui_SameLine(ctx)
         local dir_opts = { "All", "In", "Out" }
         local cur_dir = config.routing_direction or "All"
@@ -10119,9 +10187,11 @@ function DrawRoutingFilterBar(is_matrix)
         local ch3, v3 = r.ImGui_Checkbox(ctx, "By folder", config.routing_group_by_folder and true or false)
         if ch3 then config.routing_group_by_folder = v3; SaveConfig() end
     end
+    r.ImGui_Separator(ctx)
 end
 
 function ShowRoutingMatrix()
+    r.ImGui_Separator(ctx)
     DrawRoutingFilterBar(true)
     r.ImGui_Dummy(ctx, 0, 8)
 
@@ -10241,6 +10311,7 @@ function ShowRoutingMatrix()
 end
 
 function ShowRoutingHubs()
+    r.ImGui_Separator(ctx)
     DrawRoutingFilterBar(false)
 
     local filter = (config.routing_filter_text or ""):lower()
@@ -12654,7 +12725,7 @@ function ShowScreenshotControls()
             
             if browser_search_term ~= "" then
                 r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "X", 20, 20) then
+                if r.ImGui_Button(ctx, "X", 20, r.ImGui_GetFrameHeight(ctx)) then
                     ClearSearch()
                 end
                 if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
@@ -12664,7 +12735,8 @@ function ShowScreenshotControls()
             screenshot_sort_mode = screenshot_sort_mode or "alphabet"
             local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
             local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
-            if r.ImGui_Button(ctx, sort_label, 20, 20) then
+            local button_height = r.ImGui_GetFrameHeight(ctx)
+            if r.ImGui_Button(ctx, sort_label, 20, button_height) then
                 local next_mode
                 if effective_mode == "alphabet" then
                     next_mode = "rating"
@@ -12696,7 +12768,7 @@ function ShowScreenshotControls()
             
             r.ImGui_SameLine(ctx)
             if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
-            if r.ImGui_Button(ctx, "All", 30, 20) then
+            if r.ImGui_Button(ctx, "All", 30, button_height) then
                 SearchAllPlugins()
             end
             if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
@@ -12844,7 +12916,7 @@ function ShowScreenshotControls()
             r.ImGui_PopItemWidth(ctx)
             if browser_search_term ~= "" then
                 r.ImGui_SameLine(ctx)
-                if r.ImGui_Button(ctx, "X", 20, 20) then
+                if r.ImGui_Button(ctx, "X", 20, r.ImGui_GetFrameHeight(ctx)) then
                     ClearSearch()
                 end
                 if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
@@ -12854,7 +12926,8 @@ function ShowScreenshotControls()
             screenshot_sort_mode = screenshot_sort_mode or "alphabet"
             local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
             local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
-            if r.ImGui_Button(ctx, sort_label, 20, 20) then
+            local button_height = r.ImGui_GetFrameHeight(ctx)
+            if r.ImGui_Button(ctx, sort_label, 20, button_height) then
                 local next_mode
                 if effective_mode == "alphabet" then
                     next_mode = "rating"
@@ -12888,7 +12961,7 @@ function ShowScreenshotControls()
             if browser_search_term == "" then
                 r.ImGui_BeginDisabled(ctx)
             end
-            if r.ImGui_Button(ctx, "All", 30, 20) then
+            if r.ImGui_Button(ctx, "All", 30, button_height) then
                 SearchAllPlugins()
             end
             if browser_search_term == "" then
@@ -14743,7 +14816,7 @@ function ShowBrowserPanel()
         r.ImGui_PopItemWidth(ctx)
         if browser_search_term ~= "" then
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "X", 20, 20) then
+            if r.ImGui_Button(ctx, "X", 20, r.ImGui_GetFrameHeight(ctx)) then
                 ClearSearch()
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear search") end
@@ -14765,7 +14838,8 @@ function ShowBrowserPanel()
         screenshot_sort_mode = screenshot_sort_mode or "alphabet"
         local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
         local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
-        if r.ImGui_Button(ctx, sort_label, 20, 20) then
+        local button_height = r.ImGui_GetFrameHeight(ctx)
+        if r.ImGui_Button(ctx, sort_label, 20, button_height) then
             local next_mode
             if effective_mode == "alphabet" then
                 next_mode = "rating"
@@ -14793,7 +14867,7 @@ function ShowBrowserPanel()
         end
         r.ImGui_SameLine(ctx)
         if browser_search_term == "" then r.ImGui_BeginDisabled(ctx) end
-        if r.ImGui_Button(ctx, "All", 30, 20) then
+        if r.ImGui_Button(ctx, "All", 30, button_height) then
             SearchAllPlugins()
         end
         if browser_search_term == "" then r.ImGui_EndDisabled(ctx) end
@@ -20434,7 +20508,6 @@ function ShowScreenshotWindow()
             -- SEND/RECEIVE GEDEELTE:
             elseif show_sends_window then
                 local controls_vertical = ShowScreenshotControls()
-                r.ImGui_Separator(ctx)
                 if controls_vertical then
                     local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                     r.ImGui_Dummy(ctx, 0, line_height * 1.5)
@@ -20444,7 +20517,7 @@ function ShowScreenshotWindow()
                 local footer_height = 40
                 local available_height = window_height - current_y - footer_height
 
-                r.ImGui_BeginChild(ctx, "SendsReceivesList", 0, available_height)
+                r.ImGui_BeginChild(ctx, "SendsReceivesList", 0, available_height, 0)
 
                 if config.routing_view_mode == "patchbay" then
                     ShowRoutingPatchbay()
