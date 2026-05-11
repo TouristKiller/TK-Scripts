@@ -1,6 +1,6 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.8.0
+-- @version 0.8.1
 -- @changelog:
 --[[ 
     v0.7.8:
@@ -161,6 +161,20 @@ if not r.APIExists or not r.APIExists("JS_Dialog_BrowseForFolder") then
         "Install via ReaPack:",
         "1) In REAPER: Extensions > ReaPack > Browse Packages",
         "2) Search for 'js_ReaScriptAPI' and install it",
+        "3) Restart REAPER and run the script again."
+    }, "\n")
+    r.ShowMessageBox(msg, "TK FX BROWSER – Missing dependency", 0)
+    return
+end
+if not r.APIExists or not r.APIExists("ImGui_WindowFlags_NoTitleBar") then
+    local msg = table.concat({
+        "Missing or outdated dependency: 'ReaImGui' (by cfillion).",
+        "",
+        "This script requires ReaImGui APIs such as ImGui_WindowFlags_NoTitleBar().",
+        "",
+        "Install or update via ReaPack:",
+        "1) In REAPER: Extensions > ReaPack > Browse Packages",
+        "2) Search for 'ReaImGui' and install/update it",
         "3) Restart REAPER and run the script again."
     }, "\n")
     r.ShowMessageBox(msg, "TK FX BROWSER – Missing dependency", 0)
@@ -5123,9 +5137,7 @@ function ShowConfigWindow()
         r.ImGui_Dummy(ctx, 0, 10)
         r.ImGui_PushFont(ctx, NormalFont, config.font_size)
         r.ImGui_Text(ctx, title)
-        if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
-            r.ImGui_PopFont(ctx)
-        end
+        r.ImGui_PopFont(ctx)
         r.ImGui_Separator(ctx)
         r.ImGui_Dummy(ctx, 0, 4)
     end
