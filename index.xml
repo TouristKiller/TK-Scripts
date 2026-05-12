@@ -232,7 +232,7 @@
 
 <category name="Mixer">
     <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
-        <version name="1.2.8" author="TouristKiller" time="2026-05-11T23:00:00Z">
+        <version name="1.2.9" author="TouristKiller" time="2026-05-12T22:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/icon_browser.lua</source>
@@ -241,8 +241,13 @@
             <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_VU_Meter.jsfx</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
             <changelog><![CDATA[
-   
-
+    v1.2.9 
+    + Tracks: optional horizontal scrollbar for the mixer channel area
+    + Tracks: auto-center now only triggers for selections from outside the mixer (TCP / other sources), not for clicks inside the mixer itself
+    + Tracks: "All" button restores hidden tracks back to the TCP and clears stored hidden state
+    + Channel Strip: 2 new slider handle styles ("Modern" and "Modern Silver")
+    + Empty area menu: added "Insert Multiple New Tracks" (action 41067)
+    + Stability: hardened cable rendering against deleted tracks (no more crash on Delete Track)
 ]]></changelog>
         </version>
     </reapack>

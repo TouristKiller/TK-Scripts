@@ -1,7 +1,15 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.8
+-- @version 1.2.9
 --[[
+v1.2.9 
+    + Tracks: optional horizontal scrollbar for the mixer channel area
+    + Tracks: auto-center now only triggers for selections from outside the mixer (TCP / other sources), not for clicks inside the mixer itself
+    + Tracks: "All" button restores hidden tracks back to the TCP and clears stored hidden state
+    + Channel Strip: 2 new slider handle styles ("Modern" and "Modern Silver")
+    + Empty area menu: added "Insert Multiple New Tracks" (action 41067)
+    + Stability: hardened cable rendering against deleted tracks (no more crash on Delete Track)
+    
 v1.2.8
     + Tracks: optional "Scroll Selected Track Into View" mode to auto-center the selected track in the mixer area
     + Master: new display mode "Separate Window" with optional open state and remembered window position/size
@@ -234,6 +242,7 @@ mixer_state.icon_target_track = nil
 mixer_state.last_clicked_track_idx = nil
 mixer_state.auto_scroll_selected_track_last_signature = nil
 mixer_state.auto_scroll_selected_track_pending_guid = nil
+mixer_state.last_mixer_selection_signature = nil
 mixer_state.settings_tab = 0
 mixer_state.sendrecv_expanded = {}
 mixer_state.select_settings_tab = nil
@@ -245,6 +254,19 @@ mixer_state.last_touched_param = nil
 
 local vu_jsfx_cache = {}
 local vu_gmem_attached = false
+
+mixer_state.GetSelectedTrackSignature = function()
+ local num_sel = r.CountSelectedTracks(0)
+ if num_sel <= 0 then return "0|" end
+ local guids = {}
+ for i = 0, num_sel - 1 do
+  local sel_track = r.GetSelectedTrack(0, i)
+  if sel_track and r.ValidatePtr(sel_track, "MediaTrack*") then
+   guids[#guids + 1] = r.GetTrackGUID(sel_track) or ""
+  end
+ end
+ return tostring(num_sel) .. "|" .. table.concat(guids, ",")
+end
 local vu_track_slot_counter = 0
 local vu_track_slots = {}
 
@@ -509,6 +531,7 @@ local settings = {
  simple_mixer_auto_all = false,
  simple_mixer_auto_add_new_tracks = false,
  simple_mixer_show_fps = false,
+ simple_mixer_show_hscrollbar = false,
  simple_mixer_button_text_hover_color = nil,
  simple_mixer_button_text_active_color = nil,
  simple_mixer_fader_bg_style = 0,
@@ -1160,15 +1183,17 @@ local function GetTrackFXParamCached(track, fx_index, param_idx)
  if entry then
   local last = entry.ts[param_idx]
   if last and (now - last) < FX_PARAM_CACHE_TTL then
+    entry.last_touch = now
    return entry.params[param_idx]
   end
  else
-  entry = { params = {}, ts = {}, enabled_t = -1 }
+  entry = { params = {}, ts = {}, enabled_t = -1, last_touch = now }
   _fx_param_cache[key] = entry
  end
  local v = r.TrackFX_GetParam(track, fx_index, param_idx)
  entry.params[param_idx] = v
  entry.ts[param_idx] = now
+ entry.last_touch = now
  return v
 end
 
@@ -1178,15 +1203,17 @@ local function GetTrackFXEnabledCached(track, fx_index)
  local entry = _fx_param_cache[key]
  local now = r.time_precise()
  if entry and entry.enabled_t and (now - entry.enabled_t) > 0 and (now - entry.enabled_t) < FX_PARAM_CACHE_TTL then
+    entry.last_touch = now
   return entry.enabled
  end
  if not entry then
-  entry = { params = {}, ts = {}, enabled_t = -1 }
+    entry = { params = {}, ts = {}, enabled_t = -1, last_touch = now }
   _fx_param_cache[key] = entry
  end
  local en = r.TrackFX_GetEnabled(track, fx_index)
  entry.enabled = en
  entry.enabled_t = now
+ entry.last_touch = now
  return en
 end
 
@@ -1195,6 +1222,7 @@ local function InvalidateFXParamCache(track, fx_index, param_idx)
  local key = tostring(track) .. "|" .. fx_index
  local entry = _fx_param_cache[key]
  if not entry then return end
+ entry.last_touch = r.time_precise()
  if param_idx then
   entry.ts[param_idx] = nil
  else
@@ -4559,9 +4587,18 @@ end
 
 local function GetFXScreenshotPath(plugin_name)
  if not plugin_name or plugin_name == "" then return nil end
- if mixer_state.fx_screenshot_missing[plugin_name] then return nil end
+ local now = r.time_precise()
+ local miss_t = mixer_state.fx_screenshot_missing[plugin_name]
+ if miss_t and type(miss_t) == "number" and (now - miss_t) < 600 then return nil end
+ if miss_t and type(miss_t) ~= "number" then return nil end
+ if miss_t and type(miss_t) == "number" and (now - miss_t) >= 600 then
+  mixer_state.fx_screenshot_missing[plugin_name] = nil
+ end
  local cached = mixer_state.fx_screenshot_cache[plugin_name]
- if cached and cached.path then return cached.path end
+ if cached and cached.path then
+  cached.t = now
+  return cached.path
+ end
  local cleaned = CleanFXNameForScreenshot(plugin_name)
  local variants = {
   plugin_name,
@@ -4578,26 +4615,29 @@ local function GetFXScreenshotPath(plugin_name)
     local f = io.open(full, "rb")
     if f then
      f:close()
-     mixer_state.fx_screenshot_cache[plugin_name] = { path = full }
+     mixer_state.fx_screenshot_cache[plugin_name] = { path = full, t = now }
      return full
     end
    end
   end
  end
- mixer_state.fx_screenshot_missing[plugin_name] = true
+ mixer_state.fx_screenshot_missing[plugin_name] = now
  return nil
 end
 
 local function GetFXScreenshotImage(ctx, plugin_name)
+ local now = r.time_precise()
  local path = GetFXScreenshotPath(plugin_name)
  if not path then return nil end
  local entry = mixer_state.fx_screenshot_cache[plugin_name]
  if entry.img and r.ImGui_ValidatePtr(entry.img, 'ImGui_Image*') then
+    entry.t = now
   return entry.img
  end
  local ok, img = pcall(r.ImGui_CreateImage, path)
  if ok and img then
   entry.img = img
+    entry.t = now
   return img
  end
  return nil
@@ -5396,17 +5436,26 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
  if r.ImGui_IsItemHovered(mixer_ctx) then r.ImGui_SetTooltip(mixer_ctx, "Add Selected Tracks") end
  r.ImGui_SameLine(mixer_ctx, 0, btn_spacing)
  if r.ImGui_Button(mixer_ctx, "All##addall", btn_width) then
+    local hidden = GetProjectMixerHiddenTracks()
   local num_tracks = r.CountTracks(0)
+    r.PreventUIRefresh(1)
   for i = 0, num_tracks - 1 do
    local track = r.GetTrack(0, i)
    local guid = r.GetTrackGUID(track)
+     r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+     r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 1)
+     hidden[guid] = nil
    local already_added = false
    for _, existing_guid in ipairs(project_mixer_tracks) do
     if existing_guid == guid then already_added = true break end
    end
    if not already_added then table.insert(project_mixer_tracks, guid) end
   end
+    r.PreventUIRefresh(-1)
+    SaveProjectMixerHiddenTracks(hidden)
   SaveProjectMixerTracks(project_mixer_tracks)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
  end
  if r.ImGui_IsItemHovered(mixer_ctx) then r.ImGui_SetTooltip(mixer_ctx, "Add All Tracks") end
  r.ImGui_SameLine(mixer_ctx, 0, btn_spacing)
@@ -5469,6 +5518,13 @@ local function DrawMixerSidebar(mixer_ctx, sidebar_width, project_mixer_tracks)
    r.ImGui_TableNextColumn(mixer_ctx)
    rv, settings.simple_mixer_show_sendrecv = r.ImGui_Checkbox(mixer_ctx, "Sends##QT", settings.simple_mixer_show_sendrecv or false)
    if rv then changed = true end
+    r.ImGui_TableNextRow(mixer_ctx)
+    r.ImGui_TableNextColumn(mixer_ctx)
+    rv, settings.simple_mixer_show_hscrollbar = r.ImGui_Checkbox(mixer_ctx, "HScroll##QT", settings.simple_mixer_show_hscrollbar or false)
+    if rv then changed = true end
+    if r.ImGui_IsItemHovered(mixer_ctx) then
+     r.ImGui_SetTooltip(mixer_ctx, "Toon horizontale scrollbar onderaan de mixerkanalen")
+    end
    r.ImGui_TableNextRow(mixer_ctx)
    r.ImGui_TableNextColumn(mixer_ctx)
    rv, settings.simple_mixer_show_master = r.ImGui_Checkbox(mixer_ctx, "Mstr##QT", settings.simple_mixer_show_master or false)
@@ -5833,6 +5889,102 @@ local function IsTrackLocked(track)
  return locked
 end
 
+local function _IsTrackGUIDAlive(guid)
+ if type(guid) ~= "string" or guid == "" then return false end
+ if not r.BR_GetMediaTrackByGUID then return true end
+ return r.BR_GetMediaTrackByGUID(0, guid) ~= nil
+end
+
+local function _PruneMapChunk(map, st, cursor_key, max_steps, should_remove)
+ if type(map) ~= "table" then return 0 end
+ st.cursors = st.cursors or {}
+ local cur = st.cursors[cursor_key]
+ if cur ~= nil and map[cur] == nil then cur = nil end
+ local k = (cur == nil) and next(map) or next(map, cur)
+ local n = 0
+ while k ~= nil and n < max_steps do
+    local v = map[k]
+    local nk = next(map, k)
+    if should_remove(k, v) then
+     map[k] = nil
+    end
+    n = n + 1
+    k = nk
+ end
+ st.cursors[cursor_key] = k
+ return n
+end
+
+local function RunLightCachePrune(now)
+ mixer_state.cache_prune_state = mixer_state.cache_prune_state or { last_run = 0, phase = 1, cursors = {} }
+ local st = mixer_state.cache_prune_state
+ if (now - (st.last_run or 0)) < 0.05 then return end
+ st.last_run = now
+ local phase = st.phase or 1
+ local max_steps = 20
+
+ if phase == 1 then
+    _PruneMapChunk(_fx_param_cache, st, "fx", max_steps, function(_, entry)
+     local last = entry and entry.last_touch
+     if type(last) ~= "number" then
+        local fallback = -1
+        if entry and type(entry.enabled_t) == "number" and entry.enabled_t > fallback then fallback = entry.enabled_t end
+        if entry and entry.ts then
+         for _, ts in pairs(entry.ts) do
+            if type(ts) == "number" and ts > fallback then fallback = ts end
+         end
+        end
+        last = fallback
+     end
+     return type(last) ~= "number" or (now - last) > 4.0
+    end)
+ elseif phase == 2 then
+    _PruneMapChunk(simple_mixer_meter_data, st, "meter", max_steps, function(guid)
+     return not _IsTrackGUIDAlive(guid)
+    end)
+    _PruneMapChunk(simple_mixer_vu_data, st, "vu", max_steps, function(guid)
+     return not _IsTrackGUIDAlive(guid)
+    end)
+ elseif phase == 3 then
+    _PruneMapChunk(vu_jsfx_cache, st, "vufx", max_steps, function(guid)
+     local dead = not _IsTrackGUIDAlive(guid)
+     if dead then vu_track_slots[guid] = nil end
+     return dead
+    end)
+    _PruneMapChunk(vu_track_slots, st, "vuslot", max_steps, function(guid)
+     return not _IsTrackGUIDAlive(guid)
+    end)
+ elseif phase == 4 then
+    _PruneMapChunk(simple_mixer_track_icon_cache, st, "icon_cache", max_steps, function(guid)
+     local dead = not _IsTrackGUIDAlive(guid)
+     if dead then simple_mixer_track_icon_paths[guid] = nil end
+     return dead
+    end)
+    _PruneMapChunk(simple_mixer_track_icon_paths, st, "icon_paths", max_steps, function(guid)
+     return not _IsTrackGUIDAlive(guid)
+    end)
+ elseif phase == 5 then
+    _PruneMapChunk(track_lock_cache, st, "lock", max_steps, function(guid, entry)
+     return (not _IsTrackGUIDAlive(guid)) or (entry and entry.t and (now - entry.t) > 120.0)
+    end)
+    _PruneMapChunk(mixer_state.sendrecv_expanded or {}, st, "sendrecv", max_steps, function(guid)
+     return not _IsTrackGUIDAlive(guid)
+    end)
+ elseif phase == 6 then
+  local cache = mixer_state.fx_screenshot_cache or {}
+    _PruneMapChunk(cache, st, "shot_cache", max_steps, function(_, entry)
+     local t = type(entry) == "table" and entry.t or nil
+     return type(t) ~= "number" or (now - t) > 900
+    end)
+  local missing = mixer_state.fx_screenshot_missing or {}
+    _PruneMapChunk(missing, st, "shot_missing", max_steps, function(_, t)
+     return type(t) ~= "number" or (now - t) > 900
+    end)
+ end
+
+ st.phase = (phase % 6) + 1
+end
+
 local function DrawLockIcon(draw_list, x, y, size, color)
  local body_h = size * 0.55
  local body_w = size * 0.75
@@ -6194,6 +6346,7 @@ if (not is_master) then
     else
      r.SetOnlyTrackSelected(track)
     end
+    mixer_state.last_mixer_selection_signature = mixer_state.GetSelectedTrackSignature()
     mixer_state.last_clicked_track_idx = track_idx
    end
   end
@@ -7843,6 +7996,7 @@ if (not is_master) then
   handle_scale = math.max(0.5, math.min(2.5, handle_scale))
   local knob_width = math.min(slider_actual_width * 0.55 * handle_scale, 24 * handle_scale)
   local knob_height = 20 * handle_scale
+  if fader_style == 7 or fader_style == 8 then knob_height = 34 * handle_scale end
   local max_knob_height = math.max(4, slider_height - fader_margin * 2)
   if knob_height > max_knob_height then knob_height = max_knob_height end
   local knob_x = center_x - knob_width * 0.5
@@ -7986,6 +8140,82 @@ if (not is_master) then
    r.ImGui_DrawList_AddTriangleFilled(draw_list, knob_right, knob_top, knob_right - corner_size, knob_top, knob_right, knob_top + corner_size, cyber_color)
    r.ImGui_DrawList_AddTriangleFilled(draw_list, knob_x, knob_bottom, knob_x + corner_size, knob_bottom, knob_x, knob_bottom - corner_size, cyber_color)
    r.ImGui_DrawList_AddTriangleFilled(draw_list, knob_right, knob_bottom, knob_right - corner_size, knob_bottom, knob_right, knob_bottom - corner_size, cyber_color)
+  elseif fader_style == 7 then
+   local shadow_off = 2
+   r.ImGui_DrawList_AddRectFilled(draw_list, knob_x + shadow_off, knob_top + shadow_off + 1, knob_right + shadow_off, knob_bottom + shadow_off + 1, 0x00000088, 1)
+   local dark_edge    = 0x0A0A0AFF
+   local peak_top     = 0x5E5E5EFF
+   local peak_bot     = 0x7A7A7AFF
+   local mid_color    = 0x141414FF
+   local band1_top = knob_top
+   local band1_bot = knob_top + knob_height * 0.18
+   local band2_top = band1_bot
+   local band2_bot = knob_top + knob_height * 0.42
+   local band3_top = band2_bot
+   local band3_bot = knob_top + knob_height * 0.58
+   local band4_top = band3_bot
+   local band4_bot = knob_top + knob_height * 0.82
+   local band5_top = band4_bot
+   local band5_bot = knob_bottom
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band1_top, knob_right, band1_bot, dark_edge, dark_edge, peak_top, peak_top)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band2_top, knob_right, band2_bot, peak_top, peak_top, mid_color, mid_color)
+   r.ImGui_DrawList_AddRectFilled(draw_list, knob_x, band3_top, knob_right, band3_bot, mid_color, 0)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band4_top, knob_right, band4_bot, mid_color, mid_color, peak_bot, peak_bot)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band5_top, knob_right, band5_bot, peak_bot, peak_bot, dark_edge, dark_edge)
+   r.ImGui_DrawList_AddLine(draw_list, knob_x, band1_bot, knob_right, band1_bot, 0xFFFFFF33, 1)
+   r.ImGui_DrawList_AddLine(draw_list, knob_x, band4_bot, knob_right, band4_bot, 0xFFFFFF33, 1)
+   local rib_left = knob_x + 2
+   local rib_right = knob_right - 2
+   for i = 1, 3 do
+    local frac = i / 4
+    local gy_top = knob_y - (knob_y - band1_bot) * frac
+    local gy_bot = knob_y + (band4_bot - knob_y) * frac
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_top, rib_right, gy_top, 0x00000099, 1)
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_top + 1, rib_right, gy_top + 1, 0xFFFFFF22, 1)
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_bot, rib_right, gy_bot, 0x00000099, 1)
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_bot + 1, rib_right, gy_bot + 1, 0xFFFFFF22, 1)
+   end
+   r.ImGui_DrawList_AddLine(draw_list, knob_x, knob_y, knob_right, knob_y, 0x888888FF, 1)
+   r.ImGui_DrawList_AddRect(draw_list, knob_x, knob_top, knob_right, knob_bottom, 0x000000FF, 0, 0, 1)
+  elseif fader_style == 8 then
+   local shadow_off = 2
+   r.ImGui_DrawList_AddRectFilled(draw_list, knob_x + shadow_off, knob_top + shadow_off + 1, knob_right + shadow_off, knob_bottom + shadow_off + 1, 0x00000088, 1)
+   local edge_top   = 0x5E5E5EFF
+   local edge_bot   = 0x6E6E6EFF
+   local peak_top   = 0xC8C8C8FF
+   local peak_bot   = 0xE8E8E8FF
+   local mid_top    = 0x7A7A7AFF
+   local mid_bot    = 0x8A8A8AFF
+   local band1_top = knob_top
+   local band1_bot = knob_top + knob_height * 0.18
+   local band2_top = band1_bot
+   local band2_bot = knob_top + knob_height * 0.42
+   local band3_top = band2_bot
+   local band3_bot = knob_top + knob_height * 0.58
+   local band4_top = band3_bot
+   local band4_bot = knob_top + knob_height * 0.82
+   local band5_top = band4_bot
+   local band5_bot = knob_bottom
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band1_top, knob_right, band1_bot, edge_top, edge_top, peak_top, peak_top)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band2_top, knob_right, band2_bot, peak_top, peak_top, mid_top, mid_top)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band3_top, knob_right, band3_bot, mid_top, mid_top, mid_bot, mid_bot)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band4_top, knob_right, band4_bot, mid_bot, mid_bot, peak_bot, peak_bot)
+   r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, knob_x, band5_top, knob_right, band5_bot, peak_bot, peak_bot, edge_bot, edge_bot)
+   r.ImGui_DrawList_AddLine(draw_list, knob_x, band1_bot, knob_right, band1_bot, 0xFFFFFF55, 1)
+   r.ImGui_DrawList_AddLine(draw_list, knob_x, band4_bot, knob_right, band4_bot, 0xFFFFFF55, 1)
+   local rib_left = knob_x + 2
+   local rib_right = knob_right - 2
+   for i = 1, 3 do
+    local frac = i / 4
+    local gy_top = knob_y - (knob_y - band1_bot) * frac
+    local gy_bot = knob_y + (band4_bot - knob_y) * frac
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_top, rib_right, gy_top, 0x55555566, 1)
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_top + 1, rib_right, gy_top + 1, 0xFFFFFF33, 1)
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_bot, rib_right, gy_bot, 0x55555566, 1)
+    r.ImGui_DrawList_AddLine(draw_list, rib_left, gy_bot + 1, rib_right, gy_bot + 1, 0xFFFFFF33, 1)
+   end
+   r.ImGui_DrawList_AddLine(draw_list, knob_x, knob_y, knob_right, knob_y, 0x000000FF, 1)
+   r.ImGui_DrawList_AddRect(draw_list, knob_x, knob_top, knob_right, knob_bottom, 0x222222FF, 0, 0, 1)
   end
  end
 
@@ -8822,6 +9052,7 @@ if (not is_master) then
      else
       r.SetOnlyTrackSelected(track)
      end
+    mixer_state.last_mixer_selection_signature = mixer_state.GetSelectedTrackSignature()
     end
     if r.ImGui_IsMouseClicked(ctx, r.ImGui_MouseButton_Right()) then
      r.ImGui_OpenPopup(ctx, "FaderContextMenu##" .. idx)
@@ -9695,7 +9926,7 @@ function DrawSettingsWindow()
    r.ImGui_Separator(ctx)
    r.ImGui_Spacing(ctx)
    r.ImGui_Text(ctx, "Fader Style:")
-   local fader_styles = {"Normal", "Classic", "Vintage", "LED", "Glass", "VU Needle", "Cyberpunk"}
+   local fader_styles = {"Normal", "Classic", "Vintage", "LED", "Glass", "VU Needle", "Cyberpunk", "Modern", "Modern Silver"}
    local current_style = settings.simple_mixer_fader_style or 0
    r.ImGui_PushItemWidth(ctx, 120)
    if r.ImGui_BeginCombo(ctx, "##fader_style", fader_styles[current_style + 1] or "Normal") then
@@ -10895,7 +11126,7 @@ function DrawMixerCables(ctx)
  local selected_only = settings.simple_mixer_cables_selected_only == true
  for guid, anchor in pairs(anchors) do
   local src_track = anchor.track
-  if src_track and not anchor.is_master and guid ~= "__master__" then
+    if src_track and r.ValidatePtr2(0, src_track, "MediaTrack*") and not anchor.is_master and guid ~= "__master__" then
    local sx, sy = anchor.x, anchor.y
    if sx and anchor_visible(sx, sy) then
     local cached_pairs = pairs_by_src[guid]
@@ -12379,7 +12610,18 @@ function DrawSimpleMixerWindow()
    local right_pinned_gap = (#right_pinned_data > 0) and 3 or 0
    local child_width = avail_width - master_right_width - master_left_width - rack_width - (pinned_width > 0 and pinned_width or 0) - (right_pinned_width > 0 and right_pinned_width or 0) - right_pinned_gap
    if child_width < 100 then child_width = 100 end
-   if r.ImGui_BeginChild(mixer_ctx, "MixerTracks", child_width, avail_height, r.ImGui_ChildFlags_None(), r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
+    local mixer_tracks_draw_height = avail_height
+    if settings.simple_mixer_show_hscrollbar then
+     local scrollbar_size = r.ImGui_GetStyleVar(mixer_ctx, r.ImGui_StyleVar_ScrollbarSize())
+     mixer_tracks_draw_height = math.max(60, avail_height - (scrollbar_size or 14) - 2)
+    end
+    local mixer_tracks_flags = r.ImGui_WindowFlags_NoScrollWithMouse()
+    if settings.simple_mixer_show_hscrollbar then
+     mixer_tracks_flags = mixer_tracks_flags | r.ImGui_WindowFlags_HorizontalScrollbar()
+    else
+     mixer_tracks_flags = mixer_tracks_flags | r.ImGui_WindowFlags_NoScrollbar()
+    end
+    if r.ImGui_BeginChild(mixer_ctx, "MixerTracks", child_width, avail_height, r.ImGui_ChildFlags_None(), mixer_tracks_flags) then
     do
      local _wx, _wy = r.ImGui_GetWindowPos(mixer_ctx)
      local _ww, _wh = r.ImGui_GetWindowSize(mixer_ctx)
@@ -12500,26 +12742,29 @@ function DrawSimpleMixerWindow()
     table.sort(sorted_tracks, function(a, b) return a.num < b.num end)
 
         if settings.simple_mixer_scroll_selected_track_into_view then
-         local auto_scroll_target_track = nil
-         if mixer_state.last_clicked_track_idx ~= nil then
-            local clicked_track = r.GetTrack(0, mixer_state.last_clicked_track_idx)
-            if clicked_track and r.ValidatePtr(clicked_track, "MediaTrack*") and r.IsTrackSelected(clicked_track) then
-             auto_scroll_target_track = clicked_track
+            local current_selection_signature = mixer_state.GetSelectedTrackSignature()
+            if mixer_state.last_mixer_selection_signature and current_selection_signature == mixer_state.last_mixer_selection_signature then
+                mixer_state.auto_scroll_selected_track_last_signature = current_selection_signature
+                mixer_state.auto_scroll_selected_track_pending_guid = nil
+            else
+                mixer_state.last_mixer_selection_signature = nil
+                mixer_state.auto_scroll_selected_track_pending_guid = nil
+                local selected_track = r.GetSelectedTrack(0, 0)
+                if selected_track and r.ValidatePtr(selected_track, "MediaTrack*") then
+                    mixer_state.auto_scroll_selected_track_pending_guid = r.GetTrackGUID(selected_track)
+                elseif mixer_state.last_clicked_track_idx ~= nil then
+                    local clicked_track = r.GetTrack(0, mixer_state.last_clicked_track_idx)
+                    if clicked_track and r.ValidatePtr(clicked_track, "MediaTrack*") and r.IsTrackSelected(clicked_track) then
+                        mixer_state.auto_scroll_selected_track_pending_guid = r.GetTrackGUID(clicked_track)
+                    end
+                end
+                if mixer_state.auto_scroll_selected_track_pending_guid then
+                    local auto_scroll_signature = current_selection_signature .. "|" .. mixer_state.auto_scroll_selected_track_pending_guid
+                    if mixer_state.auto_scroll_selected_track_last_signature ~= auto_scroll_signature then
+                        mixer_state.auto_scroll_selected_track_last_signature = auto_scroll_signature
+                    end
+                end
             end
-         end
-         if not auto_scroll_target_track then
-            auto_scroll_target_track = r.GetSelectedTrack(0, 0)
-         end
-         local auto_scroll_target_guid = nil
-         if auto_scroll_target_track and r.ValidatePtr(auto_scroll_target_track, "MediaTrack*") then
-            auto_scroll_target_guid = r.GetTrackGUID(auto_scroll_target_track)
-         end
-         local selected_count = r.CountSelectedTracks(0)
-         local selection_signature = tostring(selected_count) .. "|" .. (auto_scroll_target_guid or "")
-         if mixer_state.auto_scroll_selected_track_last_signature ~= selection_signature then
-            mixer_state.auto_scroll_selected_track_last_signature = selection_signature
-            mixer_state.auto_scroll_selected_track_pending_guid = auto_scroll_target_guid
-         end
         else
             mixer_state.auto_scroll_selected_track_last_signature = nil
             mixer_state.auto_scroll_selected_track_pending_guid = nil
@@ -12581,7 +12826,7 @@ function DrawSimpleMixerWindow()
        local spacer_style = settings.simple_mixer_spacer_style or "line"
        local cx, cy = r.ImGui_GetCursorScreenPos(mixer_ctx)
        local dlist = r.ImGui_GetWindowDrawList(mixer_ctx)
-       local divider_height = avail_height - window_padding_y + 10
+    local divider_height = mixer_tracks_draw_height - window_padding_y + 10
        local bg_color = settings.simple_mixer_divider_custom_color or 0x444444FF
        local border_color = settings.simple_mixer_divider_border_custom_color or 0x888888FF
        local text_color = settings.simple_mixer_divider_text_custom_color or 0xFFFFFFFF
@@ -12634,7 +12879,7 @@ function DrawSimpleMixerWindow()
       local spacer_style = settings.simple_mixer_spacer_style or "line"
       local cx, cy = r.ImGui_GetCursorScreenPos(mixer_ctx)
       local dlist = r.ImGui_GetWindowDrawList(mixer_ctx)
-      local divider_height = avail_height - window_padding_y + 10
+    local divider_height = mixer_tracks_draw_height - window_padding_y + 10
       local bg_color = settings.simple_mixer_divider_custom_color or 0x444444FF
       local border_color = settings.simple_mixer_divider_border_custom_color or 0x888888FF
       local text_color = settings.simple_mixer_divider_text_custom_color or 0xFFFFFFFF
@@ -12818,7 +13063,7 @@ function DrawSimpleMixerWindow()
       end
      end
 
-     local should_remove, should_delete, should_delete_selected = DrawMixerChannel(mixer_ctx, track, track_name, idx, track_width, base_slider_height, false, true, show_handle, folder_info)
+    local should_remove, should_delete, should_delete_selected = DrawMixerChannel(mixer_ctx, track, track_name, idx, track_width, mixer_tracks_draw_height, false, true, show_handle, folder_info)
      if should_remove then
       table.insert(tracks_to_remove, track_guid)
      end
@@ -12854,6 +13099,24 @@ function DrawSimpleMixerWindow()
         break
        end
       end
+            if (not target_idx or not track_positions[target_idx]) and not (left_pinned_set[pending_guid] or right_pinned_set[pending_guid]) then
+             local pending_track = r.BR_GetMediaTrackByGUID(0, pending_guid)
+             if pending_track then
+                local pending_num = r.GetMediaTrackInfo_Value(pending_track, "IP_TRACKNUMBER")
+                local best_idx = nil
+                local best_dist = nil
+                for i, track_data in ipairs(sorted_tracks) do
+                 if track_positions[i] then
+                    local dist = math.abs((track_data.num or 0) - pending_num)
+                    if not best_dist or dist < best_dist then
+                     best_dist = dist
+                     best_idx = i
+                    end
+                 end
+                end
+                target_idx = best_idx
+             end
+            end
       if target_idx and track_positions[target_idx] then
        local child_x = select(1, r.ImGui_GetWindowPos(mixer_ctx))
        local scroll_x = r.ImGui_GetScrollX(mixer_ctx)
@@ -12879,7 +13142,7 @@ function DrawSimpleMixerWindow()
      r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0x00000000)
      r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Border(), 0x00000000)
      r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
-     r.ImGui_InvisibleButton(mixer_ctx, "##AddNewTrackInvisible", remaining_width, avail_height)
+    r.ImGui_InvisibleButton(mixer_ctx, "##AddNewTrackInvisible", remaining_width, mixer_tracks_draw_height)
      local is_hovered = r.ImGui_IsItemHovered(mixer_ctx)
      if is_hovered and r.ImGui_IsMouseClicked(mixer_ctx, 0) and not r.ImGui_IsMouseDoubleClicked(mixer_ctx, 0) then
       r.Main_OnCommand(40297, 0)
@@ -12915,8 +13178,8 @@ function DrawSimpleMixerWindow()
         end
         SaveProjectMixerTracks(project_mixer_tracks)
        end
-      end
-      if r.ImGui_MenuItem(mixer_ctx, "Add All Tracks") then
+    end
+    if r.ImGui_MenuItem(mixer_ctx, "Add All Tracks") then
        local num_tracks = r.CountTracks(0)
        for i = 0, num_tracks - 1 do
         local track = r.GetTrack(0, i)
@@ -12931,6 +13194,9 @@ function DrawSimpleMixerWindow()
        end
        SaveProjectMixerTracks(project_mixer_tracks)
       end
+    if r.ImGui_MenuItem(mixer_ctx, "Insert Multiple New Tracks") then
+     r.Main_OnCommand(41067, 0)
+    end
       r.ImGui_Separator(mixer_ctx)
       if r.ImGui_MenuItem(mixer_ctx, "Mixer Settings...") then
        settings.simple_mixer_settings_popup_open = true
@@ -12970,7 +13236,7 @@ function DrawSimpleMixerWindow()
        end
        local rect_x1 = start_pos.x - padding
        local rect_y1 = start_pos.y
-       local rect_y2 = child_start_y + avail_height
+    local rect_y2 = child_start_y + mixer_tracks_draw_height
        local rect_x2 = end_pos.x + track_width + padding
        if rounding > 0 then
         local corner_y = rect_y2 - rounding
@@ -13002,7 +13268,7 @@ function DrawSimpleMixerWindow()
        local lx = pos.x - 1
        local rx = pos.x + track_width
        local y1 = pos.y
-       local y2 = pos.y + avail_height
+    local y2 = pos.y + mixer_tracks_draw_height
        r.ImGui_DrawList_AddLine(sep_dlist, lx, y1, lx, y2, sep_color, sep_thickness)
        r.ImGui_DrawList_AddLine(sep_dlist, rx, y1, rx, y2, sep_color, sep_thickness)
       end
@@ -13388,6 +13654,7 @@ _perf_spike_count = 0
 function Loop()
  local _t_start = r.time_precise()
  ClearTrackGUIDFrameCache()
+ RunLightCachePrune(_t_start)
  if _perf_prev_t then
   local dt_ms = (_t_start - _perf_prev_t) * 1000
   if dt_ms > _perf_max_dt then _perf_max_dt = dt_ms end
