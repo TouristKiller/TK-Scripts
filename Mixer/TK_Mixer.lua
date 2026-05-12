@@ -1,8 +1,8 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.3.0
+-- @version 1.3.1
 --[[
-v1.2.9 
+v1.3.1
     + Tracks: optional horizontal scrollbar for the mixer channel area
     + Tracks: auto-center now only triggers for selections from outside the mixer (TCP / other sources), not for clicks inside the mixer itself
     + Tracks: "All" button restores hidden tracks back to the TCP and clears stored hidden state
