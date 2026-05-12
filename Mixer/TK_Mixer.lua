@@ -1,6 +1,6 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.2.9
+-- @version 1.3.0
 --[[
 v1.2.9 
     + Tracks: optional horizontal scrollbar for the mixer channel area
@@ -1550,6 +1550,7 @@ local function DrawStyledKnob(ctx, draw_list, center_x, center_y, radius, norm_v
    local knob_image_path = script_path .. "Images" .. os_separator .. "knob01.png"
    local ok, img = pcall(r.ImGui_CreateImage, knob_image_path)
    if ok and img then
+    pcall(r.ImGui_Attach, ctx, img)
     mixer_state.knob_image = img
     mixer_state.knob_image_loaded = true
    else
@@ -4296,6 +4297,7 @@ local function GetTrackIcon(ctx, track)
  end
  local ok, img = pcall(r.ImGui_CreateImage, full_path)
  if ok and img then
+  pcall(r.ImGui_Attach, ctx, img)
   simple_mixer_track_icon_cache[track_guid] = img
   simple_mixer_track_icon_paths[track_guid] = icon_path
   return img
@@ -4636,6 +4638,7 @@ local function GetFXScreenshotImage(ctx, plugin_name)
  end
  local ok, img = pcall(r.ImGui_CreateImage, path)
  if ok and img then
+  pcall(r.ImGui_Attach, ctx, img)
   entry.img = img
     entry.t = now
   return img
