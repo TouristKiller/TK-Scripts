@@ -321,13 +321,13 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.8.2" author="TouristKiller" time="2026-05-13T00:35:00Z">
+        <version name="0.8.3" author="TouristKiller" time="2026-05-13T00:50:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-v0.8.2:
+v0.8.3:
 + New Compact View (side-dock card layout): one card per item with metadata-driven tags, toggle via Settings or toolbar
 + Toolbar in compact mode: right-side icons (Refresh, RS5K, Video, Settings, Shortcuts, Close) moved into a single overflow popup (...) to free up space
 + View toggle replaced with one compact square cycle button (T -> F -> C) with tooltip; saves space when only one mode is shown

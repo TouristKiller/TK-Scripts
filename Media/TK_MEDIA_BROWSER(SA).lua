@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.8.2
+-- @version 0.8.3
 -- @changelog:
 --[[
 v0.8.2:
@@ -7019,8 +7019,8 @@ local function draw_file_list()
                             r.ImGui_TableSetupColumn(ctx, "UMID", fit and S or F, fit and 3.5 or 200)
                         end
                         end
-                        r.ImGui_TableSetupScrollFreeze(ctx, 0, 1)
                         if not compact then
+                            r.ImGui_TableSetupScrollFreeze(ctx, 0, 1)
                             r.ImGui_TableHeadersRow(ctx)
                         end
                         
