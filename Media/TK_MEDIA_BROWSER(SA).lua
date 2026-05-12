@@ -1,8 +1,16 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.8.1
+-- @version 0.8.2
 -- @changelog:
 --[[
+v0.8.2:
++ New Compact View (side-dock card layout): one card per item with metadata-driven tags, toggle via Settings or toolbar
++ Toolbar in compact mode: right-side icons (Refresh, RS5K, Video, Settings, Shortcuts, Close) moved into a single overflow popup (...) to free up space
++ View toggle replaced with one compact square cycle button (T -> F -> C) with tooltip; saves space when only one mode is shown
++ Search field minimum width lowered and growth factor tuned so it stays usable when the window shrinks
++ Removed version label from the toolbar
++ Compact view hides the time ruler above the waveform and disables the SLICE/Sens/REV/INS/FD/RND controls (insufficient horizontal space)
+
 v0.8.1:
 + New "SLICE" button in waveform preview: detects transients with adjustable sensitivity and draws editable slice markers
 + Sensitivity slider next to SLICE button (re-detects on release)
@@ -224,6 +232,18 @@ local waveform = {
     slice_random_order = nil,
 }
 
+local waveform_resize_debounce = { last_pixels = -1, change_time = 0, threshold = 0.15 }
+
+local function waveform_width_stable(pixels)
+    local now = r.time_precise()
+    if waveform_resize_debounce.last_pixels ~= pixels then
+        waveform_resize_debounce.last_pixels = pixels
+        waveform_resize_debounce.change_time = now
+        return false
+    end
+    return (now - waveform_resize_debounce.change_time) >= waveform_resize_debounce.threshold
+end
+
 -- UI State & View Control
 local ui = {
     window_x = 100,
@@ -377,6 +397,7 @@ local ui_settings = {
     selection_saturation = 1.0,
     show_waveform_bg = true,
     hide_scrollbar = false,  
+    compact_view = false,
     selected_font = "Arial",  
     button_height = 25,
     use_numaplayer = false,
@@ -2115,6 +2136,7 @@ local function save_options()
             selection_saturation = ui_settings.selection_saturation,
             show_waveform_bg = ui_settings.show_waveform_bg,
             hide_scrollbar = ui_settings.hide_scrollbar,
+            compact_view = ui_settings.compact_view,
             selected_font = ui_settings.selected_font,
             button_height = ui_settings.button_height,
             use_numaplayer = ui_settings.use_numaplayer,
@@ -2192,6 +2214,7 @@ local function get_settings_table()
         selection_saturation = ui_settings.selection_saturation,
         show_waveform_bg = ui_settings.show_waveform_bg,
         hide_scrollbar = ui_settings.hide_scrollbar,
+        compact_view = ui_settings.compact_view,
         selected_font = ui_settings.selected_font,
         button_height = ui_settings.button_height,
         visible_columns = ui_settings.visible_columns,
@@ -2237,6 +2260,7 @@ local function apply_settings_from_table(settings)
     ui_settings.selection_saturation = settings.selection_saturation ~= nil and settings.selection_saturation or 1.0
     ui_settings.show_waveform_bg = settings.show_waveform_bg ~= nil and settings.show_waveform_bg or false
     ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
+    if settings.compact_view ~= nil then ui_settings.compact_view = settings.compact_view end
     ui_settings.selected_font = settings.selected_font or "Default"
     ui_settings.button_height = settings.button_height or 20
     ui_settings.visible_columns = settings.visible_columns or {name = true, size = true, date = true, duration = true, samplerate = true, bitdepth = true, channels = true}
@@ -2384,6 +2408,9 @@ local function load_options()
                 ui_settings.hide_scrollbar = options.hide_scrollbar
             else
                 ui_settings.hide_scrollbar = false
+            end
+            if options.compact_view ~= nil then
+                ui_settings.compact_view = options.compact_view
             end
             ui_settings.selected_font = options.selected_font or "Arial"
             ui_settings.button_height = options.button_height or 25
@@ -6836,6 +6863,31 @@ local function draw_file_list()
                                        r.ImGui_TableFlags_BordersOuter() |
                                        r.ImGui_TableFlags_BordersV() |
                                        r.ImGui_TableFlags_ScrollY()
+
+                    local compact = ui_settings.compact_view
+                    if compact then
+                        table_flags = r.ImGui_TableFlags_RowBg() | r.ImGui_TableFlags_ScrollY()
+                    end
+
+                    local function format_compact_tags(file, meta)
+                        local vc = ui_settings.visible_columns
+                        local parts = {}
+                        local function add(v) if v and v ~= "" and v ~= "--" then parts[#parts+1] = v end end
+                        if vc.type then add(meta.type) end
+                        if vc.size then add(meta.size) end
+                        if vc.duration then add(meta.duration) end
+                        if vc.sample_rate then add(meta.sample_rate) end
+                        if vc.channels then add(meta.channels) end
+                        if vc.bpm then add(meta.bpm) end
+                        if vc.key then add(meta.key) end
+                        if vc.artist then add(meta.artist) end
+                        if vc.album then add(meta.album) end
+                        if vc.title then add(meta.title) end
+                        if vc.year then add(meta.year) end
+                        if vc.genre then add(meta.genre) end
+                        if vc.date then add(meta.date) end
+                        return table.concat(parts, " - ")
+                    end
                     
                     local header_bg_color = r.ImGui_ColorConvertDouble4ToU32(
                         ui_settings.window_bg_brightness * 0.8,
@@ -6871,11 +6923,14 @@ local function draw_file_list()
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_CellPadding(), 4, 4)  
                     
                     local table_id = "files_table##" .. (file_location.current_location or "") .. "_r" .. tostring(table_reset_id)
-                    local col_count = get_visible_column_count()
+                    local col_count = compact and 1 or get_visible_column_count()
                     if r.ImGui_BeginTable(ctx, table_id, col_count, table_flags) then
                         local S = r.ImGui_TableColumnFlags_WidthStretch()
                         local F = r.ImGui_TableColumnFlags_WidthFixed()
                         local fit = table_columns_fitted
+                        if compact then
+                            r.ImGui_TableSetupColumn(ctx, "Name", S, 0)
+                        else
                         if ui_settings.visible_columns.name then
                             r.ImGui_TableSetupColumn(ctx, "Name", S, fit and 4.0 or 0)
                         end
@@ -6963,8 +7018,11 @@ local function draw_file_list()
                         if ui_settings.visible_columns.umid then
                             r.ImGui_TableSetupColumn(ctx, "UMID", fit and S or F, fit and 3.5 or 200)
                         end
+                        end
                         r.ImGui_TableSetupScrollFreeze(ctx, 0, 1)
-                        r.ImGui_TableHeadersRow(ctx)
+                        if not compact then
+                            r.ImGui_TableHeadersRow(ctx)
+                        end
                         
                         if search_filter.remembered_sort_column >= 0 and r.ImGui_TableSetColumnSortDirection then
                             r.ImGui_TableSetColumnSortDirection(ctx, search_filter.remembered_sort_column, search_filter.remembered_sort_direction, false)
@@ -7390,6 +7448,19 @@ local function draw_file_list()
                                     r.ImGui_PopStyleColor(ctx)
                                 end
                                 handle_drag_drop(file.full_path)
+                                if compact then
+                                    local tag_str = format_compact_tags(file, metadata or {})
+                                    if tag_str ~= "" then
+                                        r.ImGui_Indent(ctx, 18)
+                                        r.ImGui_PushFont(ctx, small_font, small_font_size)
+                                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xAAAAAAFF)
+                                        r.ImGui_Text(ctx, tag_str)
+                                        r.ImGui_PopStyleColor(ctx)
+                                        r.ImGui_PopFont(ctx)
+                                        r.ImGui_Unindent(ctx, 18)
+                                    end
+                                    goto continue
+                                end
                                 if ui_settings.visible_columns.category then
                                     r.ImGui_TableNextColumn(ctx)
                                     local cat = category_cache[file.full_path]
@@ -10415,7 +10486,11 @@ local function loop()
                     if playback.playing_preview and not playback.is_paused and not is_video_or_gif then
                         if playback.current_playing_file ~= "" then
                             local pixels = math.floor(width)
-                            if waveform.oscilloscope_cache_file ~= playback.current_playing_file or #waveform.oscilloscope_cache ~= pixels then
+                            local osc_file_changed = waveform.oscilloscope_cache_file ~= playback.current_playing_file
+                            local osc_cache_empty = #waveform.oscilloscope_cache == 0
+                            local osc_width_diff = #waveform.oscilloscope_cache ~= pixels
+                            local osc_needs_rebuild = osc_file_changed or osc_cache_empty or (osc_width_diff and waveform_width_stable(pixels))
+                            if osc_needs_rebuild then
                                 waveform.oscilloscope_cache = {}
                                 waveform.oscilloscope_cache_file = playback.current_playing_file
                                 local source = r.PCM_Source_CreateFromFile(playback.current_playing_file)
@@ -10535,7 +10610,11 @@ local function loop()
                     else
                         if playback.current_playing_file ~= "" and not is_video_or_gif then
                             local pixels = math.floor(width)
-                            if waveform.oscilloscope_cache_file ~= playback.current_playing_file or #waveform.oscilloscope_cache ~= pixels then
+                            local osc_file_changed = waveform.oscilloscope_cache_file ~= playback.current_playing_file
+                            local osc_cache_empty = #waveform.oscilloscope_cache == 0
+                            local osc_width_diff = #waveform.oscilloscope_cache ~= pixels
+                            local osc_needs_rebuild = osc_file_changed or osc_cache_empty or (osc_width_diff and waveform_width_stable(pixels))
+                            if osc_needs_rebuild then
                                 waveform.oscilloscope_cache = {}
                                 waveform.oscilloscope_cache_file = playback.current_playing_file
                                 local source = r.PCM_Source_CreateFromFile(playback.current_playing_file)
@@ -11226,64 +11305,65 @@ local function loop()
                 
                 local view_buttons_width = 0
                 if ui.current_view_mode ~= "collections" and ui.current_view_mode ~= "auto" then
-                    local button_width = 40
-                    view_buttons_width = (button_width * 2) + 5 + spacing
-                    
+                    local button_width = ui_settings.button_height or 20
+                    view_buttons_width = button_width + spacing
+
                     local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
-                    local button_bg = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
                     local text_col = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_text_brightness, ui_settings.button_text_brightness, ui_settings.button_text_brightness, 1.0)
-                    
-                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
-                    
-                    if file_location.flat_view then
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, 1))
-                    else
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_bg)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_col)
-                    end
-                    
-                    if r.ImGui_Button(ctx, "Flat", button_width, 0) then
-                        if not file_location.flat_view then
-                            file_location.flat_view = true
-                            search_filter.cached_location = ""
-                            save_options()
-                        end
-                    end
-                    
-                    r.ImGui_PopStyleColor(ctx, 2)
-                    
-                    r.ImGui_SameLine(ctx, 0, 5)
-                    
+
+                    local current_state
                     if not file_location.flat_view then
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, 1))
+                        current_state = "T"
+                    elseif ui_settings.compact_view then
+                        current_state = "C"
                     else
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_bg)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_col)
+                        current_state = "F"
                     end
-                    
-                    if r.ImGui_Button(ctx, "Tree", button_width, 0) then
-                        if file_location.flat_view then
+
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), accent_color)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, 1))
+
+                    if r.ImGui_Button(ctx, current_state, button_width, 0) then
+                        if current_state == "T" then
+                            file_location.flat_view = true
+                            ui_settings.compact_view = false
+                            search_filter.cached_location = ""
+                        elseif current_state == "F" then
+                            ui_settings.compact_view = true
+                        else
                             file_location.flat_view = false
+                            ui_settings.compact_view = false
                             search_filter.search_term = ""
                             search_filter.filtered_files = {}
                             tree_cache.cache = {}
                             if file_location.current_location ~= "" then
                                 file_location.current_files = read_directory_recursive(file_location.current_location, false)
                             end
-                            save_options()
                         end
+                        save_options()
                     end
-                    
                     r.ImGui_PopStyleColor(ctx, 2)
                     r.ImGui_PopStyleVar(ctx, 1)
-                    
+
+                    if r.ImGui_IsItemHovered(ctx) then
+                        local label
+                        if current_state == "T" then
+                            label = "Tree view"
+                        elseif current_state == "F" then
+                            label = "Flat view"
+                        else
+                            label = "Compact view"
+                        end
+                        r.ImGui_SetTooltip(ctx, "View mode: " .. label .. "\nClick to cycle Tree -> Flat -> Compact")
+                    end
+
                     r.ImGui_SameLine(ctx, 0, spacing)
                 end
                 
                 local dropdown_button_width = 20
-                local search_width = (available_width - view_buttons_width) * 0.5 + dropdown_button_width - 5
+                local search_width = (available_width - view_buttons_width) * 0.85 + dropdown_button_width - 5
+                if search_width < 80 then search_width = 80 end
                 
                 local search_bg_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
                 local search_hover_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, 1.0)
@@ -11434,17 +11514,6 @@ local function loop()
             end  
             r.ImGui_SameLine(ctx)
             
-                local version_text = "v" .. script_version
-                r.ImGui_PushFont(ctx, small_font, small_font_size)
-                local version_width = r.ImGui_CalcTextSize(ctx, version_text)
-                local version_y = r.ImGui_GetCursorPosY(ctx)
-                r.ImGui_SetCursorPosY(ctx, version_y + 2)
-                local version_brightness = ui_settings.text_brightness * 0.6
-                local version_color = r.ImGui_ColorConvertDouble4ToU32(version_brightness, version_brightness, version_brightness, 1.0)
-                r.ImGui_TextColored(ctx, version_color, version_text)
-                r.ImGui_PopFont(ctx)
-                r.ImGui_SameLine(ctx, 0, 8)
-            
             local avail_width = r.ImGui_GetContentRegionAvail(ctx)
             local quit_button_size = 10
             local shortcuts_button_size = 20
@@ -11459,9 +11528,19 @@ local function loop()
             
             local is_folder_view = ui.current_view_mode == "folders"
             local refresh_enabled = is_folder_view and file_location.current_location ~= ""
-            
-            local button_count = refresh_enabled and 6 or 5
-            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - (refresh_enabled and refresh_button_size or 0) - rs5k_button_size - video_button_size - settings_button_size - shortcuts_button_size - quit_button_size - offset_left - (spacing * button_count) - 1)
+            local compact_mode = ui_settings.compact_view
+            local overflow_button_size = 20
+
+            local button_count
+            local used_width
+            if compact_mode then
+                button_count = 1
+                used_width = overflow_button_size
+            else
+                button_count = refresh_enabled and 6 or 5
+                used_width = (refresh_enabled and refresh_button_size or 0) + rs5k_button_size + video_button_size + settings_button_size + shortcuts_button_size + quit_button_size
+            end
+            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - used_width - offset_left - (spacing * button_count) - 1)
             r.ImGui_SetCursorPosY(ctx, buttons_y)
             
             local drawList = r.ImGui_GetWindowDrawList(ctx)
@@ -11469,7 +11548,7 @@ local function loop()
             local hover_brightness = ui_settings.text_brightness < 0.5 and math.min(1.0, ui_settings.text_brightness + 0.3) or ui_settings.text_brightness * 0.8
             local hover_color = r.ImGui_ColorConvertDouble4ToU32(hover_brightness, hover_brightness, hover_brightness, 1.0)
             
-            if refresh_enabled then
+            if refresh_enabled and not compact_mode then
                 local refresh_pos_x, refresh_pos_y = r.ImGui_GetCursorScreenPos(ctx)
                 if r.ImGui_InvisibleButton(ctx, "##refresh", refresh_button_size, refresh_button_size) then
                     tree_cache.cache[file_location.current_location] = nil
@@ -11501,6 +11580,7 @@ local function loop()
                 end
                 r.ImGui_SameLine(ctx, 0, spacing - 1)
             end
+            if not compact_mode then
             r.ImGui_SetCursorPosY(ctx, buttons_y)
             local rs5k_pos_x, rs5k_pos_y = r.ImGui_GetCursorScreenPos(ctx)
             if r.ImGui_InvisibleButton(ctx, "##rs5k_manager", rs5k_button_size, rs5k_button_size) then
@@ -11609,7 +11689,70 @@ local function loop()
             if r.ImGui_IsItemHovered(ctx) then
                 r.ImGui_SetTooltip(ctx, "Keyboard Shortcuts")
             end
+            end
             
+            if compact_mode then
+                r.ImGui_SetCursorPosY(ctx, buttons_y)
+                local ov_x, ov_y = r.ImGui_GetCursorScreenPos(ctx)
+                if r.ImGui_InvisibleButton(ctx, "##compact_overflow", overflow_button_size, overflow_button_size) then
+                    r.ImGui_OpenPopup(ctx, "compact_overflow_popup")
+                end
+                local ov_color = r.ImGui_IsItemHovered(ctx) and hover_color or base_color
+                local ov_cx = ov_x + overflow_button_size / 2
+                local ov_cy = ov_y + overflow_button_size / 2
+                local dot_r = 1.6
+                local dot_gap = 4
+                for i = -1, 1 do
+                    r.ImGui_DrawList_AddCircleFilled(drawList, ov_cx, ov_cy + i * dot_gap, dot_r, ov_color)
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "More actions")
+                end
+                if r.ImGui_BeginPopup(ctx, "compact_overflow_popup") then
+                    if refresh_enabled then
+                        if r.ImGui_MenuItem(ctx, "Refresh folder cache") then
+                            tree_cache.cache[file_location.current_location] = nil
+                            refresh_file_cache(file_location.current_location)
+                            search_filter.cached_location = ""
+                            search_filter.cached_flat_files = {}
+                            get_flat_file_list(file_location.current_location)
+                            if not file_location.flat_view then
+                                file_location.current_files = read_directory_recursive(file_location.current_location, false)
+                            end
+                        end
+                        r.ImGui_Separator(ctx)
+                    end
+                    if r.ImGui_MenuItem(ctx, "RS5K Manager") then
+                        toggle_mpl_rs5k_manager()
+                    end
+                    local video_is_open = is_video_window_open()
+                    if r.ImGui_MenuItem(ctx, video_is_open and "Close Video Window" or "Open Video Window") then
+                        r.Main_OnCommand(50125, 0)
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Settings", nil, ui.current_view_mode == "settings") then
+                        if ui.current_view_mode ~= "settings" then
+                            ui.pending_view_mode = "settings"
+                        else
+                            ui.pending_view_mode = "folders"
+                        end
+                    end
+                    if r.ImGui_MenuItem(ctx, "Keyboard Shortcuts", nil, ui.current_view_mode == "shortcuts") then
+                        if ui.current_view_mode ~= "shortcuts" then
+                            ui.pending_view_mode = "shortcuts"
+                        else
+                            ui.pending_view_mode = "folders"
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "Close") then
+                        open = false
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+            end
+
+            if not compact_mode then
             r.ImGui_SameLine(ctx, 0, spacing + 2)
             r.ImGui_SetCursorPosY(ctx, buttons_y + 5)
             if r.ImGui_InvisibleButton(ctx, "##quit", quit_button_size, quit_button_size) then
@@ -11633,6 +11776,7 @@ local function loop()
                 quit_center_x + cross_size, quit_center_y - cross_size,
                 quit_center_x - cross_size, quit_center_y + cross_size,
                 quit_color, 2)
+            end
             
             r.ImGui_Separator(ctx)
             
@@ -11950,7 +12094,17 @@ local function loop()
                         ui_settings.hide_scrollbar = new_scrollbar
                         save_options()
                     end
-                    
+
+                    r.ImGui_Spacing(ctx)
+                    local compact_changed, new_compact = r.ImGui_Checkbox(ctx, "Compact View (side-dock)", ui_settings.compact_view)
+                    if compact_changed then
+                        ui_settings.compact_view = new_compact
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Replace the file table with a compact one-card-per-item layout.\nFilename bold, tags below (mp3 - 232.3kb - 11.23s - 44.1k).\nUses the same visible columns as tag selection.")
+                    end
+
                     r.ImGui_Spacing(ctx)
                     local numaplayer_changed, new_numaplayer = r.ImGui_Checkbox(ctx, "Use Numa Player for MIDI", ui_settings.use_numaplayer)
                     if numaplayer_changed then
@@ -12401,7 +12555,7 @@ local function loop()
 
             local footer_width = r.ImGui_GetContentRegionAvail(ctx)
             local footer_height = ui.waveform_preview_height
-            local ruler_height = 15
+            local ruler_height = ui_settings.compact_view and 0 or 15
             local waveform_height = footer_height - ruler_height
             local draw_list = r.ImGui_GetWindowDrawList(ctx)
             local footer_x, footer_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -12419,7 +12573,7 @@ local function loop()
             )
             r.ImGui_DrawList_AddRectFilled(draw_list, footer_x, ruler_y, footer_x + footer_width, ruler_y + ruler_height, ruler_bg_color)
             local file_to_show = playback.current_playing_file ~= "" and playback.current_playing_file or (playback.last_displayed_file ~= "" and playback.last_displayed_file or (ui.selected_index > 0 and ui.visible_files[ui.selected_index] and ui.visible_files[ui.selected_index].path))
-            if file_to_show and file_to_show ~= "" then
+            if not ui_settings.compact_view and file_to_show and file_to_show ~= "" then
                 local length = get_cached_file_length(file_to_show)
                 if length > 0 then
                         local visible_duration = length / waveform.zoom_level
@@ -12540,7 +12694,7 @@ local function loop()
                             end
                         end
                     end
-                elseif not is_video_or_gif and not is_image and (waveform.cache_file ~= file_to_show or #waveform.cache ~= pixels) then
+                elseif not is_video_or_gif and not is_image and (waveform.cache_file ~= file_to_show or #waveform.cache == 0 or (#waveform.cache ~= pixels and waveform_width_stable(pixels))) then
                     waveform.cache = {}
                     waveform.cache_file = file_to_show
                     local temp_track = r.GetTrack(0, 0)
@@ -12585,7 +12739,10 @@ local function loop()
                 end
                 if not is_midi and not is_image and #waveform.cache > 0 then
                     if waveform.show_spectral_view then
-                        if waveform.spectral_cache_file ~= file_to_show or #waveform.spectral_cache ~= pixels then
+                        local spec_file_changed = waveform.spectral_cache_file ~= file_to_show
+                        local spec_cache_empty = #waveform.spectral_cache == 0
+                        local spec_width_diff = #waveform.spectral_cache ~= pixels
+                        if spec_file_changed or spec_cache_empty or (spec_width_diff and waveform_width_stable(pixels)) then
                             waveform.spectral_cache = calculate_spectral_data(file_to_show, pixels, 1)
                             waveform.spectral_cache_file = file_to_show
                         end
@@ -13011,7 +13168,7 @@ local function loop()
             end
 
             local slice_hovered = false
-            if is_audio_file and current_file and current_file ~= "" then
+            if not ui_settings.compact_view and is_audio_file and current_file and current_file ~= "" then
                 local has_slices = (#waveform.slices > 0 and waveform.slice_file_path == current_file)
                 local slice_text = has_slices and "CLEAR" or "SLICE"
                 local slice_color = has_slices and accent_color or text_color

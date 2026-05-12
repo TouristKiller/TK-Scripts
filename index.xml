@@ -321,28 +321,19 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.8.1" author="TouristKiller" time="2026-05-04T23:45:00Z">
+        <version name="0.8.2" author="TouristKiller" time="2026-05-13T00:35:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-v0.8.1:
-+ External toggle scripts for toolbar buttons with sync support
-+ Toolbar buttons reflect current state when toggled via checkbox or script
-v0.8.0:
-+ New option "Use Selected Track for Audio" in Settings: routes audio preview through the currently selected track so track FX, volume, pan and sends are applied to the preview
-+ Falls back to hardware output when no track is selected
-+ Cartridge sampler integration: right-click an audio file -> "Add to new track with Cartridge" or "Load sample to focused Cartridge" (active waveform selection is applied as trim)
-+ Pitch detection: real-time tunable stability/update/sensitivity sliders + Fast/Balanced/Smooth presets in Settings
-+ Stability: fixed ImGui_EndChild assertion crash that could occur on view-mode switches (gear/shortcuts buttons)
-+ Collections and Saved Searches now support 3 levels: Group / Subgroup / Sub-subgroup
-+ Header context menu: "New sub-subgroup..." on a subgroup, full rename/move/delete on a sub-subgroup
-+ Save Search dialog: extra "Sub-subgroup (optional)" field
-+ Item context menu: "Move to sub-subgroup" submenu
-+ Color picker: "Use gradient" (group + subgroup) and "Inherit parent color" (subgroup + sub-subgroup)
-+ Saved searches inherit the effective color of their (sub-)subgroup, including gradient
-+ Empty subgroups now stay visible after creation
+v0.8.2:
++ New Compact View (side-dock card layout): one card per item with metadata-driven tags, toggle via Settings or toolbar
++ Toolbar in compact mode: right-side icons (Refresh, RS5K, Video, Settings, Shortcuts, Close) moved into a single overflow popup (...) to free up space
++ View toggle replaced with one compact square cycle button (T -> F -> C) with tooltip; saves space when only one mode is shown
++ Search field minimum width lowered and growth factor tuned so it stays usable when the window shrinks
++ Removed version label from the toolbar
++ Compact view hides the time ruler above the waveform and disables the SLICE/Sens/REV/INS/FD/RND controls (insufficient horizontal space)
 ]]></changelog>
         </version>
     </reapack>
