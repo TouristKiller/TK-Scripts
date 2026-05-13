@@ -1,7 +1,10 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.3.2
+-- @version 1.3.3
 --[[
+v1.3.3
+    + Sidebar: dock/undock toggle button (above the close button) — remembers last dock position, defaults to bottom dock
+
 v1.3.2
     + Tracks: "Scroll Selected Track Into View" no longer overrules manual scrolling — mousewheel and scrollbar now work freely until a new track is selected from outside the mixer
 
@@ -254,6 +257,7 @@ mixer_state.param_learn_active = false
 mixer_state.param_learn_last_check = nil
 mixer_state.ltp_open = true
 mixer_state.last_touched_param = nil
+mixer_state.pending_dock_id = nil
 
 local vu_jsfx_cache = {}
 local vu_gmem_attached = false
@@ -528,6 +532,7 @@ local settings = {
  simple_mixer_font_name = "Arial",
  simple_mixer_button_font_name = "Arial",
  simple_mixer_remember_state = true,
+ simple_mixer_last_dock_id = -1,
  simple_mixer_channel_width = 120,
  simple_mixer_track_name_centered = false,
  simple_mixer_rms_position = "top",
@@ -12339,8 +12344,21 @@ function DrawSimpleMixerWindow()
    r.ImGui_SetNextWindowPos(mixer_ctx, sx, sy, r.ImGui_Cond_FirstUseEver())
   end
  end
+ if mixer_state.pending_dock_id ~= nil and r.ImGui_SetNextWindowDockID then
+  r.ImGui_SetNextWindowDockID(mixer_ctx, mixer_state.pending_dock_id, r.ImGui_Cond_Always())
+  mixer_state.pending_dock_id = nil
+ end
  local visible, open = r.ImGui_Begin(mixer_ctx, "TK Mixer", true, window_flags)
  if visible then
+  local main_window_dock_id = 0
+  if r.ImGui_GetWindowDockID then
+   main_window_dock_id = r.ImGui_GetWindowDockID(mixer_ctx) or 0
+   if main_window_dock_id ~= 0 and main_window_dock_id ~= settings.simple_mixer_last_dock_id then
+    settings.simple_mixer_last_dock_id = main_window_dock_id
+    SaveMixerSettings()
+   end
+  end
+  local main_window_is_docked = main_window_dock_id ~= 0
   if font_simple_mixer then
    r.ImGui_PushFont(mixer_ctx, font_simple_mixer, settings.simple_mixer_font_size or 12)
   end
@@ -12351,7 +12369,7 @@ function DrawSimpleMixerWindow()
 
   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ChildBg(), settings.simple_mixer_window_bg_color or 0x1E1E1EFF)
   r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_ScrollbarSize(), 4)
-  local sidebar_bottom_h = 24 + 1
+  local sidebar_bottom_h = 24 + 24 + 2
   r.ImGui_BeginGroup(mixer_ctx)
   if r.ImGui_BeginChild(mixer_ctx, "SidebarPanel", sidebar_width, full_avail_height - sidebar_bottom_h, 0, 0) then
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x00000000)
@@ -12436,11 +12454,41 @@ function DrawSimpleMixerWindow()
   end
   if r.ImGui_BeginChild(mixer_ctx, "SidebarBottom", sidebar_width, sidebar_bottom_h, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()) then
    r.ImGui_PushStyleVar(mixer_ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 1)
+   local dock_btn_h = 24
+   local is_docked = main_window_is_docked
+   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x2A2A2AFF)
+   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x3A3A3AFF)
+   r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0x4A4A4AFF)
+   local sb2_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
+   local db_x, db_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
+   if r.ImGui_Button(mixer_ctx, "##dock_mixer_toggle", sidebar_width, dock_btn_h) then
+    if is_docked then
+     mixer_state.pending_dock_id = 0
+    else
+     local target = settings.simple_mixer_last_dock_id or -1
+     if not target or target == 0 then target = -1 end
+     mixer_state.pending_dock_id = target
+    end
+   end
+   if r.ImGui_IsItemHovered(mixer_ctx) then
+    r.ImGui_SetTooltip(mixer_ctx, is_docked and "Undock mixer" or "Dock mixer (remembers last dock position)")
+   end
+   r.ImGui_PopStyleColor(mixer_ctx, 3)
+   local db_cx = db_x + sidebar_width * 0.5
+   local db_cy = db_y + dock_btn_h * 0.5
+   local icon_w = 10
+   local icon_h = 8
+   local ix1 = db_cx - icon_w * 0.5
+   local iy1 = db_cy - icon_h * 0.5
+   local ix2 = db_cx + icon_w * 0.5
+   local iy2 = db_cy + icon_h * 0.5
+   local icon_col = 0xAAAAAAFF
+   r.ImGui_DrawList_AddRect(sb2_dl, ix1, iy1, ix2, iy2, icon_col, 0, 0, 1.0)
+   r.ImGui_DrawList_AddRectFilled(sb2_dl, ix1, iy2 - 2, ix2, iy2, icon_col)
    local close_btn_h = 24
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_Button(), 0x2A2A2AFF)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonHovered(), 0x882222FF)
    r.ImGui_PushStyleColor(mixer_ctx, r.ImGui_Col_ButtonActive(), 0xAA2222FF)
-   local sb2_dl = r.ImGui_GetWindowDrawList(mixer_ctx)
    local cb_x, cb_y = r.ImGui_GetCursorScreenPos(mixer_ctx)
    if r.ImGui_Button(mixer_ctx, "##close_mixer_bottom", sidebar_width, close_btn_h) then
     close_requested = true
