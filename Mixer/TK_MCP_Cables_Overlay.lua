@@ -1,8 +1,10 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.1.2
+-- @version 1.1.3
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.1.3
+--   + Fixed: cables disappearing after MCP changes (track delete, fader move, etc.) - overlay now refreshes on project state changes
 --   v1.1.2
 --   + Reliable F2 capture via JS_VKeys_Intercept (only while mouse is over the mixer, so REAPER's Rename Track still works elsewhere)
 --   v1.1.1
@@ -130,18 +132,23 @@ local mixer_search_t = 0
 local settings_visible = false
 local save_timer = 0
 local prev_f2_state = 0
+local last_project_change = -1
 
 local function UpdateMixerRect(force)
  if not mixer_hwnd or not r.JS_Window_IsWindow(mixer_hwnd) then
-  local now = r.time_precise()
-  if now - mixer_search_t > 0.5 then
-   mixer_search_t = now
-   mixer_hwnd = GetMixerHWND()
+  mixer_hwnd = GetMixerHWND()
+  if not mixer_hwnd then
+   local now = r.time_precise()
+   if now - mixer_search_t > 0.2 then mixer_search_t = now end
+   return false
   end
-  if not mixer_hwnd then return false end
+  force = true
  end
  local ok, l, t, ri, b = r.JS_Window_GetRect(mixer_hwnd)
- if not ok then return false end
+ if not ok then
+  mixer_hwnd = nil
+  return false
+ end
  local val = l + t + ri + b
  if val ~= LAST_RECT_VAL or force then
   LAST_RECT_VAL = val
@@ -548,7 +555,14 @@ local function Loop()
 
  if settings_visible then DrawSettingsWindow() end
 
- if settings.enabled and UpdateMixerRect(false) and not IsMixerCovered() then
+ local pc = r.GetProjectStateChangeCount(0)
+ local force_rect = false
+ if pc ~= last_project_change then
+  last_project_change = pc
+  force_rect = true
+ end
+
+ if settings.enabled and UpdateMixerRect(force_rect) and not IsMixerCovered() then
   local w = (RIGHT - LEFT)
   local h = (BOT - TOP)
   if w > 4 and h > 4 then
