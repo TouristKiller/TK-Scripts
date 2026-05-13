@@ -1,7 +1,10 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.3.1
+-- @version 1.3.2
 --[[
+v1.3.2
+    + Tracks: "Scroll Selected Track Into View" no longer overrules manual scrolling — mousewheel and scrollbar now work freely until a new track is selected from outside the mixer
+
 v1.3.1
     + Tracks: optional horizontal scrollbar for the mixer channel area
     + Tracks: auto-center now only triggers for selections from outside the mixer (TCP / other sources), not for clicks inside the mixer itself
@@ -12767,6 +12770,7 @@ function DrawSimpleMixerWindow()
                         mixer_state.auto_scroll_selected_track_last_signature = auto_scroll_signature
                     end
                 end
+                mixer_state.last_mixer_selection_signature = current_selection_signature
             end
         else
             mixer_state.auto_scroll_selected_track_last_signature = nil
