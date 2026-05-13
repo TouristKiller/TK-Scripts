@@ -246,6 +246,18 @@
 ]]></changelog>
         </version>
     </reapack>
+
+    <reapack name="TK_MCP_Cables_Overlay.lua" type="script" desc="TK MCP Cables Overlay">
+        <version name="1.0.0" author="TouristKiller" time="2026-05-13T18:00:00Z">
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_MCP_Cables_Overlay.lua</source>
+            <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
+            <changelog><![CDATA[
+    v1.0.0
+   + Initial release: overlay that draws send/receive cables over REAPER's native MCP
+   + Settings window (toggle with F2): thickness, alpha, curve, glow, flow, selected-only, anchor position, vertical/horizontal offset
+]]></changelog>
+        </version>
+    </reapack>
 </category>
 
 
