@@ -248,6 +248,22 @@
     </reapack>
 
     <reapack name="TK_MCP_Cables_Overlay.lua" type="script" desc="TK MCP Cables Overlay">
+        <version name="1.1.2" author="TouristKiller" time="2026-05-13T20:30:00Z">
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_MCP_Cables_Overlay.lua</source>
+            <source file="tk_mcp_cables_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/tk_mcp_cables_json.lua</source>
+            <changelog><![CDATA[
+   v1.1.2
+   + Reliable F2 capture via JS_VKeys_Intercept (only while mouse is over the mixer, so REAPER's Rename Track still works elsewhere)
+]]></changelog>
+        </version>
+        <version name="1.1.1" author="TouristKiller" time="2026-05-13T20:00:00Z">
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_MCP_Cables_Overlay.lua</source>
+            <source file="tk_mcp_cables_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/tk_mcp_cables_json.lua</source>
+            <changelog><![CDATA[
+   v1.1.1
+   + Settings hotkey F2 works globally, but only when mouse hovers over the mixer (no conflict with REAPER's Rename Track)
+]]></changelog>
+        </version>
         <version name="1.1.0" author="TouristKiller" time="2026-05-13T19:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_MCP_Cables_Overlay.lua</source>
             <source file="tk_mcp_cables_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/tk_mcp_cables_json.lua</source>

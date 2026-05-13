@@ -1,8 +1,12 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.1.2
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.1.2
+--   + Reliable F2 capture via JS_VKeys_Intercept (only while mouse is over the mixer, so REAPER's Rename Track still works elsewhere)
+--   v1.1.1
+--   + Settings hotkey F2 works globally, but only when mouse hovers over the mixer (no conflict with REAPER's Rename Track)
 --   v1.1.0
 --   + Master side detection (auto/left/right) with correct track offset when master is on the left
 --   + Hide cables behind master option (clip rect split around master strip)
@@ -125,6 +129,7 @@ local mixer_hwnd = nil
 local mixer_search_t = 0
 local settings_visible = false
 local save_timer = 0
+local prev_f2_state = 0
 
 local function UpdateMixerRect(force)
  if not mixer_hwnd or not r.JS_Window_IsWindow(mixer_hwnd) then
@@ -466,11 +471,49 @@ end
 
 r.atexit(function()
  if settings_dirty then SaveSettings() end
+ if r.JS_VKeys_Intercept then r.JS_VKeys_Intercept(0x71, -1) end
  if sectionID ~= -1 then
   r.SetToggleCommandState(sectionID, cmdID, 0)
   r.RefreshToolbar2(sectionID, cmdID)
  end
 end)
+
+local function IsMouseOverMixer()
+ if not mixer_hwnd or not r.JS_Window_FromPoint then return false end
+ local mx, my = r.GetMousePosition()
+ local hwnd = r.JS_Window_FromPoint(mx, my)
+ local cur = hwnd
+ while cur do
+  if cur == mixer_hwnd then return true end
+  cur = r.JS_Window_GetParent(cur)
+ end
+ return false
+end
+
+local f2_intercepted = false
+local function UpdateF2Intercept(want)
+ if not r.JS_VKeys_Intercept then return end
+ if want and not f2_intercepted then
+  r.JS_VKeys_Intercept(0x71, 1)
+  f2_intercepted = true
+ elseif not want and f2_intercepted then
+  r.JS_VKeys_Intercept(0x71, -1)
+  f2_intercepted = false
+ end
+end
+
+local function CheckF2Toggle()
+ local over = IsMouseOverMixer()
+ UpdateF2Intercept(over)
+ if not r.JS_VKeys_GetState then return end
+ local state = r.JS_VKeys_GetState(0)
+ if not state then return end
+ local cur = state:byte(0x71) or 0
+ if cur ~= 0 and prev_f2_state == 0 and over then
+  settings_visible = not settings_visible
+ end
+ prev_f2_state = cur
+end
 
 local function IsMixerCovered()
  if not mixer_hwnd then return true end
@@ -501,9 +544,7 @@ local function Loop()
   if save_timer > 30 then SaveSettings(); save_timer = 0 end
  end
 
- if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_F2(), false) then
-  settings_visible = not settings_visible
- end
+ CheckF2Toggle()
 
  if settings_visible then DrawSettingsWindow() end
 
