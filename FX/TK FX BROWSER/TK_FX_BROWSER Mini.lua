@@ -1,8 +1,14 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.8.1
+-- @version 0.8.2
 -- @changelog:
 --[[ 
+    v0.8.2:
+        + Fix: Custom folders and native FOLDERS subfolders that share the same name are now fully isolated (folder-kind routing).
+        + Fix: An empty custom folder now shows an empty grid instead of the contents of the same-named native FOLDERS subfolder.
+        + Fix: Clicking a native FOLDERS subfolder again shows the native plugins, even when a same-named custom folder contains plugins.
+        + Custom Folder dropdown: empty custom folders are now also listed (as "name (0)") and selectable.
+
     v0.7.8:
         + Patchbay workflow overhaul: pin/unpin nodes, collapse/expand nodes, persistent state (layout, pin, collapse) and improved drag behavior with pin-lock support.
         + Routing productivity: compact bulk actions, node context group routing actions, Ctrl-multiselect improvements and explicit focus behavior.
@@ -731,7 +737,7 @@ function RefreshCurrentScreenshotView()
             end
             current_filtered_fx = filtered
         elseif selected_folder then
-            local base = GetPluginsForFolder(selected_folder) or {}
+            local base = GetPluginsForFolder(selected_folder, selected_folder_kind) or {}
             local filtered = {}
             for _, p in ipairs(base) do
                 if MatchesSearch(p) then filtered[#filtered+1] = p end
@@ -769,7 +775,7 @@ function RefreshCurrentScreenshotView()
                 current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
             end
         elseif selected_folder then
-            current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+            current_filtered_fx = GetPluginsForFolder(selected_folder, selected_folder_kind) or {}
         else
             return
         end
@@ -919,6 +925,7 @@ was_docked_before_hide = was_docked_before_hide or false
 
 screenshot_search_results = screenshot_search_results or {}
 browser_panel_selected = browser_panel_selected or nil
+selected_folder_kind = selected_folder_kind or nil
 last_selected_folder_before_global = nil
 last_panel_before_global = nil
 
@@ -973,7 +980,7 @@ local debug_config_logged = false
 
 function SelectBrowserPanelItem(name)
     browser_panel_selected = name
-    if name ~= nil then selected_folder = nil end
+    if name ~= nil then selected_folder = nil; selected_folder_kind = nil end
 
     current_fx_chain_path = nil
     current_fx_chain_relative_path = nil
@@ -984,15 +991,16 @@ function SelectBrowserPanelItem(name)
     show_scripts_browser = false
 end
 
-function SelectFolderExclusive(name)
+function SelectFolderExclusive(name, kind)
     selected_folder = name
+    selected_folder_kind = kind
     screenshot_multi_selected = {}
     screenshot_nav_anchor = nil
     screenshot_nav_index = nil
     if name ~= nil then
         browser_panel_selected = nil
     
-        local seeded = GetPluginsForFolder(name) or {}
+        local seeded = GetPluginsForFolder(name, kind) or {}
         if config and config.apply_type_priority and type(seeded) == 'table' then
             seeded = DedupeByTypePriority(seeded)
         end
@@ -1688,6 +1696,15 @@ if config and config.last_viewed_folder_mini then
 elseif config and config.last_viewed_folder then
     last_viewed_folder = config.last_viewed_folder
 end
+
+if last_viewed_folder and not selected_folder_kind then
+    if config.custom_folders and config.custom_folders[last_viewed_folder] then
+        selected_folder_kind = "custom"
+    else
+        selected_folder_kind = "map"
+    end
+end
+
 PROJECTS_DIR = config.last_used_project_location
 
 
@@ -1866,7 +1883,7 @@ do
             local list = GetFxListForSubgroup(browser_panel_selected) or {}
             current_filtered_fx = DedupeByTypePriority(list)
         elseif selected_folder and type(GetPluginsForFolder) == 'function' then
-            current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+            current_filtered_fx = GetPluginsForFolder(selected_folder, selected_folder_kind) or {}
         end
         if (not screenshot_search_results or #screenshot_search_results == 0) and current_filtered_fx and #current_filtered_fx > 0 then
             screenshot_search_results = {}
@@ -2137,7 +2154,7 @@ function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
         if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
     end
     if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-        StartFolderScreenshots(full_path)
+        StartFolderScreenshots(full_path, nil, "custom")
     end
     r.ImGui_Separator(ctx)
     if r.ImGui_MenuItem(ctx, "Rename Folder") then
@@ -2190,8 +2207,9 @@ function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
                 end
             end
             SaveCustomFolders()
-            if selected_folder == full_path then
+            if selected_folder == full_path and selected_folder_kind == "custom" then
                 selected_folder = nil
+                selected_folder_kind = nil
                 screenshot_search_results = {}
             end
             r.ShowMessageBox("Folder '" .. folder_name .. "' deleted", "Success", 0)
@@ -4393,7 +4411,9 @@ function IsShortcutContextEligible()
     local sf = selected_folder
     if sf == "Current Track FX" or sf == "Current Project FX" then return false end
     if type(browser_search_term) == "string" and browser_search_term ~= "" then return false end
-    return true
+    if sf == "Favorites" or sf == "Recent" then return true end
+    if selected_folder_kind == "custom" then return true end
+    return false
 end
 
 screenshot_shortcut_frame_idx = 0
@@ -4930,7 +4950,7 @@ function ShowPluginManagerTab()
     end
 end
 
-function GetPluginsForFolder(folder_name)
+function GetPluginsForFolder(folder_name, kind)
     if not folder_name or folder_name == '' then return {} end
 
     if folder_name == "Favorites" then
@@ -4956,9 +4976,23 @@ function GetPluginsForFolder(folder_name)
     return DedupeByTypePriority(list)
     end
 
-    if folder_name:find("/") then
-        return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
-    elseif config.custom_folders and config.custom_folders[folder_name] then
+    if kind == "custom" or folder_name:find("/") then
+        if folder_name:find("/") then
+            return DedupeByTypePriority(GetPluginsFromCustomFolder(folder_name))
+        elseif config.custom_folders and config.custom_folders[folder_name] then
+            local folder_content = config.custom_folders[folder_name]
+            local plugins = {}
+            for k, v in pairs(folder_content) do
+                if type(k) == "number" and type(v) == "string" then
+                    plugins[#plugins + 1] = v
+                end
+            end
+            return DedupeByTypePriority(plugins)
+        end
+        return {}
+    end
+
+    if kind ~= "map" and config.custom_folders and config.custom_folders[folder_name] then
         local folder_content = config.custom_folders[folder_name]
         local plugins = {}
         for k, v in pairs(folder_content) do
@@ -5770,7 +5804,7 @@ function ShowConfigWindow()
                         end
                         current_filtered_fx = filtered
                     elseif selected_folder then
-                        local base = GetPluginsForFolder(selected_folder) or {}
+                        local base = GetPluginsForFolder(selected_folder, selected_folder_kind) or {}
                         local filtered = {}
                         for _, p in ipairs(base) do
                             if FuzzyFind(p, term_l) then filtered[#filtered+1] = p end
@@ -5806,7 +5840,7 @@ function ShowConfigWindow()
                             current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
                         end
                     elseif selected_folder then
-                        current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+                        current_filtered_fx = GetPluginsForFolder(selected_folder, selected_folder_kind) or {}
                     else
                         return
                     end
@@ -7743,13 +7777,13 @@ function StartSelectedMissingScreenshots()
 end
 
 
-function StartFolderScreenshots(folder_name, explicit_plugin_list)
+function StartFolderScreenshots(folder_name, explicit_plugin_list, kind)
     if not folder_name or folder_name == '' then return end
 
     local plugins = explicit_plugin_list
 
     if plugins == nil then
-        plugins = GetPluginsForFolder(folder_name)
+        plugins = GetPluginsForFolder(folder_name, kind)
     end
 
     if (not plugins or #plugins == 0) and type(CAT_TEST) == 'table' then
@@ -10682,7 +10716,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                                     end
                                     if removed_count > 0 then
                                         SaveCustomFolders()
-                                        if selected_folder and IsCustomFolder(selected_folder) then
+                                        if selected_folder and selected_folder_kind == "custom" and IsCustomFolder(selected_folder) then
                                             local plugins = GetCustomFolderPlugins(selected_folder, config.custom_folders)
                                             screenshot_search_results = {}
                                             for _, p in ipairs(plugins) do
@@ -10950,13 +10984,13 @@ function ShowPluginContextMenu(plugin_name, menu_id)
         if is_favorite then
             if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
                 RemoveFromFavorites(plugin_name)
-                GetPluginsForFolder(selected_folder)
+                GetPluginsForFolder(selected_folder, selected_folder_kind)
                 ClearScreenshotCache()
             end
         else
             if r.ImGui_MenuItem(ctx, "Add to Favorites") then
                 AddToFavorites(plugin_name)
-                GetPluginsForFolder(selected_folder)
+                GetPluginsForFolder(selected_folder, selected_folder_kind)
                 ClearScreenshotCache()
             end
         end
@@ -11143,7 +11177,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                                 SaveCustomFolders()
                                 
                                 -- Refresh if we're viewing this folder
-                                if selected_folder and IsCustomFolder(selected_folder) then
+                                if selected_folder and selected_folder_kind == "custom" and IsCustomFolder(selected_folder) then
                                     local plugins = GetCustomFolderPlugins(selected_folder, config.custom_folders)
                                     screenshot_search_results = {}
                                     for _, p in ipairs(plugins) do
@@ -11668,7 +11702,7 @@ function ShowFolderDropdown()
                 show_action_browser = false
                 screenshot_search_results = nil
                 RequestClearScreenshotCache()
-                GetPluginsForFolder(selected_folder)
+                GetPluginsForFolder(selected_folder, selected_folder_kind)
             end
             if r.ImGui_Selectable(ctx, "Current Track FX", selected_folder == "Current Track FX") then
                 SelectFolderExclusive("Current Track FX")
@@ -11727,9 +11761,9 @@ function ShowFolderDropdown()
           
             if config.show_folders then
                 for i = 1, #folders_category do
-                    local is_selected = (selected_folder == folders_category[i].name)
+                    local is_selected = (selected_folder == folders_category[i].name) and (selected_folder_kind == "map")
                     if r.ImGui_Selectable(ctx, folders_category[i].name .. "##folder_" .. i, is_selected) then
-                        SelectFolderExclusive(folders_category[i].name)
+                        SelectFolderExclusive(folders_category[i].name, "map")
                         browser_panel_selected = nil
                         UpdateLastViewedFolder(selected_folder)
                         screenshot_search_results = nil
@@ -11739,7 +11773,7 @@ function ShowFolderDropdown()
                         show_scripts_browser = false
                         folder_page_state[folders_category[i].name] = 1
                         ClearScreenshotCache()
-                        GetPluginsForFolder(selected_folder)
+                        GetPluginsForFolder(selected_folder, selected_folder_kind)
                     end
                     if r.ImGui_IsItemClicked(ctx, 1) then
                         _nf_ctx_folder_name = folders_category[i].name
@@ -11751,7 +11785,7 @@ function ShowFolderDropdown()
                         r.ImGui_OpenPopup(ctx, "NativeFolderCtxMenu")
                     end
                     if config.use_pagination and view_mode ~= "list" then
-                        local total = #(GetPluginsForFolder(folders_category[i].name) or {})
+                        local total = #(GetPluginsForFolder(folders_category[i].name, "map") or {})
                         local total_pages = math.max(1, math.ceil(total / ITEMS_PER_PAGE))
                         if total_pages > 1 then
                             local page = folder_page_state[folders_category[i].name] or 1
@@ -11833,11 +11867,11 @@ function ShowFolderDropdown()
                 elseif current_index > #folders_category then
                     current_index = 1
                 end
-                SelectFolderExclusive(folders_category[current_index].name)
+                SelectFolderExclusive(folders_category[current_index].name, "map")
                 UpdateLastViewedFolder(selected_folder)
                 screenshot_search_results = nil
                 ClearScreenshotCache()
-                GetPluginsForFolder(selected_folder)
+                GetPluginsForFolder(selected_folder, selected_folder_kind)
             end
         end
     
@@ -11877,8 +11911,9 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                     
                     if IsPluginArray(folder_content) then
                         local display_name = prefix == "" and folder_name or ("  " .. folder_name)
-                        if r.ImGui_Selectable(ctx, display_name .. " (" .. #folder_content .. ")", selected_folder == full_path) then
-                            SelectFolderExclusive(full_path)
+                        local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
+                        if r.ImGui_Selectable(ctx, display_name .. " (" .. #folder_content .. ")", cf_is_selected) then
+                            SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
                             show_sends_window = false
                             show_action_browser = false
@@ -11894,6 +11929,17 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         r.ImGui_PopStyleColor(ctx)
                         
                         ShowNestedFolders(folder_content, full_path)
+                    elseif type(folder_content) == "table" then
+                        local display_name = prefix == "" and folder_name or ("  " .. folder_name)
+                        local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
+                        if r.ImGui_Selectable(ctx, display_name .. " (0)", cf_is_selected) then
+                            SelectFolderExclusive(full_path, "custom")
+                            show_media_browser = false
+                            show_sends_window = false
+                            show_action_browser = false
+                            screenshot_search_results = {}
+                            ClearScreenshotCache()
+                        end
                     end
                 end
             end
@@ -12037,7 +12083,7 @@ function ClearSearch()
         selected_folder = last_selected_folder_before_global
         last_selected_folder_before_global = nil
         screenshot_search_results = nil
-        current_filtered_fx = GetPluginsForFolder(selected_folder) or {}
+        current_filtered_fx = GetPluginsForFolder(selected_folder, selected_folder_kind) or {}
         if config.apply_type_priority then
             current_filtered_fx = DedupeByTypePriority(current_filtered_fx)
         end
@@ -12055,7 +12101,7 @@ function ClearSearch()
                 table.insert(screenshot_search_results, {name = plugin})
             end
         elseif selected_folder then
-            local filtered_plugins = GetPluginsForFolder(selected_folder)
+            local filtered_plugins = GetPluginsForFolder(selected_folder, selected_folder_kind)
             for _, plugin in ipairs(filtered_plugins) do
                 table.insert(screenshot_search_results, {name = plugin})
             end
@@ -12239,7 +12285,7 @@ function ShowScreenshotControls()
                             table.insert(screenshot_search_results, {name = plugin})
                         end
                     elseif selected_folder then
-                        local filtered_plugins = GetPluginsForFolder(selected_folder)
+                        local filtered_plugins = GetPluginsForFolder(selected_folder, selected_folder_kind)
                         for _, plugin in ipairs(filtered_plugins) do
                             table.insert(screenshot_search_results, {name = plugin})
                         end
@@ -12258,7 +12304,7 @@ function ShowScreenshotControls()
                         source_list = current_filtered_fx
                     elseif selected_folder or browser_panel_selected then
                         local folder_to_search = browser_panel_selected or selected_folder
-                        source_list = GetPluginsForFolder(folder_to_search)
+                        source_list = GetPluginsForFolder(folder_to_search, selected_folder_kind)
                     end
                     current_filtered_fx = {}
                     if source_list then
@@ -12439,7 +12485,7 @@ function ShowScreenshotControls()
                             table.insert(screenshot_search_results, {name = plugin})
                         end
                     elseif selected_folder then
-                        local filtered_plugins = GetPluginsForFolder(selected_folder)
+                        local filtered_plugins = GetPluginsForFolder(selected_folder, selected_folder_kind)
                         for _, plugin in ipairs(filtered_plugins) do
                             table.insert(screenshot_search_results, {name = plugin})
                         end
@@ -13478,7 +13524,7 @@ function DrawBrowserItems(tbl, main_cat_name)
                     end
                 end
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                    StartFolderScreenshots(subgroup_name)
+                    StartFolderScreenshots(subgroup_name, nil, "map")
                 end
                 r.ImGui_EndPopup(ctx)
             end
@@ -13689,7 +13735,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x00000000)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x3F3F3F3F)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
-            local tree_is_selected = (selected_folder == full_path)
+            local tree_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
             local tree_flags = r.ImGui_TreeNodeFlags_Framed() | r.ImGui_TreeNodeFlags_SpanAvailWidth() | r.ImGui_TreeNodeFlags_FramePadding() | r.ImGui_TreeNodeFlags_OpenOnArrow() | r.ImGui_TreeNodeFlags_OpenOnDoubleClick()
             if tree_is_selected then
                 tree_flags = tree_flags | r.ImGui_TreeNodeFlags_Selected()
@@ -13730,6 +13776,8 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             if tree_clicked and not tree_toggled then
                 browser_panel_selected = nil
                 selected_folder = full_path
+                selected_folder_kind = "custom"
+                current_filtered_fx = GetPluginsForFolder(full_path, "custom") or {}
                 UpdateLastViewedFolder(full_path)
                 show_media_browser = false
                 show_sends_window = false
@@ -13776,7 +13824,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                     if r.ImGui_MenuItem(ctx, "Pin Folder") then PinCustom(full_path) end
                 end
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                    StartFolderScreenshots(full_path)
+                    StartFolderScreenshots(full_path, nil, "custom")
                 end
                 r.ImGui_Separator(ctx)
                 if r.ImGui_MenuItem(ctx, "Rename Folder") then
@@ -13788,7 +13836,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 if r.ImGui_BeginMenu(ctx, "Move to Folder...") then
                     if r.ImGui_MenuItem(ctx, "[Root Level]") then
                         if MoveFolderTo(full_path, "") then
-                            if selected_folder == full_path then
+                            if selected_folder == full_path and selected_folder_kind == "custom" then
                                 selected_folder = folder_name
                             end
                         end
@@ -13798,7 +13846,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                     for _, target_path in ipairs(available_targets) do
                         if r.ImGui_MenuItem(ctx, target_path) then
                             if MoveFolderTo(full_path, target_path) then
-                                if selected_folder == full_path then
+                                if selected_folder == full_path and selected_folder_kind == "custom" then
                                     selected_folder = target_path .. "/" .. folder_name
                                 end
                             end
@@ -13836,6 +13884,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                         -- Clear selection if deleted folder was selected
                         if selected_folder == full_path or (selected_folder and selected_folder:find("^" .. full_path .. "/")) then
                             selected_folder = nil
+                            selected_folder_kind = nil
                             screenshot_search_results = {}
                         end
                         
@@ -13870,7 +13919,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x3F3F3F3F)
             end
             
-            local is_selected = (selected_folder == full_path)
+            local is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
             local is_pinned = IsCustomPinned(full_path)
             local folder_label_text = config.custom_folder_force_uppercase and folder_name:upper() or folder_name
             if is_selected then
@@ -13891,6 +13940,8 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             if r.ImGui_Selectable(ctx, label, is_selected) then
                 browser_panel_selected = nil
                 selected_folder = full_path
+                selected_folder_kind = "custom"
+                current_filtered_fx = GetPluginsForFolder(full_path, "custom") or {}
                 UpdateLastViewedFolder(full_path)
                 show_media_browser = false
                 show_sends_window = false
@@ -14634,7 +14685,7 @@ function ShowBrowserPanel()
                             local is_pinned = IsPinned(folder_name)
                             local header_text = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_name
                             
-                            local folder_is_selected = (selected_folder == folder_name)
+                            local folder_is_selected = (selected_folder == folder_name) and (selected_folder_kind == "map")
                             if folder_is_selected then
                                 local dl = r.ImGui_GetWindowDrawList(ctx)
                                 local x,y = r.ImGui_GetCursorScreenPos(ctx)
@@ -14679,6 +14730,7 @@ function ShowBrowserPanel()
 
                             if r.ImGui_IsItemClicked(ctx, 0) then
                                 selected_folder = folder_name
+                                selected_folder_kind = "map"
                                 browser_panel_selected = nil 
                                 selected_plugin = nil
                                 UpdateLastViewedFolder(selected_folder)
@@ -14688,7 +14740,7 @@ function ShowBrowserPanel()
                                 show_action_browser = false
                                 folder_page_state[folder_name] = 1
                                 ClearScreenshotCache()
-                                GetPluginsForFolder(folder_name)
+                                current_filtered_fx = GetPluginsForFolder(folder_name, "map") or {}
                             elseif r.ImGui_IsItemClicked(ctx, 1) then
                                 r.ImGui_OpenPopup(ctx, "folder_browser_ctx_" .. disp_idx)
                             end
@@ -14702,8 +14754,8 @@ function ShowBrowserPanel()
                                     if view_mode == 'screenshots' then
                                         if prev ~= 'screenshots' then ClearScreenshotCache() end
                                     else
-                                        if selected_folder == folder_name then
-                                            local folder_plugins = GetPluginsForFolder(folder_name)
+                                        if selected_folder == folder_name and selected_folder_kind == "map" then
+                                            local folder_plugins = GetPluginsForFolder(folder_name, "map")
                                             screenshot_search_results = {}
                                             for p = 1, #folder_plugins do
                                                 table.insert(screenshot_search_results, { name = folder_plugins[p] })
@@ -14717,7 +14769,7 @@ function ShowBrowserPanel()
                                     if r.ImGui_MenuItem(ctx, 'Pin Folder') then Pin(folder_name) end
                                 end
                                 if r.ImGui_MenuItem(ctx, 'Capture Folder Screenshots') then
-                                    StartFolderScreenshots(folder_name)
+                                    StartFolderScreenshots(folder_name, nil, "map")
                                 end
                                 r.ImGui_Separator(ctx)
                                 if r.ImGui_MenuItem(ctx, "Sort Folders A-Z") then
@@ -14766,21 +14818,21 @@ function ShowBrowserPanel()
                                 r.ImGui_EndPopup(ctx)
                             end
                             if config.use_pagination and view_mode ~= "list" then
-                                local total = #(GetPluginsForFolder(folder_name) or {})
+                                local total = #(GetPluginsForFolder(folder_name, "map") or {})
                                 local total_pages = math.max(1, math.ceil(total / ITEMS_PER_PAGE))
                                 if total_pages > 1 then
                                     local page = folder_page_state[folder_name] or 1
                                     r.ImGui_Indent(ctx, 30)
                                     if r.ImGui_Button(ctx, "<##fp2_" .. disp_idx, 15, 15) then
                                         folder_page_state[folder_name] = page > 1 and page - 1 or total_pages
-                                        if selected_folder == folder_name then RequestClearScreenshotCache() end
+                                        if selected_folder == folder_name and selected_folder_kind == "map" then RequestClearScreenshotCache() end
                                     end
                                     r.ImGui_SameLine(ctx)
                                     r.ImGui_Text(ctx, string.format("%d/%d", page, total_pages))
                                     r.ImGui_SameLine(ctx)
                                     if r.ImGui_Button(ctx, ">##fn2_" .. disp_idx, 15, 15) then
                                         folder_page_state[folder_name] = page < total_pages and page + 1 or 1
-                                        if selected_folder == folder_name then RequestClearScreenshotCache() end
+                                        if selected_folder == folder_name and selected_folder_kind == "map" then RequestClearScreenshotCache() end
                                     end
                                     r.ImGui_Unindent(ctx, 30)
                                 end
@@ -20874,9 +20926,10 @@ function ShowScreenshotWindow()
                     end
                 end
                 local sel_now = selected_folder
-                local is_sel = (sel_now == full_path)
+                local sel_kind = selected_folder_kind
+                local is_sel = (sel_now == full_path) and (sel_kind == "custom")
                 local is_ancestor = false
-                if not is_sel and type(sel_now) == "string" then
+                if not is_sel and sel_kind == "custom" and type(sel_now) == "string" then
                     if sel_now:sub(1, #full_path + 1) == full_path .. "/" then
                         is_ancestor = true
                     end
@@ -20896,7 +20949,7 @@ function ShowScreenshotWindow()
                     if is_sel then
                         SelectFolderExclusive(nil)
                     else
-                        SelectFolderExclusive(full_path)
+                        SelectFolderExclusive(full_path, "custom")
                     end
                 end
                 CheckFolderDropTarget(full_path, "custom")
@@ -21290,7 +21343,7 @@ function ShowScreenshotWindow()
                     end -- END favorites condition
 
                 -- CUSTOM FOLDERS RENDERING
-                elseif (selected_folder and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
+                elseif (selected_folder and selected_folder_kind == "custom") or (selected_folder and selected_folder_kind == nil and type(selected_folder) == "string" and selected_folder:find("/") and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
                     filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
                     local display_plugins = {}
                     if config.show_favorites_on_top then
@@ -21694,7 +21747,7 @@ function ShowScreenshotWindow()
                                             collapsed_tracks[track_number] = not is_collapsed
                                             if not is_collapsed then
                                                 ClearScreenshotCache()
-                                                GetPluginsForFolder(selected_folder)
+                                                GetPluginsForFolder(selected_folder, selected_folder_kind)
                                             end
                                         end
                                         if r.ImGui_IsItemClicked(ctx, 1) then  -- Rechtermuisklik
@@ -21703,7 +21756,7 @@ function ShowScreenshotWindow()
                                                 collapsed_tracks[j] = all_tracks_collapsed
                                             end
                                             ClearScreenshotCache()
-                                            GetPluginsForFolder(selected_folder)
+                                            GetPluginsForFolder(selected_folder, selected_folder_kind)
                                         end
                                         r.ImGui_SameLine(ctx)
                                         if r.ImGui_Button(ctx, "Track " .. track_number .. ": " .. plugin.track_name) then
@@ -23382,7 +23435,7 @@ function FilterBox()
                     end
                 else
                     SelectFolderExclusive(last_viewed_folder)
-                    GetPluginsForFolder(selected_folder)
+                    GetPluginsForFolder(selected_folder, selected_folder_kind)
                 end
             end
         else
@@ -23527,7 +23580,7 @@ function FilterBox()
         show_action_browser = false
         ClearScreenshotCache()
         if selected_folder then
-            local filtered_plugins = GetPluginsForFolder(selected_folder)
+            local filtered_plugins = GetPluginsForFolder(selected_folder, selected_folder_kind)
             loaded_items_count = ITEMS_PER_BATCH or loaded_items_count or 30
             screenshot_search_results = {}
             for i = 1, math.min(loaded_items_count, #filtered_plugins) do
@@ -24650,7 +24703,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                         selected_folder_name = folder_name
                     end
                     if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                        StartFolderScreenshots(full_path)
+                        StartFolderScreenshots(full_path, nil, "custom")
                     end
                     r.ImGui_EndPopup(ctx)
                 end

@@ -1,8 +1,14 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.9.1
+-- @version 2.9.2
 -- @changelog:
 --[[ 
+    v2.9.2:
+        + Fix: Custom folders and native FOLDERS subfolders that share the same name are now fully isolated (folder-kind routing).
+        + Fix: An empty custom folder now shows an empty grid instead of the contents of the same-named native FOLDERS subfolder.
+        + Fix: Clicking a native FOLDERS subfolder again shows the native plugins, even when a same-named custom folder contains plugins.
+        + Custom Folder dropdown: empty custom folders are now also listed (as "name (0)") and selectable.
+
     v2.8.8:
         + Patchbay workflow overhaul: pin/unpin nodes, collapse/expand nodes, persistent state (layout, pin, collapse) and improved drag behavior with pin-lock support.
         + Routing productivity: compact bulk actions, node context group routing actions, Ctrl-multiselect improvements and explicit focus behavior.
@@ -900,9 +906,14 @@ local DEBUG_LOG_COOLDOWN = 2.0  -- seconds between repeated logs
 local debug_browser_panel_logged = false
 local debug_config_logged = false
 
+selected_folder_kind = selected_folder_kind or nil
+
 function SelectBrowserPanelItem(name)
     browser_panel_selected = name
-    if name ~= nil then selected_folder = nil end
+    if name ~= nil then
+        selected_folder = nil
+        selected_folder_kind = nil
+    end
 
     show_media_browser = false
     show_sends_window = false
@@ -910,15 +921,16 @@ function SelectBrowserPanelItem(name)
     show_scripts_browser = false
 end
 
-function SelectFolderExclusive(name)
+function SelectFolderExclusive(name, kind)
     selected_folder = name
+    selected_folder_kind = kind
     screenshot_multi_selected = {}
     screenshot_nav_anchor = nil
     screenshot_nav_index = nil
     if name ~= nil then
         browser_panel_selected = nil
     
-        local seeded = GetPluginsForFolder(name) or {}
+        local seeded = GetPluginsForFolder(name, kind) or {}
         if config and config.apply_type_priority and type(seeded) == 'table' then
             seeded = DedupeByTypePriority(seeded)
         end
@@ -5276,7 +5288,7 @@ function ShowPluginManagerTab()
     end
 end
 
-function GetPluginsForFolder(folder_name)
+function GetPluginsForFolder(folder_name, kind)
     if not folder_name or folder_name == '' then return {} end
 
     if folder_name == "Favorites" then
@@ -5302,7 +5314,7 @@ function GetPluginsForFolder(folder_name)
     return DedupeByTypePriority(list)
     end
 
-    if config.custom_folders and config.custom_folders[folder_name] then
+    if kind ~= "map" and config.custom_folders and config.custom_folders[folder_name] then
         local folder_content = config.custom_folders[folder_name]
         local plugins = {}
         for k, v in pairs(folder_content) do
@@ -5310,7 +5322,9 @@ function GetPluginsForFolder(folder_name)
                 plugins[#plugins + 1] = v
             end
         end
-        return DedupeByTypePriority(plugins)
+        if kind == "custom" or #plugins > 0 then
+            return DedupeByTypePriority(plugins)
+        end
     end
 
     if folders_category and #folders_category > 0 then
@@ -12296,9 +12310,9 @@ function ShowFolderDropdown()
           
             if config.show_folders then
                 for i = 1, #folders_category do
-                    local is_selected = (selected_folder == folders_category[i].name)
+                    local is_selected = (selected_folder == folders_category[i].name) and (selected_folder_kind == "map")
                     if r.ImGui_Selectable(ctx, folders_category[i].name .. "##folder_" .. i, is_selected) then
-                        SelectFolderExclusive(folders_category[i].name)
+                        SelectFolderExclusive(folders_category[i].name, "map")
                         browser_panel_selected = nil
                         UpdateLastViewedFolder(selected_folder)
                         screenshot_search_results = nil
@@ -12402,11 +12416,11 @@ function ShowFolderDropdown()
                 elseif current_index > #folders_category then
                     current_index = 1
                 end
-                SelectFolderExclusive(folders_category[current_index].name)
+                SelectFolderExclusive(folders_category[current_index].name, "map")
                 UpdateLastViewedFolder(selected_folder)
                 screenshot_search_results = nil
                 ClearScreenshotCache()
-                GetPluginsForFolder(selected_folder)
+                GetPluginsForFolder(selected_folder, selected_folder_kind)
             end
         end
     
@@ -12454,8 +12468,9 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         end
                         
                         local display_name = prefix == "" and folder_name or ("  " .. folder_name)
-                        if r.ImGui_Selectable(ctx, display_name .. " (" .. plugin_count .. ")", selected_folder == full_path) then
-                            SelectFolderExclusive(full_path)
+                        local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
+                        if r.ImGui_Selectable(ctx, display_name .. " (" .. plugin_count .. ")", cf_is_selected) then
+                            SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
                             show_sends_window = false
                             show_action_browser = false
@@ -12473,6 +12488,17 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         r.ImGui_PopStyleColor(ctx)
                         
                         ShowNestedFolders(folder_content, full_path)
+                    elseif type(folder_content) == "table" then
+                        local display_name = prefix == "" and folder_name or ("  " .. folder_name)
+                        local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
+                        if r.ImGui_Selectable(ctx, display_name .. " (0)", cf_is_selected) then
+                            SelectFolderExclusive(full_path, "custom")
+                            show_media_browser = false
+                            show_sends_window = false
+                            show_action_browser = false
+                            screenshot_search_results = {}
+                            ClearScreenshotCache()
+                        end
                     end
                 end
             end
@@ -14290,6 +14316,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             if tree_clicked and not tree_toggled then
                 browser_panel_selected = nil
                 selected_folder = full_path
+                selected_folder_kind = "custom"
                 UpdateLastViewedFolder(full_path)
                 show_media_browser = false
                 show_sends_window = false
@@ -14450,6 +14477,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             if r.ImGui_Selectable(ctx, label, is_selected) then
                 browser_panel_selected = nil
                 selected_folder = full_path
+                selected_folder_kind = "custom"
                 UpdateLastViewedFolder(full_path)
                 show_media_browser = false
                 show_sends_window = false
@@ -15484,6 +15512,7 @@ function ShowBrowserPanel()
 
                             if r.ImGui_IsItemClicked(ctx, 0) then
                                 selected_folder = folder_name
+                                selected_folder_kind = "map"
                                 browser_panel_selected = nil 
                                 selected_plugin = nil
                                 UpdateLastViewedFolder(selected_folder)
@@ -15493,7 +15522,7 @@ function ShowBrowserPanel()
                                 show_action_browser = false
                                 folder_page_state[folder_name] = 1
                                 ClearScreenshotCache()
-                                GetPluginsForFolder(folder_name)
+                                current_filtered_fx = GetPluginsForFolder(folder_name, "map") or {}
                             elseif r.ImGui_IsItemClicked(ctx, 1) then
                                 r.ImGui_OpenPopup(ctx, "folder_browser_ctx_" .. disp_idx)
                             end
@@ -21349,9 +21378,10 @@ function ShowScreenshotWindow()
                     end
                 end
                 local sel_now = selected_folder
-                local is_sel = (sel_now == full_path)
+                local sel_kind = selected_folder_kind
+                local is_sel = (sel_now == full_path) and (sel_kind == "custom")
                 local is_ancestor = false
-                if not is_sel and type(sel_now) == "string" then
+                if not is_sel and type(sel_now) == "string" and sel_kind == "custom" then
                     if sel_now:sub(1, #full_path + 1) == full_path .. "/" then
                         is_ancestor = true
                     end
@@ -21371,7 +21401,7 @@ function ShowScreenshotWindow()
                     if is_sel then
                         SelectFolderExclusive(nil)
                     else
-                        SelectFolderExclusive(full_path)
+                        SelectFolderExclusive(full_path, "custom")
                     end
                 end
                 CheckFolderDropTarget(full_path, "custom")
@@ -21766,7 +21796,7 @@ function ShowScreenshotWindow()
                     end -- END favorites condition
 
                 -- CUSTOM FOLDERS RENDERING
-                elseif (selected_folder and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
+                elseif (selected_folder and selected_folder_kind == "custom") or (selected_folder and selected_folder_kind == nil and type(selected_folder) == "string" and selected_folder:find("/") and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
                     filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
                     local display_plugins = {}
                     if config.show_favorites_on_top then
