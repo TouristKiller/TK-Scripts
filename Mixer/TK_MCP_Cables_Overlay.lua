@@ -1,8 +1,18 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.1.0
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.1.0
+--   + Master side detection (auto/left/right) with correct track offset when master is on the left
+--   + Hide cables behind master option (clip rect split around master strip)
+--   + Cables stay anchored to tracks while scrolling (horizontal + vertical)
+--   + Cables remain visible when tracks scroll out of view (clipped to mixer)
+--   + Horizontal offset slider; vertical offset now also applies to "center" anchor
+--   + Bright yellow flow indicators (halo + dot + core) for better visibility
+--   + Overlay is suppressed when another window covers the mixer
+--   + Renamed bundled json helper to tk_mcp_cables_json.lua to avoid ReaPack conflicts
+--   v1.0.0
 --   + Initial release
 
 local r = reaper
@@ -21,7 +31,10 @@ local settings_path = script_path .. "tk_mcp_overlay_settings" .. os_sep
 r.RecursiveCreateDirectory(settings_path:sub(1, -2), 0)
 
 package.path = script_path .. "?.lua;" .. package.path
-local ok_json, json = pcall(require, "json")
+local ok_json, json = pcall(require, "tk_mcp_cables_json")
+if not ok_json then
+ ok_json, json = pcall(require, "json")
+end
 if not ok_json then json = nil end
 
 local ctx = r.ImGui_CreateContext('TK MCP Cables Overlay')
@@ -39,6 +52,9 @@ local settings = {
  anchor_position = "bottom",
  vertical_offset = 6,
  horizontal_offset = 0,
+ hide_behind_master = true,
+ master_side = "auto",
+ debug_anchors = false,
 }
 
 local function LoadSettings()
@@ -104,6 +120,7 @@ local settings_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_Al
 
 local LAST_RECT_VAL = 0
 local LEFT, TOP, RIGHT, BOT = 0, 0, 0, 0
+local track_x_offset_native = 0
 local mixer_hwnd = nil
 local mixer_search_t = 0
 local settings_visible = false
@@ -144,7 +161,7 @@ end
 local function ComputeAnchorXY(mcpx, mcpy, mcpw, mcph)
  if mcpw <= 0 or mcph <= 0 then return nil end
  local x_offset = settings.horizontal_offset or 0
- local x = LEFT + (mcpx + mcpw * 0.5 + x_offset) / screen_scale
+ local x = LEFT + (mcpx + track_x_offset_native + mcpw * 0.5 + x_offset) / screen_scale
  local y_offset = settings.vertical_offset or 0
  local y
  if settings.anchor_position == "top" then
@@ -162,13 +179,44 @@ local function DrawCables(draw_list)
  local master = r.GetMasterTrack(0)
 
  local anchors = {}
+ local master_screen_l, master_screen_r
+ local master_mw_s, master_mh_s, master_my_s
  do
   local mx = r.GetMediaTrackInfo_Value(master, "I_MCPX")
   local my = r.GetMediaTrackInfo_Value(master, "I_MCPY")
   local mw = r.GetMediaTrackInfo_Value(master, "I_MCPW")
   local mh = r.GetMediaTrackInfo_Value(master, "I_MCPH")
-  local x, y = ComputeAnchorXY(mx, my, mw, mh)
-  if x then anchors[master] = { x = x, y = y } end
+
+  local side = settings.master_side
+  if side == "auto" then
+   if r.GetToggleCommandState(40389) == 1 then side = "right" else side = "left" end
+  end
+
+  if mw > 0 and mh > 0 then
+   master_mw_s = mw / screen_scale
+   master_mh_s = mh / screen_scale
+   master_my_s = my / screen_scale
+   if side == "right" then
+    master_screen_r = RIGHT
+    master_screen_l = RIGHT - master_mw_s
+    track_x_offset_native = 0
+   else
+    master_screen_l = LEFT
+    master_screen_r = LEFT + master_mw_s
+    track_x_offset_native = mw
+   end
+   local cx = (master_screen_l + master_screen_r) * 0.5
+   local y_offset = settings.vertical_offset or 0
+   local cy
+   if settings.anchor_position == "top" then
+    cy = TOP + master_my_s + y_offset / screen_scale
+   elseif settings.anchor_position == "center" then
+    cy = TOP + master_my_s + master_mh_s * 0.5 + y_offset / screen_scale
+   else
+    cy = TOP + master_my_s + master_mh_s - y_offset / screen_scale
+   end
+   anchors[master] = { x = cx, y = cy }
+  end
  end
 
  for i = 0, num_tracks - 1 do
@@ -179,7 +227,7 @@ local function DrawCables(draw_list)
    local mcpw = r.GetMediaTrackInfo_Value(tr, "I_MCPW")
    local mcph = r.GetMediaTrackInfo_Value(tr, "I_MCPH")
    local x, y = ComputeAnchorXY(mcpx, mcpy, mcpw, mcph)
-   if x and x >= LEFT and x <= RIGHT and y >= TOP and y <= BOT then
+   if x then
     anchors[tr] = { x = x, y = y }
    end
   end
@@ -196,75 +244,136 @@ local function DrawCables(draw_list)
 
  r.ImGui_DrawList_PushClipRect(draw_list, LEFT, TOP, RIGHT, BOT, 0)
 
+ local clip_segments = { { LEFT, RIGHT } }
+ if settings.hide_behind_master and master_screen_l and master_screen_r
+  and master_screen_r > LEFT and master_screen_l < RIGHT then
+  local ml = math.max(LEFT, master_screen_l)
+  local mr = math.min(RIGHT, master_screen_r)
+  clip_segments = {}
+  if ml > LEFT then clip_segments[#clip_segments + 1] = { LEFT, ml } end
+  if mr < RIGHT then clip_segments[#clip_segments + 1] = { mr, RIGHT } end
+ end
+
  local now = r.time_precise()
 
- for src_track, src_anchor in pairs(anchors) do
-  if src_track ~= master then
-   local send_count = r.GetTrackNumSends(src_track, 0)
-   for i = 0, send_count - 1 do
-    local dst_track = r.GetTrackSendInfo_Value(src_track, 0, i, "P_DESTTRACK")
-    if dst_track and dst_track ~= src_track then
-     local dst_anchor = anchors[dst_track]
-     if dst_anchor then
-      local skip = false
-      if selected_only and not (r.IsTrackSelected(src_track) or r.IsTrackSelected(dst_track)) then
-       skip = true
-      end
-      if not skip then
-       local muted = r.GetTrackSendInfo_Value(src_track, 0, i, "B_MUTE") == 1
-       local color_track = use_dest_color and dst_track or src_track
-       local cable_alpha = alpha * (muted and 0.35 or 1.0)
-       if cable_alpha > 1 then cable_alpha = 1 end
-       local color = color_u32(color_track, cable_alpha)
-
-       local sx, sy = src_anchor.x, src_anchor.y
-       local dx, dy = dst_anchor.x, dst_anchor.y
-       local dist = math.abs(dx - sx)
-       local dip = math.max(24, dist * curve_amount)
-       if dip > 220 then dip = 220 end
-       local c1x, c1y = sx, sy + dip
-       local c2x, c2y = dx, dy + dip
-
-       if glow then
-        local glow_alpha = math.min(1, cable_alpha * 0.35)
-        local glow_color = color_u32(color_track, glow_alpha)
-        r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, glow_color, thickness * 2.6, 32)
+ local function DrawCablePass(seg_l, seg_r)
+  r.ImGui_DrawList_PushClipRect(draw_list, seg_l, TOP, seg_r, BOT, 0)
+  for src_track, src_anchor in pairs(anchors) do
+   if src_track ~= master then
+    local send_count = r.GetTrackNumSends(src_track, 0)
+    for i = 0, send_count - 1 do
+     local dst_track = r.GetTrackSendInfo_Value(src_track, 0, i, "P_DESTTRACK")
+     if dst_track and dst_track ~= src_track then
+      local dst_anchor = anchors[dst_track]
+      if dst_anchor then
+       local skip = false
+       if selected_only and not (r.IsTrackSelected(src_track) or r.IsTrackSelected(dst_track)) then
+        skip = true
        end
-       r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, color, thickness, 32)
+       if not skip then
+        local muted = r.GetTrackSendInfo_Value(src_track, 0, i, "B_MUTE") == 1
+        local color_track = use_dest_color and dst_track or src_track
+        local cable_alpha = alpha * (muted and 0.35 or 1.0)
+        if cable_alpha > 1 then cable_alpha = 1 end
+        local color = color_u32(color_track, cable_alpha)
 
-       local plug_alpha = math.min(1, cable_alpha + 0.15)
-       local plug_color = color_u32(color_track, plug_alpha)
-       local outline_color = r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, math.min(1, cable_alpha + 0.2))
+        local sx, sy = src_anchor.x, src_anchor.y
+        local dx, dy = dst_anchor.x, dst_anchor.y
+        local dist = math.abs(dx - sx)
+        local dip = math.max(24, dist * curve_amount)
+        if dip > 220 then dip = 220 end
+        local c1x, c1y = sx, sy + dip
+        local c2x, c2y = dx, dy + dip
 
-       local out_size = thickness * 1.8
-       r.ImGui_DrawList_AddRectFilled(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, plug_color, 1)
-       r.ImGui_DrawList_AddRect(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, outline_color, 1, 0, 1)
+        if glow then
+         local glow_alpha = math.min(1, cable_alpha * 0.35)
+         local glow_color = color_u32(color_track, glow_alpha)
+         r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, glow_color, thickness * 2.6, 32)
+        end
+        r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, color, thickness, 32)
 
-       local arrow_size = thickness * 2.4
-       r.ImGui_DrawList_AddTriangleFilled(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, plug_color)
-       r.ImGui_DrawList_AddTriangle(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, outline_color, 1)
+        local plug_alpha = math.min(1, cable_alpha + 0.15)
+        local plug_color = color_u32(color_track, plug_alpha)
+        local outline_color = r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, math.min(1, cable_alpha + 0.2))
 
-       if flow and not muted then
-        local cycle = 1.6
-        local t = (now % cycle) / cycle
-        local u = 1 - t
-        local b0 = u * u * u
-        local b1 = 3 * u * u * t
-        local b2 = 3 * u * t * t
-        local b3 = t * t * t
-        local fx = b0 * sx + b1 * c1x + b2 * c2x + b3 * dx
-        local fy = b0 * sy + b1 * c1y + b2 * c2y + b3 * dy
-        local dot_color = color_u32(color_track, math.min(1, cable_alpha + 0.25))
-        r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, thickness * 1.4, dot_color, 12)
+        local out_size = thickness * 1.8
+        r.ImGui_DrawList_AddRectFilled(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, plug_color, 1)
+        r.ImGui_DrawList_AddRect(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, outline_color, 1, 0, 1)
+
+        local arrow_size = thickness * 2.4
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, plug_color)
+        r.ImGui_DrawList_AddTriangle(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, outline_color, 1)
+
+        if flow and not muted then
+         local cycle = 1.6
+         local t = (now % cycle) / cycle
+         local u = 1 - t
+         local b0 = u * u * u
+         local b1 = 3 * u * u * t
+         local b2 = 3 * u * t * t
+         local b3 = t * t * t
+         local fx = b0 * sx + b1 * c1x + b2 * c2x + b3 * dx
+         local fy = b0 * sy + b1 * c1y + b2 * c2y + b3 * dy
+         local halo = r.ImGui_ColorConvertDouble4ToU32(1, 0.95, 0.2, math.min(1, cable_alpha * 0.45))
+         local dot = r.ImGui_ColorConvertDouble4ToU32(1, 1, 0.3, 1)
+         local core = r.ImGui_ColorConvertDouble4ToU32(1, 1, 0.9, 1)
+         r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, thickness * 2.6, halo, 16)
+         r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, thickness * 1.6, dot, 16)
+         r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, thickness * 0.7, core, 12)
+        end
        end
       end
      end
     end
    end
   end
+  r.ImGui_DrawList_PopClipRect(draw_list)
+ end
+
+ for _, seg in ipairs(clip_segments) do
+  DrawCablePass(seg[1], seg[2])
  end
 
  r.ImGui_DrawList_PopClipRect(draw_list)
+end
+
+local function DrawDebugAnchors(draw_list)
+ local master = r.GetMasterTrack(0)
+ local function dot(tr, label)
+  local mcpx = r.GetMediaTrackInfo_Value(tr, "I_MCPX")
+  local mcpy = r.GetMediaTrackInfo_Value(tr, "I_MCPY")
+  local mcpw = r.GetMediaTrackInfo_Value(tr, "I_MCPW")
+  local mcph = r.GetMediaTrackInfo_Value(tr, "I_MCPH")
+  local x, y = ComputeAnchorXY(mcpx, mcpy, mcpw, mcph)
+  if not x then return end
+  local col = 0xFF00FFFF
+  r.ImGui_DrawList_AddCircleFilled(draw_list, x, y, 5, col, 16)
+  local txt = string.format("%s mcpx=%d w=%d", label, mcpx, mcpw)
+  r.ImGui_DrawList_AddText(draw_list, x + 6, y - 14, 0xFFFFFFFF, txt)
+ end
+ local mw = r.GetMediaTrackInfo_Value(master, "I_MCPW")
+ local mh = r.GetMediaTrackInfo_Value(master, "I_MCPH")
+ local my = r.GetMediaTrackInfo_Value(master, "I_MCPY")
+ if mw > 0 and mh > 0 then
+  local side = settings.master_side
+  if side == "auto" then
+   if r.GetToggleCommandState(40389) == 1 then side = "right" else side = "left" end
+  end
+  local mw_s = mw / screen_scale
+  local mh_s = mh / screen_scale
+  local my_s = my / screen_scale
+  local l, ri
+  if side == "right" then ri = RIGHT; l = RIGHT - mw_s else l = LEFT; ri = LEFT + mw_s end
+  r.ImGui_DrawList_AddRect(draw_list, l, TOP + my_s, ri, TOP + my_s + mh_s, 0xFFFF00FF, 0, 0, 2)
+  r.ImGui_DrawList_AddText(draw_list, l + 4, TOP + my_s + 2, 0xFFFF00FF, "MASTER (" .. side .. ")")
+ end
+ local num = r.CountTracks(0)
+ for i = 0, num - 1 do
+  local tr = r.GetTrack(0, i)
+  if tr and r.GetMediaTrackInfo_Value(tr, "B_SHOWINMIXER") == 1 then
+   dot(tr, tostring(i + 1))
+  end
+ end
 end
 
 local function DrawSettingsWindow()
@@ -324,6 +433,24 @@ local function DrawSettingsWindow()
   changed, settings.use_dest_color = r.ImGui_Checkbox(ctx, "Use destination color", settings.use_dest_color)
   if changed then MarkDirty() end
 
+  changed, settings.hide_behind_master = r.ImGui_Checkbox(ctx, "Hide cables behind master", settings.hide_behind_master)
+  if changed then MarkDirty() end
+
+  local sides = { "auto", "left", "right" }
+  r.ImGui_SetNextItemWidth(ctx, 180)
+  if r.ImGui_BeginCombo(ctx, "Master side", settings.master_side) then
+   for _, v in ipairs(sides) do
+    if r.ImGui_Selectable(ctx, v, v == settings.master_side) then
+     settings.master_side = v
+     MarkDirty()
+    end
+   end
+   r.ImGui_EndCombo(ctx)
+  end
+
+  changed, settings.debug_anchors = r.ImGui_Checkbox(ctx, "Debug: show anchors", settings.debug_anchors)
+  if changed then MarkDirty() end
+
   r.ImGui_Separator(ctx)
   if r.ImGui_Button(ctx, "Close") then settings_visible = false end
  end
@@ -345,6 +472,28 @@ r.atexit(function()
  end
 end)
 
+local function IsMixerCovered()
+ if not mixer_hwnd then return true end
+ local ok, l, t, ri, b = r.JS_Window_GetRect(mixer_hwnd)
+ if not ok then return true end
+ local pts = {
+  { l + 20, t + 20 },
+  { ri - 20, t + 20 },
+  { l + 20, b - 20 },
+  { ri - 20, b - 20 },
+  { math.floor((l + ri) * 0.5), math.floor((t + b) * 0.5) },
+ }
+ for _, p in ipairs(pts) do
+  local hwnd = r.JS_Window_FromPoint(p[1], p[2])
+  local cur = hwnd
+  while cur do
+   if cur == mixer_hwnd then return false end
+   cur = r.JS_Window_GetParent(cur)
+  end
+ end
+ return true
+end
+
 local function Loop()
  UpdateScreenScale()
  if settings_dirty then
@@ -358,7 +507,7 @@ local function Loop()
 
  if settings_visible then DrawSettingsWindow() end
 
- if settings.enabled and UpdateMixerRect(false) then
+ if settings.enabled and UpdateMixerRect(false) and not IsMixerCovered() then
   local w = (RIGHT - LEFT)
   local h = (BOT - TOP)
   if w > 4 and h > 4 then
@@ -368,6 +517,7 @@ local function Loop()
    if visible then
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     DrawCables(draw_list)
+    if settings.debug_anchors then DrawDebugAnchors(draw_list) end
    end
    r.ImGui_End(ctx)
   end
