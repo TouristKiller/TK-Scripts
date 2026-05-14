@@ -1,27 +1,15 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.1.8
+-- @version 1.2.0
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
---   v1.1.8
---   + Fixed: TOPMOST handling no longer runs permanently every frame, preventing focus/menu/shortcut issues while still boosting the overlay after relevant mixer or selection changes
---   v1.1.7
---   + Fixed: added ReaImGui context validation and stricter Begin/End handling to prevent rare invalid context errors on some systems
---   v1.1.6
---   + Fixed: overlay still falling behind floating mixer on some systems after track selection - TOPMOST Z-order is now re-applied every frame (cheap no-op when already on top)
---   v1.1.5
---   + Fixed: "Hide cables behind master" clip rect was a few pixels off when the mixer was undocked (window border was included) - now uses the mixer client rect so the cut-off lands exactly on the master strip edge
---   v1.1.4
---   + Settings window no longer opens automatically on startup
---   + External toggle script support (TK_MCP_Cables_Overlay_Toggle_Settings.lua) with toolbar/menu toggle state
---   + Fixed: overlay disappearing behind floating (undocked) mixer after selecting another track - overlay is now forced to TOPMOST Z-order
---   + Fixed: ghost cables remaining visible after selection changes when "Selected tracks only" is on - overlay window is now hidden when there are no cables to draw
---   v1.1.3
---   + Fixed: cables disappearing after MCP changes (track delete, fader move, etc.) - overlay now refreshes on project state changes
---   v1.1.2
---   + Reliable F2 capture via JS_VKeys_Intercept (only while mouse is over the mixer, so REAPER's Rename Track still works elsewhere)
---   v1.1.1
---   + Settings hotkey F2 works globally, but only when mouse hovers over the mixer (no conflict with REAPER's Rename Track)
+--   v1.2.0
+--   + Added small corner controls for pinning cables and opening settings
+--   + Added optional pin mode to keep cables above a floating mixer when needed
+--   + Default mode stays shortcut-safe, so REAPER shortcuts and menus keep working normally
+--   + Selected tracks only now hides and restores cables more cleanly when changing selection
+--   + Settings can now show or hide the corner controls
+--   + Floating mixer note: with pin off and Selected tracks only off, cables may appear behind the mixer; enable pin mode for that situation
 --   v1.1.0
 --   + Master side detection (auto/left/right) with correct track offset when master is on the left
 --   + Hide cables behind master option (clip rect split around master strip)
@@ -74,6 +62,8 @@ local settings = {
  hide_behind_master = true,
  master_side = "auto",
  debug_anchors = false,
+ pin_on_top = false,
+ show_overlay_controls = true,
 }
 
 local function LoadSettings()
@@ -133,28 +123,44 @@ local overlay_flags = r.ImGui_WindowFlags_NoTitleBar()
  | r.ImGui_WindowFlags_NoFocusOnAppearing()
  | r.ImGui_WindowFlags_NoInputs()
  | r.ImGui_WindowFlags_NoMouseInputs()
- | r.ImGui_WindowFlags_TopMost()
+
+if r.ImGui_WindowFlags_NoBringToFrontOnFocus then
+ overlay_flags = overlay_flags | r.ImGui_WindowFlags_NoBringToFrontOnFocus()
+end
 
 local settings_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize()
+local pin_flags = r.ImGui_WindowFlags_NoTitleBar()
+ | r.ImGui_WindowFlags_NoResize()
+ | r.ImGui_WindowFlags_NoNav()
+ | r.ImGui_WindowFlags_NoScrollbar()
+ | r.ImGui_WindowFlags_NoDecoration()
+ | r.ImGui_WindowFlags_NoDocking()
+ | r.ImGui_WindowFlags_NoBackground()
+ | r.ImGui_WindowFlags_NoMove()
+ | r.ImGui_WindowFlags_NoSavedSettings()
+ | r.ImGui_WindowFlags_NoFocusOnAppearing()
+
+if r.ImGui_WindowFlags_NoBringToFrontOnFocus then
+ pin_flags = pin_flags | r.ImGui_WindowFlags_NoBringToFrontOnFocus()
+end
 
 local LAST_RECT_VAL = 0
 local LEFT, TOP, RIGHT, BOT = 0, 0, 0, 0
 local track_x_offset_native = 0
 local mixer_hwnd = nil
+local mixer_visible_last = false
+local mixer_open_last = nil
 local mixer_search_t = 0
 local settings_visible = false
 local save_timer = 0
-local prev_f2_state = 0
 local last_project_change = -1
 local overlay_hwnd = nil
 local overlay_topmost_set = false
-local topmost_boost_frames = 0
-local last_selection_key = ""
-
-local function RequestOverlayTopmost(frames)
- frames = frames or 12
- if topmost_boost_frames < frames then topmost_boost_frames = frames end
-end
+local overlay_shown_noactivate = false
+local overlay_window_visible = false
+local pin_hwnd = nil
+local pin_topmost_set = false
+local PARK_X, PARK_Y = -32000, -32000
 
 local function EnsureImGuiContext()
  if r.ImGui_ValidatePtr and r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then return true end
@@ -162,23 +168,39 @@ local function EnsureImGuiContext()
  ctx = r.ImGui_CreateContext('TK MCP Cables Overlay')
  overlay_hwnd = nil
  overlay_topmost_set = false
- RequestOverlayTopmost(12)
+ overlay_shown_noactivate = false
+ overlay_window_visible = false
+ pin_hwnd = nil
+ pin_topmost_set = false
  return r.ImGui_ValidatePtr(ctx, "ImGui_Context*")
 end
 
+local function ReleaseOverlayTopmost()
+ if overlay_hwnd and r.JS_Window_IsWindow(overlay_hwnd) and r.JS_Window_SetZOrder then
+    pcall(r.JS_Window_SetZOrder, overlay_hwnd, "NOTOPMOST")
+ end
+ overlay_topmost_set = false
+end
+
 local function EnsureOverlayTopmost()
- if not r.JS_Window_SetZOrder or not r.JS_Window_Find then return end
+ if not r.JS_Window_Find then return end
  if not overlay_hwnd or not r.JS_Window_IsWindow(overlay_hwnd) then
   overlay_hwnd = r.JS_Window_Find("TK MCP Cables Overlay", true)
   overlay_topmost_set = false
-  if overlay_hwnd then RequestOverlayTopmost(12) end
+    overlay_shown_noactivate = false
  end
  if not overlay_hwnd then return end
- if overlay_topmost_set and topmost_boost_frames <= 0 then return end
- if overlay_hwnd then
-  r.JS_Window_SetZOrder(overlay_hwnd, "TOPMOST")
-  overlay_topmost_set = true
-  if topmost_boost_frames > 0 then topmost_boost_frames = topmost_boost_frames - 1 end
+ if settings.pin_on_top then
+    if r.JS_Window_Show then r.JS_Window_Show(overlay_hwnd, "SHOWNOACTIVATE") end
+    if r.JS_Window_SetZOrder then r.JS_Window_SetZOrder(overlay_hwnd, "TOPMOST") end
+    overlay_topmost_set = true
+    overlay_shown_noactivate = true
+ else
+    if overlay_topmost_set then ReleaseOverlayTopmost() end
+    if not overlay_shown_noactivate and r.JS_Window_Show then
+     r.JS_Window_Show(overlay_hwnd, "SHOWNOACTIVATE")
+     overlay_shown_noactivate = true
+    end
  end
 end
 
@@ -203,30 +225,45 @@ local function HasCablesToDraw()
 end
 
 local function HideOverlayWindow()
- if not r.JS_Window_Show then return end
+ if not ctx then return end
+ if overlay_topmost_set then ReleaseOverlayTopmost() end
+ r.ImGui_SetNextWindowPos(ctx, PARK_X, PARK_Y)
+ r.ImGui_SetNextWindowSize(ctx, 1, 1)
+ local visible = r.ImGui_Begin(ctx, "TK MCP Cables Overlay", false, overlay_flags)
+ if visible then r.ImGui_End(ctx) end
  if not overlay_hwnd or not r.JS_Window_IsWindow(overlay_hwnd) then
   if r.JS_Window_Find then overlay_hwnd = r.JS_Window_Find("TK MCP Cables Overlay", true) end
  end
  if overlay_hwnd and r.JS_Window_IsWindow(overlay_hwnd) then
-  r.JS_Window_Show(overlay_hwnd, "HIDE")
-  overlay_topmost_set = false
-    topmost_boost_frames = 0
+  if r.JS_Window_Show then r.JS_Window_Show(overlay_hwnd, "SHOWNOACTIVATE") end
  end
+ overlay_topmost_set = false
+ overlay_shown_noactivate = false
+ overlay_window_visible = false
 end
 
 local function UpdateMixerRect(force)
  if not mixer_hwnd or not r.JS_Window_IsWindow(mixer_hwnd) then
   mixer_hwnd = GetMixerHWND()
   if not mixer_hwnd then
+    mixer_visible_last = false
    local now = r.time_precise()
    if now - mixer_search_t > 0.2 then mixer_search_t = now end
    return false
   end
   force = true
  end
+ if not mixer_visible_last then
+   force = true
+   overlay_shown_noactivate = false
+   overlay_topmost_set = false
+   pin_topmost_set = false
+ end
+ mixer_visible_last = true
  local ok, l, t, ri, b = r.JS_Window_GetRect(mixer_hwnd)
  if not ok then
   mixer_hwnd = nil
+   mixer_visible_last = false
   return false
  end
  if r.JS_Window_GetClientRect then
@@ -238,9 +275,26 @@ local function UpdateMixerRect(force)
   LAST_RECT_VAL = val
   LEFT, TOP = r.ImGui_PointConvertNative(ctx, l, t)
   RIGHT, BOT = r.ImGui_PointConvertNative(ctx, ri, b)
-    RequestOverlayTopmost(12)
  end
  return true
+end
+
+local function IsNativeMixerOpen()
+ local state = r.GetToggleCommandState(40078)
+ if state == 0 then return false end
+ return true
+end
+
+local function ResetMixerWindowState()
+ mixer_hwnd = nil
+ mixer_visible_last = false
+ LAST_RECT_VAL = 0
+ overlay_hwnd = nil
+ overlay_topmost_set = false
+ overlay_shown_noactivate = false
+ overlay_window_visible = false
+ pin_hwnd = nil
+ pin_topmost_set = false
 end
 
 local function color_u32(track, alpha)
@@ -535,6 +589,19 @@ local function DrawSettingsWindow()
   changed, settings.hide_behind_master = r.ImGui_Checkbox(ctx, "Hide cables behind master", settings.hide_behind_master)
   if changed then MarkDirty() end
 
+   changed, settings.pin_on_top = r.ImGui_Checkbox(ctx, "Pin cables on top", settings.pin_on_top)
+   if changed then
+    MarkDirty()
+    if settings.pin_on_top then
+      overlay_topmost_set = false
+    else
+      ReleaseOverlayTopmost()
+    end
+   end
+
+   changed, settings.show_overlay_controls = r.ImGui_Checkbox(ctx, "Show corner controls", settings.show_overlay_controls)
+  if changed then MarkDirty() end
+
   local sides = { "auto", "left", "right" }
   r.ImGui_SetNextItemWidth(ctx, 180)
   if r.ImGui_BeginCombo(ctx, "Master side", settings.master_side) then
@@ -555,6 +622,128 @@ local function DrawSettingsWindow()
   r.ImGui_End(ctx)
  end
  if not open then settings_visible = false end
+end
+
+local function EnsurePinWindowTopmost()
+ if not r.JS_Window_Find then return end
+ if not pin_hwnd or not r.JS_Window_IsWindow(pin_hwnd) then
+  pin_hwnd = r.JS_Window_Find("TK MCP Cables Pin", true)
+  pin_topmost_set = false
+ end
+ if pin_hwnd and not pin_topmost_set then
+  if r.JS_Window_Show then r.JS_Window_Show(pin_hwnd, "SHOWNOACTIVATE") end
+  if r.JS_Window_SetZOrder then r.JS_Window_SetZOrder(pin_hwnd, "TOPMOST") end
+  pin_topmost_set = true
+ end
+end
+
+local function HidePinWindow()
+ if not ctx then return end
+ r.ImGui_SetNextWindowPos(ctx, PARK_X, PARK_Y)
+ r.ImGui_SetNextWindowSize(ctx, 1, 1)
+ local visible = r.ImGui_Begin(ctx, "TK MCP Cables Pin", false, pin_flags)
+ if visible then r.ImGui_End(ctx) end
+ if not pin_hwnd or not r.JS_Window_IsWindow(pin_hwnd) then
+  if r.JS_Window_Find then pin_hwnd = r.JS_Window_Find("TK MCP Cables Pin", true) end
+ end
+ if pin_hwnd and r.JS_Window_IsWindow(pin_hwnd) then
+  if r.JS_Window_Show then r.JS_Window_Show(pin_hwnd, "SHOWNOACTIVATE") end
+  pin_topmost_set = false
+ end
+end
+
+local function DrawPinIcon(draw_list, x, y, size, hovered)
+ local pinned = settings.pin_on_top
+ local fill = pinned and r.ImGui_ColorConvertDouble4ToU32(0.95, 0.68, 0.16, 0.95)
+  or r.ImGui_ColorConvertDouble4ToU32(0.90, 0.94, 1.0, hovered and 0.95 or 0.72)
+ local ring = pinned and r.ImGui_ColorConvertDouble4ToU32(1.0, 0.92, 0.45, 1.0)
+  or r.ImGui_ColorConvertDouble4ToU32(0.15, 0.18, 0.22, hovered and 0.95 or 0.72)
+ local cx = x + size * 0.5
+ local cy = y + size * 0.5
+ r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, size * 0.28, fill, 16)
+ r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, ring, 16, hovered and 2 or 1)
+end
+
+local function DrawSettingsIcon(draw_list, x, y, size, hovered)
+ local fill = r.ImGui_ColorConvertDouble4ToU32(0.90, 0.94, 1.0, hovered and 1.0 or 0.78)
+ local ring = r.ImGui_ColorConvertDouble4ToU32(0.15, 0.18, 0.22, hovered and 0.95 or 0.72)
+ local cx = x + size * 0.5
+ local cy = y + size * 0.5
+ r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, ring, 16, hovered and 2 or 1)
+ r.ImGui_DrawList_AddTriangleFilled(draw_list, cx, cy - size * 0.26, cx - size * 0.24, cy + size * 0.18, cx + size * 0.24, cy + size * 0.18, fill)
+end
+
+local function DrawPinButton()
+ if not ctx then return end
+ local size = 18
+ local gap = 2
+ local margin = 1
+ local controls_w = size
+ local controls_h = size * 2 + gap
+ r.ImGui_SetNextWindowPos(ctx, RIGHT - controls_w - margin, TOP + margin)
+ r.ImGui_SetNextWindowSize(ctx, controls_w, controls_h)
+ local pushed_padding = false
+ if r.ImGui_PushStyleVar and r.ImGui_StyleVar_WindowPadding then
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+  pushed_padding = true
+ end
+ EnsurePinWindowTopmost()
+ local visible = r.ImGui_Begin(ctx, "TK MCP Cables Pin", false, pin_flags)
+ if visible then
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local clicked = false
+  if r.ImGui_InvisibleButton then
+   clicked = r.ImGui_InvisibleButton(ctx, "##pin", size, size)
+  else
+   clicked = r.ImGui_Button(ctx, settings.pin_on_top and "Pinned" or "Pin", size, size)
+  end
+  if clicked then
+   settings.pin_on_top = not settings.pin_on_top
+   MarkDirty()
+   if settings.pin_on_top then
+    overlay_topmost_set = false
+   else
+    ReleaseOverlayTopmost()
+   end
+   pin_topmost_set = false
+  end
+  local hovered = r.ImGui_IsItemHovered and r.ImGui_IsItemHovered(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  DrawPinIcon(draw_list, x, y, size, hovered)
+  if hovered and r.ImGui_BeginTooltip and r.ImGui_BeginTooltip(ctx) then
+   if settings.pin_on_top then
+    r.ImGui_Text(ctx, "Cables pinned on top")
+    r.ImGui_Text(ctx, "REAPER shortcuts and menu focus may not work while this is enabled.")
+    r.ImGui_Text(ctx, "Click to return to shortcut-safe mode.")
+   else
+    r.ImGui_Text(ctx, "Pin cables on top")
+    r.ImGui_Text(ctx, "Keeps cables above the floating mixer.")
+    r.ImGui_Text(ctx, "REAPER shortcuts and menu focus may not work while pinned.")
+   end
+   r.ImGui_EndTooltip(ctx)
+  end
+
+   local settings_y = y + size + gap
+   if r.ImGui_SetCursorScreenPos then r.ImGui_SetCursorScreenPos(ctx, x, settings_y) end
+   local settings_clicked = false
+   if r.ImGui_InvisibleButton then
+    settings_clicked = r.ImGui_InvisibleButton(ctx, "##settings", size, size)
+   else
+    settings_clicked = r.ImGui_Button(ctx, "Settings", size, size)
+   end
+   if settings_clicked then settings_visible = not settings_visible end
+   local settings_hovered = r.ImGui_IsItemHovered and r.ImGui_IsItemHovered(ctx)
+   DrawSettingsIcon(draw_list, x, settings_y, size, settings_hovered)
+   if settings_hovered and r.ImGui_BeginTooltip and r.ImGui_BeginTooltip(ctx) then
+    r.ImGui_Text(ctx, settings_visible and "Close cable settings" or "Open cable settings")
+    r.ImGui_Text(ctx, "Adjust cable appearance and filtering.")
+    r.ImGui_EndTooltip(ctx)
+   end
+
+  r.ImGui_End(ctx)
+  EnsurePinWindowTopmost()
+ end
+ if pushed_padding then r.ImGui_PopStyleVar(ctx) end
 end
 
 local _, _, sectionID, cmdID = r.get_action_context()
@@ -586,7 +775,8 @@ end
 
 r.atexit(function()
  if settings_dirty then SaveSettings() end
- if r.JS_VKeys_Intercept then r.JS_VKeys_Intercept(0x71, -1) end
+ ReleaseOverlayTopmost()
+ HidePinWindow()
  if sectionID ~= -1 then
   r.SetToggleCommandState(sectionID, cmdID, 0)
   r.RefreshToolbar2(sectionID, cmdID)
@@ -596,56 +786,6 @@ r.atexit(function()
   r.RefreshToolbar2(ext_toggle_sec, ext_toggle_cmd)
  end
 end)
-
-local function IsMouseOverMixer()
- if not mixer_hwnd or not r.JS_Window_FromPoint then return false end
- local mx, my = r.GetMousePosition()
- local hwnd = r.JS_Window_FromPoint(mx, my)
- local cur = hwnd
- while cur do
-  if cur == mixer_hwnd then return true end
-  cur = r.JS_Window_GetParent(cur)
- end
- return false
-end
-
-local f2_intercepted = false
-local function UpdateF2Intercept(want)
- if not r.JS_VKeys_Intercept then return end
- if want and not f2_intercepted then
-  r.JS_VKeys_Intercept(0x71, 1)
-  f2_intercepted = true
- elseif not want and f2_intercepted then
-  r.JS_VKeys_Intercept(0x71, -1)
-  f2_intercepted = false
- end
-end
-
-local function CheckF2Toggle()
- local over = IsMouseOverMixer()
- UpdateF2Intercept(over)
- if not r.JS_VKeys_GetState then return end
- local state = r.JS_VKeys_GetState(0)
- if not state then return end
- local cur = state:byte(0x71) or 0
- if cur ~= 0 and prev_f2_state == 0 and over then
-  settings_visible = not settings_visible
- end
- prev_f2_state = cur
-end
-
-local function UpdateSelectionTopmostBoost()
- local sel = r.CountSelectedTracks(0)
- local key = tostring(sel)
- for i = 0, sel - 1 do
-  local t = r.GetSelectedTrack(0, i)
-  if t then key = key .. ":" .. tostring(math.floor(r.GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER") or 0)) end
- end
- if key ~= last_selection_key then
-  last_selection_key = key
-  RequestOverlayTopmost(12)
- end
-end
 
 local function IsMixerCovered()
  if not mixer_hwnd then return true end
@@ -657,6 +797,7 @@ local function IsMixerCovered()
   while cur do
    if cur == mixer_hwnd then return true end
    if overlay_hwnd and cur == overlay_hwnd then return true end
+   if pin_hwnd and cur == pin_hwnd then return true end
    cur = r.JS_Window_GetParent(cur)
   end
   return false
@@ -679,9 +820,6 @@ local function Loop()
   if save_timer > 30 then SaveSettings(); save_timer = 0 end
  end
 
- CheckF2Toggle()
- UpdateSelectionTopmostBoost()
-
  if r.GetExtState("TK_MCP_Cables_Overlay", "toggle_settings") ~= "" then
   r.DeleteExtState("TK_MCP_Cables_Overlay", "toggle_settings", false)
   settings_visible = not settings_visible
@@ -698,10 +836,24 @@ local function Loop()
   force_rect = true
  end
 
- if settings.enabled and UpdateMixerRect(force_rect) and not IsMixerCovered() and HasCablesToDraw() then
+ local mixer_open = IsNativeMixerOpen()
+ if mixer_open_last ~= nil and mixer_open ~= mixer_open_last then
+  if not mixer_open and overlay_window_visible then HideOverlayWindow() end
+  ResetMixerWindowState()
+  force_rect = true
+ end
+ mixer_open_last = mixer_open
+
+ local mixer_alive = settings.enabled and mixer_open and UpdateMixerRect(force_rect)
+ local mixer_ready = mixer_alive and not IsMixerCovered()
+ local cables_ready = mixer_ready and HasCablesToDraw()
+ local overlay_drawn = false
+
+ if cables_ready then
   local w = (RIGHT - LEFT)
   local h = (BOT - TOP)
   if w > 4 and h > 4 then
+    EnsureOverlayTopmost()
    r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
    r.ImGui_SetNextWindowSize(ctx, w, h)
    local visible = r.ImGui_Begin(ctx, "TK MCP Cables Overlay", false, overlay_flags)
@@ -711,11 +863,17 @@ local function Loop()
     if settings.debug_anchors then DrawDebugAnchors(draw_list) end
     r.ImGui_End(ctx)
     EnsureOverlayTopmost()
+     overlay_window_visible = true
+     overlay_drawn = true
    end
   end
- else
+   end
+
+   if not overlay_drawn and overlay_window_visible then
   HideOverlayWindow()
  end
+
+ if mixer_alive and settings.show_overlay_controls then DrawPinButton() else HidePinWindow() end
 
  r.defer(Loop)
 end
