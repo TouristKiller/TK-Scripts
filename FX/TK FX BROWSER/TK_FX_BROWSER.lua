@@ -1,8 +1,13 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.9.2
+-- @version 2.9.3
 -- @changelog:
 --[[ 
+    v2.9.3:
+        + Custom folder tabs: the virtual "All" tab now shows all plugins from all custom folders and subfolders, with cached collection and lazy rendering.
+        + Fix: Screenshot/plugin context menu "Create New Folder..." now creates a safe new custom folder without overwriting existing folders.
+        + Custom folder tabs: added Keep Parent Tabs Open setting for breadcrumb and nested tab navigation.
+        + Fix: Newly created custom subfolders now stay visible in the tab hierarchy immediately after creation.
     v2.9.2:
         + Fix: Custom folders and native FOLDERS subfolders that share the same name are now fully isolated (folder-kind routing).
         + Fix: An empty custom folder now shows an empty grid instead of the contents of the same-named native FOLDERS subfolder.
@@ -90,7 +95,7 @@
     v2.7.3:
         + Screenshot Shortcuts: badge changes color based on window focus (green = active, dim grey = window/search not focused) so it's visually clear when keypresses will be handled by the browser
         + Screenshot Shortcuts: type 1-9 / 0 / Q-M to instantly add the visible plugin from custom folders / Favorites / Recent (Settings > Enable Screenshot Shortcuts, off by default)
-        + Custom folder tabs: virtual "All" tab to clear the folder filter (Settings > Show 'All' Tab)
+        + Custom folder tabs: virtual "All" tab shows all custom folder plugins (Settings > Show 'All' Tab)
         + Custom folder tabs: virtual "Favorites" tab showing all favorite plugins (Settings > Show 'Favorites' Tab)
         + Custom folder tabs: virtual "Recent" tab showing recently added plugins, kept in insertion order with most recent first (Settings > Show 'Recent' Tab, capacity recent_max)
         + Recent: persisted to recent_plugins.txt; populated automatically when a plugin is inserted via AddFXToTrack
@@ -201,6 +206,7 @@ local t_sort  = table.sort
 local r_GetExtState = r.GetExtState -- Cache de Reaper functie lookup
 
 local LAST_OPENED_SENTINEL  = "__LAST_OPENED__"
+CUSTOM_ALL_FOLDER           = "__ALL_CUSTOM__"
 
 -- Ratings:
 local plugin_ratings_path   = script_path .. "plugin_ratings.json"
@@ -882,6 +888,9 @@ subfolder_plugin_action = subfolder_plugin_action or 0 -- 0=move to subfolder, 1
 parent_folder_has_plugins = parent_folder_has_plugins or false
 show_add_root_folder_popup = show_add_root_folder_popup or false
 new_root_folder_name = new_root_folder_name or ""
+show_create_folder_popup = show_create_folder_popup or false
+new_folder_for_plugin = new_folder_for_plugin or ""
+new_folder_name_input = new_folder_name_input or ""
 show_create_parent_folder_popup = show_create_parent_folder_popup or false
 selected_folder_for_parent = selected_folder_for_parent or nil
 new_parent_folder_name = new_parent_folder_name or ""
@@ -929,6 +938,7 @@ function SelectFolderExclusive(name, kind)
     screenshot_nav_index = nil
     if name ~= nil then
         browser_panel_selected = nil
+        loaded_items_count = ITEMS_PER_BATCH or loaded_items_count or 30
     
         local seeded = GetPluginsForFolder(name, kind) or {}
         if config and config.apply_type_priority and type(seeded) == 'table' then
@@ -1343,6 +1353,7 @@ function SetDefaultConfig()
         show_tab_recent = false,
         recent_max = 30,
         custom_folder_tabs_breadcrumb = false,
+        custom_folder_tabs_keep_parent_visible = true,
         show_screenshot_shortcuts = false,
         hide_custom_dropdown = false,
         submenu_width = 160,
@@ -2904,7 +2915,36 @@ function GetCustomFolderPlugins(folder_path, folders)
     return plugins
 end
 
+custom_all_plugins_cache = custom_all_plugins_cache or nil
+custom_all_plugins_cache_dirty = custom_all_plugins_cache_dirty ~= false
+
+function CollectAllCustomFolderPlugins(force)
+    if not force and not custom_all_plugins_cache_dirty and custom_all_plugins_cache then
+        return custom_all_plugins_cache
+    end
+    local plugins = {}
+    local seen = {}
+    local function walk(node)
+        if type(node) ~= "table" then return end
+        for k, v in pairs(node) do
+            if type(k) == "number" and type(v) == "string" then
+                if not seen[v] then
+                    seen[v] = true
+                    plugins[#plugins + 1] = v
+                end
+            elseif k ~= "__folder_marker__" and type(k) == "string" and type(v) == "table" then
+                walk(v)
+            end
+        end
+    end
+    walk(config and config.custom_folders or {})
+    custom_all_plugins_cache = plugins
+    custom_all_plugins_cache_dirty = false
+    return plugins
+end
+
 function SaveCustomFolders()
+    custom_all_plugins_cache_dirty = true
     
     local function convertForJSON(folders)
         if type(folders) ~= "table" then return {} end
@@ -5291,6 +5331,10 @@ end
 function GetPluginsForFolder(folder_name, kind)
     if not folder_name or folder_name == '' then return {} end
 
+    if folder_name == CUSTOM_ALL_FOLDER or kind == "custom_all" then
+        return DedupeByTypePriority(CollectAllCustomFolderPlugins())
+    end
+
     if folder_name == "Favorites" then
         return DedupeByTypePriority(favorite_plugins or {})
     end
@@ -5905,6 +5949,12 @@ function ShowConfigWindow()
             if cfbc_changed then config.custom_folder_tabs_breadcrumb = cfbc_new; SaveConfig() end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show nested folder hierarchy as a single breadcrumb row (Top > Sub > SubSub) instead of multiple rows") end
 
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            local cfkp_changed, cfkp_new = r.ImGui_Checkbox(ctx, "Keep Parent Tabs Open", config.custom_folder_tabs_keep_parent_visible)
+            if cfkp_changed then config.custom_folder_tabs_keep_parent_visible = cfkp_new; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Keep parent custom folder tabs selected and visible when navigating back through nested tabs") end
+
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local tpc_changed, tpc_new = r.ImGui_Checkbox(ctx, "Show Plugin Count on Tabs", config.show_tab_plugin_count)
             if tpc_changed then config.show_tab_plugin_count = tpc_new; SaveConfig() end
@@ -5919,7 +5969,7 @@ function ShowConfigWindow()
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local sta_changed, sta_new = r.ImGui_Checkbox(ctx, "Show 'All' Tab", config.show_tab_all)
             if sta_changed then config.show_tab_all = sta_new; SaveConfig() end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show an 'All' button at the start of the tab row to clear the folder filter") end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show an 'All' button at the start of the tab row with all custom folder plugins") end
 
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
@@ -21295,7 +21345,7 @@ function ShowScreenshotWindow()
             local function DrawVirtualTabs(initial_sameline)
                 local total_w = 0
                 local first = true
-                local function DrawVirtualTab(label, target, tooltip)
+                local function DrawVirtualTab(label, target, tooltip, kind)
                     if first then
                         if initial_sameline then
                             r.ImGui_SameLine(ctx)
@@ -21315,14 +21365,10 @@ function ShowScreenshotWindow()
                     local txt_w = r.ImGui_CalcTextSize(ctx, label)
                     local btn_w = txt_w + 16
                     if r.ImGui_Button(ctx, label .. "##cftab_virt_" .. target, btn_w, 0) then
-                        if target == "__ALL__" then
+                        if is_active then
                             SelectFolderExclusive(nil)
                         else
-                            if is_active then
-                                SelectFolderExclusive(nil)
-                            else
-                                SelectFolderExclusive(target)
-                            end
+                            SelectFolderExclusive(target, kind)
                         end
                     end
                     if is_active then r.ImGui_PopStyleColor(ctx, 3) end
@@ -21331,7 +21377,12 @@ function ShowScreenshotWindow()
                 end
 
                 if config.show_tab_all then
-                    DrawVirtualTab("All", "__ALL__", "Show all plugins (clear folder filter)")
+                    local all_label = "All"
+                    if config.show_tab_plugin_count then
+                        local cnt = #(CollectAllCustomFolderPlugins and CollectAllCustomFolderPlugins() or {})
+                        if cnt > 0 then all_label = all_label .. " (" .. cnt .. ")" end
+                    end
+                    DrawVirtualTab(all_label, CUSTOM_ALL_FOLDER, "Show all custom folder plugins", "custom_all")
                 end
                 if config.show_tab_favorites then
                     local cnt = favorite_plugins and #favorite_plugins or 0
@@ -21399,7 +21450,9 @@ function ShowScreenshotWindow()
                 end
                 if r.ImGui_Button(ctx, btn_label, btn_w, 0) then
                     if is_sel then
-                        SelectFolderExclusive(nil)
+                        if not config.custom_folder_tabs_keep_parent_visible then
+                            SelectFolderExclusive(nil)
+                        end
                     else
                         SelectFolderExclusive(full_path, "custom")
                     end
@@ -21478,7 +21531,7 @@ function ShowScreenshotWindow()
             DrawTabRow(top_names, 1, "")
 
             local _sel_snap = selected_folder
-            if config.custom_folder_tabs_show_nested and _sel_snap and type(_sel_snap) == "string"
+                if config.custom_folder_tabs_show_nested and selected_folder_kind == "custom" and _sel_snap and type(_sel_snap) == "string"
                and _sel_snap ~= "Favorites" and _sel_snap ~= "Recent" and _sel_snap ~= "Current Track FX" and _sel_snap ~= "Current Project FX" then
                 local active_top = _sel_snap:match("^([^/]+)")
                 if active_top and config.custom_folders[active_top] then
@@ -21507,7 +21560,7 @@ function ShowScreenshotWindow()
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3A5F95FF)
                                 end
                                 if r.ImGui_Button(ctx, seg_label .. "##bc_" .. i, 0, 0) then
-                                    SelectFolderExclusive(accum_path)
+                                    SelectFolderExclusive(accum_path, "custom")
                                 end
                                 if is_last then r.ImGui_PopStyleColor(ctx, 3) end
                                 r.ImGui_PopStyleColor(ctx)
@@ -21530,6 +21583,10 @@ function ShowScreenshotWindow()
                             end
                         end
                     else
+                        local segments = {}
+                        for seg in (_sel_snap .. "/"):gmatch("([^/]+)/") do
+                            segments[#segments+1] = seg
+                        end
                         local current_depth = 1
                         local current_path = active_top
                         while true do
@@ -21538,15 +21595,9 @@ function ShowScreenshotWindow()
                             local sub_names = CollectTopLevelNames(node)
                             if #sub_names == 0 then break end
                             DrawTabRow(sub_names, current_depth + 1, current_path)
-                            if _sel_snap:sub(1, #current_path + 1) == current_path .. "/" then
-                                local rest = _sel_snap:sub(#current_path + 2)
-                                local next_part = rest:match("^([^/]+)")
-                                if next_part then
-                                    current_path = current_path .. "/" .. next_part
-                                    current_depth = current_depth + 1
-                                else
-                                    break
-                                end
+                            if current_depth < #segments and segments[current_depth + 1] then
+                                current_path = current_path .. "/" .. segments[current_depth + 1]
+                                current_depth = current_depth + 1
                             else
                                 break
                             end
@@ -21796,8 +21847,12 @@ function ShowScreenshotWindow()
                     end -- END favorites condition
 
                 -- CUSTOM FOLDERS RENDERING
-                elseif (selected_folder and selected_folder_kind == "custom") or (selected_folder and selected_folder_kind == nil and type(selected_folder) == "string" and selected_folder:find("/") and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
-                    filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
+                elseif (selected_folder and (selected_folder_kind == "custom" or selected_folder_kind == "custom_all")) or (selected_folder and selected_folder_kind == nil and type(selected_folder) == "string" and selected_folder:find("/") and next(GetPluginsFromCustomFolder(selected_folder) or {}) ~= nil) then
+                    if selected_folder_kind == "custom_all" then
+                        filtered_plugins = CollectAllCustomFolderPlugins() or {}
+                    else
+                        filtered_plugins = GetPluginsFromCustomFolder(selected_folder or "") or {}
+                    end
                     local display_plugins = {}
                     if config.show_favorites_on_top then
                         local term_l = GetLowerName(screenshot_folder_filter_suspended and "" or browser_search_term)
@@ -21864,17 +21919,25 @@ function ShowScreenshotWindow()
                         for _, p in ipairs(others) do display_plugins[#display_plugins+1] = p end
                     end
                     filtered_plugins = display_plugins
-                    -- Sync visible names for texture pruning (Current Project FX)
                     current_filtered_fx = {}
                     for _, plugin in ipairs(display_plugins) do
                         if type(plugin) == 'table' and plugin.fx_name then
                             current_filtered_fx[#current_filtered_fx+1] = plugin.fx_name
+                        elseif type(plugin) == 'string' and plugin ~= "--Favorites End--" and plugin ~= "--Pinned End--" then
+                            current_filtered_fx[#current_filtered_fx+1] = plugin
                         end
                     end
 
-                    local custom_total_count = nil
+                    local custom_total_count = #filtered_plugins
                     if config.use_pagination and view_mode ~= "list" then
                         filtered_plugins, custom_total_count = ApplyFolderPaginationSlice(filtered_plugins, selected_folder)
+                    elseif selected_folder_kind == "custom_all" then
+                        local cap = loaded_items_count or ITEMS_PER_BATCH or 30
+                        local sliced = {}
+                        for i = 1, math.min(cap, #filtered_plugins) do
+                            sliced[#sliced + 1] = filtered_plugins[i]
+                        end
+                        filtered_plugins = sliced
                     end
 
                     if #filtered_plugins == 0 then
@@ -28125,9 +28188,14 @@ if visible then
         r.ImGui_Separator(ctx)
         if r.ImGui_Button(ctx, "Create", 100, 0) then
             if new_folder_name_input and new_folder_name_input ~= "" and new_folder_for_plugin and new_folder_for_plugin ~= "" then
-                config.custom_folders[new_folder_name_input] = {new_folder_for_plugin}
-                SaveCustomFolders()
-                r.ShowMessageBox("Folder '" .. new_folder_name_input .. "' created with plugin", "Success", 0)
+                config.custom_folders = config.custom_folders or {}
+                if not config.custom_folders[new_folder_name_input] then
+                    config.custom_folders[new_folder_name_input] = { ["__folder_marker__"] = true, new_folder_for_plugin }
+                    SaveCustomFolders()
+                    r.ShowMessageBox("Folder '" .. new_folder_name_input .. "' created with plugin", "Success", 0)
+                else
+                    r.ShowMessageBox("A folder with that name already exists.", "Info", 0)
+                end
             end
             show_create_folder_popup = false
             new_folder_for_plugin = ""
@@ -28389,8 +28457,9 @@ if visible then
         r.ImGui_Separator(ctx)
         if r.ImGui_Button(ctx, "Create", 100, 0) then
             if new_subfolder_name and new_subfolder_name ~= "" and selected_folder_for_subfolder then
+                local parent_path = selected_folder_for_subfolder
                 local parts = {}
-                for part in selected_folder_for_subfolder:gmatch("[^/]+") do
+                for part in parent_path:gmatch("[^/]+") do
                     table.insert(parts, part)
                 end
                 
@@ -28402,8 +28471,11 @@ if visible then
                     current = current[parts[i]]
                 end
                 
-                current[new_subfolder_name] = {}
+                if not current[new_subfolder_name] then
+                    current[new_subfolder_name] = { ["__folder_marker__"] = true }
+                end
                 SaveCustomFolders()
+                SelectFolderExclusive(parent_path, "custom")
             end
             new_subfolder_name = ""
             selected_folder_for_subfolder = nil
