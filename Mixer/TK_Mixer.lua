@@ -1,6 +1,6 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.3.3
+-- @version 1.3.4
 --[[
 v1.3.3
     + Sidebar: dock/undock toggle button (above the close button) — remembers last dock position, defaults to bottom dock
@@ -301,6 +301,8 @@ local settings = {
  simple_mixer_use_track_color = true,
  simple_mixer_selection_color = 0x4A90D9FF,
  simple_mixer_selection_intensity = 0.67,
+ simple_mixer_track_color_intensity = 1.0,
+ simple_mixer_channel_color_intensity = 1.0,
  simple_mixer_track_name_use_color = false,
  simple_mixer_track_name_bg_use_color = false,
  simple_mixer_auto_height = true,
@@ -399,6 +401,7 @@ local settings = {
  simple_mixer_track_separator_use_track_color = false,
  simple_mixer_track_separator_color = 0x606060FF,
  simple_mixer_track_separator_thickness = 1.0,
+ simple_mixer_track_separator_brightness = 1.0,
  simple_mixer_track_buttons_height = 16,
  simple_mixer_channel_rounding = 0,
  simple_mixer_left_padding = 0,
@@ -1149,6 +1152,24 @@ SaveProjectMixerHiddenTracks = function(hidden)
 end
 
 local channelstrip_fx_cache = {}
+
+function GetChannelColorIntensity()
+ local intensity = settings.simple_mixer_channel_color_intensity or 1.0
+ return math.max(0.1, math.min(1.0, intensity))
+end
+
+function GetChannelTrackColor(track, alpha, is_selected, selected_boost)
+ if not track then return nil end
+ local track_color = r.GetTrackColor(track)
+ if not track_color or track_color == 0 then return nil end
+ local r_val, g_val, b_val = r.ColorFromNative(track_color)
+ if is_selected and selected_boost and selected_boost > 0 then
+  r_val = math.min(255, r_val + (255 - r_val) * selected_boost)
+  g_val = math.min(255, g_val + (255 - g_val) * selected_boost)
+  b_val = math.min(255, b_val + (255 - b_val) * selected_boost)
+ end
+ return r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, (alpha or 1.0) * GetChannelColorIntensity())
+end
 
 function GetChannelTextColor(track)
  if not settings.simple_mixer_channel_text_auto then
@@ -6037,14 +6058,19 @@ local function DrawFolderEndIcon(draw_list, x, y, size, color)
 end
 
 local function GetSeparatorColorForTrack(track, fallback)
+ local brightness = settings.simple_mixer_track_separator_brightness or 1.0
  if settings.simple_mixer_track_separator_use_track_color and track then
   local tc = r.GetTrackColor(track)
   if tc and tc ~= 0 then
    local rv, gv, bv = r.ColorFromNative(tc)
-   return r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
+   return r.ImGui_ColorConvertDouble4ToU32(rv/255 * brightness, gv/255 * brightness, bv/255 * brightness, 1.0)
   end
  end
- return fallback or settings.simple_mixer_track_separator_color or 0x606060FF
+ local col = fallback or settings.simple_mixer_track_separator_color or 0x606060FF
+ local r_comp = ((col / 0x1000000) % 0x100) / 255
+ local g_comp = ((col / 0x10000) % 0x100) / 255
+ local b_comp = ((col / 0x100) % 0x100) / 255
+ return r.ImGui_ColorConvertDouble4ToU32(r_comp * brightness, g_comp * brightness, b_comp * brightness, 1.0)
 end
 
 local function GetTrackBlockEnd(start_idx)
@@ -6250,21 +6276,13 @@ if (not is_master) then
  if not is_master then
   local track_number = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
   local track_number_str = tostring(track_number)
-  local track_color = r.GetTrackColor(track)
   local is_selected = r.IsTrackSelected(track)
   local bg_color = 0x404040FF
-  if track_color ~= 0 then
-   local r_val, g_val, b_val = r.ColorFromNative(track_color)
-   if is_selected then
-    r_val = math.min(255, r_val + (255 - r_val) * 0.4)
-    g_val = math.min(255, g_val + (255 - g_val) * 0.4)
-    b_val = math.min(255, b_val + (255 - b_val) * 0.4)
-   end
-   bg_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.9)
-  else
-   if is_selected then
-    bg_color = 0x606060FF
-   end
+  local track_color_bg = GetChannelTrackColor(track, 0.9, is_selected, 0.4)
+  if track_color_bg then
+   bg_color = track_color_bg
+  elseif is_selected then
+   bg_color = 0x606060FF
   end
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
@@ -6576,10 +6594,7 @@ if (not is_master) then
   local sr_divider_x, sr_divider_y = r.ImGui_GetCursorScreenPos(ctx)
   local sr_tr_color = r.GetTrackColor(track)
   local sr_divider_color = 0x444444FF
-  if sr_tr_color and sr_tr_color ~= 0 then
-   local sr_r_val, sr_g_val, sr_b_val = r.ColorFromNative(sr_tr_color)
-   sr_divider_color = r.ImGui_ColorConvertDouble4ToU32(sr_r_val/255, sr_g_val/255, sr_b_val/255, 1.0)
-  end
+  sr_divider_color = GetChannelTrackColor(track, 1.0, false, 0) or sr_divider_color
   local sr_draw_list = r.ImGui_GetWindowDrawList(ctx)
   r.ImGui_DrawList_AddLine(sr_draw_list, sr_divider_x, sr_divider_y, sr_divider_x + track_width, sr_divider_y, sr_divider_color, 1)
   if settings.simple_mixer_show_cables and mixer_state.cable_anchors then
@@ -6971,11 +6986,7 @@ if (not is_master) then
   local line_y = btn_y + handle_height / 2
 
   local handle_color = 0x888888FF
-  local track_color = r.GetTrackColor(track)
-  if track_color ~= 0 then
-   local rv, gv, bv = r.ColorFromNative(track_color)
-   handle_color = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
-  end
+    handle_color = GetChannelTrackColor(track, 1.0, false, 0) or handle_color
 
   local io_label_color = (handle_color & 0xFFFFFF00) | 0xBB
   r.ImGui_DrawList_AddText(draw_list, btn_x + 2, btn_y - 3, io_label_color, "IO")
@@ -7416,12 +7427,8 @@ if (not is_master) then
   fx_btn_width = track_width - (fx_show_bypass and fx_bypass_btn_width + 2 or 0) - fx_scrollbar_reserve
 
   local divider_x, divider_y = r.ImGui_GetCursorScreenPos(ctx)
-  local tr_color = r.GetTrackColor(track)
   local divider_color = 0x444444FF
-  if tr_color and tr_color ~= 0 then
-   local r_val, g_val, b_val = r.ColorFromNative(tr_color)
-   divider_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
-  end
+  divider_color = GetChannelTrackColor(track, 1.0, false, 0) or divider_color
   local fx_draw_list = r.ImGui_GetWindowDrawList(ctx)
   r.ImGui_DrawList_AddLine(fx_draw_list, divider_x, divider_y, divider_x + track_width, divider_y, divider_color, 1)
   r.ImGui_Dummy(ctx, 0, 2)
@@ -7696,11 +7703,7 @@ if (not is_master) then
   local line_y = btn_y + handle_height / 2
   
   local handle_color = 0x888888FF
-  local track_color = r.GetTrackColor(track)
-  if track_color ~= 0 then
-   local rv, gv, bv = r.ColorFromNative(track_color)
-   handle_color = r.ImGui_ColorConvertDouble4ToU32(rv/255, gv/255, bv/255, 1.0)
-  end
+    handle_color = GetChannelTrackColor(track, 1.0, false, 0) or handle_color
   
   local fx_label_color = (handle_color & 0xFFFFFF00) | 0xBB
   r.ImGui_DrawList_AddText(draw_list, btn_x + 2, btn_y - 3, fx_label_color, "FX")
@@ -7786,6 +7789,7 @@ if (not is_master) then
   local track_color = r.GetTrackColor(track)
   if track_color ~= 0 then
    local r_val, g_val, b_val = r.ColorFromNative(track_color)
+     local track_color_intensity = math.max(0.1, math.min(1.0, settings.simple_mixer_track_color_intensity or 1.0))
    
    if is_track_selected then
     r_val = math.min(255, r_val + (255 - r_val) * 0.5)
@@ -7794,11 +7798,11 @@ if (not is_master) then
    end
    
    local fader_bg_style = settings.simple_mixer_fader_bg_style or 0
-   local imgui_color_full = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
-   local imgui_color_bg = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.25)
-   local imgui_color_hover = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.38)
-   local imgui_color_active = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.5)
-   local imgui_color_grab_active = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.87)
+    local imgui_color_full = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, track_color_intensity)
+    local imgui_color_bg = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.25 * track_color_intensity)
+    local imgui_color_hover = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.38 * track_color_intensity)
+    local imgui_color_active = (fader_bg_style > 0) and 0x00000000 or r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.5 * track_color_intensity)
+    local imgui_color_grab_active = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.87 * track_color_intensity)
    
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), imgui_color_bg)
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), imgui_color_hover)
@@ -7887,7 +7891,8 @@ if (not is_master) then
   local track_color_rgb = nil
   if settings.simple_mixer_use_track_color and track_has_color then
    local r_val, g_val, b_val = r.ColorFromNative(track_color_native)
-   track_color_rgb = {r_val/255, g_val/255, b_val/255}
+    local track_color_intensity = math.max(0.1, math.min(1.0, settings.simple_mixer_track_color_intensity or 1.0))
+    track_color_rgb = {r_val/255 * track_color_intensity, g_val/255 * track_color_intensity, b_val/255 * track_color_intensity}
   end
   DrawFaderBackground(ctx, draw_list, slider_start_x, slider_start_y, slider_actual_width, slider_height, rounding, track_color_rgb, fader_margin)
  end
@@ -8788,13 +8793,7 @@ if (not is_master) then
    local btn_rounding = settings.simple_mixer_channel_rounding or 0
    local bg_color
    if track_color ~= 0 then
-    local r_val, g_val, b_val = r.ColorFromNative(track_color)
-    if is_track_selected then
-     r_val = math.min(255, r_val + (255 - r_val) * 0.5)
-     g_val = math.min(255, g_val + (255 - g_val) * 0.5)
-     b_val = math.min(255, b_val + (255 - b_val) * 0.5)
-    end
-    bg_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.7)
+    bg_color = GetChannelTrackColor(track, 0.7, is_track_selected, 0.5)
    elseif is_track_selected then
     bg_color = 0x4A90D9CC
    else
@@ -8901,13 +8900,7 @@ if (not is_master) then
   local text_h = r.ImGui_GetTextLineHeight(ctx)
   local bg_color
   if track_color ~= 0 then
-   local r_val, g_val, b_val = r.ColorFromNative(track_color)
-   if is_track_selected then
-    r_val = math.min(255, r_val + (255 - r_val) * 0.5)
-    g_val = math.min(255, g_val + (255 - g_val) * 0.5)
-    b_val = math.min(255, b_val + (255 - b_val) * 0.5)
-   end
-   bg_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 0.7)
+   bg_color = GetChannelTrackColor(track, 0.7, is_track_selected, 0.5)
   elseif is_track_selected then
    bg_color = 0x4A90D9CC
   else
@@ -8929,15 +8922,7 @@ if (not is_master) then
  if settings.simple_mixer_track_name_use_color and not is_master then
   local track_color = r.GetTrackColor(track)
   if track_color ~= 0 then
-   local r_val, g_val, b_val = r.ColorFromNative(track_color)
-   
-   if is_track_selected then
-    r_val = math.min(255, r_val + (255 - r_val) * 0.5)
-    g_val = math.min(255, g_val + (255 - g_val) * 0.5)
-    b_val = math.min(255, b_val + (255 - b_val) * 0.5)
-   end
-   
-   local text_color = r.ImGui_ColorConvertDouble4ToU32(r_val/255, g_val/255, b_val/255, 1.0)
+   local text_color = GetChannelTrackColor(track, 1.0, is_track_selected, 0.5)
    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
    name_color_pushed = true
   end
@@ -9920,7 +9905,18 @@ function DrawSettingsWindow()
    
    r.ImGui_Text(ctx, "Track Color Options:")
    rv, settings.simple_mixer_use_track_color = r.ImGui_Checkbox(ctx, "Color Slider", settings.simple_mixer_use_track_color ~= false)
-   r.ImGui_SameLine(ctx)
+    if rv then SaveMixerSettings() end
+    if settings.simple_mixer_use_track_color ~= false then
+     r.ImGui_SameLine(ctx)
+     r.ImGui_SetNextItemWidth(ctx, 150)
+     rv, settings.simple_mixer_track_color_intensity = r.ImGui_SliderDouble(ctx, "Slider Intensity##track_color_int", settings.simple_mixer_track_color_intensity or 1.0, 0.1, 1.0, "%.2f")
+     if rv then SaveMixerSettings() end
+    end
+
+    r.ImGui_SetNextItemWidth(ctx, 180)
+    rv, settings.simple_mixer_channel_color_intensity = r.ImGui_SliderDouble(ctx, "Channel Intensity##channel_color_int", settings.simple_mixer_channel_color_intensity or 1.0, 0.1, 1.0, "%.2f")
+    if rv then SaveMixerSettings() end
+
    rv, settings.simple_mixer_track_name_use_color = r.ImGui_Checkbox(ctx, "Color Name", settings.simple_mixer_track_name_use_color or false)
    r.ImGui_SameLine(ctx)
    rv, settings.simple_mixer_track_name_bg_use_color = r.ImGui_Checkbox(ctx, "Color Name BG", settings.simple_mixer_track_name_bg_use_color or false)
@@ -10911,6 +10907,14 @@ function DrawSettingsWindow()
     rv, sep_thick = r.ImGui_SliderDouble(ctx, "Thickness##TrackSepThk", sep_thick, 0.5, 5.0, "%.1f px")
     if rv then
      settings.simple_mixer_track_separator_thickness = sep_thick
+     MarkTransportPresetChanged()
+    end
+
+    r.ImGui_SetNextItemWidth(ctx, 160)
+    local sep_bright = settings.simple_mixer_track_separator_brightness or 1.0
+    rv, sep_bright = r.ImGui_SliderDouble(ctx, "Brightness##TrackSepBright", sep_bright, 0.0, 1.0, "%.2f")
+    if rv then
+     settings.simple_mixer_track_separator_brightness = sep_bright
      MarkTransportPresetChanged()
     end
    end
