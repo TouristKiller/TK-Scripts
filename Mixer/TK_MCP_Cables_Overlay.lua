@@ -1,8 +1,12 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.1.6
+-- @version 1.1.8
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.1.8
+--   + Fixed: TOPMOST handling no longer runs permanently every frame, preventing focus/menu/shortcut issues while still boosting the overlay after relevant mixer or selection changes
+--   v1.1.7
+--   + Fixed: added ReaImGui context validation and stricter Begin/End handling to prevent rare invalid context errors on some systems
 --   v1.1.6
 --   + Fixed: overlay still falling behind floating mixer on some systems after track selection - TOPMOST Z-order is now re-applied every frame (cheap no-op when already on top)
 --   v1.1.5
@@ -144,15 +148,37 @@ local prev_f2_state = 0
 local last_project_change = -1
 local overlay_hwnd = nil
 local overlay_topmost_set = false
+local topmost_boost_frames = 0
+local last_selection_key = ""
+
+local function RequestOverlayTopmost(frames)
+ frames = frames or 12
+ if topmost_boost_frames < frames then topmost_boost_frames = frames end
+end
+
+local function EnsureImGuiContext()
+ if r.ImGui_ValidatePtr and r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then return true end
+ if not r.ImGui_ValidatePtr then return true end
+ ctx = r.ImGui_CreateContext('TK MCP Cables Overlay')
+ overlay_hwnd = nil
+ overlay_topmost_set = false
+ RequestOverlayTopmost(12)
+ return r.ImGui_ValidatePtr(ctx, "ImGui_Context*")
+end
 
 local function EnsureOverlayTopmost()
  if not r.JS_Window_SetZOrder or not r.JS_Window_Find then return end
  if not overlay_hwnd or not r.JS_Window_IsWindow(overlay_hwnd) then
   overlay_hwnd = r.JS_Window_Find("TK MCP Cables Overlay", true)
+  overlay_topmost_set = false
+  if overlay_hwnd then RequestOverlayTopmost(12) end
  end
+ if not overlay_hwnd then return end
+ if overlay_topmost_set and topmost_boost_frames <= 0 then return end
  if overlay_hwnd then
   r.JS_Window_SetZOrder(overlay_hwnd, "TOPMOST")
   overlay_topmost_set = true
+  if topmost_boost_frames > 0 then topmost_boost_frames = topmost_boost_frames - 1 end
  end
 end
 
@@ -184,6 +210,7 @@ local function HideOverlayWindow()
  if overlay_hwnd and r.JS_Window_IsWindow(overlay_hwnd) then
   r.JS_Window_Show(overlay_hwnd, "HIDE")
   overlay_topmost_set = false
+    topmost_boost_frames = 0
  end
 end
 
@@ -211,6 +238,7 @@ local function UpdateMixerRect(force)
   LAST_RECT_VAL = val
   LEFT, TOP = r.ImGui_PointConvertNative(ctx, l, t)
   RIGHT, BOT = r.ImGui_PointConvertNative(ctx, ri, b)
+    RequestOverlayTopmost(12)
  end
  return true
 end
@@ -524,8 +552,8 @@ local function DrawSettingsWindow()
 
   r.ImGui_Separator(ctx)
   if r.ImGui_Button(ctx, "Close") then settings_visible = false end
+  r.ImGui_End(ctx)
  end
- r.ImGui_End(ctx)
  if not open then settings_visible = false end
 end
 
@@ -606,6 +634,19 @@ local function CheckF2Toggle()
  prev_f2_state = cur
 end
 
+local function UpdateSelectionTopmostBoost()
+ local sel = r.CountSelectedTracks(0)
+ local key = tostring(sel)
+ for i = 0, sel - 1 do
+  local t = r.GetSelectedTrack(0, i)
+  if t then key = key .. ":" .. tostring(math.floor(r.GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER") or 0)) end
+ end
+ if key ~= last_selection_key then
+  last_selection_key = key
+  RequestOverlayTopmost(12)
+ end
+end
+
 local function IsMixerCovered()
  if not mixer_hwnd then return true end
  local ok, l, t, ri, b = r.JS_Window_GetRect(mixer_hwnd)
@@ -631,6 +672,7 @@ local function IsMixerCovered()
 end
 
 local function Loop()
+ if not EnsureImGuiContext() then return end
  UpdateScreenScale()
  if settings_dirty then
   save_timer = save_timer + 1
@@ -638,6 +680,7 @@ local function Loop()
  end
 
  CheckF2Toggle()
+ UpdateSelectionTopmostBoost()
 
  if r.GetExtState("TK_MCP_Cables_Overlay", "toggle_settings") ~= "" then
   r.DeleteExtState("TK_MCP_Cables_Overlay", "toggle_settings", false)
@@ -666,9 +709,9 @@ local function Loop()
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     DrawCables(draw_list)
     if settings.debug_anchors then DrawDebugAnchors(draw_list) end
+    r.ImGui_End(ctx)
+    EnsureOverlayTopmost()
    end
-   r.ImGui_End(ctx)
-   EnsureOverlayTopmost()
   end
  else
   HideOverlayWindow()
