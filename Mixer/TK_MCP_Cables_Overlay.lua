@@ -1,8 +1,13 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.1.3
+-- @version 1.1.4
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.1.4
+--   + Settings window no longer opens automatically on startup
+--   + External toggle script support (TK_MCP_Cables_Overlay_Toggle_Settings.lua) with toolbar/menu toggle state
+--   + Fixed: overlay disappearing behind floating (undocked) mixer after selecting another track - overlay is now forced to TOPMOST Z-order
+--   + Fixed: ghost cables remaining visible after selection changes when "Selected tracks only" is on - overlay window is now hidden when there are no cables to draw
 --   v1.1.3
 --   + Fixed: cables disappearing after MCP changes (track delete, fader move, etc.) - overlay now refreshes on project state changes
 --   v1.1.2
@@ -133,6 +138,51 @@ local settings_visible = false
 local save_timer = 0
 local prev_f2_state = 0
 local last_project_change = -1
+local overlay_hwnd = nil
+local overlay_topmost_set = false
+
+local function EnsureOverlayTopmost()
+ if overlay_topmost_set then return end
+ if not r.JS_Window_SetZOrder or not r.JS_Window_Find then return end
+ if not overlay_hwnd or not r.JS_Window_IsWindow(overlay_hwnd) then
+  overlay_hwnd = r.JS_Window_Find("TK MCP Cables Overlay", true)
+ end
+ if overlay_hwnd then
+  r.JS_Window_SetZOrder(overlay_hwnd, "TOPMOST")
+  overlay_topmost_set = true
+ end
+end
+
+local function HasCablesToDraw()
+ if settings.selected_only then
+  local sel = r.CountSelectedTracks(0)
+  if sel == 0 then return false end
+  for i = 0, sel - 1 do
+   local t = r.GetSelectedTrack(0, i)
+   if t and (r.GetTrackNumSends(t, 0) > 0 or r.GetTrackNumSends(t, -1) > 0) then
+    return true
+   end
+  end
+  return false
+ end
+ local num = r.CountTracks(0)
+ for i = 0, num - 1 do
+  local t = r.GetTrack(0, i)
+  if r.GetTrackNumSends(t, 0) > 0 then return true end
+ end
+ return false
+end
+
+local function HideOverlayWindow()
+ if not r.JS_Window_Show then return end
+ if not overlay_hwnd or not r.JS_Window_IsWindow(overlay_hwnd) then
+  if r.JS_Window_Find then overlay_hwnd = r.JS_Window_Find("TK MCP Cables Overlay", true) end
+ end
+ if overlay_hwnd and r.JS_Window_IsWindow(overlay_hwnd) then
+  r.JS_Window_Show(overlay_hwnd, "HIDE")
+  overlay_topmost_set = false
+ end
+end
 
 local function UpdateMixerRect(force)
  if not mixer_hwnd or not r.JS_Window_IsWindow(mixer_hwnd) then
@@ -279,8 +329,10 @@ local function DrawCables(draw_list)
       local dst_anchor = anchors[dst_track]
       if dst_anchor then
        local skip = false
-       if selected_only and not (r.IsTrackSelected(src_track) or r.IsTrackSelected(dst_track)) then
-        skip = true
+       if selected_only then
+        local src_sel = r.GetMediaTrackInfo_Value(src_track, "I_SELECTED") == 1
+        local dst_sel = r.GetMediaTrackInfo_Value(dst_track, "I_SELECTED") == 1
+        if not (src_sel or dst_sel) then skip = true end
        end
        if not skip then
         local muted = r.GetTrackSendInfo_Value(src_track, 0, i, "B_MUTE") == 1
@@ -476,12 +528,37 @@ if sectionID ~= -1 then
  r.RefreshToolbar2(sectionID, cmdID)
 end
 
+local ext_toggle_sec, ext_toggle_cmd, ext_toggle_state = nil, nil, -1
+local function UpdateExternalToggleState()
+ local s = r.GetExtState("TK_MCP_Cables_Overlay", "toggle_cmd")
+ if s == "" then
+  ext_toggle_sec, ext_toggle_cmd = nil, nil
+  return
+ end
+ local sec, cmd = s:match("^(-?%d+):(%d+)$")
+ if not sec then return end
+ sec, cmd = tonumber(sec), tonumber(cmd)
+ if sec ~= ext_toggle_sec or cmd ~= ext_toggle_cmd then
+  ext_toggle_sec, ext_toggle_cmd, ext_toggle_state = sec, cmd, -1
+ end
+ local desired = settings_visible and 1 or 0
+ if desired ~= ext_toggle_state then
+  r.SetToggleCommandState(sec, cmd, desired)
+  r.RefreshToolbar2(sec, cmd)
+  ext_toggle_state = desired
+ end
+end
+
 r.atexit(function()
  if settings_dirty then SaveSettings() end
  if r.JS_VKeys_Intercept then r.JS_VKeys_Intercept(0x71, -1) end
  if sectionID ~= -1 then
   r.SetToggleCommandState(sectionID, cmdID, 0)
   r.RefreshToolbar2(sectionID, cmdID)
+ end
+ if ext_toggle_sec and ext_toggle_cmd then
+  r.SetToggleCommandState(ext_toggle_sec, ext_toggle_cmd, 0)
+  r.RefreshToolbar2(ext_toggle_sec, ext_toggle_cmd)
  end
 end)
 
@@ -526,21 +603,23 @@ local function IsMixerCovered()
  if not mixer_hwnd then return true end
  local ok, l, t, ri, b = r.JS_Window_GetRect(mixer_hwnd)
  if not ok then return true end
- local pts = {
-  { l + 20, t + 20 },
-  { ri - 20, t + 20 },
-  { l + 20, b - 20 },
-  { ri - 20, b - 20 },
-  { math.floor((l + ri) * 0.5), math.floor((t + b) * 0.5) },
- }
- for _, p in ipairs(pts) do
-  local hwnd = r.JS_Window_FromPoint(p[1], p[2])
+ local function hits(px, py)
+  local hwnd = r.JS_Window_FromPoint(px, py)
   local cur = hwnd
   while cur do
-   if cur == mixer_hwnd then return false end
+   if cur == mixer_hwnd then return true end
+   if overlay_hwnd and cur == overlay_hwnd then return true end
    cur = r.JS_Window_GetParent(cur)
   end
+  return false
  end
+ local cx = math.floor((l + ri) * 0.5)
+ local cy = math.floor((t + b) * 0.5)
+ if hits(cx, cy) then return false end
+ if hits(l + 20, t + 20) then return false end
+ if hits(ri - 20, t + 20) then return false end
+ if hits(l + 20, b - 20) then return false end
+ if hits(ri - 20, b - 20) then return false end
  return true
 end
 
@@ -553,6 +632,13 @@ local function Loop()
 
  CheckF2Toggle()
 
+ if r.GetExtState("TK_MCP_Cables_Overlay", "toggle_settings") ~= "" then
+  r.DeleteExtState("TK_MCP_Cables_Overlay", "toggle_settings", false)
+  settings_visible = not settings_visible
+ end
+
+ UpdateExternalToggleState()
+
  if settings_visible then DrawSettingsWindow() end
 
  local pc = r.GetProjectStateChangeCount(0)
@@ -562,7 +648,7 @@ local function Loop()
   force_rect = true
  end
 
- if settings.enabled and UpdateMixerRect(force_rect) and not IsMixerCovered() then
+ if settings.enabled and UpdateMixerRect(force_rect) and not IsMixerCovered() and HasCablesToDraw() then
   local w = (RIGHT - LEFT)
   local h = (BOT - TOP)
   if w > 4 and h > 4 then
@@ -575,11 +661,13 @@ local function Loop()
     if settings.debug_anchors then DrawDebugAnchors(draw_list) end
    end
    r.ImGui_End(ctx)
+   EnsureOverlayTopmost()
   end
+ else
+  HideOverlayWindow()
  end
 
  r.defer(Loop)
 end
 
-settings_visible = true
 r.defer(Loop)
