@@ -1,8 +1,12 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.1.4
+-- @version 1.1.6
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.1.6
+--   + Fixed: overlay still falling behind floating mixer on some systems after track selection - TOPMOST Z-order is now re-applied every frame (cheap no-op when already on top)
+--   v1.1.5
+--   + Fixed: "Hide cables behind master" clip rect was a few pixels off when the mixer was undocked (window border was included) - now uses the mixer client rect so the cut-off lands exactly on the master strip edge
 --   v1.1.4
 --   + Settings window no longer opens automatically on startup
 --   + External toggle script support (TK_MCP_Cables_Overlay_Toggle_Settings.lua) with toolbar/menu toggle state
@@ -142,7 +146,6 @@ local overlay_hwnd = nil
 local overlay_topmost_set = false
 
 local function EnsureOverlayTopmost()
- if overlay_topmost_set then return end
  if not r.JS_Window_SetZOrder or not r.JS_Window_Find then return end
  if not overlay_hwnd or not r.JS_Window_IsWindow(overlay_hwnd) then
   overlay_hwnd = r.JS_Window_Find("TK MCP Cables Overlay", true)
@@ -198,6 +201,10 @@ local function UpdateMixerRect(force)
  if not ok then
   mixer_hwnd = nil
   return false
+ end
+ if r.JS_Window_GetClientRect then
+  local cok, cl, ct, cr_, cb = r.JS_Window_GetClientRect(mixer_hwnd)
+  if cok then l, t, ri, b = cl, ct, cr_, cb end
  end
  local val = l + t + ri + b
  if val ~= LAST_RECT_VAL or force then
