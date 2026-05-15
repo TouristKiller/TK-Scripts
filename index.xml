@@ -246,7 +246,7 @@
     </reapack>
 
     <reapack name="TK_MCP_Cables_Overlay.lua" type="script" desc="TK MCP Cables Overlay">
-        <version name="1.2.0" author="TouristKiller" time="2026-05-14T18:15:00Z">
+        <version name="1.2.1" author="TouristKiller" time="2026-05-16T01:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_MCP_Cables_Overlay.lua</source>
             <source main="main" file="TK_MCP_Cables_Overlay_Toggle_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_MCP_Cables_Overlay_Toggle_Settings.lua</source>
             <source file="tk_mcp_cables_json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/tk_mcp_cables_json.lua</source>

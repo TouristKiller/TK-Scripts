@@ -1,8 +1,16 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.2.1
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.2.1
+--   + Added manual below-mixer offset mode for floating mixer setups without topmost pinning
+--   + Expanded below-mixer render area so cable curves are not clipped in the middle
+--   + Offset below mixer now forces bottom anchors regardless of the anchor dropdown
+--   + Hide the below-mixer offset slider until Offset below mixer is enabled
+--   + Docked master offset handling now runs automatically when the mixer is floating
+--   + Restyled the settings window with a dark rounded panel and red close button
+--   + Removed the close icon cross and kept the settings close button out of auto-resize layout
 --   v1.2.0
 --   + Added small corner controls for pinning cables and opening settings
 --   + Added optional pin mode to keep cables above a floating mixer when needed
@@ -63,6 +71,8 @@ local settings = {
  master_side = "auto",
  debug_anchors = false,
  pin_on_top = false,
+ offset_below_mixer = false,
+ below_mixer_offset_y = 80,
  show_overlay_controls = true,
 }
 
@@ -128,7 +138,9 @@ if r.ImGui_WindowFlags_NoBringToFrontOnFocus then
  overlay_flags = overlay_flags | r.ImGui_WindowFlags_NoBringToFrontOnFocus()
 end
 
-local settings_flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize()
+local settings_flags = r.ImGui_WindowFlags_NoTitleBar()
+ | r.ImGui_WindowFlags_NoCollapse()
+ | r.ImGui_WindowFlags_AlwaysAutoResize()
 local pin_flags = r.ImGui_WindowFlags_NoTitleBar()
  | r.ImGui_WindowFlags_NoResize()
  | r.ImGui_WindowFlags_NoNav()
@@ -146,6 +158,7 @@ end
 
 local LAST_RECT_VAL = 0
 local LEFT, TOP, RIGHT, BOT = 0, 0, 0, 0
+local RENDER_LEFT, RENDER_TOP, RENDER_RIGHT, RENDER_BOT = 0, 0, 0, 0
 local track_x_offset_native = 0
 local mixer_hwnd = nil
 local mixer_visible_last = false
@@ -297,6 +310,21 @@ local function ResetMixerWindowState()
  pin_topmost_set = false
 end
 
+local function UpdateRenderRect()
+ local offset_y = 0
+ local extra_h = 0
+ if settings.offset_below_mixer and not settings.pin_on_top then
+  offset_y = settings.below_mixer_offset_y or 0
+  local max_dip = math.max(24, (RIGHT - LEFT) * (settings.curve_amount or 0))
+  if max_dip > 220 then max_dip = 220 end
+  extra_h = math.ceil(max_dip + (settings.thickness or 1) * 8 + 12)
+ end
+ RENDER_LEFT = LEFT
+ RENDER_TOP = TOP + offset_y
+ RENDER_RIGHT = RIGHT
+ RENDER_BOT = BOT + offset_y + extra_h
+end
+
 local function color_u32(track, alpha)
  local c = r.GetTrackColor(track)
  local cr, cg, cb
@@ -309,18 +337,60 @@ local function color_u32(track, alpha)
  return r.ImGui_ColorConvertDouble4ToU32(cr, cg, cb, alpha)
 end
 
+local function GetAnchorPosition()
+ if settings.offset_below_mixer then return "bottom" end
+ return settings.anchor_position
+end
+
+local function GetMasterSide()
+ local side = settings.master_side
+ if side == "auto" then
+  if r.GetToggleCommandState(40389) == 1 then side = "right" else side = "left" end
+ end
+ return side
+end
+
+local function IsMixerMasterVisible()
+ return r.GetToggleCommandState(41209) == 1
+end
+
+local function IsMixerDocked()
+ return r.GetToggleCommandState(40083) == 1
+end
+
+local function IsTcpMasterVisible()
+ if r.GetMasterTrackVisibility then
+  local visibility = r.GetMasterTrackVisibility()
+  return visibility and (visibility & 1) == 1
+ end
+ return r.GetToggleCommandState(40075) == 1
+end
+
+local function ShouldIgnoreDockedMasterOffset(side)
+ if side ~= "left" then return false end
+ return IsTcpMasterVisible() and not IsMixerDocked()
+end
+
+local function ShouldApplyMasterOffset(side)
+ if side ~= "left" then return false end
+ if not IsMixerMasterVisible() then return false end
+ if ShouldIgnoreDockedMasterOffset(side) then return false end
+ return true
+end
+
 local function ComputeAnchorXY(mcpx, mcpy, mcpw, mcph)
  if mcpw <= 0 or mcph <= 0 then return nil end
  local x_offset = settings.horizontal_offset or 0
- local x = LEFT + (mcpx + track_x_offset_native + mcpw * 0.5 + x_offset) / screen_scale
+ local x = RENDER_LEFT + (mcpx + track_x_offset_native + mcpw * 0.5 + x_offset) / screen_scale
  local y_offset = settings.vertical_offset or 0
+ local anchor_position = GetAnchorPosition()
  local y
- if settings.anchor_position == "top" then
-  y = TOP + (mcpy + y_offset) / screen_scale
- elseif settings.anchor_position == "center" then
-  y = TOP + (mcpy + mcph * 0.5 + y_offset) / screen_scale
+ if anchor_position == "top" then
+  y = RENDER_TOP + (mcpy + y_offset) / screen_scale
+ elseif anchor_position == "center" then
+  y = RENDER_TOP + (mcpy + mcph * 0.5 + y_offset) / screen_scale
  else
-  y = TOP + (mcpy + mcph - y_offset) / screen_scale
+  y = RENDER_TOP + (mcpy + mcph - y_offset) / screen_scale
  end
  return x, y
 end
@@ -338,35 +408,37 @@ local function DrawCables(draw_list)
   local mw = r.GetMediaTrackInfo_Value(master, "I_MCPW")
   local mh = r.GetMediaTrackInfo_Value(master, "I_MCPH")
 
-  local side = settings.master_side
-  if side == "auto" then
-   if r.GetToggleCommandState(40389) == 1 then side = "right" else side = "left" end
-  end
+  local side = GetMasterSide()
+  local use_master_offset = ShouldApplyMasterOffset(side)
+  local show_master_anchor = IsMixerMasterVisible() and not ShouldIgnoreDockedMasterOffset(side)
 
-  if mw > 0 and mh > 0 then
+  if mw > 0 and mh > 0 and show_master_anchor then
    master_mw_s = mw / screen_scale
    master_mh_s = mh / screen_scale
    master_my_s = my / screen_scale
    if side == "right" then
-    master_screen_r = RIGHT
-    master_screen_l = RIGHT - master_mw_s
+    master_screen_r = RENDER_RIGHT
+    master_screen_l = RENDER_RIGHT - master_mw_s
     track_x_offset_native = 0
    else
-    master_screen_l = LEFT
-    master_screen_r = LEFT + master_mw_s
-    track_x_offset_native = mw
+    master_screen_l = RENDER_LEFT
+    master_screen_r = RENDER_LEFT + master_mw_s
+    track_x_offset_native = use_master_offset and mw or 0
    end
    local cx = (master_screen_l + master_screen_r) * 0.5
    local y_offset = settings.vertical_offset or 0
+   local anchor_position = GetAnchorPosition()
    local cy
-   if settings.anchor_position == "top" then
-    cy = TOP + master_my_s + y_offset / screen_scale
-   elseif settings.anchor_position == "center" then
-    cy = TOP + master_my_s + master_mh_s * 0.5 + y_offset / screen_scale
+   if anchor_position == "top" then
+    cy = RENDER_TOP + master_my_s + y_offset / screen_scale
+   elseif anchor_position == "center" then
+    cy = RENDER_TOP + master_my_s + master_mh_s * 0.5 + y_offset / screen_scale
    else
-    cy = TOP + master_my_s + master_mh_s - y_offset / screen_scale
+    cy = RENDER_TOP + master_my_s + master_mh_s - y_offset / screen_scale
    end
    anchors[master] = { x = cx, y = cy }
+  else
+   track_x_offset_native = 0
   end
  end
 
@@ -393,22 +465,22 @@ local function DrawCables(draw_list)
  local flow = settings.flow
  local selected_only = settings.selected_only
 
- r.ImGui_DrawList_PushClipRect(draw_list, LEFT, TOP, RIGHT, BOT, 0)
+ r.ImGui_DrawList_PushClipRect(draw_list, RENDER_LEFT, RENDER_TOP, RENDER_RIGHT, RENDER_BOT, 0)
 
- local clip_segments = { { LEFT, RIGHT } }
+ local clip_segments = { { RENDER_LEFT, RENDER_RIGHT } }
  if settings.hide_behind_master and master_screen_l and master_screen_r
-  and master_screen_r > LEFT and master_screen_l < RIGHT then
-  local ml = math.max(LEFT, master_screen_l)
-  local mr = math.min(RIGHT, master_screen_r)
+  and master_screen_r > RENDER_LEFT and master_screen_l < RENDER_RIGHT then
+  local ml = math.max(RENDER_LEFT, master_screen_l)
+  local mr = math.min(RENDER_RIGHT, master_screen_r)
   clip_segments = {}
-  if ml > LEFT then clip_segments[#clip_segments + 1] = { LEFT, ml } end
-  if mr < RIGHT then clip_segments[#clip_segments + 1] = { mr, RIGHT } end
+  if ml > RENDER_LEFT then clip_segments[#clip_segments + 1] = { RENDER_LEFT, ml } end
+  if mr < RENDER_RIGHT then clip_segments[#clip_segments + 1] = { mr, RENDER_RIGHT } end
  end
 
  local now = r.time_precise()
 
  local function DrawCablePass(seg_l, seg_r)
-  r.ImGui_DrawList_PushClipRect(draw_list, seg_l, TOP, seg_r, BOT, 0)
+  r.ImGui_DrawList_PushClipRect(draw_list, seg_l, RENDER_TOP, seg_r, RENDER_BOT, 0)
   for src_track, src_anchor in pairs(anchors) do
    if src_track ~= master then
     local send_count = r.GetTrackNumSends(src_track, 0)
@@ -507,18 +579,16 @@ local function DrawDebugAnchors(draw_list)
  local mw = r.GetMediaTrackInfo_Value(master, "I_MCPW")
  local mh = r.GetMediaTrackInfo_Value(master, "I_MCPH")
  local my = r.GetMediaTrackInfo_Value(master, "I_MCPY")
- if mw > 0 and mh > 0 then
-  local side = settings.master_side
-  if side == "auto" then
-   if r.GetToggleCommandState(40389) == 1 then side = "right" else side = "left" end
-  end
+ local side = GetMasterSide()
+ local show_master_anchor = IsMixerMasterVisible() and not ShouldIgnoreDockedMasterOffset(side)
+ if mw > 0 and mh > 0 and show_master_anchor then
   local mw_s = mw / screen_scale
   local mh_s = mh / screen_scale
   local my_s = my / screen_scale
   local l, ri
-  if side == "right" then ri = RIGHT; l = RIGHT - mw_s else l = LEFT; ri = LEFT + mw_s end
-  r.ImGui_DrawList_AddRect(draw_list, l, TOP + my_s, ri, TOP + my_s + mh_s, 0xFFFF00FF, 0, 0, 2)
-  r.ImGui_DrawList_AddText(draw_list, l + 4, TOP + my_s + 2, 0xFFFF00FF, "MASTER (" .. side .. ")")
+  if side == "right" then ri = RENDER_RIGHT; l = RENDER_RIGHT - mw_s else l = RENDER_LEFT; ri = RENDER_LEFT + mw_s end
+  r.ImGui_DrawList_AddRect(draw_list, l, RENDER_TOP + my_s, ri, RENDER_TOP + my_s + mh_s, 0xFFFF00FF, 0, 0, 2)
+  r.ImGui_DrawList_AddText(draw_list, l + 4, RENDER_TOP + my_s + 2, 0xFFFF00FF, "MASTER (" .. side .. ")")
  end
  local num = r.CountTracks(0)
  for i = 0, num - 1 do
@@ -529,10 +599,78 @@ local function DrawDebugAnchors(draw_list)
  end
 end
 
+local function PushSettingsStyle()
+ local vars = 0
+ local colors = 0
+ if r.ImGui_PushStyleVar then
+  if r.ImGui_StyleVar_WindowRounding then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8); vars = vars + 1 end
+  if r.ImGui_StyleVar_FrameRounding then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 5); vars = vars + 1 end
+  if r.ImGui_StyleVar_GrabRounding then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 5); vars = vars + 1 end
+  if r.ImGui_StyleVar_PopupRounding then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_PopupRounding(), 6); vars = vars + 1 end
+  if r.ImGui_StyleVar_WindowBorderSize then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 1); vars = vars + 1 end
+  if r.ImGui_StyleVar_WindowPadding then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 12, 10); vars = vars + 1 end
+  if r.ImGui_StyleVar_FramePadding then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 7, 4); vars = vars + 1 end
+  if r.ImGui_StyleVar_ItemSpacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 7); vars = vars + 1 end
+ end
+ if r.ImGui_PushStyleColor then
+  if r.ImGui_Col_WindowBg then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x121316F6); colors = colors + 1 end
+  if r.ImGui_Col_Border then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x34363CFF); colors = colors + 1 end
+  if r.ImGui_Col_Text then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xE6E6E6FF); colors = colors + 1 end
+  if r.ImGui_Col_FrameBg then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x202226FF); colors = colors + 1 end
+  if r.ImGui_Col_FrameBgHovered then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), 0x2B2E34FF); colors = colors + 1 end
+  if r.ImGui_Col_FrameBgActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), 0x383C44FF); colors = colors + 1 end
+  if r.ImGui_Col_Button then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x2A2D33FF); colors = colors + 1 end
+  if r.ImGui_Col_ButtonHovered then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x383C44FF); colors = colors + 1 end
+  if r.ImGui_Col_ButtonActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x464B55FF); colors = colors + 1 end
+  if r.ImGui_Col_Header then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), 0x2A2D33FF); colors = colors + 1 end
+  if r.ImGui_Col_HeaderHovered then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), 0x383C44FF); colors = colors + 1 end
+  if r.ImGui_Col_HeaderActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), 0x464B55FF); colors = colors + 1 end
+  if r.ImGui_Col_CheckMark then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), 0xE6E6E6FF); colors = colors + 1 end
+  if r.ImGui_Col_SliderGrab then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x9A9EA8FF); colors = colors + 1 end
+  if r.ImGui_Col_SliderGrabActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0xC3C7D1FF); colors = colors + 1 end
+  if r.ImGui_Col_PopupBg then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), 0x15161AFF); colors = colors + 1 end
+  if r.ImGui_Col_Separator then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Separator(), 0x3B3E45FF); colors = colors + 1 end
+ end
+ return vars, colors
+end
+
+local function PopSettingsStyle(vars, colors)
+ if r.ImGui_PopStyleColor then
+  for _ = 1, colors do r.ImGui_PopStyleColor(ctx) end
+ end
+ if r.ImGui_PopStyleVar then
+  for _ = 1, vars do r.ImGui_PopStyleVar(ctx) end
+ end
+end
+
+local function DrawSettingsCloseButton()
+ if not (r.ImGui_GetWindowPos and r.ImGui_GetWindowWidth and r.ImGui_GetWindowDrawList) then return end
+ local wx, wy = r.ImGui_GetWindowPos(ctx)
+ local ww = r.ImGui_GetWindowWidth(ctx)
+ local size = 14
+ local x = wx + ww - size - 10
+ local y = wy + 9
+ local hovered = false
+ local clicked = false
+ if r.ImGui_GetMousePos then
+  local mx, my = r.ImGui_GetMousePos(ctx)
+  hovered = mx >= x and mx <= x + size and my >= y and my <= y + size
+  clicked = hovered and r.ImGui_IsMouseClicked and r.ImGui_IsMouseClicked(ctx, 0)
+ end
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
+ local fill = hovered and 0xFF4B4BFF or 0xD83B3BFF
+ local cx = x + size * 0.5
+ local cy = y + size * 0.5
+ r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, size * 0.5, fill, 18)
+ if clicked then settings_visible = false end
+end
+
 local function DrawSettingsWindow()
+ local vars, colors = PushSettingsStyle()
  r.ImGui_SetNextWindowSize(ctx, 320, 0, r.ImGui_Cond_FirstUseEver())
  local visible, open = r.ImGui_Begin(ctx, "TK MCP Cables Overlay - Settings", true, settings_flags)
  if visible then
+  DrawSettingsCloseButton()
   local changed
   changed, settings.enabled = r.ImGui_Checkbox(ctx, "Enabled", settings.enabled)
   if changed then MarkDirty() end
@@ -559,13 +697,25 @@ local function DrawSettingsWindow()
   changed, settings.horizontal_offset = r.ImGui_SliderInt(ctx, "Horizontal offset", settings.horizontal_offset, -80, 80)
   if changed then MarkDirty() end
 
+  changed, settings.offset_below_mixer = r.ImGui_Checkbox(ctx, "Offset below mixer", settings.offset_below_mixer)
+  if changed then
+   if settings.offset_below_mixer then settings.anchor_position = "bottom" end
+   MarkDirty()
+  end
+
+  if settings.offset_below_mixer then
+   r.ImGui_SetNextItemWidth(ctx, 180)
+   changed, settings.below_mixer_offset_y = r.ImGui_SliderInt(ctx, "Below mixer offset", settings.below_mixer_offset_y, 0, 400)
+   if changed then MarkDirty() end
+  end
+
   local pos_items = { "bottom", "center", "top" }
   r.ImGui_SetNextItemWidth(ctx, 180)
-  if r.ImGui_BeginCombo(ctx, "Anchor", settings.anchor_position) then
+  if r.ImGui_BeginCombo(ctx, "Anchor", GetAnchorPosition()) then
    for _, v in ipairs(pos_items) do
-    local sel = v == settings.anchor_position
+    local sel = v == GetAnchorPosition()
     if r.ImGui_Selectable(ctx, v, sel) then
-     settings.anchor_position = v
+     settings.anchor_position = settings.offset_below_mixer and "bottom" or v
      MarkDirty()
     end
    end
@@ -613,14 +763,12 @@ local function DrawSettingsWindow()
    end
    r.ImGui_EndCombo(ctx)
   end
-
   changed, settings.debug_anchors = r.ImGui_Checkbox(ctx, "Debug: show anchors", settings.debug_anchors)
   if changed then MarkDirty() end
 
-  r.ImGui_Separator(ctx)
-  if r.ImGui_Button(ctx, "Close") then settings_visible = false end
   r.ImGui_End(ctx)
  end
+ PopSettingsStyle(vars, colors)
  if not open then settings_visible = false end
 end
 
@@ -848,13 +996,14 @@ local function Loop()
  local mixer_ready = mixer_alive and not IsMixerCovered()
  local cables_ready = mixer_ready and HasCablesToDraw()
  local overlay_drawn = false
+ UpdateRenderRect()
 
  if cables_ready then
   local w = (RIGHT - LEFT)
-  local h = (BOT - TOP)
+  local h = (RENDER_BOT - RENDER_TOP)
   if w > 4 and h > 4 then
     EnsureOverlayTopmost()
-   r.ImGui_SetNextWindowPos(ctx, LEFT, TOP)
+   r.ImGui_SetNextWindowPos(ctx, RENDER_LEFT, RENDER_TOP)
    r.ImGui_SetNextWindowSize(ctx, w, h)
    local visible = r.ImGui_Begin(ctx, "TK MCP Cables Overlay", false, overlay_flags)
    if visible then
