@@ -1,8 +1,13 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.9.3
+-- @version 2.9.4
 -- @changelog:
 --[[ 
+    v2.9.4:
+        + Custom folders: added individual folder color overrides with level-color fallback.
+        + Custom folders: added right-click Set/Reset Folder Color actions and a separate Custom Folder Colors override window.
+        + Performance: individual folder colors use cached config lookups during rendering; folder tree scans only run in the override window or folder save/update paths.
+
     v2.9.3:
         + Custom folder tabs: the virtual "All" tab now shows all plugins from all custom folders and subfolders, with cached collection and lazy rendering.
         + Fix: Screenshot/plugin context menu "Create New Folder..." now creates a safe new custom folder without overwriting existing folders.
@@ -902,6 +907,11 @@ show_move_folder_popup = show_move_folder_popup or false
 folder_to_move_path = folder_to_move_path or nil
 folder_to_move_name = folder_to_move_name or nil
 move_folder_target = move_folder_target or nil
+custom_folder_color_popup_open = custom_folder_color_popup_open or false
+custom_folder_color_popup_path = custom_folder_color_popup_path or nil
+custom_folder_color_popup_name = custom_folder_color_popup_name or ""
+custom_folder_color_popup_color = custom_folder_color_popup_color or nil
+show_custom_folder_colors_window = show_custom_folder_colors_window or false
 
 config_window_selected_tab = config_window_selected_tab or 1
 
@@ -1279,6 +1289,7 @@ function SetDefaultConfig()
             r.ImGui_ColorConvertDouble4ToU32(0.6, 0.6, 0.6, 1), -- Level 4
             r.ImGui_ColorConvertDouble4ToU32(0.5, 0.5, 0.5, 1), -- Level 5+
         },
+        custom_folder_colors = {},
         
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         last_selected_project_path = "",
@@ -1404,6 +1415,146 @@ function ClearPerformanceCaches()
     if config then
         config._current_version = (config._current_version or 0) + 1
     end
+end
+
+function GetCustomFolderLevelColor(depth, default_text)
+    local level_colors = config and config.custom_folder_level_colors or {}
+    local idx = math.min(depth or 1, #level_colors)
+    if idx < 1 then idx = 1 end
+    return level_colors[idx] or default_text or (config and config.custom_folder_text_color) or r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
+end
+
+function GetCustomFolderTextColor(folder_path, depth, default_text)
+    local colors = config and config.custom_folder_colors
+    if folder_path and colors and type(colors) == "table" then
+        local color = colors[folder_path]
+        if type(color) == "number" then return color end
+    end
+    return GetCustomFolderLevelColor(depth, default_text)
+end
+
+function GetCustomFolderDepth(folder_path)
+    if not folder_path or folder_path == "" then return 1 end
+    local _, count = folder_path:gsub("/", "")
+    return count + 1
+end
+
+function OpenCustomFolderColorPopup(full_path, folder_name)
+    if not full_path or full_path == "" then return end
+    config.custom_folder_colors = config.custom_folder_colors or {}
+    custom_folder_color_popup_path = full_path
+    custom_folder_color_popup_name = folder_name or full_path
+    custom_folder_color_popup_color = config.custom_folder_colors[full_path] or GetCustomFolderTextColor(full_path, GetCustomFolderDepth(full_path))
+    custom_folder_color_popup_open = true
+end
+
+function SetCustomFolderColor(full_path, color)
+    if not full_path or full_path == "" or type(color) ~= "number" then return end
+    config.custom_folder_colors = config.custom_folder_colors or {}
+    config.custom_folder_colors[full_path] = color
+    SaveConfig()
+end
+
+function ClearCustomFolderColor(full_path)
+    if not full_path or full_path == "" then return end
+    if config.custom_folder_colors and config.custom_folder_colors[full_path] ~= nil then
+        config.custom_folder_colors[full_path] = nil
+        SaveConfig()
+    end
+end
+
+function CustomFolderPathExists(folder_path)
+    if not folder_path or folder_path == "" then return false end
+    local current = config and config.custom_folders
+    for part in folder_path:gmatch("[^/]+") do
+        if type(current) ~= "table" then return false end
+        current = current[part]
+    end
+    return type(current) == "table"
+end
+
+function PruneCustomFolderColors(save_changes)
+    if not config or type(config.custom_folder_colors) ~= "table" then return end
+    local changed = false
+    for folder_path, _ in pairs(config.custom_folder_colors) do
+        if type(folder_path) ~= "string" or not CustomFolderPathExists(folder_path) then
+            config.custom_folder_colors[folder_path] = nil
+            changed = true
+        end
+    end
+    if changed and save_changes then SaveConfig() end
+end
+
+function RemapCustomFolderColors(old_path, new_path)
+    if not old_path or old_path == "" or not new_path or new_path == "" then return end
+    if not config or type(config.custom_folder_colors) ~= "table" then return end
+    local changed = false
+    local updates = {}
+    local old_prefix = old_path .. "/"
+    for folder_path, color in pairs(config.custom_folder_colors) do
+        if folder_path == old_path then
+            updates[folder_path] = new_path
+        elseif folder_path:sub(1, #old_prefix) == old_prefix then
+            updates[folder_path] = new_path .. folder_path:sub(#old_path + 1)
+        end
+    end
+    for old_key, new_key in pairs(updates) do
+        config.custom_folder_colors[new_key] = config.custom_folder_colors[old_key]
+        config.custom_folder_colors[old_key] = nil
+        changed = true
+    end
+    if changed then SaveConfig() end
+end
+
+function DrawCustomFolderColorsWindow()
+    if not show_custom_folder_colors_window then return end
+    r.ImGui_SetNextWindowSize(ctx, 520, 420, r.ImGui_Cond_FirstUseEver())
+    local visible, open = r.ImGui_Begin(ctx, "Custom Folder Colors", true, r.ImGui_WindowFlags_NoCollapse())
+    show_custom_folder_colors_window = open
+    if visible then
+        local folder_color_paths = CollectAllFolderPaths(config.custom_folders or {}, "", nil, {})
+        config.custom_folder_colors = config.custom_folder_colors or {}
+        if #folder_color_paths == 0 then
+            r.ImGui_TextDisabled(ctx, "No custom folders")
+        else
+            local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+            local child_visible = r.ImGui_BeginChild(ctx, "CustomFolderColorList", 0, -32, 1)
+            if child_visible then
+                for _, folder_path in ipairs(folder_color_paths) do
+                    r.ImGui_PushID(ctx, "cf_color_window_" .. folder_path)
+                    local override_color = config.custom_folder_colors[folder_path]
+                    local folder_color = override_color or GetCustomFolderTextColor(folder_path, GetCustomFolderDepth(folder_path))
+                    local changed_folder_color, new_folder_color = r.ImGui_ColorEdit4(ctx, "##FolderColor", folder_color, flags)
+                    if changed_folder_color then
+                        config.custom_folder_colors[folder_path] = new_folder_color
+                        if not r.ImGui_IsItemDeactivatedAfterEdit then SaveConfig() end
+                    end
+                    if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) then SaveConfig() end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_Text(ctx, folder_path)
+                    if not override_color then
+                        r.ImGui_SameLine(ctx)
+                        r.ImGui_TextDisabled(ctx, "level")
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Reset") then
+                        ClearCustomFolderColor(folder_path)
+                    end
+                    r.ImGui_PopID(ctx)
+                end
+            end
+            r.ImGui_EndChild(ctx)
+            if r.ImGui_Button(ctx, "Reset All") then
+                config.custom_folder_colors = {}
+                SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+        end
+        if r.ImGui_Button(ctx, "Close") then
+            show_custom_folder_colors_window = false
+        end
+    end
+    r.ImGui_End(ctx)
 end
 
 
@@ -1626,6 +1777,9 @@ function LoadConfig()
             config.show_favorite_overlay = true
         end
         config.folder_specific_sizes = loaded_config.folder_specific_sizes or {}
+        if type(config.custom_folder_colors) ~= "table" then
+            config.custom_folder_colors = {}
+        end
         
         -- Try to load pinned data from separate file first
         local loaded_from_file = LoadPinned()
@@ -2087,6 +2241,8 @@ function MoveFolderTo(source_path, target_path)
     
     target_parent[folder_name] = folder_content
     source_parent[folder_name] = nil
+    local new_path = target_path and target_path ~= "" and (target_path .. "/" .. folder_name) or folder_name
+    RemapCustomFolderColors(source_path, new_path)
     
     SaveCustomFolders()
     return true
@@ -2147,6 +2303,14 @@ function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
     end
     if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
         StartFolderScreenshots(full_path)
+    end
+    if r.ImGui_MenuItem(ctx, "Set Folder Color...") then
+        OpenCustomFolderColorPopup(full_path, folder_name)
+    end
+    if config.custom_folder_colors and config.custom_folder_colors[full_path] ~= nil then
+        if r.ImGui_MenuItem(ctx, "Reset Folder Color") then
+            ClearCustomFolderColor(full_path)
+        end
     end
     r.ImGui_Separator(ctx)
     if r.ImGui_MenuItem(ctx, "Rename Folder") then
@@ -2945,6 +3109,7 @@ end
 
 function SaveCustomFolders()
     custom_all_plugins_cache_dirty = true
+    PruneCustomFolderColors(true)
     
     local function convertForJSON(folders)
         if type(folders) ~= "table" then return {} end
@@ -5933,6 +6098,12 @@ function ShowConfigWindow()
             local changed5, new_col5 = r.ImGui_ColorEdit4(ctx, "##L5Col", col5, flags)
             if changed5 then config.custom_folder_level_colors[5] = new_col5; SaveConfig() end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level 5+ Folder Color") end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            if r.ImGui_Button(ctx, "Folder Color Overrides...") then
+                show_custom_folder_colors_window = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Open individual custom folder color settings") end
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local cft_changed, cft_new = r.ImGui_Checkbox(ctx, "Show as Tabs above Screenshots", config.show_custom_folder_tabs)
@@ -12519,6 +12690,8 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         
                         local display_name = prefix == "" and folder_name or ("  " .. folder_name)
                         local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
+                        local depth = GetCustomFolderDepth(full_path)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
                         if r.ImGui_Selectable(ctx, display_name .. " (" .. plugin_count .. ")", cf_is_selected) then
                             SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
@@ -12532,15 +12705,33 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                             end
                             ClearScreenshotCache()
                         end
+                        if r.ImGui_IsItemClicked(ctx, 1) then
+                            r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
+                        end
+                        if r.ImGui_BeginPopup(ctx, "FolderContextMenu_dropdown_" .. full_path) then
+                            DrawCustomFolderContextMenu(folder_name, prefix, full_path)
+                            r.ImGui_EndPopup(ctx)
+                        end
+                        r.ImGui_PopStyleColor(ctx)
                     elseif IsSubfolderStructure(folder_content) then
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                        local depth = GetCustomFolderDepth(full_path)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
                         r.ImGui_Text(ctx, (prefix == "" and "" or "  ") .. folder_name .. " >")
+                        if r.ImGui_IsItemClicked(ctx, 1) then
+                            r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
+                        end
+                        if r.ImGui_BeginPopup(ctx, "FolderContextMenu_dropdown_" .. full_path) then
+                            DrawCustomFolderContextMenu(folder_name, prefix, full_path)
+                            r.ImGui_EndPopup(ctx)
+                        end
                         r.ImGui_PopStyleColor(ctx)
                         
                         ShowNestedFolders(folder_content, full_path)
                     elseif type(folder_content) == "table" then
                         local display_name = prefix == "" and folder_name or ("  " .. folder_name)
                         local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
+                        local depth = GetCustomFolderDepth(full_path)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
                         if r.ImGui_Selectable(ctx, display_name .. " (0)", cf_is_selected) then
                             SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
@@ -12549,6 +12740,14 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                             screenshot_search_results = {}
                             ClearScreenshotCache()
                         end
+                        if r.ImGui_IsItemClicked(ctx, 1) then
+                            r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
+                        end
+                        if r.ImGui_BeginPopup(ctx, "FolderContextMenu_dropdown_" .. full_path) then
+                            DrawCustomFolderContextMenu(folder_name, prefix, full_path)
+                            r.ImGui_EndPopup(ctx)
+                        end
+                        r.ImGui_PopStyleColor(ctx)
                     end
                 end
             end
@@ -14262,9 +14461,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
         local _, count = path_prefix:gsub("/", "")
         depth = count + 2
     end
-    local level_colors = config.custom_folder_level_colors or {}
-    local color_idx = math.min(depth, #level_colors)
-    local text_col = level_colors[color_idx] or config.custom_folder_text_color or r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
+    local default_text_col = config.custom_folder_text_color or r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
 
     local function IsCustomPinned(full_path)
         if not config.pinned_custom_subfolders then return false end
@@ -14312,6 +14509,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
     for _, folder_name in ipairs(sorted_folder_names) do
         local folder_content = folders[folder_name]
         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+        local text_col = GetCustomFolderTextColor(full_path, depth, default_text_col)
         
         -- Save original cursor position
         local original_cursor_x = r.ImGui_GetCursorPosX(ctx)
@@ -14413,6 +14611,14 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 end
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
                     StartFolderScreenshots(full_path)
+                end
+                if r.ImGui_MenuItem(ctx, "Set Folder Color...") then
+                    OpenCustomFolderColorPopup(full_path, folder_name)
+                end
+                if config.custom_folder_colors and config.custom_folder_colors[full_path] ~= nil then
+                    if r.ImGui_MenuItem(ctx, "Reset Folder Color") then
+                        ClearCustomFolderColor(full_path)
+                    end
                 end
                 r.ImGui_Separator(ctx)
                 if r.ImGui_MenuItem(ctx, "Rename Folder") then
@@ -21310,13 +21516,7 @@ function ShowScreenshotWindow()
             end
             return false
         end
-        local level_colors = config.custom_folder_level_colors or {}
         local default_text = config.custom_folder_text_color or r.ImGui_GetColor(ctx, r.ImGui_Col_Text())
-        local function LevelColor(d)
-            local idx = math.min(d, #level_colors)
-            if idx < 1 then idx = 1 end
-            return level_colors[idx] or default_text
-        end
         cftab_scroll_pending = cftab_scroll_pending or {}
         local function DrawTabRow(names, depth, parent_path)
             if #names == 0 and depth ~= 1 then return end
@@ -21437,7 +21637,7 @@ function ShowScreenshotWindow()
                         is_ancestor = true
                     end
                 end
-                local txt_col = LevelColor(depth)
+                local txt_col = GetCustomFolderTextColor(full_path, depth, default_text)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), txt_col)
                 if is_sel then
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4A6FA5FF)
@@ -21552,7 +21752,7 @@ function ShowScreenshotWindow()
                                 end
                                 local seg_label = config.custom_folder_force_uppercase and seg:upper() or seg
                                 local is_last = (i == #segments)
-                                local txt_col = LevelColor(i)
+                                local txt_col = GetCustomFolderTextColor(accum_path, i, default_text)
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), txt_col)
                                 if is_last then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4A6FA5FF)
@@ -25780,6 +25980,8 @@ function DrawCustomFoldersMenu(folders, path_prefix)
     for _, folder_name in ipairs(sorted_folder_names) do
         local folder_content = folders[folder_name]
         local full_path = path_prefix == "" and folder_name or (path_prefix .. "/" .. folder_name)
+        local depth = GetCustomFolderDepth(full_path)
+        local folder_text_color = GetCustomFolderTextColor(full_path, depth)
         
         if IsPluginArray(folder_content) then
             r.ImGui_SetNextWindowSize(ctx, config.fx_list_width or 280, 0)
@@ -25790,28 +25992,17 @@ function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), folder_text_color)
             
             if r.ImGui_BeginMenu(ctx, folder_name .. " (" .. #folder_content .. ")") then
+                r.ImGui_PopStyleColor(ctx)
                 -- NIEUWE CONTEXT MENU VOOR FOLDERS
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
                 end
                 
                 if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
-                    if r.ImGui_MenuItem(ctx, "Add Subfolder") then
-                        show_add_subfolder_popup = true
-                        selected_folder_for_subfolder = full_path
-                        selected_folder_name = folder_name
-                        new_subfolder_name = ""
-                    end
-                    if r.ImGui_MenuItem(ctx, "Create Parent Folder Above") then
-                        show_create_parent_folder_popup = true
-                        selected_folder_for_parent = full_path
-                        selected_folder_name = folder_name
-                    end
-                    if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
-                        StartFolderScreenshots(full_path)
-                    end
+                    DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
                     r.ImGui_EndPopup(ctx)
                 end
                 
@@ -25867,6 +26058,8 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
                 r.ImGui_EndMenu(ctx)
+            else
+                r.ImGui_PopStyleColor(ctx)
             end
             
             r.ImGui_PopStyleVar(ctx, 4)
@@ -25881,13 +26074,24 @@ function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 5, 5)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), folder_text_color)
             
             if r.ImGui_BeginMenu(ctx, folder_name) then
+                r.ImGui_PopStyleColor(ctx)
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
+                end
+                if r.ImGui_BeginPopup(ctx, "FolderContextMenu_" .. full_path) then
+                    DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
+                    r.ImGui_EndPopup(ctx)
+                end
                 DrawCustomFoldersMenu(folder_content, full_path)
                 if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
                 r.ImGui_EndMenu(ctx)
+            else
+                r.ImGui_PopStyleColor(ctx)
             end
             
             r.ImGui_PopStyleVar(ctx, 4)
@@ -28530,6 +28734,9 @@ if visible then
                     current[new_parent_folder_name] = {
                         [folder_name] = old_content
                     }
+                    local old_path = selected_folder_for_parent
+                    local new_path = (#parts > 1 and table.concat(parts, "/", 1, #parts - 1) .. "/" or "") .. new_parent_folder_name .. "/" .. folder_name
+                    RemapCustomFolderColors(old_path, new_path)
                     
                     SaveCustomFolders()
                     r.ShowMessageBox("Parent folder '" .. new_parent_folder_name .. "' created successfully!", "Success", 0)
@@ -28588,12 +28795,13 @@ if visible then
                         -- Rename: copy content to new key and remove old key
                         target[new_folder_name_for_rename] = target[folder_to_rename]
                         target[folder_to_rename] = nil
+                        local old_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. folder_to_rename
+                        local new_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. new_folder_name_for_rename
+                        RemapCustomFolderColors(old_path, new_path)
                         SaveCustomFolders()
                         
                         -- Update selected_folder if it was the renamed folder
                         if selected_folder then
-                            local old_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. folder_to_rename
-                            local new_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. new_folder_name_for_rename
                             if selected_folder == old_path then
                                 selected_folder = new_path
                             end
@@ -28614,6 +28822,46 @@ if visible then
             r.ImGui_CloseCurrentPopup(ctx)
         end
         
+        r.ImGui_EndPopup(ctx)
+    end
+
+    DrawCustomFolderColorsWindow()
+
+    if custom_folder_color_popup_open then
+        r.ImGui_OpenPopup(ctx, "Custom Folder Color")
+        custom_folder_color_popup_open = false
+    end
+
+    if r.ImGui_BeginPopupModal(ctx, "Custom Folder Color", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, custom_folder_color_popup_path or "")
+        r.ImGui_Separator(ctx)
+        local color_flags = r.ImGui_ColorEditFlags_NoLabel()
+        local changed_color, new_color = r.ImGui_ColorEdit4(ctx, "##CustomFolderColor", custom_folder_color_popup_color or 0xFFFFFFFF, color_flags)
+        if changed_color then custom_folder_color_popup_color = new_color end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Apply", 100, 0) then
+            SetCustomFolderColor(custom_folder_color_popup_path, custom_folder_color_popup_color)
+            custom_folder_color_popup_path = nil
+            custom_folder_color_popup_name = ""
+            custom_folder_color_popup_color = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Reset", 100, 0) then
+            ClearCustomFolderColor(custom_folder_color_popup_path)
+            custom_folder_color_popup_path = nil
+            custom_folder_color_popup_name = ""
+            custom_folder_color_popup_color = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            custom_folder_color_popup_path = nil
+            custom_folder_color_popup_name = ""
+            custom_folder_color_popup_color = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+
         r.ImGui_EndPopup(ctx)
     end
 
