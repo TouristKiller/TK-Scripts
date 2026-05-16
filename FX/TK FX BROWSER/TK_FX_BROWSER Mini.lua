@@ -1,8 +1,14 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.8.4
+-- @version 0.8.5
 -- @changelog:
 --[[ 
+    v0.8.5:
+        + Fix: main Settings now uses a fixed UI font size and layout scale, independent from the browser font size setting.
+        + Custom folders: added PNG icon overrides from the FolderIcons script folder.
+        + Custom folders: added right-click Set/Reset Folder Icon actions and a separate Custom Folder Icons override window.
+        + Performance: folder icons use cached PNG lists and lazy texture loading; no icon folder scans run during normal rendering.
+
     v0.8.4:
         + Custom folders: added individual folder color overrides with level-color fallback.
         + Custom folders: added right-click Set/Reset Folder Color actions and a separate Custom Folder Colors override window.
@@ -201,6 +207,7 @@ local project_covers_path   = script_path .. "ProjectCovers" .. os_separator
 local project_comments_path = script_path .. "project_comments.json"
 local project_preview_active_path = script_path .. "project_preview_active.json"
 local script_thumbs_path    = script_path .. "ScriptThumbnails" .. os_separator
+local custom_folder_icons_path = script_path .. "FolderIcons" .. os_separator
 StartBulkScreenshot         = function() end
 local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
 local TKFXBVars             = dofile(script_path .. "TKFXBVariables.lua")
@@ -983,6 +990,15 @@ custom_folder_color_popup_path = custom_folder_color_popup_path or nil
 custom_folder_color_popup_name = custom_folder_color_popup_name or ""
 custom_folder_color_popup_color = custom_folder_color_popup_color or nil
 show_custom_folder_colors_window = show_custom_folder_colors_window or false
+custom_folder_icon_popup_open = custom_folder_icon_popup_open or false
+custom_folder_icon_popup_path = custom_folder_icon_popup_path or nil
+custom_folder_icon_popup_name = custom_folder_icon_popup_name or ""
+custom_folder_icon_popup_selection = custom_folder_icon_popup_selection or ""
+show_custom_folder_icons_window = show_custom_folder_icons_window or false
+custom_folder_icon_files_cache = custom_folder_icon_files_cache or {}
+custom_folder_icon_files_cache_dirty = custom_folder_icon_files_cache_dirty ~= false
+custom_folder_icon_texture_cache = custom_folder_icon_texture_cache or {}
+custom_folder_icon_failed_cache = custom_folder_icon_failed_cache or {}
 
 -- Config window tab selection
 config_window_selected_tab = config_window_selected_tab or 1
@@ -1297,6 +1313,8 @@ function SetDefaultConfig()
             r.ImGui_ColorConvertDouble4ToU32(0.5, 0.5, 0.5, 1), -- Level 5+
         },
         custom_folder_colors = {},
+        custom_folder_icons = {},
+        show_custom_folder_icons = true,
             
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         last_selected_project_path = "",
@@ -1500,6 +1518,310 @@ function RemapCustomFolderColors(old_path, new_path)
         changed = true
     end
     if changed then SaveConfig() end
+end
+
+function EnsureCustomFolderIconsFolderExists()
+    if not r.file_exists(custom_folder_icons_path) then
+        r.RecursiveCreateDirectory(custom_folder_icons_path, 0)
+    end
+    return custom_folder_icons_path
+end
+
+function IsCustomFolderIconFilename(filename)
+    if type(filename) ~= "string" or filename == "" then return false end
+    if filename:find("\\", 1, true) or filename:find(":", 1, true) or filename:sub(1, 1) == "/" or filename:find("//", 1, true) then return false end
+    if not filename:lower():match("%.png$") then return false end
+    local parts = 0
+    for part in filename:gmatch("[^/]+") do
+        if part == "" or part == "." or part == ".." then return false end
+        parts = parts + 1
+    end
+    return parts > 0
+end
+
+function GetCustomFolderIconFilePath(filename)
+    if not IsCustomFolderIconFilename(filename) then return nil end
+    return custom_folder_icons_path .. filename:gsub("/", os_separator)
+end
+
+function ClearCustomFolderIconTextureCaches()
+    if ctx and r.ImGui_Detach then
+        for _, texture in pairs(custom_folder_icon_texture_cache or {}) do
+            if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+                r.ImGui_Detach(ctx, texture)
+            end
+        end
+    end
+    custom_folder_icon_texture_cache = {}
+    custom_folder_icon_failed_cache = {}
+end
+
+function RefreshCustomFolderIconFiles()
+    EnsureCustomFolderIconsFolderExists()
+    local files = {}
+    local function ScanIconDir(dir, prefix)
+        local file_idx = 0
+        while true do
+            local filename = r.EnumerateFiles(dir, file_idx)
+            if not filename then break end
+            local relative = prefix == "" and filename or (prefix .. "/" .. filename)
+            if IsCustomFolderIconFilename(relative) then
+                files[#files + 1] = relative
+            end
+            file_idx = file_idx + 1
+        end
+        local dir_idx = 0
+        while true do
+            local subdir = r.EnumerateSubdirectories(dir, dir_idx)
+            if not subdir then break end
+            if subdir ~= "." and subdir ~= ".." and not subdir:find("[/\\:]") then
+                local relative_dir = prefix == "" and subdir or (prefix .. "/" .. subdir)
+                ScanIconDir(dir .. subdir .. os_separator, relative_dir)
+            end
+            dir_idx = dir_idx + 1
+        end
+    end
+    ScanIconDir(custom_folder_icons_path, "")
+    table.sort(files, function(a, b) return a:lower() < b:lower() end)
+    custom_folder_icon_files_cache = files
+    custom_folder_icon_files_cache_dirty = false
+    custom_folder_icon_failed_cache = {}
+    return files
+end
+
+function GetCustomFolderIconFiles()
+    if custom_folder_icon_files_cache_dirty then
+        return RefreshCustomFolderIconFiles()
+    end
+    return custom_folder_icon_files_cache or {}
+end
+
+function GetCustomFolderIconSize()
+    local font_size = config and (config.custom_folder_use_default_font and config.font_size or config.custom_folder_font_size) or 13
+    font_size = font_size or 13
+    return math.max(13, math.min(18, math.floor(font_size + 0.5)))
+end
+
+function GetCustomFolderIconFilename(folder_path)
+    if not config or config.show_custom_folder_icons == false or type(config.custom_folder_icons) ~= "table" then return nil end
+    local filename = config.custom_folder_icons[folder_path]
+    if IsCustomFolderIconFilename(filename) then return filename end
+    return nil
+end
+
+function HasCustomFolderIcon(folder_path)
+    local filename = GetCustomFolderIconFilename(folder_path)
+    return filename ~= nil and not custom_folder_icon_failed_cache[filename]
+end
+
+function GetCustomFolderIconReservedWidth(folder_path)
+    if HasCustomFolderIcon(folder_path) then return GetCustomFolderIconSize() + 4 end
+    return 0
+end
+
+function GetCustomFolderIconTexture(folder_path)
+    local filename = GetCustomFolderIconFilename(folder_path)
+    if not filename then return nil end
+    if custom_folder_icon_texture_cache[filename] and r.ImGui_ValidatePtr(custom_folder_icon_texture_cache[filename], 'ImGui_Image*') then
+        return custom_folder_icon_texture_cache[filename]
+    end
+    if custom_folder_icon_failed_cache[filename] then return nil end
+    if not r.ImGui_CreateImage then
+        custom_folder_icon_failed_cache[filename] = true
+        return nil
+    end
+    local icon_path = GetCustomFolderIconFilePath(filename)
+    if not icon_path or not r.file_exists(icon_path) then
+        custom_folder_icon_failed_cache[filename] = true
+        return nil
+    end
+    local ok, texture = pcall(r.ImGui_CreateImage, icon_path)
+    if not ok then
+        custom_folder_icon_failed_cache[filename] = true
+        return nil
+    end
+    if texture and r.ImGui_ValidatePtr(texture, 'ImGui_Image*') then
+        r.ImGui_Attach(ctx, texture)
+        custom_folder_icon_texture_cache[filename] = texture
+        return texture
+    end
+    custom_folder_icon_failed_cache[filename] = true
+    return nil
+end
+
+function DrawCustomFolderIconAt(folder_path, x, y)
+    local texture = GetCustomFolderIconTexture(folder_path)
+    if not texture then return false end
+    local size = GetCustomFolderIconSize()
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    r.ImGui_DrawList_AddImage(draw_list, texture, x, y, x + size, y + size, 0, 0, 1, 1, 0xFFFFFFFF)
+    return true
+end
+
+function DrawCustomFolderIconOnLastItem(folder_path)
+    local texture = GetCustomFolderIconTexture(folder_path)
+    if not texture then return false end
+    local size = GetCustomFolderIconSize()
+    local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+    local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+    local y = min_y + ((max_y - min_y) - size) * 0.5
+    local x = min_x + 4
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    r.ImGui_DrawList_AddImage(draw_list, texture, x, y, x + size, y + size, 0, 0, 1, 1, 0xFFFFFFFF)
+    return true
+end
+
+function GetCustomFolderIconLabel(folder_path, label)
+    if HasCustomFolderIcon(folder_path) then return "   " .. label end
+    return label
+end
+
+function OpenCustomFolderIconPopup(full_path, folder_name)
+    if not full_path or full_path == "" then return end
+    config.custom_folder_icons = config.custom_folder_icons or {}
+    custom_folder_icon_popup_path = full_path
+    custom_folder_icon_popup_name = folder_name or full_path
+    custom_folder_icon_popup_selection = config.custom_folder_icons[full_path] or ""
+    custom_folder_icon_popup_open = true
+    custom_folder_icon_files_cache_dirty = true
+end
+
+function SetCustomFolderIcon(full_path, filename)
+    if not full_path or full_path == "" or not IsCustomFolderIconFilename(filename) then return end
+    config.custom_folder_icons = config.custom_folder_icons or {}
+    config.custom_folder_icons[full_path] = filename
+    SaveConfig()
+end
+
+function ClearCustomFolderIcon(full_path)
+    if not full_path or full_path == "" then return end
+    if config.custom_folder_icons and config.custom_folder_icons[full_path] ~= nil then
+        config.custom_folder_icons[full_path] = nil
+        SaveConfig()
+    end
+end
+
+function PruneCustomFolderIcons(save_changes)
+    if not config or type(config.custom_folder_icons) ~= "table" then return end
+    local changed = false
+    for folder_path, filename in pairs(config.custom_folder_icons) do
+        if type(folder_path) ~= "string" or not CustomFolderPathExists(folder_path) or not IsCustomFolderIconFilename(filename) then
+            config.custom_folder_icons[folder_path] = nil
+            changed = true
+        end
+    end
+    if changed and save_changes then SaveConfig() end
+end
+
+function RemapCustomFolderIcons(old_path, new_path)
+    if not old_path or old_path == "" or not new_path or new_path == "" then return end
+    if not config or type(config.custom_folder_icons) ~= "table" then return end
+    local changed = false
+    local updates = {}
+    local old_prefix = old_path .. "/"
+    for folder_path, filename in pairs(config.custom_folder_icons) do
+        if folder_path == old_path then
+            updates[folder_path] = new_path
+        elseif folder_path:sub(1, #old_prefix) == old_prefix then
+            updates[folder_path] = new_path .. folder_path:sub(#old_path + 1)
+        end
+    end
+    for old_key, new_key in pairs(updates) do
+        config.custom_folder_icons[new_key] = config.custom_folder_icons[old_key]
+        config.custom_folder_icons[old_key] = nil
+        changed = true
+    end
+    if changed then SaveConfig() end
+end
+
+function OpenCustomFolderIconsFolder()
+    local path = EnsureCustomFolderIconsFolderExists()
+    local os_name = r.GetOS()
+    if os_name:match("Win") then
+        os.execute('start "" "' .. path .. '"')
+    elseif os_name:match("OSX") then
+        os.execute('open "' .. path .. '"')
+    else
+        os.execute('xdg-open "' .. path .. '" &')
+    end
+end
+
+function DrawCustomFolderIconSelector(folder_path, id_suffix)
+    local files = GetCustomFolderIconFiles()
+    config.custom_folder_icons = config.custom_folder_icons or {}
+    local current = config.custom_folder_icons[folder_path] or "None"
+    local changed = false
+    if r.ImGui_BeginCombo(ctx, "##FolderIcon" .. id_suffix, current) then
+        if r.ImGui_Selectable(ctx, "None", current == "None") then
+            ClearCustomFolderIcon(folder_path)
+            changed = true
+        end
+        for _, filename in ipairs(files) do
+            if r.ImGui_Selectable(ctx, filename, current == filename) then
+                SetCustomFolderIcon(folder_path, filename)
+                changed = true
+            end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    return changed
+end
+
+function DrawCustomFolderIconsWindow()
+    if not show_custom_folder_icons_window then return end
+    r.ImGui_SetNextWindowSize(ctx, 560, 440, r.ImGui_Cond_FirstUseEver())
+    local visible, open = r.ImGui_Begin(ctx, "Custom Folder Icons", true, r.ImGui_WindowFlags_NoCollapse())
+    show_custom_folder_icons_window = open
+    if visible then
+        local folder_icon_paths = CollectAllFolderPaths(config.custom_folders or {}, "", nil, {})
+        config.custom_folder_icons = config.custom_folder_icons or {}
+        local show_changed, show_new = r.ImGui_Checkbox(ctx, "Show Custom Folder Icons", config.show_custom_folder_icons ~= false)
+        if show_changed then config.show_custom_folder_icons = show_new; SaveConfig() end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Refresh Icons") then
+            custom_folder_icon_files_cache_dirty = true
+            ClearCustomFolderIconTextureCaches()
+            RefreshCustomFolderIconFiles()
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Open Icon Folder") then
+            OpenCustomFolderIconsFolder()
+            custom_folder_icon_files_cache_dirty = true
+        end
+        if #folder_icon_paths == 0 then
+            r.ImGui_TextDisabled(ctx, "No custom folders")
+        else
+            local child_visible = r.ImGui_BeginChild(ctx, "CustomFolderIconList", 0, -32, 1)
+            if child_visible then
+                for _, folder_path in ipairs(folder_icon_paths) do
+                    r.ImGui_PushID(ctx, "cf_icon_window_" .. folder_path)
+                    DrawCustomFolderIconSelector(folder_path, folder_path)
+                    r.ImGui_SameLine(ctx)
+                    if HasCustomFolderIcon(folder_path) then
+                        DrawCustomFolderIconOnLastItem(folder_path)
+                    end
+                    r.ImGui_Text(ctx, folder_path)
+                    if config.custom_folder_icons[folder_path] then
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_Button(ctx, "Reset") then
+                            ClearCustomFolderIcon(folder_path)
+                        end
+                    end
+                    r.ImGui_PopID(ctx)
+                end
+            end
+            r.ImGui_EndChild(ctx)
+            if r.ImGui_Button(ctx, "Reset All") then
+                config.custom_folder_icons = {}
+                SaveConfig()
+            end
+            r.ImGui_SameLine(ctx)
+        end
+        if r.ImGui_Button(ctx, "Close") then
+            show_custom_folder_icons_window = false
+        end
+    end
+    r.ImGui_End(ctx)
 end
 
 function DrawCustomFolderColorsWindow()
@@ -1785,6 +2107,12 @@ function LoadConfig()
         config.folder_specific_sizes = loaded_config.folder_specific_sizes or {}
         if type(config.custom_folder_colors) ~= "table" then
             config.custom_folder_colors = {}
+        end
+        if type(config.custom_folder_icons) ~= "table" then
+            config.custom_folder_icons = {}
+        end
+        if config.show_custom_folder_icons == nil then
+            config.show_custom_folder_icons = true
         end
         
         -- Try to load pinned data from separate file first
@@ -2262,6 +2590,7 @@ function MoveFolderTo(source_path, target_path)
     source_parent[folder_name] = nil
     local new_path = target_path and target_path ~= "" and (target_path .. "/" .. folder_name) or folder_name
     RemapCustomFolderColors(source_path, new_path)
+    RemapCustomFolderIcons(source_path, new_path)
     
     SaveCustomFolders()
     return true
@@ -2329,6 +2658,14 @@ function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
     if config.custom_folder_colors and config.custom_folder_colors[full_path] ~= nil then
         if r.ImGui_MenuItem(ctx, "Reset Folder Color") then
             ClearCustomFolderColor(full_path)
+        end
+    end
+    if r.ImGui_MenuItem(ctx, "Set Folder Icon...") then
+        OpenCustomFolderIconPopup(full_path, folder_name)
+    end
+    if config.custom_folder_icons and config.custom_folder_icons[full_path] ~= nil then
+        if r.ImGui_MenuItem(ctx, "Reset Folder Icon") then
+            ClearCustomFolderIcon(full_path)
         end
     end
     r.ImGui_Separator(ctx)
@@ -3141,6 +3478,7 @@ end
 function SaveCustomFolders()
     custom_all_plugins_cache_dirty = true
     PruneCustomFolderColors(true)
+    PruneCustomFolderIcons(true)
     
     local function convertForJSON(folders)
         local result = {}
@@ -4033,6 +4371,12 @@ local TKFXfonts = {
     "DejaVu Sans"
 }
 
+function GetSettingsFontName()
+    local os_name = r.GetOS and r.GetOS() or ""
+    if os_name:match("Other") or os_name:match("Linux") then return "DejaVu Sans" end
+    return "Arial"
+end
+
 
 function exit()
     pcall(function() r.SetExtState("TK_FX_BROWSER_MINI", "running", "false", true) end)
@@ -4241,11 +4585,19 @@ function UpdateFonts()
     if r.ImGui_ValidatePtr(CustomFolderFont, 'ImGui_Resource*') then
         r.ImGui_Detach(ctx, CustomFolderFont)
     end
+    if r.ImGui_ValidatePtr(SettingsFont, 'ImGui_Resource*') then
+        r.ImGui_Detach(ctx, SettingsFont)
+    end
+    if r.ImGui_ValidatePtr(SettingsLargeFont, 'ImGui_Resource*') then
+        r.ImGui_Detach(ctx, SettingsLargeFont)
+    end
 
     
     NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size)
     TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size - 2)
     LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size + 4)
+    SettingsFont = r.ImGui_CreateFont(GetSettingsFontName(), 12)
+    SettingsLargeFont = r.ImGui_CreateFont(GetSettingsFontName(), 16)
     -- Custom folder font (can be independent size)
     local cfs = config.custom_folder_use_default_font and config.font_size or (config.custom_folder_font_size or config.font_size)
     CustomFolderFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], cfs)
@@ -4253,17 +4605,23 @@ function UpdateFonts()
     r.ImGui_Attach(ctx, NormalFont)
     r.ImGui_Attach(ctx, TinyFont)
     r.ImGui_Attach(ctx, LargeFont)
+    r.ImGui_Attach(ctx, SettingsFont)
+    r.ImGui_Attach(ctx, SettingsLargeFont)
     r.ImGui_Attach(ctx, CustomFolderFont)
 end
 
 NormalFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size)
 TinyFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size - 2)
 LargeFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.font_size + 4)
+SettingsFont = r.ImGui_CreateFont(GetSettingsFontName(), 12)
+SettingsLargeFont = r.ImGui_CreateFont(GetSettingsFontName(), 16)
 CustomFolderFont = r.ImGui_CreateFont(TKFXfonts[config.selected_font], config.custom_folder_use_default_font and config.font_size or (config.custom_folder_font_size or config.font_size))
 
 r.ImGui_Attach(ctx, NormalFont)
 r.ImGui_Attach(ctx, LargeFont)
 r.ImGui_Attach(ctx, TinyFont)
+r.ImGui_Attach(ctx, SettingsFont)
+r.ImGui_Attach(ctx, SettingsLargeFont)
 r.ImGui_Attach(ctx, CustomFolderFont)
 
 ---------------------------------------------------------------------
@@ -5378,7 +5736,7 @@ end
 function ShowConfigWindow()
     local function NewSection(title)
         r.ImGui_Dummy(ctx, 0, 10)
-        r.ImGui_PushFont(ctx, NormalFont, config.font_size)
+        r.ImGui_PushFont(ctx, SettingsFont, 12)
         r.ImGui_Text(ctx, title)
         r.ImGui_PopFont(ctx)
         r.ImGui_Separator(ctx)
@@ -5386,10 +5744,9 @@ function ShowConfigWindow()
     end
     local config_open = true
     
-    -- Scale config window based on font size (11 is default)
-    local font_scale = (config.font_size or 11) / 11
+    local font_scale = 1
     local window_width = math.floor(640 * font_scale)
-    local base_height = 600
+    local base_height = 700
     local window_height = font_scale > 1.0 and math.floor(base_height * font_scale) or base_height
 
     local column1_width = math.floor(10 * font_scale)
@@ -5404,7 +5761,8 @@ function ShowConfigWindow()
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), 0x666666FF)  -- normale staat
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), 0x888888FF)  -- actieve staat
     if visible then
-        r.ImGui_PushFont(ctx, LargeFont, config.font_size + 4)
+        r.ImGui_PushFont(ctx, SettingsFont, 12)
+        r.ImGui_PushFont(ctx, SettingsLargeFont, 16)
         r.ImGui_Text(ctx, "TK FX BROWSER MINI SETTINGS  v" .. GetScriptVersion())
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             r.ImGui_PopFont(ctx)
@@ -5775,6 +6133,13 @@ function ShowConfigWindow()
                 show_custom_folder_colors_window = true
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Open individual custom folder color settings") end
+
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Folder Icon Overrides...") then
+                show_custom_folder_icons_window = true
+                custom_folder_icon_files_cache_dirty = true
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Open individual custom folder PNG icon settings") end
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local cft_changed, cft_new = r.ImGui_Checkbox(ctx, "Show as Tabs above Screenshots", config.show_custom_folder_tabs)
@@ -6693,6 +7058,7 @@ function ShowConfigWindow()
             end
         end
 
+r.ImGui_PopFont(ctx)
 r.ImGui_PopStyleColor(ctx, 2)
 r.ImGui_End(ctx)
 end
@@ -12137,7 +12503,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         local _, slash_count = full_path:gsub("/", "")
                         depth = slash_count + 1
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
-                        if r.ImGui_Selectable(ctx, display_name .. " (" .. #folder_content .. ")", cf_is_selected) then
+                        if r.ImGui_Selectable(ctx, GetCustomFolderIconLabel(full_path, display_name .. " (" .. #folder_content .. ")"), cf_is_selected) then
                             SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
                             show_sends_window = false
@@ -12148,6 +12514,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                             end
                             ClearScreenshotCache()
                         end
+                        DrawCustomFolderIconOnLastItem(full_path)
                         if r.ImGui_IsItemClicked(ctx, 1) then
                             r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
                         end
@@ -12161,7 +12528,8 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         local _, slash_count = full_path:gsub("/", "")
                         depth = slash_count + 1
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
-                        r.ImGui_Text(ctx, (prefix == "" and "" or "  ") .. folder_name .. " >")
+                        r.ImGui_Text(ctx, GetCustomFolderIconLabel(full_path, (prefix == "" and "" or "  ") .. folder_name .. " >"))
+                        DrawCustomFolderIconOnLastItem(full_path)
                         if r.ImGui_IsItemClicked(ctx, 1) then
                             r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
                         end
@@ -12179,7 +12547,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         local _, slash_count = full_path:gsub("/", "")
                         depth = slash_count + 1
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
-                        if r.ImGui_Selectable(ctx, display_name .. " (0)", cf_is_selected) then
+                        if r.ImGui_Selectable(ctx, GetCustomFolderIconLabel(full_path, display_name .. " (0)"), cf_is_selected) then
                             SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
                             show_sends_window = false
@@ -12187,6 +12555,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                             screenshot_search_results = {}
                             ClearScreenshotCache()
                         end
+                        DrawCustomFolderIconOnLastItem(full_path)
                         if r.ImGui_IsItemClicked(ctx, 1) then
                             r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
                         end
@@ -14020,6 +14389,11 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             local orig_sx, orig_sy = r.ImGui_GetCursorScreenPos(ctx)
             local font_to_use = CustomFolderFont or NormalFont
             r.ImGui_PushFont(ctx, font_to_use, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
+            if HasCustomFolderIcon(full_path) then
+                local icon_size = GetCustomFolderIconSize()
+                DrawCustomFolderIconAt(full_path, text_x, item_min_y + (line_h - icon_size) * 0.5 + 2)
+                text_x = text_x + icon_size + 4
+            end
             r.ImGui_SetCursorScreenPos(ctx, text_x, text_y)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_col)
             r.ImGui_Text(ctx, display_label)
@@ -14086,6 +14460,14 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 if config.custom_folder_colors and config.custom_folder_colors[full_path] ~= nil then
                     if r.ImGui_MenuItem(ctx, "Reset Folder Color") then
                         ClearCustomFolderColor(full_path)
+                    end
+                end
+                if r.ImGui_MenuItem(ctx, "Set Folder Icon...") then
+                    OpenCustomFolderIconPopup(full_path, folder_name)
+                end
+                if config.custom_folder_icons and config.custom_folder_icons[full_path] ~= nil then
+                    if r.ImGui_MenuItem(ctx, "Reset Folder Icon") then
+                        ClearCustomFolderIcon(full_path)
                     end
                 end
                 r.ImGui_Separator(ctx)
@@ -14192,7 +14574,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
-            local label = (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_label_text
+            local label = GetCustomFolderIconLabel(full_path, (is_pinned and "\xF0\x9F\x93\x8C " or "") .. folder_label_text)
             
             -- Apply custom folder font
             local font_to_use = CustomFolderFont or NormalFont
@@ -14227,6 +14609,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 end
                 ClearScreenshotCache()
             end
+            DrawCustomFolderIconOnLastItem(full_path)
             r.ImGui_PopStyleColor(ctx)
             
             r.ImGui_PopFont(ctx)
@@ -21078,6 +21461,7 @@ function ShowScreenshotWindow()
             local avail_w = r.ImGui_GetContentRegionAvail(ctx)
             local spacing = 4
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacing, spacing)
+            r.ImGui_PushFont(ctx, CustomFolderFont or NormalFont, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
 
             local function DrawPlus()
                 local plus_w = 22
@@ -21170,9 +21554,9 @@ function ShowScreenshotWindow()
                         display_label = label .. " (" .. plugin_count .. ")"
                     end
                 end
-                local btn_label = display_label .. "##cftab_" .. depth .. "_" .. i
+                local btn_label = GetCustomFolderIconLabel(full_path, display_label) .. "##cftab_" .. depth .. "_" .. i
                 local txt_w = r.ImGui_CalcTextSize(ctx, display_label)
-                local btn_w = txt_w + 16
+                local btn_w = txt_w + 16 + GetCustomFolderIconReservedWidth(full_path)
                 local need_sameline = (depth == 1 or i > 1)
                 if need_sameline then
                     if scroll_mode or (row_w + btn_w + spacing <= avail_w) then
@@ -21211,6 +21595,7 @@ function ShowScreenshotWindow()
                         SelectFolderExclusive(full_path, "custom")
                     end
                 end
+                DrawCustomFolderIconOnLastItem(full_path)
                 CheckFolderDropTarget(full_path, "custom")
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
@@ -21277,6 +21662,7 @@ function ShowScreenshotWindow()
                     row_w = DrawTab(i, name, row_w)
                 end
             end
+            r.ImGui_PopFont(ctx)
             r.ImGui_PopStyleVar(ctx)
         end
 
@@ -21296,6 +21682,7 @@ function ShowScreenshotWindow()
                         end
                         if #segments >= 2 then
                             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
+                            r.ImGui_PushFont(ctx, CustomFolderFont or NormalFont, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
                             local accum_path = ""
                             for i, seg in ipairs(segments) do
                                 accum_path = (i == 1) and seg or (accum_path .. "/" .. seg)
@@ -21313,12 +21700,14 @@ function ShowScreenshotWindow()
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A7FB5FF)
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3A5F95FF)
                                 end
-                                if r.ImGui_Button(ctx, seg_label .. "##bc_" .. i, 0, 0) then
+                                if r.ImGui_Button(ctx, GetCustomFolderIconLabel(accum_path, seg_label) .. "##bc_" .. i, 0, 0) then
                                     SelectFolderExclusive(accum_path, "custom")
                                 end
+                                DrawCustomFolderIconOnLastItem(accum_path)
                                 if is_last then r.ImGui_PopStyleColor(ctx, 3) end
                                 r.ImGui_PopStyleColor(ctx)
                             end
+                            r.ImGui_PopFont(ctx)
                             r.ImGui_PopStyleVar(ctx)
                             local node = ResolveCustomNode(_sel_snap)
                             if HasSubfolders(node) then
@@ -23053,6 +23442,7 @@ function ShowScreenshotWindow()
                 local old_path = selected_folder_for_parent
                 local new_path = (#parts > 1 and table.concat(parts, "/", 1, #parts - 1) .. "/" or "") .. new_parent_folder_name .. "/" .. folder_name
                 RemapCustomFolderColors(old_path, new_path)
+                RemapCustomFolderIcons(old_path, new_path)
                 
                 SaveCustomFolders()
             end
@@ -23110,6 +23500,7 @@ function ShowScreenshotWindow()
                         local old_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. folder_to_rename
                         local new_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. new_folder_name_for_rename
                         RemapCustomFolderColors(old_path, new_path)
+                        RemapCustomFolderIcons(old_path, new_path)
                         SaveCustomFolders()
                         
                         -- Update selected_folder if it was the renamed folder
@@ -23138,6 +23529,7 @@ function ShowScreenshotWindow()
     end
 
     DrawCustomFolderColorsWindow()
+    DrawCustomFolderIconsWindow()
 
             if custom_folder_color_popup_open then
                 r.ImGui_OpenPopup(ctx, "Custom Folder Color")
@@ -23174,6 +23566,44 @@ function ShowScreenshotWindow()
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
 
+                r.ImGui_EndPopup(ctx)
+            end
+
+            if custom_folder_icon_popup_open then
+                r.ImGui_OpenPopup(ctx, "Custom Folder Icon")
+                custom_folder_icon_popup_open = false
+            end
+
+            if r.ImGui_BeginPopupModal(ctx, "Custom Folder Icon", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+                r.ImGui_Text(ctx, custom_folder_icon_popup_path or "")
+                r.ImGui_Separator(ctx)
+                DrawCustomFolderIconSelector(custom_folder_icon_popup_path, "_popup")
+                r.ImGui_Separator(ctx)
+                if r.ImGui_Button(ctx, "Open Icon Folder", 130, 0) then
+                    OpenCustomFolderIconsFolder()
+                    custom_folder_icon_files_cache_dirty = true
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Refresh", 100, 0) then
+                    custom_folder_icon_files_cache_dirty = true
+                    ClearCustomFolderIconTextureCaches()
+                    RefreshCustomFolderIconFiles()
+                end
+                r.ImGui_Separator(ctx)
+                if r.ImGui_Button(ctx, "Reset", 100, 0) then
+                    ClearCustomFolderIcon(custom_folder_icon_popup_path)
+                    custom_folder_icon_popup_path = nil
+                    custom_folder_icon_popup_name = ""
+                    custom_folder_icon_popup_selection = ""
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Close", 100, 0) then
+                    custom_folder_icon_popup_path = nil
+                    custom_folder_icon_popup_name = ""
+                    custom_folder_icon_popup_selection = ""
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
                 r.ImGui_EndPopup(ctx)
             end
 
@@ -25049,7 +25479,8 @@ function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), folder_text_color)
             
-            if r.ImGui_BeginMenu(ctx, folder_name .. " (" .. #folder_content .. ")") then
+            if r.ImGui_BeginMenu(ctx, GetCustomFolderIconLabel(full_path, folder_name .. " (" .. #folder_content .. ")")) then
+                DrawCustomFolderIconOnLastItem(full_path)
                 r.ImGui_PopStyleColor(ctx)
                 -- NIEUWE CONTEXT MENU VOOR FOLDERS
                 if r.ImGui_IsItemClicked(ctx, 1) then
@@ -25118,6 +25549,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                 end
                 r.ImGui_EndMenu(ctx)
             else
+                DrawCustomFolderIconOnLastItem(full_path)
                 r.ImGui_PopStyleColor(ctx)
             end
             
@@ -25135,7 +25567,8 @@ function DrawCustomFoldersMenu(folders, path_prefix)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), folder_text_color)
             
-            if r.ImGui_BeginMenu(ctx, folder_name) then
+            if r.ImGui_BeginMenu(ctx, GetCustomFolderIconLabel(full_path, folder_name)) then
+                DrawCustomFolderIconOnLastItem(full_path)
                 r.ImGui_PopStyleColor(ctx)
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
@@ -25150,6 +25583,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                 end
                 r.ImGui_EndMenu(ctx)
             else
+                DrawCustomFolderIconOnLastItem(full_path)
                 r.ImGui_PopStyleColor(ctx)
             end
             
