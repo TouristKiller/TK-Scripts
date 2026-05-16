@@ -1,8 +1,16 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.2.1
+-- @version 1.2.3
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.2.3
+--   + Added optional Natural curve mode using a catenary-style hyperbolic cosine shape
+--   + Manual curve mode remains the default and keeps the existing adjustable Bezier behavior
+--   + Hide the manual Curve slider while Natural curve mode is selected
+--   v1.2.2
+--   + Added optional hover labels with compact send and receive info
+--   + Hover labels now show both send and receive direction
+--   + Highlighted hovered cables and separated source and destination endpoint colors
 --   v1.2.1
 --   + Added manual below-mixer offset mode for floating mixer setups without topmost pinning
 --   + Expanded below-mixer render area so cable curves are not clipped in the middle
@@ -60,8 +68,10 @@ local settings = {
  thickness = 2.5,
  alpha = 0.75,
  curve_amount = 0.55,
+ curve_mode = "manual",
  glow = true,
  flow = false,
+ show_cable_labels = false,
  selected_only = false,
  use_dest_color = false,
  anchor_position = "bottom",
@@ -310,13 +320,34 @@ local function ResetMixerWindowState()
  pin_topmost_set = false
 end
 
+function TK_MCP_Cables_GetCurveMode()
+ if settings.curve_mode == "natural" then return "natural" end
+ return "manual"
+end
+
+function TK_MCP_Cables_GetManualDip(dist)
+ local dip = math.max(24, dist * (settings.curve_amount or 0))
+ if dip > 220 then dip = 220 end
+ return dip
+end
+
+function TK_MCP_Cables_GetNaturalDip(dist)
+ local dip = math.max(20, dist * 0.26)
+ if dip > 190 then dip = 190 end
+ return dip
+end
+
+function TK_MCP_Cables_GetCableDip(dist)
+ if TK_MCP_Cables_GetCurveMode() == "natural" then return TK_MCP_Cables_GetNaturalDip(dist) end
+ return TK_MCP_Cables_GetManualDip(dist)
+end
+
 local function UpdateRenderRect()
  local offset_y = 0
  local extra_h = 0
  if settings.offset_below_mixer and not settings.pin_on_top then
   offset_y = settings.below_mixer_offset_y or 0
-  local max_dip = math.max(24, (RIGHT - LEFT) * (settings.curve_amount or 0))
-  if max_dip > 220 then max_dip = 220 end
+  local max_dip = TK_MCP_Cables_GetCableDip(RIGHT - LEFT)
   extra_h = math.ceil(max_dip + (settings.thickness or 1) * 8 + 12)
  end
  RENDER_LEFT = LEFT
@@ -335,6 +366,183 @@ local function color_u32(track, alpha)
   cr, cg, cb = R / 255, G / 255, B / 255
  end
  return r.ImGui_ColorConvertDouble4ToU32(cr, cg, cb, alpha)
+end
+
+local function muted_u32(alpha)
+ return r.ImGui_ColorConvertDouble4ToU32(0.50, 0.52, 0.56, alpha)
+end
+
+local function TrackDisplayName(track)
+ local ok, name = r.GetTrackName(track)
+ if ok and name and name ~= "" then return name end
+ if track == r.GetMasterTrack(0) then return "MASTER" end
+ local idx = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
+ if idx and idx > 0 then return "Track " .. math.floor(idx) end
+ return "Track"
+end
+
+local function FormatDb(value)
+ if not value or value <= 0.0000001 then return "-inf dB" end
+ return string.format("%.1f dB", 20 * math.log(value) / math.log(10))
+end
+
+local function FormatPan(value)
+ if not value or math.abs(value) < 0.005 then return "C" end
+ local amount = math.floor(math.abs(value) * 100 + 0.5)
+ if value < 0 then return "L" .. amount end
+ return "R" .. amount
+end
+
+local function BezierPoint(sx, sy, c1x, c1y, c2x, c2y, dx, dy, t)
+ local u = 1 - t
+ local b0 = u * u * u
+ local b1 = 3 * u * u * t
+ local b2 = 3 * u * t * t
+ local b3 = t * t * t
+ return b0 * sx + b1 * c1x + b2 * c2x + b3 * dx, b0 * sy + b1 * c1y + b2 * c2y + b3 * dy
+end
+
+function TK_MCP_Cables_Cosh(value)
+ local e = math.exp(value)
+ return (e + 1 / e) * 0.5
+end
+
+function TK_MCP_Cables_CatenaryPoint(sx, sy, dx, dy, dip, shape, t)
+ local x = sx + (dx - sx) * t
+ local baseline_y = sy + (dy - sy) * t
+ local u = t * 2 - 1
+ local denom = TK_MCP_Cables_Cosh(shape) - 1
+ local drop = dip * (TK_MCP_Cables_Cosh(shape) - TK_MCP_Cables_Cosh(shape * u)) / denom
+ return x, baseline_y + drop
+end
+
+function TK_MCP_Cables_BuildCable(sx, sy, dx, dy)
+ local dist = math.abs(dx - sx)
+ local dip = TK_MCP_Cables_GetCableDip(dist)
+ local cable = { sx = sx, sy = sy, dx = dx, dy = dy, mode = TK_MCP_Cables_GetCurveMode() }
+ if cable.mode == "natural" then
+  cable.dip = dip
+  cable.shape = 2.15
+ else
+  cable.c1x, cable.c1y = sx, sy + dip
+  cable.c2x, cable.c2y = dx, dy + dip
+ end
+ return cable
+end
+
+function TK_MCP_Cables_Point(cable, t)
+ if cable.mode == "natural" then
+  return TK_MCP_Cables_CatenaryPoint(cable.sx, cable.sy, cable.dx, cable.dy, cable.dip, cable.shape, t)
+ end
+ return BezierPoint(cable.sx, cable.sy, cable.c1x, cable.c1y, cable.c2x, cable.c2y, cable.dx, cable.dy, t)
+end
+
+function TK_MCP_Cables_FindHover(mx, my, cable)
+ local best_dist = math.huge
+ local best_x, best_y = cable.sx, cable.sy
+ local span = math.max(math.abs(cable.dx - cable.sx), math.abs(cable.dy - cable.sy))
+ local steps = math.floor(span / 18)
+ if steps < 32 then steps = 32 elseif steps > 96 then steps = 96 end
+ for step = 0, steps do
+  local px, py = TK_MCP_Cables_Point(cable, step / steps)
+  local x_dist = mx - px
+  local y_dist = my - py
+  local dist = x_dist * x_dist + y_dist * y_dist
+  if dist < best_dist then
+   best_dist = dist
+   best_x, best_y = px, py
+  end
+ end
+ return best_dist, best_x, best_y
+end
+
+function TK_MCP_Cables_DrawStroke(draw_list, cable, color, thickness)
+ if cable.mode ~= "natural" then
+  r.ImGui_DrawList_AddBezierCubic(draw_list, cable.sx, cable.sy, cable.c1x, cable.c1y, cable.c2x, cable.c2y, cable.dx, cable.dy, color, thickness, 32)
+  return
+ end
+ local span = math.max(math.abs(cable.dx - cable.sx), math.abs(cable.dy - cable.sy))
+ local steps = math.floor(span / 14)
+ if steps < 32 then steps = 32 elseif steps > 112 then steps = 112 end
+ local last_x, last_y = TK_MCP_Cables_Point(cable, 0)
+ for step = 1, steps do
+  local x, y = TK_MCP_Cables_Point(cable, step / steps)
+  r.ImGui_DrawList_AddLine(draw_list, last_x, last_y, x, y, color, thickness)
+  last_x, last_y = x, y
+ end
+end
+
+local function GetOverlayMousePosition()
+ if r.GetMousePosition then
+  local mx, my = r.GetMousePosition()
+  if mx and my then return r.ImGui_PointConvertNative(ctx, mx, my) end
+ end
+ if r.ImGui_GetMousePos then return r.ImGui_GetMousePos(ctx) end
+ return nil, nil
+end
+
+local function BuildCableLabel(src_track, dst_track, send_idx, muted)
+ local vol = r.GetTrackSendInfo_Value(src_track, 0, send_idx, "D_VOL")
+ local pan = r.GetTrackSendInfo_Value(src_track, 0, send_idx, "D_PAN")
+ local src_name = TrackDisplayName(src_track)
+ local dst_name = TrackDisplayName(dst_track)
+ local state = muted and "MUTED" or "ACTIVE"
+ return {
+  "SEND    " .. src_name .. " -> " .. dst_name,
+  "RECEIVE " .. dst_name .. " <- " .. src_name,
+  state .. " | " .. FormatDb(vol) .. " | " .. FormatPan(pan),
+ }
+end
+
+local function DrawCableLabel(draw_list, label)
+ local lines = BuildCableLabel(label.src, label.dst, label.send_idx, label.muted)
+ local tw, th = 0, 0
+ local line_heights = {}
+ local line_gap = 2
+ for i, line in ipairs(lines) do
+  local lw, lh
+  if r.ImGui_CalcTextSize then
+   lw, lh = r.ImGui_CalcTextSize(ctx, line)
+  else
+   lw, lh = #line * 7, 14
+  end
+  if lw > tw then tw = lw end
+  line_heights[i] = lh
+  th = th + lh
+  if i < #lines then th = th + line_gap end
+ end
+ local pad_x, pad_y = 7, 4
+ local x = label.x + 10
+ local y = label.y - th - 12
+ local w = tw + pad_x * 2
+ local h = th + pad_y * 2
+ if x + w > RENDER_RIGHT - 4 then x = RENDER_RIGHT - w - 4 end
+ if x < RENDER_LEFT + 4 then x = RENDER_LEFT + 4 end
+ if y < RENDER_TOP + 4 then y = label.y + 12 end
+ if y + h > RENDER_BOT - 4 then y = RENDER_BOT - h - 4 end
+ r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + w, y + h, 0x111216F0, 5)
+ r.ImGui_DrawList_AddRect(draw_list, x, y, x + w, y + h, 0x4A4D55FF, 5, 0, 1)
+ local text_y = y + pad_y
+ for i, line in ipairs(lines) do
+  local col = i == 1 and 0xF2F2F2FF or i == 2 and 0xBFC3CCFF or 0x9FA4AEFF
+  r.ImGui_DrawList_AddText(draw_list, x + pad_x, text_y, col, line)
+  text_y = text_y + line_heights[i] + line_gap
+ end
+end
+
+local function DrawCableHighlight(draw_list, cable, clip_segments)
+ for _, seg in ipairs(clip_segments) do
+  r.ImGui_DrawList_PushClipRect(draw_list, seg[1], RENDER_TOP, seg[2], RENDER_BOT, 0)
+  local halo = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, cable.muted and 0.18 or 0.32)
+  local core = r.ImGui_ColorConvertDouble4ToU32(1, 1, 1, cable.muted and 0.45 or 0.75)
+  local src_ring = cable.muted and muted_u32(0.85) or color_u32(cable.src, 0.95)
+  local dst_ring = cable.muted and muted_u32(0.85) or color_u32(cable.dst, 0.95)
+  TK_MCP_Cables_DrawStroke(draw_list, cable, halo, cable.thickness * 4.1)
+  TK_MCP_Cables_DrawStroke(draw_list, cable, core, cable.thickness * 1.8)
+  r.ImGui_DrawList_AddCircle(draw_list, cable.sx, cable.sy, cable.thickness * 3.2, src_ring, 18, 2)
+  r.ImGui_DrawList_AddCircle(draw_list, cable.dx, cable.dy, cable.thickness * 3.2, dst_ring, 18, 2)
+  r.ImGui_DrawList_PopClipRect(draw_list)
+ end
 end
 
 local function GetAnchorPosition()
@@ -459,11 +667,18 @@ local function DrawCables(draw_list)
  local thickness = settings.thickness
  local alpha = settings.alpha
  if alpha < 0.05 then return end
- local curve_amount = settings.curve_amount
  local use_dest_color = settings.use_dest_color
  local glow = settings.glow
  local flow = settings.flow
  local selected_only = settings.selected_only
+ local show_cable_labels = settings.show_cable_labels
+ local mouse_x, mouse_y
+ local hovered_label = nil
+ local hovered_cable = nil
+ local hovered_dist = math.huge
+ if show_cable_labels then
+  mouse_x, mouse_y = GetOverlayMousePosition()
+ end
 
  r.ImGui_DrawList_PushClipRect(draw_list, RENDER_LEFT, RENDER_TOP, RENDER_RIGHT, RENDER_BOT, 0)
 
@@ -500,45 +715,50 @@ local function DrawCables(draw_list)
         local color_track = use_dest_color and dst_track or src_track
         local cable_alpha = alpha * (muted and 0.35 or 1.0)
         if cable_alpha > 1 then cable_alpha = 1 end
-        local color = color_u32(color_track, cable_alpha)
+        local color = muted and muted_u32(cable_alpha) or color_u32(color_track, cable_alpha)
 
         local sx, sy = src_anchor.x, src_anchor.y
         local dx, dy = dst_anchor.x, dst_anchor.y
-        local dist = math.abs(dx - sx)
-        local dip = math.max(24, dist * curve_amount)
-        if dip > 220 then dip = 220 end
-        local c1x, c1y = sx, sy + dip
-        local c2x, c2y = dx, dy + dip
+    local cable = TK_MCP_Cables_BuildCable(sx, sy, dx, dy)
+    cable.src = src_track
+    cable.dst = dst_track
+    cable.thickness = thickness
+    cable.muted = muted
+
+        if mouse_x and mouse_y and mouse_x >= seg_l and mouse_x <= seg_r and mouse_y >= RENDER_TOP and mouse_y <= RENDER_BOT then
+     local dist_sq, label_x, label_y = TK_MCP_Cables_FindHover(mouse_x, mouse_y, cable)
+         local threshold = math.max(16, thickness * 4 + 6)
+         if dist_sq <= threshold * threshold and dist_sq < hovered_dist then
+          hovered_dist = dist_sq
+          hovered_label = { src = src_track, dst = dst_track, send_idx = i, muted = muted, x = label_x, y = label_y }
+      hovered_cable = cable
+         end
+        end
 
         if glow then
          local glow_alpha = math.min(1, cable_alpha * 0.35)
-         local glow_color = color_u32(color_track, glow_alpha)
-         r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, glow_color, thickness * 2.6, 32)
+         local glow_color = muted and muted_u32(glow_alpha) or color_u32(color_track, glow_alpha)
+     TK_MCP_Cables_DrawStroke(draw_list, cable, glow_color, thickness * 2.6)
         end
-        r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, c1x, c1y, c2x, c2y, dx, dy, color, thickness, 32)
+    TK_MCP_Cables_DrawStroke(draw_list, cable, color, thickness)
 
         local plug_alpha = math.min(1, cable_alpha + 0.15)
-        local plug_color = color_u32(color_track, plug_alpha)
+        local src_plug_color = muted and muted_u32(plug_alpha) or color_u32(src_track, plug_alpha)
+        local dst_plug_color = muted and muted_u32(plug_alpha) or color_u32(dst_track, plug_alpha)
         local outline_color = r.ImGui_ColorConvertDouble4ToU32(0, 0, 0, math.min(1, cable_alpha + 0.2))
 
         local out_size = thickness * 1.8
-        r.ImGui_DrawList_AddRectFilled(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, plug_color, 1)
+        r.ImGui_DrawList_AddRectFilled(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, src_plug_color, 1)
         r.ImGui_DrawList_AddRect(draw_list, sx - out_size, sy - out_size, sx + out_size, sy + out_size, outline_color, 1, 0, 1)
 
         local arrow_size = thickness * 2.4
-        r.ImGui_DrawList_AddTriangleFilled(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, plug_color)
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, dst_plug_color)
         r.ImGui_DrawList_AddTriangle(draw_list, dx - arrow_size, dy + arrow_size, dx + arrow_size, dy + arrow_size, dx, dy, outline_color, 1)
 
         if flow and not muted then
          local cycle = 1.6
          local t = (now % cycle) / cycle
-         local u = 1 - t
-         local b0 = u * u * u
-         local b1 = 3 * u * u * t
-         local b2 = 3 * u * t * t
-         local b3 = t * t * t
-         local fx = b0 * sx + b1 * c1x + b2 * c2x + b3 * dx
-         local fy = b0 * sy + b1 * c1y + b2 * c2y + b3 * dy
+         local fx, fy = TK_MCP_Cables_Point(cable, t)
          local halo = r.ImGui_ColorConvertDouble4ToU32(1, 0.95, 0.2, math.min(1, cable_alpha * 0.45))
          local dot = r.ImGui_ColorConvertDouble4ToU32(1, 1, 0.3, 1)
          local core = r.ImGui_ColorConvertDouble4ToU32(1, 1, 0.9, 1)
@@ -558,6 +778,9 @@ local function DrawCables(draw_list)
  for _, seg in ipairs(clip_segments) do
   DrawCablePass(seg[1], seg[2])
  end
+
+ if hovered_cable then DrawCableHighlight(draw_list, hovered_cable, clip_segments) end
+ if hovered_label then DrawCableLabel(draw_list, hovered_label) end
 
  r.ImGui_DrawList_PopClipRect(draw_list)
 end
@@ -686,8 +909,23 @@ local function DrawSettingsWindow()
   if changed then MarkDirty() end
 
   r.ImGui_SetNextItemWidth(ctx, 180)
-  changed, settings.curve_amount = r.ImGui_SliderDouble(ctx, "Curve", settings.curve_amount, 0.0, 1.5, "%.2f")
-  if changed then MarkDirty() end
+  if r.ImGui_BeginCombo(ctx, "Curve mode", TK_MCP_Cables_GetCurveMode() == "natural" and "Natural" or "Manual") then
+   if r.ImGui_Selectable(ctx, "Manual", TK_MCP_Cables_GetCurveMode() == "manual") then
+    settings.curve_mode = "manual"
+    MarkDirty()
+   end
+   if r.ImGui_Selectable(ctx, "Natural", TK_MCP_Cables_GetCurveMode() == "natural") then
+    settings.curve_mode = "natural"
+    MarkDirty()
+   end
+   r.ImGui_EndCombo(ctx)
+  end
+
+  if TK_MCP_Cables_GetCurveMode() == "manual" then
+   r.ImGui_SetNextItemWidth(ctx, 180)
+   changed, settings.curve_amount = r.ImGui_SliderDouble(ctx, "Curve", settings.curve_amount, 0.0, 1.5, "%.2f")
+   if changed then MarkDirty() end
+  end
 
   r.ImGui_SetNextItemWidth(ctx, 180)
   changed, settings.vertical_offset = r.ImGui_SliderInt(ctx, "Vertical offset", settings.vertical_offset, 0, 80)
@@ -728,6 +966,9 @@ local function DrawSettingsWindow()
   if changed then MarkDirty() end
   r.ImGui_SameLine(ctx)
   changed, settings.flow = r.ImGui_Checkbox(ctx, "Flow", settings.flow)
+  if changed then MarkDirty() end
+
+  changed, settings.show_cable_labels = r.ImGui_Checkbox(ctx, "Show cable labels", settings.show_cable_labels)
   if changed then MarkDirty() end
 
   changed, settings.selected_only = r.ImGui_Checkbox(ctx, "Selected tracks only", settings.selected_only)
