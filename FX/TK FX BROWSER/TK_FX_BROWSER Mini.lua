@@ -1,8 +1,15 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.8.5
+-- @version 0.8.6
 -- @changelog:
 --[[ 
+    v0.8.6:
+        + Custom folder icons: added recursive FolderIcons subfolder support, PNG icon overrides, and cached/lazy texture loading.
+        + Custom folder icon dropdowns now have a search field for filtering PNG icon filenames.
+        + Custom folder tab icons above screenshots can now be scaled separately from the custom folder text and browser panel icons.
+        + Fix: custom folder icons and labels now align correctly in nested dropdown folders, browser panel rows, and screenshot tabs.
+        + Tweak: reduced spacing between custom folder icons and labels in the browser panel and screenshot tabs.
+
     v0.8.5:
         + Fix: main Settings now uses a fixed UI font size and layout scale, independent from the browser font size setting.
         + Custom folders: added PNG icon overrides from the FolderIcons script folder.
@@ -995,6 +1002,7 @@ custom_folder_icon_popup_path = custom_folder_icon_popup_path or nil
 custom_folder_icon_popup_name = custom_folder_icon_popup_name or ""
 custom_folder_icon_popup_selection = custom_folder_icon_popup_selection or ""
 show_custom_folder_icons_window = show_custom_folder_icons_window or false
+custom_folder_icon_combo_filter = custom_folder_icon_combo_filter or ""
 custom_folder_icon_files_cache = custom_folder_icon_files_cache or {}
 custom_folder_icon_files_cache_dirty = custom_folder_icon_files_cache_dirty ~= false
 custom_folder_icon_texture_cache = custom_folder_icon_texture_cache or {}
@@ -1300,6 +1308,7 @@ function SetDefaultConfig()
         -- Custom folder font settings
         custom_folder_use_default_font = true,
         custom_folder_font_size = 11,
+        custom_folder_tab_icon_size = 18,
         -- NEW SETTINGS FOR CUSTOM FOLDERS
         custom_folder_force_uppercase = true,
         custom_folder_indent = 10,
@@ -1596,10 +1605,21 @@ function GetCustomFolderIconFiles()
     return custom_folder_icon_files_cache or {}
 end
 
-function GetCustomFolderIconSize()
+function GetCustomFolderIconSize(size_override)
+    if size_override then
+        return math.max(13, math.min(32, math.floor(size_override + 0.5)))
+    end
     local font_size = config and (config.custom_folder_use_default_font and config.font_size or config.custom_folder_font_size) or 13
     font_size = font_size or 13
     return math.max(13, math.min(18, math.floor(font_size + 0.5)))
+end
+
+function GetCustomFolderTabIconSize()
+    return GetCustomFolderIconSize(config and config.custom_folder_tab_icon_size or 18)
+end
+
+function GetCustomFolderIconTextGap()
+    return 2
 end
 
 function GetCustomFolderIconFilename(folder_path)
@@ -1614,8 +1634,8 @@ function HasCustomFolderIcon(folder_path)
     return filename ~= nil and not custom_folder_icon_failed_cache[filename]
 end
 
-function GetCustomFolderIconReservedWidth(folder_path)
-    if HasCustomFolderIcon(folder_path) then return GetCustomFolderIconSize() + 4 end
+function GetCustomFolderIconReservedWidth(folder_path, size_override)
+    if HasCustomFolderIcon(folder_path) then return GetCustomFolderIconSize(size_override) + GetCustomFolderIconTextGap() end
     return 0
 end
 
@@ -1649,30 +1669,35 @@ function GetCustomFolderIconTexture(folder_path)
     return nil
 end
 
-function DrawCustomFolderIconAt(folder_path, x, y)
+function DrawCustomFolderIconAt(folder_path, x, y, size_override)
     local texture = GetCustomFolderIconTexture(folder_path)
     if not texture then return false end
-    local size = GetCustomFolderIconSize()
+    local size = GetCustomFolderIconSize(size_override)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_DrawList_AddImage(draw_list, texture, x, y, x + size, y + size, 0, 0, 1, 1, 0xFFFFFFFF)
     return true
 end
 
-function DrawCustomFolderIconOnLastItem(folder_path)
+function DrawCustomFolderIconOnLastItem(folder_path, offset_x, size_override)
     local texture = GetCustomFolderIconTexture(folder_path)
     if not texture then return false end
-    local size = GetCustomFolderIconSize()
+    local size = GetCustomFolderIconSize(size_override)
     local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
     local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
     local y = min_y + ((max_y - min_y) - size) * 0.5
-    local x = min_x + 4
+    local x = min_x + 4 + (offset_x or 0)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_DrawList_AddImage(draw_list, texture, x, y, x + size, y + size, 0, 0, 1, 1, 0xFFFFFFFF)
     return true
 end
 
-function GetCustomFolderIconLabel(folder_path, label)
-    if HasCustomFolderIcon(folder_path) then return "   " .. label end
+function GetCustomFolderIconLabel(folder_path, label, size_override)
+    if HasCustomFolderIcon(folder_path) then
+        local space_w = r.ImGui_CalcTextSize(ctx, " ")
+        local reserved_w = GetCustomFolderIconSize(size_override) + 4 + GetCustomFolderIconTextGap()
+        local spaces = space_w and space_w > 0 and math.max(6, math.ceil(reserved_w / space_w)) or 6
+        return string.rep(" ", spaces) .. label
+    end
     return label
 end
 
@@ -1752,15 +1777,25 @@ function DrawCustomFolderIconSelector(folder_path, id_suffix)
     local current = config.custom_folder_icons[folder_path] or "None"
     local changed = false
     if r.ImGui_BeginCombo(ctx, "##FolderIcon" .. id_suffix, current) then
+        local search_changed, search_new = r.ImGui_InputTextWithHint(ctx, "##FolderIconSearch" .. id_suffix, "Search icons...", custom_folder_icon_combo_filter or "")
+        if search_changed then custom_folder_icon_combo_filter = search_new end
+        local filter_l = s_lower(custom_folder_icon_combo_filter or "")
         if r.ImGui_Selectable(ctx, "None", current == "None") then
             ClearCustomFolderIcon(folder_path)
             changed = true
         end
+        local visible_count = 0
         for _, filename in ipairs(files) do
-            if r.ImGui_Selectable(ctx, filename, current == filename) then
-                SetCustomFolderIcon(folder_path, filename)
-                changed = true
+            if filter_l == "" or s_find(s_lower(filename), filter_l, 1, true) then
+                visible_count = visible_count + 1
+                if r.ImGui_Selectable(ctx, filename, current == filename) then
+                    SetCustomFolderIcon(folder_path, filename)
+                    changed = true
+                end
             end
+        end
+        if visible_count == 0 then
+            r.ImGui_TextDisabled(ctx, "No matching icons")
         end
         r.ImGui_EndCombo(ctx)
     end
@@ -5723,7 +5758,8 @@ local function ResetThemeToDefaults()
         "selected_font",
         "font_size",
         "custom_folder_use_default_font",
-        "custom_folder_font_size"
+        "custom_folder_font_size",
+        "custom_folder_tab_icon_size"
     }
     for _, key in ipairs(keys) do
         config[key] = defaults[key]
@@ -6140,6 +6176,15 @@ function ShowConfigWindow()
                 custom_folder_icon_files_cache_dirty = true
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Open individual custom folder PNG icon settings") end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Tab Icon Size")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local tab_icon_changed, tab_icon_size = r.ImGui_SliderInt(ctx, "##CustomFolderTabIconSize", config.custom_folder_tab_icon_size or 18, 13, 32)
+            if tab_icon_changed then config.custom_folder_tab_icon_size = tab_icon_size; SaveConfig() end
+            r.ImGui_PopItemWidth(ctx)
 
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local cft_changed, cft_new = r.ImGui_Checkbox(ctx, "Show as Tabs above Screenshots", config.show_custom_folder_tabs)
@@ -12497,13 +12542,15 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                     local full_path = prefix == "" and folder_name or (prefix .. "/" .. folder_name)
                     
                     if IsPluginArray(folder_content) then
-                        local display_name = prefix == "" and folder_name or ("  " .. folder_name)
+                        local folder_indent = prefix == "" and "" or "  "
+                        local display_name = folder_indent .. GetCustomFolderIconLabel(full_path, folder_name .. " (" .. #folder_content .. ")")
+                        local icon_offset = folder_indent ~= "" and r.ImGui_CalcTextSize(ctx, folder_indent) or 0
                         local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
                         local depth = 1
                         local _, slash_count = full_path:gsub("/", "")
                         depth = slash_count + 1
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
-                        if r.ImGui_Selectable(ctx, GetCustomFolderIconLabel(full_path, display_name .. " (" .. #folder_content .. ")"), cf_is_selected) then
+                        if r.ImGui_Selectable(ctx, display_name, cf_is_selected) then
                             SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
                             show_sends_window = false
@@ -12514,7 +12561,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                             end
                             ClearScreenshotCache()
                         end
-                        DrawCustomFolderIconOnLastItem(full_path)
+                        DrawCustomFolderIconOnLastItem(full_path, icon_offset)
                         if r.ImGui_IsItemClicked(ctx, 1) then
                             r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
                         end
@@ -12527,9 +12574,11 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         local depth = 1
                         local _, slash_count = full_path:gsub("/", "")
                         depth = slash_count + 1
+                        local folder_indent = prefix == "" and "" or "  "
+                        local icon_offset = folder_indent ~= "" and r.ImGui_CalcTextSize(ctx, folder_indent) or 0
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
-                        r.ImGui_Text(ctx, GetCustomFolderIconLabel(full_path, (prefix == "" and "" or "  ") .. folder_name .. " >"))
-                        DrawCustomFolderIconOnLastItem(full_path)
+                        r.ImGui_Text(ctx, folder_indent .. GetCustomFolderIconLabel(full_path, folder_name .. " >"))
+                        DrawCustomFolderIconOnLastItem(full_path, icon_offset)
                         if r.ImGui_IsItemClicked(ctx, 1) then
                             r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
                         end
@@ -12541,13 +12590,15 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         
                         ShowNestedFolders(folder_content, full_path)
                     elseif type(folder_content) == "table" then
-                        local display_name = prefix == "" and folder_name or ("  " .. folder_name)
+                        local folder_indent = prefix == "" and "" or "  "
+                        local display_name = folder_indent .. GetCustomFolderIconLabel(full_path, folder_name .. " (0)")
+                        local icon_offset = folder_indent ~= "" and r.ImGui_CalcTextSize(ctx, folder_indent) or 0
                         local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
                         local depth = 1
                         local _, slash_count = full_path:gsub("/", "")
                         depth = slash_count + 1
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
-                        if r.ImGui_Selectable(ctx, GetCustomFolderIconLabel(full_path, display_name .. " (0)"), cf_is_selected) then
+                        if r.ImGui_Selectable(ctx, display_name, cf_is_selected) then
                             SelectFolderExclusive(full_path, "custom")
                             show_media_browser = false
                             show_sends_window = false
@@ -12555,7 +12606,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                             screenshot_search_results = {}
                             ClearScreenshotCache()
                         end
-                        DrawCustomFolderIconOnLastItem(full_path)
+                        DrawCustomFolderIconOnLastItem(full_path, icon_offset)
                         if r.ImGui_IsItemClicked(ctx, 1) then
                             r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
                         end
@@ -14392,7 +14443,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             if HasCustomFolderIcon(full_path) then
                 local icon_size = GetCustomFolderIconSize()
                 DrawCustomFolderIconAt(full_path, text_x, item_min_y + (line_h - icon_size) * 0.5 + 2)
-                text_x = text_x + icon_size + 4
+                text_x = text_x + icon_size + GetCustomFolderIconTextGap()
             end
             r.ImGui_SetCursorScreenPos(ctx, text_x, text_y)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_col)
@@ -21460,15 +21511,17 @@ function ShowScreenshotWindow()
             local scroll_mode = config.custom_folder_tabs_overflow_scroll
             local avail_w = r.ImGui_GetContentRegionAvail(ctx)
             local spacing = 4
+            local tab_icon_size = GetCustomFolderTabIconSize()
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), spacing, spacing)
             r.ImGui_PushFont(ctx, CustomFolderFont or NormalFont, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
+            local tab_frame_h = math.max(r.ImGui_GetFrameHeight(ctx), tab_icon_size + 6)
 
             local function DrawPlus()
                 local plus_w = 22
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F3F)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x5F5F5F5F)
-                if r.ImGui_Button(ctx, "+##cftab_add_root", plus_w, 0) then
+                if r.ImGui_Button(ctx, "+##cftab_add_root", plus_w, tab_frame_h) then
                     show_add_root_folder_popup = true
                     new_root_folder_name = ""
                     r.ImGui_OpenPopup(ctx, "Add Custom Folder")
@@ -21502,7 +21555,7 @@ function ShowScreenshotWindow()
                     end
                     local txt_w = r.ImGui_CalcTextSize(ctx, label)
                     local btn_w = txt_w + 16
-                    if r.ImGui_Button(ctx, label .. "##cftab_virt_" .. target, btn_w, 0) then
+                    if r.ImGui_Button(ctx, label .. "##cftab_virt_" .. target, btn_w, tab_frame_h) then
                         if is_active then
                             SelectFolderExclusive(nil)
                         else
@@ -21554,9 +21607,9 @@ function ShowScreenshotWindow()
                         display_label = label .. " (" .. plugin_count .. ")"
                     end
                 end
-                local btn_label = GetCustomFolderIconLabel(full_path, display_label) .. "##cftab_" .. depth .. "_" .. i
+                local btn_label = GetCustomFolderIconLabel(full_path, display_label, tab_icon_size) .. "##cftab_" .. depth .. "_" .. i
                 local txt_w = r.ImGui_CalcTextSize(ctx, display_label)
-                local btn_w = txt_w + 16 + GetCustomFolderIconReservedWidth(full_path)
+                local btn_w = txt_w + 16 + GetCustomFolderIconReservedWidth(full_path, tab_icon_size)
                 local need_sameline = (depth == 1 or i > 1)
                 if need_sameline then
                     if scroll_mode or (row_w + btn_w + spacing <= avail_w) then
@@ -21586,7 +21639,7 @@ function ShowScreenshotWindow()
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x456088FF)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x2A4068FF)
                 end
-                if r.ImGui_Button(ctx, btn_label, btn_w, 0) then
+                if r.ImGui_Button(ctx, btn_label, btn_w, tab_frame_h) then
                     if is_sel then
                         if not config.custom_folder_tabs_keep_parent_visible then
                             SelectFolderExclusive(nil)
@@ -21595,7 +21648,7 @@ function ShowScreenshotWindow()
                         SelectFolderExclusive(full_path, "custom")
                     end
                 end
-                DrawCustomFolderIconOnLastItem(full_path)
+                DrawCustomFolderIconOnLastItem(full_path, nil, tab_icon_size)
                 CheckFolderDropTarget(full_path, "custom")
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
@@ -21612,7 +21665,7 @@ function ShowScreenshotWindow()
 
             if scroll_mode then
                 local arrow_w = 20
-                local btn_h = r.ImGui_GetFrameHeight(ctx)
+                local btn_h = tab_frame_h
                 local child_id = "cftab_scroll_" .. depth .. "_" .. (parent_path or "")
                 local outer_used = 0
                 if depth == 1 then
@@ -21683,6 +21736,8 @@ function ShowScreenshotWindow()
                         if #segments >= 2 then
                             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
                             r.ImGui_PushFont(ctx, CustomFolderFont or NormalFont, (config.custom_folder_use_default_font and config.font_size) or (config.custom_folder_font_size or config.font_size))
+                            local tab_icon_size = GetCustomFolderTabIconSize()
+                            local tab_frame_h = math.max(r.ImGui_GetFrameHeight(ctx), tab_icon_size + 6)
                             local accum_path = ""
                             for i, seg in ipairs(segments) do
                                 accum_path = (i == 1) and seg or (accum_path .. "/" .. seg)
@@ -21700,10 +21755,11 @@ function ShowScreenshotWindow()
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x5A7FB5FF)
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x3A5F95FF)
                                 end
-                                if r.ImGui_Button(ctx, GetCustomFolderIconLabel(accum_path, seg_label) .. "##bc_" .. i, 0, 0) then
+                                local bc_w = r.ImGui_CalcTextSize(ctx, seg_label) + 16 + GetCustomFolderIconReservedWidth(accum_path, tab_icon_size)
+                                if r.ImGui_Button(ctx, GetCustomFolderIconLabel(accum_path, seg_label, tab_icon_size) .. "##bc_" .. i, bc_w, tab_frame_h) then
                                     SelectFolderExclusive(accum_path, "custom")
                                 end
-                                DrawCustomFolderIconOnLastItem(accum_path)
+                                DrawCustomFolderIconOnLastItem(accum_path, nil, tab_icon_size)
                                 if is_last then r.ImGui_PopStyleColor(ctx, 3) end
                                 r.ImGui_PopStyleColor(ctx)
                             end
