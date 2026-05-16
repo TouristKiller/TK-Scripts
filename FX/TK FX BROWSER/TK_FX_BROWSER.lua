@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.9.6
+-- @version 2.9.7
 -- @changelog:
 --[[ 
+    v2.9.7:
+        + Track Templates: added a thumbnail grid view with automatic image matching from the TrackTemplateThumbnails script folder.
+        + Track Templates: thumbnail and fallback tiles use the same click-to-load behavior as the existing browser panel template list.
+
     v2.9.6:
         + Custom folder icons: added recursive FolderIcons subfolder support, PNG icon overrides, and cached/lazy texture loading.
         + Custom folder icon dropdowns now have a search field for filtering PNG icon filenames.
@@ -204,6 +208,7 @@ if not r.APIExists or not r.APIExists("ImGui_WindowFlags_NoTitleBar") then
 end
 local screenshot_path       = script_path .. "Screenshots" .. os_separator
 local script_thumbs_path    = script_path .. "ScriptThumbnails" .. os_separator
+local track_template_thumbs_path = script_path .. "TrackTemplateThumbnails" .. os_separator
 local project_covers_path   = script_path .. "ProjectCovers" .. os_separator
 local project_comments_path = script_path .. "project_comments.json"
 local project_preview_active_path = script_path .. "project_preview_active.json"
@@ -888,6 +893,7 @@ last_panel_before_global = nil
 current_fx_chain_path = current_fx_chain_path or nil
 current_fx_chain_relative_path = current_fx_chain_relative_path or nil
 current_fx_chain_name = current_fx_chain_name or nil
+show_all_fx_chains_browser = show_all_fx_chains_browser or false
 
 view_mode = view_mode or "screenshots" 
 
@@ -937,6 +943,12 @@ custom_folder_icon_files_cache = custom_folder_icon_files_cache or {}
 custom_folder_icon_files_cache_dirty = custom_folder_icon_files_cache_dirty ~= false
 custom_folder_icon_texture_cache = custom_folder_icon_texture_cache or {}
 custom_folder_icon_failed_cache = custom_folder_icon_failed_cache or {}
+show_track_templates_browser = show_track_templates_browser or false
+track_template_search_term = track_template_search_term or ""
+track_template_flat_cache = track_template_flat_cache or nil
+track_template_flat_cache_dirty = track_template_flat_cache_dirty ~= false
+track_template_thumb_path_cache = track_template_thumb_path_cache or {}
+track_template_thumbs_folder_ready = track_template_thumbs_folder_ready or false
 
 config_window_selected_tab = config_window_selected_tab or 1
 
@@ -963,11 +975,17 @@ function SelectBrowserPanelItem(name)
     show_sends_window = false
     show_action_browser = false
     show_scripts_browser = false
+    show_track_templates_browser = false
+    show_all_fx_chains_browser = false
 end
 
 function SelectFolderExclusive(name, kind)
     selected_folder = name
     selected_folder_kind = kind
+    if name ~= "Track Templates" then
+        show_track_templates_browser = false
+    end
+    show_all_fx_chains_browser = false
     screenshot_multi_selected = {}
     screenshot_nav_anchor = nil
     screenshot_nav_index = nil
@@ -1353,6 +1371,8 @@ function SetDefaultConfig()
         screenshot_section_width = screenshot_section_width or 600, 
         script_thumb_size = 120,
         show_script_labels = true,
+        track_template_thumb_size = 120,
+        show_track_template_folder_labels = true,
         use_pagination = false,
         compact_screenshots = true,
         use_masonry_layout = false,
@@ -9871,6 +9891,7 @@ function ShowFxChainInScreenshotWindow(chain_path, relative_path, chain_name)
     current_fx_chain_path = chain_path
     current_fx_chain_relative_path = relative_path
     current_fx_chain_name = chain_name
+    show_all_fx_chains_browser = false
     
     -- Parse the FX chain to get list of plugins
     local fx_list = ParseFxChainFile(chain_path)
@@ -10147,7 +10168,7 @@ function ShowChainDividerContextMenu(popup_id, fx)
     end
 end
 
-function ShowAllFxChainsInScreenshotWindow()
+function ShowAllFxChainsInScreenshotWindow(reset_cache)
     local tree = GetFxChainsTree()
     local all_chains = CollectAllFxChainsFlat(tree)
     if #all_chains == 0 then return end
@@ -10156,15 +10177,18 @@ function ShowAllFxChainsInScreenshotWindow()
     selected_folder = nil
     browser_panel_selected = nil
     ClearScreenshotCache()
-    if fx_chain_cache then
+    if reset_cache ~= false and fx_chain_cache then
         for k in pairs(fx_chain_cache) do fx_chain_cache[k] = nil end
     end
     current_fx_chain_path = nil
     current_fx_chain_relative_path = nil
     current_fx_chain_name = nil
+    show_all_fx_chains_browser = true
 
     local extension = ".RfxChain"
     local fx_chains_root = ResolveFxChainsRoot()
+    local term = browser_search_term or ""
+    local term_l = term:lower()
 
     for idx, chain_info in ipairs(all_chains) do
         local chain_file_path = fx_chains_root .. chain_info.path .. os_separator .. chain_info.name .. extension
@@ -10172,6 +10196,16 @@ function ShowAllFxChainsInScreenshotWindow()
 
         if fx_list and #fx_list > 0 then
             local relative_path = chain_info.path .. os_separator .. chain_info.name .. extension
+            local path_label = (chain_info.path or ""):gsub("[/\\]", " ")
+            local chain_matches = term == "" or FuzzyFind(chain_info.name, term_l) or FuzzyFind(path_label, term_l)
+            local matching_fx = {}
+            for _, fx_name in ipairs(fx_list) do
+                if chain_matches or FuzzyFind(fx_name, term_l) then
+                    matching_fx[#matching_fx + 1] = fx_name
+                end
+            end
+
+            if #matching_fx > 0 then
             table.insert(screenshot_search_results, {
                 is_separator = true,
                 kind = "chain_divider",
@@ -10181,7 +10215,7 @@ function ShowAllFxChainsInScreenshotWindow()
                 chain_name = chain_info.name
             })
 
-            for _, fx_name in ipairs(fx_list) do
+            for _, fx_name in ipairs(matching_fx) do
                 table.insert(screenshot_search_results, {
                     name = fx_name,
                     is_fx_chain_item = true,
@@ -10190,7 +10224,7 @@ function ShowAllFxChainsInScreenshotWindow()
                 })
             end
 
-            for _, fx_name in ipairs(fx_list) do
+            for _, fx_name in ipairs(matching_fx) do
                 local safe_name = fx_name:gsub("[^%w%s-]", "_")
                 local screenshot_file = screenshot_path .. safe_name .. ".png"
                 if r.file_exists(screenshot_file) then
@@ -10204,6 +10238,7 @@ function ShowAllFxChainsInScreenshotWindow()
                         }
                     end
                 end
+            end
             end
         end
     end
@@ -13231,6 +13266,7 @@ function SortScreenshotResults()
 end
 
 function SearchAllPlugins()
+    show_all_fx_chains_browser = false
     screenshot_search_results = {}
     local MAX_RESULTS = 250
     local term = (browser_search_term or "")
@@ -13286,6 +13322,13 @@ end
 function ClearSearch()
     browser_search_term = ""
     search_warning_message = nil
+
+    if show_all_fx_chains_browser then
+        ShowAllFxChainsInScreenshotWindow(false)
+        RequestClearScreenshotCache()
+        new_search_performed = true
+        return
+    end
     
     if last_panel_before_global then
         local sg = last_panel_before_global
@@ -13383,6 +13426,7 @@ function ShowScreenshotControls()
     local show_customize_popup = false
     local layout = config.screenshot_controls_layout or "horizontal"
     local available_width = r.ImGui_GetContentRegionAvail(ctx)
+    local is_all_fx_chains_view = show_all_fx_chains_browser and not selected_folder and not browser_panel_selected
     
     local auto_vertical = (layout == "auto" and available_width < 300)
     local is_vertical = (layout == "vertical" or auto_vertical)
@@ -13404,7 +13448,7 @@ function ShowScreenshotControls()
             ShowCustomFolderDropdown(true)  -- Pass true for vertical layout
         end
         
-        show_screenshot_search = config.show_screenshot_search ~= false
+        show_screenshot_search = not is_all_fx_chains_view and config.show_screenshot_search ~= false
         if show_screenshot_search then
             -- Buttons: Sort(20) + spacing(4) + All(30) = 54, plus right_margin to align with dropdown
             local button_space = 58 + right_margin
@@ -13494,7 +13538,11 @@ function ShowScreenshotControls()
                 browser_search_term = new_search
                 if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
                 
-                if config.always_search_all then
+                if show_all_fx_chains_browser and not selected_folder and not browser_panel_selected then
+                    ShowAllFxChainsInScreenshotWindow(false)
+                    RequestClearScreenshotCache()
+                    new_search_performed = true
+                elseif config.always_search_all then
                     SearchAllPlugins()
                 elseif browser_search_term == "" then
                     screenshot_search_results = {}
@@ -13600,7 +13648,7 @@ function ShowScreenshotControls()
         if not config.hide_custom_dropdown then
             ShowCustomFolderDropdown(false)  -- Pass false for horizontal layout
         end
-        show_screenshot_search = config.show_screenshot_search ~= false
+        show_screenshot_search = not is_all_fx_chains_view and config.show_screenshot_search ~= false
         if show_screenshot_search then
             r.ImGui_SameLine(ctx)
             r.ImGui_PushItemWidth(ctx, 70)
@@ -13689,7 +13737,11 @@ function ShowScreenshotControls()
                 browser_search_term = new_search
                 if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
                 
-                if config.always_search_all then
+                if show_all_fx_chains_browser and not selected_folder and not browser_panel_selected then
+                    ShowAllFxChainsInScreenshotWindow(false)
+                    RequestClearScreenshotCache()
+                    new_search_performed = true
+                elseif config.always_search_all then
                     SearchAllPlugins()
                 elseif browser_search_term == "" then
                     screenshot_search_results = {}
@@ -14504,6 +14556,146 @@ function DrawTrackTemplates(tbl, path)
             end
         end
     end
+end
+
+function InvalidateTrackTemplateGridCache()
+    track_template_flat_cache = nil
+    track_template_flat_cache_dirty = true
+    track_template_thumb_path_cache = {}
+end
+
+function EnsureTrackTemplateThumbnailsFolderExists()
+    if not track_template_thumbs_folder_ready then
+        if not r.file_exists(track_template_thumbs_path) then
+            r.RecursiveCreateDirectory(track_template_thumbs_path, 0)
+        end
+        track_template_thumbs_folder_ready = true
+    end
+    return track_template_thumbs_path
+end
+
+function OpenTrackTemplateThumbnailsFolder()
+    local path = EnsureTrackTemplateThumbnailsFolderExists()
+    local os_name = r.GetOS()
+    if os_name:match("Win") then
+        os.execute('start "" "' .. path .. '"')
+    elseif os_name:match("OSX") then
+        os.execute('open "' .. path .. '"')
+    else
+        os.execute('xdg-open "' .. path .. '" &')
+    end
+end
+
+function GetTrackTemplateRelativeBase(template_path)
+    local rel = tostring(template_path or ""):gsub("^[/\\]+", "")
+    rel = rel:gsub("%.RTrackTemplate$", "")
+    return rel
+end
+
+function GetTrackTemplateThumbnailPath(item)
+    if not item or not item.template_path then return nil end
+    local key = item.template_path
+    if track_template_thumb_path_cache[key] ~= nil then
+        return track_template_thumb_path_cache[key]
+    end
+    local rel = GetTrackTemplateRelativeBase(item.template_path)
+    local rel_path = rel:gsub("[/\\]", os_separator)
+    local exts = { ".png", ".jpg", ".jpeg", ".bmp" }
+    for i = 1, #exts do
+        local candidate = track_template_thumbs_path .. rel_path .. exts[i]
+        if r.file_exists(candidate) then
+            track_template_thumb_path_cache[key] = candidate
+            return candidate
+        end
+    end
+    track_template_thumb_path_cache[key] = false
+    return nil
+end
+
+function CollectTrackTemplatesFlat(tbl, path, result)
+    path = path or ""
+    result = result or {}
+    local extension = ".RTrackTemplate"
+    for i = 1, #tbl do
+        local item = tbl[i]
+        if type(item) == "table" and item.dir then
+            local cur_path = table.concat({ path, os_separator, item.dir })
+            CollectTrackTemplatesFlat(item, cur_path, result)
+        elseif type(item) ~= "table" then
+            local template_path = table.concat({ path, os_separator, item, extension })
+            local folder = path:gsub("^[/\\]+", "")
+            result[#result + 1] = {
+                name = item,
+                folder = folder ~= "" and folder or "Root",
+                folder_path = path,
+                template_path = template_path
+            }
+        end
+    end
+    return result
+end
+
+function GetTrackTemplatesFlatList(force)
+    if force or track_template_flat_cache_dirty or not track_template_flat_cache then
+        local tree = GetTrackTemplatesTree()
+        track_template_flat_cache = CollectTrackTemplatesFlat(tree)
+        table.sort(track_template_flat_cache, function(a, b)
+            local af = (a.folder or ""):lower()
+            local bf = (b.folder or ""):lower()
+            if af == bf then return (a.name or ""):lower() < (b.name or ""):lower() end
+            return af < bf
+        end)
+        track_template_flat_cache_dirty = false
+    end
+    return track_template_flat_cache or {}
+end
+
+function TrackTemplateMatchesSearch(item, term)
+    if not term or term == "" then return true end
+    local needle = term:lower()
+    local haystack = ((item.name or "") .. " " .. (item.folder or "")):lower()
+    return haystack:find(needle, 1, true) ~= nil
+end
+
+function RenameTrackTemplateGridItem(item)
+    if not item then return end
+    local retval, new_name = r.GetUserInputs("Rename Track Template", 1, "New name:", item.name)
+    if not retval or not new_name or new_name == "" then return end
+    local templates_path = ResolveTrackTemplatesRoot()
+    local old_path = templates_path .. item.template_path
+    local new_path = templates_path .. item.folder_path .. os_separator .. new_name .. ".RTrackTemplate"
+    if os.rename(old_path, new_path) then
+        FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+        InvalidateTrackTemplateGridCache()
+        r.ShowMessageBox("Track Template renamed", "Success", 0)
+    else
+        r.ShowMessageBox("Could not rename Track Template", "Error", 0)
+    end
+end
+
+function DeleteTrackTemplateGridItem(item)
+    if not item then return end
+    local templates_path = ResolveTrackTemplatesRoot()
+    local file_path = templates_path .. item.template_path
+    if os.remove(file_path) then
+        FX_LIST_TEST, CAT_TEST = MakeFXFiles()
+        InvalidateTrackTemplateGridCache()
+        r.ShowMessageBox("Track Template deleted", "Success", 0)
+    else
+        r.ShowMessageBox("Could not delete Track Template", "Error", 0)
+    end
+end
+
+function OpenTrackTemplatesGrid()
+    UpdateLastViewedFolder(selected_folder)
+    show_track_templates_browser = true
+    show_scripts_browser = false
+    show_action_browser = false
+    show_media_browser = false
+    show_sends_window = false
+    SelectFolderExclusive("Track Templates")
+    if config and not config.show_screenshot_window then config.show_screenshot_window = true; SaveConfig() end
+    ClearScreenshotCache()
 end
 
 local function ApplyFolderPaginationSlice(plugins, folder_key)
@@ -15559,7 +15751,11 @@ function ShowBrowserPanel()
             end
             screenshot_search_replace_requested = false
             browser_search_term = new_browser_search
-            if config.always_search_all then
+            if show_all_fx_chains_browser and not selected_folder and not browser_panel_selected then
+                ShowAllFxChainsInScreenshotWindow(false)
+                RequestClearScreenshotCache()
+                new_search_performed = true
+            elseif config.always_search_all then
                 SearchAllPlugins()
             elseif browser_search_term ~= "" and browser_panel_selected then
                 RefreshCurrentScreenshotView()
@@ -16370,6 +16566,10 @@ function ShowBrowserPanel()
                 
                 if header_is_open then
                     r.ImGui_Indent(ctx, 10)
+                    if r.ImGui_Selectable(ctx, ">> Show All TT ##show_all_track_templates") then
+                        OpenTrackTemplatesGrid()
+                    end
+                    r.ImGui_Separator(ctx)
                     local tree = GetTrackTemplatesTree()
                     DrawTrackTemplates(tree)
                     r.ImGui_Unindent(ctx, 10)
@@ -19518,6 +19718,152 @@ function DrawVinylLayout(screenshots, top_offset)
     r.ImGui_SetCursorPosY(ctx, base_cy + max_h + (config.compact_screenshots and 4 or 12))
 end
 
+function RenderTrackTemplatesSection(popped_view_stylevars)
+    local controls_vertical = ShowScreenshotControls()
+    local cur_y = r.ImGui_GetCursorPosY(ctx)
+    r.ImGui_SetCursorPosY(ctx, cur_y)
+    r.ImGui_Separator(ctx)
+    local cur_y2 = r.ImGui_GetCursorPosY(ctx)
+    r.ImGui_SetCursorPosY(ctx, cur_y2 - 1)
+    if controls_vertical then
+        local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+        r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+    end
+    if not popped_view_stylevars then
+        r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
+    end
+
+    EnsureTrackTemplateThumbnailsFolderExists()
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushItemWidth(ctx, 120)
+    local sz_changed, new_sz = r.ImGui_SliderInt(ctx, "##TrackTemplateThumbSize", config.track_template_thumb_size or 120, 60, 300, "%dpx")
+    if sz_changed then
+        config.track_template_thumb_size = new_sz
+        SaveConfig()
+    end
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Refresh##TrackTemplateThumbs", 70, 22) then
+        InvalidateTrackTemplateGridCache()
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Open Folder##TrackTemplateThumbs", 95, 22) then
+        OpenTrackTemplateThumbnailsFolder()
+    end
+    r.ImGui_SameLine(ctx)
+    local folder_labels_active = config.show_track_template_folder_labels ~= false
+    if not folder_labels_active then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x555555FF)
+    end
+    if r.ImGui_Button(ctx, "Folders##TrackTemplateLabels", 70, 22) then
+        config.show_track_template_folder_labels = not folder_labels_active
+        SaveConfig()
+    end
+    if not folder_labels_active then
+        r.ImGui_PopStyleColor(ctx)
+    end
+
+    local changed_search, new_search = r.ImGui_InputTextWithHint(ctx, "##TrackTemplateSearch", "Search track templates...", track_template_search_term or "")
+    if changed_search then track_template_search_term = new_search end
+
+    local window_height = r.ImGui_GetWindowHeight(ctx)
+    local current_y = r.ImGui_GetCursorPosY(ctx)
+    local available_height = window_height - current_y
+    local child_open = r.ImGui_BeginChild(ctx, "TrackTemplateGridList", -1, available_height)
+    if child_open then
+        local all_items = GetTrackTemplatesFlatList()
+        local items = {}
+        for i = 1, #all_items do
+            if TrackTemplateMatchesSearch(all_items[i], track_template_search_term) then
+                items[#items + 1] = all_items[i]
+            end
+        end
+
+        if #items == 0 then
+            r.ImGui_Text(ctx, "No Track Templates found")
+        else
+            local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+            local cell_w = config.track_template_thumb_size or 120
+            local cell_h = math.floor(cell_w * 80 / 120)
+            local spacing = 12
+            local start_x = r.ImGui_GetCursorPosX(ctx)
+            local x = start_x
+            local y = r.ImGui_GetCursorPosY(ctx)
+            local cols = math.max(1, math.floor((avail_w + spacing) / (cell_w + spacing)))
+            local col_index = 0
+            local current_folder = nil
+
+            for i = 1, #items do
+                local item = items[i]
+                if folder_labels_active and item.folder ~= current_folder then
+                    if col_index ~= 0 then
+                        y = y + cell_h + spacing + 34
+                    end
+                    r.ImGui_SetCursorPos(ctx, start_x, y)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x888888FF)
+                    r.ImGui_Text(ctx, item.folder or "Root")
+                    r.ImGui_PopStyleColor(ctx)
+                    r.ImGui_Separator(ctx)
+                    y = r.ImGui_GetCursorPosY(ctx)
+                    x = start_x
+                    col_index = 0
+                    current_folder = item.folder
+                end
+
+                if col_index >= cols then
+                    col_index = 0
+                    x = start_x
+                    y = y + cell_h + spacing + 34
+                end
+
+                r.ImGui_SetCursorPos(ctx, x, y)
+                local id = "track_template_cell_" .. i
+                local cell_clicked = false
+                local thumb_path = GetTrackTemplateThumbnailPath(item)
+                if thumb_path then
+                    local tex = LoadSearchTexture(thumb_path, "track_template:" .. item.template_path)
+                    if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                        if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
+                    else
+                        if r.ImGui_Button(ctx, "No Image##ttbtn" .. i, cell_w, cell_h) then cell_clicked = true end
+                    end
+                else
+                    if r.ImGui_Button(ctx, "No Image##ttbtn" .. i, cell_w, cell_h) then cell_clicked = true end
+                end
+
+                if cell_clicked then
+                    LoadTemplate(item.template_path)
+                end
+
+                if r.ImGui_IsItemClicked(ctx, 1) then
+                    r.ImGui_OpenPopup(ctx, "TrackTemplateGridOptions_" .. i)
+                end
+                if r.ImGui_BeginPopup(ctx, "TrackTemplateGridOptions_" .. i) then
+                    if r.ImGui_MenuItem(ctx, "Rename") then
+                        RenameTrackTemplateGridItem(item)
+                    end
+                    if r.ImGui_MenuItem(ctx, "Delete") then
+                        DeleteTrackTemplateGridItem(item)
+                    end
+                    r.ImGui_EndPopup(ctx)
+                end
+
+                r.ImGui_SetCursorPos(ctx, x, y + cell_h + 4)
+                r.ImGui_PushTextWrapPos(ctx, r.ImGui_GetCursorPosX(ctx) + cell_w)
+                r.ImGui_Text(ctx, item.name)
+                r.ImGui_PopTextWrapPos(ctx)
+                col_index = col_index + 1
+                x = x + cell_w + spacing
+            end
+            r.ImGui_SetCursorPosY(ctx, y + cell_h + spacing + 34)
+            r.ImGui_Dummy(ctx, 0, 1)
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    return popped_view_stylevars
+end
+
 function RenderScriptsLauncherSection(popped_view_stylevars)
     
     local controls_vertical = ShowScreenshotControls()
@@ -20158,6 +20504,9 @@ function ShowScreenshotWindow()
 --------------------------------------------------------------------------------------
         -- PROJECTS GEDEELTE:
         local is_screenshot_branch = false
+        if show_track_templates_browser and selected_folder ~= "Track Templates" then
+            show_track_templates_browser = false
+        end
         if projects_loading and show_media_browser then
             if not popped_view_stylevars then
                 r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true
@@ -20175,6 +20524,8 @@ function ShowScreenshotWindow()
             r.ImGui_Text(ctx, dots)
         elseif show_scripts_browser then
             popped_view_stylevars = RenderScriptsLauncherSection(popped_view_stylevars)
+        elseif show_track_templates_browser then
+            popped_view_stylevars = RenderTrackTemplatesSection(popped_view_stylevars)
         elseif show_media_browser then
             local controls_vertical = ShowScreenshotControls()
             local cur_y = r.ImGui_GetCursorPosY(ctx)
@@ -21334,16 +21685,32 @@ function ShowScreenshotWindow()
         local controls_vertical = ShowScreenshotControls()
         r.ImGui_Separator(ctx)
         if controls_vertical then
-            -- In vertical mode hebben we meer ruimte nodig voor de controls
-            -- Bereken hoeveel regels er zijn: folder + custom (optioneel) + search = 2-3 regels
-            local num_control_rows = 2 -- folder + search minimum
-            if not config.hide_custom_dropdown and next(config.custom_folders) then
-                num_control_rows = num_control_rows + 1 -- custom dropdown erbij
+            if show_all_fx_chains_browser then
+                local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                r.ImGui_Dummy(ctx, 0, line_height * 1.5)
+            else
+                -- In vertical mode hebben we meer ruimte nodig voor de controls
+                -- Bereken hoeveel regels er zijn: folder + custom (optioneel) + search = 2-3 regels
+                local num_control_rows = 2 -- folder + search minimum
+                if not config.hide_custom_dropdown and next(config.custom_folders) then
+                    num_control_rows = num_control_rows + 1 -- custom dropdown erbij
+                end
+                -- Voeg voldoende spacing toe (line height * aantal regels + kleine marge)
+                local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                local needed_space = line_height * (num_control_rows - 0.5) + 1
+                r.ImGui_Dummy(ctx, 0, needed_space)
             end
-            -- Voeg voldoende spacing toe (line height * aantal regels + kleine marge)
-            local line_height = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-            local needed_space = line_height * (num_control_rows - 0.5) + 1
-            r.ImGui_Dummy(ctx, 0, needed_space)
+        end
+        if show_all_fx_chains_browser then
+            r.ImGui_Spacing(ctx)
+            local changed_search, new_search = r.ImGui_InputTextWithHint(ctx, "##FxChainsSearch", "Search FX chains...", browser_search_term or "")
+            if changed_search then
+                browser_search_term = new_search
+                if config.flicker_guard_enabled then _last_search_input_time = r.time_precise() end
+                ShowAllFxChainsInScreenshotWindow(false)
+                RequestClearScreenshotCache()
+                new_search_performed = true
+            end
         end
         local available_width = r.ImGui_GetContentRegionAvail(ctx)
         if config.use_global_screenshot_size then
@@ -21922,7 +22289,7 @@ function ShowScreenshotWindow()
         r.ImGui_PopStyleColor(ctx)
     end
 
-    if config.show_custom_folder_tabs and type(config.custom_folders) == "table" then
+    if config.show_custom_folder_tabs and not show_all_fx_chains_browser and not current_fx_chain_path and type(config.custom_folders) == "table" then
         local function CollectTopLevelNames(tbl)
             local names = {}
             for n, _ in pairs(tbl) do
@@ -26633,6 +27000,11 @@ end
                             debug_track_templates_header_was_open = true
                             debug_last_menu_log_time = current_time
                         end
+                        if r.ImGui_Selectable(ctx, ">> Show All TT ##show_all_track_templates_menu") then
+                            OpenTrackTemplatesGrid()
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
+                        r.ImGui_Separator(ctx)
                         local tree = GetTrackTemplatesTree()
                         DrawTrackTemplates(tree)
                         if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
