@@ -1,8 +1,13 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.8.3
+-- @version 0.8.4
 -- @changelog:
 --[[
+v0.8.4:
++ Waveform clicks now seek active audio preview playback immediately from the clicked position, with zoom, scroll and playrate/tempo-sync aware positioning
++ Waveform and spectral preview generation now read directly from the media source, avoiding temporary project tracks/items for analysis
++ Timeline inserts now apply the current monitoring volume to the inserted take
+
 v0.8.2:
 + New Compact View (side-dock card layout): one card per item with metadata-driven tags, toggle via Settings or toolbar
 + Toolbar in compact mode: right-side icons (Refresh, RS5K, Video, Settings, Shortcuts, Close) moved into a single overflow popup (...) to free up space
@@ -4015,143 +4020,129 @@ end
 local function calculate_spectral_data(file_path, num_slices, num_freq_bands)
     local spectral_data = {}
     
-    local temp_track = r.GetTrack(0, 0)
-    if not temp_track then 
-        return spectral_data 
-    end
-    
-    local temp_item = r.AddMediaItemToTrack(temp_track)
-    if not temp_item then return spectral_data end
-    
-    local take = r.AddTakeToMediaItem(temp_item)
-    if not take then
-        r.DeleteTrackMediaItem(temp_track, temp_item)
-        return spectral_data
-    end
-    
     local source = r.PCM_Source_CreateFromFile(file_path)
     if not source then
-        r.DeleteTrackMediaItem(temp_track, temp_item)
         return spectral_data
     end
     
-    r.SetMediaItemTake_Source(take, source)
     local length = r.GetMediaSourceLength(source)
     
     if not length or length <= 0 then
-        r.DeleteTrackMediaItem(temp_track, temp_item)
+        r.PCM_Source_Destroy(source)
         return spectral_data
     end
     
-    r.SetMediaItemLength(temp_item, length, false)
-    r.UpdateItemInProject(temp_item)
+    local samplerate = r.GetMediaSourceSampleRate(source) or 44100
+    if not samplerate or samplerate <= 0 then
+        samplerate = 44100
+    end
+    local fft_size = 1024
     
-    local accessor = r.CreateTakeAudioAccessor(take)
-    if accessor then
-        local samplerate = r.GetMediaSourceSampleRate(source) or 44100
-        local numch = 1 -- Use mono for spectral analysis
-        local fft_size = 1024
+    local split1 = 0.16
+    local split2 = 0.32
+    local split3 = 0.50
+    local split4 = 0.70
+    local split5 = 0.85
+    
+    for slice = 0, num_slices - 1 do
+        local start_time = (slice / num_slices) * length
+        local peakbuffer = r.new_array(fft_size * 2)
+        local samplebuffer = r.new_array(fft_size * 2)
+        peakbuffer.clear()
+        samplebuffer.clear()
         
-        local split1 = 0.16  -- Bass (kick drum range)
-        local split2 = 0.32  -- Low-mid (snare fundamental)
-        local split3 = 0.50  -- Mid (toms/vocals)
-        local split4 = 0.70  -- High-mid
-        local split5 = 0.85  -- High (cymbals/hats)
+        local ok = r.PCM_Source_GetPeaks(source, samplerate, start_time, 1, fft_size, 0, peakbuffer)
         
-        for slice = 0, num_slices - 1 do
-            local start_time = (slice / num_slices) * length
-            local samplebuffer = r.new_array(fft_size * 2)
+        if ok and ok > 0 then
+            for i = 1, fft_size do
+                local max_val = peakbuffer[i] or 0
+                local min_val = peakbuffer[fft_size + i] or 0
+                samplebuffer[i] = math.abs(max_val) >= math.abs(min_val) and max_val or min_val
+            end
+            samplebuffer.fft_real(fft_size, true)
+                
+            local bands = {0, 0, 0, 0, 0, 0}
+            local band_counts = {0, 0, 0, 0, 0, 0}
             
-            local ok = r.GetAudioAccessorSamples(accessor, samplerate, numch, start_time, fft_size, samplebuffer)
-            
-            if ok > 0 then
-                samplebuffer.fft_real(fft_size, true)
+            for bin = 1, fft_size / 2 - 1 do
+                local Re = samplebuffer[bin * 2] or 0
+                local Im = samplebuffer[bin * 2 + 1] or 0
+                local magnitude = math.sqrt(Re * Re + Im * Im)
                 
-                local bands = {0, 0, 0, 0, 0, 0}
-                local band_counts = {0, 0, 0, 0, 0, 0}
-                
-                for bin = 1, fft_size / 2 - 1 do
-                    local Re = samplebuffer[bin * 2]
-                    local Im = samplebuffer[bin * 2 + 1]
-                    local magnitude = math.sqrt(Re * Re + Im * Im)
-                    
-                    local ratio = bin / (fft_size / 2)
-                    local band_idx
-                    if ratio < split1 then
-                        band_idx = 1
-                    elseif ratio < split2 then
-                        band_idx = 2
-                    elseif ratio < split3 then
-                        band_idx = 3
-                    elseif ratio < split4 then
-                        band_idx = 4
-                    elseif ratio < split5 then
-                        band_idx = 5
-                    else
-                        band_idx = 6
-                    end
-                    
-                    bands[band_idx] = bands[band_idx] + magnitude
-                    band_counts[band_idx] = band_counts[band_idx] + 1
+                local ratio = bin / (fft_size / 2)
+                local band_idx
+                if ratio < split1 then
+                    band_idx = 1
+                elseif ratio < split2 then
+                    band_idx = 2
+                elseif ratio < split3 then
+                    band_idx = 3
+                elseif ratio < split4 then
+                    band_idx = 4
+                elseif ratio < split5 then
+                    band_idx = 5
+                else
+                    band_idx = 6
                 end
                 
-                for b = 1, 6 do
-                    if band_counts[b] > 0 then
-                        bands[b] = bands[b] / band_counts[b]
-                    end
-                end
-                
-                bands[1] = bands[1] * 0.15  -- Bass - reduce slightly more
-                bands[2] = bands[2] * 0.20  -- Low-mid
-                bands[3] = bands[3] * 0.35  -- Mid
-                bands[4] = bands[4] * 0.70  -- High-mid
-                bands[5] = bands[5] * 1.30  -- High - boost more
-                bands[6] = bands[6] * 2.20  -- Highest - boost more
-                
-                local total = 0
-                for b = 1, 6 do
-                    total = total + bands[b]
-                end
-                if total > 0 then
-                    for b = 1, 6 do
-                        bands[b] = bands[b] / total
-                    end
-                end
-                
-                for b = 1, 6 do
-                    bands[b] = bands[b] * bands[b]  -- ^2
-                end
-                
-                total = 0
-                for b = 1, 6 do
-                    total = total + bands[b]
-                end
-                if total > 0 then
-                    for b = 1, 6 do
-                        bands[b] = bands[b] / total
-                    end
-                end
-                
-                local weighted_sum = 0
-                for b = 1, 6 do
-                    weighted_sum = weighted_sum + (bands[b] * (b - 1))
-                end
-                
-                local spectral_value = weighted_sum / 5.0
-                
-                spectral_value = spectral_value ^ 0.7
-                
-                table.insert(spectral_data, spectral_value)
-            else
-                table.insert(spectral_data, 0.5) 
+                bands[band_idx] = bands[band_idx] + magnitude
+                band_counts[band_idx] = band_counts[band_idx] + 1
             end
             
-            samplebuffer.clear()
+            for b = 1, 6 do
+                if band_counts[b] > 0 then
+                    bands[b] = bands[b] / band_counts[b]
+                end
+            end
+            
+            bands[1] = bands[1] * 0.15
+            bands[2] = bands[2] * 0.20
+            bands[3] = bands[3] * 0.35
+            bands[4] = bands[4] * 0.70
+            bands[5] = bands[5] * 1.30
+            bands[6] = bands[6] * 2.20
+            
+            local total = 0
+            for b = 1, 6 do
+                total = total + bands[b]
+            end
+            if total > 0 then
+                for b = 1, 6 do
+                    bands[b] = bands[b] / total
+                end
+            end
+            
+            for b = 1, 6 do
+                bands[b] = bands[b] * bands[b]
+            end
+            
+            total = 0
+            for b = 1, 6 do
+                total = total + bands[b]
+            end
+            if total > 0 then
+                for b = 1, 6 do
+                    bands[b] = bands[b] / total
+                end
+            end
+            
+            local weighted_sum = 0
+            for b = 1, 6 do
+                weighted_sum = weighted_sum + (bands[b] * (b - 1))
+            end
+            
+            local spectral_value = weighted_sum / 5.0
+            spectral_value = spectral_value ^ 0.7
+            table.insert(spectral_data, spectral_value)
+        else
+            table.insert(spectral_data, 0.5) 
         end
-        r.DestroyAudioAccessor(accessor)
+        
+        peakbuffer.clear()
+        samplebuffer.clear()
     end
     
-    r.DeleteTrackMediaItem(temp_track, temp_item)
+    r.PCM_Source_Destroy(source)
     
     return spectral_data
 end 
@@ -5499,6 +5490,7 @@ local function insert_media_on_track(file_path, track, use_original_speed, custo
     r.UpdateItemInProject(item)
     local take = r.GetActiveTake(item)
     if take then
+        r.SetMediaItemTakeInfo_Value(take, "D_VOL", playback.preview_volume or 1.0)
         local src = r.GetMediaItemTake_Source(take)
         if src then r.PCM_Source_BuildPeaks(src, 0) end
         force_peaks_in_item(item, take)
@@ -12697,44 +12689,24 @@ local function loop()
                 elseif not is_video_or_gif and not is_image and (waveform.cache_file ~= file_to_show or #waveform.cache == 0 or (#waveform.cache ~= pixels and waveform_width_stable(pixels))) then
                     waveform.cache = {}
                     waveform.cache_file = file_to_show
-                    local temp_track = r.GetTrack(0, 0)
-                    if temp_track then
-                        local num_items_before = r.CountTrackMediaItems(temp_track)
-                        local temp_item = r.AddMediaItemToTrack(temp_track)
-                        if temp_item then
-                            local take = r.AddTakeToMediaItem(temp_item)
-                            if take then
-                                local source = r.PCM_Source_CreateFromFile(file_to_show)
-                                r.SetMediaItemTake_Source(take, source)
-                                local length = r.GetMediaSourceLength(source)
-                                if length and length > 0 then
-                                    r.SetMediaItemLength(temp_item, length, false)
-                                    r.UpdateItemInProject(temp_item)
-                                    local accessor = r.CreateTakeAudioAccessor(take)
-                                    if accessor then
-                                        local samplerate = 44100
-                                        local numch = r.GetMediaSourceNumChannels(source) or 2
-                                        for i = 0, pixels - 1 do
-                                            local start_time = (i / pixels) * length
-                                            local samples_to_read = math.max(100, math.floor((length / pixels) * samplerate))
-                                            local buffer = r.new_array(samples_to_read * numch)
-                                            local ok = r.GetAudioAccessorSamples(accessor, samplerate, numch, start_time, samples_to_read, buffer)
-                                            local peak = 0
-                                            if ok > 0 then
-                                                for j = 1, ok * numch do
-                                                    local v = math.abs(buffer[j] or 0)
-                                                    if v > peak then peak = v end
-                                                end
-                                            end
-                                            waveform.cache[i + 1] = peak
-                                            buffer.clear()
-                                        end
-                                        r.DestroyAudioAccessor(accessor)
-                                    end
+                    local source = r.PCM_Source_CreateFromFile(file_to_show)
+                    if source then
+                        local length = r.GetMediaSourceLength(source)
+                        if length and length > 0 and pixels > 0 then
+                            local peakrate = pixels / length
+                            local buffer = r.new_array(pixels * 2)
+                            buffer.clear()
+                            local ok = r.PCM_Source_GetPeaks(source, peakrate, 0, 1, pixels, 0, buffer)
+                            if ok then
+                                for i = 1, pixels do
+                                    local max_val = math.abs(buffer[i] or 0)
+                                    local min_val = math.abs(buffer[pixels + i] or 0)
+                                    waveform.cache[i] = math.max(max_val, min_val)
                                 end
                             end
-                            r.DeleteTrackMediaItem(temp_track, temp_item)
+                            buffer.clear()
                         end
+                        r.PCM_Source_Destroy(source)
                     end
                 end
                 if not is_midi and not is_image and #waveform.cache > 0 then
@@ -13504,10 +13476,18 @@ local function loop()
                         if source then
                             local file_length = r.GetMediaSourceLength(source)
                             r.PCM_Source_Destroy(source)
-                            if playback.playing_source and playback.state == "playing" then
-                                local click_time = normalized_x * file_length
-                                r.PCM_Source_SetPosition(playback.playing_source, click_time)
+                            if file_length and file_length > 0 and playback.playing_preview and not playback.is_paused and r.CF_Preview_SetValue then
+                                local playrate = playback.effective_playrate or 1.0
+                                if playrate <= 0 then playrate = 1.0 end
+                                local visible_duration_seek = 1.0 / waveform.zoom_level
+                                local max_scroll_seek = math.max(0, 1.0 - visible_duration_seek)
+                                local visible_start_seek = waveform.scroll_offset * max_scroll_seek
+                                local seek_norm = visible_start_seek + normalized_x * visible_duration_seek
+                                seek_norm = math.max(0, math.min(1, seek_norm))
+                                local click_time = seek_norm * (file_length / playrate)
+                                r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", click_time)
                                 playback.paused_position = click_time
+                                playback.prev_play_cursor = click_time
                             end
                         end
                     end
@@ -13515,9 +13495,10 @@ local function loop()
                 
                 if r.ImGui_IsMouseClicked(ctx, 1) and not grid_hovered and not slice_marker_handled then
                     waveform.play_cursor_position = 0
-                    if file_path and file_path ~= "" and playback.playing_source and playback.state == "playing" then
-                        r.PCM_Source_SetPosition(playback.playing_source, 0)
+                    if file_path and file_path ~= "" and playback.playing_preview and not playback.is_paused and r.CF_Preview_SetValue then
+                        r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", 0)
                         playback.paused_position = 0
+                        playback.prev_play_cursor = 0
                     end
                 end
                 
@@ -13539,7 +13520,9 @@ local function loop()
                                 waveform.play_cursor_position = slice_t / sf_len
                             end
                             if playback.playing_preview and r.CF_Preview_SetValue then
-                                r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", slice_t)
+                                local playrate = playback.effective_playrate or 1.0
+                                if playrate <= 0 then playrate = 1.0 end
+                                r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", slice_t / playrate)
                             elseif playback.playing_source then
                                 r.PCM_Source_SetPosition(playback.playing_source, slice_t)
                                 playback.paused_position = slice_t
@@ -13567,10 +13550,18 @@ local function loop()
                         local end_norm = math.max(waveform.selection_start, waveform.selection_end)
                         if math.abs(end_norm - start_norm) < 0.01 then
                             if use_cf_view and playback.playing_preview then
-                                local pos = start_norm * file_length
+                                local playrate = playback.effective_playrate or 1.0
+                                if playrate <= 0 then playrate = 1.0 end
+                                local visible_duration_seek = 1.0 / waveform.zoom_level
+                                local max_scroll_seek = math.max(0, 1.0 - visible_duration_seek)
+                                local visible_start_seek = waveform.scroll_offset * max_scroll_seek
+                                local seek_norm = visible_start_seek + start_norm * visible_duration_seek
+                                seek_norm = math.max(0, math.min(1, seek_norm))
+                                local pos = seek_norm * (file_length / playrate)
                                 if pos and pos >= 0 then
                                     r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", pos)
-                                    if not r.CF_Preview_GetValue(playback.playing_preview, "B_PLAYING") then
+                                    local ok_playing, is_playing = r.CF_Preview_GetValue(playback.playing_preview, "B_PLAYING")
+                                    if not (ok_playing and is_playing) then
                                         r.CF_Preview_Play(playback.playing_preview)
                                     end
                                 end
