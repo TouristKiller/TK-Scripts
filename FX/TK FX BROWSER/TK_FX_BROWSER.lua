@@ -1,8 +1,19 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.9.7
+-- @version 2.9.9
 -- @changelog:
 --[[ 
+    v2.9.9:
+        + Track Templates: thumbnails can now be loaded from images next to the .RTrackTemplate file, mirrored TrackTemplateThumbnails paths, or root-level TrackTemplateThumbnails fallbacks.
+        + Track Templates: missing thumbnails now show a clickable placeholder with the template name.
+        + Track Templates: improved TrackTemplateThumbnails folder creation checks and error feedback.
+
+    v2.9.8:
+        + Custom folder tabs and browser rows now show pinned folders first, followed by manual order and then alphabetical order.
+        + Custom folders can now be reordered by dragging within the same parent folder.
+        + Added right-click Sort Folders A-Z to reset manual custom folder order for a folder level.
+        + Rename, move, and delete actions now keep custom folder order and pinned folder metadata in sync.
+
     v2.9.7:
         + Track Templates: added a thumbnail grid view with automatic image matching from the TrackTemplateThumbnails script folder.
         + Track Templates: thumbnail and fallback tiles use the same click-to-load behavior as the existing browser panel template list.
@@ -1402,6 +1413,7 @@ function SetDefaultConfig()
         pinned_plugins = {},
         pinned_subgroups = {},
         pinned_custom_subfolders = {},
+        custom_folder_order = {},
         show_custom_folders = true,
         show_custom_folder_tabs = false,
         custom_folder_tabs_show_nested = true,
@@ -2628,6 +2640,8 @@ function MoveFolderTo(source_path, target_path)
     local new_path = target_path and target_path ~= "" and (target_path .. "/" .. folder_name) or folder_name
     RemapCustomFolderColors(source_path, new_path)
     RemapCustomFolderIcons(source_path, new_path)
+    RemapCustomFolderOrderPath(source_path, new_path)
+    RemapCustomPinnedPath(source_path, new_path)
     
     SaveCustomFolders()
     return true
@@ -2656,6 +2670,219 @@ function UnpinCustom(full_path)
             break
         end
     end
+end
+
+function SortCustomFolderNamesPinnedFirst(names, parent_path)
+    parent_path = parent_path or ""
+    local pinned_status = {}
+    local lower_names = {}
+    local manual_index = {}
+    local order = config and config.custom_folder_order and config.custom_folder_order[parent_path]
+    if type(order) == "table" then
+        for i, name in ipairs(order) do
+            if type(name) == "string" and manual_index[name] == nil then
+                manual_index[name] = i
+            end
+        end
+    end
+    for _, name in ipairs(names) do
+        local full_path = parent_path == "" and name or (parent_path .. "/" .. name)
+        pinned_status[name] = IsCustomPinned(full_path)
+        lower_names[name] = name:lower()
+    end
+    table.sort(names, function(a, b)
+        local pa = pinned_status[a]
+        local pb = pinned_status[b]
+        if pa ~= pb then return pa end
+        local ia = manual_index[a]
+        local ib = manual_index[b]
+        if ia and ib and ia ~= ib then return ia < ib end
+        if ia and not ib then return true end
+        if ib and not ia then return false end
+        return lower_names[a] < lower_names[b]
+    end)
+    return names
+end
+
+function GetCustomFolderParentAndName(full_path)
+    if not full_path or full_path == "" then return "", "" end
+    local parent, name = full_path:match("^(.*)/([^/]+)$")
+    return parent or "", name or full_path
+end
+
+function GetCustomFolderNode(folder_path)
+    local node = config and config.custom_folders
+    if not folder_path or folder_path == "" then return node end
+    for part in folder_path:gmatch("[^/]+") do
+        if type(node) ~= "table" then return nil end
+        node = node[part]
+    end
+    return node
+end
+
+function GetCustomFolderSiblingNames(parent_path)
+    local node = GetCustomFolderNode(parent_path)
+    local names = {}
+    if type(node) ~= "table" then return names end
+    for name, content in pairs(node) do
+        if name ~= "__folder_marker__" and type(name) == "string" and type(content) == "table" then
+            names[#names + 1] = name
+        end
+    end
+    return names
+end
+
+function SetCustomFolderOrder(parent_path, ordered_names)
+    parent_path = parent_path or ""
+    config.custom_folder_order = config.custom_folder_order or {}
+    local existing = {}
+    for _, name in ipairs(GetCustomFolderSiblingNames(parent_path)) do
+        existing[name] = true
+    end
+    local clean = {}
+    local seen = {}
+    for _, name in ipairs(ordered_names or {}) do
+        if existing[name] and not seen[name] then
+            clean[#clean + 1] = name
+            seen[name] = true
+        end
+    end
+    if #clean > 0 then
+        config.custom_folder_order[parent_path] = clean
+    else
+        config.custom_folder_order[parent_path] = nil
+    end
+    SaveConfig()
+end
+
+function ClearCustomFolderOrder(parent_path)
+    if not config.custom_folder_order then return end
+    config.custom_folder_order[parent_path or ""] = nil
+    SaveConfig()
+end
+
+function RemapCustomPinnedPath(old_path, new_path)
+    if not config.pinned_custom_subfolders then return end
+    local changed = false
+    for i, path in ipairs(config.pinned_custom_subfolders) do
+        if path == old_path or path:sub(1, #old_path + 1) == old_path .. "/" then
+            config.pinned_custom_subfolders[i] = new_path .. path:sub(#old_path + 1)
+            changed = true
+        end
+    end
+    if changed then SavePinned() end
+end
+
+function RemoveCustomPinnedPathTree(folder_path)
+    if not config.pinned_custom_subfolders then return end
+    local changed = false
+    for i = #config.pinned_custom_subfolders, 1, -1 do
+        local path = config.pinned_custom_subfolders[i]
+        if path == folder_path or path:sub(1, #folder_path + 1) == folder_path .. "/" then
+            table.remove(config.pinned_custom_subfolders, i)
+            changed = true
+        end
+    end
+    if changed then SavePinned() end
+end
+
+function RemapCustomFolderOrderPath(old_path, new_path)
+    config.custom_folder_order = config.custom_folder_order or {}
+    local old_parent, old_name = GetCustomFolderParentAndName(old_path)
+    local new_parent, new_name = GetCustomFolderParentAndName(new_path)
+    local changed = false
+    if old_parent == new_parent then
+        local order = config.custom_folder_order[old_parent]
+        if type(order) == "table" then
+            for i, name in ipairs(order) do
+                if name == old_name then
+                    order[i] = new_name
+                    changed = true
+                    break
+                end
+            end
+        end
+    else
+        local old_order = config.custom_folder_order[old_parent]
+        if type(old_order) == "table" then
+            for i = #old_order, 1, -1 do
+                if old_order[i] == old_name then
+                    table.remove(old_order, i)
+                    changed = true
+                end
+            end
+            if #old_order == 0 then config.custom_folder_order[old_parent] = nil end
+        end
+        local new_order = config.custom_folder_order[new_parent]
+        if type(new_order) == "table" then
+            local exists = false
+            for _, name in ipairs(new_order) do
+                if name == new_name then exists = true break end
+            end
+            if not exists then
+                new_order[#new_order + 1] = new_name
+                changed = true
+            end
+        end
+    end
+    local keys = {}
+    for key in pairs(config.custom_folder_order) do keys[#keys + 1] = key end
+    for _, key in ipairs(keys) do
+        local order = config.custom_folder_order[key]
+        if key == old_path or key:sub(1, #old_path + 1) == old_path .. "/" then
+            local new_key = new_path .. key:sub(#old_path + 1)
+            config.custom_folder_order[new_key] = order
+            config.custom_folder_order[key] = nil
+            changed = true
+        end
+    end
+    if changed then SaveConfig() end
+end
+
+function RemoveCustomFolderOrderPath(folder_path)
+    if not config.custom_folder_order then return end
+    local parent_path, folder_name = GetCustomFolderParentAndName(folder_path)
+    local changed = false
+    local order = config.custom_folder_order[parent_path]
+    if type(order) == "table" then
+        for i = #order, 1, -1 do
+            if order[i] == folder_name then
+                table.remove(order, i)
+                changed = true
+            end
+        end
+        if #order == 0 then config.custom_folder_order[parent_path] = nil end
+    end
+    local keys = {}
+    for key in pairs(config.custom_folder_order) do keys[#keys + 1] = key end
+    for _, key in ipairs(keys) do
+        if key == folder_path or key:sub(1, #folder_path + 1) == folder_path .. "/" then
+            config.custom_folder_order[key] = nil
+            changed = true
+        end
+    end
+    if changed then SaveConfig() end
+end
+
+function ReorderCustomFolderWithinParent(source_path, target_path)
+    if not source_path or not target_path or source_path == target_path then return false end
+    local source_parent, source_name = GetCustomFolderParentAndName(source_path)
+    local target_parent, target_name = GetCustomFolderParentAndName(target_path)
+    if source_parent ~= target_parent or source_name == "" or target_name == "" then return false end
+    local names = SortCustomFolderNamesPinnedFirst(GetCustomFolderSiblingNames(source_parent), source_parent)
+    local ordered = {}
+    for _, name in ipairs(names) do
+        if name ~= source_name then ordered[#ordered + 1] = name end
+    end
+    local insert_pos = nil
+    for i, name in ipairs(ordered) do
+        if name == target_name then insert_pos = i break end
+    end
+    if not insert_pos then return false end
+    table.insert(ordered, insert_pos, source_name)
+    SetCustomFolderOrder(source_parent, ordered)
+    if RequestClearScreenshotCache then RequestClearScreenshotCache() end
+    return true
 end
 
 function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
@@ -2704,6 +2931,10 @@ function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
         if r.ImGui_MenuItem(ctx, "Reset Folder Icon") then
             ClearCustomFolderIcon(full_path)
         end
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Sort Folders A-Z") then
+        ClearCustomFolderOrder(path_prefix or "")
     end
     r.ImGui_Separator(ctx)
     if r.ImGui_MenuItem(ctx, "Rename Folder") then
@@ -2755,6 +2986,8 @@ function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
                     target[folder_name] = nil
                 end
             end
+            RemoveCustomFolderOrderPath(full_path)
+            RemoveCustomPinnedPathTree(full_path)
             SaveCustomFolders()
             if selected_folder == full_path then
                 selected_folder = nil
@@ -13117,14 +13350,13 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         table.insert(sorted_folder_names, folder_name)
                     end
                 end
-                table.sort(sorted_folder_names, function(a, b) 
-                    return a:lower() < b:lower() 
-                end)
+                SortCustomFolderNamesPinnedFirst(sorted_folder_names, prefix)
                 
                 -- GEBRUIK DE GESORTEERDE NAMEN
                 for _, folder_name in ipairs(sorted_folder_names) do
                     local folder_content = folders[folder_name]
                     local full_path = prefix == "" and folder_name or (prefix .. "/" .. folder_name)
+                    local folder_display_name = (IsCustomPinned(full_path) and "\xF0\x9F\x93\x8C " or "") .. folder_name
                     
                     if IsPluginArray(folder_content) then
                         -- Count plugins (excluding markers and subfolders)
@@ -13136,7 +13368,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         end
                         
                         local folder_indent = prefix == "" and "" or "  "
-                        local display_name = folder_indent .. GetCustomFolderIconLabel(full_path, folder_name .. " (" .. plugin_count .. ")")
+                        local display_name = folder_indent .. GetCustomFolderIconLabel(full_path, folder_display_name .. " (" .. plugin_count .. ")")
                         local icon_offset = folder_indent ~= "" and r.ImGui_CalcTextSize(ctx, folder_indent) or 0
                         local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
                         local depth = GetCustomFolderDepth(full_path)
@@ -13168,7 +13400,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         local folder_indent = prefix == "" and "" or "  "
                         local icon_offset = folder_indent ~= "" and r.ImGui_CalcTextSize(ctx, folder_indent) or 0
                         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), GetCustomFolderTextColor(full_path, depth))
-                        r.ImGui_Text(ctx, folder_indent .. GetCustomFolderIconLabel(full_path, folder_name .. " >"))
+                        r.ImGui_Text(ctx, folder_indent .. GetCustomFolderIconLabel(full_path, folder_display_name .. " >"))
                         DrawCustomFolderIconOnLastItem(full_path, icon_offset)
                         if r.ImGui_IsItemClicked(ctx, 1) then
                             r.ImGui_OpenPopup(ctx, "FolderContextMenu_dropdown_" .. full_path)
@@ -13182,7 +13414,7 @@ function ShowCustomFolderDropdown(is_vertical_layout)
                         ShowNestedFolders(folder_content, full_path)
                     elseif type(folder_content) == "table" then
                         local folder_indent = prefix == "" and "" or "  "
-                        local display_name = folder_indent .. GetCustomFolderIconLabel(full_path, folder_name .. " (0)")
+                        local display_name = folder_indent .. GetCustomFolderIconLabel(full_path, folder_display_name .. " (0)")
                         local icon_offset = folder_indent ~= "" and r.ImGui_CalcTextSize(ctx, folder_indent) or 0
                         local cf_is_selected = (selected_folder == full_path) and (selected_folder_kind == "custom")
                         local depth = GetCustomFolderDepth(full_path)
@@ -14569,13 +14801,17 @@ function EnsureTrackTemplateThumbnailsFolderExists()
         if not r.file_exists(track_template_thumbs_path) then
             r.RecursiveCreateDirectory(track_template_thumbs_path, 0)
         end
-        track_template_thumbs_folder_ready = true
+        track_template_thumbs_folder_ready = r.file_exists(track_template_thumbs_path)
     end
-    return track_template_thumbs_path
+    return track_template_thumbs_folder_ready and track_template_thumbs_path or nil
 end
 
 function OpenTrackTemplateThumbnailsFolder()
     local path = EnsureTrackTemplateThumbnailsFolderExists()
+    if not path then
+        r.ShowMessageBox("Could not create or open TrackTemplateThumbnails folder:\n" .. tostring(track_template_thumbs_path), "TK FX BROWSER", 0)
+        return
+    end
     local os_name = r.GetOS()
     if os_name:match("Win") then
         os.execute('start "" "' .. path .. '"')
@@ -14592,6 +14828,20 @@ function GetTrackTemplateRelativeBase(template_path)
     return rel
 end
 
+function GetTrackTemplateFullPath(item)
+    if not item or not item.template_path then return nil end
+    return ResolveTrackTemplatesRoot() .. item.template_path
+end
+
+function FindTrackTemplateImage(base_path, exts)
+    if not base_path or base_path == "" then return nil end
+    for i = 1, #exts do
+        local candidate = base_path .. exts[i]
+        if r.file_exists(candidate) then return candidate end
+    end
+    return nil
+end
+
 function GetTrackTemplateThumbnailPath(item)
     if not item or not item.template_path then return nil end
     local key = item.template_path
@@ -14601,15 +14851,42 @@ function GetTrackTemplateThumbnailPath(item)
     local rel = GetTrackTemplateRelativeBase(item.template_path)
     local rel_path = rel:gsub("[/\\]", os_separator)
     local exts = { ".png", ".jpg", ".jpeg", ".bmp" }
-    for i = 1, #exts do
-        local candidate = track_template_thumbs_path .. rel_path .. exts[i]
-        if r.file_exists(candidate) then
-            track_template_thumb_path_cache[key] = candidate
-            return candidate
-        end
+    local template_full_path = GetTrackTemplateFullPath(item)
+    local template_image = template_full_path and FindTrackTemplateImage(template_full_path:gsub("%.RTrackTemplate$", ""), exts)
+    if template_image then
+        track_template_thumb_path_cache[key] = template_image
+        return template_image
+    end
+    local mirror_image = FindTrackTemplateImage(track_template_thumbs_path .. rel_path, exts)
+    if mirror_image then
+        track_template_thumb_path_cache[key] = mirror_image
+        return mirror_image
+    end
+    local root_image = FindTrackTemplateImage(track_template_thumbs_path .. tostring(item.name or ""), exts)
+    if root_image then
+        track_template_thumb_path_cache[key] = root_image
+        return root_image
     end
     track_template_thumb_path_cache[key] = false
     return nil
+end
+
+function DrawTrackTemplatePlaceholderButton(id, width, height, label)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+    local clicked = r.ImGui_InvisibleButton(ctx, id, width, height)
+    local bg_col = r.ImGui_IsItemHovered(ctx) and 0x242424FF or 0x151515FF
+    local border_col = r.ImGui_IsItemHovered(ctx) and 0x707070FF or 0x404040FF
+    r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + width, cursor_y + height, bg_col, 4)
+    r.ImGui_DrawList_AddRect(draw_list, cursor_x, cursor_y, cursor_x + width, cursor_y + height, border_col, 4, 0, 1)
+    local text = tostring(label or "No Image")
+    local max_chars = math.max(6, math.floor(width / 7))
+    if #text > max_chars then text = text:sub(1, max_chars - 3) .. "..." end
+    local text_w, text_h = r.ImGui_CalcTextSize(ctx, text)
+    local text_x = cursor_x + (width - text_w) * 0.5
+    local text_y = cursor_y + (height - text_h) * 0.5
+    r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0xB8B8B8FF, text)
+    return clicked
 end
 
 function CollectTrackTemplatesFlat(tbl, path, result)
@@ -15102,21 +15379,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
         end
     end
 
-    -- OPTIMIZATION: Pre-calculate pinned status and lower names to avoid string ops in sort loop
-    local pinned_status = {}
-    local lower_names = {}
-    for _, name in ipairs(sorted_folder_names) do
-        local full = (path_prefix == "" and name or (path_prefix .. "/" .. name))
-        pinned_status[name] = IsCustomPinned(full)
-        lower_names[name] = name:lower()
-    end
-
-    table.sort(sorted_folder_names, function(a, b)
-        local ia = pinned_status[a]
-        local ib = pinned_status[b]
-        if ia ~= ib then return ia end -- pinned eerst
-        return lower_names[a] < lower_names[b]
-    end)
+    SortCustomFolderNamesPinnedFirst(sorted_folder_names, path_prefix)
     
     -- GEBRUIK DE GESORTEERDE NAMEN
     for _, folder_name in ipairs(sorted_folder_names) do
@@ -15157,6 +15420,16 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             local tree_toggled = r.ImGui_IsItemToggledOpen(ctx)
             local tree_right_clicked = r.ImGui_IsItemClicked(ctx, 1)
             CheckFolderDropTarget(full_path, "custom")
+            if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                r.ImGui_SetDragDropPayload(ctx, "CF_FOLDER_REORDER", full_path)
+                r.ImGui_Text(ctx, folder_name)
+                r.ImGui_EndDragDropSource(ctx)
+            end
+            if r.ImGui_BeginDragDropTarget(ctx) then
+                local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "CF_FOLDER_REORDER")
+                if rv then ReorderCustomFolderWithinParent(payload, full_path) end
+                r.ImGui_EndDragDropTarget(ctx)
+            end
             local item_min_x, item_min_y = r.ImGui_GetItemRectMin(ctx)
             local line_h = r.ImGui_GetTextLineHeight(ctx)
             local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_label)
@@ -15247,6 +15520,10 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                     end
                 end
                 r.ImGui_Separator(ctx)
+                if r.ImGui_MenuItem(ctx, "Sort Folders A-Z") then
+                    ClearCustomFolderOrder(path_prefix or "")
+                end
+                r.ImGui_Separator(ctx)
                 if r.ImGui_MenuItem(ctx, "Rename Folder") then
                     show_rename_folder_popup = true
                     folder_to_rename = folder_name
@@ -15299,6 +15576,8 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                                 target[folder_name] = nil
                             end
                         end
+                        RemoveCustomFolderOrderPath(full_path)
+                        RemoveCustomPinnedPathTree(full_path)
                         SaveCustomFolders()
                         
                         -- Clear selection if deleted folder was selected
@@ -15414,6 +15693,16 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
             end
 
             CheckFolderDropTarget(full_path, "custom")
+            if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                r.ImGui_SetDragDropPayload(ctx, "CF_FOLDER_REORDER", full_path)
+                r.ImGui_Text(ctx, folder_name)
+                r.ImGui_EndDragDropSource(ctx)
+            end
+            if r.ImGui_BeginDragDropTarget(ctx) then
+                local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "CF_FOLDER_REORDER")
+                if rv then ReorderCustomFolderWithinParent(payload, full_path) end
+                r.ImGui_EndDragDropTarget(ctx)
+            end
 
             if r.ImGui_IsItemClicked(ctx, 1) then
                 r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
@@ -19826,10 +20115,10 @@ function RenderTrackTemplatesSection(popped_view_stylevars)
                     if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
                         if r.ImGui_ImageButton(ctx, id, tex, cell_w, cell_h) then cell_clicked = true end
                     else
-                        if r.ImGui_Button(ctx, "No Image##ttbtn" .. i, cell_w, cell_h) then cell_clicked = true end
+                        if DrawTrackTemplatePlaceholderButton("tt_placeholder_" .. i, cell_w, cell_h, item.name) then cell_clicked = true end
                     end
                 else
-                    if r.ImGui_Button(ctx, "No Image##ttbtn" .. i, cell_w, cell_h) then cell_clicked = true end
+                    if DrawTrackTemplatePlaceholderButton("tt_placeholder_" .. i, cell_w, cell_h, item.name) then cell_clicked = true end
                 end
 
                 if cell_clicked then
@@ -22290,15 +22579,14 @@ function ShowScreenshotWindow()
     end
 
     if config.show_custom_folder_tabs and not show_all_fx_chains_browser and not current_fx_chain_path and type(config.custom_folders) == "table" then
-        local function CollectTopLevelNames(tbl)
+        local function CollectTopLevelNames(tbl, parent_path)
             local names = {}
             for n, _ in pairs(tbl) do
                 if n ~= "__folder_marker__" and type(n) == "string" then
                     names[#names + 1] = n
                 end
             end
-            table.sort(names, function(a, b) return a:lower() < b:lower() end)
-            return names
+            return SortCustomFolderNamesPinnedFirst(names, parent_path or "")
         end
         local function ResolveCustomNode(full_path)
             if not full_path or full_path == "" then return nil end
@@ -22421,6 +22709,9 @@ function ShowScreenshotWindow()
                         display_label = label .. " (" .. plugin_count .. ")"
                     end
                 end
+                if IsCustomPinned(full_path) then
+                    display_label = "\xF0\x9F\x93\x8C " .. display_label
+                end
                 local btn_label = GetCustomFolderIconLabel(full_path, display_label, tab_icon_size) .. "##cftab_" .. depth .. "_" .. i
                 local txt_w = r.ImGui_CalcTextSize(ctx, display_label)
                 local btn_w = txt_w + 16 + GetCustomFolderIconReservedWidth(full_path, tab_icon_size)
@@ -22464,6 +22755,16 @@ function ShowScreenshotWindow()
                 end
                 DrawCustomFolderIconOnLastItem(full_path, nil, tab_icon_size)
                 CheckFolderDropTarget(full_path, "custom")
+                if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
+                    r.ImGui_SetDragDropPayload(ctx, "CF_FOLDER_REORDER", full_path)
+                    r.ImGui_Text(ctx, name)
+                    r.ImGui_EndDragDropSource(ctx)
+                end
+                if r.ImGui_BeginDragDropTarget(ctx) then
+                    local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "CF_FOLDER_REORDER")
+                    if rv then ReorderCustomFolderWithinParent(payload, full_path) end
+                    r.ImGui_EndDragDropTarget(ctx)
+                end
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "FolderContextMenu_" .. full_path)
                 end
@@ -22533,7 +22834,7 @@ function ShowScreenshotWindow()
             r.ImGui_PopStyleVar(ctx)
         end
 
-        local top_names = CollectTopLevelNames(config.custom_folders)
+        local top_names = CollectTopLevelNames(config.custom_folders, "")
         do
             DrawTabRow(top_names, 1, "")
 
@@ -22563,6 +22864,9 @@ function ShowScreenshotWindow()
                                 local seg_label = config.custom_folder_force_uppercase and seg:upper() or seg
                                 local is_last = (i == #segments)
                                 local txt_col = GetCustomFolderTextColor(accum_path, i, default_text)
+                                if IsCustomPinned(accum_path) then
+                                    seg_label = "\xF0\x9F\x93\x8C " .. seg_label
+                                end
                                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), txt_col)
                                 if is_last then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4A6FA5FF)
@@ -22581,7 +22885,7 @@ function ShowScreenshotWindow()
                             r.ImGui_PopStyleVar(ctx)
                             local node = ResolveCustomNode(_sel_snap)
                             if HasSubfoldersLocal(node) then
-                                local sub_names = CollectTopLevelNames(node)
+                                local sub_names = CollectTopLevelNames(node, _sel_snap)
                                 if #sub_names > 0 then
                                     DrawTabRow(sub_names, #segments + 1, _sel_snap)
                                 end
@@ -22589,7 +22893,7 @@ function ShowScreenshotWindow()
                         else
                             local node = ResolveCustomNode(active_top)
                             if HasSubfoldersLocal(node) then
-                                local sub_names = CollectTopLevelNames(node)
+                                local sub_names = CollectTopLevelNames(node, active_top)
                                 if #sub_names > 0 then
                                     DrawTabRow(sub_names, 2, active_top)
                                 end
@@ -22605,7 +22909,7 @@ function ShowScreenshotWindow()
                         while true do
                             local node = ResolveCustomNode(current_path)
                             if not HasSubfoldersLocal(node) then break end
-                            local sub_names = CollectTopLevelNames(node)
+                            local sub_names = CollectTopLevelNames(node, current_path)
                             if #sub_names == 0 then break end
                             DrawTabRow(sub_names, current_depth + 1, current_path)
                             if current_depth < #segments and segments[current_depth + 1] then
@@ -29622,6 +29926,8 @@ if visible then
                         local new_path = (folder_to_rename_path ~= "" and folder_to_rename_path .. "/" or "") .. new_folder_name_for_rename
                         RemapCustomFolderColors(old_path, new_path)
                         RemapCustomFolderIcons(old_path, new_path)
+                        RemapCustomFolderOrderPath(old_path, new_path)
+                        RemapCustomPinnedPath(old_path, new_path)
                         SaveCustomFolders()
                         
                         -- Update selected_folder if it was the renamed folder
