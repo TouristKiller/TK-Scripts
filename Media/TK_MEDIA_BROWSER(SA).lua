@@ -1,12 +1,20 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.8.4
+-- @version 0.8.5
 -- @changelog:
 --[[
-v0.8.4:
+v0.8.5:
 + Waveform clicks now seek active audio preview playback immediately from the clicked position, with zoom, scroll and playrate/tempo-sync aware positioning
 + Waveform and spectral preview generation now read directly from the media source, avoiding temporary project tracks/items for analysis
 + Timeline inserts now apply the current monitoring volume to the inserted take
++ Added Skip First Silence with configurable threshold and non-destructive preview/timeline insert handling
++ Waveform, spectral and silence analysis now read all source channels, retry after missing peak data, and use adaptive resolution for long files
++ Waveform peak builds are throttled and long files draw the normal waveform first instead of waiting for spectral analysis
++ Silence Threshold range now goes up to -12 dB
++ Waveforms now refresh shortly after the first peak read so partial peak data can fill in without switching files
++ Added LUFS cache support with manual per-sample and per-folder analysis using the SWS/NF loudness API
++ Added explicit LUFS-normalized timeline insert using the configured target LUFS and current monitoring volume
++ Added optional LUFS table column with cached-only display and sorting
 
 v0.8.2:
 + New Compact View (side-dock card layout): one card per item with metadata-driven tags, toggle via Settings or toolbar
@@ -99,6 +107,7 @@ local cached_cat_counts_loc = ""
 local cached_cat_filter = {}
 local cached_cat_filter_key = ""
 local cache_dir = script_path .. "CACHE" .. sep
+lufs_cache_file = cache_dir .. "lufs_cache.json"
 local collections_dir = script_path .. "COLLECTIONS" .. sep
 local presets_dir = script_path .. "PRESETS" .. sep
 local settings_image_path = script_path .. "TKMBSETTINGS.png"
@@ -153,8 +162,20 @@ local playback = {
     saved_solo_states = {},
     use_exclusive_solo = true,
     sync_wait_for_next_measure = false,
+    skip_first_silence = false,
+    skip_first_silence_threshold_db = -60,
+    skip_first_silence_max_scan_seconds = 10.0,
+    lufs_normalize_target = -18.0,
     pending_autoplay_file = nil,
     pending_autoplay_time = 0
+}
+
+lufs_cache = {}
+lufs_analysis = {
+    queue = {},
+    active = false,
+    status = "",
+    last_error = ""
 }
 
 -- File & Location Management
@@ -198,6 +219,9 @@ local waveform = {
     oscilloscope_cache_file = "",
     spectral_cache = {},
     spectral_cache_file = "",
+    leading_silence_cache = {},
+    peak_build_pending = {},
+    peak_refresh_pending = {},
     show_spectral_view = false,
     midi_notes = {},
     midi_notes_file = "",
@@ -431,6 +455,7 @@ local ui_settings = {
         sample_rate = true,
         channels = true,
         bpm = true,
+        lufs = false,
         key = true,
         artist = false,
         album = false,
@@ -1358,7 +1383,7 @@ end
 
 local function get_column_name_by_index(visible_index)
     local column_order = {
-        "name", "category", "type", "size", "duration", "sample_rate", "channels", "bpm", "key",
+        "name", "category", "type", "size", "duration", "sample_rate", "channels", "bpm", "lufs", "key",
         "artist", "album", "title", "track", "year", "genre", "comment",
         "composer", "publisher", "timesignature", "bitrate", "bitspersample",
         "encoder", "copyright", "desc", "originator", "originatorref",
@@ -1833,7 +1858,7 @@ local function clear_all_cache_files()
         local file = r.EnumerateFiles(cache_dir, i)
         if not file then break end
         
-        if file:match("%.json$") or file:match("^fast_cache_.*%.lua$") then
+        if file ~= "lufs_cache.json" and (file:match("%.json$") or file:match("^fast_cache_.*%.lua$")) then
             local file_path = cache_dir .. file
             local success = os.remove(file_path)
             if success then
@@ -2113,6 +2138,10 @@ local function save_options()
             use_exclusive_solo = playback.use_exclusive_solo,
             preview_volume = playback.preview_volume,
             sync_wait_for_next_measure = playback.sync_wait_for_next_measure,
+            skip_first_silence = playback.skip_first_silence,
+            skip_first_silence_threshold_db = playback.skip_first_silence_threshold_db,
+            skip_first_silence_max_scan_seconds = playback.skip_first_silence_max_scan_seconds,
+            lufs_normalize_target = playback.lufs_normalize_target,
             current_db = current_db,
             remember_last_location = file_location.remember_last_location,
             last_location_index = file_location.selected_location_index,
@@ -2200,6 +2229,10 @@ local function get_settings_table()
         use_exclusive_solo = playback.use_exclusive_solo,
         preview_volume = playback.preview_volume,
         sync_wait_for_next_measure = playback.sync_wait_for_next_measure,
+        skip_first_silence = playback.skip_first_silence,
+        skip_first_silence_threshold_db = playback.skip_first_silence_threshold_db,
+        skip_first_silence_max_scan_seconds = playback.skip_first_silence_max_scan_seconds,
+        lufs_normalize_target = playback.lufs_normalize_target,
         show_oscilloscope = ui.show_oscilloscope,
         waveform_grid_overlay = ui.waveform_grid_overlay,
         flat_view = file_location.flat_view,
@@ -2245,6 +2278,11 @@ local function apply_settings_from_table(settings)
     playback.use_exclusive_solo = settings.use_exclusive_solo ~= nil and settings.use_exclusive_solo or true
     playback.preview_volume = settings.preview_volume
     playback.sync_wait_for_next_measure = settings.sync_wait_for_next_measure or false
+    playback.skip_first_silence = settings.skip_first_silence or false
+    playback.skip_first_silence_threshold_db = settings.skip_first_silence_threshold_db or -60
+    playback.skip_first_silence_max_scan_seconds = settings.skip_first_silence_max_scan_seconds or 10.0
+    playback.lufs_normalize_target = settings.lufs_normalize_target or -18.0
+    waveform.leading_silence_cache = {}
     ui.show_oscilloscope = settings.show_oscilloscope
     ui.waveform_grid_overlay = settings.waveform_grid_overlay or false
     waveform.show_spectral_view = settings.show_spectral_view or false
@@ -2385,6 +2423,10 @@ local function load_options()
             playback.link_start_from_editcursor = options.link_start_from_editcursor or false
             playback.use_exclusive_solo = options.use_exclusive_solo ~= nil and options.use_exclusive_solo or true
             playback.preview_volume = options.preview_volume
+            playback.skip_first_silence = options.skip_first_silence or false
+            playback.skip_first_silence_threshold_db = options.skip_first_silence_threshold_db or -60
+            playback.skip_first_silence_max_scan_seconds = options.skip_first_silence_max_scan_seconds or 10.0
+            playback.lufs_normalize_target = options.lufs_normalize_target or -18.0
             current_db = options.current_db
             file_location.remember_last_location = options.remember_last_location ~= nil and options.remember_last_location or true
             ui.remember_window_position = options.remember_window_position ~= nil and options.remember_window_position or true
@@ -2462,6 +2504,10 @@ local function load_options()
                         playback.use_original_speed = options2.use_original_speed
                         playback.link_transport = options2.link_transport or false
                         playback.preview_volume = options2.preview_volume
+                        playback.skip_first_silence = options2.skip_first_silence or false
+                        playback.skip_first_silence_threshold_db = options2.skip_first_silence_threshold_db or -60
+                        playback.skip_first_silence_max_scan_seconds = options2.skip_first_silence_max_scan_seconds or 10.0
+                        playback.lufs_normalize_target = options2.lufs_normalize_target or -18.0
                         current_db = options2.current_db
                         file_location.remember_last_location = options2.remember_last_location ~= nil and options2.remember_last_location or true
                         ui.remember_window_position = options2.remember_window_position ~= nil and options2.remember_window_position or true
@@ -4009,6 +4055,307 @@ end
 local function db_to_linear(db)
     return 10 ^ (db / 20)
 end
+
+function is_audio_media_file(file_path)
+    if not file_path or file_path == "" then return false end
+    local ext = (file_path:match("%.([^%.]+)$") or ""):lower()
+    return file_types[ext] == "REAPER_MEDIAFOLDER" and ext ~= "mid" and ext ~= "midi"
+end
+
+function collect_lufs_audio_files_in_folder(folder_path)
+    local results = {}
+    if not folder_path or folder_path == "" then return results end
+    local dir_stack = { folder_path }
+    local scanned_dirs = 0
+    while #dir_stack > 0 and scanned_dirs < 10000 do
+        local current_dir = table.remove(dir_stack)
+        scanned_dirs = scanned_dirs + 1
+        local file_index = 0
+        while true do
+            local filename = r.EnumerateFiles(current_dir, file_index)
+            if not filename then break end
+            local full_path = current_dir:sub(-1) == sep and (current_dir .. filename) or (current_dir .. sep .. filename)
+            if is_audio_media_file(full_path) then
+                table.insert(results, full_path)
+            end
+            file_index = file_index + 1
+        end
+        local dir_index = 0
+        while true do
+            local subdir = r.EnumerateSubdirectories(current_dir, dir_index)
+            if not subdir then break end
+            if not subdir:match("^%.") and not subdir:match("^__") then
+                local sub_path = current_dir:sub(-1) == sep and (current_dir .. subdir) or (current_dir .. sep .. subdir)
+                table.insert(dir_stack, sub_path)
+            end
+            dir_index = dir_index + 1
+        end
+    end
+    return results
+end
+
+function get_lufs_file_stat(file_path)
+    if r.JS_File_Stat then
+        local ok, size, mtime = r.JS_File_Stat(file_path)
+        if ok then
+            return tonumber(size) or 0, tonumber(mtime) or 0
+        end
+    end
+    local file = io.open(file_path, "rb")
+    if file then
+        local size = file:seek("end")
+        file:close()
+        return tonumber(size) or 0, 0
+    end
+    return 0, 0
+end
+
+function load_lufs_cache()
+    lufs_cache = {}
+    local file = io.open(lufs_cache_file, "r")
+    if not file then return end
+    local content = file:read("*all")
+    file:close()
+    local ok, data = pcall(json.decode, content)
+    if ok and type(data) == "table" then
+        lufs_cache = data.entries or data
+    end
+end
+
+function save_lufs_cache()
+    local file = io.open(lufs_cache_file, "w")
+    if not file then return false end
+    file:write(json.encode({ version = 1, entries = lufs_cache }))
+    file:close()
+    return true
+end
+
+function get_cached_lufs(file_path)
+    local entry = lufs_cache[file_path]
+    if not entry or not entry.integrated_lufs then return nil end
+    local size, mtime = get_lufs_file_stat(file_path)
+    if entry.size_bytes and size > 0 and tonumber(entry.size_bytes) ~= size then return nil end
+    if entry.mtime and mtime > 0 and math.abs((tonumber(entry.mtime) or 0) - mtime) > 1 then return nil end
+    return entry
+end
+
+function format_lufs_value(file_path)
+    local entry = get_cached_lufs(file_path)
+    if entry and entry.integrated_lufs then
+        return string.format("%.1f", entry.integrated_lufs)
+    end
+    return "--"
+end
+
+function get_lufs_sort_value(file_path)
+    local entry = get_cached_lufs(file_path)
+    if entry and entry.integrated_lufs then
+        return entry.integrated_lufs
+    end
+    return -math.huge
+end
+
+function calculate_lufs_gain(entry)
+    if not entry or not entry.integrated_lufs then return 1.0, 0.0 end
+    local gain_db = (playback.lufs_normalize_target or -18.0) - entry.integrated_lufs
+    gain_db = math.max(-24.0, math.min(24.0, gain_db))
+    return db_to_linear(gain_db), gain_db
+end
+
+function store_lufs_result(file_path, integrated_lufs)
+    local size, mtime = get_lufs_file_stat(file_path)
+    lufs_cache[file_path] = {
+        integrated_lufs = integrated_lufs,
+        method = "SWS NF integrated",
+        analyzed_at = os.time(),
+        size_bytes = size,
+        mtime = mtime
+    }
+    save_lufs_cache()
+end
+
+function analyze_lufs_for_file(file_path)
+    if not r.NF_AnalyzeTakeLoudness_IntegratedOnly then
+        return false, "SWS/NF loudness API not available"
+    end
+    if not is_audio_media_file(file_path) then
+        return false, "LUFS analysis is only available for audio files"
+    end
+    local source = r.PCM_Source_CreateFromFile(file_path)
+    if not source then
+        return false, "Could not open source"
+    end
+    local source_length = r.GetMediaSourceLength(source)
+    if not source_length or source_length <= 0 then
+        r.PCM_Source_Destroy(source)
+        return false, "Could not read source length"
+    end
+
+    local temp_track = nil
+    local temp_item = nil
+    local source_attached = false
+    local retval = false
+    local integrated_lufs = nil
+
+    r.PreventUIRefresh(1)
+    local track_index = r.CountTracks(0)
+    r.InsertTrackAtIndex(track_index, false)
+    temp_track = r.GetTrack(0, track_index)
+    if temp_track then
+        temp_item = r.AddMediaItemToTrack(temp_track)
+        if temp_item then
+            local take = r.AddTakeToMediaItem(temp_item)
+            if take then
+                r.SetMediaItemTake_Source(take, source)
+                source_attached = true
+                r.SetMediaItemPosition(temp_item, 0, false)
+                r.SetMediaItemLength(temp_item, source_length, false)
+                r.UpdateItemInProject(temp_item)
+                retval, integrated_lufs = r.NF_AnalyzeTakeLoudness_IntegratedOnly(take)
+            end
+        end
+    end
+    if temp_item and temp_track then
+        r.DeleteTrackMediaItem(temp_track, temp_item)
+    end
+    if temp_track then
+        r.DeleteTrack(temp_track)
+    end
+    if source and not source_attached then
+        r.PCM_Source_Destroy(source)
+    end
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+
+    if retval and integrated_lufs then
+        store_lufs_result(file_path, integrated_lufs)
+        return true, integrated_lufs
+    end
+    return false, "LUFS analysis failed"
+end
+
+function queue_lufs_analysis(files)
+    local existing = {}
+    for _, queued_file in ipairs(lufs_analysis.queue) do
+        existing[queued_file] = true
+    end
+    local queued = 0
+    for _, file_path in ipairs(files or {}) do
+        if is_audio_media_file(file_path) and not existing[file_path] then
+            table.insert(lufs_analysis.queue, file_path)
+            existing[file_path] = true
+            queued = queued + 1
+        end
+    end
+    if queued > 0 then
+        lufs_analysis.status = string.format("%d LUFS analyse(s) in wachtrij", queued)
+        lufs_analysis.last_error = ""
+    else
+        lufs_analysis.last_error = "Geen audiobestanden om te analyseren"
+    end
+    return queued
+end
+
+function process_lufs_analysis_queue()
+    if lufs_analysis.active or #lufs_analysis.queue == 0 then return end
+    local file_path = table.remove(lufs_analysis.queue, 1)
+    lufs_analysis.active = true
+    lufs_analysis.status = "LUFS analyse: " .. (file_path:match("([^/\\]+)$") or file_path)
+    local ok, result = analyze_lufs_for_file(file_path)
+    if ok then
+        lufs_analysis.status = string.format("LUFS opgeslagen: %.1f", result)
+        lufs_analysis.last_error = ""
+    else
+        lufs_analysis.last_error = tostring(result or "LUFS analyse mislukt")
+        lufs_analysis.status = lufs_analysis.last_error
+    end
+    lufs_analysis.active = false
+end
+
+load_lufs_cache()
+
+local function read_source_peaks(source, peakrate, start_time, channels, count, retry_empty)
+    if retry_empty == nil then retry_empty = true end
+    local buffer = r.new_array(count * channels * 2)
+    local function get_peaks()
+        buffer.clear()
+        local ok = r.PCM_Source_GetPeaks(source, peakrate, start_time, channels, count, 0, buffer)
+        local has_signal = false
+        if ok then
+            for i = 1, count * channels * 2 do
+                if math.abs(buffer[i] or 0) > 0 then
+                    has_signal = true
+                    break
+                end
+            end
+        end
+        return ok, has_signal
+    end
+
+    local ok, has_signal = get_peaks()
+    if not ok or (retry_empty and not has_signal) then
+        r.PCM_Source_BuildPeaks(source, 0)
+        ok, has_signal = get_peaks()
+    end
+    return ok, buffer, has_signal
+end
+local function get_leading_silence_offset(file_path)
+    if not playback.skip_first_silence or not file_path or file_path == "" then return 0 end
+    local threshold_db = playback.skip_first_silence_threshold_db or -60
+    if threshold_db < -80 then threshold_db = -80 elseif threshold_db > -12 then threshold_db = -12 end
+    local max_scan = playback.skip_first_silence_max_scan_seconds or 10.0
+    if max_scan < 1.0 then max_scan = 1.0 elseif max_scan > 10.0 then max_scan = 10.0 end
+    local cache_key = file_path .. "|" .. tostring(threshold_db) .. "|" .. tostring(max_scan)
+    local cached = waveform.leading_silence_cache[cache_key]
+    if cached ~= nil then return cached end
+
+    local source = r.PCM_Source_CreateFromFile(file_path)
+    if not source then return 0 end
+
+    local source_length = r.GetMediaSourceLength(source)
+    if not source_length or source_length <= 0 then
+        r.PCM_Source_Destroy(source)
+        waveform.leading_silence_cache[cache_key] = 0
+        return 0
+    end
+
+    local scan_duration = math.min(source_length, max_scan)
+    local peakrate = 1000
+    local total_peaks = math.floor(scan_duration * peakrate)
+    if total_peaks < 1 then total_peaks = 1 end
+    local channels = r.GetMediaSourceNumChannels(source) or 1
+    if channels < 1 then channels = 1 end
+
+    local ok, buffer = read_source_peaks(source, peakrate, 0, channels, total_peaks)
+    r.PCM_Source_Destroy(source)
+    if not ok then
+        waveform.leading_silence_cache[cache_key] = 0
+        return 0
+    end
+
+    local threshold = db_to_linear(threshold_db)
+    local offset = 0
+    for i = 1, total_peaks do
+        local peak = 0
+        for ch = 1, channels do
+            local index = ((i - 1) * channels) + ch
+            local max_peak = buffer[index] or 0
+            local min_peak = buffer[(total_peaks * channels) + index] or 0
+            peak = math.max(peak, math.abs(max_peak), math.abs(min_peak))
+        end
+        if peak >= threshold then
+            offset = math.max(0, ((i - 1) / peakrate) - 0.003)
+            break
+        end
+    end
+
+    if offset < 0.005 or offset >= source_length - 0.01 then
+        offset = 0
+    end
+
+    waveform.leading_silence_cache[cache_key] = offset
+    return offset
+end
 local function generate_peak_file(file_path)
     local source = r.PCM_Source_CreateFromFile(file_path)
     if source then
@@ -4037,6 +4384,8 @@ local function calculate_spectral_data(file_path, num_slices, num_freq_bands)
         samplerate = 44100
     end
     local fft_size = 1024
+    local channels = r.GetMediaSourceNumChannels(source) or 1
+    if channels < 1 then channels = 1 end
     
     local split1 = 0.16
     local split2 = 0.32
@@ -4046,18 +4395,26 @@ local function calculate_spectral_data(file_path, num_slices, num_freq_bands)
     
     for slice = 0, num_slices - 1 do
         local start_time = (slice / num_slices) * length
-        local peakbuffer = r.new_array(fft_size * 2)
+        local ok, peakbuffer = read_source_peaks(source, samplerate, start_time, channels, fft_size, false)
         local samplebuffer = r.new_array(fft_size * 2)
-        peakbuffer.clear()
         samplebuffer.clear()
         
-        local ok = r.PCM_Source_GetPeaks(source, samplerate, start_time, 1, fft_size, 0, peakbuffer)
-        
-        if ok and ok > 0 then
+        if ok then
             for i = 1, fft_size do
-                local max_val = peakbuffer[i] or 0
-                local min_val = peakbuffer[fft_size + i] or 0
-                samplebuffer[i] = math.abs(max_val) >= math.abs(min_val) and max_val or min_val
+                local sample = 0
+                local sample_abs = 0
+                for ch = 1, channels do
+                    local index = ((i - 1) * channels) + ch
+                    local max_val = peakbuffer[index] or 0
+                    local min_val = peakbuffer[(fft_size * channels) + index] or 0
+                    local candidate = math.abs(max_val) >= math.abs(min_val) and max_val or min_val
+                    local candidate_abs = math.abs(candidate)
+                    if candidate_abs > sample_abs then
+                        sample = candidate
+                        sample_abs = candidate_abs
+                    end
+                end
+                samplebuffer[i] = sample
             end
             samplebuffer.fft_real(fft_size, true)
                 
@@ -4548,6 +4905,9 @@ local function sort_files_by_column(files, col_name, sort_direction)
                 elseif col_name == "bpm" then
                     val_a = meta_a.bpm_num or 0
                     val_b = meta_b.bpm_num or 0
+                elseif col_name == "lufs" then
+                    val_a = get_lufs_sort_value(a.full_path)
+                    val_b = get_lufs_sort_value(b.full_path)
                 elseif col_name == "key" then
                     val_a = (meta_a.key or ""):lower()
                     val_b = (meta_b.key or ""):lower()
@@ -5173,7 +5533,11 @@ local function start_playback(file_path)
             local file_length = r.GetMediaSourceLength(source_for_length)
             r.PCM_Source_Destroy(source_for_length)
             local adjusted_length = file_length / (playback.effective_playrate or 1.0)
-            start_pos = waveform.play_cursor_position * adjusted_length
+            if waveform.play_cursor_position > 0 then
+                start_pos = waveform.play_cursor_position * adjusted_length
+            else
+                start_pos = get_leading_silence_offset(file_path) / (playback.effective_playrate or 1.0)
+            end
         end
     end
     
@@ -5403,12 +5767,12 @@ local function handle_drag_drop(file_path)
         r.ImGui_EndDragDropSource(ctx)
     end
 end
-local function insert_media_on_track(file_path, track, use_original_speed, custom_playrate, custom_pitch)
+function insert_media_on_track(file_path, track, use_original_speed, custom_playrate, custom_pitch, lufs_gain)
     if not track then return end
     generate_peak_file(file_path)
     local ext = file_path:match("%.([^%.]+)$"):lower()
     local file_type = file_types[ext]
-    local is_midi_file = insert_state.is_midi
+    local is_midi_file = insert_state.is_midi or ext == "mid" or ext == "midi"
     local item = r.AddMediaItemToTrack(track)
     if file_type == "REAPER_MEDIAFOLDER" then
         local take = r.AddTakeToMediaItem(item)
@@ -5453,17 +5817,28 @@ local function insert_media_on_track(file_path, track, use_original_speed, custo
                 end
             end
         else
+            local skip_offset = 0
+            if not is_midi_file then
+                skip_offset = get_leading_silence_offset(file_path)
+                if skip_offset > 0 then
+                    r.SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", skip_offset)
+                end
+            end
+
             if use_original_speed then
-                r.SetMediaItemLength(item, source_length / custom_playrate, false)
+                local item_length = math.max(0.01, (source_length - skip_offset) / custom_playrate)
+                r.SetMediaItemLength(item, item_length, false)
                 r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", custom_playrate)
             else
                 if not is_midi_file then
                     local ok, rate, len = r.GetTempoMatchPlayRate(source, 1, 0, 1)
                     if ok and rate and rate > 0 and len and len > 0 then
                         r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
-                        r.SetMediaItemLength(item, len, false)
+                        local item_length = math.max(0.01, len - (skip_offset / rate))
+                        r.SetMediaItemLength(item, item_length, false)
                     else
-                        r.SetMediaItemLength(item, source_length / custom_playrate, false)
+                        local item_length = math.max(0.01, (source_length - skip_offset) / custom_playrate)
+                        r.SetMediaItemLength(item, item_length, false)
                         r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", custom_playrate)
                     end
                 else
@@ -5490,7 +5865,7 @@ local function insert_media_on_track(file_path, track, use_original_speed, custo
     r.UpdateItemInProject(item)
     local take = r.GetActiveTake(item)
     if take then
-        r.SetMediaItemTakeInfo_Value(take, "D_VOL", playback.preview_volume or 1.0)
+        r.SetMediaItemTakeInfo_Value(take, "D_VOL", (playback.preview_volume or 1.0) * (lufs_gain or 1.0))
         local src = r.GetMediaItemTake_Source(take)
         if src then r.PCM_Source_BuildPeaks(src, 0) end
         force_peaks_in_item(item, take)
@@ -5502,6 +5877,62 @@ local function insert_media_on_track(file_path, track, use_original_speed, custo
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
 end
+
+function render_lufs_context_menu(file_path, files_to_process, insert_track)
+    if not is_audio_media_file(file_path) then return end
+    local cached_lufs = get_cached_lufs(file_path)
+    r.ImGui_Text(ctx, cached_lufs and string.format("LUFS: %.1f", cached_lufs.integrated_lufs) or "LUFS: not analyzed")
+    if lufs_analysis.status ~= "" then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
+        r.ImGui_Text(ctx, lufs_analysis.status)
+        r.ImGui_PopStyleColor(ctx)
+    end
+    if lufs_analysis.last_error ~= "" then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF8080FF)
+        r.ImGui_Text(ctx, lufs_analysis.last_error)
+        r.ImGui_PopStyleColor(ctx)
+    end
+    local label = cached_lufs and "Re-analyze LUFS" or "Analyze LUFS"
+    if r.ImGui_MenuItem(ctx, label) then
+        queue_lufs_analysis({ file_path })
+    end
+    if files_to_process and #files_to_process > 1 then
+        if r.ImGui_MenuItem(ctx, "Analyze LUFS for selected audio files") then
+            queue_lufs_analysis(files_to_process)
+        end
+    end
+    if insert_track then
+        if cached_lufs then
+            local lufs_gain, gain_db = calculate_lufs_gain(cached_lufs)
+            if r.ImGui_MenuItem(ctx, string.format("Insert normalized to %.1f LUFS (%.1f dB)", playback.lufs_normalize_target or -18.0, gain_db)) then
+                insert_media_on_track(file_path, insert_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch, lufs_gain)
+            end
+        else
+            r.ImGui_BeginDisabled(ctx, true)
+            r.ImGui_MenuItem(ctx, string.format("Insert normalized to %.1f LUFS", playback.lufs_normalize_target or -18.0))
+            r.ImGui_EndDisabled(ctx)
+        end
+    end
+    r.ImGui_Separator(ctx)
+end
+
+function render_lufs_folder_context_menu(folder_path)
+    if lufs_analysis.status ~= "" then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xA0A0A0FF)
+        r.ImGui_Text(ctx, lufs_analysis.status)
+        r.ImGui_PopStyleColor(ctx)
+    end
+    if lufs_analysis.last_error ~= "" then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF8080FF)
+        r.ImGui_Text(ctx, lufs_analysis.last_error)
+        r.ImGui_PopStyleColor(ctx)
+    end
+    if r.ImGui_MenuItem(ctx, "Analyze LUFS for folder") then
+        queue_lufs_analysis(collect_lufs_audio_files_in_folder(folder_path))
+    end
+    r.ImGui_Separator(ctx)
+end
+
 local function handle_reaper_drop()
     local mouse_state = r.JS_Mouse_GetState(1)
     if mouse_state == 1 and insert_state.drop_file then
@@ -6527,6 +6958,17 @@ local function draw_file_list()
                         if item.is_dir then
                             if folder_has_matching_files(item.items or {}, search_lower) then
                                 local tree_open = r.ImGui_TreeNode(ctx, icon .. " " .. item.name)
+                                local folder_path = item.path or (path .. sep .. item.name)
+                                if r.ImGui_BeginPopupContextItem(ctx, "tree_folder_context_" .. folder_path) then
+                                    render_lufs_folder_context_menu(folder_path)
+                                    if r.ImGui_MenuItem(ctx, "Add this folder to Folders list") then
+                                        if not table.contains(file_location.locations, folder_path) then
+                                            table.insert(file_location.locations, folder_path)
+                                            save_locations()
+                                        end
+                                    end
+                                    r.ImGui_EndPopup(ctx)
+                                end
                                 
                                 if r.ImGui_IsItemFocused(ctx) then
                                     if playback.auto_play and (playback.playing_preview or playback.is_midi_playback or playback.is_video_playback) then
@@ -6543,9 +6985,8 @@ local function draw_file_list()
                                 local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
                                 
                                 if r.ImGui_InvisibleButton(ctx, button_id, button_size, button_size) then
-                                    local full_path = path .. sep .. item.name
-                                    if not table.contains(file_location.locations, full_path) then
-                                        table.insert(file_location.locations, full_path)
+                                    if not table.contains(file_location.locations, folder_path) then
+                                        table.insert(file_location.locations, folder_path)
                                         save_locations()
                                     end
                                 end
@@ -6655,6 +7096,8 @@ local function draw_file_list()
                                         end
                                         r.ImGui_Separator(ctx)
                                     end
+
+                                    render_lufs_context_menu(file_path, { file_path }, insert_track)
 
                                     render_remove_from_collection_menu(file_path, nil)
                                     
@@ -6871,6 +7314,10 @@ local function draw_file_list()
                         if vc.sample_rate then add(meta.sample_rate) end
                         if vc.channels then add(meta.channels) end
                         if vc.bpm then add(meta.bpm) end
+                        if vc.lufs then
+                            local lufs_text = format_lufs_value(file.full_path)
+                            if lufs_text ~= "--" then add(lufs_text .. " LUFS") end
+                        end
                         if vc.key then add(meta.key) end
                         if vc.artist then add(meta.artist) end
                         if vc.album then add(meta.album) end
@@ -6946,6 +7393,9 @@ local function draw_file_list()
                         end
                         if ui_settings.visible_columns.bpm then
                             r.ImGui_TableSetupColumn(ctx, "BPM", fit and S or F, fit and 0.8 or 50)
+                        end
+                        if ui_settings.visible_columns.lufs then
+                            r.ImGui_TableSetupColumn(ctx, "LUFS", fit and S or F, fit and 0.8 or 55)
                         end
                         if ui_settings.visible_columns.key then
                             r.ImGui_TableSetupColumn(ctx, "Key", fit and S or F, fit and 0.6 or 40)
@@ -7126,6 +7576,9 @@ local function draw_file_list()
                                                 elseif col_name == "bpm" then
                                                     val_a = meta_a.bpm_num or 0
                                                     val_b = meta_b.bpm_num or 0
+                                                elseif col_name == "lufs" then
+                                                    val_a = get_lufs_sort_value(a.full_path)
+                                                    val_b = get_lufs_sort_value(b.full_path)
                                                 elseif col_name == "key" then
                                                     val_a = (meta_a.key or ""):lower()
                                                     val_b = (meta_b.key or ""):lower()
@@ -7323,6 +7776,8 @@ local function draw_file_list()
                                         r.ImGui_Separator(ctx)
                                     end
 
+                                    render_lufs_context_menu(file.full_path, files_to_process, insert_track)
+
                                     render_remove_from_collection_menu(file.full_path, files_to_process)
                                     
                                     local ext = file.full_path:match("%.([^%.]+)$")
@@ -7493,6 +7948,10 @@ local function draw_file_list()
                                 if ui_settings.visible_columns.bpm then
                                     r.ImGui_TableNextColumn(ctx)
                                     r.ImGui_Text(ctx, metadata.bpm)
+                                end
+                                if ui_settings.visible_columns.lufs then
+                                    r.ImGui_TableNextColumn(ctx)
+                                    r.ImGui_Text(ctx, format_lufs_value(file.full_path))
                                 end
                                 if ui_settings.visible_columns.key then
                                     r.ImGui_TableNextColumn(ctx)
@@ -8234,6 +8693,7 @@ local function loop()
         ui.pending_view_mode = nil
         save_options()
     end
+    process_lufs_analysis_queue()
     if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         ctx = r.ImGui_CreateContext('TK Media Browser')
         normal_font = r.ImGui_CreateFont('sans-serif', font_size)
@@ -8746,6 +9206,8 @@ local function loop()
                         end
                         os.execute(command)
                     end
+
+                    render_lufs_folder_context_menu(location)
                     
                     if r.ImGui_MenuItem(ctx, "Clear Cache for this Folder") then
                         local cache_file = cache_dir .. "file_cache_" .. location:gsub("[^%w]", "_") .. ".json"
@@ -12126,6 +12588,43 @@ local function loop()
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "Route audio preview through the currently selected track,\nso track FX, volume, pan and sends are applied to the preview.\nIf no track is selected, the preview falls back to the hardware output.")
                     end
+
+                    r.ImGui_Spacing(ctx)
+                    local skip_silence_changed, new_skip_silence = r.ImGui_Checkbox(ctx, "Skip First Silence", playback.skip_first_silence)
+                    if skip_silence_changed then
+                        playback.skip_first_silence = new_skip_silence
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Skip leading silence for audio preview and normal timeline inserts when no waveform selection or manual start position is active.")
+                    end
+
+                    if playback.skip_first_silence then
+                        r.ImGui_Indent(ctx, 16)
+                        local silence_threshold_changed, new_silence_threshold = r.ImGui_SliderDouble(ctx, "Silence Threshold", playback.skip_first_silence_threshold_db, -80.0, -12.0, "%.0f dB")
+                        if silence_threshold_changed then
+                            playback.skip_first_silence_threshold_db = new_silence_threshold
+                            waveform.leading_silence_cache = {}
+                            save_options()
+                        end
+                        local max_scan_changed, new_max_scan = r.ImGui_SliderDouble(ctx, "Max Silence Scan", playback.skip_first_silence_max_scan_seconds, 1.0, 10.0, "%.1fs")
+                        if max_scan_changed then
+                            playback.skip_first_silence_max_scan_seconds = new_max_scan
+                            waveform.leading_silence_cache = {}
+                            save_options()
+                        end
+                        r.ImGui_Unindent(ctx, 16)
+                    end
+
+                    r.ImGui_Spacing(ctx)
+                    local lufs_target_changed, new_lufs_target = r.ImGui_SliderDouble(ctx, "Normalize Target LUFS", playback.lufs_normalize_target, -30.0, -6.0, "%.1f LUFS")
+                    if lufs_target_changed then
+                        playback.lufs_normalize_target = new_lufs_target
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Used by the right-click normalized insert action when a saved LUFS analysis exists for the sample.")
+                    end
                     
                     r.ImGui_Spacing(ctx)
                     local pitch_detection_changed, new_pitch_detection = r.ImGui_Checkbox(ctx, "Show Pitch Detection", ui.pitch_detection_enabled)
@@ -12291,6 +12790,10 @@ local function loop()
                     
                     ch1, val1 = r.ImGui_Checkbox(ctx, "Key##col", ui_settings.visible_columns.key)
                     if ch1 then ui_settings.visible_columns.key = val1; save_options() end
+                    r.ImGui_SameLine(ctx, 560)
+
+                    ch1, val1 = r.ImGui_Checkbox(ctx, "LUFS##col", ui_settings.visible_columns.lufs or false)
+                    if ch1 then ui_settings.visible_columns.lufs = val1; save_options() end
                     
                     r.ImGui_Spacing(ctx)
                     r.ImGui_Separator(ctx)
@@ -12667,6 +13170,18 @@ local function loop()
                 end
                 
                 local pixels = math.floor(footer_width * ui_settings.waveform_resolution_multiplier)
+                local audio_length = nil
+                local waveform_refresh_due = false
+                if not is_midi and not is_video_or_gif and not is_image then
+                    audio_length = get_cached_file_length(file_to_show)
+                    if audio_length and audio_length > 8 then
+                        pixels = math.min(pixels, math.max(240, math.floor(footer_width)))
+                    end
+                    local refresh = waveform.peak_refresh_pending[file_to_show]
+                    if refresh and refresh.pixels == pixels and r.time_precise() >= refresh.time then
+                        waveform_refresh_due = true
+                    end
+                end
                 if is_midi then
                     if waveform.midi_notes_file ~= file_to_show or #waveform.midi_notes == 0 then
                         waveform.midi_notes, waveform.midi_length = load_midi_notes(file_to_show)
@@ -12686,7 +13201,7 @@ local function loop()
                             end
                         end
                     end
-                elseif not is_video_or_gif and not is_image and (waveform.cache_file ~= file_to_show or #waveform.cache == 0 or (#waveform.cache ~= pixels and waveform_width_stable(pixels))) then
+                elseif not is_video_or_gif and not is_image and (waveform.cache_file ~= file_to_show or #waveform.cache == 0 or waveform_refresh_due or (#waveform.cache ~= pixels and waveform_width_stable(pixels))) then
                     waveform.cache = {}
                     waveform.cache_file = file_to_show
                     local source = r.PCM_Source_CreateFromFile(file_to_show)
@@ -12694,14 +13209,49 @@ local function loop()
                         local length = r.GetMediaSourceLength(source)
                         if length and length > 0 and pixels > 0 then
                             local peakrate = pixels / length
-                            local buffer = r.new_array(pixels * 2)
-                            buffer.clear()
-                            local ok = r.PCM_Source_GetPeaks(source, peakrate, 0, 1, pixels, 0, buffer)
-                            if ok then
+                            local channels = r.GetMediaSourceNumChannels(source) or 1
+                            if channels < 1 then channels = 1 end
+                            local ok, buffer, has_signal = read_source_peaks(source, peakrate, 0, channels, pixels, false)
+                            if ok and has_signal then
                                 for i = 1, pixels do
-                                    local max_val = math.abs(buffer[i] or 0)
-                                    local min_val = math.abs(buffer[pixels + i] or 0)
-                                    waveform.cache[i] = math.max(max_val, min_val)
+                                    local peak = 0
+                                    for ch = 1, channels do
+                                        local index = ((i - 1) * channels) + ch
+                                        local max_val = math.abs(buffer[index] or 0)
+                                        local min_val = math.abs(buffer[(pixels * channels) + index] or 0)
+                                        peak = math.max(peak, max_val, min_val)
+                                    end
+                                    waveform.cache[i] = peak
+                                end
+                                local refresh = waveform.peak_refresh_pending[file_to_show]
+                                if not refresh then
+                                    waveform.peak_refresh_pending[file_to_show] = { time = r.time_precise() + 0.75, count = 1, pixels = pixels }
+                                    local last_build = waveform.peak_build_pending[file_to_show] or 0
+                                    local now = r.time_precise()
+                                    if now - last_build > 0.75 then
+                                        waveform.peak_build_pending[file_to_show] = now
+                                        r.PCM_Source_BuildPeaks(source, 0)
+                                    end
+                                elseif refresh.count < 4 then
+                                    refresh.count = refresh.count + 1
+                                    refresh.time = r.time_precise() + 0.75
+                                    refresh.pixels = pixels
+                                    local last_build = waveform.peak_build_pending[file_to_show] or 0
+                                    local now = r.time_precise()
+                                    if now - last_build > 0.75 then
+                                        waveform.peak_build_pending[file_to_show] = now
+                                        r.PCM_Source_BuildPeaks(source, 0)
+                                    end
+                                else
+                                    waveform.peak_build_pending[file_to_show] = nil
+                                    waveform.peak_refresh_pending[file_to_show] = nil
+                                end
+                            else
+                                local now = r.time_precise()
+                                local last_build = waveform.peak_build_pending[file_to_show] or 0
+                                if now - last_build > 0.75 then
+                                    waveform.peak_build_pending[file_to_show] = now
+                                    r.PCM_Source_BuildPeaks(source, 0)
                                 end
                             end
                             buffer.clear()
@@ -12710,12 +13260,17 @@ local function loop()
                     end
                 end
                 if not is_midi and not is_image and #waveform.cache > 0 then
-                    if waveform.show_spectral_view then
+                    local can_show_spectral = waveform.show_spectral_view and not (audio_length and audio_length > 8 and waveform.spectral_cache_file ~= file_to_show)
+                    if can_show_spectral then
                         local spec_file_changed = waveform.spectral_cache_file ~= file_to_show
                         local spec_cache_empty = #waveform.spectral_cache == 0
-                        local spec_width_diff = #waveform.spectral_cache ~= pixels
+                        local spectral_pixels = pixels
+                        if audio_length and audio_length > 8 then
+                            spectral_pixels = math.min(pixels, 160)
+                        end
+                        local spec_width_diff = #waveform.spectral_cache ~= spectral_pixels
                         if spec_file_changed or spec_cache_empty or (spec_width_diff and waveform_width_stable(pixels)) then
-                            waveform.spectral_cache = calculate_spectral_data(file_to_show, pixels, 1)
+                            waveform.spectral_cache = calculate_spectral_data(file_to_show, spectral_pixels, 1)
                             waveform.spectral_cache_file = file_to_show
                         end
                         
