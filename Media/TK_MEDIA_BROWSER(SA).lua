@@ -1,6 +1,6 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.8.5
+-- @version 0.8.6
 -- @changelog:
 --[[
 v0.8.5:
@@ -13260,7 +13260,7 @@ local function loop()
                     end
                 end
                 if not is_midi and not is_image and #waveform.cache > 0 then
-                    local can_show_spectral = waveform.show_spectral_view and not (audio_length and audio_length > 8 and waveform.spectral_cache_file ~= file_to_show)
+                    local can_show_spectral = waveform.show_spectral_view
                     if can_show_spectral then
                         local spec_file_changed = waveform.spectral_cache_file ~= file_to_show
                         local spec_cache_empty = #waveform.spectral_cache == 0
