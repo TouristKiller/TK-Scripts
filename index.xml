@@ -556,7 +556,7 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.8.9" author="TouristKiller" time="2026-04-06T17:00:00Z">
+        <version name="1.9.0" author="TouristKiller" time="2026-04-06T17:00:00Z">
             <changelog><![CDATA[
 v1.8.9:
 + Labels Toggle: Excluded overlay grid from toggle

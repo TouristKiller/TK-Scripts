@@ -1,6 +1,6 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.8.9
+-- @version 1.9.0
 -- @changelog 
 --[[
 v1.8.9:
@@ -149,6 +149,7 @@ local exclude_filter     = ""
 local tcp_synced         = false
 local mcp_synced         = false
 local settings_tab       = 1
+local settings_tab_restore = nil
 local track_visibility_clipper = nil
 
 local folder_browser_open = false
@@ -617,7 +618,23 @@ local default_settings              = {
     sel_brightness_tr1              = 0.3,  
     sel_brightness_tr2              = 0.3,
     show_envelope_names             = false,
+    show_envelope_point_values      = false,
+    show_envelope_point_values_selected_only = false,
+    envelope_point_text_size        = 10,
+    envelope_text_custom_color      = false,
+    envelope_text_color             = 0xFFFFFFFF,
     envelope_text_opacity           = 0.8,
+    envelope_value_bg_enabled       = false,
+    envelope_value_bg_color         = 0x000000FF,
+    envelope_value_bg_opacity       = 0.55,
+    envelope_value_connector_lines  = false,
+    envelope_values_visible_mode    = 1,
+    envelope_value_zoom_threshold   = 0,
+    envelope_value_format_mode      = 1,
+    envelope_max_labels_per_lane    = 80,
+    automation_item_text_differentiate = false,
+    automation_item_text_custom_color = false,
+    automation_item_text_color      = 0x88CCFFFF,
     grid_color_enabled              = true,
     bg_brightness_enabled           = true,
     master_track_color              = 0x6699FFFF,
@@ -691,10 +708,12 @@ local fonts = {
 
 local color_modes = {"White", "Black", "Track Color", "Complementary"}
 local font_objects = {}
+local env_point_font_cache = {}
 local settings_font
 
 function CreateFonts()
     font_objects = {}
+    env_point_font_cache = {}
     for _, font_name in ipairs(fonts) do
         local font = r.ImGui_CreateFont(font_name, settings.text_size)
         table.insert(font_objects, font)
@@ -702,6 +721,19 @@ function CreateFonts()
     end
     settings_font = r.ImGui_CreateFont('Arial', 12)
     r.ImGui_Attach(ctx, settings_font)
+end
+
+function GetEnvelopePointFont()
+    local font_name = fonts[settings.selected_font] or fonts[1]
+    local font_size = settings.envelope_point_text_size or settings.text_size
+    local cache_key = font_name .. "_" .. tostring(font_size)
+    local font = env_point_font_cache[cache_key]
+    if not font or not r.ImGui_ValidatePtr(font, 'ImGui_Font*') then
+        font = r.ImGui_CreateFont(font_name, font_size)
+        env_point_font_cache[cache_key] = font
+        r.ImGui_Attach(ctx, font)
+    end
+    return font
 end
 if old_text_size ~= settings.text_size then CreateFonts()end 
 
@@ -1581,31 +1613,36 @@ function ShowSettingsWindow()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TabSelected(), 0xFF0000FF)
         
         if r.ImGui_BeginTabBar(ctx, "SettingsTabs") then
-            if r.ImGui_BeginTabItem(ctx, "Labels") then
+            if r.ImGui_BeginTabItem(ctx, "Labels", nil, settings_tab_restore == 1 and r.ImGui_TabItemFlags_SetSelected() or 0) then
                 settings_tab = 1
                 r.ImGui_EndTabItem(ctx)
             end
-            if r.ImGui_BeginTabItem(ctx, "Colors") then
+            if r.ImGui_BeginTabItem(ctx, "Colors", nil, settings_tab_restore == 2 and r.ImGui_TabItemFlags_SetSelected() or 0) then
                 settings_tab = 2
                 r.ImGui_EndTabItem(ctx)
             end
-            if r.ImGui_BeginTabItem(ctx, "Grid & BG") then
+            if r.ImGui_BeginTabItem(ctx, "Grid & BG", nil, settings_tab_restore == 3 and r.ImGui_TabItemFlags_SetSelected() or 0) then
                 settings_tab = 3
                 r.ImGui_EndTabItem(ctx)
             end
-            if r.ImGui_BeginTabItem(ctx, "Icons") then
+            if r.ImGui_BeginTabItem(ctx, "Envelopes", nil, settings_tab_restore == 7 and r.ImGui_TabItemFlags_SetSelected() or 0) then
+                settings_tab = 7
+                r.ImGui_EndTabItem(ctx)
+            end
+            if r.ImGui_BeginTabItem(ctx, "Icons", nil, settings_tab_restore == 4 and r.ImGui_TabItemFlags_SetSelected() or 0) then
                 settings_tab = 4
                 r.ImGui_EndTabItem(ctx)
             end
-            if r.ImGui_BeginTabItem(ctx, "Track Visibility") then
+            if r.ImGui_BeginTabItem(ctx, "Track Visibility", nil, settings_tab_restore == 5 and r.ImGui_TabItemFlags_SetSelected() or 0) then
                 settings_tab = 5
                 r.ImGui_EndTabItem(ctx)
             end
-            if r.ImGui_BeginTabItem(ctx, "Time Selection") then
+            if r.ImGui_BeginTabItem(ctx, "Time Selection", nil, settings_tab_restore == 6 and r.ImGui_TabItemFlags_SetSelected() or 0) then
                 settings_tab = 6
                 r.ImGui_EndTabItem(ctx)
             end
             r.ImGui_EndTabBar(ctx)
+            settings_tab_restore = nil
         end
         
         r.ImGui_PopStyleColor(ctx, 3)
@@ -1634,11 +1671,6 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Normal", settings.show_normal_tracks) then
             settings.show_normal_tracks = not settings.show_normal_tracks
             needs_font_update = CheckNeedsUpdate()
-        end
-        r.ImGui_SameLine(ctx, column_width * 3)
-        
-        if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
-            settings.show_envelope_names = not settings.show_envelope_names
         end
         
         if r.ImGui_RadioButton(ctx, "First FX", settings.show_first_fx) then
@@ -1776,11 +1808,6 @@ function ShowSettingsWindow()
         changed, settings.text_opacity = r.ImGui_SliderDouble(ctx, "##TextOpacity", settings.text_opacity, 0.0, 1.0)
         r.ImGui_SameLine(ctx, col4)
         r.ImGui_Text(ctx, "Opacity")
-        
-        r.ImGui_SetNextItemWidth(ctx, slider_width)
-        changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "##EnvOpacity", settings.envelope_text_opacity, 0.0, 1.0)
-        r.ImGui_SameLine(ctx, col2)
-        r.ImGui_Text(ctx, "Env Opacity")
 
         r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_Separator(ctx)
@@ -2098,6 +2125,132 @@ function ShowSettingsWindow()
         end
         
         r.ImGui_PopItemWidth(ctx)
+
+        elseif settings_tab == 7 then
+        local changed
+        r.ImGui_Text(ctx, "Envelope Labels:")
+        if r.ImGui_RadioButton(ctx, "Env Names", settings.show_envelope_names) then
+            settings.show_envelope_names = not settings.show_envelope_names
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        if r.ImGui_RadioButton(ctx, "Env Values", settings.show_envelope_point_values) then
+            settings.show_envelope_point_values = not settings.show_envelope_point_values
+        end
+        r.ImGui_BeginDisabled(ctx, not settings.show_envelope_point_values)
+        r.ImGui_SameLine(ctx, column_width * 2)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        local visibility_label = settings.envelope_values_visible_mode == 2 and "Selected Points" or settings.envelope_values_visible_mode == 3 and "Selected Env/AI" or "All Points"
+        if r.ImGui_BeginCombo(ctx, "##EnvValueVisibility", visibility_label) then
+            if r.ImGui_Selectable(ctx, "All Points", settings.envelope_values_visible_mode == 1) then
+                settings.envelope_values_visible_mode = 1
+                settings.show_envelope_point_values_selected_only = false
+            end
+            if r.ImGui_Selectable(ctx, "Selected Points", settings.envelope_values_visible_mode == 2) then
+                settings.envelope_values_visible_mode = 2
+                settings.show_envelope_point_values_selected_only = true
+            end
+            if r.ImGui_Selectable(ctx, "Selected Env/AI", settings.envelope_values_visible_mode == 3) then
+                settings.envelope_values_visible_mode = 3
+                settings.show_envelope_point_values_selected_only = false
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Visibility")
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        r.ImGui_Text(ctx, "Envelope Text:")
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.envelope_text_opacity = r.ImGui_SliderDouble(ctx, "##EnvOpacity", settings.envelope_text_opacity, 0.0, 1.0)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Opacity")
+        if r.ImGui_RadioButton(ctx, "Custom Color", settings.envelope_text_custom_color) then
+            settings.envelope_text_custom_color = not settings.envelope_text_custom_color
+        end
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_BeginDisabled(ctx, not settings.envelope_text_custom_color)
+        if r.ImGui_ColorButton(ctx, "##EnvTextColorButton", settings.envelope_text_color) then
+            r.ImGui_OpenPopup(ctx, "EnvTextColorPicker")
+        end
+        if r.ImGui_BeginPopup(ctx, "EnvTextColorPicker") then
+            changed, settings.envelope_text_color = r.ImGui_ColorPicker4(ctx, "##EnvTextColor", settings.envelope_text_color)
+            r.ImGui_EndPopup(ctx)
+        end
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_Text(ctx, "Color")
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.envelope_point_text_size = r.ImGui_SliderInt(ctx, "##EnvPointSize", settings.envelope_point_text_size, 6, 24)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Point Value Size")
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        local format_label = settings.envelope_value_format_mode == 2 and "Raw" or settings.envelope_value_format_mode == 3 and "Compact" or "Smart"
+        if r.ImGui_BeginCombo(ctx, "##EnvValueFormat", format_label) then
+            if r.ImGui_Selectable(ctx, "Smart", settings.envelope_value_format_mode == 1) then settings.envelope_value_format_mode = 1 end
+            if r.ImGui_Selectable(ctx, "Raw", settings.envelope_value_format_mode == 2) then settings.envelope_value_format_mode = 2 end
+            if r.ImGui_Selectable(ctx, "Compact", settings.envelope_value_format_mode == 3) then settings.envelope_value_format_mode = 3 end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Format")
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        r.ImGui_Text(ctx, "Value Display:")
+        if r.ImGui_RadioButton(ctx, "Background", settings.envelope_value_bg_enabled) then
+            settings.envelope_value_bg_enabled = not settings.envelope_value_bg_enabled
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        if r.ImGui_RadioButton(ctx, "Connector Lines", settings.envelope_value_connector_lines) then
+            settings.envelope_value_connector_lines = not settings.envelope_value_connector_lines
+        end
+        r.ImGui_SameLine(ctx, column_width * 2)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.envelope_max_labels_per_lane = r.ImGui_SliderInt(ctx, "##EnvMaxLabels", settings.envelope_max_labels_per_lane, 1, 200)
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Max Labels")
+        r.ImGui_BeginDisabled(ctx, not settings.envelope_value_bg_enabled)
+        if r.ImGui_ColorButton(ctx, "##EnvValueBgColorButton", settings.envelope_value_bg_color) then
+            r.ImGui_OpenPopup(ctx, "EnvValueBgColorPicker")
+        end
+        if r.ImGui_BeginPopup(ctx, "EnvValueBgColorPicker") then
+            changed, settings.envelope_value_bg_color = r.ImGui_ColorPicker4(ctx, "##EnvValueBgColor", settings.envelope_value_bg_color)
+            r.ImGui_EndPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.envelope_value_bg_opacity = r.ImGui_SliderDouble(ctx, "##EnvValueBgOpacity", settings.envelope_value_bg_opacity, 0.0, 1.0)
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_Text(ctx, "BG / Opacity")
+        r.ImGui_SetNextItemWidth(ctx, slider_width)
+        changed, settings.envelope_value_zoom_threshold = r.ImGui_SliderDouble(ctx, "##EnvValueZoom", settings.envelope_value_zoom_threshold, 0.0, 400.0)
+        r.ImGui_SameLine(ctx, col2)
+        r.ImGui_Text(ctx, "Zoom Threshold")
+        if r.ImGui_RadioButton(ctx, "AI Color", settings.automation_item_text_differentiate) then
+            settings.automation_item_text_differentiate = not settings.automation_item_text_differentiate
+        end
+        r.ImGui_SameLine(ctx, column_width)
+        r.ImGui_BeginDisabled(ctx, not settings.automation_item_text_differentiate)
+        if r.ImGui_RadioButton(ctx, "Custom AI Color", settings.automation_item_text_custom_color) then
+            settings.automation_item_text_custom_color = not settings.automation_item_text_custom_color
+        end
+        r.ImGui_SameLine(ctx, col3)
+        r.ImGui_BeginDisabled(ctx, not settings.automation_item_text_custom_color)
+        if r.ImGui_ColorButton(ctx, "##AITextColorButton", settings.automation_item_text_color) then
+            r.ImGui_OpenPopup(ctx, "AITextColorPicker")
+        end
+        if r.ImGui_BeginPopup(ctx, "AITextColorPicker") then
+            changed, settings.automation_item_text_color = r.ImGui_ColorPicker4(ctx, "##AITextColor", settings.automation_item_text_color)
+            r.ImGui_EndPopup(ctx)
+        end
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_SameLine(ctx, col4)
+        r.ImGui_Text(ctx, "Automation")
 
         elseif settings_tab == 4 then
         -- ═══════════════════════════════════════════════════════════════════
@@ -3239,6 +3392,216 @@ function TruncateTrackName(name, mode, fixed_len_override)
         end
     end
     return name
+end
+
+function FormatEnvelopePointValue(env, env_name, value)
+    if settings.envelope_value_format_mode == 2 then
+        return string.format("%.4f", value)
+    end
+    local display_value = value
+    local scaling_mode = r.GetEnvelopeScalingMode(env)
+    if scaling_mode then
+        display_value = r.ScaleFromEnvelopeMode(scaling_mode, value)
+    end
+    local name = env_name:lower()
+    if name:find("volume") or name:find("vol") then
+        if display_value <= 0 then
+            return "-inf dB"
+        end
+        if settings.envelope_value_format_mode == 3 then
+            return string.format("%.0fdB", 20 * math.log(display_value, 10))
+        end
+        return string.format("%.1f dB", 20 * math.log(display_value, 10))
+    elseif name:find("pan") then
+        return string.format("%.0f%%", display_value * 100)
+    end
+    if settings.envelope_value_format_mode == 3 then
+        local abs_value = math.abs(display_value)
+        if abs_value >= 10 then
+            return string.format("%.0f", display_value)
+        elseif abs_value >= 1 then
+            return string.format("%.1f", display_value)
+        end
+        return string.format("%.2f", display_value)
+    end
+    return string.format("%.2f", display_value)
+end
+
+function GetEnvelopePointValueRange(env)
+    if not (r.BR_EnvAlloc and r.BR_EnvGetProperties and r.BR_EnvFree) then return nil end
+    local br_env = r.BR_EnvAlloc(env, false)
+    if not br_env then return nil end
+    local _, _, _, _, _, _, min_value, max_value, _, _, fader_scaling = r.BR_EnvGetProperties(br_env)
+    r.BR_EnvFree(br_env, false)
+    local scaling_mode = nil
+    if fader_scaling then
+        scaling_mode = r.GetEnvelopeScalingMode(env)
+    end
+    return min_value, max_value, scaling_mode
+end
+
+function GetEnvelopePointLabelY(value, env_height, min_value, max_value, scaling_mode)
+    local text_size = settings.envelope_point_text_size or settings.text_size
+    local normalized = 0.5
+    if min_value and max_value and max_value ~= min_value then
+        local display_value = value
+        if scaling_mode then
+            display_value = r.ScaleFromEnvelopeMode(scaling_mode, value)
+        end
+        normalized = 1 - ((display_value - min_value) / (max_value - min_value))
+    end
+    normalized = math.max(0, math.min(1, normalized))
+    local point_y = env_height * normalized
+    local offset = math.max(4, text_size * 0.35)
+    local top_margin = 1
+    local bottom_margin = env_height - 1
+    local above_y = point_y - text_size - offset
+    local below_y = point_y + offset
+    if above_y >= top_margin then
+        return above_y, point_y, 1
+    end
+    if below_y + text_size <= bottom_margin then
+        return below_y, point_y, 2
+    end
+    return nil, point_y, 0
+end
+
+function EnvelopePointLabelOverlaps(labels, x1, y1, x2, y2)
+    local padding = 2
+    for _, label in ipairs(labels) do
+        if x1 < label.x2 + padding and x2 > label.x1 - padding and y1 < label.y2 + padding and y2 > label.y1 - padding then
+            return true
+        end
+    end
+    return false
+end
+
+function GetEnvelopeTextColor(track, is_child)
+    local color = settings.envelope_text_custom_color and settings.envelope_text_color or GetTextColor(track, is_child)
+    return (color & 0xFFFFFF00) | ((settings.envelope_text_opacity * 255)//1)
+end
+
+function GetEnvelopePointTextColor(track, is_child, autoitem_idx)
+    if autoitem_idx and autoitem_idx >= 0 and settings.automation_item_text_differentiate then
+        local color = settings.automation_item_text_custom_color and settings.automation_item_text_color or settings.automation_item_text_color
+        return (color & 0xFFFFFF00) | ((settings.envelope_text_opacity * 255)//1)
+    end
+    return GetEnvelopeTextColor(track, is_child)
+end
+
+function ShouldDrawEnvelopePointValue(point_selected, env_selected, autoitem_selected)
+    local mode = settings.envelope_values_visible_mode or 1
+    if settings.show_envelope_point_values_selected_only and mode == 1 then
+        mode = 2
+    end
+    if mode == 2 then
+        return point_selected
+    elseif mode == 3 then
+        return point_selected or env_selected or autoitem_selected
+    end
+    return true
+end
+
+function DrawEnvelopeValueBackground(draw_list, x1, y1, x2, y2)
+    if not settings.envelope_value_bg_enabled then return end
+    local color = (settings.envelope_value_bg_color & 0xFFFFFF00) | ((settings.envelope_value_bg_opacity * 255)//1)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1 - 3, y1 - 1, x2 + 3, y2 + 1, color, 3)
+end
+
+function DrawEnvelopeValueConnector(draw_list, text_x, text_y, text_width, text_size, point_x, point_y, color, placement)
+    if not settings.envelope_value_connector_lines or placement == 0 then return end
+    local label_x = text_x + text_width * 0.5
+    local label_y = placement == 1 and (text_y + text_size) or text_y
+    local line_color = (color & 0xFFFFFF00) | math.floor(((color & 0xFF) or 255) * 0.75)
+    r.ImGui_DrawList_AddLine(draw_list, label_x, label_y, point_x, point_y, line_color, 1)
+end
+
+function DrawEnvelopePointValueSet(draw_list, env, env_name, autoitem_idx, drawn_labels, label_count, viewport_start, viewport_end, arrange_width, track_y, env_y, env_used_height, min_value, max_value, scaling_mode, text_color, text_size, WY, is_pinned, pinned_tracks_height, env_selected, autoitem_selected)
+    local point_count = r.CountEnvelopePointsEx(env, autoitem_idx)
+    if point_count < 1 then return label_count end
+    local max_labels = settings.envelope_max_labels_per_lane or 80
+    local low = 0
+    local high = point_count - 1
+    local start_idx = point_count
+    while low <= high do
+        local mid = (low + high) // 2
+        local _, point_time = r.GetEnvelopePointEx(env, autoitem_idx, mid)
+        if point_time >= viewport_start then
+            start_idx = mid
+            high = mid - 1
+        else
+            low = mid + 1
+        end
+    end
+    for point_idx = start_idx, point_count - 1 do
+        local _, point_time, point_value, _, _, point_selected = r.GetEnvelopePointEx(env, autoitem_idx, point_idx)
+        if point_time > viewport_end then break end
+        if ShouldDrawEnvelopePointValue(point_selected, env_selected, autoitem_selected) then
+            local x = LEFT + arrange_width * (point_time - viewport_start) / (viewport_end - viewport_start)
+            local label = FormatEnvelopePointValue(env, env_name, point_value)
+            local text_width = r.ImGui_CalcTextSize(ctx, label)
+            local text_x = x + 4
+            if text_x + text_width > RIGHT - scroll_size then
+                text_x = x - text_width - 4
+            end
+            local label_y, point_y, placement = GetEnvelopePointLabelY(point_value, env_used_height, min_value, max_value, scaling_mode)
+            local text_y = label_y and (WY + track_y + env_y + label_y) or nil
+            if text_y and (is_pinned or text_y >= WY + pinned_tracks_height) and not EnvelopePointLabelOverlaps(drawn_labels, text_x, text_y, text_x + text_width, text_y + text_size) then
+                local absolute_point_y = WY + track_y + env_y + point_y
+                DrawEnvelopeValueConnector(draw_list, text_x, text_y, text_width, text_size, x, absolute_point_y, text_color, placement)
+                DrawEnvelopeValueBackground(draw_list, text_x, text_y, text_x + text_width, text_y + text_size)
+                r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, label)
+                table.insert(drawn_labels, {x1 = text_x, y1 = text_y, x2 = text_x + text_width, y2 = text_y + text_size})
+                label_count = label_count + 1
+                if label_count >= max_labels then return label_count end
+            end
+        end
+    end
+    return label_count
+end
+
+function DrawEnvelopePointValues(draw_list, track, track_y, WY, is_pinned, pinned_tracks_height, is_child)
+    if not settings.show_envelope_point_values or settings.hide_all_labels then return end
+    if not (r.CountEnvelopePointsEx and r.GetEnvelopePointEx) then return end
+    local viewport_start, viewport_end = r.GetSet_ArrangeView2(0, false, 0, 0)
+    local arrange_width = RIGHT - LEFT - scroll_size
+    if arrange_width <= 0 or viewport_end <= viewport_start then return end
+    local pixels_per_second = arrange_width / (viewport_end - viewport_start)
+    if settings.envelope_value_zoom_threshold and settings.envelope_value_zoom_threshold > 0 and pixels_per_second < settings.envelope_value_zoom_threshold then return end
+    local env_count = r.CountTrackEnvelopes(track)
+    local text_size = settings.envelope_point_text_size or settings.text_size
+    local text_color = GetEnvelopeTextColor(track, is_child)
+    local env_point_font = GetEnvelopePointFont()
+    if env_point_font then
+        r.ImGui_PushFont(ctx, env_point_font)
+    end
+    for env_idx = 0, env_count - 1 do
+        local env = r.GetTrackEnvelope(track, env_idx)
+        local env_height = r.GetEnvelopeInfo_Value(env, "I_TCPH") / screen_scale
+        local env_used_height = r.GetEnvelopeInfo_Value(env, "I_TCPH_USED") / screen_scale
+        local env_y = r.GetEnvelopeInfo_Value(env, "I_TCPY") / screen_scale
+        if env_used_height > 0 and env_height >= text_size + 4 and env_y > 0 then
+            local min_value, max_value, scaling_mode = GetEnvelopePointValueRange(env)
+            local _, env_name = r.GetEnvelopeName(env)
+            local env_selected = r.GetSelectedEnvelope(0) == env
+            local drawn_labels = {}
+            local label_count = DrawEnvelopePointValueSet(draw_list, env, env_name, -1, drawn_labels, 0, viewport_start, viewport_end, arrange_width, track_y, env_y, env_used_height, min_value, max_value, scaling_mode, text_color, text_size, WY, is_pinned, pinned_tracks_height, env_selected, false)
+            local automation_item_count = r.CountAutomationItems and r.CountAutomationItems(env) or 0
+            for autoitem_idx = 0, automation_item_count - 1 do
+                if label_count >= (settings.envelope_max_labels_per_lane or 80) then break end
+                local ai_pos = r.GetSetAutomationItemInfo(env, autoitem_idx, "D_POSITION", 0, false)
+                local ai_len = r.GetSetAutomationItemInfo(env, autoitem_idx, "D_LENGTH", 0, false)
+                if ai_pos + ai_len >= viewport_start and ai_pos <= viewport_end then
+                    local ai_selected = r.GetSetAutomationItemInfo(env, autoitem_idx, "D_UISEL", 0, false) == 1
+                    local ai_text_color = GetEnvelopePointTextColor(track, is_child, autoitem_idx)
+                    label_count = DrawEnvelopePointValueSet(draw_list, env, env_name, autoitem_idx, drawn_labels, label_count, viewport_start, viewport_end, arrange_width, track_y, env_y, env_used_height, min_value, max_value, scaling_mode, ai_text_color, text_size, WY, is_pinned, pinned_tracks_height, env_selected, ai_selected)
+                end
+            end
+        end
+    end
+    if env_point_font then
+        r.ImGui_PopFont(ctx)
+    end
 end
 
 function RenderTrackIcon(draw_list, track, track_y, track_height, text_x, text_width, vertical_offset, WY, is_pinned, pinned_tracks_height, keep_text_aligned)
@@ -4907,6 +5270,7 @@ function loop()
                             end
                         end
                     end
+                    DrawEnvelopePointValues(draw_list, track, track_y, WY, is_pinned, pinned_tracks_height, is_child)
                     if settings.show_envelope_names and not settings.hide_all_labels then
                         local env_count = r.CountTrackEnvelopes(track)
                         for i = 0, env_count - 1 do
@@ -4939,8 +5303,7 @@ function loop()
                                 local text_y = WY + absolute_env_y + (env_height/2) - (settings.text_size/2)
                                 
                                 if is_pinned or text_y >= WY + pinned_tracks_height then
-                                    local env_color = GetTextColor(track, is_child)
-                                    env_color = (env_color & 0xFFFFFF00) | ((settings.envelope_text_opacity * 255)//1)
+                                    local env_color = GetEnvelopeTextColor(track, is_child)
                                     r.ImGui_DrawList_AddText(draw_list, env_text_x, text_y, env_color, env_name)
                                 end
                             end
@@ -4985,6 +5348,7 @@ function loop()
     end
 
     if needs_font_update then
+        settings_tab_restore = settings_tab
         ctx = r.ImGui_CreateContext('Track Names')
         CreateFonts()
         needs_font_update = false
