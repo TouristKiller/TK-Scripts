@@ -1,9 +1,9 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.8.6
+-- @version 0.9.0
 -- @changelog:
 --[[
-v0.8.6:
+v0.9.0:
 + Added lazy cover art lookup for the selected file with embedded MP3/WAV ID3 APIC, FLAC Picture Block and folder image fallback
 + Added cover art thumbnail overlay in the oscilloscope preview with in-preview expanded view and image viewer zoom button
 
