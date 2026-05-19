@@ -3,6 +3,10 @@
 -- @version 0.8.6
 -- @changelog:
 --[[
+v0.8.6:
++ Added lazy cover art lookup for the selected file with embedded MP3/WAV ID3 APIC, FLAC Picture Block and folder image fallback
++ Added cover art thumbnail overlay in the oscilloscope preview with in-preview expanded view and image viewer zoom button
+
 v0.8.5:
 + Waveform clicks now seek active audio preview playback immediately from the clicked position, with zoom, scroll and playrate/tempo-sync aware positioning
 + Waveform and spectral preview generation now read directly from the media source, avoiding temporary project tracks/items for analysis
@@ -107,11 +111,13 @@ local cached_cat_counts_loc = ""
 local cached_cat_filter = {}
 local cached_cat_filter_key = ""
 local cache_dir = script_path .. "CACHE" .. sep
+local cover_art_cache_dir = cache_dir .. "cover_art" .. sep
 lufs_cache_file = cache_dir .. "lufs_cache.json"
 local collections_dir = script_path .. "COLLECTIONS" .. sep
 local presets_dir = script_path .. "PRESETS" .. sep
 local settings_image_path = script_path .. "TKMBSETTINGS.png"
 r.RecursiveCreateDirectory(cache_dir, 0)
+r.RecursiveCreateDirectory(cover_art_cache_dir, 0)
 r.RecursiveCreateDirectory(collections_dir, 0)
 r.RecursiveCreateDirectory(presets_dir, 0)
 local ctx = r.ImGui_CreateContext('TK Media Browser')
@@ -293,6 +299,7 @@ local ui = {
     auto_source_index = 0,
     image_viewer_open = false,
     image_viewer_path = "",
+    cover_art_preview_full = false,
     waveform_preview_height = 92,
     is_dragging_waveform_divider = false,
 }
@@ -424,6 +431,7 @@ local ui_settings = {
     accent_hue = 0.55,
     selection_hue = 0.16,
     selection_saturation = 1.0,
+    show_cover_art = true,
     show_waveform_bg = true,
     hide_scrollbar = false,  
     compact_view = false,
@@ -510,6 +518,416 @@ local file_types = {
     bmp = "REAPER_IMAGEFOLDER"
 }
 local texture_cache = {}
+local cover_data_cache = {}
+local cover_path_cache = {}
+local bad_cover_cache = {}
+local last_cover_img = nil
+local last_cover_path = nil
+
+function cover_file_stat(file_path)
+    if r.JS_File_Stat then
+        local ok, size, mode, atime, mtime = r.JS_File_Stat(file_path)
+        if ok then
+            return size or 0, mtime or 0
+        end
+    end
+    local file = io.open(file_path, "rb")
+    if not file then return 0, 0 end
+    local size = file:seek("end") or 0
+    file:close()
+    return size, 0
+end
+
+function cover_hash(value)
+    local hash = 5381
+    for i = 1, #value do
+        hash = ((hash * 33) + value:byte(i)) % 2147483647
+    end
+    return string.format("%08x", hash)
+end
+
+function cover_cache_key(file_path)
+    local size, mtime = cover_file_stat(file_path)
+    return cover_hash(file_path .. "|" .. tostring(size) .. "|" .. tostring(mtime))
+end
+
+function read_be32_str(data, pos)
+    if not data or pos + 3 > #data then return nil end
+    local b1, b2, b3, b4 = data:byte(pos, pos + 3)
+    return b1 * 16777216 + b2 * 65536 + b3 * 256 + b4
+end
+
+function read_le32_file(file)
+    local data = file:read(4)
+    if not data or #data < 4 then return nil end
+    local b1, b2, b3, b4 = data:byte(1, 4)
+    return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+end
+
+function read_syncsafe_str(data, pos)
+    if not data or pos + 3 > #data then return nil end
+    local b1, b2, b3, b4 = data:byte(pos, pos + 3)
+    return b1 * 2097152 + b2 * 16384 + b3 * 128 + b4
+end
+
+function cover_image_ext(mime, data)
+    if data and data:sub(1, 8) == "\137PNG\r\n\26\n" then return ".png" end
+    if data and data:sub(1, 2) == "\255\216" then return ".jpg" end
+    if mime and mime:lower():find("png", 1, true) then return ".png" end
+    if mime and mime:lower():find("jpeg", 1, true) then return ".jpg" end
+    if mime and mime:lower():find("jpg", 1, true) then return ".jpg" end
+    return nil
+end
+
+function is_valid_cover_image_file(path)
+    local file = io.open(path, "rb")
+    if not file then return false end
+    local header = file:read(8) or ""
+    file:close()
+    return header:sub(1, 8) == "\137PNG\r\n\26\n" or header:sub(1, 2) == "\255\216"
+end
+
+function parse_id3_apic(tag_data, version)
+    if not tag_data then return nil, nil end
+    local pos = 1
+    local len = #tag_data
+    while pos + 10 <= len do
+        local frame_id = tag_data:sub(pos, pos + 3)
+        if frame_id == "\0\0\0\0" then break end
+        local frame_size = version == 4 and read_syncsafe_str(tag_data, pos + 4) or read_be32_str(tag_data, pos + 4)
+        if not frame_size or frame_size <= 0 or pos + 10 + frame_size > len + 1 then break end
+        if frame_id == "APIC" then
+            local frame = tag_data:sub(pos + 10, pos + 10 + frame_size - 1)
+            local rest = frame:sub(2)
+            local mime_end = rest:find("\0", 1, true)
+            if mime_end then
+                local mime = rest:sub(1, mime_end - 1)
+                local after_mime = rest:sub(mime_end + 1)
+                local search_area = after_mime:sub(2)
+                local jpg_pos = search_area:find("\255\216", 1, true)
+                local png_pos = search_area:find("\137PNG", 1, true)
+                local img_pos = nil
+                if jpg_pos and png_pos then
+                    img_pos = math.min(jpg_pos, png_pos)
+                else
+                    img_pos = jpg_pos or png_pos
+                end
+                if img_pos then
+                    local data = search_area:sub(img_pos)
+                    local ext = cover_image_ext(mime, data)
+                    if ext then
+                        return ext == ".png" and "image/png" or "image/jpeg", data
+                    end
+                end
+            end
+        end
+        pos = pos + 10 + frame_size
+    end
+    return nil, nil
+end
+
+function get_wav_id3_chunk(file_path)
+    local file = io.open(file_path, "rb")
+    if not file then return nil end
+    if file:read(4) ~= "RIFF" then file:close() return nil end
+    file:read(4)
+    if file:read(4) ~= "WAVE" then file:close() return nil end
+    local file_size = file:seek("end") or 0
+    file:seek("set", 12)
+    while file:seek() < file_size do
+        local chunk_id = file:read(4)
+        if not chunk_id or #chunk_id < 4 then break end
+        local chunk_size = read_le32_file(file)
+        if not chunk_size then break end
+        if chunk_id == "ID3 " or chunk_id == "id3 " then
+            local data = file:read(chunk_size)
+            file:close()
+            return data
+        end
+        file:seek("cur", chunk_size)
+        if chunk_size % 2 ~= 0 then file:seek("cur", 1) end
+    end
+    file:close()
+    return nil
+end
+
+function extract_id3_cover(file_path)
+    local file = io.open(file_path, "rb")
+    if not file then return nil, nil end
+    local header = file:read(10) or ""
+    file:close()
+    local tag_data = nil
+    if #header >= 10 and header:sub(1, 3) == "ID3" then
+        local tag_size = read_syncsafe_str(header, 7)
+        if tag_size and tag_size > 0 then
+            file = io.open(file_path, "rb")
+            if file then
+                tag_data = file:read(10 + tag_size)
+                file:close()
+            end
+        end
+    elseif header:sub(1, 4) == "RIFF" then
+        tag_data = get_wav_id3_chunk(file_path)
+    end
+    if tag_data and #tag_data >= 10 and tag_data:sub(1, 3) == "ID3" then
+        local version = tag_data:byte(4)
+        local tag_size = read_syncsafe_str(tag_data, 7)
+        if tag_size and tag_size > 0 then
+            return parse_id3_apic(tag_data:sub(11, 10 + tag_size), version)
+        end
+    end
+    return nil, nil
+end
+
+function extract_flac_cover(file_path)
+    local file = io.open(file_path, "rb")
+    if not file then return nil, nil end
+    if file:read(4) ~= "fLaC" then file:close() return nil, nil end
+    while true do
+        local header = file:read(4)
+        if not header or #header < 4 then break end
+        local b1, b2, b3, b4 = header:byte(1, 4)
+        local is_last = b1 >= 128
+        local block_type = b1 % 128
+        local size = b2 * 65536 + b3 * 256 + b4
+        local data = file:read(size) or ""
+        if block_type == 6 then
+            local pos = 5
+            local mime_len = read_be32_str(data, pos)
+            if not mime_len then break end
+            pos = pos + 4
+            local mime = data:sub(pos, pos + mime_len - 1)
+            pos = pos + mime_len
+            local desc_len = read_be32_str(data, pos)
+            if not desc_len then break end
+            pos = pos + 4 + desc_len + 16
+            local pic_len = read_be32_str(data, pos)
+            if not pic_len then break end
+            pos = pos + 4
+            local image_data = data:sub(pos, pos + pic_len - 1)
+            file:close()
+            if cover_image_ext(mime, image_data) then
+                return mime, image_data
+            end
+            return nil, nil
+        end
+        if is_last then break end
+    end
+    file:close()
+    return nil, nil
+end
+
+function save_cover_data_to_cache(file_path, mime, data)
+    local ext = cover_image_ext(mime, data)
+    if not ext then return nil end
+    local out_path = cover_art_cache_dir .. cover_cache_key(file_path) .. ext
+    if not r.file_exists(out_path) then
+        local file = io.open(out_path, "wb")
+        if not file then return nil end
+        file:write(data)
+        file:close()
+    end
+    if is_valid_cover_image_file(out_path) then
+        return out_path
+    end
+    os.remove(out_path)
+    return nil
+end
+
+function find_folder_cover(file_path)
+    local dir = file_path:match("^(.*[/\\])") or ""
+    if dir == "" then return nil end
+    local names = {"cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.jpeg", "folder.png"}
+    for _, name in ipairs(names) do
+        local path = dir .. name
+        if r.file_exists(path) and is_valid_cover_image_file(path) then
+            return path
+        end
+    end
+    return nil
+end
+
+function get_cover_image_path(file_path)
+    if not file_path or file_path == "" or bad_cover_cache[file_path] then return nil end
+    if cover_path_cache[file_path] ~= nil then
+        return cover_path_cache[file_path] or nil
+    end
+    local key = cover_cache_key(file_path)
+    for _, ext in ipairs({".jpg", ".png"}) do
+        local cached_path = cover_art_cache_dir .. key .. ext
+        if r.file_exists(cached_path) and is_valid_cover_image_file(cached_path) then
+            cover_path_cache[file_path] = cached_path
+            return cached_path
+        end
+    end
+    local mime, data = extract_id3_cover(file_path)
+    if not data then mime, data = extract_flac_cover(file_path) end
+    if data then
+        cover_data_cache[file_path] = {mime = mime, data = data}
+        local cached_path = save_cover_data_to_cache(file_path, mime, data)
+        if cached_path then
+            cover_path_cache[file_path] = cached_path
+            return cached_path
+        end
+    end
+    local folder_cover = find_folder_cover(file_path)
+    if folder_cover then
+        cover_path_cache[file_path] = folder_cover
+        return folder_cover
+    end
+    cover_path_cache[file_path] = false
+    return nil
+end
+
+function release_cover_image()
+    if last_cover_img and r.ImGui_DestroyImage then
+        r.ImGui_DestroyImage(last_cover_img)
+    end
+    last_cover_img = nil
+    last_cover_path = nil
+end
+
+function load_cover_image(file_path)
+    if not r.ImGui_CreateImage then return nil end
+    local cover_path = get_cover_image_path(file_path)
+    if not cover_path then
+        release_cover_image()
+        return nil
+    end
+    if last_cover_path ~= cover_path then
+        release_cover_image()
+        if not is_valid_cover_image_file(cover_path) then
+            bad_cover_cache[file_path] = true
+            return nil
+        end
+        local ok, image = pcall(r.ImGui_CreateImage, cover_path)
+        if ok and image then
+            last_cover_img = image
+            last_cover_path = cover_path
+            if r.ImGui_Attach then
+                r.ImGui_Attach(ctx, image)
+            end
+        else
+            bad_cover_cache[file_path] = true
+            return nil
+        end
+    end
+    return last_cover_img
+end
+
+function draw_cover_art_preview(file_path)
+    if not ui_settings.show_cover_art then return end
+    local image = load_cover_image(file_path)
+    if not image then return end
+    local img_w, img_h = 1, 1
+    if r.ImGui_Image_GetSize then
+        img_w, img_h = r.ImGui_Image_GetSize(image)
+    end
+    if not img_w or not img_h or img_w <= 0 or img_h <= 0 then
+        img_w, img_h = 1, 1
+    end
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local max_size = math.min(130, math.max(40, avail_w))
+    local aspect = img_w / img_h
+    local draw_w, draw_h = max_size, max_size
+    if aspect > 1 then
+        draw_h = draw_w / aspect
+    else
+        draw_w = draw_h * aspect
+    end
+    local cursor_x = r.ImGui_GetCursorPosX(ctx)
+    local offset_x = math.max(0, (avail_w - draw_w) * 0.5)
+    if offset_x > 0 then
+        r.ImGui_SetCursorPosX(ctx, cursor_x + offset_x)
+    end
+    r.ImGui_Image(ctx, image, draw_w, draw_h)
+    r.ImGui_SetCursorPosX(ctx, cursor_x)
+    r.ImGui_Spacing(ctx)
+end
+
+function open_image_viewer(path)
+    if not path or path == "" then return end
+    ui.image_viewer_open = true
+    ui.image_viewer_path = path
+end
+
+function draw_cover_art_overlay(draw_list, file_path, x, y, w, h)
+    if not ui_settings.show_cover_art or not r.ImGui_DrawList_AddImage then ui.cover_art_preview_full = false return false end
+    local image = load_cover_image(file_path)
+    if not image then ui.cover_art_preview_full = false return false end
+    local img_w, img_h = 1, 1
+    if r.ImGui_Image_GetSize then
+        img_w, img_h = r.ImGui_Image_GetSize(image)
+    end
+    if not img_w or not img_h or img_w <= 0 or img_h <= 0 then
+        img_w, img_h = 1, 1
+    end
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    local clicked = r.ImGui_IsMouseClicked(ctx, 0)
+    local aspect = img_w / img_h
+    if ui.cover_art_preview_full then
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + w, y + h, 0x000000DD, 0)
+        local pad = 8
+        local max_w = math.max(1, w - pad * 2)
+        local max_h = math.max(1, h - pad * 2)
+        local draw_w, draw_h = max_w, max_w / aspect
+        if draw_h > max_h then
+            draw_h = max_h
+            draw_w = draw_h * aspect
+        end
+        local draw_x = x + (w - draw_w) * 0.5
+        local draw_y = y + (h - draw_h) * 0.5
+        r.ImGui_DrawList_AddImage(draw_list, image, draw_x, draw_y, draw_x + draw_w, draw_y + draw_h, 0, 0, 1, 1, 0xFFFFFFFF)
+        local btn_size = 16
+        local btn_x = x + w - btn_size - 5
+        local btn_y = y + 5
+        local hovered = mx >= btn_x and mx <= btn_x + btn_size and my >= btn_y and my <= btn_y + btn_size
+        local zoom_x = btn_x - btn_size - 4
+        local zoom_hovered = mx >= zoom_x and mx <= zoom_x + btn_size and my >= btn_y and my <= btn_y + btn_size
+        r.ImGui_DrawList_AddRectFilled(draw_list, zoom_x, btn_y, zoom_x + btn_size, btn_y + btn_size, zoom_hovered and 0xFFFFFF44 or 0x00000088, 3)
+        r.ImGui_DrawList_AddRect(draw_list, zoom_x, btn_y, zoom_x + btn_size, btn_y + btn_size, 0xFFFFFFFF, 3, 0, 1)
+        local icon_col = zoom_hovered and 0xFFFFFFFF or 0xDDDDDDFF
+        r.ImGui_DrawList_AddCircle(draw_list, zoom_x + 7, btn_y + 7, 4, icon_col, 0, 1.3)
+        r.ImGui_DrawList_AddLine(draw_list, zoom_x + 10, btn_y + 10, zoom_x + 13, btn_y + 13, icon_col, 1.3)
+        r.ImGui_DrawList_AddRectFilled(draw_list, btn_x, btn_y, btn_x + btn_size, btn_y + btn_size, hovered and 0xFFFFFF44 or 0x00000088, 3)
+        r.ImGui_DrawList_AddRect(draw_list, btn_x, btn_y, btn_x + btn_size, btn_y + btn_size, 0xFFFFFFFF, 3, 0, 1)
+        r.ImGui_DrawList_AddLine(draw_list, btn_x + 4, btn_y + 8, btn_x + 12, btn_y + 8, 0xFFFFFFFF, 1.5)
+        if zoom_hovered and clicked then
+            open_image_viewer(last_cover_path or get_cover_image_path(file_path))
+        elseif hovered and clicked then
+            ui.cover_art_preview_full = false
+        end
+        return true
+    end
+    local box = math.min(64, math.max(32, math.min(w * 0.24, h - 10)))
+    local box_x = x + w - box - 6
+    local box_y = y + h - box - 6
+    local hovered = mx >= box_x and mx <= box_x + box and my >= box_y and my <= box_y + box
+    r.ImGui_DrawList_AddRectFilled(draw_list, box_x - 2, box_y - 2, box_x + box + 2, box_y + box + 2, hovered and 0x000000CC or 0x00000099, 4)
+    local draw_w, draw_h = box, box / aspect
+    if draw_h > box then
+        draw_h = box
+        draw_w = draw_h * aspect
+    end
+    local draw_x = box_x + (box - draw_w) * 0.5
+    local draw_y = box_y + (box - draw_h) * 0.5
+    r.ImGui_DrawList_AddImage(draw_list, image, draw_x, draw_y, draw_x + draw_w, draw_y + draw_h, 0, 0, 1, 1, 0xFFFFFFFF)
+    r.ImGui_DrawList_AddRect(draw_list, box_x - 2, box_y - 2, box_x + box + 2, box_y + box + 2, hovered and 0xFFFFFFFF or 0xFFFFFFAA, 4, 0, 1)
+    if hovered and clicked then
+        ui.cover_art_preview_full = true
+    end
+    return false
+end
+
+function draw_cover_art_for_preview(draw_list, x, y, w, h)
+    local file_path = playback.current_playing_file
+    if not file_path or file_path == "" then ui.cover_art_preview_full = false return false end
+    local ext = file_path:match("%.([^%.]+)$")
+    if not ext then ui.cover_art_preview_full = false return false end
+    ext = ext:lower()
+    if ext == "mid" or ext == "midi" or file_types[ext] ~= "REAPER_MEDIAFOLDER" then ui.cover_art_preview_full = false return false end
+    return draw_cover_art_overlay(draw_list, file_path, x, y, w, h)
+end
 
 local function hsv_to_color(hue, saturation, value, alpha)
     saturation = saturation or 1.0
@@ -1871,6 +2289,10 @@ local function clear_all_cache_files()
     search_filter.cached_location = ""
     search_filter.cached_flat_files = {}
     tree_cache.cache = {}
+    cover_data_cache = {}
+    cover_path_cache = {}
+    bad_cover_cache = {}
+    release_cover_image()
     
     cache_mgmt.scan_message = string.format("Cleared %d cache file(s)", deleted_count)
     cache_mgmt.message_timer = os.time()
@@ -2168,6 +2590,7 @@ local function save_options()
             accent_hue = ui_settings.accent_hue,
             selection_hue = ui_settings.selection_hue,
             selection_saturation = ui_settings.selection_saturation,
+            show_cover_art = ui_settings.show_cover_art,
             show_waveform_bg = ui_settings.show_waveform_bg,
             hide_scrollbar = ui_settings.hide_scrollbar,
             compact_view = ui_settings.compact_view,
@@ -2250,6 +2673,7 @@ local function get_settings_table()
         accent_hue = ui_settings.accent_hue,
         selection_hue = ui_settings.selection_hue,
         selection_saturation = ui_settings.selection_saturation,
+        show_cover_art = ui_settings.show_cover_art,
         show_waveform_bg = ui_settings.show_waveform_bg,
         hide_scrollbar = ui_settings.hide_scrollbar,
         compact_view = ui_settings.compact_view,
@@ -2301,6 +2725,7 @@ local function apply_settings_from_table(settings)
     ui_settings.accent_hue = settings.accent_hue ~= nil and settings.accent_hue or 0.55
     ui_settings.selection_hue = settings.selection_hue ~= nil and settings.selection_hue or 0.16
     ui_settings.selection_saturation = settings.selection_saturation ~= nil and settings.selection_saturation or 1.0
+    if settings.show_cover_art ~= nil then ui_settings.show_cover_art = settings.show_cover_art else ui_settings.show_cover_art = true end
     ui_settings.show_waveform_bg = settings.show_waveform_bg ~= nil and settings.show_waveform_bg or false
     ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
     if settings.compact_view ~= nil then ui_settings.compact_view = settings.compact_view end
@@ -2446,6 +2871,7 @@ local function load_options()
             ui_settings.accent_hue = options.accent_hue ~= nil and options.accent_hue or 0.55
             ui_settings.selection_hue = options.selection_hue ~= nil and options.selection_hue or 0.16
             ui_settings.selection_saturation = options.selection_saturation ~= nil and options.selection_saturation or 1.0
+            if options.show_cover_art ~= nil then ui_settings.show_cover_art = options.show_cover_art else ui_settings.show_cover_art = true end
             if options.show_waveform_bg ~= nil then
                 ui_settings.show_waveform_bg = options.show_waveform_bg
             else
@@ -2524,6 +2950,7 @@ local function load_options()
                         ui_settings.waveform_hue = options2.waveform_hue ~= nil and options2.waveform_hue or 0.55
                         ui_settings.waveform_thickness = options2.waveform_thickness ~= nil and options2.waveform_thickness or 1.0
                         ui_settings.accent_hue = options2.accent_hue ~= nil and options2.accent_hue or 0.55
+                        if options2.show_cover_art ~= nil then ui_settings.show_cover_art = options2.show_cover_art else ui_settings.show_cover_art = true end
                         if options2.show_waveform_bg ~= nil then
                             ui_settings.show_waveform_bg = options2.show_waveform_bg
                         else
@@ -4539,6 +4966,7 @@ end
 
 local function on_exit()
     save_options()
+    release_cover_image()
     
     if playback.link_transport then
         r.Main_OnCommand(1016, 0)
@@ -6220,13 +6648,13 @@ local RS5K_PAD_RANGES = {
     {start_note = 84, end_note = 99, label = "C6 - D#7", is_standard = false},
 }
 
-local function midi_note_to_name(note)
+function midi_note_to_name(note)
     local octave = math.floor(note / 12) - 1
     local note_idx = (note % 12) + 1
     return NOTE_NAMES[note_idx] .. octave
 end
 
-local function get_rs5k_instances_on_track(track)
+function get_rs5k_instances_on_track(track)
     if not track then return {} end
     
     local instances = {}
@@ -6261,7 +6689,7 @@ local function get_rs5k_instances_on_track(track)
     return instances
 end
 
-local function load_sample_to_rs5k_pad(file_path, track, fx_idx, note)
+function load_sample_to_rs5k_pad(file_path, track, fx_idx, note)
     if not file_path or not track then return false end
     
     local ext = file_path:match("%.([^%.]+)$")
@@ -6315,7 +6743,7 @@ end
 
 local mpl_rs5k_cmd_id = nil
 
-local function get_mpl_rs5k_cmd_id()
+function get_mpl_rs5k_cmd_id()
     if mpl_rs5k_cmd_id and mpl_rs5k_cmd_id > 0 then
         return mpl_rs5k_cmd_id
     end
@@ -6332,7 +6760,7 @@ local function get_mpl_rs5k_cmd_id()
     return mpl_rs5k_cmd_id
 end
 
-local function toggle_mpl_rs5k_manager()
+function toggle_mpl_rs5k_manager()
     local cmd_id = get_mpl_rs5k_cmd_id()
     if cmd_id and cmd_id > 0 then
         r.Main_OnCommand(cmd_id, 0)
@@ -6341,7 +6769,7 @@ local function toggle_mpl_rs5k_manager()
     return false
 end
 
-local function is_mpl_rs5k_parent_track(track)
+function is_mpl_rs5k_parent_track(track)
     if not track then return false end
     
     local _, parent_guid = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_GUIDINTERNAL", "", false)
@@ -6360,7 +6788,7 @@ local function is_mpl_rs5k_parent_track(track)
     return false
 end
 
-local function get_mpl_parent_track_from_child(track)
+function get_mpl_parent_track_from_child(track)
     if not track then return nil end
     
     local _, child_parent_guid = r.GetSetMediaTrackInfo_String(track, "P_EXT:MPLRS5KMAN_CHILD_PARENTGUID", "", false)
@@ -6380,7 +6808,7 @@ local function get_mpl_parent_track_from_child(track)
     return nil
 end
 
-local function get_mpl_rs5k_track_and_parent(track)
+function get_mpl_rs5k_track_and_parent(track)
     if is_mpl_rs5k_parent_track(track) then
         return track, true
     end
@@ -6393,7 +6821,7 @@ local function get_mpl_rs5k_track_and_parent(track)
     return track, false
 end
 
-local function get_mpl_rs5k_used_notes(parent_track)
+function get_mpl_rs5k_used_notes(parent_track)
     if not parent_track then return {} end
     
     local used_notes = {}
@@ -6437,7 +6865,7 @@ local function get_mpl_rs5k_used_notes(parent_track)
     return used_notes
 end
 
-local function find_next_available_note(used_notes, start_note)
+function find_next_available_note(used_notes, start_note)
     start_note = start_note or 36
     for note = start_note, 127 do
         if not used_notes[note] then
@@ -6452,7 +6880,7 @@ local function find_next_available_note(used_notes, start_note)
     return nil
 end
 
-local function find_mpl_midi_bus_track(parent_track, parent_guid)
+function find_mpl_midi_bus_track(parent_track, parent_guid)
     local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
     local track_count = r.CountTracks(0)
     
@@ -6475,7 +6903,7 @@ local function find_mpl_midi_bus_track(parent_track, parent_guid)
     return nil, nil
 end
 
-local function create_mpl_midi_bus_track(parent_track, parent_guid, parent_idx)
+function create_mpl_midi_bus_track(parent_track, parent_guid, parent_idx)
     local insert_idx = parent_idx + 1
     r.InsertTrackAtIndex(insert_idx, false)
     local midi_bus = r.GetTrack(0, insert_idx)
@@ -6501,7 +6929,7 @@ local function create_mpl_midi_bus_track(parent_track, parent_guid, parent_idx)
     return midi_bus, insert_idx
 end
 
-local function create_midi_send_to_child(midi_bus, child_track)
+function create_midi_send_to_child(midi_bus, child_track)
     if not midi_bus or not child_track then return end
     
     local send_count = r.GetTrackNumSends(midi_bus, 0)
@@ -6519,7 +6947,7 @@ local function create_midi_send_to_child(midi_bus, child_track)
     end
 end
 
-local function get_mpl_available_pads(parent_track)
+function get_mpl_available_pads(parent_track)
     if not parent_track then return {} end
     
     local available_pads = {}
@@ -6563,7 +6991,7 @@ local function get_mpl_available_pads(parent_track)
     return available_pads
 end
 
-local function get_mpl_filled_pads(parent_track)
+function get_mpl_filled_pads(parent_track)
     if not parent_track then return {} end
     
     local filled_pads = {}
@@ -6633,7 +7061,7 @@ local function get_mpl_filled_pads(parent_track)
     return filled_pads
 end
 
-local function delete_rs5k_pad(pad)
+function delete_rs5k_pad(pad)
     if not pad or not pad.track then return false end
     
     r.Undo_BeginBlock()
@@ -6646,7 +7074,7 @@ local function delete_rs5k_pad(pad)
     return true
 end
 
-local function find_pad_by_note(filled_pads, note)
+function find_pad_by_note(filled_pads, note)
     for _, pad in ipairs(filled_pads) do
         if pad.note == note then
             return pad
@@ -6655,7 +7083,7 @@ local function find_pad_by_note(filled_pads, note)
     return nil
 end
 
-local function find_empty_child_track_for_note(parent_track, parent_guid, note)
+function find_empty_child_track_for_note(parent_track, parent_guid, note)
     local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
     local track_count = r.CountTracks(0)
     
@@ -6694,7 +7122,7 @@ local function find_empty_child_track_for_note(parent_track, parent_guid, note)
     return nil
 end
 
-local function get_last_child_in_folder(parent_track, parent_guid)
+function get_last_child_in_folder(parent_track, parent_guid)
     local parent_idx = r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") - 1
     local track_count = r.CountTracks(0)
     local last_child_idx = parent_idx
@@ -6719,7 +7147,7 @@ local function get_last_child_in_folder(parent_track, parent_guid)
     return last_child_idx, midi_bus_idx
 end
 
-local function create_rs5k_pad_track(file_path, parent_track, note)
+function create_rs5k_pad_track(file_path, parent_track, note)
     if not file_path or not parent_track then return false end
     
     local ext = file_path:match("%.([^%.]+)$")
@@ -6836,7 +7264,7 @@ local function create_rs5k_pad_track(file_path, parent_track, note)
     return true
 end
 
-local function create_empty_rs5k_rack()
+function create_empty_rs5k_rack()
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     
@@ -6882,7 +7310,7 @@ local function create_empty_rs5k_rack()
     return true
 end
 
-local function get_audio_file_info(file_path)
+function get_audio_file_info(file_path)
     local source = r.PCM_Source_CreateFromFile(file_path)
     if not source then return nil end
     local sample_rate = r.GetMediaSourceSampleRate(source)
@@ -6895,7 +7323,7 @@ local function get_audio_file_info(file_path)
     }
 end
 
-local function get_audio_data()
+function get_audio_data()
     if use_cf_view and CF_Preview then
         local retval, pos = r.CF_Preview_GetValue(CF_Preview, "D_POSITION")
         local source = r.PCM_Source_CreateFromFile(playback.current_playing_file)
@@ -6927,7 +7355,7 @@ local function get_audio_data()
     end
 end
 
-local function draw_file_list()
+function draw_file_list()
     if file_location.current_location ~= "" then
             local child_flags = r.ImGui_WindowFlags_HorizontalScrollbar() | r.ImGui_WindowFlags_NoBackground()
             if r.ImGui_BeginChild(ctx, "file_list", 0, 0, 1, child_flags) then
@@ -8066,11 +8494,12 @@ local function draw_file_list()
             end
         end
 end
-local function draw_file_info()
+function draw_file_info()
     if playback.current_playing_file ~= "" and not playback.current_playing_file:match("%.midi?$") then
         local info = get_audio_file_info(playback.current_playing_file)
         if info then
             r.ImGui_Separator(ctx)
+            draw_cover_art_preview(playback.current_playing_file)
             local file_name = playback.current_playing_file:match("([^/\\]+)$")
             r.ImGui_Text(ctx, "Selected file:")
             r.ImGui_TextWrapped(ctx, file_name)
@@ -8085,7 +8514,7 @@ local function draw_file_info()
         r.ImGui_TextWrapped(ctx, "Click on a file in the list to see details")
     end
 end
-local function calculate_window_height()
+function calculate_window_height()
     local min_height = 500
     if not show_browser_section then
         min_height = 200
@@ -8093,7 +8522,7 @@ local function calculate_window_height()
     return min_height
 end
 
-local function draw_rename_folder_popup()
+function draw_rename_folder_popup()
     if not file_location.rename_popup_location then return end
     if file_location.renaming_location ~= nil then
         file_location.rename_popup_location = nil
@@ -8186,7 +8615,7 @@ local function draw_rename_folder_popup()
     end
 end
 
-local function handle_keyboard_navigation()
+function handle_keyboard_navigation()
     local is_any_item_active = r.ImGui_IsAnyItemActive(ctx)
     local is_any_popup_open = r.ImGui_IsPopupOpen(ctx, '', r.ImGui_PopupFlags_AnyPopupId())
     
@@ -8395,7 +8824,7 @@ local function handle_keyboard_navigation()
     end
     return false
 end
-local function draw_progress_window()
+function draw_progress_window()
     if not cache_mgmt.show_progress then
         return
     end
@@ -8687,7 +9116,7 @@ function tk_insert_slices_at_cursor(current_file)
     r.Undo_EndBlock("TK Media Browser: Insert sliced sample", -1)
 end
 
-local function loop()
+function loop()
     if ui.pending_view_mode then
         ui.current_view_mode = ui.pending_view_mode
         ui.pending_view_mode = nil
@@ -10794,8 +11223,7 @@ local function loop()
                         r.ImGui_DrawList_AddCircle(draw_list, icon_x + 6, icon_y + 6, 5, icon_col, 0, 1.5)
                         r.ImGui_DrawList_AddLine(draw_list, icon_x + 10, icon_y + 10, icon_x + 14, icon_y + 14, icon_col, 1.5)
                         if icon_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
-                            ui.image_viewer_open = true
-                            ui.image_viewer_path = playback.current_playing_file
+                            open_image_viewer(playback.current_playing_file)
                         end
                     end
                 elseif file_type == "REAPER_VIDEOFOLDER" then
@@ -11227,8 +11655,7 @@ local function loop()
                         r.ImGui_DrawList_AddCircle(draw_list, icon_x + 6, icon_y + 6, 5, icon_col, 0, 1.5)
                         r.ImGui_DrawList_AddLine(draw_list, icon_x + 10, icon_y + 10, icon_x + 14, icon_y + 14, icon_col, 1.5)
                         if icon_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
-                            ui.image_viewer_open = true
-                            ui.image_viewer_path = selected_file
+                            open_image_viewer(selected_file)
                         end
                     else
                         local text = "IMAGE"
@@ -11245,6 +11672,7 @@ local function loop()
                     r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x888888FF, text)
                 end
             end
+            draw_cover_art_for_preview(draw_list, pos_x, pos_y, width, height)
             r.ImGui_Dummy(ctx, width, height)
         end
         r.ImGui_Separator(ctx)
@@ -12540,6 +12968,19 @@ local function loop()
                     if waveform_bg_changed then
                         ui_settings.show_waveform_bg = new_waveform_bg
                         save_options()
+                    end
+
+                    r.ImGui_Spacing(ctx)
+                    local cover_art_changed, new_cover_art = r.ImGui_Checkbox(ctx, "Show Cover Art", ui_settings.show_cover_art)
+                    if cover_art_changed then
+                        ui_settings.show_cover_art = new_cover_art
+                        if not new_cover_art then
+                            release_cover_image()
+                        end
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show embedded MP3/WAV/FLAC cover art for the selected file, with cover/folder image fallback.")
                     end
                     
                     r.ImGui_Spacing(ctx)
@@ -14282,7 +14723,7 @@ local function loop()
         on_exit()
     end
 end
-local function exit_script()
+function exit_script()
     save_options()
     save_browser_position()
     on_exit()
