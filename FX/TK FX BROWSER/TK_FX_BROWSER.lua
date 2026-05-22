@@ -1,8 +1,17 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 2.9.9
+-- @version 3.0.0
 -- @changelog:
 --[[ 
+    v3.0.0:
+        + Patchbay: added track template insertion with default/custom template folders, recursive subfolder scan, browse and refresh actions.
+        + Patchbay: added folder parent-child assignment via dedicated bottom pins and context menu actions, including existing folder append and simple nested folder support.
+        + Patchbay: added Remove from parent action for extracting folder children while preserving simple folder-depth balance.
+        + Patchbay: added audio, sidechain and MIDI send identification with badges, filters and type presets.
+        + Patchbay: added Cable shop for mode colors, folder connections, sidechain/MIDI overlays, stripes, user presets, thickness and visibility.
+        + Patchbay: added distinct folder relationship visuals, split child/folder node coloring and a View > Folder links toggle.
+        + Patchbay: added Explicit view master-flow option and Only isolated view for tracks without routing or main send.
+
     v2.9.9:
         + Track Templates: thumbnails can now be loaded from images next to the .RTrackTemplate file, mirrored TrackTemplateThumbnails paths, or root-level TrackTemplateThumbnails fallbacks.
         + Track Templates: missing thumbnails now show a clickable placeholder with the template name.
@@ -27042,7 +27051,7 @@ end
 function CalculateTopHeight(config)
     local height = 0
 
-    height = height + 50  -- track info header
+    height = height + 50
     if config.main_section_tags_enabled and config.main_segment_tags_visible then height = height + 65 end
     return height
 end
@@ -27061,18 +27070,37 @@ function CalculateMenuHeight(config)
     if config.show_projects then height = height + 18 end
     if config.show_sends then height = height + 18 end
     if config.show_actions then height = height + 18 end
-    if config.show_custom_folders and next(config.custom_folders) then height = height + 18 end  -- WIJZIG DEZE REGEL
+    if config.show_custom_folders and next(config.custom_folders) then height = height + 18 end
     if LAST_USED_FX then height = height + 18 end
     return height
 end
 
+function GetMainCollapseHeaderHeight()
+    return 22
+end
+
+function GetMainButtonsHeight()
+    local frame_h = r.ImGui_GetFrameHeight(ctx)
+    local button_frame_h = math.max(1, frame_h - 1)
+    local spacing_y = 3
+    local height = 0
+    if not config.hideVolumeSlider then
+        height = height + frame_h * 2 + spacing_y
+    end
+    height = height + button_frame_h * 3 + spacing_y * 2
+    return height
+end
+
+function GetMainMeterHeight()
+    return 90
+end
+
 function CalculateBottomSectionHeight(config)
     local height = 0
-    if config.main_section_buttons_enabled and config.main_segment_buttons_visible then height = height + 70 end
-    if not config.hideVolumeSlider then
-        height = height + 40
-    end
-    if config.main_section_meter_enabled and config.main_segment_meter_visible then height = height + 90 end
+    if config.main_section_buttons_enabled then height = height + GetMainCollapseHeaderHeight() end
+    if config.main_section_buttons_enabled and config.main_segment_buttons_visible then height = height + GetMainButtonsHeight() end
+    if config.main_section_meter_enabled then height = height + GetMainCollapseHeaderHeight() end
+    if config.main_section_meter_enabled and config.main_segment_meter_visible then height = height + GetMainMeterHeight() end
     return height
 end
 
@@ -27514,12 +27542,10 @@ end
 function DrawMainTrackFXPanel(fx_mode)
     local show_item_fx = fx_mode == "item" or fx_mode == true
     local show_input_fx = fx_mode == "input"
-    local meter_header_h = config.main_section_meter_enabled and 22 or 0
-    local meter_content_h = (config.main_section_meter_enabled and config.main_segment_meter_visible) and 90 or 0
-    local buttons_header_h = config.main_section_buttons_enabled and 22 or 0
-    local vol_h = (not config.hideVolumeSlider) and 45 or 0
-    local btn_h = 70
-    local buttons_content_h = (config.main_section_buttons_enabled and config.main_segment_buttons_visible) and (vol_h + btn_h) or 0
+    local meter_header_h = config.main_section_meter_enabled and GetMainCollapseHeaderHeight() or 0
+    local meter_content_h = (config.main_section_meter_enabled and config.main_segment_meter_visible) and GetMainMeterHeight() or 0
+    local buttons_header_h = config.main_section_buttons_enabled and GetMainCollapseHeaderHeight() or 0
+    local buttons_content_h = (config.main_section_buttons_enabled and config.main_segment_buttons_visible) and GetMainButtonsHeight() or 0
     local below_h = meter_header_h + meter_content_h + buttons_header_h + buttons_content_h + 10
     local current_y = r.ImGui_GetCursorPosY(ctx)
     local window_h = r.ImGui_GetWindowHeight(ctx)
@@ -28095,11 +28121,7 @@ function Main()
     --     return
     -- end
 
-local fx_list_height = 0
-if TRACK and r.ValidatePtr2(0, TRACK, "MediaTrack*") then
-    local fx_count = r.TrackFX_GetCount(TRACK)
-    fx_list_height = fx_count * 15
-end
+local fx_list_height = 50
 
 local min_window_height = CalculateTopHeight(config) + CalculateMenuHeight(config) + fx_list_height + CalculateBottomSectionHeight(config) + 60
 
@@ -28244,7 +28266,8 @@ if visible then
             local window_width = r.ImGui_GetWindowWidth(ctx)
             local track_info_width = math.max(window_width - 10, 125)  -- Minimaal 125, of vensterbreedte - 20
             
-            local trackinfo_open = r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50)
+            local trackinfo_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoNavInputs()
+            local trackinfo_open = r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50, 0, trackinfo_flags)
             if trackinfo_open then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
@@ -28297,7 +28320,7 @@ if visible then
                 local pos_x = (window_width - text_width - 7) * 0.5
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local text_height = r.ImGui_GetTextLineHeight(ctx)
-                local pos_y = (window_height - text_height) * 0.4
+                local pos_y = math.max(2, math.min((window_height - text_height) * 0.4, 8))
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Volledig doorzichtige knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Donkerder grijs bij klik
@@ -28510,13 +28533,15 @@ if visible then
                 r.ImGui_PushFont(ctx, NormalFont, config.font_size)
                 local type_text_width = r.ImGui_CalcTextSize(ctx, track_type)
                 local type_pos_x = (window_width - type_text_width) * 0.5
-                local type_pos_y = pos_y + text_height
+                local type_text_height = r.ImGui_GetTextLineHeight(ctx)
+                local type_pos_y = math.min(pos_y + text_height, window_height - type_text_height - 2)
                 r.ImGui_SetCursorPos(ctx, type_pos_x, type_pos_y)
                 r.ImGui_Text(ctx, track_type)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Doorzichtige knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x7F7F7F7F)  -- Donkerder grijs bij klik
-                r.ImGui_SetCursorPos(ctx, -2, window_height - 20)
+                local track_selector_y = math.max(22, math.min(window_height - 24, type_pos_y - 1))
+                r.ImGui_SetCursorPos(ctx, -2, track_selector_y)
                 if r.ImGui_Button(ctx, "<", 20, 20) then
                     local current_track_number = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER")
                     if current_track_number == 1 then
@@ -28530,7 +28555,7 @@ if visible then
                     end
                 end
 
-                r.ImGui_SetCursorPos(ctx, window_width - 16, window_height - 20)
+                r.ImGui_SetCursorPos(ctx, window_width - 16, track_selector_y)
                 if r.ImGui_Button(ctx, ">", 20, 20) then
                     if r.IsTrackSelected(r.GetMasterTrack(0)) then
                         local first_track = r.GetTrack(0, 0)

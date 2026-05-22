@@ -28,6 +28,7 @@ local MIN_ZOOM = 0.3
 local MAX_ZOOM = 2.5
 local dragging_node_guid = nil
 local pending_connection = nil
+local pending_folder_connection = nil
 local right_click_send = nil
 local layout_dirty = false
 local layout_loaded_project = nil
@@ -71,16 +72,54 @@ local popup_route_x = nil
 local popup_route_y = nil
 local popup_actions_x = nil
 local popup_actions_y = nil
+local popup_templates_x = nil
+local popup_templates_y = nil
 local open_toolbar_popup_id = nil
+local patchbay_template_cache = nil
+local patchbay_template_cache_root = nil
+local patchbay_template_cache_exists = false
+local patchbay_template_cache_dirty = true
+local cable_shop_open = false
+local cable_shop_selected = "post_fader"
+local cable_shop_user_slot = 1
+local cable_shop_user_name = "Preset 1"
 
-local ROUTE_FILTER_ORDER = { "all", "post-fader", "pre-fader", "pre-fx", "muted" }
+local ROUTE_FILTER_ORDER = { "all", "post-fader", "pre-fader", "pre-fx", "muted", "audio", "sidechain", "midi" }
 local ROUTE_FILTER_LABELS = {
     ["all"] = "All",
     ["post-fader"] = "Post-Fader",
     ["pre-fader"] = "Pre-Fader",
     ["pre-fx"] = "Pre-FX",
-    ["muted"] = "Muted only"
+    ["muted"] = "Muted only",
+    ["audio"] = "Audio 1/2",
+    ["sidechain"] = "Sidechain",
+    ["midi"] = "MIDI"
 }
+
+local CABLE_SHOP_ORDER = { "post_fader", "pre_fader", "pre_fx", "muted", "main", "folder_links", "sidechain", "midi", "phase" }
+local CABLE_SHOP_LABELS = {
+    post_fader = "Post-Fader",
+    pre_fader = "Pre-Fader",
+    pre_fx = "Pre-FX",
+    muted = "Muted",
+    main = "Main",
+    folder_links = "Folder connections",
+    sidechain = "Sidechain overlay",
+    midi = "MIDI stripes",
+    phase = "Phase overlay"
+}
+local CABLE_SHOP_DEFAULTS = {
+    post_fader = { color = 0x4FB0C8FF, hover = 0x70D0E0FF, thickness = 1.5, visible = true },
+    pre_fader = { color = 0xDDA050FF, hover = 0xF0C070FF, thickness = 1.7, visible = true },
+    pre_fx = { color = 0xB070D0FF, hover = 0xC890E0FF, thickness = 1.7, visible = true },
+    muted = { color = 0x666666AA, hover = 0x888888FF, thickness = 1.2, visible = true },
+    main = { color = 0xC69A42CC, hover = 0xDBB35AE0, thickness = 1.8, visible = true },
+    folder_links = { color = 0x66CC88AA, hover = 0x88FFAAFF, thickness = 1.6, visible = true },
+    sidechain = { color = 0x65B872FF, hover = 0x88D894FF, thickness = 2.0, visible = true },
+    midi = { color = 0x4F8FD8FF, hover = 0x76AAE8FF, thickness = 1.6, visible = true },
+    phase = { color = 0xFF4040FF, hover = 0xFF7070FF, thickness = 1.0, visible = true }
+}
+local CABLE_SHOP_USER_PRESET_SLOTS = 6
 
 local LAYOUT_PRESET_ORDER = { "compact", "hybrid", "wide" }
 local LAYOUT_PRESET_LABELS = {
@@ -176,13 +215,156 @@ function _G.PatchbayZoomPercent()
     return math.floor(canvas_zoom * 100 + 0.5)
 end
 
-local function AddPatchbayTrack()
-    if IsAllLockedCfg(GetConfig()) then return end
+local function PathJoin(a, b)
+    if not a or a == "" then return b or "" end
+    if not b or b == "" then return a end
+    if a:sub(-1) == "/" or a:sub(-1) == "\\" then return a .. b end
+    return a .. "/" .. b
+end
+
+local function PathExists(path)
+    if not path or path == "" then return false end
+    local first_file = r.EnumerateFiles(path, 0)
+    if first_file then return true end
+    local first_sub = r.EnumerateSubdirectories(path, 0)
+    if first_sub then return true end
+    local ok, _, code = os.rename(path, path)
+    return ok == true or code == 13
+end
+
+local function FileExists(path)
+    if not path or path == "" then return false end
+    if r.file_exists and r.file_exists(path) then return true end
+    local f = io.open(path, "rb")
+    if f then f:close(); return true end
+    return false
+end
+
+local function ResolvePatchbayTrackTemplatesRoot()
+    local cfg = GetConfig()
+    if cfg and cfg.use_custom_template_dir == true and type(cfg.custom_template_dir) == "string" and cfg.custom_template_dir ~= "" then
+        return cfg.custom_template_dir
+    end
+    return r.GetResourcePath() .. "/TrackTemplates"
+end
+
+local function BuildPatchbayTemplateList(root)
+    local out = {}
+    local ext = ".RTrackTemplate"
+    local function scan(dir, rel)
+        for i = 0, 999 do
+            local sub = r.EnumerateSubdirectories(dir, i)
+            if not sub or sub == "" then break end
+            scan(PathJoin(dir, sub), rel == "" and sub or PathJoin(rel, sub))
+        end
+        for i = 0, 9999 do
+            local file = r.EnumerateFiles(dir, i)
+            if not file or file == "" then break end
+            if file:sub(-#ext):lower() == ext:lower() then
+                local name = file:sub(1, #file - #ext)
+                local folder = rel or ""
+                out[#out + 1] = {
+                    name = name,
+                    folder = folder,
+                    label = folder ~= "" and (folder:gsub("\\", "/") .. " / " .. name) or name,
+                    full_path = PathJoin(dir, file)
+                }
+            end
+        end
+    end
+    if root and root ~= "" and PathExists(root) then scan(root, "") end
+    table.sort(out, function(a, b) return (a.label or ""):lower() < (b.label or ""):lower() end)
+    return out
+end
+
+local function GetPatchbayTemplateList(force)
+    local root = ResolvePatchbayTrackTemplatesRoot()
+    if force or patchbay_template_cache_dirty or patchbay_template_cache_root ~= root or not patchbay_template_cache then
+        patchbay_template_cache_root = root
+        patchbay_template_cache_exists = PathExists(root)
+        patchbay_template_cache = patchbay_template_cache_exists and BuildPatchbayTemplateList(root) or {}
+        patchbay_template_cache_dirty = false
+    end
+    return patchbay_template_cache or {}, patchbay_template_cache_root, patchbay_template_cache_exists
+end
+
+local function GetPatchbayInsertIndex()
     local insert_idx = r.CountTracks(0)
     if _G.TRACK and r.ValidatePtr(_G.TRACK, "MediaTrack*") and _G.TRACK ~= r.GetMasterTrack(0) then
         local tnum = math.floor(r.GetMediaTrackInfo_Value(_G.TRACK, "IP_TRACKNUMBER") or 0)
         if tnum > 0 then insert_idx = tnum end
     end
+    return insert_idx
+end
+
+local function FindTrackByGuidLocal(guid)
+    if not guid or guid == "" then return nil end
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") and r.GetTrackGUID(tr) == guid then return tr end
+    end
+    return nil
+end
+
+local function InsertPatchbayTrackTemplate(full_path)
+    if IsAllLockedCfg(GetConfig()) then return end
+    if not FileExists(full_path) then
+        r.ShowConsoleMsg("Track template not found: " .. tostring(full_path) .. "\n")
+        return
+    end
+    local insert_idx = GetPatchbayInsertIndex()
+    local old_count = r.CountTracks(0)
+    local before = {}
+    for i = 0, old_count - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then before[r.GetTrackGUID(tr)] = true end
+    end
+    if old_count > 0 then
+        local anchor_idx = math.max(0, math.min(old_count - 1, insert_idx - 1))
+        local anchor = r.GetTrack(0, anchor_idx)
+        if anchor and r.ValidatePtr(anchor, "MediaTrack*") then r.SetOnlyTrackSelected(anchor) end
+    end
+    r.PreventUIRefresh(1)
+    r.Undo_BeginBlock()
+    r.Main_openProject(full_path, 1)
+    local new_guids = {}
+    local first_new = nil
+    local new_count = r.CountTracks(0)
+    for i = 0, new_count - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            local guid = r.GetTrackGUID(tr)
+            if not before[guid] then
+                new_guids[#new_guids + 1] = guid
+                if not first_new then first_new = tr end
+            end
+        end
+    end
+    if #new_guids > 0 then
+        for i = 0, r.CountTracks(0) - 1 do
+            r.SetMediaTrackInfo_Value(r.GetTrack(0, i), "I_SELECTED", 0)
+        end
+        for i = 1, #new_guids do
+            local tr = FindTrackByGuidLocal(new_guids[i])
+            if tr and r.ValidatePtr(tr, "MediaTrack*") then r.SetMediaTrackInfo_Value(tr, "I_SELECTED", 1) end
+        end
+        if r.ReorderSelectedTracks and insert_idx < old_count then
+            r.ReorderSelectedTracks(insert_idx, 0)
+        end
+        first_new = FindTrackByGuidLocal(new_guids[1]) or first_new
+        if first_new and r.ValidatePtr(first_new, "MediaTrack*") then _G.TRACK = first_new end
+    end
+    r.Undo_EndBlock("Patchbay: insert track template", -1)
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    layout_dirty = true
+end
+
+local function AddPatchbayTrack()
+    if IsAllLockedCfg(GetConfig()) then return end
+    local insert_idx = GetPatchbayInsertIndex()
     r.Undo_BeginBlock()
     r.InsertTrackAtIndex(insert_idx, true)
     local tr = r.GetTrack(0, insert_idx)
@@ -227,6 +409,345 @@ local function GetSelectedPatchbayTracks()
         end
     end
     return out
+end
+
+local function GetTrackIndexLocal(tr)
+    if not tr or not r.ValidatePtr(tr, "MediaTrack*") then return -1 end
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        if r.GetTrack(0, i) == tr then return i end
+    end
+    return -1
+end
+
+local function GetFolderNestingBeforeIndex(idx)
+    local depth = 0
+    for i = 0, idx - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            depth = depth + math.floor(r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") or 0)
+            if depth < 0 then depth = 0 end
+        end
+    end
+    return depth
+end
+
+local function GetFolderRangeLocal(parent)
+    local parent_idx = GetTrackIndexLocal(parent)
+    if parent_idx < 0 then return nil, nil end
+    local parent_depth = math.floor(r.GetMediaTrackInfo_Value(parent, "I_FOLDERDEPTH") or 0)
+    if parent_depth <= 0 then return parent_idx, nil end
+    local base_depth = GetFolderNestingBeforeIndex(parent_idx)
+    local depth = base_depth
+    local n = r.CountTracks(0)
+    for i = parent_idx, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            depth = depth + math.floor(r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") or 0)
+            if i > parent_idx and depth <= base_depth then return parent_idx, i end
+        end
+    end
+    return parent_idx, nil
+end
+
+local function GetDirectFolderParentLocal(tr)
+    local idx = GetTrackIndexLocal(tr)
+    if idx <= 0 then return nil, idx end
+    local stack = {}
+    for i = 0, idx - 1 do
+        local cur = r.GetTrack(0, i)
+        if cur and r.ValidatePtr(cur, "MediaTrack*") then
+            local depth = math.floor(r.GetMediaTrackInfo_Value(cur, "I_FOLDERDEPTH") or 0)
+            if depth > 0 then
+                for _ = 1, depth do stack[#stack + 1] = cur end
+            elseif depth < 0 then
+                for _ = 1, -depth do
+                    if #stack > 0 then table.remove(stack) end
+                end
+            end
+        end
+    end
+    return stack[#stack], idx
+end
+
+local function PrepareSimpleFolderChildren(parent, selected_tracks)
+    if not r.ReorderSelectedTracks then return nil, "ReorderSelectedTracks is not available." end
+    if not parent or not r.ValidatePtr(parent, "MediaTrack*") then return nil, "Invalid parent track." end
+    if parent == r.GetMasterTrack(0) then return nil, "MASTER cannot be a folder parent." end
+    local parent_idx = GetTrackIndexLocal(parent)
+    if parent_idx < 0 then return nil, "Parent track not found." end
+    local parent_depth = math.floor(r.GetMediaTrackInfo_Value(parent, "I_FOLDERDEPTH") or 0)
+    local append_existing = parent_depth > 0
+    local folder_end_idx = nil
+    if parent_depth > 1 then
+        return nil, "This first version only supports simple folder parents."
+    end
+    if append_existing then
+        _, folder_end_idx = GetFolderRangeLocal(parent)
+        if not folder_end_idx then return nil, "Existing folder range could not be resolved." end
+    end
+    local parent_guid = r.GetTrackGUID(parent)
+    local children = {}
+    local seen = {}
+    for i = 1, #(selected_tracks or {}) do
+        local child = selected_tracks[i].track
+        local guid = selected_tracks[i].guid
+        if child and r.ValidatePtr(child, "MediaTrack*") and guid ~= parent_guid and not seen[guid] then
+            local child_idx = GetTrackIndexLocal(child)
+            local child_depth = math.floor(r.GetMediaTrackInfo_Value(child, "I_FOLDERDEPTH") or 0)
+            if child == r.GetMasterTrack(0) then
+                return nil, "MASTER cannot be assigned as a child."
+            end
+            if child_idx < 0 then
+                return nil, "Selected child track not found."
+            end
+            if child_depth ~= 0 then
+                return nil, "Selected children must not have existing folder structure."
+            end
+            if append_existing and folder_end_idx and child_idx > parent_idx and child_idx <= folder_end_idx then
+                return nil, "Selected child is already inside this folder."
+            end
+            seen[guid] = true
+            children[#children + 1] = { guid = guid, track = child }
+        end
+    end
+    if #children == 0 then return nil, "Select one or more other nodes first." end
+    return children, nil, append_existing, parent_depth
+end
+
+local function AssignSelectedTracksAsFolderChildren(parent, selected_tracks)
+    if IsAllLockedCfg(GetConfig()) then return end
+    local children, err, append_existing, parent_start_depth = PrepareSimpleFolderChildren(parent, selected_tracks)
+    if not children then
+        r.ShowMessageBox(err or "Could not assign folder children.", "Patchbay Folder", 0)
+        return
+    end
+    local parent_guid = r.GetTrackGUID(parent)
+    local child_guids = {}
+    for i = 1, #children do child_guids[i] = children[i].guid end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for i = 0, r.CountTracks(0) - 1 do
+        r.SetMediaTrackInfo_Value(r.GetTrack(0, i), "I_SELECTED", 0)
+    end
+    for i = 1, #child_guids do
+        local child = FindTrackByGuidLocal(child_guids[i])
+        if child and r.ValidatePtr(child, "MediaTrack*") then
+            r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1)
+        end
+    end
+    local parent_now = FindTrackByGuidLocal(parent_guid)
+    if append_existing then
+        local _, folder_end_idx = GetFolderRangeLocal(parent_now)
+        if folder_end_idx then r.ReorderSelectedTracks(folder_end_idx + 1, 0) end
+        parent_now = FindTrackByGuidLocal(parent_guid)
+        local _, refreshed_end_idx = GetFolderRangeLocal(parent_now)
+        local ordered_children = {}
+        for i = 1, #child_guids do
+            local child = FindTrackByGuidLocal(child_guids[i])
+            local child_idx = GetTrackIndexLocal(child)
+            if child and child_idx >= 0 then ordered_children[#ordered_children + 1] = { track = child, idx = child_idx } end
+        end
+        table.sort(ordered_children, function(a, b) return a.idx < b.idx end)
+        local contiguous = refreshed_end_idx ~= nil and #ordered_children == #child_guids
+        if contiguous then
+            for i = 1, #ordered_children do
+                if ordered_children[i].idx ~= refreshed_end_idx + i then contiguous = false; break end
+            end
+        end
+        if not contiguous then
+            r.PreventUIRefresh(-1)
+            r.TrackList_AdjustWindows(false)
+            r.UpdateArrange()
+            r.Undo_EndBlock("Patchbay: move folder children", -1)
+            r.ShowMessageBox("Selected tracks were moved, but the existing folder range could not be verified. Undo and try again.", "Patchbay Folder", 0)
+            return
+        end
+        local closer = r.GetTrack(0, refreshed_end_idx)
+        local closer_depth = closer and math.floor(r.GetMediaTrackInfo_Value(closer, "I_FOLDERDEPTH") or 0) or 0
+        if not closer or not r.ValidatePtr(closer, "MediaTrack*") or closer_depth >= 0 then
+            r.PreventUIRefresh(-1)
+            r.TrackList_AdjustWindows(false)
+            r.UpdateArrange()
+            r.Undo_EndBlock("Patchbay: move folder children", -1)
+            r.ShowMessageBox("Selected tracks were moved, but the folder closing track could not be verified. Undo and try again.", "Patchbay Folder", 0)
+            return
+        end
+        if closer and r.ValidatePtr(closer, "MediaTrack*") then
+            r.SetMediaTrackInfo_Value(closer, "I_FOLDERDEPTH", 0)
+        end
+        for i = 1, #ordered_children do
+            local child = ordered_children[i].track
+            r.SetMediaTrackInfo_Value(child, "I_FOLDERDEPTH", i == #ordered_children and closer_depth or 0)
+            r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1)
+        end
+        r.PreventUIRefresh(-1)
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+        r.Undo_EndBlock("Patchbay: add folder children", -1)
+        _G.TRACK = FindTrackByGuidLocal(parent_guid) or _G.TRACK
+        layout_dirty = true
+        return
+    end
+    local parent_idx = GetTrackIndexLocal(parent_now)
+    if parent_idx >= 0 then r.ReorderSelectedTracks(parent_idx + 1, 0) end
+    parent_now = FindTrackByGuidLocal(parent_guid)
+    parent_idx = GetTrackIndexLocal(parent_now)
+    local ordered_children = {}
+    for i = 1, #child_guids do
+        local child = FindTrackByGuidLocal(child_guids[i])
+        local child_idx = GetTrackIndexLocal(child)
+        if child and child_idx >= 0 then ordered_children[#ordered_children + 1] = { track = child, idx = child_idx } end
+    end
+    table.sort(ordered_children, function(a, b) return a.idx < b.idx end)
+    local contiguous = parent_idx >= 0 and #ordered_children == #child_guids
+    if contiguous then
+        for i = 1, #ordered_children do
+            if ordered_children[i].idx ~= parent_idx + i then contiguous = false; break end
+        end
+    end
+    if not contiguous then
+        r.PreventUIRefresh(-1)
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+        r.Undo_EndBlock("Patchbay: move folder children", -1)
+        r.ShowMessageBox("Selected tracks were moved, but the folder range could not be verified. Undo and try again.", "Patchbay Folder", 0)
+        return
+    end
+    if parent_now and r.ValidatePtr(parent_now, "MediaTrack*") then
+        r.SetMediaTrackInfo_Value(parent_now, "I_FOLDERDEPTH", 1)
+    end
+    for i = 1, #ordered_children do
+        local child = ordered_children[i].track
+        r.SetMediaTrackInfo_Value(child, "I_FOLDERDEPTH", i == #ordered_children and ((parent_start_depth or 0) - 1) or 0)
+        r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1)
+    end
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Patchbay: assign folder children", -1)
+    _G.TRACK = FindTrackByGuidLocal(parent_guid) or _G.TRACK
+    layout_dirty = true
+end
+
+local function RemoveTrackFromFolderParent(tr)
+    if IsAllLockedCfg(GetConfig()) then return end
+    if not r.ReorderSelectedTracks then
+        r.ShowMessageBox("ReorderSelectedTracks is not available.", "Patchbay Folder", 0)
+        return
+    end
+    if not tr or not r.ValidatePtr(tr, "MediaTrack*") or tr == r.GetMasterTrack(0) then return end
+    local parent, block_start_idx = GetDirectFolderParentLocal(tr)
+    if not parent or not r.ValidatePtr(parent, "MediaTrack*") then
+        r.ShowMessageBox("This track is not inside a folder.", "Patchbay Folder", 0)
+        return
+    end
+    local parent_depth = math.floor(r.GetMediaTrackInfo_Value(parent, "I_FOLDERDEPTH") or 0)
+    if parent_depth ~= 1 then
+        r.ShowMessageBox("Remove from parent only supports simple folder parents.", "Patchbay Folder", 0)
+        return
+    end
+    local parent_guid = r.GetTrackGUID(parent)
+    local parent_idx, parent_end_idx = GetFolderRangeLocal(parent)
+    if not parent_end_idx or block_start_idx <= parent_idx or block_start_idx > parent_end_idx then
+        r.ShowMessageBox("Parent folder range could not be resolved.", "Patchbay Folder", 0)
+        return
+    end
+    local block_depth = math.floor(r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") or 0)
+    if block_depth > 1 then
+        r.ShowMessageBox("Remove from parent only supports simple child folder starts.", "Patchbay Folder", 0)
+        return
+    end
+    local _, block_end_idx = GetFolderRangeLocal(tr)
+    if not block_end_idx then block_end_idx = block_start_idx end
+    if block_end_idx > parent_end_idx then
+        r.ShowMessageBox("Child folder range exceeds parent range.", "Patchbay Folder", 0)
+        return
+    end
+    local block_guids = {}
+    for i = block_start_idx, block_end_idx do
+        local block_tr = r.GetTrack(0, i)
+        if block_tr and r.ValidatePtr(block_tr, "MediaTrack*") then block_guids[#block_guids + 1] = r.GetTrackGUID(block_tr) end
+    end
+    if #block_guids == 0 then return end
+    local parent_end_guid = r.GetTrackGUID(r.GetTrack(0, parent_end_idx))
+    local closes_parent = block_end_idx == parent_end_idx
+    local replacement_guid = nil
+    local replacement_depth = nil
+    if closes_parent and block_start_idx > parent_idx + 1 then
+        local replacement = r.GetTrack(0, block_start_idx - 1)
+        if replacement and r.ValidatePtr(replacement, "MediaTrack*") then
+            replacement_guid = r.GetTrackGUID(replacement)
+            replacement_depth = math.floor(r.GetMediaTrackInfo_Value(replacement, "I_FOLDERDEPTH") or 0)
+        end
+    end
+    local block_end_guid = block_guids[#block_guids]
+    local block_end_depth = math.floor(r.GetMediaTrackInfo_Value(r.GetTrack(0, block_end_idx), "I_FOLDERDEPTH") or 0)
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for i = 0, r.CountTracks(0) - 1 do
+        r.SetMediaTrackInfo_Value(r.GetTrack(0, i), "I_SELECTED", 0)
+    end
+    for i = 1, #block_guids do
+        local block_tr = FindTrackByGuidLocal(block_guids[i])
+        if block_tr and r.ValidatePtr(block_tr, "MediaTrack*") then r.SetMediaTrackInfo_Value(block_tr, "I_SELECTED", 1) end
+    end
+    r.ReorderSelectedTracks(parent_end_idx + 1, 0)
+    local ordered_block = {}
+    for i = 1, #block_guids do
+        local block_tr = FindTrackByGuidLocal(block_guids[i])
+        local block_idx = GetTrackIndexLocal(block_tr)
+        if block_tr and block_idx >= 0 then ordered_block[#ordered_block + 1] = { track = block_tr, idx = block_idx } end
+    end
+    table.sort(ordered_block, function(a, b) return a.idx < b.idx end)
+    local contiguous = #ordered_block == #block_guids
+    if contiguous then
+        for i = 1, #ordered_block do
+            if ordered_block[i].idx ~= ordered_block[1].idx + i - 1 then contiguous = false; break end
+        end
+    end
+    local parent_now = FindTrackByGuidLocal(parent_guid)
+    if contiguous and not closes_parent then
+        local parent_end_now = FindTrackByGuidLocal(parent_end_guid)
+        contiguous = parent_end_now and ordered_block[1].idx > GetTrackIndexLocal(parent_end_now)
+    elseif contiguous and replacement_guid then
+        local replacement_now = FindTrackByGuidLocal(replacement_guid)
+        contiguous = replacement_now and ordered_block[1].idx > GetTrackIndexLocal(replacement_now)
+    elseif contiguous then
+        contiguous = parent_now and ordered_block[1].idx > GetTrackIndexLocal(parent_now)
+    end
+    if not contiguous then
+        r.PreventUIRefresh(-1)
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+        r.Undo_EndBlock("Patchbay: move folder block", -1)
+        r.ShowMessageBox("Selected tracks were moved, but the removed folder block could not be verified. Undo and try again.", "Patchbay Folder", 0)
+        return
+    end
+    if closes_parent then
+        if replacement_guid and replacement_depth then
+            local replacement_now = FindTrackByGuidLocal(replacement_guid)
+            if replacement_now and r.ValidatePtr(replacement_now, "MediaTrack*") then
+                r.SetMediaTrackInfo_Value(replacement_now, "I_FOLDERDEPTH", replacement_depth - 1)
+            end
+        elseif parent_now and r.ValidatePtr(parent_now, "MediaTrack*") then
+            r.SetMediaTrackInfo_Value(parent_now, "I_FOLDERDEPTH", 0)
+        end
+        local block_end_now = FindTrackByGuidLocal(block_end_guid)
+        if block_end_now and r.ValidatePtr(block_end_now, "MediaTrack*") then
+            r.SetMediaTrackInfo_Value(block_end_now, "I_FOLDERDEPTH", block_end_depth + 1)
+        end
+    end
+    for i = 1, #block_guids do
+        local block_tr = FindTrackByGuidLocal(block_guids[i])
+        if block_tr and r.ValidatePtr(block_tr, "MediaTrack*") then r.SetMediaTrackInfo_Value(block_tr, "I_SELECTED", 1) end
+    end
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Patchbay: remove from parent", -1)
+    _G.TRACK = FindTrackByGuidLocal(block_guids[1]) or _G.TRACK
+    layout_dirty = true
 end
 
 local function BatchSetMute(selected_tracks, muted)
@@ -718,8 +1239,12 @@ local function BuildSnapshotPayload(cfg)
     lines[#lines + 1] = "routing_filter_text=" .. UrlEncode(cfg.routing_filter_text or "")
     lines[#lines + 1] = "routing_only_selected=" .. ((cfg.routing_only_selected and 1) or 0)
     lines[#lines + 1] = "patchbay_only_explicit_routing=" .. ((cfg.patchbay_only_explicit_routing and 1) or 0)
+    lines[#lines + 1] = "patchbay_explicit_show_mainsend=" .. ((cfg.patchbay_explicit_show_mainsend and 1) or 0)
+    lines[#lines + 1] = "patchbay_show_unrouted=" .. ((cfg.patchbay_show_unrouted and 1) or 0)
     lines[#lines + 1] = "patchbay_show_master=" .. (((cfg.patchbay_show_master ~= false) and 1) or 0)
     lines[#lines + 1] = "patchbay_show_flow=" .. (((cfg.patchbay_show_flow ~= false) and 1) or 0)
+    lines[#lines + 1] = "patchbay_show_folder_links=" .. (((cfg.patchbay_show_folder_links ~= false) and 1) or 0)
+    lines[#lines + 1] = "patchbay_show_send_type_badges=" .. (((cfg.patchbay_show_send_type_badges ~= false) and 1) or 0)
     lines[#lines + 1] = "patchbay_route_filter=" .. UrlEncode(cfg.patchbay_route_filter or "all")
     lines[#lines + 1] = "patchbay_solo_path=" .. ((cfg.patchbay_solo_path and 1) or 0)
     lines[#lines + 1] = "patchbay_layout_preset=" .. UrlEncode(GetLayoutPreset(cfg))
@@ -741,10 +1266,18 @@ local function ApplySnapshotPayload(payload, cfg)
                 cfg.routing_only_selected = (v == "1")
             elseif k == "patchbay_only_explicit_routing" then
                 cfg.patchbay_only_explicit_routing = (v == "1")
+            elseif k == "patchbay_explicit_show_mainsend" then
+                cfg.patchbay_explicit_show_mainsend = (v == "1")
+            elseif k == "patchbay_show_unrouted" then
+                cfg.patchbay_show_unrouted = (v == "1")
             elseif k == "patchbay_show_master" then
                 cfg.patchbay_show_master = (v == "1")
             elseif k == "patchbay_show_flow" then
                 cfg.patchbay_show_flow = (v == "1")
+            elseif k == "patchbay_show_folder_links" then
+                cfg.patchbay_show_folder_links = (v == "1")
+            elseif k == "patchbay_show_send_type_badges" then
+                cfg.patchbay_show_send_type_badges = (v == "1")
             elseif k == "patchbay_route_filter" then
                 cfg.patchbay_route_filter = UrlDecode(v)
             elseif k == "patchbay_solo_path" then
@@ -819,6 +1352,8 @@ local function CollectVisibleTracks()
     local filter = ((cfg.routing_filter_text or "")):lower()
     local only_selected = cfg.routing_only_selected
     local only_explicit = cfg.patchbay_only_explicit_routing == true
+    local explicit_show_mainsend = cfg.patchbay_explicit_show_mainsend == true
+    local show_unrouted = cfg.patchbay_show_unrouted == true
     local TRACK_SEL = _G.TRACK
     local master = r.GetMasterTrack(0)
     local folder_stack = {}
@@ -858,6 +1393,7 @@ local function CollectVisibleTracks()
     local n = r.CountTracks(0)
     local list = {}
     local any_mainsend = false
+    local visible_mainsend = false
     for i = 0, n - 1 do
         local t = r.GetTrack(0, i)
         local _, name = r.GetTrackName(t)
@@ -870,6 +1406,13 @@ local function CollectVisibleTracks()
         local folder_group_g = nil
         local folder_group_b = nil
         local folder_is_parent = depth > 0
+        local folder_depth = #folder_stack
+        local folder_parent_guid = folder_top and folder_top.guid or nil
+        local folder_parent_name = folder_top and folder_top.name or nil
+        local folder_parent_r = folder_top and folder_top.r or nil
+        local folder_parent_g = folder_top and folder_top.g or nil
+        local folder_parent_b = folder_top and folder_top.b or nil
+        local is_folder_child = folder_parent_guid ~= nil
         if folder_is_parent then
             folder_group_guid = guid
             folder_group_name = name
@@ -907,7 +1450,9 @@ local function CollectVisibleTracks()
 
         local has_explicit = (nsnd > 0 or has_explicit_receive)
         local has_routing
-        if only_explicit then
+        if show_unrouted then
+            has_routing = (not has_explicit and not mainsend)
+        elseif only_explicit then
             has_routing = has_explicit
         else
             has_routing = (has_explicit or mainsend)
@@ -946,6 +1491,7 @@ local function CollectVisibleTracks()
             end
         end
         if has_routing and match_filter and match_sel then
+            if mainsend then visible_mainsend = true end
             list[#list + 1] = {
                 track = t,
                 idx = i,
@@ -956,7 +1502,14 @@ local function CollectVisibleTracks()
                 folder_group_r = folder_group_r,
                 folder_group_g = folder_group_g,
                 folder_group_b = folder_group_b,
-                folder_is_parent = folder_is_parent
+                folder_is_parent = folder_is_parent,
+                folder_depth = folder_depth,
+                folder_parent_guid = folder_parent_guid,
+                folder_parent_name = folder_parent_name,
+                folder_parent_r = folder_parent_r,
+                folder_parent_g = folder_parent_g,
+                folder_parent_b = folder_parent_b,
+                is_folder_child = is_folder_child
             }
         end
 
@@ -986,14 +1539,28 @@ local function CollectVisibleTracks()
                     master_match_sel = true
                     break
                 end
+                if sel ~= master and explicit_show_mainsend then
+                    for ti = 0, n - 1 do
+                        local mt = r.GetTrack(0, ti)
+                        if mt and r.ValidatePtr(mt, "MediaTrack*") and r.GetMediaTrackInfo_Value(mt, "B_MAINSEND") == 1
+                            and (TrackHasExplicitSend(sel, mt) or TrackHasExplicitSend(mt, sel))
+                        then
+                            master_match_sel = true
+                            break
+                        end
+                    end
+                    if master_match_sel then break end
+                end
             end
         end
     end
     local nmsnd = r.GetTrackNumSends(master, 0)
     local nmrec = r.GetTrackNumSends(master, -1)
     local master_has_routing
-    if only_explicit then
-        master_has_routing = (nmsnd > 0 or nmrec > 0)
+    if show_unrouted then
+        master_has_routing = false
+    elseif only_explicit then
+        master_has_routing = (nmsnd > 0 or nmrec > 0 or (explicit_show_mainsend and visible_mainsend))
     else
         master_has_routing = (any_mainsend or nmsnd > 0 or nmrec > 0)
     end
@@ -1280,6 +1847,248 @@ local function ModeColors(mode, muted)
     return 0x4FB0C8FF, 0x70D0E0FF
 end
 
+local function CableShopKey(key, field)
+    return "patchbay_cable_shop_" .. key .. "_" .. field
+end
+
+local function EnsureCableShopConfig(cfg)
+    if not cfg then return end
+    if cfg.patchbay_cable_shop_user_presets == nil then cfg.patchbay_cable_shop_user_presets = "" end
+    for i = 1, #CABLE_SHOP_ORDER do
+        local key = CABLE_SHOP_ORDER[i]
+        local d = CABLE_SHOP_DEFAULTS[key]
+        if cfg[CableShopKey(key, "color")] == nil then cfg[CableShopKey(key, "color")] = d.color end
+        if cfg[CableShopKey(key, "hover")] == nil then cfg[CableShopKey(key, "hover")] = d.hover end
+        if cfg[CableShopKey(key, "thickness")] == nil then cfg[CableShopKey(key, "thickness")] = d.thickness end
+        if cfg[CableShopKey(key, "visible")] == nil then cfg[CableShopKey(key, "visible")] = d.visible end
+    end
+end
+
+local function ResetCableShopType(cfg, key)
+    local d = CABLE_SHOP_DEFAULTS[key]
+    if not cfg or not d then return end
+    cfg[CableShopKey(key, "color")] = d.color
+    cfg[CableShopKey(key, "hover")] = d.hover
+    cfg[CableShopKey(key, "thickness")] = d.thickness
+    cfg[CableShopKey(key, "visible")] = d.visible
+end
+
+local function ApplyCableShopPresetData(cfg, preset)
+    if not cfg or not preset or not preset.styles then return false end
+    for i = 1, #CABLE_SHOP_ORDER do
+        local key = CABLE_SHOP_ORDER[i]
+        local style = preset.styles[key] or CABLE_SHOP_DEFAULTS[key]
+        cfg[CableShopKey(key, "color")] = style.color
+        cfg[CableShopKey(key, "hover")] = style.hover
+        cfg[CableShopKey(key, "thickness")] = style.thickness
+        cfg[CableShopKey(key, "visible")] = style.visible ~= false
+    end
+    return true
+end
+
+local function SanitizeCableShopPresetName(name, slot)
+    name = tostring(name or ""):gsub("[|;,~\r\n\t]", " "):gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+    if name == "" then name = "Preset " .. tostring(slot or 1) end
+    return name
+end
+
+local function GetCableShopUserPresets(cfg)
+    local presets = {}
+    local raw = tostring((cfg and cfg.patchbay_cable_shop_user_presets) or "")
+    for entry in raw:gmatch("[^;]+") do
+        local slot_str, name, body = entry:match("^(%d+)|([^|]*)|(.+)$")
+        local slot = tonumber(slot_str)
+        if slot and slot >= 1 and slot <= CABLE_SHOP_USER_PRESET_SLOTS then
+            local preset = { name = SanitizeCableShopPresetName(name, slot), styles = {} }
+            for item in body:gmatch("[^~]+") do
+                local key, color, hover, thickness, visible = item:match("^([^:]+):([^:]+):([^:]+):([^:]+):([^:]+)$")
+                if CABLE_SHOP_DEFAULTS[key] then
+                    preset.styles[key] = {
+                        color = tonumber(color) or CABLE_SHOP_DEFAULTS[key].color,
+                        hover = tonumber(hover) or CABLE_SHOP_DEFAULTS[key].hover,
+                        thickness = tonumber(thickness) or CABLE_SHOP_DEFAULTS[key].thickness,
+                        visible = visible == "1"
+                    }
+                end
+            end
+            presets[slot] = preset
+        end
+    end
+    return presets
+end
+
+local function SerializeCableShopUserPresets(cfg, presets)
+    local entries = {}
+    for slot = 1, CABLE_SHOP_USER_PRESET_SLOTS do
+        local preset = presets[slot]
+        if preset and preset.styles then
+            local items = {}
+            for i = 1, #CABLE_SHOP_ORDER do
+                local key = CABLE_SHOP_ORDER[i]
+                local style = preset.styles[key] or CABLE_SHOP_DEFAULTS[key]
+                items[#items + 1] = table.concat({ key, tostring(style.color), tostring(style.hover), tostring(style.thickness), style.visible ~= false and "1" or "0" }, ":")
+            end
+            entries[#entries + 1] = tostring(slot) .. "|" .. SanitizeCableShopPresetName(preset.name, slot) .. "|" .. table.concat(items, "~")
+        end
+    end
+    cfg.patchbay_cable_shop_user_presets = table.concat(entries, ";")
+end
+
+local function CaptureCableShopPreset(cfg, name, slot)
+    EnsureCableShopConfig(cfg)
+    local preset = { name = SanitizeCableShopPresetName(name, slot), styles = {} }
+    for i = 1, #CABLE_SHOP_ORDER do
+        local key = CABLE_SHOP_ORDER[i]
+        preset.styles[key] = {
+            color = cfg[CableShopKey(key, "color")],
+            hover = cfg[CableShopKey(key, "hover")],
+            thickness = tonumber(cfg[CableShopKey(key, "thickness")]) or CABLE_SHOP_DEFAULTS[key].thickness,
+            visible = cfg[CableShopKey(key, "visible")] ~= false
+        }
+    end
+    return preset
+end
+
+local function CableShopUserSlotLabel(presets, slot)
+    local preset = presets and presets[slot]
+    if preset then return tostring(slot) .. ": " .. preset.name end
+    return tostring(slot) .. ": Empty"
+end
+
+local function GetCableTypeKey(cable)
+    if not cable then return "post_fader" end
+    if cable.is_main then return "main" end
+    if cable.muted then return "muted" end
+    if cable.mode == 1 then return "pre_fx" end
+    if cable.mode == 3 then return "pre_fader" end
+    return "post_fader"
+end
+
+local function GetCableStyle(cable, cfg)
+    EnsureCableShopConfig(cfg)
+    local key = GetCableTypeKey(cable)
+    return {
+        key = key,
+        color = cfg[CableShopKey(key, "color")],
+        hover = cfg[CableShopKey(key, "hover")],
+        thickness = tonumber(cfg[CableShopKey(key, "thickness")]) or CABLE_SHOP_DEFAULTS[key].thickness,
+        visible = cfg[CableShopKey(key, "visible")] ~= false
+    }
+end
+
+local function GetCableOverlayStyle(key, cfg)
+    EnsureCableShopConfig(cfg)
+    return {
+        color = cfg[CableShopKey(key, "color")],
+        hover = cfg[CableShopKey(key, "hover")],
+        thickness = tonumber(cfg[CableShopKey(key, "thickness")]) or CABLE_SHOP_DEFAULTS[key].thickness,
+        visible = cfg[CableShopKey(key, "visible")] ~= false
+    }
+end
+
+local function AudioPairLabel(chan)
+    chan = math.floor(tonumber(chan) or -1)
+    if chan < 0 then return "off" end
+    local mono = false
+    if chan >= 1024 then
+        mono = true
+        chan = chan - 1024
+    end
+    local left = chan + 1
+    if mono then return string.format("%d mono", left) end
+    return string.format("%d/%d", left, left + 1)
+end
+
+local function MidiChannelLabel(chan, source)
+    chan = math.floor(tonumber(chan) or 31)
+    if chan == 31 then return "off" end
+    if chan == 0 then return source and "all" or "original" end
+    return tostring(chan)
+end
+
+local function GetSendTypeInfo(src, send_idx, is_main)
+    if is_main then
+        return { label = "Main audio", details = "Type: Main audio", badge = "", has_audio = true, has_midi = false, is_sidechain = false }
+    end
+    local src_chan = math.floor(r.GetTrackSendInfo_Value(src, 0, send_idx, "I_SRCCHAN") or -1)
+    local dst_chan = math.floor(r.GetTrackSendInfo_Value(src, 0, send_idx, "I_DSTCHAN") or 0)
+    local midi_flags = math.floor(r.GetTrackSendInfo_Value(src, 0, send_idx, "I_MIDIFLAGS") or 1024)
+    local midi_src = midi_flags & 31
+    local midi_dst = (midi_flags >> 5) & 31
+    local has_audio = src_chan >= 0
+    local is_sidechain = has_audio and dst_chan >= 2
+    local has_midi = midi_flags >= 0 and (midi_flags & 1024) == 0 and midi_src ~= 31 and midi_dst ~= 31
+    local label = "Disabled"
+    local badge = ""
+    local badge_col = 0x666666DD
+    if is_sidechain and has_midi then
+        label = "Sidechain + MIDI"
+        badge = "SC+MIDI"
+        badge_col = 0x6EBE7AFF
+    elseif is_sidechain then
+        label = "Sidechain"
+        badge = "SC"
+        badge_col = 0x65B872FF
+    elseif has_audio and has_midi then
+        label = "Audio + MIDI"
+        badge = "A+MIDI"
+        badge_col = 0x4F8FD8FF
+    elseif has_midi then
+        label = "MIDI only"
+        badge = "MIDI"
+        badge_col = 0x4F8FD8FF
+    elseif has_audio then
+        label = "Audio"
+    end
+    local parts = {}
+    if has_audio then parts[#parts + 1] = "Audio " .. AudioPairLabel(src_chan) .. " -> " .. AudioPairLabel(dst_chan) end
+    if has_midi then parts[#parts + 1] = "MIDI " .. MidiChannelLabel(midi_src, true) .. " -> " .. MidiChannelLabel(midi_dst, false) end
+    if #parts == 0 then parts[#parts + 1] = "No audio or MIDI" end
+    return {
+        label = label,
+        details = "Type: " .. table.concat(parts, " | "),
+        badge = badge,
+        badge_col = badge_col,
+        has_audio = has_audio,
+        has_midi = has_midi,
+        is_sidechain = is_sidechain,
+        src_chan = src_chan,
+        dst_chan = dst_chan,
+        midi_src = midi_src,
+        midi_dst = midi_dst,
+        midi_flags = midi_flags
+    }
+end
+
+local function ApplySendTypePreset(src, dst, send_idx, preset)
+    if not src or not r.ValidatePtr(src, "MediaTrack*") then return end
+    r.Undo_BeginBlock()
+    if preset == "audio" then
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_SRCCHAN", 0)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_DSTCHAN", 0)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_MIDIFLAGS", 1024)
+    elseif preset == "sidechain" then
+        if dst and r.ValidatePtr(dst, "MediaTrack*") then
+            local dst_channels = math.floor(r.GetMediaTrackInfo_Value(dst, "I_NCHAN") or 2)
+            if dst_channels < 4 then r.SetMediaTrackInfo_Value(dst, "I_NCHAN", 4) end
+        end
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_SRCCHAN", 0)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_DSTCHAN", 2)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_MIDIFLAGS", 1024)
+    elseif preset == "midi" then
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_SRCCHAN", -1)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_DSTCHAN", 0)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_MIDIFLAGS", 0)
+    elseif preset == "audio_midi" then
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_SRCCHAN", 0)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_DSTCHAN", 0)
+        r.SetTrackSendInfo_Value(src, 0, send_idx, "I_MIDIFLAGS", 0)
+    end
+    r.Undo_EndBlock("Patchbay: set send type", -1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+end
+
 local function FolderBodyColor(r8, g8, b8, dim)
     if not r8 or not g8 or not b8 then return nil end
     local rr = math.floor(r8 * 0.28 + 18)
@@ -1325,6 +2134,232 @@ local function BezierHit(mx, my, x0, y0, x1, y1, x2, y2, x3, y3, threshold)
         prev_x, prev_y = nx, ny
     end
     return false
+end
+
+local function DrawBezierStripes(draw_list, x0, y0, x1, y1, x2, y2, x3, y3, color, stripe_thickness, cable_thickness, diagonal)
+    local stripe_len = math.max(1, cable_thickness * 0.9)
+    local stripe_thick = math.max(1, stripe_thickness)
+    local stripe_gap = 32
+    local chord = math.sqrt((x3 - x0) * (x3 - x0) + (y3 - y0) * (y3 - y0))
+    local sample_count = math.max(32, math.min(240, math.floor(chord / 4)))
+    local prev_x, prev_y = BezierPoint(0.08, x0, y0, x1, y1, x2, y2, x3, y3)
+    local distance = 0
+    local next_stripe = stripe_gap
+    for i = 1, sample_count do
+        local t = 0.08 + (0.84 * i / sample_count)
+        local cx, cy = BezierPoint(t, x0, y0, x1, y1, x2, y2, x3, y3)
+        local segment = math.sqrt((cx - prev_x) * (cx - prev_x) + (cy - prev_y) * (cy - prev_y))
+        distance = distance + segment
+        if distance >= next_stripe then
+            local ax, ay = BezierPoint(math.max(0, t - 0.01), x0, y0, x1, y1, x2, y2, x3, y3)
+            local bx, by = BezierPoint(math.min(1, t + 0.01), x0, y0, x1, y1, x2, y2, x3, y3)
+            local dx = bx - ax
+            local dy = by - ay
+            local len = math.sqrt(dx * dx + dy * dy)
+            if len > 0.001 then
+                local tx = dx / len
+                local ty = dy / len
+                local nx = -ty
+                local ny = tx
+                if diagonal and r.ImGui_DrawList_AddQuadFilled then
+                    local half_n = stripe_len * 0.5
+                    local half_t = math.max(0.7, stripe_thick * 0.5)
+                    local slant = cable_thickness * 0.95
+                    local bottom_x = cx - nx * half_n - tx * slant
+                    local bottom_y = cy - ny * half_n - ty * slant
+                    local top_x = cx + nx * half_n + tx * slant
+                    local top_y = cy + ny * half_n + ty * slant
+                    r.ImGui_DrawList_AddQuadFilled(draw_list,
+                        bottom_x - tx * half_t, bottom_y - ty * half_t,
+                        bottom_x + tx * half_t, bottom_y + ty * half_t,
+                        top_x + tx * half_t, top_y + ty * half_t,
+                        top_x - tx * half_t, top_y - ty * half_t,
+                        color)
+                else
+                    local vx = nx
+                    local vy = ny
+                    if diagonal then
+                        vx = (tx * 1.15) + (nx * 0.5)
+                        vy = (ty * 1.15) + (ny * 0.5)
+                        local vlen = math.sqrt(vx * vx + vy * vy)
+                        if vlen > 0.001 then
+                            vx = vx / vlen
+                            vy = vy / vlen
+                        end
+                    end
+                    r.ImGui_DrawList_AddLine(draw_list, cx - vx * stripe_len * 0.5, cy - vy * stripe_len * 0.5, cx + vx * stripe_len * 0.5, cy + vy * stripe_len * 0.5, color, stripe_thick)
+                end
+            end
+            next_stripe = next_stripe + stripe_gap
+        end
+        prev_x, prev_y = cx, cy
+    end
+end
+
+local function RenderCableShopHeader(ctx)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local header_h = 30
+    r.ImGui_InvisibleButton(ctx, "##cable_shop_header", avail_w, header_h)
+    local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+    local close_x = x2 - 16
+    local close_y = (y1 + y2) * 0.5
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    local close_hovered = mx >= close_x - 9 and mx <= close_x + 9 and my >= close_y - 9 and my <= close_y + 9
+    local close_col = close_hovered and 0xFF7474FF or 0xE94343FF
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, 0x15171BFF, 6)
+    r.ImGui_DrawList_AddLine(draw_list, x1, y2, x2, y2, 0x2A2E36FF, 1)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x, close_y, 5.5, close_col)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    r.ImGui_DrawList_AddText(draw_list, x1 + 12, y1 + ((header_h - text_h) * 0.5), 0xE8E8E8FF, "Cable shop")
+    if close_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+        cable_shop_open = false
+        return true
+    end
+    return false
+end
+
+local function RenderCableShopWindow()
+    if not cable_shop_open then return end
+    local ctx = GetCtx()
+    local cfg = GetConfig()
+    EnsureCableShopConfig(cfg)
+    if r.ImGui_SetNextWindowSize then
+        local cond = r.ImGui_Cond_FirstUseEver and r.ImGui_Cond_FirstUseEver() or 0
+        r.ImGui_SetNextWindowSize(ctx, 430, 430, cond)
+    end
+    local window_flags = 0
+    if r.ImGui_WindowFlags_NoTitleBar then window_flags = window_flags | r.ImGui_WindowFlags_NoTitleBar() end
+    if r.ImGui_WindowFlags_NoCollapse then window_flags = window_flags | r.ImGui_WindowFlags_NoCollapse() end
+    local visible, open = r.ImGui_Begin(ctx, "Cable shop##patchbay_cable_shop", cable_shop_open, window_flags)
+    cable_shop_open = open
+    if visible then
+        RenderCableShopHeader(ctx)
+        r.ImGui_Spacing(ctx)
+        local changed_any = false
+        local user_presets = GetCableShopUserPresets(cfg)
+        local current_label = CABLE_SHOP_LABELS[cable_shop_selected] or cable_shop_selected
+        r.ImGui_PushItemWidth(ctx, 220)
+        if r.ImGui_BeginCombo(ctx, "Cable type", current_label) then
+            for i = 1, #CABLE_SHOP_ORDER do
+                local key = CABLE_SHOP_ORDER[i]
+                if r.ImGui_Selectable(ctx, CABLE_SHOP_LABELS[key], cable_shop_selected == key) then
+                    cable_shop_selected = key
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopItemWidth(ctx)
+
+        local key = cable_shop_selected
+        local color_key = CableShopKey(key, "color")
+        local hover_key = CableShopKey(key, "hover")
+        local thickness_key = CableShopKey(key, "thickness")
+        local visible_key = CableShopKey(key, "visible")
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local px, py = r.ImGui_GetCursorScreenPos(ctx)
+        local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+        local preview_w = math.min(360, avail_w)
+        local preview_h = 72
+        r.ImGui_InvisibleButton(ctx, "##cable_shop_preview", preview_w, preview_h)
+        local sx = px + 18
+        local sy = py + preview_h * 0.5
+        local dx = px + preview_w - 18
+        local dy = sy
+        local cp = preview_w * 0.22
+        local preview_col = cfg[color_key]
+        local preview_thick = tonumber(cfg[thickness_key]) or 1.5
+        r.ImGui_DrawList_AddRectFilled(dl, px, py, px + preview_w, py + preview_h, 0x15171BCC, 6)
+        if cfg[visible_key] ~= false then
+            if key == "sidechain" or key == "midi" then
+                r.ImGui_DrawList_AddBezierCubic(dl, sx, sy, sx + cp, sy, dx - cp, dy, dx, dy, 0x4FB0C8AA, 2)
+            end
+            if key == "midi" then
+                DrawBezierStripes(dl, sx, sy, sx + cp, sy, dx - cp, dy, dx, dy, preview_col, preview_thick, 2)
+            elseif key == "sidechain" then
+                DrawBezierStripes(dl, sx, sy, sx + cp, sy, dx - cp, dy, dx, dy, preview_col, preview_thick, 2, true)
+            elseif key == "folder_links" then
+                r.ImGui_DrawList_AddLine(dl, sx, sy, dx, dy, preview_col, preview_thick)
+            else
+                r.ImGui_DrawList_AddBezierCubic(dl, sx, sy, sx + cp, sy, dx - cp, dy, dx, dy, preview_col, preview_thick)
+            end
+            r.ImGui_DrawList_AddCircleFilled(dl, sx, sy, 4, preview_col)
+            r.ImGui_DrawList_AddCircleFilled(dl, dx, dy, 4, preview_col)
+        else
+            r.ImGui_DrawList_AddText(dl, px + 18, py + 26, 0x888888FF, "Hidden")
+        end
+
+        local visible_changed, new_visible = r.ImGui_Checkbox(ctx, "Visible", cfg[visible_key] ~= false)
+        if visible_changed then
+            cfg[visible_key] = new_visible
+            changed_any = true
+        end
+        local flags = r.ImGui_ColorEditFlags_NoInputs()
+        if r.ImGui_ColorEditFlags_AlphaBar then flags = flags | r.ImGui_ColorEditFlags_AlphaBar() end
+        local color_changed, new_color = r.ImGui_ColorEdit4(ctx, "Color", cfg[color_key], flags)
+        if color_changed then
+            cfg[color_key] = new_color
+            changed_any = true
+        end
+        local hover_changed, new_hover = r.ImGui_ColorEdit4(ctx, "Hover", cfg[hover_key], flags)
+        if hover_changed then
+            cfg[hover_key] = new_hover
+            changed_any = true
+        end
+        r.ImGui_PushItemWidth(ctx, 220)
+        local thickness_label = key == "midi" and "Stripe width" or "Thickness"
+        local thickness_max = key == "midi" and 32.0 or 8.0
+        local thickness_changed, new_thickness = r.ImGui_SliderDouble(ctx, thickness_label, tonumber(cfg[thickness_key]) or 1.5, 0.5, thickness_max, "%.1f")
+        r.ImGui_PopItemWidth(ctx)
+        if thickness_changed then
+            cfg[thickness_key] = new_thickness
+            changed_any = true
+        end
+        if r.ImGui_Button(ctx, "Reset type") then
+            ResetCableShopType(cfg, key)
+            changed_any = true
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Reset all") then
+            for i = 1, #CABLE_SHOP_ORDER do ResetCableShopType(cfg, CABLE_SHOP_ORDER[i]) end
+            changed_any = true
+        end
+        r.ImGui_Spacing(ctx)
+        r.ImGui_Separator(ctx)
+        r.ImGui_PushItemWidth(ctx, 220)
+        if r.ImGui_BeginCombo(ctx, "User preset", CableShopUserSlotLabel(user_presets, cable_shop_user_slot)) then
+            for slot = 1, CABLE_SHOP_USER_PRESET_SLOTS do
+                if r.ImGui_Selectable(ctx, CableShopUserSlotLabel(user_presets, slot), cable_shop_user_slot == slot) then
+                    cable_shop_user_slot = slot
+                    cable_shop_user_name = user_presets[slot] and user_presets[slot].name or ("Preset " .. tostring(slot))
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopItemWidth(ctx)
+        local name_changed, new_name = r.ImGui_InputText(ctx, "Preset name", cable_shop_user_name or "")
+        if name_changed then cable_shop_user_name = new_name end
+        if r.ImGui_Button(ctx, "Save current") then
+            user_presets[cable_shop_user_slot] = CaptureCableShopPreset(cfg, cable_shop_user_name, cable_shop_user_slot)
+            cable_shop_user_name = user_presets[cable_shop_user_slot].name
+            SerializeCableShopUserPresets(cfg, user_presets)
+            changed_any = true
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Load") and user_presets[cable_shop_user_slot] then
+            changed_any = ApplyCableShopPresetData(cfg, user_presets[cable_shop_user_slot]) or changed_any
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Delete") and user_presets[cable_shop_user_slot] then
+            user_presets[cable_shop_user_slot] = nil
+            SerializeCableShopUserPresets(cfg, user_presets)
+            changed_any = true
+        end
+        if changed_any and _G.SaveConfig then _G.SaveConfig() end
+        r.ImGui_TextDisabled(ctx, "Audit colors stay on top.")
+    end
+    r.ImGui_End(ctx)
 end
 
 local function TruncateText(ctx, s, max_w)
@@ -1452,6 +2487,19 @@ local function RenderRightClickPopup()
             end
             r.ImGui_EndCombo(ctx)
         end
+
+        local type_info = GetSendTypeInfo(src, idx, false)
+        r.ImGui_TextDisabled(ctx, type_info.details)
+        local preset_names = { "Audio 1/2", "Sidechain 3/4", "MIDI only", "Audio + MIDI" }
+        local preset_values = { "audio", "sidechain", "midi", "audio_midi" }
+        if r.ImGui_BeginCombo(ctx, "Type preset", type_info.label) then
+            for k = 1, #preset_names do
+                if r.ImGui_Selectable(ctx, preset_names[k], false) then
+                    ApplySendTypePreset(src, dst, idx, preset_values[k])
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
         r.ImGui_PopItemWidth(ctx)
 
         r.ImGui_Separator(ctx)
@@ -1535,6 +2583,35 @@ local function RenderNodePopup()
                     BatchDisconnectTargetToSelected(tr, selected_tracks)
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_BeginMenu(ctx, "Folder") then
+                local selected_tracks_for_folder = GetSelectedPatchbayTracks()
+                local child_count = 0
+                for i = 1, #selected_tracks_for_folder do
+                    if selected_tracks_for_folder[i].guid ~= node_popup_guid then child_count = child_count + 1 end
+                end
+                if IsAllLockedCfg(GetConfig()) then
+                    r.ImGui_TextDisabled(ctx, "All locked")
+                elseif child_count == 0 then
+                    r.ImGui_TextDisabled(ctx, "Select child nodes first")
+                elseif r.ImGui_Selectable(ctx, string.format("Add selected as children (%d)", child_count)) then
+                    AssignSelectedTracksAsFolderChildren(tr, selected_tracks_for_folder)
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                local folder_parent = GetDirectFolderParentLocal(tr)
+                if folder_parent and r.ValidatePtr(folder_parent, "MediaTrack*") then
+                    if IsAllLockedCfg(GetConfig()) then
+                        r.ImGui_TextDisabled(ctx, "Remove from parent")
+                    elseif r.ImGui_Selectable(ctx, "Remove from parent") then
+                        RemoveTrackFromFolderParent(tr)
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                else
+                    r.ImGui_TextDisabled(ctx, "Not inside a folder")
+                end
+                r.ImGui_TextDisabled(ctx, "Simple folder structures only")
+                r.ImGui_EndMenu(ctx)
             end
             r.ImGui_Separator(ctx)
             local is_pinned = pinned_nodes[node_popup_guid] == true
@@ -1705,10 +2782,34 @@ function ShowRoutingPatchbay()
             cfg.patchbay_only_explicit_routing = new_explicit
             if _G.SaveConfig then _G.SaveConfig() end
         end
+        local explicit_show_mainsend = cfg.patchbay_explicit_show_mainsend == true
+        local changed_explicit_master, new_explicit_master = r.ImGui_Checkbox(ctx, "Master flow in explicit", explicit_show_mainsend)
+        if changed_explicit_master then
+            cfg.patchbay_explicit_show_mainsend = new_explicit_master
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        local show_unrouted = cfg.patchbay_show_unrouted == true
+        local changed_unrouted, new_unrouted = r.ImGui_Checkbox(ctx, "Only isolated", show_unrouted)
+        if changed_unrouted then
+            cfg.patchbay_show_unrouted = new_unrouted
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
         local show_flow = cfg.patchbay_show_flow ~= false
         local changed_flow, new_flow = r.ImGui_Checkbox(ctx, "Flow", show_flow)
         if changed_flow then
             cfg.patchbay_show_flow = new_flow
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        local show_folder_links = cfg.patchbay_show_folder_links ~= false
+        local changed_folder_links, new_folder_links = r.ImGui_Checkbox(ctx, "Folder links", show_folder_links)
+        if changed_folder_links then
+            cfg.patchbay_show_folder_links = new_folder_links
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        local show_send_type_badges = cfg.patchbay_show_send_type_badges ~= false
+        local changed_send_type_badges, new_send_type_badges = r.ImGui_Checkbox(ctx, "Send type badges", show_send_type_badges)
+        if changed_send_type_badges then
+            cfg.patchbay_show_send_type_badges = new_send_type_badges
             if _G.SaveConfig then _G.SaveConfig() end
         end
         local focus_selected = cfg.routing_only_selected == true
@@ -1722,6 +2823,9 @@ function ShowRoutingPatchbay()
         if changed_solo_path then
             cfg.patchbay_solo_path = new_solo_path
             if _G.SaveConfig then _G.SaveConfig() end
+        end
+        if r.ImGui_Selectable(ctx, "Cable shop...") then
+            cable_shop_open = true
         end
         r.ImGui_EndPopup(ctx)
     end
@@ -1852,6 +2956,101 @@ function ShowRoutingPatchbay()
         end
         if r.ImGui_Selectable(ctx, "Clear selection") then
             pb_selected_set = {}
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    r.ImGui_SameLine(ctx)
+    local template_btn_w = menu_btn_w
+    if menu_btn_compact and r.ImGui_CalcTextSize then
+        template_btn_w = (select(1, r.ImGui_CalcTextSize(ctx, "Template")) or 0) + menu_btn_text_pad
+    end
+    if ToolbarMenuButton(ctx, "##patchbay_menu_templates", "Template", template_btn_w, "patchbay_template_menu") then
+        if r.ImGui_GetItemRectMin and r.ImGui_GetItemRectMax then
+            local x1, _ = r.ImGui_GetItemRectMin(ctx)
+            local _, y2 = r.ImGui_GetItemRectMax(ctx)
+            popup_templates_x = x1
+            popup_templates_y = y2 + popup_menu_offset_y
+        end
+        OpenToolbarPopup(ctx, "patchbay_template_menu")
+    end
+    if popup_templates_x and popup_templates_y and r.ImGui_SetNextWindowPos then
+        local cond = r.ImGui_Cond_Appearing and r.ImGui_Cond_Appearing() or 0
+        r.ImGui_SetNextWindowPos(ctx, popup_templates_x, popup_templates_y, cond)
+    end
+    if r.ImGui_SetNextWindowSizeConstraints then
+        r.ImGui_SetNextWindowSizeConstraints(ctx, 320, 0, 320, 10000)
+    elseif r.ImGui_SetNextWindowSize then
+        local cond = r.ImGui_Cond_Appearing and r.ImGui_Cond_Appearing() or 0
+        r.ImGui_SetNextWindowSize(ctx, 320, 0, cond)
+    end
+    if r.ImGui_BeginPopup(ctx, "patchbay_template_menu") then
+        toolbar_popup_opened = true
+        open_toolbar_popup_id = "patchbay_template_menu"
+        local templates, root, root_exists = GetPatchbayTemplateList(false)
+        r.ImGui_TextDisabled(ctx, "Track templates")
+        r.ImGui_TextWrapped(ctx, root or "")
+        if root_exists then
+            r.ImGui_TextColored(ctx, 0x66CC66FF, string.format("%d found", #templates))
+        else
+            r.ImGui_TextColored(ctx, 0xFF6666FF, "Folder not found")
+        end
+        if r.ImGui_Selectable(ctx, "Refresh") then
+            GetPatchbayTemplateList(true)
+        end
+        if r.ImGui_Selectable(ctx, "Browse template...") then
+            local ok, path = r.GetUserFileNameForRead((root or "") .. "/", "Select track template", ".RTrackTemplate")
+            if ok and path and path ~= "" then
+                InsertPatchbayTrackTemplate(path)
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+        end
+        r.ImGui_Separator(ctx)
+        local tpl_cfg = GetConfig()
+        if tpl_cfg then
+            local use_custom = tpl_cfg.use_custom_template_dir == true
+            local ch_use, v_use = r.ImGui_Checkbox(ctx, "Custom folder", use_custom)
+            if ch_use then
+                tpl_cfg.use_custom_template_dir = v_use
+                patchbay_template_cache_dirty = true
+                if _G.SaveConfig then _G.SaveConfig() end
+            end
+            r.ImGui_PushItemWidth(ctx, 260)
+            local ch_dir, v_dir = r.ImGui_InputText(ctx, "##patchbay_template_dir", tpl_cfg.custom_template_dir or "")
+            if ch_dir then
+                tpl_cfg.custom_template_dir = v_dir
+                patchbay_template_cache_dirty = true
+                if _G.SaveConfig then _G.SaveConfig() end
+            end
+            r.ImGui_PopItemWidth(ctx)
+            if r.JS_Dialog_BrowseForFolder and r.ImGui_Button(ctx, "Browse folder...", 130, 0) then
+                local rv, path = r.JS_Dialog_BrowseForFolder("Select Track Templates folder", ResolvePatchbayTrackTemplatesRoot())
+                if rv == 1 and path and path ~= "" then
+                    tpl_cfg.custom_template_dir = path
+                    tpl_cfg.use_custom_template_dir = true
+                    patchbay_template_cache_dirty = true
+                    if _G.SaveConfig then _G.SaveConfig() end
+                end
+            end
+            if r.JS_Dialog_BrowseForFolder then r.ImGui_SameLine(ctx) end
+            if r.ImGui_Button(ctx, "Reset", 80, 0) then
+                tpl_cfg.use_custom_template_dir = false
+                tpl_cfg.custom_template_dir = ""
+                patchbay_template_cache_dirty = true
+                if _G.SaveConfig then _G.SaveConfig() end
+            end
+        end
+        r.ImGui_Separator(ctx)
+        if #templates == 0 then
+            r.ImGui_TextDisabled(ctx, root_exists and "No templates found." or "Choose a valid template folder.")
+        else
+            for i = 1, #templates do
+                local item = templates[i]
+                if r.ImGui_Selectable(ctx, item.label .. "##patchbay_template_" .. i) then
+                    InsertPatchbayTrackTemplate(item.full_path)
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, item.full_path) end
+            end
         end
         r.ImGui_EndPopup(ctx)
     end
@@ -2288,9 +3487,18 @@ function ShowRoutingPatchbay()
         if not x1 then return nil end
         if side == "out" then
             return x2, (y1 + y2) * 0.5
+        elseif side == "bottom" then
+            return (x1 + x2) * 0.5, y2
         else
             return x1, (y1 + y2) * 0.5
         end
+    end
+
+    local function CanStartFolderPin(tr)
+        if all_locked or not r.ReorderSelectedTracks then return false end
+        if not tr or tr.is_master or not tr.track or not r.ValidatePtr(tr.track, "MediaTrack*") then return false end
+        local depth = math.floor(r.GetMediaTrackInfo_Value(tr.track, "I_FOLDERDEPTH") or 0)
+        return depth <= 1
     end
 
     hovered_input_guid = nil
@@ -2303,7 +3511,7 @@ function ShowRoutingPatchbay()
     local selected_track = _G.TRACK
     local solo_path_enabled = (cfg.patchbay_solo_path == true) and selected_track and r.ValidatePtr(selected_track, "MediaTrack*")
 
-    local function CablePassesFilter(is_main, mode, muted)
+    local function CablePassesFilter(is_main, mode, muted, send_type_info)
         if route_filter == "all" then return true end
         if route_filter == "muted" then return muted == true end
         if route_filter == "pre-fx" then return (not is_main) and mode == 1 end
@@ -2312,6 +3520,9 @@ function ShowRoutingPatchbay()
             if is_main then return true end
             return mode == 0
         end
+        if route_filter == "audio" then return is_main or (send_type_info and send_type_info.has_audio and not send_type_info.is_sidechain) end
+        if route_filter == "sidechain" then return send_type_info and send_type_info.is_sidechain end
+        if route_filter == "midi" then return send_type_info and send_type_info.has_midi end
         return true
     end
 
@@ -2334,10 +3545,11 @@ function ShowRoutingPatchbay()
                         local muted = r.GetTrackSendInfo_Value(src, 0, k, "B_MUTE") == 1
                         local phase = r.GetTrackSendInfo_Value(src, 0, k, "B_PHASE") == 1
                         local vol = r.GetTrackSendInfo_Value(src, 0, k, "D_VOL")
-                        if CablePassesFilter(false, mode, muted) and CablePassesSoloPath(src, dst) then
+                        local send_type_info = GetSendTypeInfo(src, k, false)
+                        if CablePassesFilter(false, mode, muted, send_type_info) and CablePassesSoloPath(src, dst) then
                             cables[#cables + 1] = {
                                 src = src, dst = dst, sg = sg, dg = dg, idx = k,
-                                mode = mode, muted = muted, phase = phase, vol = vol
+                                mode = mode, muted = muted, phase = phase, vol = vol, send_type_info = send_type_info
                             }
                         end
                     end
@@ -2348,10 +3560,11 @@ function ShowRoutingPatchbay()
                 local muted = false
                 local phase = false
                 local vol = r.GetMediaTrackInfo_Value(src, "D_VOL")
-                if CablePassesFilter(true, mode, muted) and CablePassesSoloPath(src, master_track) then
+                local send_type_info = GetSendTypeInfo(src, -1, true)
+                if CablePassesFilter(true, mode, muted, send_type_info) and CablePassesSoloPath(src, master_track) then
                     cables[#cables + 1] = {
                         src = src, dst = master_track, sg = sg, dg = MASTER_GUID, idx = -1, is_main = true,
-                        mode = mode, muted = muted, phase = phase, vol = vol
+                        mode = mode, muted = muted, phase = phase, vol = vol, send_type_info = send_type_info
                     }
                 end
             end
@@ -2376,16 +3589,37 @@ function ShowRoutingPatchbay()
         end
     end
 
+    local folder_link_style = GetCableOverlayStyle("folder_links", cfg)
+    if cfg.patchbay_show_folder_links ~= false and folder_link_style.visible then
+        for i = 1, #tracks do
+            local child = tracks[i]
+            if child.folder_parent_guid and guid_to[child.folder_parent_guid] then
+                local sx, sy = PinPos(child.folder_parent_guid, "bottom")
+                local x1, y1, x2 = NodeRect(child.guid)
+                if sx and x1 then
+                    local dx = (x1 + x2) * 0.5
+                    local dy = y1
+                    local col = folder_link_style.color
+                    local thickness = math.max(1.0, folder_link_style.thickness * canvas_zoom)
+                    r.ImGui_DrawList_AddLine(draw_list, sx, sy, dx, dy, col, thickness)
+                    r.ImGui_DrawList_AddCircleFilled(draw_list, dx, dy, math.max(2.0, 2.5 * canvas_zoom), col)
+                end
+            end
+        end
+    end
+
     local hovered_cable = nil
     local cp_dist = 80 * canvas_zoom
     local show_flow = cfg.patchbay_show_flow ~= false
+    local show_send_type_badges = cfg.patchbay_show_send_type_badges ~= false
     local flow_time = r.time_precise()
 
     for ci = 1, #cables do
         local c = cables[ci]
         local sx, sy = PinPos(c.sg, "out")
         local dx, dy = PinPos(c.dg, "in")
-        if sx and dx then
+        local style = GetCableStyle(c, cfg)
+        if sx and dx and style.visible then
             local cx1 = sx + cp_dist
             local cy1 = sy
             local cx2 = dx - cp_dist
@@ -2400,18 +3634,15 @@ function ShowRoutingPatchbay()
         local c = cables[ci]
         local sx, sy = PinPos(c.sg, "out")
         local dx, dy = PinPos(c.dg, "in")
-        if sx and dx then
+        local style = GetCableStyle(c, cfg)
+        if sx and dx and style.visible then
             local mode = c.mode
             local muted = c.muted
             local phase = c.phase
             local vol = c.vol
-            local thickness = 1.5 + math.min(2.5, math.max(0, (vol - 0.5)) * 1.5)
+            local thickness = style.thickness + math.min(2.5, math.max(0, (vol - 0.5)) * 1.5)
             if hovered_cable == c then thickness = thickness + 1 end
-            local col, hcol = ModeColors(mode, muted)
-            if c.is_main and not muted then
-                col = 0xC69A42CC
-                hcol = 0xDBB35AE0
-            end
+            local col, hcol = style.color, style.hover
             local audit_sev = route_audit_visual_active and route_audit_cable_marks[c.sg .. "->" .. c.dg] or nil
             if audit_sev == "error" then
                 col = 0xE34A4AE0
@@ -2424,6 +3655,23 @@ function ShowRoutingPatchbay()
             end
             local use_col = (hovered_cable == c) and hcol or col
             r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, use_col, thickness)
+            local send_type_info = c.send_type_info
+            if not audit_sev and send_type_info then
+                if send_type_info.is_sidechain then
+                    local sidechain_style = GetCableOverlayStyle("sidechain", cfg)
+                    if sidechain_style.visible then
+                        local sidechain_col = (hovered_cable == c) and sidechain_style.hover or sidechain_style.color
+                        DrawBezierStripes(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, sidechain_col, sidechain_style.thickness, thickness, true)
+                    end
+                end
+                if send_type_info.has_midi then
+                    local midi_style = GetCableOverlayStyle("midi", cfg)
+                    if midi_style.visible then
+                        local midi_col = (hovered_cable == c) and midi_style.hover or midi_style.color
+                        DrawBezierStripes(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, midi_col, midi_style.thickness, thickness)
+                    end
+                end
+            end
             if show_flow then
                 local t = (flow_time * 0.55 + ci * 0.137) % 1.0
                 local fx, fy = BezierPoint(t, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy)
@@ -2438,7 +3686,26 @@ function ShowRoutingPatchbay()
                 r.ImGui_DrawList_AddCircleFilled(draw_list, fx, fy, math.max(2.0, 2.8 * canvas_zoom), dot_col)
             end
             if phase and not muted then
-                r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, 0xFF4040FF, 1)
+                local phase_style = {
+                    color = cfg[CableShopKey("phase", "color")],
+                    thickness = tonumber(cfg[CableShopKey("phase", "thickness")]) or 1.0,
+                    visible = cfg[CableShopKey("phase", "visible")] ~= false
+                }
+                if phase_style.visible then
+                    r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, phase_style.color, phase_style.thickness)
+                end
+            end
+            if show_send_type_badges and send_type_info and send_type_info.badge and send_type_info.badge ~= "" and canvas_zoom >= 0.55 then
+                local bx, by = BezierPoint(0.53, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy)
+                local tw, th = r.ImGui_CalcTextSize(ctx, send_type_info.badge)
+                local pad_x = 5
+                local pad_y = 3
+                local rx1 = bx - (tw * 0.5) - pad_x
+                local ry1 = by - (th * 0.5) - pad_y
+                local rx2 = bx + (tw * 0.5) + pad_x
+                local ry2 = by + (th * 0.5) + pad_y
+                r.ImGui_DrawList_AddRectFilled(draw_list, rx1, ry1, rx2, ry2, send_type_info.badge_col or 0x666666DD, 4)
+                r.ImGui_DrawList_AddText(draw_list, bx - (tw * 0.5), by - (th * 0.5), 0xFFFFFFFF, send_type_info.badge)
             end
         end
     end
@@ -2468,27 +3735,31 @@ function ShowRoutingPatchbay()
         local dname
         local mlabel
         local vol
+        local send_type_info
         if hovered_cable.is_main then
             dname = "MASTER"
             mlabel = "Main send (post-fader)"
             vol = r.GetMediaTrackInfo_Value(hovered_cable.src, "D_VOL")
+            send_type_info = GetSendTypeInfo(hovered_cable.src, -1, true)
         else
             local _, dn = r.GetTrackName(hovered_cable.dst)
             dname = dn
             local mode = r.GetTrackSendInfo_Value(hovered_cable.src, 0, hovered_cable.idx, "I_SENDMODE")
             vol = r.GetTrackSendInfo_Value(hovered_cable.src, 0, hovered_cable.idx, "D_VOL")
+            send_type_info = GetSendTypeInfo(hovered_cable.src, hovered_cable.idx, false)
             mlabel = "Post-Fader"
             if mode == 1 then mlabel = "Pre-FX" elseif mode == 3 then mlabel = "Pre-Fader (Post-FX)" end
         end
         local vol_db = vol > 0 and (20 * math.log(vol, 10)) or -150
-        r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB", sname, dname, mlabel, vol_db))
+        local type_details = send_type_info and send_type_info.details or "Type: Audio"
+        r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB\n%s", sname, dname, mlabel, vol_db, type_details))
         if r.ImGui_IsMouseClicked(ctx, 1) then
             right_click_send = { src = hovered_cable.src, dst = hovered_cable.dst, is_main = hovered_cable.is_main }
             request_open_popup = true
         end
     end
 
-    if not hovered_cable and not node_right_click_consumed and bg_hovered and not pb_rubber_active and pending_connection == nil and r.ImGui_IsMouseClicked(ctx, 1) then
+    if not hovered_cable and not node_right_click_consumed and bg_hovered and not pb_rubber_active and pending_connection == nil and pending_folder_connection == nil and r.ImGui_IsMouseClicked(ctx, 1) then
         local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
         local mod_shift = r.ImGui_Mod_Shift and r.ImGui_Mod_Shift() or 0
         local shift_held = (mods & mod_shift) ~= 0
@@ -2549,7 +3820,17 @@ function ShowRoutingPatchbay()
                     if fcol then body_col = fcol end
                 end
             end
+            local split_body_col = nil
+            if (not is_master_node) and tr.is_folder_child and tr.folder_is_parent then
+                local parent_body_col = FolderBodyColor(tr.folder_parent_r, tr.folder_parent_g, tr.folder_parent_b, not in_solo_focus)
+                if parent_body_col then body_col = parent_body_col end
+                split_body_col = FolderBodyColor(r8, g8, b8, not in_solo_focus)
+            end
             r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, body_col, 6)
+            if split_body_col then
+                local split_x = x1 + ((x2 - x1) * 0.5)
+                r.ImGui_DrawList_AddRectFilled(draw_list, split_x, y1 + 1, x2 - 1, y2 - 1, split_body_col, 0)
+            end
             r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x1 + 5, y2, bar_col, 6)
             local border
             if is_master_node then
@@ -2676,6 +3957,7 @@ function ShowRoutingPatchbay()
                     if pin_r_hit < 4 then pin_r_hit = 4 end
                     local hit_r = pin_r_hit + 4
                     local hit_out = nil
+                    local hit_folder = nil
                     for hi = 1, #tracks do
                         if not tracks[hi].is_master then
                             local ox, oy = PinPos(tracks[hi].guid, "out")
@@ -2687,9 +3969,20 @@ function ShowRoutingPatchbay()
                                     break
                                 end
                             end
+                            local fx, fy = PinPos(tracks[hi].guid, "bottom")
+                            if fx and CanStartFolderPin(tracks[hi]) then
+                                local ddx = mx - fx
+                                local ddy = my - fy
+                                if ddx * ddx + ddy * ddy <= hit_r * hit_r then
+                                    hit_folder = tracks[hi]
+                                    break
+                                end
+                            end
                         end
                     end
-                    if hit_out and not all_locked then
+                    if hit_folder and not all_locked then
+                        pending_folder_connection = { parent = hit_folder.track, parent_guid = hit_folder.guid }
+                    elseif hit_out and not all_locked then
                         pending_connection = { src = hit_out.track, src_guid = hit_out.guid }
                     else
                         pb_press_guid = g
@@ -2697,7 +3990,7 @@ function ShowRoutingPatchbay()
                     end
                 end
             end
-            if body_active and pending_connection == nil and not layout_locked then
+            if body_active and pending_connection == nil and pending_folder_connection == nil and not layout_locked then
                 local ddx, ddy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
                 if ddx ~= 0 or ddy ~= 0 then
                     if not node_is_pinned then
@@ -2777,6 +4070,7 @@ function ShowRoutingPatchbay()
             local is_master_node = tr.is_master
             local in_x, in_y = PinPos(g, "in")
             local out_x, out_y = PinPos(g, "out")
+            local folder_x, folder_y = PinPos(g, "bottom")
             local pin_r = PIN_R * canvas_zoom
             if pin_r < 4 then pin_r = 4 end
 
@@ -2785,6 +4079,10 @@ function ShowRoutingPatchbay()
             if not is_master_node then
                 r.ImGui_DrawList_AddCircleFilled(draw_list, out_x, out_y, pin_r, 0xFFCC88FF)
                 r.ImGui_DrawList_AddCircle(draw_list, out_x, out_y, pin_r, 0x000000FF, nil, 1)
+                local folder_pin_enabled = CanStartFolderPin(tr)
+                local folder_pin_col = folder_pin_enabled and 0x66CC88FF or 0x3B5A46AA
+                r.ImGui_DrawList_AddCircleFilled(draw_list, folder_x, folder_y, pin_r * 0.82, folder_pin_col)
+                r.ImGui_DrawList_AddCircle(draw_list, folder_x, folder_y, pin_r * 0.82, 0x000000FF, nil, 1)
             end
 
             r.ImGui_PushID(ctx, "pins_" .. g)
@@ -2803,13 +4101,77 @@ function ShowRoutingPatchbay()
                     r.ImGui_DrawList_AddCircle(draw_list, out_x, out_y, pin_r + 2, 0xFFFFFFFF, nil, 2)
                 end
                 if r.ImGui_IsItemActive(ctx) and not all_locked then
-                    if not pending_connection then
+                    if not pending_connection and not pending_folder_connection then
                         pending_connection = { src = tr.track, src_guid = g }
+                    end
+                end
+
+                r.ImGui_SetCursorScreenPos(ctx, folder_x - pin_r, folder_y - pin_r)
+                r.ImGui_InvisibleButton(ctx, "##pin_folder", pin_r * 2, pin_r * 2)
+                if r.ImGui_IsItemHovered(ctx) then
+                    local folder_pin_enabled = CanStartFolderPin(tr)
+                    local hcol = folder_pin_enabled and 0xD8FFE0FF or 0x777777FF
+                    r.ImGui_DrawList_AddCircle(draw_list, folder_x, folder_y, pin_r + 2, hcol, nil, 2)
+                    if all_locked then
+                        r.ImGui_SetTooltip(ctx, "Folder assignment is locked")
+                    elseif not r.ReorderSelectedTracks then
+                        r.ImGui_SetTooltip(ctx, "Folder assignment unavailable")
+                    elseif not folder_pin_enabled then
+                        r.ImGui_SetTooltip(ctx, "Top-level tracks only")
+                    else
+                        r.ImGui_SetTooltip(ctx, "Drag to assign one child\nStructure only, not audio routing")
+                    end
+                end
+                if r.ImGui_IsItemActive(ctx) and CanStartFolderPin(tr) then
+                    if not pending_folder_connection and not pending_connection then
+                        pending_folder_connection = { parent = tr.track, parent_guid = g }
                     end
                 end
             end
 
             r.ImGui_PopID(ctx)
+        end
+    end
+
+    if pending_folder_connection then
+        local sx, sy = PinPos(pending_folder_connection.parent_guid, "bottom")
+        local hovered_folder_target = nil
+        local hovered_folder_valid = false
+        local parent = FindTrackByGuidLocal(pending_folder_connection.parent_guid)
+        for i = 1, #tracks do
+            local target = tracks[i]
+            if target.guid ~= pending_folder_connection.parent_guid and not target.is_master then
+                local x1, y1, x2, y2 = NodeRect(target.guid)
+                if x1 and mx >= x1 and mx <= x2 and my >= y1 and my <= y2 then
+                    hovered_folder_target = target
+                    local ok = PrepareSimpleFolderChildren(parent, { { track = target.track, guid = target.guid, name = target.name } })
+                    hovered_folder_valid = ok ~= nil
+                    break
+                end
+            end
+        end
+        local folder_link_style = GetCableOverlayStyle("folder_links", cfg)
+        local target_x, target_y = mx, my
+        local color = folder_link_style.color
+        local thickness = math.max(1.0, folder_link_style.thickness * canvas_zoom)
+        if hovered_folder_target then
+            local x1, y1, x2, y2 = NodeRect(hovered_folder_target.guid)
+            if x1 then
+                target_x = (x1 + x2) * 0.5
+                target_y = y1
+                color = hovered_folder_valid and folder_link_style.hover or 0x777777AA
+                r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, hovered_folder_valid and 0x88FFAAFF or 0x777777AA, 6, nil, 2)
+            end
+        end
+        if sx then
+            r.ImGui_DrawList_AddLine(draw_list, sx, sy, target_x, target_y, color, thickness)
+            r.ImGui_DrawList_AddCircleFilled(draw_list, target_x, target_y, math.max(2.5, 3.0 * canvas_zoom), color)
+        end
+        if r.ImGui_IsMouseReleased(ctx, 0) then
+            if hovered_folder_target and hovered_folder_valid and parent and r.ValidatePtr(parent, "MediaTrack*") then
+                AssignSelectedTracksAsFolderChildren(parent, { { track = hovered_folder_target.track, guid = hovered_folder_target.guid, name = hovered_folder_target.name } })
+            end
+            pending_folder_connection = nil
         end
     end
 
@@ -2912,6 +4274,7 @@ function ShowRoutingPatchbay()
     if r.ImGui_IsMouseReleased(ctx, 0) then
         pb_press_guid = nil
         pb_press_dragged = false
+        pending_folder_connection = nil
         if dragging_node_guid then
             dragging_node_guid = nil
             SaveLayout()
@@ -2924,7 +4287,7 @@ function ShowRoutingPatchbay()
 
     r.ImGui_EndChild(ctx)
     do
-        local hint = "Left-click node = select  |  Drag node = move  |  Drag pin = connect  |  Left-drag empty = pan  |  Right-drag empty = select (Shift = add)  |  Wheel = zoom  |  Right-click cable = options  |  Route filter + Solo path in toolbar"
+        local hint = "Left-click node = select  |  Drag node = move  |  Drag side pin = connect  |  Drag bottom pin = folder child  |  Right-drag empty = select (Shift = add)  |  Wheel = zoom"
         local tw = r.ImGui_CalcTextSize(ctx, hint)
         local fw = r.ImGui_GetContentRegionAvail(ctx)
         local off = (fw - tw) * 0.5
@@ -2941,4 +4304,5 @@ function ShowRoutingPatchbay()
     end
     RenderRightClickPopup()
     RenderNodePopup()
+    RenderCableShopWindow()
 end

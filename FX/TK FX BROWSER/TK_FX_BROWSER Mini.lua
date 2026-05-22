@@ -1,8 +1,17 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 0.8.9
+-- @version 1.0.0
 -- @changelog:
 --[[ 
+    v1.0.0:
+        + Patchbay: added track template insertion with default/custom template folders, recursive subfolder scan, browse and refresh actions.
+        + Patchbay: added folder parent-child assignment via dedicated bottom pins and context menu actions, including existing folder append and simple nested folder support.
+        + Patchbay: added Remove from parent action for extracting folder children while preserving simple folder-depth balance.
+        + Patchbay: added audio, sidechain and MIDI send identification with badges, filters and type presets.
+        + Patchbay: added Cable shop for mode colors, folder connections, sidechain/MIDI overlays, stripes, user presets, thickness and visibility.
+        + Patchbay: added distinct folder relationship visuals, split child/folder node coloring and a View > Folder links toggle.
+        + Patchbay: added Explicit view master-flow option and Only isolated view for tracks without routing or main send.
+
     v0.8.9:
         + Track Templates: thumbnails can now be loaded from images next to the .RTrackTemplate file, mirrored TrackTemplateThumbnails paths, or root-level TrackTemplateThumbnails fallbacks.
         + Track Templates: missing thumbnails now show a clickable placeholder with the template name.
@@ -1331,6 +1340,45 @@ function SetDefaultConfig()
         routing_group_by_folder = false,
         routing_hubs_show_all_tracks = false,
         patchbay_only_explicit_routing = false,
+        patchbay_show_folder_links = true,
+        patchbay_show_send_type_badges = true,
+        patchbay_cable_shop_post_fader_color = 0x4FB0C8FF,
+        patchbay_cable_shop_post_fader_hover = 0x70D0E0FF,
+        patchbay_cable_shop_post_fader_thickness = 1.5,
+        patchbay_cable_shop_post_fader_visible = true,
+        patchbay_cable_shop_pre_fader_color = 0xDDA050FF,
+        patchbay_cable_shop_pre_fader_hover = 0xF0C070FF,
+        patchbay_cable_shop_pre_fader_thickness = 1.7,
+        patchbay_cable_shop_pre_fader_visible = true,
+        patchbay_cable_shop_pre_fx_color = 0xB070D0FF,
+        patchbay_cable_shop_pre_fx_hover = 0xC890E0FF,
+        patchbay_cable_shop_pre_fx_thickness = 1.7,
+        patchbay_cable_shop_pre_fx_visible = true,
+        patchbay_cable_shop_muted_color = 0x666666AA,
+        patchbay_cable_shop_muted_hover = 0x888888FF,
+        patchbay_cable_shop_muted_thickness = 1.2,
+        patchbay_cable_shop_muted_visible = true,
+        patchbay_cable_shop_main_color = 0xC69A42CC,
+        patchbay_cable_shop_main_hover = 0xDBB35AE0,
+        patchbay_cable_shop_main_thickness = 1.8,
+        patchbay_cable_shop_main_visible = true,
+        patchbay_cable_shop_folder_links_color = 0x66CC88AA,
+        patchbay_cable_shop_folder_links_hover = 0x88FFAAFF,
+        patchbay_cable_shop_folder_links_thickness = 1.6,
+        patchbay_cable_shop_folder_links_visible = true,
+        patchbay_cable_shop_sidechain_color = 0x65B872FF,
+        patchbay_cable_shop_sidechain_hover = 0x88D894FF,
+        patchbay_cable_shop_sidechain_thickness = 2.0,
+        patchbay_cable_shop_sidechain_visible = true,
+        patchbay_cable_shop_midi_color = 0x4F8FD8FF,
+        patchbay_cable_shop_midi_hover = 0x76AAE8FF,
+        patchbay_cable_shop_midi_thickness = 1.6,
+        patchbay_cable_shop_midi_visible = true,
+        patchbay_cable_shop_phase_color = 0xFF4040FF,
+        patchbay_cable_shop_phase_hover = 0xFF7070FF,
+        patchbay_cable_shop_phase_thickness = 1.0,
+        patchbay_cable_shop_phase_visible = true,
+        patchbay_cable_shop_user_presets = "",
         patchbay_node_width = 180,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
         font_size = 11,  -- Default font size
