@@ -80,6 +80,7 @@ local patchbay_template_cache_root = nil
 local patchbay_template_cache_exists = false
 local patchbay_template_cache_dirty = true
 local cable_shop_open = false
+local view_help_open = false
 local cable_shop_selected = "post_fader"
 local cable_shop_user_slot = 1
 local cable_shop_user_name = "Preset 1"
@@ -1242,6 +1243,7 @@ local function BuildSnapshotPayload(cfg)
     lines[#lines + 1] = "patchbay_explicit_show_mainsend=" .. ((cfg.patchbay_explicit_show_mainsend and 1) or 0)
     lines[#lines + 1] = "patchbay_show_unrouted=" .. ((cfg.patchbay_show_unrouted and 1) or 0)
     lines[#lines + 1] = "patchbay_show_master=" .. (((cfg.patchbay_show_master ~= false) and 1) or 0)
+    lines[#lines + 1] = "patchbay_hide_child_master_flow=" .. ((cfg.patchbay_hide_child_master_flow and 1) or 0)
     lines[#lines + 1] = "patchbay_show_flow=" .. (((cfg.patchbay_show_flow ~= false) and 1) or 0)
     lines[#lines + 1] = "patchbay_show_folder_links=" .. (((cfg.patchbay_show_folder_links ~= false) and 1) or 0)
     lines[#lines + 1] = "patchbay_show_send_type_badges=" .. (((cfg.patchbay_show_send_type_badges ~= false) and 1) or 0)
@@ -1272,6 +1274,8 @@ local function ApplySnapshotPayload(payload, cfg)
                 cfg.patchbay_show_unrouted = (v == "1")
             elseif k == "patchbay_show_master" then
                 cfg.patchbay_show_master = (v == "1")
+            elseif k == "patchbay_hide_child_master_flow" then
+                cfg.patchbay_hide_child_master_flow = (v == "1")
             elseif k == "patchbay_show_flow" then
                 cfg.patchbay_show_flow = (v == "1")
             elseif k == "patchbay_show_folder_links" then
@@ -2362,6 +2366,70 @@ local function RenderCableShopWindow()
     r.ImGui_End(ctx)
 end
 
+local function RenderViewHelpHeader(ctx)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local header_h = 30
+    r.ImGui_InvisibleButton(ctx, "##view_help_header", avail_w, header_h)
+    local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+    local close_x = x2 - 16
+    local close_y = (y1 + y2) * 0.5
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    local close_hovered = mx >= close_x - 9 and mx <= close_x + 9 and my >= close_y - 9 and my <= close_y + 9
+    local close_col = close_hovered and 0xFF7474FF or 0xE94343FF
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, 0x15171BFF, 6)
+    r.ImGui_DrawList_AddLine(draw_list, x1, y2, x2, y2, 0x2A2E36FF, 1)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x, close_y, 5.5, close_col)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    r.ImGui_DrawList_AddText(draw_list, x1 + 12, y1 + ((header_h - text_h) * 0.5), 0xE8E8E8FF, "View options")
+    if close_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+        view_help_open = false
+        return true
+    end
+    return false
+end
+
+local function RenderViewHelpItem(ctx, title, text)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+    r.ImGui_Text(ctx, title)
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_TextWrapped(ctx, text)
+    r.ImGui_Spacing(ctx)
+end
+
+local function RenderViewHelpWindow()
+    if not view_help_open then return end
+    local ctx = GetCtx()
+    if r.ImGui_SetNextWindowSize then
+        local cond = r.ImGui_Cond_FirstUseEver and r.ImGui_Cond_FirstUseEver() or 0
+        r.ImGui_SetNextWindowSize(ctx, 470, 500, cond)
+    end
+    local window_flags = 0
+    if r.ImGui_WindowFlags_NoTitleBar then window_flags = window_flags | r.ImGui_WindowFlags_NoTitleBar() end
+    if r.ImGui_WindowFlags_NoCollapse then window_flags = window_flags | r.ImGui_WindowFlags_NoCollapse() end
+    local visible, open = r.ImGui_Begin(ctx, "View options##patchbay_view_help", view_help_open, window_flags)
+    view_help_open = open
+    if visible then
+        RenderViewHelpHeader(ctx)
+        r.ImGui_Spacing(ctx)
+        r.ImGui_TextWrapped(ctx, "These options only change what the patchbay displays. They do not change REAPER routing unless you use routing actions.")
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+        RenderViewHelpItem(ctx, "Master", "Shows or hides the MASTER node and normal track-to-master flow.")
+        RenderViewHelpItem(ctx, "Hide child master flow", "Hides visual master-flow cables from folder child tracks. Folder parents and normal top-level tracks can still show their master flow.")
+        RenderViewHelpItem(ctx, "Explicit", "Shows only tracks that have explicit sends or receives. Normal master output is not counted as explicit routing.")
+        RenderViewHelpItem(ctx, "Master flow in explicit", "Allows normal track-to-master flow to appear while Explicit mode is enabled.")
+        RenderViewHelpItem(ctx, "Only isolated", "Shows tracks that have no explicit sends, no explicit receives, and no master output.")
+        RenderViewHelpItem(ctx, "Flow", "Shows or hides the animated flow markers on visible cables.")
+        RenderViewHelpItem(ctx, "Folder links", "Shows or hides the visual parent-to-child folder relationship lines.")
+        RenderViewHelpItem(ctx, "Send type badges", "Shows audio, sidechain, and MIDI badges on send cables.")
+        RenderViewHelpItem(ctx, "Focus selected", "Limits the view to selected tracks and their direct routing neighbors.")
+        RenderViewHelpItem(ctx, "Solo path", "Visually emphasizes the current selected track path and dims unrelated visible nodes and cables.")
+    end
+    r.ImGui_End(ctx)
+end
+
 local function TruncateText(ctx, s, max_w)
     if max_w <= 0 then return "" end
     local w = r.ImGui_CalcTextSize(ctx, s)
@@ -2776,6 +2844,12 @@ function ShowRoutingPatchbay()
             cfg.patchbay_show_master = new_val
             if _G.SaveConfig then _G.SaveConfig() end
         end
+        local hide_child_master_flow = cfg.patchbay_hide_child_master_flow == true
+        local changed_hide_child_master_flow, new_hide_child_master_flow = r.ImGui_Checkbox(ctx, "Hide child master flow", hide_child_master_flow)
+        if changed_hide_child_master_flow then
+            cfg.patchbay_hide_child_master_flow = new_hide_child_master_flow
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
         local only_explicit = cfg.patchbay_only_explicit_routing == true
         local changed_explicit, new_explicit = r.ImGui_Checkbox(ctx, "Explicit", only_explicit)
         if changed_explicit then
@@ -2826,6 +2900,9 @@ function ShowRoutingPatchbay()
         end
         if r.ImGui_Selectable(ctx, "Cable shop...") then
             cable_shop_open = true
+        end
+        if r.ImGui_Selectable(ctx, "View options...") then
+            view_help_open = true
         end
         r.ImGui_EndPopup(ctx)
     end
@@ -3509,6 +3586,7 @@ function ShowRoutingPatchbay()
     local master_track = master_in_view and guid_to[MASTER_GUID].track or nil
     local route_filter = cfg.patchbay_route_filter or "all"
     local selected_track = _G.TRACK
+    local hide_child_master_flow = cfg.patchbay_hide_child_master_flow == true
     local solo_path_enabled = (cfg.patchbay_solo_path == true) and selected_track and r.ValidatePtr(selected_track, "MediaTrack*")
 
     local function CablePassesFilter(is_main, mode, muted, send_type_info)
@@ -3555,7 +3633,8 @@ function ShowRoutingPatchbay()
                     end
                 end
             end
-            if master_in_view and r.GetMediaTrackInfo_Value(src, "B_MAINSEND") == 1 then
+            local child_master_hidden = hide_child_master_flow and tracks[i].is_folder_child
+            if master_in_view and not child_master_hidden and r.GetMediaTrackInfo_Value(src, "B_MAINSEND") == 1 then
                 local mode = 0
                 local muted = false
                 local phase = false
@@ -4305,4 +4384,5 @@ function ShowRoutingPatchbay()
     RenderRightClickPopup()
     RenderNodePopup()
     RenderCableShopWindow()
+    RenderViewHelpWindow()
 end

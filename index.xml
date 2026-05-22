@@ -33,7 +33,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.0.0" author="TouristKiller" time="2026-05-22T02:15:00Z">
+    <version name="3.0.1" author="TouristKiller" time="2026-05-22T12:15:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -54,11 +54,15 @@
     </reapack>
 
     <reapack name="TK_Patchbay_Standalone.lua" type="script" desc="TK Patchbay Viewer (Standalone)">
-    <version name="1.1.0" author="TouristKiller" time="2026-05-22T02:15:00Z">
+    <version name="1.1.1" author="TouristKiller" time="2026-05-22T12:45:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Patchbay_Standalone.lua</source>
     <source file="TKFXBPatchbay_Standalone.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBPatchbay_Standalone.lua</source>
                 <changelog><![CDATA[
-     v1.1.0:
+        v1.1.1:
+        + Added View > Hide child master flow to visually reduce folder child master cable clutter.
+        + Added View > View options help window with English explanations for Patchbay view modes.
+             
+        v1.1.0:
         + Added Patchbay track template insertion with default/custom template folders, recursive subfolder scan, browse and refresh actions.
         + Added Patchbay folder parent-child assignment via dedicated bottom pins and context menu actions, including existing folder append and simple nested folder support.
         + Added Patchbay Remove from parent action for extracting folder children while preserving simple folder-depth balance.

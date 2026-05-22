@@ -1,6 +1,6 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.0.1
 -- @changelog:
 --[[ 
     v1.0.0:

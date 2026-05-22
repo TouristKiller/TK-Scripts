@@ -1,6 +1,6 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.0.0
+-- @version 3.0.1
 -- @changelog:
 --[[ 
     v3.0.0:

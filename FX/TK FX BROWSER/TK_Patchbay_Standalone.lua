@@ -1,7 +1,10 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.1.1
 -- @changelog:
+--   v1.1.1:
+--       + Added View > Hide child master flow to visually reduce folder child master cable clutter.
+--       + Added View > View options help window with English explanations for Patchbay view modes.
 --   v1.1.0:
 --       + Added Patchbay track template insertion with default/custom template folders, recursive subfolder scan, browse and refresh actions.
 --       + Added Patchbay folder parent-child assignment via dedicated bottom pins and context menu actions, including existing folder append and simple nested folder support.
@@ -60,6 +63,7 @@ _G.ctx = r.ImGui_CreateContext("TK Patchbay Viewer")
 _G.config = {
     patchbay_node_width = 180,
     patchbay_show_master = true,
+    patchbay_hide_child_master_flow = false,
     patchbay_only_explicit_routing = false,
     patchbay_show_flow = true,
     patchbay_show_folder_links = true,
