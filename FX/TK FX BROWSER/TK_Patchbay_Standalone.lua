@@ -1,8 +1,8 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.2
+-- @version 1.1.3
 -- @changelog:
---   v1.1.2:
+--   v1.1.3:
 --       + Added Rename Track to the node context menu.
 --       + Added Alt+left-click cable deletion for sends and master-send cables.
 --       + Added multi-select drag routing for selected sources and selected targets.
