@@ -31,6 +31,52 @@
     </reapack>
  </category>
 
+ <category name="TK Workbench">
+     <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
+     <version name="0.1.0" author="TouristKiller" time="2026-05-26T15:30:00Z">
+     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
+     <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/json.lua</source>
+     <source file="core/media_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/media_categorizer.lua</source>
+     <source file="core/meter_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/meter_engine.lua</source>
+     <source file="core/module_loader.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/module_loader.lua</source>
+     <source file="core/project_health.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/project_health.lua</source>
+     <source file="core/selection.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/selection.lua</source>
+     <source file="core/settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/settings.lua</source>
+     <source file="core/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/theme.lua</source>
+     <source file="core/ui.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui.lua</source>
+     <source file="modules/action_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_browser.lua</source>
+     <source file="modules/automation_item_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/automation_item_manager.lua</source>
+     <source file="modules/color_studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/color_studio.lua</source>
+     <source file="modules/control_room.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/control_room.lua</source>
+     <source file="modules/fx_chain_builder.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/fx_chain_builder.lua</source>
+     <source file="modules/instrument_rack.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/instrument_rack.lua</source>
+     <source file="modules/media_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/media_browser.lua</source>
+     <source file="modules/notes.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/notes.lua</source>
+     <source file="modules/plugin_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/plugin_browser.lua</source>
+     <source file="modules/project_overview.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/project_overview.lua</source>
+     <source file="modules/script_launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/script_launcher.lua</source>
+     <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
+     <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
+     <changelog><![CDATA[
+     v0.1.0:
+     + Initial release of modular shell
+     + Project Overview
+     + Action Browser
+     + Script Launcher
+     + Track Recall
+     + Automation Item Manager
+     + Control Room
+     + Instrument Rack
+     + FX Chain Builder
+     + Notes
+     + Plugin Browser
+     + Media Browser
+     + Color Studio
+]]></changelog>
+     </version>
+     </reapack>
+ </category>
+
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
     <version name="3.0.1" author="TouristKiller" time="2026-05-22T12:15:00Z">

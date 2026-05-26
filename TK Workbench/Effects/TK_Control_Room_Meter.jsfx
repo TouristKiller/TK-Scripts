@@ -1,0 +1,345 @@
+desc:TK Control Room Meter
+author:TouristKiller
+version:0.2
+
+in_pin:Left
+in_pin:Right
+out_pin:Left
+out_pin:Right
+
+slider1:1<0,1,1{Off,On}>Run
+slider2:0<0,1,1{Off,Reset}>Reset
+slider3:400<100,1000,10>Momentary Window (ms)
+slider4:3000<1000,10000,100>Short-Term Window (ms)
+slider5:-100<-100,12,0.1>-Momentary Max (LUFS)
+slider6:-100<-100,12,0.1>-Short-Term (LUFS)
+slider7:-100<-100,12,0.1>-Integrated (LUFS)
+slider8:0<0,60,0.1>-Range (LU)
+slider9:-100<-100,12,0.1>-True Peak (dBTP)
+slider10:0<0,86400,1>-Time (s)
+slider11:-100<-100,12,0.1>-Momentary (LUFS)
+slider12:-100<-100,12,0.1>-Sample Peak (dB)
+
+@init
+floor_db = -100;
+bins_per_db = 10;
+db_per_bin = 0.1;
+num_bins = 1024;
+last_reset = slider2;
+last_srate = srate;
+
+function power_to_lufs(power)
+(
+  power > 0.000000000001 ? -0.691 + 10 * log10(power) : floor_db;
+);
+
+function amp_to_db(amp)
+(
+  amp > 0.0000001 ? 20 * log10(amp) : floor_db;
+);
+
+function cubic_peak(y0, y1, y2, y3, t)
+  local(t2 t3 y)
+(
+  t2 = t * t;
+  t3 = t2 * t;
+  y = 0.5 * ((2 * y1) + (-y0 + y2) * t + (2 * y0 - 5 * y1 + 4 * y2 - y3) * t2 + (-y0 + 3 * y1 - 3 * y2 + y3) * t3);
+  abs(y);
+);
+
+function bq_set_shelf()
+  local(db f0 Q K Vh Vb a0)
+  instance(b0 b1 b2 a1 a2 z1 z2)
+(
+  db = 3.999843853973347;
+  f0 = 1681.974450955533;
+  Q = 0.7071752369554196;
+  K = tan($pi * f0 / srate);
+  Vh = pow(10, db / 20);
+  Vb = pow(Vh, 0.4996667741545416);
+  a0 = 1 + K / Q + K * K;
+  a1 = 2 * (K * K - 1) / a0;
+  a2 = (1 - K / Q + K * K) / a0;
+  b0 = (Vh + Vb * K / Q + K * K) / a0;
+  b1 = 2 * (K * K - Vh) / a0;
+  b2 = (Vh - Vb * K / Q + K * K) / a0;
+  z1 = 0;
+  z2 = 0;
+);
+
+function bq_set_highpass()
+  local(f0 Q K a0)
+  instance(b0 b1 b2 a1 a2 z1 z2)
+(
+  f0 = 38.13547087602444;
+  Q = 0.5003270373238773;
+  K = tan($pi * f0 / srate);
+  a0 = 1 + K / Q + K * K;
+  a1 = 2 * (K * K - 1) / a0;
+  a2 = (1 - K / Q + K * K) / a0;
+  b0 = 1;
+  b1 = -2;
+  b2 = 1;
+  z1 = 0;
+  z2 = 0;
+);
+
+function bq_process(x)
+  local(y)
+  instance(b0 b1 b2 a1 a2 z1 z2)
+(
+  y = b0 * x + z1;
+  z1 = b1 * x - a1 * y + z2;
+  z2 = b2 * x - a2 * y;
+  y;
+);
+
+function init_filters()
+(
+  l_shelf.bq_set_shelf();
+  l_hp.bq_set_highpass();
+  r_shelf.bq_set_shelf();
+  r_hp.bq_set_highpass();
+);
+
+function init_buffers()
+(
+  momentary_size = max(1, floor(srate * 0.4));
+  short_size = max(1, floor(srate * 3));
+  update_size = max(1, floor(srate * 0.1));
+  momentary_base = 0;
+  short_base = momentary_base + momentary_size + 16;
+  integrated_count_base = short_base + short_size + 16;
+  integrated_sum_base = integrated_count_base + num_bins + 16;
+  lra_count_base = integrated_sum_base + num_bins + 16;
+  memset(momentary_base, 0, momentary_size);
+  memset(short_base, 0, short_size);
+  memset(integrated_count_base, 0, num_bins);
+  memset(integrated_sum_base, 0, num_bins);
+  memset(lra_count_base, 0, num_bins);
+);
+
+function reset_meter()
+(
+  init_filters();
+  init_buffers();
+  momentary_sum = 0;
+  short_sum = 0;
+  momentary_pos = 0;
+  short_pos = 0;
+  momentary_count = 0;
+  short_count = 0;
+  update_counter = 0;
+  momentary_lufs = floor_db;
+  short_lufs = floor_db;
+  integrated_lufs = floor_db;
+  momentary_max = floor_db;
+  lra_value = 0;
+  integrated_abs_sum = 0;
+  integrated_abs_count = 0;
+  lra_abs_sum = 0;
+  lra_abs_count = 0;
+  true_peak = 0;
+  sample_peak = 0;
+  elapsed_samples = 0;
+  tp_l0 = 0;
+  tp_l1 = 0;
+  tp_l2 = 0;
+  tp_r0 = 0;
+  tp_r1 = 0;
+  tp_r2 = 0;
+  slider5 = floor_db;
+  slider6 = floor_db;
+  slider7 = floor_db;
+  slider8 = 0;
+  slider9 = floor_db;
+  slider10 = 0;
+  slider11 = floor_db;
+  slider12 = floor_db;
+);
+
+function add_integrated_window(db, power)
+  local(bin)
+(
+  db > -70 ? (
+    bin = floor((db + 70) * bins_per_db);
+    bin < 0 ? bin = 0;
+    bin >= num_bins ? bin = num_bins - 1;
+    integrated_abs_sum += power;
+    integrated_abs_count += 1;
+    integrated_count_base[bin] += 1;
+    integrated_sum_base[bin] += power;
+  );
+);
+
+function calculate_integrated()
+  local(abs_db gate_bin bin sum count)
+(
+  integrated_abs_count > 0 ? (
+    abs_db = power_to_lufs(integrated_abs_sum / integrated_abs_count);
+    gate_bin = floor((abs_db - 10 + 70) * bins_per_db);
+    gate_bin < 0 ? gate_bin = 0;
+    gate_bin >= num_bins ? gate_bin = num_bins - 1;
+    sum = 0;
+    count = 0;
+    bin = gate_bin;
+    loop(num_bins - gate_bin,
+      count += integrated_count_base[bin];
+      sum += integrated_sum_base[bin];
+      bin += 1;
+    );
+    integrated_lufs = sum > 0 && count > 0 ? power_to_lufs(sum / count) : floor_db;
+  );
+);
+
+function add_lra_window(db, power)
+  local(bin)
+(
+  db > -70 ? (
+    bin = floor((db + 70) * bins_per_db);
+    bin < 0 ? bin = 0;
+    bin >= num_bins ? bin = num_bins - 1;
+    lra_abs_sum += power;
+    lra_abs_count += 1;
+    lra_count_base[bin] += 1;
+  );
+);
+
+function calculate_lra()
+  local(abs_db gate_bin bin count low_target high_target low_count high_count low_bin high_bin)
+(
+  lra_abs_count >= 20 ? (
+    abs_db = power_to_lufs(lra_abs_sum / lra_abs_count);
+    gate_bin = floor((abs_db - 20 + 70) * bins_per_db);
+    gate_bin < 0 ? gate_bin = 0;
+    gate_bin >= num_bins ? gate_bin = num_bins - 1;
+    count = 0;
+    bin = gate_bin;
+    loop(num_bins - gate_bin,
+      count += lra_count_base[bin];
+      bin += 1;
+    );
+    count >= 20 ? (
+      low_target = count * 0.10;
+      high_target = count * 0.05;
+      low_count = 0;
+      bin = gate_bin;
+      while(bin < num_bins && low_count < low_target)
+      (
+        low_count += lra_count_base[bin];
+        bin += 1;
+      );
+      low_bin = max(gate_bin, bin - 1);
+      high_count = 0;
+      bin = num_bins - 1;
+      while(bin >= gate_bin && high_count < high_target)
+      (
+        high_count += lra_count_base[bin];
+        bin -= 1;
+      );
+      high_bin = min(num_bins - 1, bin + 1);
+      lra_value = max(0, (high_bin - low_bin) * db_per_bin);
+    );
+  );
+);
+
+function update_outputs()
+  local(m_power s_power tp_db sample_db)
+(
+  momentary_count >= momentary_size ? (
+    m_power = momentary_sum / momentary_size;
+    momentary_lufs = power_to_lufs(m_power);
+    momentary_max = max(momentary_max, momentary_lufs);
+    add_integrated_window(momentary_lufs, m_power);
+    calculate_integrated();
+  );
+  short_count >= short_size ? (
+    s_power = short_sum / short_size;
+    short_lufs = power_to_lufs(s_power);
+    add_lra_window(short_lufs, s_power);
+    calculate_lra();
+  );
+  tp_db = amp_to_db(true_peak);
+  sample_db = amp_to_db(sample_peak);
+  slider5 = momentary_max;
+  slider6 = short_lufs;
+  slider7 = integrated_lufs;
+  slider8 = lra_value;
+  slider9 = tp_db;
+  slider10 = elapsed_samples / max(1, srate);
+  slider11 = momentary_lufs;
+  slider12 = sample_db;
+  sliderchange(slider5);
+  sliderchange(slider6);
+  sliderchange(slider7);
+  sliderchange(slider8);
+  sliderchange(slider9);
+  sliderchange(slider10);
+  sliderchange(slider11);
+  sliderchange(slider12);
+);
+
+reset_meter();
+
+@slider
+reset_needed = 0;
+slider3 = 400;
+slider4 = 3000;
+(last_srate != srate) ? (
+  last_srate = srate;
+  reset_needed = 1;
+);
+slider2 >= 0.5 ? reset_needed = 1;
+last_reset = slider2;
+reset_needed ? (
+  reset_meter();
+  update_outputs();
+  slider2 = 0;
+  sliderchange(slider2);
+  last_reset = slider2;
+);
+
+@sample
+slider1 >= 0.5 ? (
+  l = spl0;
+  r = spl1;
+  sample_peak = max(sample_peak, max(abs(l), abs(r)));
+  true_peak = max(true_peak, sample_peak);
+  true_peak = max(true_peak, cubic_peak(tp_l0, tp_l1, tp_l2, l, 0.25));
+  true_peak = max(true_peak, cubic_peak(tp_l0, tp_l1, tp_l2, l, 0.50));
+  true_peak = max(true_peak, cubic_peak(tp_l0, tp_l1, tp_l2, l, 0.75));
+  true_peak = max(true_peak, cubic_peak(tp_r0, tp_r1, tp_r2, r, 0.25));
+  true_peak = max(true_peak, cubic_peak(tp_r0, tp_r1, tp_r2, r, 0.50));
+  true_peak = max(true_peak, cubic_peak(tp_r0, tp_r1, tp_r2, r, 0.75));
+  tp_l0 = tp_l1;
+  tp_l1 = tp_l2;
+  tp_l2 = l;
+  tp_r0 = tp_r1;
+  tp_r1 = tp_r2;
+  tp_r2 = r;
+
+  kl = l_hp.bq_process(l_shelf.bq_process(l));
+  kr = r_hp.bq_process(r_shelf.bq_process(r));
+  p = kl * kl + kr * kr;
+
+  old_m = momentary_base[momentary_pos];
+  momentary_sum += p - old_m;
+  momentary_base[momentary_pos] = p;
+  momentary_pos += 1;
+  momentary_pos >= momentary_size ? momentary_pos = 0;
+  momentary_count < momentary_size ? momentary_count += 1;
+
+  old_s = short_base[short_pos];
+  short_sum += p - old_s;
+  short_base[short_pos] = p;
+  short_pos += 1;
+  short_pos >= short_size ? short_pos = 0;
+  short_count < short_size ? short_count += 1;
+
+  elapsed_samples += 1;
+  update_counter += 1;
+  update_counter >= update_size ? (
+    update_counter = 0;
+    update_outputs();
+  );
+);
