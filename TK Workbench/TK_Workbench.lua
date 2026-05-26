@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.1
+-- @version 0.1.2
 -- @changelog:
+-- v0.1.2
+--   + Added support for secondary Workbench launchers with separate script name and config file
+-- v0.1.1
 --   + Home: Added drag-and-drop module tile reordering with matching module dropdown order
 --   + Instrument Rack: Added MIDI learn and hardware control support for rack macros
 --   + Instrument Rack: Added absolute, relative, invert, range calibration, and sensitivity options for macro MIDI control
@@ -15,7 +18,7 @@
 
 local r = reaper
 
-local SCRIPT_NAME = "TK Workbench"
+local SCRIPT_NAME = rawget(_G, "TK_WORKBENCH_SCRIPT_NAME") or "TK Workbench"
 if not r.ImGui_CreateContext then
   r.ShowMessageBox("ReaImGui is required for TK Workbench.", SCRIPT_NAME, 0)
   return
@@ -32,7 +35,8 @@ local ModuleLoader = require("core.module_loader")
 local UI = require("core.ui")
 
 local ctx = r.ImGui_CreateContext(SCRIPT_NAME)
-local config_path = script_path .. "config.json"
+local config_name = rawget(_G, "TK_WORKBENCH_CONFIG_NAME") or "config.json"
+local config_path = script_path .. config_name
 local settings = Settings.load(config_path)
 
 local app = {

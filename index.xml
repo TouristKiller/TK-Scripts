@@ -33,8 +33,9 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-     <version name="0.1.1" author="TouristKiller" time="2026-05-26T21:30:00Z">
+    <version name="0.1.2" author="TouristKiller" time="2026-05-26T22:20:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
+     <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/json.lua</source>
      <source file="core/media_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/media_categorizer.lua</source>
      <source file="core/meter_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/meter_engine.lua</source>
@@ -58,6 +59,10 @@
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <changelog><![CDATA[
+    v0.1.2:
+    + Added TK Workbench 2 as a secondary main action with separate config_2.json
+    + Added support for secondary Workbench launchers with separate script name and config file
+
      v0.1.1:
     + Home: Added drag-and-drop module tile reordering with matching module dropdown order
     + Instrument Rack: Added MIDI learn and hardware control support for rack macros
