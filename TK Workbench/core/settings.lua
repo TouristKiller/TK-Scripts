@@ -9,6 +9,7 @@ local defaults = {
   window_height = 760,
   show_status = true,
   hide_scrollbars = false,
+  module_order = {},
   theme_preset = "Graphite",
   custom_themes = {},
   custom_theme_name = "My Theme",

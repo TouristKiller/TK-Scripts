@@ -1,20 +1,17 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.0
+-- @version 0.1.1
 -- @changelog:
---   + Initial release of modular shell 
---   + Project Overview
---   + Action Browser
---   + Script Launcher
---   + Track Recall
---   + Automation Item Manager
---   + Control Room
---   + Instrument Rack
---   + FX Chain Builder
---   + Notes
---   + Plugin Browser
---   + Media Browser
---   + Color Studio
+--   + Home: Added drag-and-drop module tile reordering with matching module dropdown order
+--   + Instrument Rack: Added MIDI learn and hardware control support for rack macros
+--   + Instrument Rack: Added absolute, relative, invert, range calibration, and sensitivity options for macro MIDI control
+--   + Instrument Rack: Added global rack macro footer with 8 macro controls
+--   + Instrument Rack: Added Assign to Macro workflow from pinned parameter controls
+--   + Instrument Rack: Added project-persistent macro assignments with range and invert support
+--   + Script Launcher: Added Capture Window for thumbnail screenshot capture
+--   + Script Launcher: Added right-click context menu with Edit and Delete
+--   + Script Launcher: Stabilized context-menu edit flow
+
 
 local r = reaper
 
@@ -56,6 +53,7 @@ local app = {
 app.cache.saved_theme_preset = settings.theme_preset or "Graphite"
 
 local HOME_MODULE_ID = "__home"
+local MODULE_REORDER_PAYLOAD = "TK_WORKBENCH_MODULE_REORDER"
 
 local module_names = {
   "project_overview",
@@ -96,6 +94,64 @@ local function save_settings()
 end
 
 app.save_settings = save_settings
+
+local function find_module_index_by_id(id)
+  for index, module in ipairs(app.modules) do
+    if module.id == id then return index end
+  end
+  return nil
+end
+
+local function normalize_module_order()
+  local loaded = {}
+  for _, module in ipairs(app.modules) do loaded[module.id] = true end
+  local order = type(app.settings.module_order) == "table" and app.settings.module_order or {}
+  local normalized = {}
+  local used = {}
+  for _, id in ipairs(order) do
+    if loaded[id] and not used[id] then
+      normalized[#normalized + 1] = id
+      used[id] = true
+    end
+  end
+  for _, module in ipairs(app.modules) do
+    if not used[module.id] then
+      normalized[#normalized + 1] = module.id
+      used[module.id] = true
+    end
+  end
+  app.settings.module_order = normalized
+  return normalized
+end
+
+local function save_module_order()
+  local order = {}
+  for _, module in ipairs(app.modules) do order[#order + 1] = module.id end
+  app.settings.module_order = order
+  save_settings()
+end
+
+local function apply_module_order()
+  local order = normalize_module_order()
+  local rank = {}
+  for index, id in ipairs(order) do rank[id] = index end
+  table.sort(app.modules, function(left, right)
+    return (rank[left.id] or 9999) < (rank[right.id] or 9999)
+  end)
+end
+
+local function move_module_to_target(source_id, target_id)
+  if not source_id or not target_id or source_id == target_id then return false end
+  local source_index = find_module_index_by_id(source_id)
+  local target_index = find_module_index_by_id(target_id)
+  if not source_index or not target_index then return false end
+  local item = table.remove(app.modules, source_index)
+  target_index = find_module_index_by_id(target_id) or target_index
+  table.insert(app.modules, target_index, item)
+  save_module_order()
+  app.status = "Module order updated"
+  return true
+end
 
 local function is_home_active()
   return app.settings.active_module == HOME_MODULE_ID
@@ -286,8 +342,22 @@ local function draw_module_card(module, card_width, card_height)
     end
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
+  if r.ImGui_BeginDragDropSource and r.ImGui_SetDragDropPayload then
+    local source_flags = r.ImGui_DragDropFlags_SourceNoPreviewTooltip and r.ImGui_DragDropFlags_SourceNoPreviewTooltip() or 0
+    if r.ImGui_BeginDragDropSource(ctx, source_flags) then
+      r.ImGui_SetDragDropPayload(ctx, MODULE_REORDER_PAYLOAD, module.id)
+      r.ImGui_Text(ctx, title)
+      r.ImGui_EndDragDropSource(ctx)
+    end
+  end
+  if r.ImGui_BeginDragDropTarget and r.ImGui_AcceptDragDropPayload and r.ImGui_BeginDragDropTarget(ctx) then
+    r.ImGui_DrawList_AddRect(draw_list, x1 + 2, y1 + 2, x2 - 2, y2 - 2, Theme.colors.accent, 6, 0, 2)
+    local ok, payload = r.ImGui_AcceptDragDropPayload(ctx, MODULE_REORDER_PAYLOAD)
+    if ok and payload and payload ~= module.id then app.cache.pending_module_reorder = { source = payload, target = module.id } end
+    r.ImGui_EndDragDropTarget(ctx)
+  end
   if clicked then set_active_view(module.id) end
-  if hovered then r.ImGui_SetTooltip(ctx, title) end
+  if hovered then r.ImGui_SetTooltip(ctx, title .. "\nDrag to reorder") end
   r.ImGui_PopID(ctx)
 end
 
@@ -309,6 +379,11 @@ local function draw_home_view()
     for index, module in ipairs(app.modules) do
       draw_module_card(module, card_w, card_h)
       if index % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
+    end
+    local pending = app.cache.pending_module_reorder
+    if pending then
+      app.cache.pending_module_reorder = nil
+      move_module_to_target(pending.source, pending.target)
     end
     r.ImGui_EndChild(ctx)
   end
@@ -643,6 +718,7 @@ local function loop()
 end
 
 ModuleLoader.load(app, module_names)
+apply_module_order()
 if app.settings.active_module ~= HOME_MODULE_ID and not app.modules_by_id[app.settings.active_module] and app.modules[1] then
   app.settings.active_module = app.modules[1].id
   save_settings()

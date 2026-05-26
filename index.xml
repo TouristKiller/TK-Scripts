@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-     <version name="0.1.0" author="TouristKiller" time="2026-05-26T15:30:00Z">
+     <version name="0.1.1" author="TouristKiller" time="2026-05-26T21:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/json.lua</source>
      <source file="core/media_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/media_categorizer.lua</source>
@@ -58,6 +58,17 @@
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <changelog><![CDATA[
+     v0.1.1:
+    + Home: Added drag-and-drop module tile reordering with matching module dropdown order
+    + Instrument Rack: Added MIDI learn and hardware control support for rack macros
+    + Instrument Rack: Added absolute, relative, invert, range calibration, and sensitivity options for macro MIDI control
+    + Instrument Rack: Added global rack macro footer with 8 macro controls
+    + Instrument Rack: Added Assign to Macro workflow from pinned parameter controls
+    + Instrument Rack: Added project-persistent macro assignments with range and invert support
+    + Script Launcher: Added Capture Window for thumbnail screenshot capture
+    + Script Launcher: Added right-click context menu with Edit and Delete
+    + Script Launcher: Stabilized context-menu edit flow
+     
      v0.1.0:
      + Initial release of modular shell
      + Project Overview

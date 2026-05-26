@@ -13,14 +13,20 @@ local M = {
 local defaults = {
   search_term = "",
   show_labels = true,
-  sort_mode = "name"
+  sort_mode = "name",
+  max_textures_per_frame = 12,
+  max_cached_textures = 120,
+  min_cached_textures = 40,
+  texture_ttl_seconds = 300
 }
 
 local state = {
   entries = {},
   filtered = {},
   data_path = "",
+  thumbs_dir = "",
   image_cache = {},
+  texture_load_queue = {},
   loaded = false,
   dirty_filter = true,
   edit_index = nil,
@@ -28,7 +34,10 @@ local state = {
   form_name = "",
   form_cmd = "",
   form_thumb = "",
-  form_label = ""
+  form_label = "",
+  capture_window_list = {},
+  capture_target_name = "",
+  pending_edit_index = nil
 }
 
 local function copy_default(value)
@@ -57,6 +66,11 @@ local function now()
   return os.time()
 end
 
+local function precise_now()
+  if r.time_precise then return r.time_precise() end
+  return os.clock()
+end
+
 local function file_exists(path)
   local file = io.open(path, "rb")
   if file then file:close(); return true end
@@ -81,6 +95,33 @@ local function write_json(path, value)
   return true
 end
 
+local function os_separator()
+  return package.config and package.config:sub(1, 1) or "\\"
+end
+
+local function join_path(base, leaf)
+  if not base or base == "" then return leaf or "" end
+  if not leaf or leaf == "" then return base end
+  local sep = os_separator()
+  if base:sub(-1) == sep or base:sub(-1) == "/" or base:sub(-1) == "\\" then
+    return base .. leaf
+  end
+  return base .. sep .. leaf
+end
+
+local function ensure_dir(path)
+  if not path or path == "" then return false end
+  if r.file_exists and r.file_exists(path) then return true end
+  local ok = r.RecursiveCreateDirectory and r.RecursiveCreateDirectory(path, 0)
+  return ok and true or false
+end
+
+local function sanitize_name(name)
+  local value = tostring(name or ""):gsub("[^%w%s-]", "_"):match("^%s*(.-)%s*$")
+  if value == "" then value = "screenshot_" .. tostring(now()) end
+  return value
+end
+
 local function normalize_entry(entry, index)
   if type(entry) ~= "table" then return nil end
   local cmd = tostring(entry.cmd or ""):match("^%s*(.-)%s*$")
@@ -101,6 +142,8 @@ end
 
 local function load_entries(app)
   state.data_path = (app.script_path or "") .. "script_launcher.json"
+  state.thumbs_dir = join_path(app.script_path or "", "ScriptThumbnails")
+  ensure_dir(state.thumbs_dir)
   state.entries = {}
   local content = read_text(state.data_path)
   if content and content ~= "" then
@@ -115,6 +158,74 @@ local function load_entries(app)
   end
   state.loaded = true
   state.dirty_filter = true
+end
+
+local function get_visible_windows()
+  if not (r.JS_Window_ListAllTop and r.JS_Window_HandleFromAddress and r.JS_Window_IsVisible and r.JS_Window_GetTitle) then
+    return nil
+  end
+  local windows = {}
+  local _, list = r.JS_Window_ListAllTop()
+  if not list or list == "" then return windows end
+  local main_hwnd = r.GetMainHwnd and r.GetMainHwnd() or nil
+  for addr_str in list:gmatch("[^,]+") do
+    local hwnd = r.JS_Window_HandleFromAddress(addr_str)
+    if not hwnd then
+      hwnd = r.JS_Window_HandleFromAddress(tonumber(addr_str))
+    end
+    if hwnd and hwnd ~= main_hwnd and r.JS_Window_IsVisible(hwnd) then
+      local title = r.JS_Window_GetTitle(hwnd)
+      if title and title ~= "" and not title:match("^TK FX BROWSER") then
+        windows[#windows + 1] = { hwnd = hwnd, title = title }
+      end
+    end
+  end
+  table.sort(windows, function(left, right) return left.title:lower() < right.title:lower() end)
+  return windows
+end
+
+local function is_osx()
+  local platform = r.GetOS and r.GetOS() or ""
+  return platform:match("OSX") or platform:match("macOS")
+end
+
+local function capture_window_screenshot(hwnd, save_name)
+  if not hwnd then return nil end
+  if not ensure_dir(state.thumbs_dir) then return nil end
+  local safe_name = sanitize_name(save_name)
+  local filename = join_path(state.thumbs_dir, safe_name .. ".png")
+  if is_osx() and r.JS_Window_GetRect then
+    local ok, left, top, right, bottom = r.JS_Window_GetRect(hwnd)
+    local w = (right or 0) - (left or 0)
+    local h = (bottom or 0) - (top or 0)
+    if ok and w > 0 and h > 0 then
+      local command = string.format('screencapture -x -R %d,%d,%d,%d -t png "%s"', left, top, w, h, filename)
+      os.execute(command)
+      if file_exists(filename) then return filename end
+    end
+    return nil
+  end
+  if not (r.JS_Window_GetClientRect and r.JS_GDI_GetClientDC and r.JS_LICE_CreateBitmap and r.JS_LICE_GetDC and r.JS_GDI_Blit and r.JS_LICE_WritePNG and r.JS_GDI_ReleaseDC and r.JS_LICE_DestroyBitmap) then
+    return nil
+  end
+  local ok, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+  if not ok then return nil end
+  local w, h = right - left, bottom - top
+  if w <= 0 or h <= 0 then return nil end
+  local src_dc = r.JS_GDI_GetClientDC(hwnd)
+  if not src_dc then return nil end
+  local src_bmp = r.JS_LICE_CreateBitmap(true, w, h)
+  if not src_bmp then
+    r.JS_GDI_ReleaseDC(hwnd, src_dc)
+    return nil
+  end
+  local src_dc_lice = r.JS_LICE_GetDC(src_bmp)
+  r.JS_GDI_Blit(src_dc_lice, 0, 0, src_dc, 0, 0, w, h)
+  r.JS_LICE_WritePNG(filename, src_bmp, false)
+  r.JS_GDI_ReleaseDC(hwnd, src_dc)
+  r.JS_LICE_DestroyBitmap(src_bmp)
+  if file_exists(filename) then return filename end
+  return nil
 end
 
 local function save_entries()
@@ -190,17 +301,85 @@ end
 local function clear_image_cache()
   for _, entry in pairs(state.image_cache) do destroy_texture(entry.texture) end
   state.image_cache = {}
+  state.texture_load_queue = {}
+end
+
+local function get_cached_texture(path)
+  local cached = state.image_cache[path]
+  if not cached then return nil end
+  cached.last_used = precise_now()
+  return cached.texture
+end
+
+local function queue_texture(path)
+  if not path or path == "" then return end
+  if state.image_cache[path] or state.texture_load_queue[path] then return end
+  state.texture_load_queue[path] = precise_now()
 end
 
 local function load_texture(ctx, path)
   if not path or path == "" or not file_exists(path) or not r.ImGui_CreateImage then return nil end
-  local cached = state.image_cache[path]
-  if cached then return cached.texture end
-  local ok, texture = pcall(r.ImGui_CreateImage, path)
-  if not ok or not texture then return nil end
-  if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, texture) end
-  state.image_cache[path] = { texture = texture }
-  return texture
+  local texture = get_cached_texture(path)
+  if texture then return texture end
+  queue_texture(path)
+  return nil
+end
+
+local function process_texture_load_queue(ctx, settings)
+  if not r.ImGui_CreateImage then
+    state.texture_load_queue = {}
+    return
+  end
+  local max_per_frame = math.max(1, tonumber(settings.max_textures_per_frame) or 12)
+  local loaded = 0
+  for path in pairs(state.texture_load_queue) do
+    if loaded >= max_per_frame then break end
+    state.texture_load_queue[path] = nil
+    if file_exists(path) and not state.image_cache[path] then
+      local ok, texture = pcall(r.ImGui_CreateImage, path)
+      if ok and texture then
+        if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, texture) end
+        state.image_cache[path] = { texture = texture, last_used = precise_now() }
+      end
+    end
+    loaded = loaded + 1
+  end
+end
+
+local function trim_image_cache(settings)
+  local max_cached = math.max(1, tonumber(settings.max_cached_textures) or 120)
+  local min_cached = math.max(0, tonumber(settings.min_cached_textures) or 40)
+  if min_cached > max_cached then min_cached = max_cached end
+  local ttl = math.max(1, tonumber(settings.texture_ttl_seconds) or 300)
+  local current_time = precise_now()
+  local keys = {}
+  local count = 0
+  for path, entry in pairs(state.image_cache) do
+    count = count + 1
+    if current_time - (entry.last_used or current_time) > ttl and count > min_cached then
+      keys[#keys + 1] = path
+    end
+  end
+  if count > max_cached then
+    local all = {}
+    for path, entry in pairs(state.image_cache) do
+      all[#all + 1] = { path = path, last_used = entry.last_used or 0 }
+    end
+    table.sort(all, function(left, right) return left.last_used < right.last_used end)
+    local remove_needed = count - max_cached
+    for index = 1, remove_needed do
+      local item = all[index]
+      if item then keys[#keys + 1] = item.path end
+    end
+  end
+  local removed = {}
+  for _, path in ipairs(keys) do
+    if not removed[path] and state.image_cache[path] then
+      destroy_texture(state.image_cache[path].texture)
+      state.image_cache[path] = nil
+      removed[path] = true
+    end
+  end
 end
 
 local function begin_form(mode, index, entry)
@@ -241,6 +420,8 @@ local function choose_thumbnail()
   return nil
 end
 
+local draw_capture_popup
+
 local function draw_form_popup(app)
   local ctx = app.ctx
   local title = state.popup_mode == "edit" and "Edit Script" or "Add Script"
@@ -266,6 +447,20 @@ local function draw_form_popup(app)
   if r.ImGui_Button(ctx, "Choose##script_launcher_thumb") then
     local path = choose_thumbnail()
     if path then state.form_thumb = path end
+  end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "Capture Window##script_launcher_capture") then
+    local windows = get_visible_windows()
+    if windows == nil then
+      app.status = "Capture requires js_ReaScriptAPI"
+    else
+      state.capture_window_list = windows
+      state.capture_target_name = state.form_name ~= "" and state.form_name or state.form_cmd
+      r.ImGui_OpenPopup(ctx, "SelectCaptureWindow")
+      if #windows == 0 then
+        app.status = "No visible windows found to capture"
+      end
+    end
   end
   changed, value = r.ImGui_InputText(ctx, "Label", state.form_label or "")
   if changed then state.form_label = value end
@@ -324,6 +519,42 @@ local function draw_form_popup(app)
   if not can_save then
     r.ImGui_TextColored(ctx, Theme.colors.warning, command_exists_elsewhere(cmd, state.edit_index) and "Command already exists" or "Name and command are required")
   end
+  if draw_capture_popup then draw_capture_popup(app) end
+  r.ImGui_EndPopup(ctx)
+end
+
+draw_capture_popup = function(app)
+  local ctx = app.ctx
+  if not r.ImGui_BeginPopup(ctx, "SelectCaptureWindow") then return end
+  r.ImGui_Text(ctx, "Select window to capture")
+  r.ImGui_Separator(ctx)
+  if #state.capture_window_list == 0 then
+    r.ImGui_Text(ctx, "(no visible windows found)")
+  else
+    for index, win in ipairs(state.capture_window_list) do
+      if r.ImGui_Selectable(ctx, tostring(win.title or "") .. "##script_launcher_cap_" .. tostring(index)) then
+        local target_name = state.capture_target_name ~= "" and state.capture_target_name or tostring(win.title or "")
+        local path = capture_window_screenshot(win.hwnd, target_name)
+        if path then
+          state.form_thumb = path
+          clear_image_cache()
+          app.status = "Screenshot captured"
+        else
+          app.status = "Screenshot capture failed"
+        end
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+    end
+  end
+  r.ImGui_Separator(ctx)
+  if r.ImGui_Button(ctx, "Refresh##script_launcher_cap_refresh") then
+    local windows = get_visible_windows()
+    state.capture_window_list = windows or {}
+  end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "Cancel##script_launcher_cap_cancel") then
+    r.ImGui_CloseCurrentPopup(ctx)
+  end
   r.ImGui_EndPopup(ctx)
 end
 
@@ -363,9 +594,19 @@ local function draw_entry_card(app, item, width, height)
   r.ImGui_DrawList_AddText(draw_list, x + 6, y + image_h + 4, Theme.colors.text, label)
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then execute_entry(app, entry) end
-  if r.ImGui_IsItemClicked(ctx, 1) then
-    begin_form("edit", item.index, entry)
-    r.ImGui_OpenPopup(ctx, "Edit Script")
+  if r.ImGui_BeginPopupContextItem(ctx, "##script_launcher_tile_ctx") then
+    if r.ImGui_Selectable(ctx, "Edit") then
+      state.pending_edit_index = item.index
+      r.ImGui_CloseCurrentPopup(ctx)
+    end
+    if r.ImGui_Selectable(ctx, "Delete") then
+      table.remove(state.entries, item.index)
+      save_entries()
+      state.dirty_filter = true
+      app.status = "Deleted launcher item"
+      r.ImGui_CloseCurrentPopup(ctx)
+    end
+    r.ImGui_EndPopup(ctx)
   end
   if hovered then r.ImGui_SetTooltip(ctx, tostring(entry.cmd or "")) end
 end
@@ -462,7 +703,16 @@ function M.draw(app)
   r.ImGui_SetNextItemWidth(ctx, search_w)
   local search_changed, search = r.ImGui_InputTextWithHint(ctx, "##script_launcher_search", "Search scripts", settings.search_term or "")
   if search_changed then settings.search_term = search; state.dirty_filter = true; if app.save_settings then app.save_settings() end end
+  if state.pending_edit_index and state.entries[state.pending_edit_index] then
+    begin_form("edit", state.pending_edit_index, state.entries[state.pending_edit_index])
+    state.pending_edit_index = nil
+    r.ImGui_OpenPopup(ctx, "Edit Script")
+  elseif state.pending_edit_index then
+    state.pending_edit_index = nil
+  end
   draw_form_popup(app)
+  process_texture_load_queue(ctx, settings)
+  trim_image_cache(settings)
   refresh_filter(settings)
   local info_h = UI.info_line_height(ctx)
   local list_h = math.max(80, (avail_h or 300) - button_h - info_h)

@@ -11,6 +11,9 @@ local M = {
 
 local EXT_SECTION = "TK_WORKBENCH_INSTRUMENT_RACK"
 local REC_FX_OFFSET = 0x1000000
+local MAX_PARAM_SLOTS = 8
+local PARAM_SLOT_COLUMNS = 4
+local MACRO_COUNT = 8
 
 local state = {
   screenshot_path = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/Screenshots/",
@@ -22,7 +25,14 @@ local state = {
   collapsed = {},
   drop_mouse_was_down = false,
   last_external_drag = nil,
-  pending_param_action = nil
+  pending_param_action = nil,
+  macro_project = nil,
+  macros = {},
+  macro_assignments = {},
+  macro_name_buffers = {},
+  macro_cc_learn = nil,
+  midi_last_retval = nil,
+  macros_dirty = false
 }
 
 local defaults = {
@@ -36,7 +46,9 @@ local defaults = {
   show_selected_item_fx = false,
   show_ab = false,
   tile_compact = false,
-  body_collapsed = false
+  body_collapsed = false,
+  macro_param_slots = 4,
+  show_macros = true
 }
 
 local function ensure_settings(app)
@@ -49,8 +61,13 @@ local function ensure_settings(app)
       changed = true
     end
   end
+  if settings.macro_param_slots ~= 8 then settings.macro_param_slots = 4 end
   if changed and app.save_settings then app.save_settings() end
   return settings
+end
+
+local function param_slot_count(settings)
+  return settings and tonumber(settings.macro_param_slots) == 8 and 8 or 4
 end
 
 local function validate_track(track)
@@ -211,6 +228,14 @@ local function clean_storage_field(value)
   return tostring(value or ""):gsub("[\t\r\n]", " ")
 end
 
+local function split_storage_fields(line)
+  local fields = {}
+  for field in (tostring(line or "") .. "\t"):gmatch("([^\t]*)\t") do
+    fields[#fields + 1] = field
+  end
+  return fields
+end
+
 local function get_fx_guid(track, fx_index)
   local guid = r.TrackFX_GetFXGUID(track, fx_index)
   if guid and guid ~= "" then return guid end
@@ -244,8 +269,12 @@ local function load_pinned_params()
   local _, content = r.GetProjExtState(project, EXT_SECTION, "pinned_params")
   if not content or content == "" then return end
   for line in content:gmatch("[^\r\n]+") do
-    local track_id, fx_guid, param_idx, param_name, fx_name = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
+    local track_id, fx_guid, param_idx, param_name, fx_name, slot = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+    if not track_id then
+      track_id, fx_guid, param_idx, param_name, fx_name = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
+    end
     param_idx = tonumber(param_idx)
+    slot = tonumber(slot)
     if track_id and track_id ~= "" and fx_guid and fx_guid ~= "" and param_idx then
       state.pinned_params[track_id] = state.pinned_params[track_id] or {}
       state.pinned_params[track_id][param_key(fx_guid, param_idx)] = {
@@ -253,7 +282,8 @@ local function load_pinned_params()
         fx_guid = fx_guid,
         param_idx = param_idx,
         param_name = param_name or "",
-        fx_name = fx_name or ""
+        fx_name = fx_name or "",
+        slot = slot
       }
     end
   end
@@ -275,7 +305,8 @@ local function save_pinned_params()
         clean_storage_field(entry.fx_guid),
         tostring(entry.param_idx),
         clean_storage_field(entry.param_name),
-        clean_storage_field(entry.fx_name)
+        clean_storage_field(entry.fx_name),
+        tostring(tonumber(entry.slot) or "")
       }, "\t")
     end
   end
@@ -283,10 +314,383 @@ local function save_pinned_params()
   r.SetProjExtState(current_project(), EXT_SECTION, "pinned_params", table.concat(lines, "\n"))
 end
 
+local function default_macro_name(slot)
+  return "Macro " .. tostring(slot)
+end
+
+local function ensure_macro_entry(track_id, slot)
+  state.macros[track_id] = state.macros[track_id] or {}
+  if not state.macros[track_id][slot] then
+    state.macros[track_id][slot] = { name = default_macro_name(slot), value = 0 }
+  end
+  return state.macros[track_id][slot]
+end
+
+local function load_macros()
+  local project = current_project()
+  state.macro_project = project
+  state.macros = {}
+  state.macro_assignments = {}
+  state.macro_name_buffers = {}
+  if not r.GetProjExtState then return end
+  local _, defs = r.GetProjExtState(project, EXT_SECTION, "macro_defs")
+  if defs and defs ~= "" then
+    for line in defs:gmatch("[^\r\n]+") do
+      local fields = split_storage_fields(line)
+      local track_id, slot, name, value = fields[1], fields[2], fields[3], fields[4]
+      slot = tonumber(slot)
+      if track_id and track_id ~= "" and slot and slot >= 1 and slot <= MACRO_COUNT then
+        state.macros[track_id] = state.macros[track_id] or {}
+        state.macros[track_id][slot] = {
+          name = name ~= "" and name or default_macro_name(slot),
+          value = math.max(0, math.min(1, tonumber(value) or 0)),
+          cc_channel = tonumber(fields[5]),
+          cc_number = tonumber(fields[6]),
+          cc_device = tonumber(fields[7]),
+          cc_mode = fields[8] ~= "" and fields[8] or nil,
+          cc_invert = fields[9] == "1",
+          cc_min = tonumber(fields[10]),
+          cc_max = tonumber(fields[11]),
+          cc_type = fields[12] ~= "" and fields[12] or "cc",
+          cc_sensitivity = tonumber(fields[13])
+        }
+      end
+    end
+  end
+  local _, assignments = r.GetProjExtState(project, EXT_SECTION, "macro_assignments")
+  if assignments and assignments ~= "" then
+    for line in assignments:gmatch("[^\r\n]+") do
+      local track_id, slot, fx_guid, param_idx, param_name, fx_name, range_min, range_max, inverted = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+      slot = tonumber(slot)
+      param_idx = tonumber(param_idx)
+      if track_id and track_id ~= "" and slot and slot >= 1 and slot <= MACRO_COUNT and fx_guid and fx_guid ~= "" and param_idx then
+        state.macro_assignments[track_id] = state.macro_assignments[track_id] or {}
+        state.macro_assignments[track_id][slot] = state.macro_assignments[track_id][slot] or {}
+        state.macro_assignments[track_id][slot][#state.macro_assignments[track_id][slot] + 1] = {
+          track_guid = track_id,
+          fx_guid = fx_guid,
+          param_idx = param_idx,
+          param_name = param_name or "",
+          fx_name = fx_name or "",
+          range_min = math.max(0, math.min(1, tonumber(range_min) or 0)),
+          range_max = math.max(0, math.min(1, tonumber(range_max) or 1)),
+          inverted = inverted == "1"
+        }
+      end
+    end
+  end
+end
+
+local function ensure_macros_loaded()
+  local project = current_project()
+  if state.macro_project ~= project then load_macros() end
+end
+
+local function save_macros()
+  if not r.SetProjExtState then return end
+  ensure_macros_loaded()
+  local def_lines = {}
+  for track_id, macros in pairs(state.macros) do
+    for slot, macro in pairs(macros) do
+      def_lines[#def_lines + 1] = table.concat({
+        clean_storage_field(track_id),
+        tostring(slot),
+        clean_storage_field(macro.name or default_macro_name(slot)),
+        tostring(math.max(0, math.min(1, tonumber(macro.value) or 0))),
+        tostring(tonumber(macro.cc_channel) or ""),
+        tostring(tonumber(macro.cc_number) or ""),
+        tostring(tonumber(macro.cc_device) or ""),
+        clean_storage_field(macro.cc_mode or ""),
+        macro.cc_invert and "1" or "0",
+        tostring(tonumber(macro.cc_min) or ""),
+        tostring(tonumber(macro.cc_max) or ""),
+        clean_storage_field(macro.cc_type or "cc"),
+        tostring(tonumber(macro.cc_sensitivity) or "")
+      }, "\t")
+    end
+  end
+  table.sort(def_lines)
+  local assignment_lines = {}
+  for track_id, macros in pairs(state.macro_assignments) do
+    for slot, assignments in pairs(macros) do
+      for _, assignment in ipairs(assignments) do
+        assignment_lines[#assignment_lines + 1] = table.concat({
+          clean_storage_field(track_id),
+          tostring(slot),
+          clean_storage_field(assignment.fx_guid),
+          tostring(assignment.param_idx),
+          clean_storage_field(assignment.param_name),
+          clean_storage_field(assignment.fx_name),
+          tostring(tonumber(assignment.range_min) or 0),
+          tostring(tonumber(assignment.range_max) or 1),
+          assignment.inverted and "1" or "0"
+        }, "\t")
+      end
+    end
+  end
+  table.sort(assignment_lines)
+  r.SetProjExtState(current_project(), EXT_SECTION, "macro_defs", table.concat(def_lines, "\n"))
+  r.SetProjExtState(current_project(), EXT_SECTION, "macro_assignments", table.concat(assignment_lines, "\n"))
+end
+
+local function get_macro_assignments(track_id, slot)
+  state.macro_assignments[track_id] = state.macro_assignments[track_id] or {}
+  state.macro_assignments[track_id][slot] = state.macro_assignments[track_id][slot] or {}
+  return state.macro_assignments[track_id][slot]
+end
+
+local function assign_param_to_macro(app, track, fx_index, param_idx, slot)
+  if not validate_track(track) or not fx_index or not param_idx then return end
+  ensure_macros_loaded()
+  local track_id = track_guid(track)
+  local fx_guid = get_fx_guid(track, fx_index)
+  local assignments = get_macro_assignments(track_id, slot)
+  for _, assignment in ipairs(assignments) do
+    if assignment.fx_guid == fx_guid and assignment.param_idx == param_idx then
+      app.status = "Parameter already assigned to " .. default_macro_name(slot)
+      return
+    end
+  end
+  local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
+  local _, param_name = r.TrackFX_GetParamName(track, fx_index, param_idx, "")
+  ensure_macro_entry(track_id, slot)
+  assignments[#assignments + 1] = {
+    track_guid = track_id,
+    fx_guid = fx_guid,
+    param_idx = param_idx,
+    param_name = param_name ~= "" and param_name or ("Param " .. tostring(param_idx)),
+    fx_name = fx_name or "",
+    range_min = 0,
+    range_max = 1,
+    inverted = false
+  }
+  save_macros()
+  app.status = "Assigned " .. (param_name ~= "" and param_name or ("Param " .. tostring(param_idx))) .. " to " .. default_macro_name(slot)
+end
+
+local function format_macro_cc_label(macro)
+  local channel = tonumber(macro and macro.cc_channel)
+  local number = tonumber(macro and macro.cc_number)
+  local event_type = macro and macro.cc_type or "cc"
+  if not channel or not number then return "" end
+  local label = "CC " .. tostring(number)
+  if event_type == "pitch" then label = "Pitch Bend" end
+  if event_type == "channel_pressure" then label = "Channel Pressure" end
+  if event_type == "poly_pressure" then label = "Poly Pressure " .. tostring(number) end
+  label = label .. " Ch " .. tostring(channel)
+  if macro.cc_mode == "relative_twos" then label = label .. " Rel 1/127" end
+  if macro.cc_mode == "relative_offset" or macro.cc_mode == "relative" then label = label .. " Rel 63/65" end
+  if macro.cc_mode == "relative_sign" then label = label .. " Rel 1/65" end
+  if (macro.cc_mode == "relative_twos" or macro.cc_mode == "relative_offset" or macro.cc_mode == "relative" or macro.cc_mode == "relative_sign") and tonumber(macro.cc_sensitivity) and tonumber(macro.cc_sensitivity) ~= 1 then label = label .. " " .. tostring(macro.cc_sensitivity) .. "x" end
+  if (macro.cc_mode == nil or macro.cc_mode == "absolute") and tonumber(macro.cc_min) and tonumber(macro.cc_max) then label = label .. " Range " .. tostring(math.floor(macro.cc_min)) .. "-" .. tostring(math.floor(macro.cc_max)) end
+  if macro.cc_invert then label = label .. " Inverted" end
+  return label
+end
+
+local function macro_has_cc(macro)
+  return tonumber(macro and macro.cc_channel) ~= nil and tonumber(macro and macro.cc_number) ~= nil
+end
+
+local function macro_matches_midi_event(macro, event)
+  if not macro_has_cc(macro) or not event then return false end
+  return (macro.cc_type or "cc") == (event.type or "cc") and tonumber(macro.cc_channel) == event.channel and tonumber(macro.cc_number) == event.number
+end
+
+local function read_recent_midi_ccs()
+  if not r.MIDI_GetRecentInputEvent then return {} end
+  if state.midi_last_retval == nil then
+    state.midi_last_retval = r.MIDI_GetRecentInputEvent(0) or 0
+    return {}
+  end
+  local events = {}
+  local first_retval = nil
+  local index = 0
+  while index < 128 do
+    local retval, rawmsg, tsval, device = r.MIDI_GetRecentInputEvent(index)
+    if index == 0 then first_retval = retval end
+    if retval == 0 or retval == state.midi_last_retval then break end
+    if rawmsg and #rawmsg >= 2 then
+      local status = rawmsg:byte(1)
+      local status_type = status & 0xF0
+      local channel = (status & 0x0F) + 1
+      local data1 = rawmsg:byte(2) or 0
+      local data2 = rawmsg:byte(3) or 0
+      if status_type == 0xB0 then
+        events[#events + 1] = {
+          type = "cc",
+          channel = channel,
+          number = data1,
+          raw_value = data2,
+          max_raw = 127,
+          value = math.max(0, math.min(1, data2 / 127)),
+          device = device,
+          tsval = tsval
+        }
+      elseif status_type == 0xE0 then
+        local raw_value = data1 + data2 * 128
+        events[#events + 1] = {
+          type = "pitch",
+          channel = channel,
+          number = -1,
+          raw_value = raw_value,
+          max_raw = 16383,
+          value = math.max(0, math.min(1, raw_value / 16383)),
+          device = device,
+          tsval = tsval
+        }
+      elseif status_type == 0xD0 then
+        events[#events + 1] = {
+          type = "channel_pressure",
+          channel = channel,
+          number = -2,
+          raw_value = data1,
+          max_raw = 127,
+          value = math.max(0, math.min(1, data1 / 127)),
+          device = device,
+          tsval = tsval
+        }
+      elseif status_type == 0xA0 then
+        events[#events + 1] = {
+          type = "poly_pressure",
+          channel = channel,
+          number = data1,
+          raw_value = data2,
+          max_raw = 127,
+          value = math.max(0, math.min(1, data2 / 127)),
+          device = device,
+          tsval = tsval
+        }
+      end
+    end
+    index = index + 1
+  end
+  if first_retval and first_retval ~= 0 then state.midi_last_retval = first_retval end
+  return events
+end
+
+local function detect_cc_mode(event)
+  return "absolute"
+end
+
+local function relative_cc_delta(raw, mode)
+  raw = tonumber(raw) or 0
+  if mode == "relative_twos" then
+    if raw >= 1 and raw <= 63 then return raw end
+    if raw >= 65 and raw <= 127 then return raw - 128 end
+    return 0
+  end
+  if mode == "relative_sign" then
+    if raw >= 1 and raw <= 63 then return raw end
+    if raw >= 65 and raw <= 127 then return -(raw - 64) end
+    return 0
+  end
+  if raw >= 1 and raw <= 63 then return raw - 64 end
+  if raw >= 65 and raw <= 127 then return raw - 64 end
+  return 0
+end
+
+local function is_macro_cc_relative(macro)
+  local mode = macro and macro.cc_mode
+  return mode == "relative" or mode == "relative_offset" or mode == "relative_twos" or mode == "relative_sign"
+end
+
+local function absolute_cc_value(macro, event)
+  local raw = tonumber(event and event.raw_value) or 0
+  local max_raw = tonumber(event and event.max_raw) or 127
+  local min_value = tonumber(macro.cc_min)
+  local max_value = tonumber(macro.cc_max)
+  local old_min = min_value
+  local old_max = max_value
+  local changed = false
+  if not min_value or raw < min_value then
+    min_value = raw
+    macro.cc_min = raw
+    changed = true
+  end
+  if not max_value or raw > max_value then
+    max_value = raw
+    macro.cc_max = raw
+    changed = true
+  end
+  if changed then state.macros_dirty = true end
+  local old_span = old_min and old_max and old_max - old_min or 0
+  local expanded_range = changed and (raw == min_value or raw == max_value)
+  if old_span >= 8 and not expanded_range then return math.max(0, math.min(1, (raw - old_min) / old_span)) end
+  local span = (max_value or max_raw) - (min_value or 0)
+  if span >= 24 and not expanded_range then return math.max(0, math.min(1, (raw - min_value) / span)) end
+  return math.max(0, math.min(1, raw / max_raw))
+end
+
+local function macro_value_from_cc_event(macro, event)
+  if is_macro_cc_relative(macro) then
+    local mode = macro.cc_mode == "relative" and "relative_offset" or macro.cc_mode
+    local delta = relative_cc_delta(event.raw_value, mode)
+    if macro.cc_invert then delta = -delta end
+    local sensitivity = math.max(0.25, math.min(8, tonumber(macro.cc_sensitivity) or 1))
+    return math.max(0, math.min(1, (tonumber(macro.value) or 0) + delta * sensitivity / 127))
+  end
+  local value = macro and absolute_cc_value(macro, event) or event.value
+  return macro and macro.cc_invert and (1 - value) or value
+end
+
+local function start_macro_cc_learn(app, track, slot)
+  if not r.MIDI_GetRecentInputEvent then
+    app.status = "MIDI input event API not available"
+    return
+  end
+  state.midi_last_retval = r.MIDI_GetRecentInputEvent(0) or 0
+  state.macro_cc_learn = { track_guid = track_guid(track), slot = slot }
+  app.status = "Move a MIDI CC for " .. default_macro_name(slot)
+end
+
+local function normalize_slots_for_fx(track_id, fx_guid)
+  local entries = state.pinned_params[track_id]
+  if not entries then return false end
+  local bucket = {}
+  for _, entry in pairs(entries) do
+    if entry.fx_guid == fx_guid then bucket[#bucket + 1] = entry end
+  end
+  if #bucket == 0 then return false end
+  table.sort(bucket, function(left, right)
+    local left_slot = tonumber(left.slot)
+    local right_slot = tonumber(right.slot)
+    local left_valid = left_slot and left_slot >= 1 and left_slot <= MAX_PARAM_SLOTS
+    local right_valid = right_slot and right_slot >= 1 and right_slot <= MAX_PARAM_SLOTS
+    local left_order = left_valid and left_slot or 999
+    local right_order = right_valid and right_slot or 999
+    if left_order ~= right_order then return left_order < right_order end
+    if left.param_idx ~= right.param_idx then return left.param_idx < right.param_idx end
+    return tostring(left.param_name or "") < tostring(right.param_name or "")
+  end)
+  local used = {}
+  local changed = false
+  for _, entry in ipairs(bucket) do
+    local slot = tonumber(entry.slot)
+    if slot and slot >= 1 and slot <= MAX_PARAM_SLOTS and not used[slot] then
+      used[slot] = true
+    else
+      local assigned = nil
+      for index = 1, MAX_PARAM_SLOTS do
+        if not used[index] then
+          assigned = index
+          break
+        end
+      end
+      if assigned then
+        entry.slot = assigned
+        used[assigned] = true
+        changed = true
+      end
+    end
+  end
+  return changed
+end
+
 local function get_pinned_for_fx(track, fx_index)
   ensure_pinned_params_loaded()
   local track_id = track_guid(track)
   local fx_guid = get_fx_guid(track, fx_index)
+  local changed_slots = normalize_slots_for_fx(track_id, fx_guid)
   local result = {}
   local entries = state.pinned_params[track_id]
   if not entries then return result end
@@ -296,11 +700,18 @@ local function get_pinned_for_fx(track, fx_index)
       result[#result + 1] = entry
     end
   end
-  table.sort(result, function(left, right) return (left.param_name or "") < (right.param_name or "") end)
+  table.sort(result, function(left, right)
+    local left_slot = tonumber(left.slot) or 999
+    local right_slot = tonumber(right.slot) or 999
+    if left_slot ~= right_slot then return left_slot < right_slot end
+    if left.param_idx ~= right.param_idx then return left.param_idx < right.param_idx end
+    return tostring(left.param_name or "") < tostring(right.param_name or "")
+  end)
+  if changed_slots then save_pinned_params() end
   return result
 end
 
-local function pin_parameter(app, track, fx_index, param_idx)
+local function pin_parameter(app, track, fx_index, param_idx, preferred_slot)
   if not validate_track(track) or not param_idx or param_idx < 0 then return end
   ensure_pinned_params_loaded()
   local track_id = track_guid(track)
@@ -311,7 +722,32 @@ local function pin_parameter(app, track, fx_index, param_idx)
     app.status = "Parameter already pinned"
     return
   end
-  if #get_pinned_for_fx(track, fx_index) >= 4 then
+  local settings = ensure_settings(app)
+  local slot_count = param_slot_count(settings)
+  local pinned = get_pinned_for_fx(track, fx_index)
+  local used_slots = {}
+  for _, entry in ipairs(pinned) do
+    local slot = tonumber(entry.slot)
+    if slot and slot >= 1 and slot <= slot_count then used_slots[slot] = true end
+  end
+  local requested_slot = tonumber(preferred_slot)
+  if requested_slot and (requested_slot < 1 or requested_slot > slot_count) then
+    requested_slot = nil
+  end
+  if requested_slot and used_slots[requested_slot] then
+    app.status = "Selected slot is already in use"
+    return
+  end
+  local assigned_slot = requested_slot
+  if not assigned_slot then
+    for index = 1, slot_count do
+      if not used_slots[index] then
+        assigned_slot = index
+        break
+      end
+    end
+  end
+  if not assigned_slot then
     app.status = "Parameter slots are full"
     return
   end
@@ -322,7 +758,8 @@ local function pin_parameter(app, track, fx_index, param_idx)
     fx_guid = fx_guid,
     param_idx = param_idx,
     param_name = param_name or ("Param " .. tostring(param_idx)),
-    fx_name = fx_name or ""
+    fx_name = fx_name or "",
+    slot = assigned_slot
   }
   save_pinned_params()
   app.status = "Pinned " .. (param_name ~= "" and param_name or ("Param " .. tostring(param_idx)))
@@ -421,6 +858,15 @@ local function draw_param_context_menu(app, ctx, track, fx_index, param_idx)
       r.TrackList_AdjustWindows(false)
       app.status = "Parameter envelope shown"
     end
+  end
+  r.ImGui_Separator(ctx)
+  if r.ImGui_BeginMenu(ctx, "Assign to Macro") then
+    for slot = 1, MACRO_COUNT do
+      if r.ImGui_MenuItem(ctx, default_macro_name(slot) .. "##ir_assign_macro_" .. tostring(slot)) then
+        assign_param_to_macro(app, track, fx_index, param_idx, slot)
+      end
+    end
+    r.ImGui_EndMenu(ctx)
   end
   r.ImGui_Separator(ctx)
   if r.ImGui_MenuItem(ctx, "Unpin") then request_unpin = true end
@@ -608,6 +1054,15 @@ local function draw_header(app, ctx, settings, track)
     if changed then settings.show_screenshots = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show parameters", settings.show_pinned_params)
     if changed then settings.show_pinned_params = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Show macros", settings.show_macros ~= false)
+    if changed then settings.show_macros = value; if app.save_settings then app.save_settings() end end
+    local slot_count = param_slot_count(settings)
+    r.ImGui_Text(ctx, "Parameter buttons")
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, tostring(slot_count) .. "##ir_macro_param_slots", 60, 0) then
+      settings.macro_param_slots = slot_count == 4 and 8 or 4
+      if app.save_settings then app.save_settings() end
+    end
     changed, value = r.ImGui_Checkbox(ctx, "Show track FX", settings.show_track_fx)
     if changed then settings.show_track_fx = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show input FX", settings.show_input_fx)
@@ -757,7 +1212,7 @@ local function draw_small_button(ctx, draw_list, id, x, y, width, height, label,
   return clicked, right_clicked
 end
 
-local function draw_pin_menu(app, ctx, track, fx_index)
+local function draw_pin_menu(app, ctx, track, fx_index, target_slot)
   if r.GetLastTouchedFX then
     local ok, track_index, touched_fx, param_idx = r.GetLastTouchedFX()
     local touched_track = nil
@@ -770,7 +1225,8 @@ local function draw_pin_menu(app, ctx, track, fx_index)
       local _, param_name = r.TrackFX_GetParamName(track, fx_index, param_idx, "")
       label = "Pin last touched: " .. (param_name ~= "" and param_name or ("Param " .. tostring(param_idx)))
     end
-    if r.ImGui_MenuItem(ctx, label, nil, false, matches) then pin_parameter(app, track, fx_index, param_idx) end
+    if target_slot then label = label .. " to slot " .. tostring(target_slot) end
+    if r.ImGui_MenuItem(ctx, label, nil, false, matches) then pin_parameter(app, track, fx_index, param_idx, target_slot) end
   end
   if r.ImGui_BeginMenu(ctx, "Pin parameter...") then
     local param_count = math.min(r.TrackFX_GetNumParams(track, fx_index), 200)
@@ -778,7 +1234,7 @@ local function draw_pin_menu(app, ctx, track, fx_index)
       local _, param_name = r.TrackFX_GetParamName(track, fx_index, param_idx, "")
       if param_name == "" then param_name = "Param " .. tostring(param_idx) end
       if r.ImGui_MenuItem(ctx, param_name .. "##ir_pin_param_" .. tostring(param_idx)) then
-        pin_parameter(app, track, fx_index, param_idx)
+        pin_parameter(app, track, fx_index, param_idx, target_slot)
       end
     end
     r.ImGui_EndMenu(ctx)
@@ -826,6 +1282,300 @@ local function set_rack_param_value(track, fx_index, param_idx, value, uses_base
   else
     r.TrackFX_SetParamNormalized(track, fx_index, param_idx, value)
   end
+end
+
+local function apply_macro_value(track, slot, value)
+  if not validate_track(track) then return end
+  ensure_macros_loaded()
+  local track_id = track_guid(track)
+  local macro = ensure_macro_entry(track_id, slot)
+  value = math.max(0, math.min(1, tonumber(value) or 0))
+  macro.value = value
+  state.macros_dirty = true
+  local assignments = get_macro_assignments(track_id, slot)
+  for _, assignment in ipairs(assignments) do
+    local target_track = find_track_by_guid(assignment.track_guid)
+    local fx_index = find_fx_index_by_guid(target_track, assignment.fx_guid)
+    if validate_track(target_track) and fx_index then
+      local param_count = r.TrackFX_GetNumParams(target_track, fx_index)
+      if assignment.param_idx >= 0 and assignment.param_idx < param_count then
+        local macro_value = assignment.inverted and (1 - value) or value
+        local range_min = math.max(0, math.min(1, tonumber(assignment.range_min) or 0))
+        local range_max = math.max(0, math.min(1, tonumber(assignment.range_max) or 1))
+        local target_value = range_min + (range_max - range_min) * macro_value
+        set_rack_param_value(target_track, fx_index, assignment.param_idx, target_value, is_param_modulated(target_track, fx_index, assignment.param_idx))
+      end
+    end
+  end
+end
+
+local function process_macro_cc_event(app, visible_track, event)
+  local learn = state.macro_cc_learn
+  if learn then
+    local learn_track = find_track_by_guid(learn.track_guid)
+    local track_id = learn.track_guid
+    local macro = ensure_macro_entry(track_id, learn.slot)
+    macro.cc_type = event.type or "cc"
+    macro.cc_channel = event.channel
+    macro.cc_number = event.number
+    macro.cc_device = nil
+    macro.cc_mode = detect_cc_mode(event)
+    macro.cc_invert = false
+    macro.cc_min = event.raw_value
+    macro.cc_max = event.raw_value
+    macro.cc_sensitivity = 1
+    save_macros()
+    state.macro_cc_learn = nil
+    app.status = "Assigned " .. format_macro_cc_label(macro) .. " to " .. (macro.name or default_macro_name(learn.slot))
+    return
+  end
+  if not validate_track(visible_track) then return end
+  local track_id = track_guid(visible_track)
+  local macros = state.macros[track_id]
+  if not macros then return end
+  for slot = 1, MACRO_COUNT do
+    local macro = macros[slot]
+    if macro_matches_midi_event(macro, event) then
+      apply_macro_value(visible_track, slot, macro_value_from_cc_event(macro, event))
+    end
+  end
+end
+
+local function process_macro_cc_input(app, track)
+  local events = read_recent_midi_ccs()
+  if #events == 0 then return end
+  ensure_macros_loaded()
+  for index = #events, 1, -1 do
+    process_macro_cc_event(app, track, events[index])
+  end
+end
+
+local function flush_macro_changes(ctx)
+  if not state.macros_dirty then return end
+  if r.ImGui_IsMouseDown and r.ImGui_IsMouseDown(ctx, 0) then return end
+  state.macros_dirty = false
+  save_macros()
+end
+
+local function macro_bar_height(ctx)
+  return 118
+end
+
+local function remove_macro_assignment(track_id, slot, assignment_index)
+  local assignments = get_macro_assignments(track_id, slot)
+  if assignments[assignment_index] then table.remove(assignments, assignment_index) end
+end
+
+local function draw_macro_context_menu(app, ctx, track, slot)
+  local track_id = track_guid(track)
+  local macro = ensure_macro_entry(track_id, slot)
+  local cc_label = format_macro_cc_label(macro)
+  state.macro_name_buffers[slot] = state.macro_name_buffers[slot] or macro.name or default_macro_name(slot)
+  local changed, name = r.ImGui_InputText(ctx, "Name##ir_macro_name_" .. tostring(slot), state.macro_name_buffers[slot])
+  if changed then state.macro_name_buffers[slot] = name end
+  if r.ImGui_Button(ctx, "Apply Name##ir_macro_apply_name_" .. tostring(slot)) then
+    macro.name = state.macro_name_buffers[slot] ~= "" and state.macro_name_buffers[slot] or default_macro_name(slot)
+    save_macros()
+  end
+  r.ImGui_Separator(ctx)
+  if r.ImGui_MenuItem(ctx, "Reset Value") then
+    apply_macro_value(track, slot, 0)
+    save_macros()
+  end
+  if r.ImGui_MenuItem(ctx, "Learn MIDI CC", nil, false, r.MIDI_GetRecentInputEvent ~= nil) then
+    start_macro_cc_learn(app, track, slot)
+  end
+  if cc_label ~= "" then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "MIDI: " .. cc_label) end
+  if macro_has_cc(macro) then
+    if r.ImGui_MenuItem(ctx, "MIDI Mode: Absolute", nil, not is_macro_cc_relative(macro)) then
+      macro.cc_mode = "absolute"
+      macro.cc_min = nil
+      macro.cc_max = nil
+      save_macros()
+      app.status = "Macro MIDI mode set to absolute"
+    end
+    if r.ImGui_MenuItem(ctx, "MIDI Mode: Relative 1/127", nil, macro.cc_mode == "relative_twos") then
+      macro.cc_mode = "relative_twos"
+      save_macros()
+      app.status = "Macro MIDI mode set to relative 1/127"
+    end
+    if r.ImGui_MenuItem(ctx, "MIDI Mode: Relative 63/65", nil, macro.cc_mode == "relative_offset" or macro.cc_mode == "relative") then
+      macro.cc_mode = "relative_offset"
+      save_macros()
+      app.status = "Macro MIDI mode set to relative 63/65"
+    end
+    if r.ImGui_MenuItem(ctx, "MIDI Mode: Relative 1/65", nil, macro.cc_mode == "relative_sign") then
+      macro.cc_mode = "relative_sign"
+      save_macros()
+      app.status = "Macro MIDI mode set to relative 1/65"
+    end
+    if r.ImGui_MenuItem(ctx, "Invert MIDI Direction", nil, macro.cc_invert == true) then
+      macro.cc_invert = not macro.cc_invert
+      save_macros()
+      app.status = macro.cc_invert and "Macro MIDI direction inverted" or "Macro MIDI direction normal"
+    end
+    if is_macro_cc_relative(macro) then
+      if r.ImGui_MenuItem(ctx, "MIDI Sensitivity: 1x", nil, (tonumber(macro.cc_sensitivity) or 1) == 1) then
+        macro.cc_sensitivity = 1
+        save_macros()
+        app.status = "Macro MIDI sensitivity set to 1x"
+      end
+      if r.ImGui_MenuItem(ctx, "MIDI Sensitivity: 2x", nil, tonumber(macro.cc_sensitivity) == 2) then
+        macro.cc_sensitivity = 2
+        save_macros()
+        app.status = "Macro MIDI sensitivity set to 2x"
+      end
+      if r.ImGui_MenuItem(ctx, "MIDI Sensitivity: 4x", nil, tonumber(macro.cc_sensitivity) == 4) then
+        macro.cc_sensitivity = 4
+        save_macros()
+        app.status = "Macro MIDI sensitivity set to 4x"
+      end
+      if r.ImGui_MenuItem(ctx, "MIDI Sensitivity: 8x", nil, tonumber(macro.cc_sensitivity) == 8) then
+        macro.cc_sensitivity = 8
+        save_macros()
+        app.status = "Macro MIDI sensitivity set to 8x"
+      end
+    end
+    if r.ImGui_MenuItem(ctx, "Reset MIDI Range", nil, false, not is_macro_cc_relative(macro)) then
+      macro.cc_min = nil
+      macro.cc_max = nil
+      save_macros()
+      app.status = "Macro MIDI range reset"
+    end
+  end
+  if state.macro_cc_learn and state.macro_cc_learn.track_guid == track_id and state.macro_cc_learn.slot == slot then
+    r.ImGui_TextColored(ctx, Theme.colors.warning, "Learning: move a MIDI CC")
+    if r.ImGui_MenuItem(ctx, "Cancel MIDI Learn") then
+      state.macro_cc_learn = nil
+      app.status = "MIDI learn cancelled"
+    end
+  end
+  if r.ImGui_MenuItem(ctx, "Clear MIDI CC", nil, false, macro_has_cc(macro)) then
+    macro.cc_channel = nil
+    macro.cc_number = nil
+    macro.cc_device = nil
+    macro.cc_mode = nil
+    macro.cc_invert = nil
+    macro.cc_min = nil
+    macro.cc_max = nil
+    macro.cc_type = nil
+    macro.cc_sensitivity = nil
+    save_macros()
+    app.status = "Cleared MIDI CC for " .. (macro.name or default_macro_name(slot))
+  end
+  if r.ImGui_MenuItem(ctx, "Clear Assignments") then
+    state.macro_assignments[track_id] = state.macro_assignments[track_id] or {}
+    state.macro_assignments[track_id][slot] = {}
+    save_macros()
+    app.status = "Cleared " .. (macro.name or default_macro_name(slot))
+  end
+  r.ImGui_Separator(ctx)
+  local assignments = get_macro_assignments(track_id, slot)
+  if #assignments == 0 then
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No assignments")
+  else
+    for assignment_index, assignment in ipairs(assignments) do
+      local label = (assignment.fx_name ~= "" and assignment.fx_name or "FX") .. " / " .. (assignment.param_name ~= "" and assignment.param_name or ("Param " .. tostring(assignment.param_idx)))
+      if r.ImGui_BeginMenu(ctx, label .. "##ir_macro_assignment_" .. tostring(slot) .. "_" .. tostring(assignment_index)) then
+        local target_track = find_track_by_guid(assignment.track_guid)
+        local fx_index = find_fx_index_by_guid(target_track, assignment.fx_guid)
+        local can_read = validate_track(target_track) and fx_index ~= nil
+        if r.ImGui_MenuItem(ctx, assignment.inverted and "Invert: On" or "Invert: Off") then
+          assignment.inverted = not assignment.inverted
+          save_macros()
+        end
+        if r.ImGui_MenuItem(ctx, "Set Current As Min", nil, false, can_read) then
+          assignment.range_min = r.TrackFX_GetParamNormalized(target_track, fx_index, assignment.param_idx)
+          save_macros()
+        end
+        if r.ImGui_MenuItem(ctx, "Set Current As Max", nil, false, can_read) then
+          assignment.range_max = r.TrackFX_GetParamNormalized(target_track, fx_index, assignment.param_idx)
+          save_macros()
+        end
+        if r.ImGui_MenuItem(ctx, "Remove") then
+          remove_macro_assignment(track_id, slot, assignment_index)
+          save_macros()
+        end
+        r.ImGui_EndMenu(ctx)
+      end
+    end
+  end
+end
+
+local function draw_macro_control(app, ctx, draw_list, track, slot, x, y, width, height)
+  local track_id = track_guid(track)
+  local macro = ensure_macro_entry(track_id, slot)
+  local value = math.max(0, math.min(1, tonumber(macro.value) or 0))
+  local assignments = get_macro_assignments(track_id, slot)
+  local name = macro.name and macro.name ~= "" and macro.name or default_macro_name(slot)
+  local cx = x + width * 0.5
+  local cy = y + 20
+  local radius = math.min(19, math.max(12, math.min(width * 0.22, 18)))
+  local segments = 28
+  local start_angle = math.pi * 0.75
+  local end_angle = math.pi * 2.25
+  local value_angle = start_angle + value * (end_angle - start_angle)
+  local body_col = #assignments > 0 and 0x4B5668FF or 0x383F4DFF
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + 1, cy + 1, radius, 0x00000066, segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, body_col, segments)
+  r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius + 2, start_angle, end_angle, segments)
+  r.ImGui_DrawList_PathStroke(draw_list, Theme.colors.border, 0, 1.5)
+  if value > 0.001 then
+    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius + 2, start_angle, value_angle, segments)
+    r.ImGui_DrawList_PathStroke(draw_list, Theme.colors.accent, 0, 2.4)
+  end
+  local line_x = cx + math.cos(value_angle) * radius * 0.72
+  local line_y = cy + math.sin(value_angle) * radius * 0.72
+  r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, 0xFFFFFFFF, 2)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.38, Theme.colors.accent_soft, segments)
+  local label = short_param_label(name)
+  local label_w = r.ImGui_CalcTextSize(ctx, label) * (9 / r.ImGui_GetFontSize(ctx))
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, x + math.max(2, (width - label_w) * 0.5), y + height - 13, Theme.colors.text, label)
+  r.ImGui_SetCursorScreenPos(ctx, x, y)
+  r.ImGui_InvisibleButton(ctx, "##ir_macro_control_" .. tostring(slot), width, height)
+  if r.ImGui_IsItemActive(ctx) then
+    local _, drag_y = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
+    if math.abs(drag_y) > 0 then
+      apply_macro_value(track, slot, value - drag_y * 0.005)
+      r.ImGui_ResetMouseDragDelta(ctx, 0)
+    end
+  end
+  if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##ir_macro_menu_" .. tostring(slot)) end
+  if r.ImGui_BeginPopup(ctx, "##ir_macro_menu_" .. tostring(slot)) then
+    draw_macro_context_menu(app, ctx, track, slot)
+    r.ImGui_EndPopup(ctx)
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    local tooltip = name .. " | " .. tostring(#assignments) .. " assignments"
+    local macro_cc = format_macro_cc_label(macro)
+    if macro_cc ~= "" then tooltip = tooltip .. " | " .. macro_cc end
+    r.ImGui_SetTooltip(ctx, tooltip)
+  end
+end
+
+local function draw_macro_bar(app, ctx, settings, track)
+  if settings.show_macros == false or not validate_track(track) then return end
+  ensure_macros_loaded()
+  local height = macro_bar_height(ctx)
+  local width = r.ImGui_GetContentRegionAvail(ctx)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local rows = 2
+  local columns = 4
+  local gap = 6
+  local top_pad = 9
+  local control_h = 50
+  r.ImGui_Dummy(ctx, width, height)
+  r.ImGui_DrawList_AddLine(draw_list, x + 4, y + 1, x + width - 4, y + 1, Theme.colors.separator, 1)
+  for slot = 1, MACRO_COUNT do
+    local row = math.floor((slot - 1) / columns)
+    local column = ((slot - 1) % columns) + 1
+    local control_w = math.max(24, (width - gap * (columns + 1)) / columns)
+    local control_x = x + gap + (column - 1) * (control_w + gap)
+    local control_y = y + top_pad + row * (control_h + gap)
+    draw_macro_control(app, ctx, draw_list, track, slot, control_x, control_y, control_w, control_h)
+  end
+  flush_macro_changes(ctx)
 end
 
 local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius)
@@ -895,24 +1645,40 @@ local function draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, c
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click to pin a parameter") end
   if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##ir_empty_param_menu_" .. tostring(slot)) end
   if r.ImGui_BeginPopup(ctx, "##ir_empty_param_menu_" .. tostring(slot)) then
-    draw_pin_menu(app, ctx, track, fx_index)
+    draw_pin_menu(app, ctx, track, fx_index, slot)
     r.ImGui_EndPopup(ctx)
   end
 end
 
 local function draw_param_slots(app, ctx, track, fx_index, item_width)
+  local settings = ensure_settings(app)
+  local slot_count = param_slot_count(settings)
   local row_width = math.max(1, item_width - 14)
-  local row_height = 54
+  local rows = slot_count > PARAM_SLOT_COLUMNS and 2 or 1
+  local row_step = 44
+  local row_height = rows == 2 and 96 or 54
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local pinned = get_pinned_for_fx(track, fx_index)
+  local pinned_by_slot = {}
+  for _, entry in ipairs(pinned) do
+    local slot = tonumber(entry.slot)
+    if slot and slot >= 1 and slot <= slot_count and not pinned_by_slot[slot] then
+      pinned_by_slot[slot] = entry
+    end
+  end
   r.ImGui_Dummy(ctx, row_width, row_height)
   r.ImGui_DrawList_AddLine(draw_list, x + 4, y + 3, x + row_width - 4, y + 3, 0x3D4450AA, 1)
-  for slot = 1, 4 do
-    local cell_width = row_width / 4
-    local cx = x + (slot - 0.5) * cell_width
-    local cy = y + 23
-    local entry = pinned[slot]
+  if rows == 2 then
+    r.ImGui_DrawList_AddLine(draw_list, x + 4, y + row_step + 3, x + row_width - 4, y + row_step + 3, 0x3D4450AA, 1)
+  end
+  for slot = 1, slot_count do
+    local row = math.floor((slot - 1) / PARAM_SLOT_COLUMNS)
+    local column = ((slot - 1) % PARAM_SLOT_COLUMNS) + 1
+    local cell_width = row_width / PARAM_SLOT_COLUMNS
+    local cx = x + (column - 0.5) * cell_width
+    local cy = y + 23 + row * row_step
+    local entry = pinned_by_slot[slot]
     if entry then
       draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, 12)
     else
@@ -959,7 +1725,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, all
   r.ImGui_PushID(ctx, "ir_fx_" .. tostring(fx_index))
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   local shot_h = settings.show_screenshots and not settings.tile_compact and (settings.screenshot_height or 90) or 0
-  local param_h = settings.show_pinned_params and 58 or 0
+  local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and 100 or 58) or 0
   local row1_h = 18
   local toolbar_h = 16
   local collapse_key = track_guid(track) .. "|" .. get_fx_guid(track, fx_index)
@@ -1286,6 +2052,8 @@ end
 function M.init(app)
   ensure_settings(app)
   build_screenshot_index(false)
+  if r.MIDI_GetRecentInputEvent then state.midi_last_retval = r.MIDI_GetRecentInputEvent(0) or 0 end
+  load_macros()
 end
 
 function M.draw(app)
@@ -1294,6 +2062,7 @@ function M.draw(app)
   update_external_drag(ctx)
   run_pending_param_action(app)
   local track = get_target_track(settings)
+  if settings.show_macros ~= false then process_macro_cc_input(app, track) end
   draw_header(app, ctx, settings, track)
   r.ImGui_Separator(ctx)
   if not validate_track(track) then
@@ -1315,8 +2084,9 @@ function M.draw(app)
   local selected_item, take, item_on_track = get_selected_take(track)
   local take_fx_count = settings.show_selected_item_fx and item_on_track and validate_take(take) and r.TakeFX_GetCount and r.TakeFX_GetCount(take) or 0
   local info_h = UI.info_line_height(ctx)
+  local macros_h = settings.show_macros ~= false and macro_bar_height(ctx) or 0
   local flags = 0
-  if r.ImGui_BeginChild(ctx, "##instrument_rack_scroll", 0, -info_h, 0, flags) then
+  if r.ImGui_BeginChild(ctx, "##instrument_rack_scroll", 0, -(info_h + macros_h), 0, flags) then
     local width = get_centered_item_width(ctx)
     if show_track_fx and fx_count == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No FX on this track.")
@@ -1355,6 +2125,7 @@ function M.draw(app)
     end
     r.ImGui_EndChild(ctx)
   end
+  if settings.show_macros ~= false then draw_macro_bar(app, ctx, settings, track) end
   UI.draw_info_line(ctx, info_line_text(app, track, fx_count, input_fx_count, take_fx_count, item_on_track, take))
 end
 
