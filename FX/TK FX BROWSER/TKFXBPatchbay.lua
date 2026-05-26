@@ -398,6 +398,21 @@ local function DeletePatchbayTrack(tr, guid)
     layout_dirty = true
 end
 
+local function RenamePatchbayTrack(tr)
+    if IsAllLockedCfg(GetConfig()) then return end
+    if not tr or not r.ValidatePtr(tr, "MediaTrack*") then return end
+    if tr == r.GetMasterTrack(0) then return end
+    local _, name = r.GetTrackName(tr)
+    local ok, new_name = r.GetUserInputs("Rename Track", 1, "Name:", name or "")
+    if not ok then return end
+    if new_name == name then return end
+    r.Undo_BeginBlock()
+    r.GetSetMediaTrackInfo_String(tr, "P_NAME", new_name, true)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Patchbay: rename track", -1)
+end
+
 local function GetSelectedPatchbayTracks()
     local out = {}
     local n = r.CountTracks(0)
@@ -2443,6 +2458,29 @@ local function TruncateText(ctx, s, max_w)
     return s:sub(1, math.max(0, lo - 1)) .. "..."
 end
 
+local function RemovePatchbayCable(cable)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not cable or not cable.src or not r.ValidatePtr(cable.src, "MediaTrack*") then return false end
+    if cable.is_main then
+        if r.GetMediaTrackInfo_Value(cable.src, "B_MAINSEND") ~= 1 then return false end
+        r.Undo_BeginBlock()
+        r.SetMediaTrackInfo_Value(cable.src, "B_MAINSEND", 0)
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+        r.Undo_EndBlock("Patchbay: disable main send", -1)
+        return true
+    end
+    if not cable.dst or not r.ValidatePtr(cable.dst, "MediaTrack*") then return false end
+    local idx = GetSendIndexLocal(cable.src, cable.dst)
+    if idx < 0 then return false end
+    r.Undo_BeginBlock()
+    r.RemoveTrackSend(cable.src, 0, idx)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Patchbay: delete connection", -1)
+    return true
+end
+
 local function RenderRightClickPopup()
     local ctx = GetCtx()
     local cfg = GetConfig()
@@ -2487,9 +2525,7 @@ local function RenderRightClickPopup()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xA03030FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x601010FF)
             if r.ImGui_Button(ctx, "Disable main send") then
-                r.Undo_BeginBlock()
-                r.SetMediaTrackInfo_Value(src, "B_MAINSEND", 0)
-                r.Undo_EndBlock("Patchbay: disable main send", -1)
+                RemovePatchbayCable(s)
                 r.ImGui_CloseCurrentPopup(ctx)
                 right_click_send = nil
             end
@@ -2575,9 +2611,9 @@ local function RenderRightClickPopup()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xA03030FF)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x601010FF)
         if r.ImGui_Button(ctx, "Delete connection") then
-            r.RemoveTrackSend(src, 0, idx)
-            r.ImGui_CloseCurrentPopup(ctx)
-            right_click_send = nil
+                RemovePatchbayCable(s)
+                r.ImGui_CloseCurrentPopup(ctx)
+                right_click_send = nil
         end
         r.ImGui_PopStyleColor(ctx, 3)
 
@@ -2631,6 +2667,12 @@ local function RenderNodePopup()
             r.ImGui_CloseCurrentPopup(ctx)
         end
         if node_popup_guid and node_popup_guid ~= MASTER_GUID then
+            if IsAllLockedCfg(GetConfig()) then
+                r.ImGui_TextDisabled(ctx, "Rename Track")
+            elseif r.ImGui_Selectable(ctx, "Rename Track...") then
+                r.ImGui_CloseCurrentPopup(ctx)
+                RenamePatchbayTrack(tr)
+            end
             local selected_tracks = GetSelectedPatchbayTracks()
             if #selected_tracks > 1 then
                 r.ImGui_Separator(ctx)
@@ -3810,31 +3852,39 @@ function ShowRoutingPatchbay()
     end
     
     if hovered_cable and not node_right_click_consumed then
-        local _, sname = r.GetTrackName(hovered_cable.src)
-        local dname
-        local mlabel
-        local vol
-        local send_type_info
-        if hovered_cable.is_main then
-            dname = "MASTER"
-            mlabel = "Main send (post-fader)"
-            vol = r.GetMediaTrackInfo_Value(hovered_cable.src, "D_VOL")
-            send_type_info = GetSendTypeInfo(hovered_cable.src, -1, true)
-        else
-            local _, dn = r.GetTrackName(hovered_cable.dst)
-            dname = dn
-            local mode = r.GetTrackSendInfo_Value(hovered_cable.src, 0, hovered_cable.idx, "I_SENDMODE")
-            vol = r.GetTrackSendInfo_Value(hovered_cable.src, 0, hovered_cable.idx, "D_VOL")
-            send_type_info = GetSendTypeInfo(hovered_cable.src, hovered_cable.idx, false)
-            mlabel = "Post-Fader"
-            if mode == 1 then mlabel = "Pre-FX" elseif mode == 3 then mlabel = "Pre-Fader (Post-FX)" end
+        local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
+        local mod_alt = r.ImGui_Mod_Alt and r.ImGui_Mod_Alt() or 0
+        local alt_held = (mods & mod_alt) ~= 0
+        if alt_held and r.ImGui_IsMouseClicked(ctx, 0) then
+            if RemovePatchbayCable(hovered_cable) then hovered_cable = nil end
         end
-        local vol_db = vol > 0 and (20 * math.log(vol, 10)) or -150
-        local type_details = send_type_info and send_type_info.details or "Type: Audio"
-        r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB\n%s", sname, dname, mlabel, vol_db, type_details))
-        if r.ImGui_IsMouseClicked(ctx, 1) then
-            right_click_send = { src = hovered_cable.src, dst = hovered_cable.dst, is_main = hovered_cable.is_main }
-            request_open_popup = true
+        if hovered_cable then
+            local _, sname = r.GetTrackName(hovered_cable.src)
+            local dname
+            local mlabel
+            local vol
+            local send_type_info
+            if hovered_cable.is_main then
+                dname = "MASTER"
+                mlabel = "Main send (post-fader)"
+                vol = r.GetMediaTrackInfo_Value(hovered_cable.src, "D_VOL")
+                send_type_info = GetSendTypeInfo(hovered_cable.src, -1, true)
+            else
+                local _, dn = r.GetTrackName(hovered_cable.dst)
+                dname = dn
+                local mode = r.GetTrackSendInfo_Value(hovered_cable.src, 0, hovered_cable.idx, "I_SENDMODE")
+                vol = r.GetTrackSendInfo_Value(hovered_cable.src, 0, hovered_cable.idx, "D_VOL")
+                send_type_info = GetSendTypeInfo(hovered_cable.src, hovered_cable.idx, false)
+                mlabel = "Post-Fader"
+                if mode == 1 then mlabel = "Pre-FX" elseif mode == 3 then mlabel = "Pre-Fader (Post-FX)" end
+            end
+            local vol_db = vol > 0 and (20 * math.log(vol, 10)) or -150
+            local type_details = send_type_info and send_type_info.details or "Type: Audio"
+            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB\n%s", sname, dname, mlabel, vol_db, type_details))
+            if r.ImGui_IsMouseClicked(ctx, 1) then
+                right_click_send = { src = hovered_cable.src, dst = hovered_cable.dst, is_main = hovered_cable.is_main }
+                request_open_popup = true
+            end
         end
     end
 
@@ -4002,41 +4052,13 @@ function ShowRoutingPatchbay()
                 local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
                 local mod_ctrl = r.ImGui_Mod_Ctrl and r.ImGui_Mod_Ctrl() or 0
                 local ctrl_held = (mods & mod_ctrl) ~= 0
+                local pin_r_hit = PIN_R * canvas_zoom
+                if pin_r_hit < 4 then pin_r_hit = 4 end
+                local hit_r = pin_r_hit + 4
+                local hit_out = nil
+                local hit_folder = nil
 
-                if is_master_node then
-                    pb_selected_set = {}
-                elseif ctrl_held then
-                    if pb_selected_set[g] then
-                        pb_selected_set[g] = nil
-                    else
-                        pb_selected_set[g] = true
-                    end
-                else
-                    if not pb_selected_set[g] then
-                        pb_selected_set = { [g] = true }
-                    end
-                end
-
-                if is_master_node then
-                    local nt = r.CountTracks(0)
-                    for ti = 0, nt - 1 do
-                        r.SetMediaTrackInfo_Value(r.GetTrack(0, ti), "I_SELECTED", 0)
-                    end
-                    r.SetMediaTrackInfo_Value(tr.track, "I_SELECTED", 1)
-                    _G.TRACK = tr.track
-                    r.UpdateArrange()
-                else
-                    r.SetOnlyTrackSelected(tr.track)
-                    _G.TRACK = tr.track
-                    if r.SetMixerScroll then r.SetMixerScroll(tr.track) end
-                    r.UpdateArrange()
-                end
                 if not ctrl_held then
-                    local pin_r_hit = PIN_R * canvas_zoom
-                    if pin_r_hit < 4 then pin_r_hit = 4 end
-                    local hit_r = pin_r_hit + 4
-                    local hit_out = nil
-                    local hit_folder = nil
                     for hi = 1, #tracks do
                         if not tracks[hi].is_master then
                             local ox, oy = PinPos(tracks[hi].guid, "out")
@@ -4059,11 +4081,46 @@ function ShowRoutingPatchbay()
                             end
                         end
                     end
-                    if hit_folder and not all_locked then
-                        pending_folder_connection = { parent = hit_folder.track, parent_guid = hit_folder.guid }
-                    elseif hit_out and not all_locked then
-                        pending_connection = { src = hit_out.track, src_guid = hit_out.guid }
+                end
+
+                if hit_folder and not all_locked then
+                    pending_folder_connection = { parent = hit_folder.track, parent_guid = hit_folder.guid }
+                elseif hit_out and not all_locked then
+                    pending_connection = { src = hit_out.track, src_guid = hit_out.guid }
+                elseif hit_folder or hit_out then
+                    pb_press_guid = nil
+                    pb_press_dragged = false
+                else
+
+                    if is_master_node then
+                        pb_selected_set = {}
+                    elseif ctrl_held then
+                        if pb_selected_set[g] then
+                            pb_selected_set[g] = nil
+                        else
+                            pb_selected_set[g] = true
+                        end
                     else
+                        if not pb_selected_set[g] then
+                            pb_selected_set = { [g] = true }
+                        end
+                    end
+
+                    if is_master_node then
+                        local nt = r.CountTracks(0)
+                        for ti = 0, nt - 1 do
+                            r.SetMediaTrackInfo_Value(r.GetTrack(0, ti), "I_SELECTED", 0)
+                        end
+                        r.SetMediaTrackInfo_Value(tr.track, "I_SELECTED", 1)
+                        _G.TRACK = tr.track
+                        r.UpdateArrange()
+                    else
+                        r.SetOnlyTrackSelected(tr.track)
+                        _G.TRACK = tr.track
+                        if r.SetMixerScroll then r.SetMixerScroll(tr.track) end
+                        r.UpdateArrange()
+                    end
+                    if not ctrl_held then
                         pb_press_guid = g
                         pb_press_dragged = false
                     end
@@ -4216,6 +4273,7 @@ function ShowRoutingPatchbay()
         local sx, sy = PinPos(pending_folder_connection.parent_guid, "bottom")
         local hovered_folder_target = nil
         local hovered_folder_valid = false
+        local folder_drag_targets = nil
         local parent = FindTrackByGuidLocal(pending_folder_connection.parent_guid)
         for i = 1, #tracks do
             local target = tracks[i]
@@ -4223,7 +4281,12 @@ function ShowRoutingPatchbay()
                 local x1, y1, x2, y2 = NodeRect(target.guid)
                 if x1 and mx >= x1 and mx <= x2 and my >= y1 and my <= y2 then
                     hovered_folder_target = target
-                    local ok = PrepareSimpleFolderChildren(parent, { { track = target.track, guid = target.guid, name = target.name } })
+                    if pb_selected_set[target.guid] then
+                        folder_drag_targets = GetSelectedPatchbayTracks()
+                    else
+                        folder_drag_targets = { { track = target.track, guid = target.guid, name = target.name } }
+                    end
+                    local ok = PrepareSimpleFolderChildren(parent, folder_drag_targets)
                     hovered_folder_valid = ok ~= nil
                     break
                 end
@@ -4248,7 +4311,7 @@ function ShowRoutingPatchbay()
         end
         if r.ImGui_IsMouseReleased(ctx, 0) then
             if hovered_folder_target and hovered_folder_valid and parent and r.ValidatePtr(parent, "MediaTrack*") then
-                AssignSelectedTracksAsFolderChildren(parent, { { track = hovered_folder_target.track, guid = hovered_folder_target.guid, name = hovered_folder_target.name } })
+                AssignSelectedTracksAsFolderChildren(parent, folder_drag_targets)
             end
             pending_folder_connection = nil
         end
@@ -4296,21 +4359,45 @@ function ShowRoutingPatchbay()
         end
         if r.ImGui_IsMouseReleased(ctx, 0) then
             if hovered_input_guid and hovered_input_guid ~= pending_connection.src_guid then
+                local selected_sources = nil
+                if pb_selected_set[pending_connection.src_guid] then
+                    selected_sources = GetSelectedPatchbayTracks()
+                end
                 if hovered_input_guid == MASTER_GUID and not all_locked then
-                    if r.GetMediaTrackInfo_Value(pending_connection.src, "B_MAINSEND") ~= 1 then
-                        r.Undo_BeginBlock()
-                        r.SetMediaTrackInfo_Value(pending_connection.src, "B_MAINSEND", 1)
-                        r.Undo_EndBlock("Patchbay: enable main send", -1)
+                    if not selected_sources or #selected_sources == 0 then
+                        selected_sources = { { track = pending_connection.src, guid = pending_connection.src_guid } }
+                    end
+                    local changes = 0
+                    r.Undo_BeginBlock()
+                    r.PreventUIRefresh(1)
+                    for i = 1, #selected_sources do
+                        local src = selected_sources[i].track
+                        if src and r.ValidatePtr(src, "MediaTrack*") and r.GetMediaTrackInfo_Value(src, "B_MAINSEND") ~= 1 then
+                            r.SetMediaTrackInfo_Value(src, "B_MAINSEND", 1)
+                            changes = changes + 1
+                        end
+                    end
+                    r.PreventUIRefresh(-1)
+                    if changes > 0 then
+                        r.TrackList_AdjustWindows(false)
+                        r.UpdateArrange()
+                        r.Undo_EndBlock("Patchbay: enable selected main sends", -1)
+                    else
+                        r.Undo_EndBlock("Patchbay: enable selected main sends (no changes)", -1)
                     end
                 elseif not all_locked then
                     local dst_track = nil
                     for i = 1, #tracks do
                         if tracks[i].guid == hovered_input_guid then dst_track = tracks[i].track; break end
                     end
-                    if dst_track and GetSendIndexLocal(pending_connection.src, dst_track) < 0 then
-                        r.Undo_BeginBlock()
-                        r.CreateTrackSend(pending_connection.src, dst_track)
-                        r.Undo_EndBlock("Patchbay: create send", -1)
+                    if dst_track then
+                        if selected_sources and #selected_sources > 0 then
+                            BatchConnectSelectedToDestination(selected_sources, dst_track)
+                        elseif pb_selected_set[hovered_input_guid] then
+                            BatchConnectTargetToSelected(pending_connection.src, GetSelectedPatchbayTracks())
+                        else
+                            BatchConnectSelectedToDestination({ { track = pending_connection.src, guid = pending_connection.src_guid } }, dst_track)
+                        end
                     end
                 end
             end

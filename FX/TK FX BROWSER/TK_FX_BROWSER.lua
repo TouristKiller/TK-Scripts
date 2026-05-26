@@ -1,8 +1,13 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.0.1
+-- @version 3.0.2
 -- @changelog:
 --[[ 
+    v3.0.2:
+        + Patchbay: added Rename Track to the node context menu.
+        + Patchbay: added Alt+left-click cable deletion for sends and master-send cables.
+        + Patchbay: added multi-select drag routing for selected sources and selected targets.
+
     v3.0.0:
         + Patchbay: added track template insertion with default/custom template folders, recursive subfolder scan, browse and refresh actions.
         + Patchbay: added folder parent-child assignment via dedicated bottom pins and context menu actions, including existing folder append and simple nested folder support.

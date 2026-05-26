@@ -1,7 +1,11 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.1
+-- @version 1.1.2
 -- @changelog:
+--   v1.1.2:
+--       + Added Rename Track to the node context menu.
+--       + Added Alt+left-click cable deletion for sends and master-send cables.
+--       + Added multi-select drag routing for selected sources and selected targets.
 --   v1.1.1:
 --       + Added View > Hide child master flow to visually reduce folder child master cable clutter.
 --       + Added View > View options help window with English explanations for Patchbay view modes.
