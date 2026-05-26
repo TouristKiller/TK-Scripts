@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.2
+-- @version 0.1.3
 -- @changelog:
+-- v0.1.3
+--   + Plugin Browser: Added option to return to Rack after adding FX from Rack
+--   + Plugin Browser: Added option to return to FX Chain Builder after adding FX to Chain Builder
+--   + Media Browser: Stop active preview playback when Workbench is closed by shortcut or action toggle
 -- v0.1.2
 --   + Added support for secondary Workbench launchers with separate script name and config file
 -- v0.1.1
@@ -162,9 +166,17 @@ local function is_home_active()
 end
 
 local function set_active_view(id)
+  local current = app.settings.active_module
+  if id == "plugin_browser" and current == "instrument_rack" then
+    app.cache.plugin_browser_return_module = "instrument_rack"
+  elseif id ~= "plugin_browser" then
+    app.cache.plugin_browser_return_module = nil
+  end
   app.settings.active_module = id
   save_settings()
 end
+
+app.set_active_view = set_active_view
 
 local function get_active_module()
   local active_id = app.settings.active_module
@@ -678,6 +690,8 @@ local function update_modules()
 end
 
 local function shutdown()
+  if app.cache.shutdown_done then return end
+  app.cache.shutdown_done = true
   for _, module in ipairs(app.modules) do
     if module.shutdown then pcall(module.shutdown, app) end
   end
@@ -686,6 +700,8 @@ local function shutdown()
   end
   save_settings()
 end
+
+if r.atexit then r.atexit(shutdown) end
 
 local function draw_shell()
   draw_top_bar()

@@ -36,6 +36,8 @@ local defaults = {
   double_click_insert = false,
   use_type_priority = true,
   dropdown_rows = 18,
+  return_to_rack_after_add = true,
+  return_to_chain_builder_after_add = true,
   type_priority = { "CLAP", "VST3", "VST", "JS", "AU", "LV2", "OTHER" },
   type_filter = { VST3 = true, VST = true, CLAP = true, JS = true, AU = true, LV2 = true, OTHER = true },
   group_selection = { all = "", developer = "", category = "", folders = "", custom_folders = "" }
@@ -178,6 +180,16 @@ local function ensure_settings(app)
   if dropdown_rows > 36 then dropdown_rows = 36 end
   if settings.dropdown_rows ~= dropdown_rows then
     settings.dropdown_rows = dropdown_rows
+    changed = true
+  end
+  if settings.return_to_rack_after_add_initialized ~= true then
+    settings.return_to_rack_after_add = true
+    settings.return_to_rack_after_add_initialized = true
+    changed = true
+  end
+  if settings.return_to_chain_builder_after_add_initialized ~= true then
+    settings.return_to_chain_builder_after_add = true
+    settings.return_to_chain_builder_after_add_initialized = true
     changed = true
   end
   if changed and app.save_settings then app.save_settings() end
@@ -1260,6 +1272,19 @@ local function clear_selection(app)
   if app then app.status = "FX selection cleared" end
 end
 
+local function return_to_rack_after_add(app, settings)
+  if not settings.return_to_rack_after_add then return end
+  if not app or not app.cache or app.cache.plugin_browser_return_module ~= "instrument_rack" then return end
+  if not app.modules_by_id or not app.modules_by_id.instrument_rack then return end
+  if app.set_active_view then app.set_active_view("instrument_rack") end
+end
+
+local function return_to_chain_builder_after_add(app, settings)
+  if not settings.return_to_chain_builder_after_add then return end
+  if not app or not app.modules_by_id or not app.modules_by_id.fx_chain_builder then return end
+  if app.set_active_view then app.set_active_view("fx_chain_builder") end
+end
+
 local function add_fx_to_drag_target(app, settings, plugin, track)
   if not validate_track(track) or not plugin then app.status = "No track under mouse"; return end
   r.Undo_BeginBlock()
@@ -1273,6 +1298,7 @@ local function add_fx_to_drag_target(app, settings, plugin, track)
     add_recent(settings, plugin.name)
     state.last_filter_key = nil
     app.status = "Dropped " .. plugin.display_name .. " on " .. track_label(track)
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not drop " .. plugin.display_name
   end
@@ -1289,6 +1315,7 @@ local function add_fx_to_input_target(app, settings, plugin, track)
     add_recent(settings, plugin.name)
     state.last_filter_key = nil
     app.status = "Dropped " .. plugin.display_name .. " to Input FX on " .. track_label(track)
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not drop " .. plugin.display_name .. " to Input FX"
   end
@@ -1306,6 +1333,7 @@ local function add_fx_to_item_target(app, settings, plugin, item)
     add_recent(settings, plugin.name)
     state.last_filter_key = nil
     app.status = "Dropped " .. plugin.display_name .. " on " .. item_label(item)
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not drop " .. plugin.display_name .. " on item"
   end
@@ -1330,6 +1358,7 @@ local function add_plugins_to_track_target(app, settings, plugins, track)
   if added > 0 then
     state.last_filter_key = nil
     app.status = "Dropped " .. drag_plugins_label(plugins) .. " on " .. track_label(track)
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not drop " .. drag_plugins_label(plugins)
   end
@@ -1351,6 +1380,7 @@ local function add_plugins_to_input_target(app, settings, plugins, track)
   if added > 0 then
     state.last_filter_key = nil
     app.status = "Dropped " .. drag_plugins_label(plugins) .. " to Input FX on " .. track_label(track)
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not drop " .. drag_plugins_label(plugins) .. " to Input FX"
   end
@@ -1378,6 +1408,7 @@ local function add_plugins_to_item_target(app, settings, plugins, item)
   if added > 0 then
     state.last_filter_key = nil
     app.status = "Dropped " .. drag_plugins_label(plugins) .. " on " .. item_label(item)
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not drop " .. drag_plugins_label(plugins) .. " on item"
   end
@@ -1525,6 +1556,7 @@ local function add_fx_to_track(app, settings, plugin)
     add_recent(settings, plugin.name)
     state.last_filter_key = nil
     app.status = "Added " .. plugin.display_name .. " to " .. track_label(track)
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not add " .. plugin.display_name
   end
@@ -1575,6 +1607,7 @@ local function add_fx_to_selected_tracks(app, settings, plugin)
     add_recent(settings, plugin.name)
     state.last_filter_key = nil
     app.status = "Added " .. plugin.display_name .. " to " .. tostring(added) .. " track(s)"
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not add " .. plugin.display_name
   end
@@ -1593,17 +1626,20 @@ local function add_fx_to_new_track(app, settings, plugin)
     add_recent(settings, plugin.name)
     state.last_filter_key = nil
     app.status = "Added " .. plugin.display_name .. " to new track"
+    return_to_rack_after_add(app, settings)
   else
     app.status = "Could not add " .. plugin.display_name .. " to new track"
   end
 end
 
 local function add_fx_to_chain_builder(app, plugin)
+  local settings = ensure_settings(app)
   local builder = app.modules_by_id and app.modules_by_id.fx_chain_builder
   if builder and builder.add_plugin then
     builder.add_plugin(app, plugin.name)
-    add_recent(ensure_settings(app), plugin.name)
+    add_recent(settings, plugin.name)
     state.last_filter_key = nil
+    return_to_chain_builder_after_add(app, settings)
   else
     app.status = "FX Chain Builder is not loaded"
   end
@@ -1619,6 +1655,7 @@ local function add_plugins_to_chain_builder(app, settings, plugins)
   end
   state.last_filter_key = nil
   app.status = "Added " .. drag_plugins_label(plugins) .. " to Chain Builder"
+  return_to_chain_builder_after_add(app, settings)
 end
 
 local type_colors = {
@@ -1806,6 +1843,16 @@ local function draw_filter_popup(ctx, settings, app)
   local click_changed, double_click_insert = r.ImGui_Checkbox(ctx, "Double-click inserts FX", settings.double_click_insert == true)
   if click_changed then
     settings.double_click_insert = double_click_insert
+    if app.save_settings then app.save_settings() end
+  end
+  local return_changed, return_to_rack = r.ImGui_Checkbox(ctx, "Return to Rack after add", settings.return_to_rack_after_add == true)
+  if return_changed then
+    settings.return_to_rack_after_add = return_to_rack
+    if app.save_settings then app.save_settings() end
+  end
+  local chain_return_changed, return_to_chain_builder = r.ImGui_Checkbox(ctx, "Return to Chain Builder after add", settings.return_to_chain_builder_after_add == true)
+  if chain_return_changed then
+    settings.return_to_chain_builder_after_add = return_to_chain_builder
     if app.save_settings then app.save_settings() end
   end
   local dropdown_changed, dropdown_rows = r.ImGui_SliderInt(ctx, "Dropdown rows", settings.dropdown_rows or defaults.dropdown_rows, 8, 36, "%d")

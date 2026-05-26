@@ -593,9 +593,13 @@ local function draw_add_plugin_button(app)
   r.ImGui_DrawList_AddLine(draw_list, cx, cy - 7, cx, cy + 7, Theme.colors.text, 2)
   if hovered then r.ImGui_SetTooltip(ctx, "Open Plugin Browser") end
   if clicked then
-    app.settings.active_module = "plugin_browser"
+    if app.set_active_view then
+      app.set_active_view("plugin_browser")
+    else
+      app.settings.active_module = "plugin_browser"
+      if app.save_settings then app.save_settings() end
+    end
     app.status = "Plugin Browser"
-    if app.save_settings then app.save_settings() end
   end
 end
 

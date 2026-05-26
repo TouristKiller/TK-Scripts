@@ -965,8 +965,12 @@ local function open_add_fx_browser(app, track)
     return
   end
   if target == "plugin_browser" and app.modules_by_id and app.modules_by_id.plugin_browser then
-    app.settings.active_module = "plugin_browser"
-    if app.save_settings then app.save_settings() end
+    if app.set_active_view then
+      app.set_active_view("plugin_browser")
+    else
+      app.settings.active_module = "plugin_browser"
+      if app.save_settings then app.save_settings() end
+    end
     app.status = "Opened Plugin Browser"
     return
   end
