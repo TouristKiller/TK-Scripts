@@ -1,8 +1,15 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.0
+-- @version 0.9.1
 -- @changelog:
 --[[
+v0.9.1:
++ Added random playback mode for sample switching during auto progress
++ Added follow-playback scrolling with visible active-file highlighting in the file list
++ Added minimum display time toggle for auto progress playback
++ Added previous/next transport buttons for browsing visible files
++ Fixed drag-and-drop insertion into REAPER fixed item lanes
+
 v0.9.0:
 + Added lazy cover art lookup for the selected file with embedded MP3/WAV ID3 APIC, FLAC Picture Block and folder image fallback
 + Added cover art thumbnail overlay in the oscilloscope preview with in-preview expanded view and image viewer zoom button
@@ -146,7 +153,12 @@ local playback = {
     state = "stopped",
     auto_play = true,
     loop_play = true,
+    random_play = false,
     auto_progress = false,
+    min_display_time = 0,
+    preview_started_at = 0,
+    auto_advance_pending = false,
+    auto_advance_due = 0,
     loop_start = 0,
     loop_end = 0,
     current_pitch = 0,
@@ -293,6 +305,9 @@ local ui = {
     current_view_mode = "folders",  
     list_clipper = nil,
     scroll_to_top = false,
+    scroll_selected_file = false,
+    last_playback_scroll_time = 0,
+    follow_scroll_interval = 0.10,
     pitch_detection_enabled = true,
     auto_selected_category = "All",
     auto_source_location = "",
@@ -379,6 +394,7 @@ local insert_state = {
     is_dragging = false,
     drop_file = nil,
     drop_track = nil,
+    drop_lane = nil,
     is_midi = false
 }
 
@@ -2553,7 +2569,9 @@ local function save_options()
         local options = {
             auto_play = playback.auto_play,
             loop_play = playback.loop_play,
+            random_play = playback.random_play,
             auto_progress = playback.auto_progress,
+            min_display_time = playback.min_display_time,
             use_original_speed = playback.use_original_speed,
             link_transport = playback.link_transport,
             link_start_from_editcursor = playback.link_start_from_editcursor,
@@ -2645,7 +2663,9 @@ local function get_settings_table()
     return {
         auto_play = playback.auto_play,
         loop_play = playback.loop_play,
+        random_play = playback.random_play,
         auto_progress = playback.auto_progress,
+        min_display_time = playback.min_display_time,
         use_original_speed = playback.use_original_speed,
         link_transport = playback.link_transport,
         link_start_from_editcursor = playback.link_start_from_editcursor,
@@ -2695,7 +2715,9 @@ local function apply_settings_from_table(settings)
     
     playback.auto_play = settings.auto_play
     playback.loop_play = settings.loop_play
+    playback.random_play = settings.random_play or false
     playback.auto_progress = settings.auto_progress or false
+    playback.min_display_time = (settings.min_display_time or 0) > 0 and 1.0 or 0
     playback.use_original_speed = settings.use_original_speed
     playback.link_transport = settings.link_transport or false
     playback.link_start_from_editcursor = settings.link_start_from_editcursor or false
@@ -2842,7 +2864,9 @@ local function load_options()
             file_location.saved_folder_flat_view = options.flat_view ~= nil and options.flat_view or false
             playback.auto_play = options.auto_play
             playback.loop_play = options.loop_play
+            playback.random_play = options.random_play or false
             playback.auto_progress = options.auto_progress or false
+            playback.min_display_time = (options.min_display_time or 0) > 0 and 1.0 or 0
             playback.use_original_speed = options.use_original_speed
             playback.link_transport = options.link_transport or false
             playback.link_start_from_editcursor = options.link_start_from_editcursor or false
@@ -2926,7 +2950,9 @@ local function load_options()
                         file_location.saved_folder_flat_view = options2.flat_view ~= nil and options2.flat_view or false
                         playback.auto_play = options2.auto_play
                         playback.loop_play = options2.loop_play
+                        playback.random_play = options2.random_play or false
                         playback.auto_progress = options2.auto_progress or false
+                        playback.min_display_time = (options2.min_display_time or 0) > 0 and 1.0 or 0
                         playback.use_original_speed = options2.use_original_speed
                         playback.link_transport = options2.link_transport or false
                         playback.preview_volume = options2.preview_volume
@@ -5690,6 +5716,8 @@ local function stop_playback(is_loop_restart)
     if not is_loop_restart then
         playback.playing_path = nil
     end
+    playback.auto_advance_pending = false
+    playback.auto_advance_due = 0
     playback.is_paused = false
     playback.paused_position = 0
     
@@ -5896,6 +5924,9 @@ local function start_playback(file_path)
         playback.current_playing_file = file_path
         playback.playing_path = file_path
         playback.last_displayed_file = file_path  
+        playback.preview_started_at = r.time_precise()
+        playback.auto_advance_pending = false
+        playback.auto_advance_due = 0
         
         r.GetSet_LoopTimeRange(true, false, 0, length, false)
         
@@ -6004,6 +6035,9 @@ local function start_playback(file_path)
     playback.current_playing_file = file_path
     playback.playing_path = file_path
     playback.last_displayed_file = file_path
+    playback.preview_started_at = r.time_precise()
+    playback.auto_advance_pending = false
+    playback.auto_advance_due = 0
     playback.prev_play_cursor = start_pos
     playback.paused_position = 0
     
@@ -6089,14 +6123,115 @@ local function play_media(file_path)
     start_playback(file_path)
 end
 
-advance_to_next_file = function()
-    if not ui.visible_files or #ui.visible_files == 0 then return false end
-    if ui.selected_index >= #ui.visible_files then
-        stop_playback(false)
+local function get_random_visible_file_index(current_index)
+    if not ui.visible_files or #ui.visible_files == 0 then return nil end
+    if #ui.visible_files == 1 then return nil end
+    math.randomseed(math.floor(r.time_precise() * 1000000))
+    local next_index = current_index
+    for _ = 1, 12 do
+        next_index = math.random(#ui.visible_files)
+        if next_index ~= current_index then return next_index end
+    end
+    return (current_index % #ui.visible_files) + 1
+end
+
+local function request_scroll_selected_file()
+    ui.scroll_selected_file = true
+end
+
+local function get_display_index_for_path(files, path)
+    if not files or not path or path == "" then return nil end
+    for i, file in ipairs(files) do
+        local file_path = file.full_path or file.path
+        if file_path == path then return i end
+    end
+    return nil
+end
+
+local function scroll_selected_file_into_view(row_h, files_to_display)
+    if not ui.scroll_selected_file then return end
+    if not ui.selected_index or ui.selected_index < 1 then return end
+    if not r.ImGui_GetScrollY or not r.ImGui_GetWindowHeight or not r.ImGui_SetScrollY then return end
+    local now = r.time_precise()
+    if ui.last_playback_scroll_time > 0 and now - ui.last_playback_scroll_time < ui.follow_scroll_interval then return end
+    ui.last_playback_scroll_time = now
+    ui.scroll_selected_file = false
+    row_h = math.max(1, row_h or 18)
+    local target_index = get_display_index_for_path(files_to_display, playback.current_playing_file) or ui.selected_index
+    ui.selected_index = target_index
+    local top = (target_index - 1) * row_h
+    local bottom = top + row_h
+    local scroll_y = r.ImGui_GetScrollY(ctx)
+    local window_h = math.max(row_h, r.ImGui_GetWindowHeight(ctx) - (row_h * 2))
+    if top < scroll_y then
+        r.ImGui_SetScrollY(ctx, math.max(0, top - row_h))
+    elseif bottom > scroll_y + window_h then
+        r.ImGui_SetScrollY(ctx, math.max(0, bottom - window_h + row_h))
+    end
+end
+
+local function get_min_display_label()
+    local ms = math.floor((playback.min_display_time or 0) * 1000 + 0.5)
+    if ms <= 0 then return "off" end
+    return "1s"
+end
+
+local function cycle_min_display_time()
+    local value = playback.min_display_time or 0
+    if value < 0.5 then
+        playback.min_display_time = 1.00
+    else
+        playback.min_display_time = 0
+    end
+    save_options()
+end
+
+local function can_auto_advance()
+    local min_time = playback.min_display_time or 0
+    if min_time <= 0 then return true end
+    if not playback.preview_started_at or playback.preview_started_at <= 0 then return true end
+    return (r.time_precise() - playback.preview_started_at) >= min_time
+end
+
+local function try_auto_advance()
+    if can_auto_advance() then
+        playback.auto_advance_pending = false
+        playback.auto_advance_due = 0
+        return advance_to_next_file()
+    end
+    if not playback.auto_advance_pending then
+        local min_time = playback.min_display_time or 0
+        playback.auto_advance_pending = true
+        playback.auto_advance_due = (playback.preview_started_at or r.time_precise()) + min_time
+    end
+    return false
+end
+
+local function process_pending_auto_advance()
+    if not playback.auto_advance_pending then return false end
+    if playback.is_paused or playback.loop_play or not playback.auto_progress then
+        playback.auto_advance_pending = false
+        playback.auto_advance_due = 0
         return false
     end
-    ui.selected_index = ui.selected_index + 1
-    playback.selected_file = ui.visible_files[ui.selected_index].name
+    if r.time_precise() < (playback.auto_advance_due or 0) then return false end
+    playback.auto_advance_pending = false
+    playback.auto_advance_due = 0
+    return advance_to_next_file()
+end
+
+local function play_visible_file_at_index(index)
+    if not ui.visible_files or index < 1 or index > #ui.visible_files then return false end
+    local file = ui.visible_files[index]
+    if not file then return false end
+    local file_path = file.full_path or file.path
+    if not file_path or file_path == "" then return false end
+    ui.selected_index = index
+    request_scroll_selected_file()
+    playback.selected_file = file.name or ""
+    playback.current_playing_file = file_path
+    playback.auto_advance_pending = false
+    playback.auto_advance_due = 0
     waveform.selection_active = false
     waveform.is_dragging = false
     waveform.selection_start = 0
@@ -6107,10 +6242,31 @@ advance_to_next_file = function()
     waveform.normalized_sel_end = 0
     waveform.monitor_file_path = ""
     waveform.play_cursor_position = 0
-    local next_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
-    playback.current_playing_file = next_path
-    play_media(next_path)
+    play_media(file_path)
     return true
+end
+
+local function advance_to_previous_file()
+    if not ui.visible_files or #ui.visible_files == 0 then return false end
+    if ui.selected_index > 1 then
+        return play_visible_file_at_index(ui.selected_index - 1)
+    end
+    return false
+end
+
+advance_to_next_file = function()
+    if not ui.visible_files or #ui.visible_files == 0 then return false end
+    local next_index = nil
+    if playback.random_play then
+        next_index = get_random_visible_file_index(ui.selected_index)
+    elseif ui.selected_index < #ui.visible_files then
+        next_index = ui.selected_index + 1
+    end
+    if not next_index then
+        stop_playback(false)
+        return false
+    end
+    return play_visible_file_at_index(next_index)
 end
 
 local function monitor_transport_state()
@@ -6195,13 +6351,14 @@ local function handle_drag_drop(file_path)
         r.ImGui_EndDragDropSource(ctx)
     end
 end
-function insert_media_on_track(file_path, track, use_original_speed, custom_playrate, custom_pitch, lufs_gain)
+function insert_media_on_track(file_path, track, use_original_speed, custom_playrate, custom_pitch, lufs_gain, target_lane)
     if not track then return end
     generate_peak_file(file_path)
     local ext = file_path:match("%.([^%.]+)$"):lower()
     local file_type = file_types[ext]
     local is_midi_file = insert_state.is_midi or ext == "mid" or ext == "midi"
     local item = r.AddMediaItemToTrack(track)
+    local lane_changed = false
     if file_type == "REAPER_MEDIAFOLDER" then
         local take = r.AddTakeToMediaItem(item)
         local source = r.PCM_Source_CreateFromFile(file_path)
@@ -6284,6 +6441,21 @@ function insert_media_on_track(file_path, track, use_original_speed, custom_play
         r.SetMediaItemPosition(item, cursor_pos, false)
         r.SetMediaItemLength(item, 5.0, false)
     end
+    if target_lane ~= nil and r.GetMediaTrackInfo_Value(track, "I_FREEMODE") == 2 then
+        local lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+        target_lane = math.floor(tonumber(target_lane) or 0)
+        if target_lane < 0 then target_lane = 0 end
+        if lane_count > 0 then
+            if target_lane >= lane_count then
+                r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", target_lane + 1)
+                if r.UpdateTimeline then r.UpdateTimeline() end
+                lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or lane_count)
+            end
+            if target_lane >= lane_count then target_lane = lane_count - 1 end
+            r.SetMediaItemInfo_Value(item, "I_FIXEDLANE", target_lane)
+            lane_changed = true
+        end
+    end
     if insert_state.disable_fades then
         r.SetMediaItemInfo_Value(item, "D_FADEINLEN", 0)
         r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN", 0)
@@ -6297,6 +6469,11 @@ function insert_media_on_track(file_path, track, use_original_speed, custom_play
         local src = r.GetMediaItemTake_Source(take)
         if src then r.PCM_Source_BuildPeaks(src, 0) end
         force_peaks_in_item(item, take)
+        if lane_changed then
+            if r.UpdateItemLanes then r.UpdateItemLanes(0) end
+            r.UpdateItemInProject(item)
+            force_peaks_in_item(item, take)
+        end
     end
     r.SetMediaItemSelected(item, true)
     r.Main_OnCommand(40047, 0)
@@ -6369,9 +6546,13 @@ local function handle_reaper_drop()
         end
         insert_state.is_dragging = true
         local mx, my = r.GetMousePosition()
-        local track = r.GetTrackFromPoint(mx, my)
+        local track, info = r.GetTrackFromPoint(mx, my)
         insert_state.drop_track = track
+        insert_state.drop_lane = nil
         if track then
+            if r.GetMediaTrackInfo_Value(track, "I_FREEMODE") == 2 then
+                insert_state.drop_lane = math.floor((tonumber(info) or 0) / 256) % 256
+            end
             local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
             if arrange then
                 local _, arr_left, _, arr_right, _ = r.JS_Window_GetRect(arrange)
@@ -6387,13 +6568,14 @@ local function handle_reaper_drop()
         end
     elseif mouse_state == 0 and insert_state.is_dragging then
         if insert_state.drop_file and insert_state.drop_track then
-            insert_media_on_track(insert_state.drop_file, insert_state.drop_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
+            insert_media_on_track(insert_state.drop_file, insert_state.drop_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch, nil, insert_state.drop_lane)
         elseif insert_state.saved_cursor_pos then
             r.SetEditCurPos(insert_state.saved_cursor_pos, false, false)
         end
         insert_state.is_dragging = false
         insert_state.drop_file = nil
         insert_state.drop_track = nil
+        insert_state.drop_lane = nil
         insert_state.saved_cursor_pos = nil
     end
 end
@@ -8040,11 +8222,19 @@ function draw_file_list()
                         end
                         
                         local files_to_display = (#search_filter.sorted_files > 0) and search_filter.sorted_files or search_filter.filtered_files
+                        ui.visible_files = files_to_display
                         
                         if ui.scroll_to_top then
                             r.ImGui_SetScrollY(ctx, 0)
                             ui.scroll_to_top = false
                         end
+                        local row_h = r.ImGui_GetTextLineHeight(ctx)
+                        if r.ImGui_GetTextLineHeightWithSpacing then
+                            row_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
+                        else
+                            row_h = row_h + 4
+                        end
+                        scroll_selected_file_into_view(row_h, files_to_display)
                         
                         if not ui.list_clipper then
                             ui.list_clipper = r.ImGui_CreateListClipper(ctx)
@@ -8120,11 +8310,14 @@ function draw_file_list()
                                 end
                                 
                                 local display_name = file.name 
-                                r.ImGui_TableNextRow(ctx)
-                                r.ImGui_TableNextColumn(ctx)
-                                
                                 local is_multi_selected = is_file_selected(file.full_path)
                                 local is_single_selected = file.full_path == playback.current_playing_file
+                                r.ImGui_TableNextRow(ctx)
+                                if is_single_selected and r.ImGui_TableSetBgColor and r.ImGui_TableBgTarget_RowBg0 then
+                                    r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg0(), hsv_to_color(ui_settings.accent_hue, 0.65, 0.45, 0.55))
+                                end
+                                r.ImGui_TableNextColumn(ctx)
+                                
                                 local did_push_text = (is_single_selected or is_multi_selected)
                                 if did_push_text then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
@@ -8660,8 +8853,11 @@ function handle_keyboard_navigation()
                 play_media(file_path)
             end
             return true
-        elseif key_down and ui.selected_index < #ui.visible_files then
-            ui.selected_index = ui.selected_index + 1
+        elseif key_down and (playback.random_play or ui.selected_index < #ui.visible_files) then
+            local next_index = playback.random_play and get_random_visible_file_index(ui.selected_index) or (ui.selected_index + 1)
+            if not next_index then return false end
+            ui.selected_index = next_index
+            if playback.random_play then request_scroll_selected_file() end
             playback.selected_file = ui.visible_files[ui.selected_index].name
             
             waveform.selection_active = false
@@ -9159,8 +9355,15 @@ function loop()
             ui.visible_files = build_visible_files_list(file_location.current_files, file_location.current_location)
         end
         local found = false
+        local current_path = playback.current_playing_file
         for i, file in ipairs(ui.visible_files) do
-            if file.name == playback.selected_file then
+            local file_path = file.full_path or file.path
+            if current_path ~= "" and file_path == current_path then
+                ui.selected_index = i
+                playback.selected_file = file.name
+                found = true
+                break
+            elseif current_path == "" and file.name == playback.selected_file then
                 ui.selected_index = i
                 found = true
                 break
@@ -11740,6 +11943,25 @@ function loop()
             pause_color)
         r.ImGui_SameLine(ctx)
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
+        if r.ImGui_InvisibleButton(ctx, "##PrevFile", button_size, button_size) then
+            advance_to_previous_file()
+        end
+        local prev_color = r.ImGui_IsItemHovered(ctx) and hover_color or normal_color
+        local prev_center_y = pos_y + button_size * 0.5
+        r.ImGui_DrawList_AddLine(drawList,
+            pos_x + button_size * 0.18, pos_y + button_size * 0.18,
+            pos_x + button_size * 0.18, pos_y + button_size * 0.82,
+            prev_color, 2)
+        r.ImGui_DrawList_AddTriangleFilled(drawList,
+            pos_x + button_size * 0.78, pos_y + button_size * 0.16,
+            pos_x + button_size * 0.78, pos_y + button_size * 0.84,
+            pos_x + button_size * 0.28, prev_center_y,
+            prev_color)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Previous file")
+        end
+        r.ImGui_SameLine(ctx)
+        pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_InvisibleButton(ctx, "##Stop", button_size, button_size) then
             stop_playback(false)
             if playback.link_transport then r.CSurf_OnStop() end
@@ -11749,6 +11971,25 @@ function loop()
             pos_x + button_size * 0.12, pos_y + button_size * 0.12,
             pos_x + button_size * 0.88, pos_y + button_size * 0.88,
             stop_color)
+        r.ImGui_SameLine(ctx)
+        pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
+        if r.ImGui_InvisibleButton(ctx, "##NextFile", button_size, button_size) then
+            advance_to_next_file()
+        end
+        local next_color = r.ImGui_IsItemHovered(ctx) and hover_color or normal_color
+        local next_center_y = pos_y + button_size * 0.5
+        r.ImGui_DrawList_AddTriangleFilled(drawList,
+            pos_x + button_size * 0.22, pos_y + button_size * 0.16,
+            pos_x + button_size * 0.22, pos_y + button_size * 0.84,
+            pos_x + button_size * 0.72, next_center_y,
+            next_color)
+        r.ImGui_DrawList_AddLine(drawList,
+            pos_x + button_size * 0.82, pos_y + button_size * 0.18,
+            pos_x + button_size * 0.82, pos_y + button_size * 0.82,
+            next_color, 2)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Next file")
+        end
         r.ImGui_SameLine(ctx)
         pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
         if r.ImGui_InvisibleButton(ctx, "##Loop", button_size, button_size) then
@@ -11781,6 +12022,41 @@ function loop()
             right_arrow_x - small_arrow_size/2, right_arrow_y - small_arrow_size/2,
             right_arrow_x + small_arrow_size/2, right_arrow_y - small_arrow_size/2,
             loop_color)
+        r.ImGui_SameLine(ctx)
+        pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
+        if r.ImGui_InvisibleButton(ctx, "##RandomPlay", button_size, button_size) then
+            playback.random_play = not playback.random_play
+            save_options()
+        end
+        local random_color = playback.random_play and active_color or (r.ImGui_IsItemHovered(ctx) and hover_color or normal_color)
+        local rand_lx = pos_x + button_size * 0.18
+        local rand_rx = pos_x + button_size * 0.82
+        local rand_y1 = pos_y + button_size * 0.32
+        local rand_y2 = pos_y + button_size * 0.68
+        r.ImGui_DrawList_AddLine(drawList, rand_lx, rand_y1, rand_rx, rand_y2, random_color, 2)
+        r.ImGui_DrawList_AddLine(drawList, rand_lx, rand_y2, rand_rx, rand_y1, random_color, 2)
+        r.ImGui_DrawList_AddTriangleFilled(drawList, rand_rx, rand_y2, rand_rx - button_size * 0.16, rand_y2 - button_size * 0.02, rand_rx - button_size * 0.08, rand_y2 - button_size * 0.14, random_color)
+        r.ImGui_DrawList_AddTriangleFilled(drawList, rand_rx, rand_y1, rand_rx - button_size * 0.16, rand_y1 + button_size * 0.02, rand_rx - button_size * 0.08, rand_y1 + button_size * 0.14, random_color)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Random play: auto progress chooses a random visible file")
+        end
+        r.ImGui_SameLine(ctx)
+        pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
+        if r.ImGui_InvisibleButton(ctx, "##MinDisplayTime", button_size, button_size) then
+            cycle_min_display_time()
+        end
+        local min_display_active = (playback.min_display_time or 0) > 0
+        local min_display_color = min_display_active and active_color or (r.ImGui_IsItemHovered(ctx) and hover_color or normal_color)
+        local min_label = get_min_display_label()
+        r.ImGui_PushFont(ctx, small_font, small_font_size)
+        local min_label_w, min_label_h = r.ImGui_CalcTextSize(ctx, min_label)
+        r.ImGui_DrawList_AddText(drawList, pos_x + (button_size - min_label_w) * 0.5, pos_y + (button_size - min_label_h) * 0.5, min_display_color, min_label)
+        r.ImGui_PopFont(ctx)
+        if r.ImGui_IsItemHovered(ctx) then
+            local min_ms = math.floor((playback.min_display_time or 0) * 1000 + 0.5)
+            local min_text = min_ms > 0 and "1 s" or "Off"
+            r.ImGui_SetTooltip(ctx, "Minimum display time: " .. min_text .. "\nClick to cycle: Off, 1 s")
+        end
         r.ImGui_SameLine(ctx, 0, 3)  
         
         local transport_start_x = r.ImGui_GetCursorPosX(ctx)
@@ -14636,7 +14912,7 @@ function loop()
         local ok, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
         if ok and pos >= waveform.monitor_sel_end then
             if playback.auto_progress then
-                advance_to_next_file()
+                try_auto_advance()
             else
                 stop_playback(false)
             end
@@ -14651,15 +14927,16 @@ function loop()
         local ok_pos, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
         local ok_len, len = r.CF_Preview_GetValue(playback.playing_preview, "D_LENGTH")
         if ok_pos and ok_len and len > 0 and pos >= len - 0.05 then
-            advance_to_next_file()
+            try_auto_advance()
         end
     end
     if (playback.is_video_playback or playback.is_midi_playback) and not playback.is_paused and playback.auto_progress and not playback.loop_play then
         local reaper_state = r.GetPlayState()
         if reaper_state == 0 and playback.video_preview_item then
-            advance_to_next_file()
+            try_auto_advance()
         end
     end
+    process_pending_auto_advance()
     draw_rename_folder_popup()
 
     if ui.image_viewer_open and ui.image_viewer_path ~= "" then
