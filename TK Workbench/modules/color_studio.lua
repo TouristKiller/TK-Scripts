@@ -69,7 +69,8 @@ local defaults = {
   custom_palette_name = "My Palette",
   selected_custom_palette = "",
   auto_rules = {},
-  auto_rule_index = 1
+  auto_rule_index = 1,
+  auto_apply_tracks = false
 }
 
 local state = {}
@@ -150,6 +151,7 @@ local function ensure_settings(app)
   settings.custom_palettes = type(settings.custom_palettes) == "table" and settings.custom_palettes or {}
   settings.custom_palette_name = tostring(settings.custom_palette_name or defaults.custom_palette_name)
   settings.selected_custom_palette = tostring(settings.selected_custom_palette or "")
+  settings.auto_apply_tracks = settings.auto_apply_tracks == true
   if settings.view_mode ~= "auto" then settings.view_mode = "manual" end
   settings.auto_rules = type(settings.auto_rules) == "table" and settings.auto_rules or {}
   if #settings.auto_rules == 0 then
@@ -1123,6 +1125,71 @@ local function apply_auto_color(app, settings)
   app.status = changed > 0 and ("Auto colored " .. tostring(changed) .. " track(s)") or "No auto color matches"
 end
 
+local function now_time()
+  return r.time_precise and r.time_precise() or os.clock()
+end
+
+local function auto_track_rules_signature(settings)
+  local parts = {}
+  for index, rule in ipairs(settings.auto_rules or {}) do
+    if rule.enabled and auto_rule_target(rule) == "tracks" then
+      parts[#parts + 1] = table.concat({ index, tostring(rule.matcher or ""), tostring(rule.value or ""), tostring(rule.color or ""), tostring(rule.color_index or "") }, "\31")
+    end
+  end
+  return table.concat(parts, "\30"), #parts
+end
+
+local function auto_tracks_signature(settings)
+  local parts = {}
+  local count = r.CountTracks(0) or 0
+  parts[#parts + 1] = tostring(count)
+  for index = 0, count - 1 do
+    local track = r.GetTrack(0, index)
+    if valid_track(track) then
+      parts[#parts + 1] = table.concat({ index, tostring(track), track_name(track), tostring(track_color(track) or 0) }, "\31")
+    end
+  end
+  local rules, rule_count = auto_track_rules_signature(settings)
+  return table.concat(parts, "\30") .. "\29" .. rules, rule_count, count
+end
+
+local function auto_track_changes(settings)
+  local changes = {}
+  for _, entry in ipairs(auto_target_entries("tracks")) do
+    for _, rule in ipairs(settings.auto_rules or {}) do
+      if rule.enabled and auto_rule_target(rule) == "tracks" and auto_rule_matches(rule, entry.name) then
+        local color = auto_color_for_rule(settings, rule)
+        if track_color(entry.target) ~= color then changes[#changes + 1] = { track = entry.target, color = color } end
+        break
+      end
+    end
+  end
+  return changes
+end
+
+local function apply_auto_tracks(app, settings, automatic)
+  local changes = auto_track_changes(settings)
+  if #changes == 0 then return 0 end
+  with_undo(automatic and "Color Studio: Auto Apply Tracks" or "Color Studio: Apply Auto Tracks", function()
+    for _, change in ipairs(changes) do set_track_color(change.track, change.color) end
+  end)
+  app.status = automatic and ("Auto applied " .. tostring(#changes) .. " track color(s)") or ("Auto colored " .. tostring(#changes) .. " track(s)")
+  return #changes
+end
+
+local function reset_auto_apply_state()
+  state.auto_apply_signature = nil
+  state.auto_apply_pending_signature = nil
+  state.auto_apply_due = nil
+end
+
+local function schedule_auto_apply(signature)
+  if state.auto_apply_pending_signature ~= signature then
+    state.auto_apply_pending_signature = signature
+    state.auto_apply_due = now_time() + 0.35
+  end
+end
+
 local function draw_button(ctx, label, width)
   return r.ImGui_Button(ctx, label, width or 92, 0)
 end
@@ -1908,13 +1975,44 @@ local function draw_auto_tab(ctx, app, settings)
   draw_auto_rule_editor(ctx, app, settings)
   r.ImGui_Separator(ctx)
   if draw_button(ctx, "Apply Auto", -1) then apply_auto_color(app, settings) end
-  r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(count_auto_matches(settings)) .. " matching track(s)")
+  local changed, value = r.ImGui_Checkbox(ctx, "Auto apply tracks", settings.auto_apply_tracks == true)
+  if changed then
+    settings.auto_apply_tracks = value
+    reset_auto_apply_state()
+    if app.save_settings then app.save_settings() end
+    app.status = value and "Auto apply tracks enabled" or "Auto apply tracks disabled"
+  end
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(count_auto_matches(settings)) .. " matching target(s)" .. (settings.auto_apply_tracks and " | Auto apply on" or ""))
   r.ImGui_Separator(ctx)
   draw_auto_rules_overview(ctx, app, settings)
 end
 
 function M.init(app)
   ensure_settings(app)
+end
+
+function M.update(app)
+  local settings = ensure_settings(app)
+  if app.settings.active_module ~= M.id or settings.view_mode ~= "auto" or settings.auto_apply_tracks ~= true then
+    state.auto_apply_pending_signature = nil
+    return
+  end
+  if state.auto_apply_running then return end
+  local signature, rule_count = auto_tracks_signature(settings)
+  if rule_count == 0 then
+    state.auto_apply_signature = signature
+    state.auto_apply_pending_signature = nil
+    return
+  end
+  if signature ~= state.auto_apply_signature then schedule_auto_apply(signature) end
+  if state.auto_apply_pending_signature and now_time() >= (state.auto_apply_due or 0) then
+    state.auto_apply_running = true
+    local ok, err = pcall(apply_auto_tracks, app, settings, true)
+    state.auto_apply_running = false
+    if not ok then error(err) end
+    state.auto_apply_pending_signature = nil
+    state.auto_apply_signature = auto_tracks_signature(settings)
+  end
 end
 
 function M.draw(app)

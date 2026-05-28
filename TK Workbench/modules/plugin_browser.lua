@@ -2142,11 +2142,11 @@ local function draw_toolbar(app, settings, avail_w)
     return button_h
   end
   local function total_width(include_overflow)
-    local total = min_search_w
+    local total = 0
     for _, name in ipairs({ "source", "group", "mode", "screenshots", "filter", "rescan" }) do
-      if visible[name] then total = total + gap + item_width(name) end
+      if visible[name] then total = total + (total > 0 and gap or 0) + item_width(name) end
     end
-    if include_overflow then total = total + gap + button_h end
+    if include_overflow then total = total + (total > 0 and gap or 0) + button_h end
     return total
   end
   local hidden_count = 0
@@ -2160,13 +2160,6 @@ local function draw_toolbar(app, settings, avail_w)
     index = index + 1
   end
   local has_overflow = hidden_count > 0
-  local fixed_w = 0
-  for _, name in ipairs({ "source", "group", "mode", "screenshots", "filter", "rescan" }) do
-    if visible[name] then fixed_w = fixed_w + gap + item_width(name) end
-  end
-  if has_overflow then fixed_w = fixed_w + gap + button_h end
-  local search_w = math.max(60, width - fixed_w)
-
   local function draw_mode_button(label, w)
     if r.ImGui_Button(ctx, label, w, button_h) then
       settings.view_mode = settings.view_mode == "tiles" and "list" or "tiles"
@@ -2193,17 +2186,12 @@ local function draw_toolbar(app, settings, avail_w)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Rescan plugins") end
   end
+  local row_started = false
   local function next_item()
-    r.ImGui_SameLine(ctx, 0, gap)
+    if row_started then r.ImGui_SameLine(ctx, 0, gap) end
+    row_started = true
   end
 
-  r.ImGui_PushItemWidth(ctx, search_w)
-  local changed, search = r.ImGui_InputTextWithHint(ctx, "##pb_search", "Search plugins", settings.search_term or "")
-  if changed then
-    settings.search_term = search
-    state.last_filter_key = nil
-  end
-  r.ImGui_PopItemWidth(ctx)
   if visible.source then
     next_item()
     r.ImGui_PushItemWidth(ctx, source_w)
@@ -2268,6 +2256,15 @@ local function draw_toolbar(app, settings, avail_w)
       r.ImGui_EndPopup(ctx)
     end
   end
+  if row_started then r.ImGui_SetCursorPosY(ctx, math.max(0, r.ImGui_GetCursorPosY(ctx))) end
+  r.ImGui_PushItemWidth(ctx, width)
+  local changed, search = r.ImGui_InputTextWithHint(ctx, "##pb_search", "Search plugins", settings.search_term or "")
+  if changed then
+    settings.search_term = search
+    state.last_filter_key = nil
+  end
+  r.ImGui_PopItemWidth(ctx)
+  r.ImGui_Separator(ctx)
 end
 
 local function switch_module(app, module_id, label)

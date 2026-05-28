@@ -1,7 +1,22 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.3
+-- @version 0.1.4
 -- @changelog:
+-- v0.1.4
+--   + Media Browser: Added lazy per-location cache loading with explicit refresh
+--   + Media Browser: Added compact folder browsing with subfolder rows
+--   + Media Browser: Added folder cover-art thumbnails for cover/folder/front images
+--   + Media Browser: Reworked media cache storage to avoid large Lua cache load errors
+--   + Media Browser: Added option for random navigation during auto-preview playback
+--   + Media Browser: Fixed drag-and-drop insertion into REAPER fixed item lanes
+--   + Media Browser: Added audio-file context menu actions for RS5K and Cartridge loading
+--   + Media Browser: Added RS5K Manager pad load/create/delete actions from the audio context menu
+--   + Media Browser: Added RS5K Manager toggle action matching the standalone browser workflow
+--   + Workbench: Added global tooltip enable and delay preferences
+--   + Workbench: Added optional compact Info box footer with clipped text and hover details
+--   + Workbench: Centralized Info box positioning so it stays aligned across modules
+--   + Workbench: Improved module error display with compact diagnostics
+--   + Color Studio: Added optional auto-apply for matching track color rules
 -- v0.1.3
 --   + Plugin Browser: Added option to return to Rack after adding FX from Rack
 --   + Plugin Browser: Added option to return to FX Chain Builder after adding FX to Chain Builder
@@ -58,6 +73,7 @@ local app = {
   close_requested = false,
   settings_panel = nil
 }
+UI.configure_tooltips(app)
 app.cache.saved_theme_preset = settings.theme_preset or "Graphite"
 
 local HOME_MODULE_ID = "__home"
@@ -615,7 +631,7 @@ local function draw_preferences_settings()
     app.settings_panel = nil
   end
   if not app.cache.preferences_open then return end
-  r.ImGui_SetNextWindowSize(ctx, 300, 150, r.ImGui_Cond_Appearing())
+  r.ImGui_SetNextWindowSize(ctx, 300, 230, r.ImGui_Cond_Appearing())
   local visible, open = r.ImGui_Begin(ctx, "Preferences##tk_workbench_preferences", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
   app.cache.preferences_open = open
   if visible then
@@ -635,6 +651,48 @@ local function draw_preferences_settings()
       save_settings()
     end
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Scroll wheel remains active.")
+    r.ImGui_Separator(ctx)
+    changed, value = r.ImGui_Checkbox(ctx, "Info box", app.settings.show_status ~= false)
+    if changed then
+      app.settings.show_status = value
+      app.status = value and "Info box visible" or "Info box hidden"
+      save_settings()
+    end
+    r.ImGui_Separator(ctx)
+    changed, value = r.ImGui_Checkbox(ctx, "Tooltips", app.settings.tooltips_enabled ~= false)
+    if changed then
+      app.settings.tooltips_enabled = value
+      app.cache.tooltip = nil
+      app.status = value and "Tooltips enabled" or "Tooltips disabled"
+      save_settings()
+    end
+    local delays = {
+      { label = "Direct", value = 0 },
+      { label = "0.5 seconds", value = 0.5 },
+      { label = "1 second", value = 1.0 },
+      { label = "2 seconds", value = 2.0 },
+      { label = "3 seconds", value = 3.0 }
+    }
+    local current_delay = tonumber(app.settings.tooltip_delay) or 1.0
+    local current_label = "1 second"
+    for _, option in ipairs(delays) do
+      if math.abs(current_delay - option.value) < 0.01 then current_label = option.label; break end
+    end
+    r.ImGui_PushItemWidth(ctx, 140)
+    if r.ImGui_BeginCombo(ctx, "Tooltip delay", current_label) then
+      for _, option in ipairs(delays) do
+        local selected = math.abs(current_delay - option.value) < 0.01
+        if r.ImGui_Selectable(ctx, option.label, selected) then
+          app.settings.tooltip_delay = option.value
+          app.cache.tooltip = nil
+          app.status = option.value <= 0 and "Tooltips show directly" or ("Tooltip delay: " .. option.label)
+          save_settings()
+        end
+        if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
   end
   r.ImGui_End(ctx)
 end
@@ -652,6 +710,22 @@ local function pop_workspace_style(vars)
   if vars and vars > 0 then r.ImGui_PopStyleVar(ctx, vars) end
 end
 
+local function draw_module_error(module, err)
+  local width = r.ImGui_GetContentRegionAvail(ctx)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local height = 72
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, 5)
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.warning, 5, 0, 1)
+  r.ImGui_SetCursorScreenPos(ctx, x + 10, y + 8)
+  r.ImGui_TextColored(ctx, Theme.colors.warning, tostring(module and (module.title or module.id) or "Module") .. " error")
+  r.ImGui_SetCursorScreenPos(ctx, x + 10, y + 30)
+  r.ImGui_PushTextWrapPos(ctx, x + width - 10)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(err))
+  r.ImGui_PopTextWrapPos(ctx)
+  r.ImGui_SetCursorScreenPos(ctx, x, y + height + 6)
+end
+
 local function draw_module_canvas()
   if is_home_active() then
     draw_home_view()
@@ -661,7 +735,12 @@ local function draw_module_canvas()
   if module then
     if module.draw then
       local ok, err = pcall(module.draw, app)
-      if ok then app.module_errors[module.id .. ".draw"] = nil else app.module_errors[module.id .. ".draw"] = tostring(err) end
+      if ok then
+        app.module_errors[module.id .. ".draw"] = nil
+      else
+        app.module_errors[module.id .. ".draw"] = tostring(err)
+        draw_module_error(module, err)
+      end
     end
   else
     r.ImGui_TextColored(ctx, Theme.colors.warning, "No modules loaded")
@@ -670,14 +749,23 @@ end
 
 local function draw_status_bar()
   local selection = app.selection or {}
-  local text = app.status or "Ready"
+  local captured = UI.get_captured_info_line(app)
+  local text = captured and tostring(captured.text or "") or (app.status or "Ready")
+  local captured_options = captured and captured.options or {}
+  local details = ""
+  local severity = captured_options.severity or "info"
+  if captured_options.details then details = tostring(captured_options.details) end
   if selection.track and selection.track.name then text = text .. " | Track: " .. selection.track.name end
   if selection.item and selection.item.take_name then text = text .. " | Take: " .. selection.item.take_name end
   for key, err in pairs(app.module_errors) do
-    text = "Error in " .. key .. ": " .. err
+    local module_id = tostring(key):match("^(.-)%.") or tostring(key)
+    local module = app.modules_by_id[module_id]
+    text = tostring(module and (module.title or module.id) or module_id) .. " error"
+    details = tostring(err)
+    severity = "error"
     break
   end
-  UI.draw_info_line(ctx, text)
+  UI.draw_info_line(ctx, text, { severity = severity, details = details, force = true })
 end
 
 local function update_modules()
@@ -705,13 +793,31 @@ if r.atexit then r.atexit(shutdown) end
 
 local function draw_shell()
   draw_top_bar()
-  draw_module_canvas()
+  local status_h = app.settings.show_status and UI.info_line_height(ctx, true) or 0
+  local _, available_h = r.ImGui_GetContentRegionAvail(ctx)
+  local canvas_h = math.max(40, (available_h or 240) - status_h)
+  local canvas_flags = 0
+  if r.ImGui_WindowFlags_NoScrollbar then canvas_flags = canvas_flags | r.ImGui_WindowFlags_NoScrollbar() end
+  if r.ImGui_WindowFlags_NoScrollWithMouse then canvas_flags = canvas_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
+  app.cache.captured_info_line = nil
+  if r.ImGui_BeginChild(ctx, "##workbench_module_canvas", 0, canvas_h, 0, canvas_flags) then
+    UI.begin_info_line_capture(app)
+    draw_module_canvas()
+    UI.end_info_line_capture(app)
+    r.ImGui_EndChild(ctx)
+  end
   if app.settings.show_status then draw_status_bar() end
 end
 
 local function loop()
+  if r.ImGui_ValidatePtr and not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
+    ctx = r.ImGui_CreateContext(SCRIPT_NAME)
+    app.ctx = ctx
+    app.cache.tooltip = nil
+  end
   app.selection = Selection.scan()
   update_modules()
+  UI.begin_tooltip_frame(app)
   r.ImGui_SetNextWindowSize(ctx, app.settings.window_width or 430, app.settings.window_height or 760, r.ImGui_Cond_FirstUseEver())
   if (app.settings.theme_preset or "Graphite") ~= Theme.current_preset then
     app.settings.theme_preset = Theme.set_preset(app.settings.theme_preset or "Graphite", app.settings.custom_themes)
@@ -728,6 +834,7 @@ local function loop()
   end
   draw_theme_settings()
   draw_preferences_settings()
+  UI.end_tooltip_frame(app)
   pop_workspace_style(workspace_style_vars)
   Theme.pop(ctx, theme_stack)
   if open and not app.close_requested then

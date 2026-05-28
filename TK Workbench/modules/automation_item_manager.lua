@@ -144,8 +144,8 @@ local function save_module_settings(app)
   if app.save_settings then app.save_settings() end
 end
 
-local function tooltip(ctx, settings, text)
-  if settings.show_tooltips and r.ImGui_IsItemHovered(ctx) then
+local function tooltip(ctx, app, settings, text)
+  if settings.show_tooltips and r.ImGui_IsItemHovered(ctx) and UI.tooltip_ready(ctx, app, text) then
     r.ImGui_BeginTooltip(ctx)
     r.ImGui_Text(ctx, text)
     r.ImGui_EndTooltip(ctx)
@@ -992,7 +992,7 @@ local function draw_header(app, ctx, settings)
   local available_width = r.ImGui_GetContentRegionAvail(ctx)
   r.ImGui_SetCursorPosX(ctx, math.max(0, available_width - 28))
   if r.ImGui_Button(ctx, "...", 28, 22) then r.ImGui_OpenPopup(ctx, "##aim_settings_menu") end
-  tooltip(ctx, settings, "Open Automation Item Manager settings")
+  tooltip(ctx, app, settings, "Open Automation Item Manager settings")
   draw_settings_popup(app, ctx, settings)
   r.ImGui_Separator(ctx)
 end
@@ -1012,8 +1012,8 @@ local function draw_item_context(app, ctx, settings, item, index)
   r.ImGui_EndPopup(ctx)
 end
 
-local function draw_item_tooltip(ctx, settings, item)
-  if not r.ImGui_IsItemHovered(ctx) or not settings.show_tooltips then return end
+local function draw_item_tooltip(app, ctx, settings, item)
+  if not r.ImGui_IsItemHovered(ctx) or not settings.show_tooltips or not UI.tooltip_ready(ctx, app, item.name or "Unknown") then return end
   r.ImGui_BeginTooltip(ctx)
   r.ImGui_Text(ctx, item.name or "Unknown")
   r.ImGui_Text(ctx, "Click: insert as automation item")
@@ -1048,7 +1048,7 @@ local function draw_items_grid(app, ctx, settings)
       end
       if r.ImGui_IsItemClicked(ctx, r.ImGui_MouseButton_Right()) then r.ImGui_OpenPopup(ctx, "##aim_context_" .. index) end
       draw_item_context(app, ctx, settings, item, index)
-      draw_item_tooltip(ctx, settings, item)
+      draw_item_tooltip(app, ctx, settings, item)
       if state.is_dragging and state.drag_item == item then
         r.ImGui_BeginTooltip(ctx)
         r.ImGui_Text(ctx, state.drag_hover_name and ("Drop on " .. state.drag_hover_name) or "Drop on an envelope lane in Arrange")
@@ -1086,47 +1086,47 @@ local function draw_controls_bar(app, ctx, settings)
     scan_automation_items()
     set_footer_message("Refreshed: " .. #state.items .. " items found")
   end
-  tooltip(ctx, settings, "Rescan AutomationItems folder")
+  tooltip(ctx, app, settings, "Rescan AutomationItems folder")
   r.ImGui_SameLine(ctx, 0, button_gap)
   if r.ImGui_Button(ctx, "Convert", button_width, 22) then convert_selected_envelope_points_to_automation_item() end
-  tooltip(ctx, settings, "Convert selected envelope points to automation item")
+  tooltip(ctx, app, settings, "Convert selected envelope points to automation item")
   r.ImGui_SameLine(ctx, 0, button_gap)
   if r.ImGui_Button(ctx, "Save", button_width, 22) then
     r.Main_OnCommand(42092, 0)
     set_footer_message("Save automation item command executed")
   end
-  tooltip(ctx, settings, "Save selected automation item to file")
+  tooltip(ctx, app, settings, "Save selected automation item to file")
   r.ImGui_SameLine(ctx, 0, button_gap)
   if r.ImGui_Button(ctx, "Export", button_width, 22) then export_envelope_points_to_file() end
-  tooltip(ctx, settings, "Export envelope points to .ReaperAutoItem file")
+  tooltip(ctx, app, settings, "Export envelope points to .ReaperAutoItem file")
   r.ImGui_SameLine(ctx, 0, button_gap)
   if r.ImGui_Button(ctx, "Folder", button_width, 22) then
     if ensure_automation_folder_exists() then open_path(state.automation_folder) end
   end
-  tooltip(ctx, settings, "Open AutomationItems folder")
+  tooltip(ctx, app, settings, "Open AutomationItems folder")
   local half_width = math.max(1, math.floor((available_width - button_gap) / 2))
   if r.ImGui_Button(ctx, "Insert New", half_width, 22) then
     r.Main_OnCommand(42082, 0)
     set_footer_message("Inserted automation item")
   end
-  tooltip(ctx, settings, "Insert a new empty automation item")
+  tooltip(ctx, app, settings, "Insert a new empty automation item")
   r.ImGui_SameLine(ctx, 0, button_gap)
   if r.ImGui_Button(ctx, "Edge points", half_width, 22) then
     r.Main_OnCommand(42209, 0)
     set_footer_message("Added edge points")
   end
-  tooltip(ctx, settings, "Add edge points at automation item boundaries")
+  tooltip(ctx, app, settings, "Add edge points at automation item boundaries")
   if r.ImGui_Button(ctx, "Pool duplicate", half_width, 22) then
     r.Main_OnCommand(42085, 0)
     set_footer_message("Pooled duplicate created")
   end
-  tooltip(ctx, settings, "Duplicate selected automation item as pooled copy")
+  tooltip(ctx, app, settings, "Duplicate selected automation item as pooled copy")
   r.ImGui_SameLine(ctx, 0, button_gap)
   if r.ImGui_Button(ctx, "Unpool selected", half_width, 22) then
     r.Main_OnCommand(42084, 0)
     set_footer_message("Unpooled selected item")
   end
-  tooltip(ctx, settings, "Make selected automation item independent")
+  tooltip(ctx, app, settings, "Make selected automation item independent")
   r.ImGui_EndChild(ctx)
 end
 
