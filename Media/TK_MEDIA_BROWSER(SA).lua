@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.1
+-- @version 0.9.2
 -- @changelog:
 --[[
+v0.9.2:
++ added auto trim of silence on audio files during playback and timeline insertion, with threshold and padding settings
+
 v0.9.1:
 + Added random playback mode for sample switching during auto progress
 + Added follow-playback scrolling with visible active-file highlighting in the file list
@@ -183,6 +186,9 @@ local playback = {
     skip_first_silence = false,
     skip_first_silence_threshold_db = -60,
     skip_first_silence_max_scan_seconds = 10.0,
+    auto_trim_silence = false,
+    auto_trim_silence_threshold_db = -48,
+    auto_trim_silence_padding_ms = 8,
     lufs_normalize_target = -18.0,
     pending_autoplay_file = nil,
     pending_autoplay_time = 0
@@ -238,6 +244,7 @@ local waveform = {
     spectral_cache = {},
     spectral_cache_file = "",
     leading_silence_cache = {},
+    silence_trim_cache = {},
     peak_build_pending = {},
     peak_refresh_pending = {},
     show_spectral_view = false,
@@ -249,6 +256,7 @@ local waveform = {
     selection_end = 0,
     is_dragging = false,
     selection_active = false,
+    selection_auto = false,
     monitor_sel_start = 0,
     monitor_sel_end = 0,
     monitor_file_path = "",
@@ -2581,6 +2589,9 @@ local function save_options()
             skip_first_silence = playback.skip_first_silence,
             skip_first_silence_threshold_db = playback.skip_first_silence_threshold_db,
             skip_first_silence_max_scan_seconds = playback.skip_first_silence_max_scan_seconds,
+            auto_trim_silence = playback.auto_trim_silence,
+            auto_trim_silence_threshold_db = playback.auto_trim_silence_threshold_db,
+            auto_trim_silence_padding_ms = playback.auto_trim_silence_padding_ms,
             lufs_normalize_target = playback.lufs_normalize_target,
             current_db = current_db,
             remember_last_location = file_location.remember_last_location,
@@ -2675,6 +2686,9 @@ local function get_settings_table()
         skip_first_silence = playback.skip_first_silence,
         skip_first_silence_threshold_db = playback.skip_first_silence_threshold_db,
         skip_first_silence_max_scan_seconds = playback.skip_first_silence_max_scan_seconds,
+        auto_trim_silence = playback.auto_trim_silence,
+        auto_trim_silence_threshold_db = playback.auto_trim_silence_threshold_db,
+        auto_trim_silence_padding_ms = playback.auto_trim_silence_padding_ms,
         lufs_normalize_target = playback.lufs_normalize_target,
         show_oscilloscope = ui.show_oscilloscope,
         waveform_grid_overlay = ui.waveform_grid_overlay,
@@ -2727,6 +2741,9 @@ local function apply_settings_from_table(settings)
     playback.skip_first_silence = settings.skip_first_silence or false
     playback.skip_first_silence_threshold_db = settings.skip_first_silence_threshold_db or -60
     playback.skip_first_silence_max_scan_seconds = settings.skip_first_silence_max_scan_seconds or 10.0
+    playback.auto_trim_silence = settings.auto_trim_silence or false
+    playback.auto_trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(settings.auto_trim_silence_threshold_db) or -48))
+    playback.auto_trim_silence_padding_ms = math.max(0, math.min(250, tonumber(settings.auto_trim_silence_padding_ms) or 8))
     playback.lufs_normalize_target = settings.lufs_normalize_target or -18.0
     waveform.leading_silence_cache = {}
     ui.show_oscilloscope = settings.show_oscilloscope
@@ -2875,6 +2892,9 @@ local function load_options()
             playback.skip_first_silence = options.skip_first_silence or false
             playback.skip_first_silence_threshold_db = options.skip_first_silence_threshold_db or -60
             playback.skip_first_silence_max_scan_seconds = options.skip_first_silence_max_scan_seconds or 10.0
+            playback.auto_trim_silence = options.auto_trim_silence or false
+            playback.auto_trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(options.auto_trim_silence_threshold_db) or -48))
+            playback.auto_trim_silence_padding_ms = math.max(0, math.min(250, tonumber(options.auto_trim_silence_padding_ms) or 8))
             playback.lufs_normalize_target = options.lufs_normalize_target or -18.0
             current_db = options.current_db
             file_location.remember_last_location = options.remember_last_location ~= nil and options.remember_last_location or true
@@ -2959,6 +2979,9 @@ local function load_options()
                         playback.skip_first_silence = options2.skip_first_silence or false
                         playback.skip_first_silence_threshold_db = options2.skip_first_silence_threshold_db or -60
                         playback.skip_first_silence_max_scan_seconds = options2.skip_first_silence_max_scan_seconds or 10.0
+                        playback.auto_trim_silence = options2.auto_trim_silence or false
+                        playback.auto_trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(options2.auto_trim_silence_threshold_db) or -48))
+                        playback.auto_trim_silence_padding_ms = math.max(0, math.min(250, tonumber(options2.auto_trim_silence_padding_ms) or 8))
                         playback.lufs_normalize_target = options2.lufs_normalize_target or -18.0
                         current_db = options2.current_db
                         file_location.remember_last_location = options2.remember_last_location ~= nil and options2.remember_last_location or true
@@ -4701,10 +4724,10 @@ function queue_lufs_analysis(files)
         end
     end
     if queued > 0 then
-        lufs_analysis.status = string.format("%d LUFS analyse(s) in wachtrij", queued)
+        lufs_analysis.status = string.format("%d LUFS analysis item(s) queued", queued)
         lufs_analysis.last_error = ""
     else
-        lufs_analysis.last_error = "Geen audiobestanden om te analyseren"
+        lufs_analysis.last_error = "No audio files to analyze"
     end
     return queued
 end
@@ -4713,13 +4736,13 @@ function process_lufs_analysis_queue()
     if lufs_analysis.active or #lufs_analysis.queue == 0 then return end
     local file_path = table.remove(lufs_analysis.queue, 1)
     lufs_analysis.active = true
-    lufs_analysis.status = "LUFS analyse: " .. (file_path:match("([^/\\]+)$") or file_path)
+    lufs_analysis.status = "LUFS analysis: " .. (file_path:match("([^/\\]+)$") or file_path)
     local ok, result = analyze_lufs_for_file(file_path)
     if ok then
-        lufs_analysis.status = string.format("LUFS opgeslagen: %.1f", result)
+        lufs_analysis.status = string.format("LUFS saved: %.1f", result)
         lufs_analysis.last_error = ""
     else
-        lufs_analysis.last_error = tostring(result or "LUFS analyse mislukt")
+        lufs_analysis.last_error = tostring(result or "LUFS analysis failed")
         lufs_analysis.status = lufs_analysis.last_error
     end
     lufs_analysis.active = false
@@ -4808,6 +4831,98 @@ local function get_leading_silence_offset(file_path)
 
     waveform.leading_silence_cache[cache_key] = offset
     return offset
+end
+
+function tkmb_auto_trim_is_audio(file_path)
+    local ext = file_path and file_path:match("%.([^%.]+)$")
+    if not ext then return false end
+    ext = ext:lower()
+    return ext == "wav" or ext == "mp3" or ext == "aif" or ext == "aiff" or ext == "flac" or ext == "ogg" or ext == "wma" or ext == "m4a"
+end
+
+function tkmb_clear_auto_trim_selection(file_path)
+    if waveform.selection_auto == true and (not file_path or waveform.monitor_file_path == file_path) then
+        waveform.selection_active = false
+        waveform.selection_auto = false
+        waveform.is_dragging = false
+        waveform.selection_start = 0
+        waveform.selection_end = 0
+        waveform.monitor_sel_start = 0
+        waveform.monitor_sel_end = 0
+        waveform.normalized_sel_start = 0
+        waveform.normalized_sel_end = 0
+        waveform.monitor_file_path = ""
+    end
+end
+
+function tkmb_detect_silence_trim(file_path)
+    if not file_path or file_path == "" or not tkmb_auto_trim_is_audio(file_path) then return nil end
+    local threshold_db = math.max(-96, math.min(-12, tonumber(playback.auto_trim_silence_threshold_db) or -48))
+    local padding_ms = math.max(0, math.min(250, tonumber(playback.auto_trim_silence_padding_ms) or 8))
+    local cache_key = table.concat({ file_path, tostring(threshold_db), tostring(padding_ms) }, "|")
+    if waveform.silence_trim_cache[cache_key] ~= nil then return waveform.silence_trim_cache[cache_key] end
+    local source = r.PCM_Source_CreateFromFile(file_path)
+    if not source then return nil end
+    local length = r.GetMediaSourceLength(source) or 0
+    if length <= 0 then
+        r.PCM_Source_Destroy(source)
+        return nil
+    end
+    local channels = r.GetMediaSourceNumChannels(source) or 1
+    if channels < 1 then channels = 1 end
+    local samples = math.max(256, math.min(32768, math.floor(length * 1000)))
+    local peakrate = samples / length
+    local ok, buffer, has_signal = read_source_peaks(source, peakrate, 0, channels, samples, true)
+    r.PCM_Source_Destroy(source)
+    if not ok or not has_signal then
+        if buffer and buffer.clear then buffer.clear() end
+        return nil
+    end
+    local threshold = db_to_linear(threshold_db)
+    local first_index, last_index = nil, nil
+    for i = 1, samples do
+        local peak = 0
+        for ch = 1, channels do
+            local index = ((i - 1) * channels) + ch
+            peak = math.max(peak, math.abs(buffer[index] or 0), math.abs(buffer[(samples * channels) + index] or 0))
+        end
+        if peak >= threshold then
+            first_index = first_index or i
+            last_index = i
+        end
+    end
+    if buffer and buffer.clear then buffer.clear() end
+    if not first_index or not last_index then return nil end
+    local padding = padding_ms / 1000
+    local start_time = math.max(0, ((first_index - 1) / samples) * length - padding)
+    local end_time = math.min(length, (last_index / samples) * length + padding)
+    if end_time - start_time < 0.01 then return nil end
+    local result = { start_time = start_time, end_time = end_time, length = length }
+    if start_time <= 0.002 and length - end_time <= 0.002 then result.full = true end
+    waveform.silence_trim_cache[cache_key] = result
+    return result
+end
+
+function tkmb_apply_auto_trim_selection(file_path, force)
+    if playback.auto_trim_silence ~= true or not tkmb_auto_trim_is_audio(file_path) then return false end
+    if waveform.selection_active and waveform.selection_auto ~= true and waveform.monitor_file_path == file_path and not force then return false end
+    local result = tkmb_detect_silence_trim(file_path)
+    if not result or result.full then
+        tkmb_clear_auto_trim_selection(file_path)
+        return false
+    end
+    waveform.selection_start = math.max(0, math.min(1, result.start_time / result.length))
+    waveform.selection_end = math.max(0, math.min(1, result.end_time / result.length))
+    waveform.normalized_sel_start = waveform.selection_start
+    waveform.normalized_sel_end = waveform.selection_end
+    waveform.monitor_sel_start = result.start_time
+    waveform.monitor_sel_end = result.end_time
+    waveform.monitor_file_path = file_path
+    waveform.selection_active = true
+    waveform.selection_auto = true
+    waveform.is_dragging = false
+    if playback.effective_playrate and playback.effective_playrate > 0 then update_monitor_positions() end
+    return true
 end
 local function generate_peak_file(file_path)
     local source = r.PCM_Source_CreateFromFile(file_path)
@@ -5747,6 +5862,7 @@ local function start_playback(file_path)
     stop_playback(false)
     
     local resuming_paused = was_paused and paused_file == file_path and saved_paused_pos and saved_paused_pos > 0
+    tkmb_apply_auto_trim_selection(file_path, false)
     
     local has_selection = (waveform.monitor_sel_start ~= waveform.monitor_sel_end) and (waveform.monitor_sel_end > 0) and (waveform.monitor_file_path == file_path)
     local source = r.PCM_Source_CreateFromFile(file_path)
@@ -6233,6 +6349,7 @@ local function play_visible_file_at_index(index)
     playback.auto_advance_pending = false
     playback.auto_advance_due = 0
     waveform.selection_active = false
+    waveform.selection_auto = false
     waveform.is_dragging = false
     waveform.selection_start = 0
     waveform.selection_end = 0
@@ -6371,6 +6488,7 @@ function insert_media_on_track(file_path, track, use_original_speed, custom_play
         if is_midi_file and source_length then
             source_length = source_length / 2
         end
+        if not is_midi_file then tkmb_apply_auto_trim_selection(file_path, false) end
         
         local has_selection = waveform.monitor_sel_start and waveform.monitor_sel_end and 
                             math.abs(waveform.monitor_sel_end - waveform.monitor_sel_start) > 0.01 and
@@ -8229,16 +8347,7 @@ function draw_file_list()
                             ui.scroll_to_top = false
                         end
                         local row_h = r.ImGui_GetTextLineHeight(ctx)
-                        if r.ImGui_GetTextLineHeightWithSpacing then
-                            row_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
-                        else
-                            row_h = row_h + 4
-                        end
                         scroll_selected_file_into_view(row_h, files_to_display)
-                        
-                        if not ui.list_clipper then
-                            ui.list_clipper = r.ImGui_CreateListClipper(ctx)
-                        end
                         
                         local clipper_valid = ui.list_clipper and r.ImGui_ValidatePtr(ui.list_clipper, 'ImGui_ListClipper*')
                         if not clipper_valid then
@@ -13334,6 +13443,39 @@ function loop()
                     end
 
                     r.ImGui_Spacing(ctx)
+                    local auto_trim_changed, new_auto_trim = r.ImGui_Checkbox(ctx, "Auto Remove Silence", playback.auto_trim_silence == true)
+                    if auto_trim_changed then
+                        playback.auto_trim_silence = new_auto_trim
+                        if playback.auto_trim_silence then
+                            if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
+                        else
+                            tkmb_clear_auto_trim_selection()
+                        end
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Automatically selects the non-silent part of audio files for preview and inserts. Manual waveform selections are preserved.")
+                    end
+                    if playback.auto_trim_silence then
+                        r.ImGui_Indent(ctx, 16)
+                        local auto_trim_threshold_changed, new_auto_trim_threshold = r.ImGui_SliderDouble(ctx, "Auto Trim Threshold", playback.auto_trim_silence_threshold_db, -96.0, -12.0, "%.0f dB")
+                        if auto_trim_threshold_changed then
+                            playback.auto_trim_silence_threshold_db = new_auto_trim_threshold
+                            waveform.silence_trim_cache = {}
+                            if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
+                            save_options()
+                        end
+                        local auto_trim_padding_changed, new_auto_trim_padding = r.ImGui_SliderDouble(ctx, "Auto Trim Padding", playback.auto_trim_silence_padding_ms, 0.0, 250.0, "%.0f ms")
+                        if auto_trim_padding_changed then
+                            playback.auto_trim_silence_padding_ms = new_auto_trim_padding
+                            waveform.silence_trim_cache = {}
+                            if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
+                            save_options()
+                        end
+                        r.ImGui_Unindent(ctx, 16)
+                    end
+
+                    r.ImGui_Spacing(ctx)
                     local lufs_target_changed, new_lufs_target = r.ImGui_SliderDouble(ctx, "Normalize Target LUFS", playback.lufs_normalize_target, -30.0, -6.0, "%.1f LUFS")
                     if lufs_target_changed then
                         playback.lufs_normalize_target = new_lufs_target
@@ -14675,6 +14817,7 @@ function loop()
                                 waveform.selection_start = s_vp
                                 waveform.selection_end = e_vp
                                 waveform.selection_active = true
+                                waveform.selection_auto = false
                                 waveform.is_dragging = false
                                 waveform.slice_selected_index = seg_idx
                                 slice_marker_handled = true
@@ -14742,6 +14885,7 @@ function loop()
                     waveform.selection_start = normalized_x
                     waveform.selection_end = normalized_x
                     waveform.selection_active = true
+                    waveform.selection_auto = false
                     
                     if file_path and file_path ~= "" then
                         local source = r.PCM_Source_CreateFromFile(file_path)
