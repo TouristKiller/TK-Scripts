@@ -1,7 +1,17 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.3
+-- @version 1.1.5
 -- @changelog:
+--   v1.1.5:
+--       + Added a read-only FX-chain schema popover per node, with compact container/nested-container visualization.
+--       + Added Paranormal FX launch integration from the FX-chain schema popover without duplicating Paranormal editing features.
+--       + Added node-level pin, FX-chain schema, mute and solo controls, with pin/schema aligned left and mute/solo aligned right.
+--       + Reworked node folder visuals: removed folder-name text badges, added wider colored sidebars with F/C role markers, and moved routing in/out counts under the node title.
+--       + Added subtle milkglass transparency to the FX-chain schema panel with separate light/dark theme tuning.
+--       + Improved zoom behavior so node in/out counts remain visible longer.
+--       + Synced Patchbay multi-select state to REAPER/TCP selection for ctrl-click and rubberband selection.
+--       + Added Del-key removal for multi-selected Patchbay nodes via the existing confirmation popup.
+--       + Added Alt+left-click removal for folder-structure links to extract child tracks from parent folders.
 --   v1.1.3:
 --       + Added Rename Track to the node context menu.
 --       + Added Alt+left-click cable deletion for sends and master-send cables.
@@ -119,6 +129,52 @@ _G.config = {
 _G.TRACK = nil
 _G.patchbay_hide_top_filter_divider = true
 
+local function DrawRoutingFilterArrowButton(ctx, id, is_redo, enabled)
+    local h = r.ImGui_GetFrameHeight(ctx)
+    local w = h
+    local clicked = r.ImGui_InvisibleButton(ctx, id, w, h) and enabled
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+    local hovered = enabled and r.ImGui_IsItemHovered(ctx)
+    local active = enabled and r.ImGui_IsItemActive(ctx)
+    local bg_base = r.ImGui_GetColor(ctx, r.ImGui_Col_Button())
+    local bg_hover = r.ImGui_GetColor(ctx, r.ImGui_Col_ButtonHovered())
+    local bg_active = r.ImGui_GetColor(ctx, r.ImGui_Col_ButtonActive())
+    local border_base = r.ImGui_GetColor(ctx, r.ImGui_Col_Border())
+    local text_disabled = r.ImGui_GetColor(ctx, r.ImGui_Col_TextDisabled())
+    local bg = active and bg_active or (hovered and bg_hover or bg_base)
+    local border = hovered and bg_active or border_base
+    local col = enabled and 0xFFFFFFFF or text_disabled
+    local cx = (x1 + x2) * 0.5
+    local cy = (y1 + y2) * 0.5
+    local s = h * 0.34
+    local m = is_redo and 1 or -1
+    r.ImGui_DrawList_AddRectFilled(dl, x1, y1, x2, y2, bg, 4)
+    r.ImGui_DrawList_AddRect(dl, x1, y1, x2, y2, border, 4, nil, 1)
+    local ax = cx + m * s
+    local bx = cx - m * s
+    local ay = cy
+    local bw = s * 0.58
+    local thick = math.max(2.2, h * 0.13)
+    r.ImGui_DrawList_AddLine(dl, ax, ay, bx, ay, col, thick)
+    r.ImGui_DrawList_AddLine(dl, ax, ay, ax - m * bw, ay - bw, col, thick)
+    r.ImGui_DrawList_AddLine(dl, ax, ay, ax - m * bw, ay + bw, col, thick)
+    if hovered then r.ImGui_SetTooltip(ctx, is_redo and "Redo" or "Undo") end
+    return clicked
+end
+
+local function CanNativeUndoRedo(is_redo)
+    local fn = is_redo and r.Undo_CanRedo2 or r.Undo_CanUndo2
+    if not fn then return true end
+    local text = fn(0)
+    return text ~= nil and text ~= ""
+end
+
+local function RunNativeUndoRedo(is_redo)
+    r.Main_OnCommand(is_redo and 40030 or 40029, 0)
+end
+
 -- JSON encode/decode helpers (simple implementation)
 local function json_encode(tbl)
     local json_str = "{"
@@ -211,10 +267,17 @@ if not _G.DrawRoutingFilterBar then
         end
 
         local control_w = 130
+    if DrawRoutingFilterArrowButton(ctx, "##routing_filter_undo", false, CanNativeUndoRedo(false)) then RunNativeUndoRedo(false) end
+    r.ImGui_SameLine(ctx, 0, 2)
+    if DrawRoutingFilterArrowButton(ctx, "##routing_filter_redo", true, CanNativeUndoRedo(true)) then RunNativeUndoRedo(true) end
+    r.ImGui_SameLine(ctx, 0, 5)
         r.ImGui_PushItemWidth(ctx, control_w)
         local changed, new_filter = r.ImGui_InputTextWithHint(ctx, "##routing_filter", "Filter tracks...", _G.config.routing_filter_text or "")
         if changed then
-            _G.config.routing_filter_text = new_filter
+            _G.config.routing_filter_text = new_filter or ""
+        end
+        if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+            if _G.SaveConfig then _G.SaveConfig() end
         end
         r.ImGui_PopItemWidth(ctx)
         r.ImGui_SameLine(ctx)

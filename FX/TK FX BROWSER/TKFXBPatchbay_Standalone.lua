@@ -3,10 +3,10 @@ local r = reaper
 local PB = {}
 
 local NODE_W_DEFAULT = 180
-local NODE_H = 60
+local NODE_H = 72
 local NODE_H_COLLAPSED = 30
 local PIN_R = 6
-local ROW_H = 80
+local ROW_H = 92
 local GRID = 40
 local MASTER_GUID = "__MASTER__"
 
@@ -84,6 +84,9 @@ local view_help_open = false
 local cable_shop_selected = "post_fader"
 local cable_shop_user_slot = 1
 local cable_shop_user_name = "Preset 1"
+PB.fx_schema_open_guid = nil
+PB.fx_schema_monochrome = true
+PB.fx_schema_mouse_block = false
 
 local ROUTE_FILTER_ORDER = { "all", "post-fader", "pre-fader", "pre-fx", "muted", "audio", "sidechain", "midi" }
 local ROUTE_FILTER_LABELS = {
@@ -427,6 +430,104 @@ local function GetSelectedPatchbayTracks()
     return out
 end
 
+function PatchbaySyncSelectedSetToTCP(focus_track)
+    local focus = nil
+    local has_selection = false
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            local g = r.GetTrackGUID(tr)
+            local selected = pb_selected_set[g] == true
+            r.SetMediaTrackInfo_Value(tr, "I_SELECTED", selected and 1 or 0)
+            if selected then
+                has_selection = true
+                if focus_track == tr then focus = tr end
+                if not focus then focus = tr end
+            end
+        end
+    end
+    local master = r.GetMasterTrack(0)
+    if master and r.ValidatePtr(master, "MediaTrack*") then
+        local selected = pb_selected_set[MASTER_GUID] == true
+        r.SetMediaTrackInfo_Value(master, "I_SELECTED", selected and 1 or 0)
+        if selected then
+            has_selection = true
+            if focus_track == master then focus = master end
+            if not focus then focus = master end
+        end
+    end
+    _G.TRACK = has_selection and focus or nil
+    if _G.TRACK and _G.TRACK ~= master and r.SetMixerScroll then r.SetMixerScroll(_G.TRACK) end
+    r.UpdateArrange()
+end
+
+function PatchbaySyncTCPSelectionToSelectedSet()
+    pb_selected_set = {}
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") and r.GetMediaTrackInfo_Value(tr, "I_SELECTED") == 1 then
+            pb_selected_set[r.GetTrackGUID(tr)] = true
+        end
+    end
+    _G.TRACK = r.GetSelectedTrack(0, 0)
+    layout_dirty = true
+end
+
+function PatchbayMarkSelectedTracksForVisiblePlacement()
+    local pending = {}
+    local count = 0
+    for guid, selected in pairs(pb_selected_set) do
+        if selected and guid ~= MASTER_GUID and not node_positions[guid] then
+            pending[guid] = true
+            count = count + 1
+        end
+    end
+    PB.pending_paste_visible_guids = count > 0 and pending or nil
+end
+
+function PatchbayFocusNativeTrackContext(track)
+    if r.SetCursorContext then r.SetCursorContext(0, nil) end
+    if track and r.ValidatePtr(track, "MediaTrack*") then _G.TRACK = track end
+end
+
+function PatchbayCopySelectedTracks()
+    local selected_tracks = GetSelectedPatchbayTracks()
+    if #selected_tracks == 0 then return false end
+    PatchbaySyncSelectedSetToTCP(selected_tracks[1].track)
+    PatchbayFocusNativeTrackContext(selected_tracks[1].track)
+    r.Main_OnCommand(40210, 0)
+    return true
+end
+
+function PatchbayCopyNodeTracks(track, guid)
+    if guid and guid ~= MASTER_GUID and pb_selected_set[guid] ~= true then
+        pb_selected_set = { [guid] = true }
+    end
+    return PatchbayCopySelectedTracks()
+end
+
+function PatchbayPasteTracks()
+    if IsAllLockedCfg(GetConfig()) then return false end
+    local selected_tracks = GetSelectedPatchbayTracks()
+    if #selected_tracks > 0 then PatchbaySyncSelectedSetToTCP(selected_tracks[1].track) end
+    PatchbayFocusNativeTrackContext(selected_tracks[1] and selected_tracks[1].track or _G.TRACK)
+    r.Main_OnCommand(42398, 0)
+    PatchbaySyncTCPSelectionToSelectedSet()
+    PatchbayMarkSelectedTracksForVisiblePlacement()
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    return true
+end
+
+function PatchbayPasteTracksAtNode(track, guid)
+    if guid and guid ~= MASTER_GUID and pb_selected_set[guid] ~= true then
+        pb_selected_set = { [guid] = true }
+    end
+    return PatchbayPasteTracks()
+end
+
 local function GetTrackIndexLocal(tr)
     if not tr or not r.ValidatePtr(tr, "MediaTrack*") then return -1 end
     local n = r.CountTracks(0)
@@ -766,7 +867,7 @@ local function RemoveTrackFromFolderParent(tr)
     layout_dirty = true
 end
 
-local function BatchSetMute(selected_tracks, muted)
+function BatchSetMute(selected_tracks, muted)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     r.Undo_BeginBlock()
@@ -780,7 +881,7 @@ local function BatchSetMute(selected_tracks, muted)
     r.Undo_EndBlock(muted and "Patchbay: mute selected tracks" or "Patchbay: unmute selected tracks", -1)
 end
 
-local function BatchSetSolo(selected_tracks, solo_on)
+function BatchSetSolo(selected_tracks, solo_on)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     r.Undo_BeginBlock()
@@ -794,7 +895,7 @@ local function BatchSetSolo(selected_tracks, solo_on)
     r.Undo_EndBlock(solo_on and "Patchbay: solo selected tracks" or "Patchbay: unsolo selected tracks", -1)
 end
 
-local function BatchSetPinned(selected_tracks, pin_on)
+function BatchSetPinned(selected_tracks, pin_on)
     if IsLayoutLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     for i = 1, #selected_tracks do
@@ -808,7 +909,125 @@ local function BatchSetPinned(selected_tracks, pin_on)
     layout_dirty = true
 end
 
-local function BatchSetCollapsed(selected_tracks, collapse_on)
+PB.paranormal_command_id = nil
+
+function PatchbayNormalizePath(path)
+    return tostring(path or ""):gsub("\\", "/"):lower()
+end
+
+function PatchbayFindParanormalScriptPath()
+    local resource = r.GetResourcePath():gsub("\\", "/")
+    local candidates = {
+        resource .. "/Scripts/Sexan_Scripts/ParanormalFX/Sexan_ParaNormal_FX_Router.lua",
+        resource .. "/Scripts/Sexan_Scripts/FX/Sexan_ParaNormal_FX_Router.lua"
+    }
+    for i = 1, #candidates do
+        if r.file_exists(candidates[i]) then return candidates[i] end
+    end
+    if r.EnumerateFiles then
+        local dir = resource .. "/Scripts/Sexan_Scripts/ParanormalFX"
+        local idx = 0
+        while true do
+            local file = r.EnumerateFiles(dir, idx)
+            if not file then break end
+            local lower = file:lower()
+            if lower:match("%.lua$") and lower:find("paranormal", 1, true) then
+                return dir .. "/" .. file
+            end
+            idx = idx + 1
+        end
+    end
+    return nil
+end
+
+function PatchbayFindRegisteredCommandForScript(script_path)
+    local kb_path = r.GetResourcePath() .. "/reaper-kb.ini"
+    local file = io.open(kb_path, "r")
+    if not file then return nil end
+    local target = PatchbayNormalizePath(script_path)
+    local name = target:match("([^/]+)$") or target
+    for line in file:lines() do
+        local line_norm = PatchbayNormalizePath(line)
+        if line_norm:find(target, 1, true) or line_norm:find(name, 1, true) then
+            local cmd = line:match("(_RS[%w_]+)")
+            if cmd then
+                file:close()
+                return cmd
+            end
+        end
+    end
+    file:close()
+    return nil
+end
+
+function PatchbayResolveParanormalCommand()
+    if PB.paranormal_command_id and PB.paranormal_command_id ~= 0 then return PB.paranormal_command_id end
+    local script_path = PatchbayFindParanormalScriptPath()
+    if not script_path then return nil, "Paranormal FX script not found." end
+    local named = PatchbayFindRegisteredCommandForScript(script_path)
+    if named and r.NamedCommandLookup then
+        local cmd = r.NamedCommandLookup(named)
+        if cmd and cmd ~= 0 then
+            PB.paranormal_command_id = cmd
+            return PB.paranormal_command_id
+        end
+    end
+    if r.AddRemoveReaScript then
+        local cmd = r.AddRemoveReaScript(true, 0, script_path, true)
+        if cmd and cmd ~= 0 then
+            PB.paranormal_command_id = cmd
+            return PB.paranormal_command_id
+        end
+    end
+    return nil, "Could not register or locate Paranormal FX action."
+end
+
+function PatchbayToggleParanormalForTrack(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false, "Track not available." end
+    local cmd, err = PatchbayResolveParanormalCommand()
+    if not cmd then return false, err end
+    r.SetOnlyTrackSelected(track)
+    _G.TRACK = track
+    if r.SetMixerScroll then r.SetMixerScroll(track) end
+    r.UpdateArrange()
+    r.Main_OnCommand(cmd, 0)
+    return true
+end
+
+function PatchbayDrawPinSymbol(draw_list, x1, y1, x2, y2, col)
+    local cx = (x1 + x2) * 0.5
+    local cy = (y1 + y2) * 0.5
+    local w = x2 - x1
+    local h = y2 - y1
+    local icon_w = w * 0.50
+    local icon_h = h * 0.32
+    local rect_y = cy - h * 0.24
+    r.ImGui_DrawList_AddRect(draw_list, cx - icon_w * 0.5, rect_y, cx + icon_w * 0.5, rect_y + icon_h, col, 1, nil, 1.4)
+    r.ImGui_DrawList_AddLine(draw_list, cx, rect_y + icon_h, cx, cy + h * 0.30, col, 1.4)
+end
+
+function PatchbayDrawSchemaSymbol(draw_list, x1, y1, x2, y2, col)
+    local w = x2 - x1
+    local h = y2 - y1
+    local box_w = w * 0.24
+    local box_h = h * 0.22
+    local left_x = x1 + w * 0.20
+    local mid_x = x1 + w * 0.50
+    local right_x = x1 + w * 0.80
+    local mid_y = y1 + h * 0.50
+    local top_y = y1 + h * 0.30
+    local bot_y = y1 + h * 0.70
+    r.ImGui_DrawList_AddLine(draw_list, left_x + box_w * 0.5, mid_y, mid_x - box_w * 0.5, top_y, col, 1.2)
+    r.ImGui_DrawList_AddLine(draw_list, left_x + box_w * 0.5, mid_y, mid_x - box_w * 0.5, bot_y, col, 1.2)
+    r.ImGui_DrawList_AddLine(draw_list, mid_x + box_w * 0.5, top_y, right_x - box_w * 0.5, mid_y, col, 1.2)
+    r.ImGui_DrawList_AddLine(draw_list, mid_x + box_w * 0.5, bot_y, right_x - box_w * 0.5, mid_y, col, 1.2)
+    r.ImGui_DrawList_AddRect(draw_list, left_x - box_w * 0.5, mid_y - box_h * 0.5, left_x + box_w * 0.5, mid_y + box_h * 0.5, col, 1, nil, 1.2)
+    r.ImGui_DrawList_AddRect(draw_list, mid_x - box_w * 0.5, top_y - box_h * 0.5, mid_x + box_w * 0.5, top_y + box_h * 0.5, col, 1, nil, 1.2)
+    r.ImGui_DrawList_AddRect(draw_list, mid_x - box_w * 0.5, bot_y - box_h * 0.5, mid_x + box_w * 0.5, bot_y + box_h * 0.5, col, 1, nil, 1.2)
+    r.ImGui_DrawList_AddRect(draw_list, right_x - box_w * 0.5, mid_y - box_h * 0.5, right_x + box_w * 0.5, mid_y + box_h * 0.5, col, 1, nil, 1.2)
+end
+
+function BatchSetCollapsed(selected_tracks, collapse_on)
     if IsLayoutLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     for i = 1, #selected_tracks do
@@ -822,7 +1041,7 @@ local function BatchSetCollapsed(selected_tracks, collapse_on)
     layout_dirty = true
 end
 
-local function BatchDeleteTracks(selected_tracks)
+function BatchDeleteTracks(selected_tracks)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     r.Undo_BeginBlock()
@@ -845,7 +1064,30 @@ local function BatchDeleteTracks(selected_tracks)
     layout_dirty = true
 end
 
-local function BatchConnectSelectedToTarget(selected_tracks, target)
+function PatchbayDeleteSelectedShortcutPressed(ctx)
+    if not r.ImGui_IsKeyPressed or not r.ImGui_Key_Delete then return false end
+    if r.ImGui_IsAnyItemActive and r.ImGui_IsAnyItemActive(ctx) then return false end
+    if r.ImGui_IsWindowFocused then
+        local flags = r.ImGui_FocusedFlags_RootAndChildWindows and r.ImGui_FocusedFlags_RootAndChildWindows() or 0
+        if not r.ImGui_IsWindowFocused(ctx, flags) then return false end
+    end
+    return r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Delete())
+end
+
+function PatchbayCtrlShortcutPressed(ctx, key_func)
+    if not r.ImGui_IsKeyPressed or not key_func then return false end
+    if r.ImGui_IsAnyItemActive and r.ImGui_IsAnyItemActive(ctx) then return false end
+    if r.ImGui_IsWindowFocused then
+        local flags = r.ImGui_FocusedFlags_RootAndChildWindows and r.ImGui_FocusedFlags_RootAndChildWindows() or 0
+        if not r.ImGui_IsWindowFocused(ctx, flags) then return false end
+    end
+    local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
+    local mod_ctrl = r.ImGui_Mod_Ctrl and r.ImGui_Mod_Ctrl() or 0
+    if (mods & mod_ctrl) == 0 then return false end
+    return r.ImGui_IsKeyPressed(ctx, key_func())
+end
+
+function BatchConnectSelectedToTarget(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -871,7 +1113,7 @@ local function BatchConnectSelectedToTarget(selected_tracks, target)
     end
 end
 
-local function BatchConnectTargetToSelected(target, selected_tracks)
+function BatchConnectTargetToSelected(target, selected_tracks)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -897,7 +1139,7 @@ local function BatchConnectTargetToSelected(target, selected_tracks)
     end
 end
 
-local function BatchDisconnectSelectedToTarget(selected_tracks, target)
+function BatchDisconnectSelectedToTarget(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -925,7 +1167,7 @@ local function BatchDisconnectSelectedToTarget(selected_tracks, target)
     end
 end
 
-local function BatchDisconnectTargetToSelected(target, selected_tracks)
+function BatchDisconnectTargetToSelected(target, selected_tracks)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -970,7 +1212,7 @@ local function FindTrackByGuid(guid)
     return nil
 end
 
-local function BatchConnectSelectedToDestination(selected_tracks, target)
+function BatchConnectSelectedToDestination(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
@@ -997,7 +1239,7 @@ local function BatchConnectSelectedToDestination(selected_tracks, target)
     return changes
 end
 
-local function BatchDisconnectSelectedFromDestination(selected_tracks, target)
+function BatchDisconnectSelectedFromDestination(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
@@ -1026,7 +1268,7 @@ local function BatchDisconnectSelectedFromDestination(selected_tracks, target)
     return changes
 end
 
-local function BatchApplyBulkRouteSettings(selected_tracks, target, create_missing, mode, vol_db, pan, mute, phase, mono)
+function BatchApplyBulkRouteSettings(selected_tracks, target, create_missing, mode, vol_db, pan, mute, phase, mono)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
@@ -1124,6 +1366,73 @@ end
 local function NodeH(guid)
     if guid and collapsed_nodes[guid] then return NODE_H_COLLAPSED end
     return NODE_H
+end
+
+function PatchbayPlacePendingVisibleNodes(tracks, avail_w, avail_h)
+    local pending = PB.pending_paste_visible_guids
+    if not pending then return end
+    local pasted = {}
+    local remaining = false
+    for i = 1, #tracks do
+        local guid = tracks[i].guid
+        if pending[guid] and node_positions[guid] then
+            pasted[#pasted + 1] = guid
+            pending[guid] = nil
+        end
+    end
+    for _, _ in pairs(pending) do remaining = true break end
+    if #pasted == 0 then
+        if not remaining then PB.pending_paste_visible_guids = nil end
+        return
+    end
+    table.sort(pasted, function(a, b)
+        local ta = FindTrackByGuidLocal(a)
+        local tb = FindTrackByGuidLocal(b)
+        return GetTrackIndexLocal(ta) < GetTrackIndexLocal(tb)
+    end)
+    local cfg = GetConfig()
+    local pad = 24
+    local left = (-canvas_offset_x) / canvas_zoom
+    local top = (-canvas_offset_y) / canvas_zoom
+    local right = (avail_w - canvas_offset_x) / canvas_zoom
+    local bottom = (avail_h - canvas_offset_y) / canvas_zoom
+    local col_w = LayoutColW(cfg)
+    local row_h = LayoutRowH(cfg)
+    local visible_w = math.max(1, right - left - pad * 2)
+    local max_cols = math.max(1, math.floor(visible_w / math.max(1, col_w)))
+    local start_x = left + pad
+    local start_y = top + pad
+    if start_x + NodeW() > right - pad then start_x = left + math.max(0, (right - left - NodeW()) * 0.5) end
+    for i = 1, #pasted do
+        local guid = pasted[i]
+        local col = (i - 1) % max_cols
+        local row = math.floor((i - 1) / max_cols)
+        local x = start_x + col * col_w
+        local y = start_y + row * row_h
+        x = math.floor((x / GRID) + 0.5) * GRID
+        y = math.floor((y / GRID) + 0.5) * GRID
+        local min_x = left + pad
+        local max_x = right - pad - NodeW()
+        local min_y = top + pad
+        local max_y = bottom - pad - NodeH(guid)
+        if max_x < min_x then
+            x = left + math.max(0, (right - left - NodeW()) * 0.5)
+        elseif x < min_x then
+            x = min_x
+        elseif x > max_x then
+            x = max_x
+        end
+        if max_y < min_y then
+            y = top + math.max(0, (bottom - top - NodeH(guid)) * 0.5)
+        elseif y < min_y then
+            y = min_y
+        elseif y > max_y then
+            y = max_y
+        end
+        node_positions[guid] = { x = x, y = y }
+    end
+    PB.pending_paste_visible_guids = remaining and pending or nil
+    layout_dirty = true
 end
 
 local function EncodeLayout()
@@ -2458,27 +2767,574 @@ local function TruncateText(ctx, s, max_w)
     return s:sub(1, math.max(0, lo - 1)) .. "..."
 end
 
-local function RemovePatchbayCable(cable)
-    if IsAllLockedCfg(GetConfig()) then return false end
+function PatchbayFxSchemaPatternEscape(s)
+    return tostring(s or ""):gsub("([^%w])", "%%%1")
+end
+
+function PatchbayFxSchemaTextWidth(ctx, text)
+    local w = r.ImGui_CalcTextSize(ctx, tostring(text or ""))
+    return w or 0
+end
+
+function PatchbayFxSchemaCleanName(name, fallback)
+    name = tostring(name or ""):gsub("^%s*(.-)%s*$", "%1")
+    name = name:gsub("^VST3i?:%s*", ""):gsub("^VSTi?:%s*", ""):gsub("^CLAPi?:%s*", ""):gsub("^JS:%s*", "")
+    name = name:gsub("^AUi?:%s*", ""):gsub("^LV2i?:%s*", ""):gsub("^DXi?:%s*", ""):gsub("^ReWire:%s*", "")
+    name = name:gsub("%s+%(x%d+%)%s*$", ""):gsub("%s+%[x%d+%]%s*$", "")
+    name = name:gsub("%s+%(bridged%)%s*$", ""):gsub("%s+%[bridged%]%s*$", "")
+    local publisher = name:match("%(([^()]*)%)%s*$")
+    if publisher and publisher ~= "" then
+        local publisher_lc = publisher:lower()
+        if not publisher_lc:match("mono") and not publisher_lc:match("stereo") and not publisher_lc:match("out") and not publisher_lc:match("sidechain") then
+            name = name:gsub("%s*%([^()]*%)%s*$", "")
+            local head = publisher:match("^([%w%-]+)")
+            if head and #head >= 3 then
+                name = name:gsub("^" .. PatchbayFxSchemaPatternEscape(head) .. "%s+", "")
+            end
+        end
+    end
+    name = name:gsub("%s+by%s+[%w%p%s]+$", "")
+    local dash_suffix = name:match("%s+%-%s+(.+)$")
+    if dash_suffix then
+        local suffix_lc = dash_suffix:lower()
+        if suffix_lc:match("audio") or suffix_lc:match("dsp") or suffix_lc:match("inc") or suffix_lc:match("ltd") or suffix_lc:match("llc") or suffix_lc:match("fabfilter") or suffix_lc:match("izotope") or suffix_lc:match("softube") or suffix_lc:match("valhalla") or suffix_lc:match("waves") or suffix_lc:match("cockos") then
+            name = name:gsub("%s+%-%s+.+$", "")
+        end
+    end
+    name = name:gsub("^%s*(.-)%s*$", "%1")
+    return name ~= "" and name or (fallback or "FX")
+end
+
+function PatchbayFxSchemaThemeIsLight()
+    local bg = _G.patchbay_grid_bg_col or 0x1A1A1AFF
+    local red = math.floor(bg / 0x1000000) % 0x100
+    local green = math.floor(bg / 0x10000) % 0x100
+    local blue = math.floor(bg / 0x100) % 0x100
+    local luminance = (red * 0.299) + (green * 0.587) + (blue * 0.114)
+    return luminance > 150
+end
+
+function PatchbayFxSchemaLineColor(compact)
+    local light_theme = PatchbayFxSchemaThemeIsLight()
+    if PB.fx_schema_monochrome then
+        if light_theme then return compact and 0x3A3A3ADD or 0xD6D6D6EE end
+        return compact and 0x202020CC or 0x252525E6
+    end
+    if light_theme then return compact and 0xE2ECF7F2 or 0x4F5C6AE6 end
+    return compact and 0xB8BDC699 or 0xB8BDC6CC
+end
+
+function PatchbayFxSchemaPalette(kind, fx)
+    local light_theme = PatchbayFxSchemaThemeIsLight()
+    if PB.fx_schema_monochrome then
+        if kind == "panel" then
+            if light_theme then return 0x1A1A1A98, 0x777777DD, 0xE8E8E8FF end
+            return 0xF1F1F1A8, 0x404040DD, 0x101010FF
+        end
+        if fx and fx.offline then
+            if light_theme then return 0x303030F2, 0xE4E4E4DD, 0xF0F0F0FF end
+            return 0x707070F2, 0x202020DD, 0xF7F7F7FF
+        end
+        if fx and not fx.enabled then
+            if light_theme then return 0x606060F2, 0xBEBEBEDD, 0xD8D8D8FF end
+            return 0xB8B8B8F2, 0x777777DD, 0x515151FF
+        end
+        if fx and fx.fx_type == "Container" then
+            if light_theme then return 0xD7D7D7F4, 0xFFFFFFFF, 0x151515FF end
+            return 0xE0E0E0F5, 0x111111E0, 0x111111FF
+        end
+        if light_theme then return 0xEEEEEEF4, 0xFFFFFFFF, 0x161616FF end
+        return 0xFFFFFFF5, 0x1B1B1BE0, 0x101010FF
+    end
+    if kind == "panel" then return 0x111820B8, 0x5D728CCC, 0x8E98A6FF end
+    if fx and fx.offline then return 0x332020E6, 0xB64A4ACC, 0xD08A8AFF end
+    if fx and not fx.enabled then return 0x24262BE6, 0x5A5D66CC, 0x8E939CFF end
+    if fx and fx.fx_type == "Container" then return 0x183225E6, 0x57C184CC, 0xD9F4E5FF end
+    return 0x172231E6, 0x4F8FD8CC, 0xE6EAF0FF
+end
+
+function PatchbayFxSchemaGetParm(track, fx, key)
+    if not r.TrackFX_GetNamedConfigParm then return false, "" end
+    local ok, value = r.TrackFX_GetNamedConfigParm(track, fx, key)
+    return ok, tostring(value or "")
+end
+
+function PatchbayFxSchemaCollectContainer(track, container_id, parent_fx_count, previous_diff, depth)
+    local out = {}
+    local ok_count, raw_count = PatchbayFxSchemaGetParm(track, 0x2000000 + container_id, "container_count")
+    local count = ok_count and math.floor(tonumber(raw_count) or 0) or 0
+    if count <= 0 then return out, 0 end
+    local max_items = 8
+    local limit = math.min(count, max_items)
+    local diff = depth == 1 and parent_fx_count + 1 or (parent_fx_count + 1) * previous_diff
+    for i = 1, limit do
+        local fx_id = container_id + (diff * i)
+        local api_id = 0x2000000 + fx_id
+        local _, raw_name = r.TrackFX_GetFXName(track, api_id, "")
+        local ok_type, fx_type = PatchbayFxSchemaGetParm(track, api_id, "fx_type")
+        local ok_parallel, parallel = PatchbayFxSchemaGetParm(track, api_id, "parallel")
+        local children, child_count = {}, 0
+        if ok_type and fx_type == "Container" and depth < 2 then
+            children, child_count = PatchbayFxSchemaCollectContainer(track, fx_id, count, diff, depth + 1)
+        elseif ok_type and fx_type == "Container" then
+            local ok_child_count, raw_child_count = PatchbayFxSchemaGetParm(track, 0x2000000 + fx_id, "container_count")
+            child_count = ok_child_count and math.floor(tonumber(raw_child_count) or 0) or 0
+        end
+        out[#out + 1] = {
+            name = PatchbayFxSchemaCleanName(raw_name, "FX " .. tostring(i)),
+            full_name = tostring(raw_name or ""),
+            enabled = r.TrackFX_GetEnabled(track, api_id),
+            offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, api_id) or false,
+            fx_type = ok_type and fx_type or "",
+            parallel = ok_parallel and parallel ~= "0",
+            children = children,
+            child_count = child_count,
+            api_id = api_id,
+            depth = depth
+        }
+    end
+    return out, count
+end
+
+function PatchbayFxSchemaCollect(track)
+    local out = {}
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return out, 0 end
+    local count = r.TrackFX_GetCount(track) or 0
+    local limit = math.min(count, 8)
+    for i = 0, limit - 1 do
+        local _, raw_name = r.TrackFX_GetFXName(track, i, "")
+        local ok_type, fx_type = PatchbayFxSchemaGetParm(track, i, "fx_type")
+        local ok_parallel, parallel = PatchbayFxSchemaGetParm(track, i, "parallel")
+        local children, child_count = {}, 0
+        if ok_type and fx_type == "Container" then
+            children, child_count = PatchbayFxSchemaCollectContainer(track, i + 1, count, 0, 1)
+        end
+        out[#out + 1] = {
+            name = PatchbayFxSchemaCleanName(raw_name, "FX " .. tostring(i + 1)),
+            full_name = tostring(raw_name or ""),
+            enabled = r.TrackFX_GetEnabled(track, i),
+            offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, i) or false,
+            fx_type = ok_type and fx_type or "",
+            parallel = ok_parallel and parallel ~= "0",
+            children = children,
+            child_count = child_count,
+            api_id = i,
+            depth = 0
+        }
+    end
+    return out, count
+end
+
+function PatchbayFxSchemaBuildStages(chain)
+    local stages = {}
+    for i = 1, #(chain or {}) do
+        local fx = chain[i]
+        if fx.parallel and #stages > 0 then
+            local st = stages[#stages]
+            st.items[#st.items + 1] = fx
+        else
+            stages[#stages + 1] = { items = { fx } }
+        end
+    end
+    return stages
+end
+
+function PatchbayFxSchemaMakeDims(zoom)
+    local scale = math.max(0.72, math.min(1.0, zoom or 1.0))
+    return {
+        scale = scale,
+        item_h = math.floor(19 * scale + 0.5),
+        child_h = math.floor(14 * scale + 0.5),
+        gap = math.floor(24 * scale + 0.5),
+        lane_gap = math.floor(10 * scale + 0.5),
+        child_gap = math.floor(5 * scale + 0.5),
+        pad_x = math.floor(8 * scale + 0.5),
+        branch_pad = math.floor(20 * scale + 0.5),
+        child_branch_pad = math.floor(13 * scale + 0.5),
+        min_w = math.floor(52 * scale + 0.5),
+        max_w = math.floor(130 * scale + 0.5),
+        child_min_w = math.floor(42 * scale + 0.5),
+        child_max_w = math.floor(95 * scale + 0.5),
+        panel_pad = math.floor(10 * scale + 0.5),
+        para_pad = math.floor(3 * scale + 0.5),
+        para_gap = math.floor(5 * scale + 0.5)
+    }
+end
+
+function PatchbayFxSchemaMeasureChildChain(ctx, fx, dims)
+    local stages = PatchbayFxSchemaBuildStages(fx.children)
+    local total_w = 0
+    local max_lanes = 1
+    for i = 1, #stages do
+        local st = stages[i]
+        st.width = 0
+        st.widths = {}
+        for j = 1, #st.items do
+            local text_w = PatchbayFxSchemaTextWidth(ctx, st.items[j].name)
+            local cw = math.min(dims.child_max_w, math.max(dims.child_min_w, math.floor(text_w + (dims.pad_x * 1.2) + 0.5)))
+            st.widths[j] = cw
+            if cw > st.width then st.width = cw end
+        end
+        if #st.items > 1 then st.width = st.width + (dims.child_branch_pad * 2) end
+        total_w = total_w + st.width
+        if #st.items > max_lanes then max_lanes = #st.items end
+    end
+    local extra = math.max(0, (fx.child_count or 0) - #(fx.children or {}))
+    local extra_w = 0
+    if extra > 0 then
+        extra_w = math.min(dims.child_max_w, math.max(dims.child_min_w, math.floor(PatchbayFxSchemaTextWidth(ctx, "+" .. tostring(extra)) + (dims.pad_x * 1.2) + 0.5)))
+        total_w = total_w + extra_w
+    end
+    total_w = total_w + math.max(0, #stages - 1) * dims.child_gap + (extra > 0 and dims.child_gap or 0)
+    fx.schema_child_stages = stages
+    fx.schema_child_extra = extra
+    fx.schema_child_extra_w = extra_w
+    fx.schema_child_w = math.max(dims.child_min_w, total_w)
+    fx.schema_child_h = (max_lanes * dims.child_h) + ((max_lanes - 1) * dims.child_gap)
+end
+
+function PatchbayFxSchemaMeasureBox(ctx, fx, dims)
+    local text_w = PatchbayFxSchemaTextWidth(ctx, fx.name)
+    local w = math.min(dims.max_w, math.max(dims.min_w, math.floor(text_w + (dims.pad_x * 2) + 0.5)))
+    local h = dims.item_h
+    fx.schema_child_stages = nil
+    fx.schema_child_extra = 0
+    if fx.fx_type == "Container" then
+        PatchbayFxSchemaMeasureChildChain(ctx, fx, dims)
+        if (fx.schema_child_w or 0) > 0 then
+            w = math.max(w, math.min(math.floor(220 * dims.scale + 0.5), math.floor((fx.schema_child_w or 0) + (dims.pad_x * 2) + 0.5)))
+            h = dims.item_h + (fx.schema_child_h or dims.child_h) + dims.child_gap + 5
+        end
+    end
+    fx.schema_w = w
+    fx.schema_h = h
+end
+
+function PatchbayFxSchemaBuildLayout(ctx, track, track_name, node_x1, node_y1, node_x2, node_y2, canvas_x1, canvas_y1, canvas_x2, canvas_y2, zoom)
+    local chain, count = PatchbayFxSchemaCollect(track)
+    local dims = PatchbayFxSchemaMakeDims(zoom)
+    local stages = PatchbayFxSchemaBuildStages(chain)
+    local total_w = 0
+    local total_h = dims.item_h
+    for i = 1, #stages do
+        local st = stages[i]
+        st.width = 0
+        st.widths = {}
+        st.lane_h = dims.item_h
+        for j = 1, #st.items do
+            PatchbayFxSchemaMeasureBox(ctx, st.items[j], dims)
+            st.widths[j] = st.items[j].schema_w
+            if st.widths[j] > st.width then st.width = st.widths[j] end
+            if st.items[j].schema_h > st.lane_h then st.lane_h = st.items[j].schema_h end
+        end
+        if #st.items > 1 then st.width = st.width + (dims.branch_pad * 2) end
+        st.height = (#st.items * st.lane_h) + ((#st.items - 1) * dims.lane_gap)
+        total_w = total_w + st.width
+        if st.height > total_h then total_h = st.height end
+    end
+    local extra = math.max(0, count - #chain)
+    local extra_w = 0
+    if extra > 0 then
+        extra_w = math.max(dims.min_w, math.floor(PatchbayFxSchemaTextWidth(ctx, "+" .. tostring(extra)) + (dims.pad_x * 2) + 0.5))
+        total_w = total_w + extra_w
+    end
+    total_w = total_w + math.max(0, #stages - 1) * dims.gap + (extra > 0 and dims.gap or 0)
+    if #stages == 0 and extra == 0 then
+        total_w = math.floor(130 * dims.scale + 0.5)
+        total_h = dims.item_h
+    end
+    local f_w = PatchbayFxSchemaTextWidth(ctx, "F")
+    local x_w = PatchbayFxSchemaTextWidth(ctx, "X")
+    local para_text_w = math.max(f_w, x_w)
+    local para_w = math.max(12, math.floor(para_text_w + (dims.para_pad * 2) + 0.5))
+    local panel_w = total_w + dims.para_gap + para_w + (dims.panel_pad * 2)
+    local panel_h = total_h + (dims.panel_pad * 2)
+    local margin = math.floor(18 * dims.scale + 0.5)
+    local px = node_x2 + margin
+    local py = node_y1 + ((node_y2 - node_y1 - panel_h) * 0.5)
+    local anchor_x = node_x2
+    local anchor_y = (node_y1 + node_y2) * 0.5
+    local end_x = px
+    local end_y = py + panel_h * 0.5
+    if px + panel_w > canvas_x2 - 4 then
+        if node_x1 - margin - panel_w >= canvas_x1 + 4 then
+            px = node_x1 - margin - panel_w
+            anchor_x = node_x1
+            end_x = px + panel_w
+        else
+            px = math.max(canvas_x1 + 4, math.min(node_x1, canvas_x2 - panel_w - 4))
+            py = node_y2 + margin
+            anchor_x = (node_x1 + node_x2) * 0.5
+            anchor_y = node_y2
+            end_x = px + panel_w * 0.5
+            end_y = py
+        end
+    end
+    if py + panel_h > canvas_y2 - 4 then py = canvas_y2 - panel_h - 4 end
+    if py < canvas_y1 + 4 then py = canvas_y1 + 4 end
+    if px < canvas_x1 + 4 then px = canvas_x1 + 4 end
+    if px + panel_w > canvas_x2 - 4 then px = canvas_x2 - panel_w - 4 end
+    return { track = track, track_name = track_name, chain = chain, count = count, stages = stages, extra = extra, extra_w = extra_w, dims = dims, x = px, y = py, w = panel_w, h = panel_h, content_w = total_w, content_h = total_h, para_w = para_w, anchor_x = anchor_x, anchor_y = anchor_y, end_x = end_x, end_y = end_y }
+end
+
+function PatchbayFxSchemaDrawSmallBox(ctx, draw_list, fx, x, y, w, h, dims)
+    local bg, border, text_col = PatchbayFxSchemaPalette("small", fx)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + w, y + h, bg, 3)
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + w, y + h, border, 3, nil, 1)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    local label = TruncateText(ctx, fx.name, w - dims.pad_x)
+    r.ImGui_DrawList_AddText(draw_list, x + dims.pad_x * 0.5, y + ((h - text_h) * 0.5), text_col, label)
+end
+
+function PatchbayFxSchemaDrawChildChain(ctx, draw_list, fx, x, y, w, dims)
+    local stages = fx.schema_child_stages or {}
+    local line_col = PatchbayFxSchemaLineColor(true)
+    local chain_w = fx.schema_child_w or 0
+    local chain_h = fx.schema_child_h or dims.child_h
+    local chain_x = x + ((w - chain_w) * 0.5)
+    local chain_mid_y = y + chain_h * 0.5
+    local cx = chain_x
+    for i = 1, #stages do
+        local st = stages[i]
+        if #st.items > 1 then
+            local left_x = cx
+            local right_x = cx + st.width
+            local first_mid_y = y + dims.child_h * 0.5
+            local last_mid_y = y + ((#st.items - 1) * (dims.child_h + dims.child_gap)) + (dims.child_h * 0.5)
+            r.ImGui_DrawList_AddLine(draw_list, left_x, first_mid_y, left_x, last_mid_y, line_col, 1.2)
+            r.ImGui_DrawList_AddLine(draw_list, right_x, first_mid_y, right_x, last_mid_y, line_col, 1.2)
+            for j = 1, #st.items do
+                local lane_mid_y = y + ((j - 1) * (dims.child_h + dims.child_gap)) + (dims.child_h * 0.5)
+                r.ImGui_DrawList_AddLine(draw_list, left_x, lane_mid_y, right_x, lane_mid_y, line_col, 1.2)
+            end
+        end
+        for j = 1, #st.items do
+            local item_w = st.widths[j]
+            local bx = cx + ((st.width - item_w) * 0.5)
+            local lane_mid_y = #st.items > 1 and (y + ((j - 1) * (dims.child_h + dims.child_gap)) + (dims.child_h * 0.5)) or chain_mid_y
+            PatchbayFxSchemaDrawSmallBox(ctx, draw_list, st.items[j], bx, lane_mid_y - dims.child_h * 0.5, item_w, dims.child_h, dims)
+        end
+        if i < #stages or (fx.schema_child_extra or 0) > 0 then
+            r.ImGui_DrawList_AddLine(draw_list, cx + st.width, chain_mid_y, cx + st.width + dims.child_gap, chain_mid_y, line_col, 1.2)
+        end
+        cx = cx + st.width + dims.child_gap
+    end
+    if (fx.schema_child_extra or 0) > 0 then
+        local ew = fx.schema_child_extra_w or dims.child_min_w
+        PatchbayFxSchemaDrawSmallBox(ctx, draw_list, { name = "+" .. tostring(fx.schema_child_extra), enabled = true, offline = false }, cx, chain_mid_y - dims.child_h * 0.5, ew, dims.child_h, dims)
+    end
+end
+
+function PatchbayFxSchemaDrawBox(ctx, draw_list, fx, x, y, w, h, dims)
+    local bg, border, text_col = PatchbayFxSchemaPalette("box", fx)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + w, y + h, bg, 4)
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + w, y + h, border, 4, nil, 1.1)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    local label = TruncateText(ctx, fx.name, w - dims.pad_x * 2)
+    r.ImGui_DrawList_AddText(draw_list, x + dims.pad_x, y + ((dims.item_h - text_h) * 0.5), text_col, label)
+    if fx.fx_type == "Container" and (fx.schema_child_stages or fx.schema_child_extra or 0) then
+        PatchbayFxSchemaDrawChildChain(ctx, draw_list, fx, x, y + dims.item_h + dims.child_gap, w, dims)
+    end
+end
+
+function PatchbayFxSchemaRender(ctx, draw_list, layout)
+    if not layout then return end
+    local dims = layout.dims
+    local line_col = PatchbayFxSchemaLineColor(false)
+    local panel_bg, panel_border, panel_text = PatchbayFxSchemaPalette("panel")
+    r.ImGui_DrawList_AddLine(draw_list, layout.anchor_x, layout.anchor_y, layout.end_x, layout.end_y, line_col, 1.2)
+    r.ImGui_DrawList_AddRectFilled(draw_list, layout.x, layout.y, layout.x + layout.w, layout.y + layout.h, panel_bg, 6)
+    r.ImGui_DrawList_AddRect(draw_list, layout.x, layout.y, layout.x + layout.w, layout.y + layout.h, panel_border, 6, nil, 1.1)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    local chain_x = layout.x + dims.panel_pad
+    local chain_y = layout.y + dims.panel_pad
+    local chain_mid_y = chain_y + layout.content_h * 0.5
+    local cx = chain_x
+    if #layout.stages == 0 and layout.extra == 0 then
+        local msg = "No FX"
+        local tw = PatchbayFxSchemaTextWidth(ctx, msg)
+        r.ImGui_DrawList_AddText(draw_list, chain_x + ((layout.content_w - tw) * 0.5), chain_mid_y - text_h * 0.5, panel_text, msg)
+    end
+    for i = 1, #layout.stages do
+        local st = layout.stages[i]
+        local stage_y = chain_y + ((layout.content_h - st.height) * 0.5)
+        if #st.items > 1 then
+            local left_x = cx
+            local right_x = cx + st.width
+            local first_mid_y = stage_y + st.lane_h * 0.5
+            local last_mid_y = stage_y + ((#st.items - 1) * (st.lane_h + dims.lane_gap)) + (st.lane_h * 0.5)
+            r.ImGui_DrawList_AddLine(draw_list, left_x, first_mid_y, left_x, last_mid_y, line_col, 1.2)
+            r.ImGui_DrawList_AddLine(draw_list, right_x, first_mid_y, right_x, last_mid_y, line_col, 1.2)
+            for j = 1, #st.items do
+                local lane_mid_y = stage_y + ((j - 1) * (st.lane_h + dims.lane_gap)) + (st.lane_h * 0.5)
+                r.ImGui_DrawList_AddLine(draw_list, left_x, lane_mid_y, right_x, lane_mid_y, line_col, 1.2)
+            end
+        end
+        for j = 1, #st.items do
+            local fx = st.items[j]
+            local item_w = st.widths[j]
+            local bx = cx + ((st.width - item_w) * 0.5)
+            local lane_mid_y = #st.items > 1 and (stage_y + ((j - 1) * (st.lane_h + dims.lane_gap)) + (st.lane_h * 0.5)) or chain_mid_y
+            local by = lane_mid_y - ((fx.schema_h or dims.item_h) * 0.5)
+            PatchbayFxSchemaDrawBox(ctx, draw_list, fx, bx, by, item_w, fx.schema_h or dims.item_h, dims)
+        end
+        if i < #layout.stages or layout.extra > 0 then
+            r.ImGui_DrawList_AddLine(draw_list, cx + st.width, chain_mid_y, cx + st.width + dims.gap, chain_mid_y, line_col, 1.2)
+        end
+        cx = cx + st.width + dims.gap
+    end
+    if layout.extra > 0 then
+        PatchbayFxSchemaDrawBox(ctx, draw_list, { name = "+" .. tostring(layout.extra), enabled = true, offline = false }, cx, chain_mid_y - dims.item_h * 0.5, layout.extra_w, dims.item_h, dims)
+    end
+    local btn_w = layout.para_w or dims.para_w
+    local btn_h = layout.content_h
+    local btn_x = layout.x + dims.panel_pad + layout.content_w + dims.para_gap
+    local btn_y = chain_y
+    local divider_x = layout.x + dims.panel_pad + layout.content_w + (dims.para_gap * 0.5)
+    local btn_text = panel_text
+    r.ImGui_DrawList_AddLine(draw_list, divider_x, layout.y, divider_x, layout.y + layout.h, panel_border, 1.1)
+    local f_tw = PatchbayFxSchemaTextWidth(ctx, "F")
+    local x_tw = PatchbayFxSchemaTextWidth(ctx, "X")
+    local glyph_gap = math.max(1, math.floor(1 * dims.scale + 0.5))
+    local text_total_h = (text_h * 2) + glyph_gap
+    local text_y = btn_y + ((btn_h - text_total_h) * 0.5)
+    r.ImGui_DrawList_AddText(draw_list, btn_x + ((btn_w - f_tw) * 0.5), text_y, btn_text, "F")
+    r.ImGui_DrawList_AddText(draw_list, btn_x + ((btn_w - x_tw) * 0.5), text_y + text_h + glyph_gap, btn_text, "X")
+    r.ImGui_PushID(ctx, "fx_schema_popover")
+    if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+    r.ImGui_SetCursorScreenPos(ctx, layout.x, layout.y)
+    r.ImGui_InvisibleButton(ctx, "##fx_schema_panel", layout.w, layout.h)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Read-only FX chain schema") end
+    if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+    r.ImGui_SetCursorScreenPos(ctx, btn_x, btn_y)
+    r.ImGui_InvisibleButton(ctx, "##schema_paranormal", btn_w, btn_h)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Open Paranormal FX for this track") end
+    if r.ImGui_IsItemClicked(ctx, 0) then
+        local ok, err = PatchbayToggleParanormalForTrack(layout.track)
+        if not ok then r.ShowMessageBox(tostring(err or "Could not open Paranormal FX."), "Patchbay: Paranormal FX", 0) end
+    end
+    r.ImGui_PopID(ctx)
+end
+
+local function RemovePatchbayCableTargetNoUndo(cable)
     if not cable or not cable.src or not r.ValidatePtr(cable.src, "MediaTrack*") then return false end
     if cable.is_main then
         if r.GetMediaTrackInfo_Value(cable.src, "B_MAINSEND") ~= 1 then return false end
-        r.Undo_BeginBlock()
         r.SetMediaTrackInfo_Value(cable.src, "B_MAINSEND", 0)
-        r.TrackList_AdjustWindows(false)
-        r.UpdateArrange()
-        r.Undo_EndBlock("Patchbay: disable main send", -1)
         return true
     end
     if not cable.dst or not r.ValidatePtr(cable.dst, "MediaTrack*") then return false end
     local idx = GetSendIndexLocal(cable.src, cable.dst)
     if idx < 0 then return false end
-    r.Undo_BeginBlock()
     r.RemoveTrackSend(cable.src, 0, idx)
+    return true
+end
+
+local function RemovePatchbayCable(cable)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    local action_name = cable and cable.is_main and "Patchbay: disable main send" or "Patchbay: delete connection"
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local changed = RemovePatchbayCableTargetNoUndo(cable)
+    r.PreventUIRefresh(-1)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
-    r.Undo_EndBlock("Patchbay: delete connection", -1)
-    return true
+    r.Undo_EndBlock(changed and action_name or (action_name .. " (no changes)"), -1)
+    return changed
+end
+
+local function RemoveSelectedPatchbayCableRelations(cable)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not cable or not cable.src or not r.ValidatePtr(cable.src, "MediaTrack*") then return false end
+    local src_guid = r.GetTrackGUID(cable.src)
+    local src_selected = pb_selected_set[src_guid] == true
+    local dst_selected = false
+    if cable.is_main then
+        dst_selected = pb_selected_set[MASTER_GUID] == true
+    elseif cable.dst and r.ValidatePtr(cable.dst, "MediaTrack*") then
+        dst_selected = pb_selected_set[r.GetTrackGUID(cable.dst)] == true
+    end
+    if not src_selected and not dst_selected then return RemovePatchbayCable(cable) end
+    local targets = {}
+    local seen = {}
+    local function add_target(src, dst, is_main)
+        if not src or not r.ValidatePtr(src, "MediaTrack*") then return end
+        if not is_main and (not dst or not r.ValidatePtr(dst, "MediaTrack*") or src == dst) then return end
+        local sg = r.GetTrackGUID(src)
+        local dg = is_main and MASTER_GUID or r.GetTrackGUID(dst)
+        local key = sg .. "->" .. dg
+        if seen[key] then return end
+        seen[key] = true
+        targets[#targets + 1] = { src = src, dst = dst, is_main = is_main }
+    end
+    local selected_tracks = GetSelectedPatchbayTracks()
+    if cable.is_main then
+        if src_selected then
+            for i = 1, #selected_tracks do
+                add_target(selected_tracks[i].track, nil, true)
+            end
+        else
+            add_target(cable.src, nil, true)
+        end
+    elseif src_selected then
+        for i = 1, #selected_tracks do
+            add_target(selected_tracks[i].track, cable.dst, false)
+        end
+    elseif dst_selected then
+        for i = 1, #selected_tracks do
+            add_target(cable.src, selected_tracks[i].track, false)
+        end
+    else
+        add_target(cable.src, cable.dst, cable.is_main)
+    end
+    if #targets == 0 then return false end
+    local changes = 0
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for i = 1, #targets do
+        if RemovePatchbayCableTargetNoUndo(targets[i]) then changes = changes + 1 end
+    end
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock(changes > 1 and "Patchbay: delete selected connections" or "Patchbay: delete connection", -1)
+    return changes > 0
+end
+
+local function RemoveSelectedFolderLinks(folder_link)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not folder_link or not folder_link.track or not r.ValidatePtr(folder_link.track, "MediaTrack*") then return false end
+    local parent_guid = folder_link.folder_parent_guid
+    if not parent_guid then return false end
+    local child_guids = {}
+    local seen = {}
+    local function add_child_guid(guid)
+        if not guid or seen[guid] then return end
+        seen[guid] = true
+        child_guids[#child_guids + 1] = guid
+    end
+    if pb_selected_set[folder_link.guid] then
+        local selected_tracks = GetSelectedPatchbayTracks()
+        for i = 1, #selected_tracks do
+            local parent = GetDirectFolderParentLocal(selected_tracks[i].track)
+            if parent and r.ValidatePtr(parent, "MediaTrack*") and r.GetTrackGUID(parent) == parent_guid then
+                add_child_guid(selected_tracks[i].guid)
+            end
+        end
+    end
+    if #child_guids == 0 then add_child_guid(folder_link.guid) end
+    table.sort(child_guids, function(a, b)
+        return GetTrackIndexLocal(FindTrackByGuidLocal(a)) > GetTrackIndexLocal(FindTrackByGuidLocal(b))
+    end)
+    local changed = false
+    for i = 1, #child_guids do
+        local child = FindTrackByGuidLocal(child_guids[i])
+        if child and r.ValidatePtr(child, "MediaTrack*") then
+            RemoveTrackFromFolderParent(child)
+            changed = true
+        end
+    end
+    return changed
 end
 
 local function RenderRightClickPopup()
@@ -2672,6 +3528,17 @@ local function RenderNodePopup()
             elseif r.ImGui_Selectable(ctx, "Rename Track...") then
                 r.ImGui_CloseCurrentPopup(ctx)
                 RenamePatchbayTrack(tr)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Selectable(ctx, "Copy track selection   Ctrl+C") then
+                PatchbayCopyNodeTracks(tr, node_popup_guid)
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if IsAllLockedCfg(GetConfig()) then
+                r.ImGui_TextDisabled(ctx, "Paste tracks")
+            elseif r.ImGui_Selectable(ctx, "Paste tracks   Ctrl+V") then
+                PatchbayPasteTracksAtNode(tr, node_popup_guid)
+                r.ImGui_CloseCurrentPopup(ctx)
             end
             local selected_tracks = GetSelectedPatchbayTracks()
             if #selected_tracks > 1 then
@@ -3069,7 +3936,14 @@ function ShowRoutingPatchbay()
             open_bulk_editor_popup = true
         end
         r.ImGui_Separator(ctx)
-        if r.ImGui_Selectable(ctx, "Delete selected...") then
+        if r.ImGui_Selectable(ctx, "Copy selected tracks   Ctrl+C") then
+            PatchbayCopySelectedTracks()
+        end
+        if r.ImGui_Selectable(ctx, "Paste tracks   Ctrl+V") then
+            PatchbayPasteTracks()
+        end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Selectable(ctx, "Delete selected...   Del") then
             delete_selected_targets = selected_tracks
             r.ImGui_OpenPopup(ctx, "PatchbayDeleteSelectedConfirm")
         end
@@ -3175,6 +4049,19 @@ function ShowRoutingPatchbay()
     end
     if not toolbar_popup_opened then
         open_toolbar_popup_id = nil
+    end
+
+    if #selected_tracks > 0 and not all_locked and open_toolbar_popup_id == nil and delete_selected_targets == nil and PatchbayDeleteSelectedShortcutPressed(ctx) then
+        delete_selected_targets = selected_tracks
+        r.ImGui_OpenPopup(ctx, "PatchbayDeleteSelectedConfirm")
+    end
+
+    if not all_locked and open_toolbar_popup_id == nil and delete_selected_targets == nil then
+        if #selected_tracks > 0 and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_C) then
+            PatchbayCopySelectedTracks()
+        elseif PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_V) then
+            PatchbayPasteTracks()
+        end
     end
 
     if open_bulk_editor_popup then
@@ -3477,7 +4364,7 @@ function ShowRoutingPatchbay()
     local bg_active = r.ImGui_IsItemActive(ctx)
     local bg_hovered = r.ImGui_IsItemHovered(ctx)
 
-    if bg_active and dragging_node_guid == nil and pending_connection == nil and not layout_locked then
+    if bg_active and not PB.fx_schema_mouse_block and dragging_node_guid == nil and pending_connection == nil and not layout_locked then
         local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
         if dx ~= 0 or dy ~= 0 then
             canvas_offset_x = canvas_offset_x + dx
@@ -3487,7 +4374,7 @@ function ShowRoutingPatchbay()
         end
     end
 
-    if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseDragging(ctx, 2) and not layout_locked then
+    if r.ImGui_IsWindowHovered(ctx) and not PB.fx_schema_mouse_block and r.ImGui_IsMouseDragging(ctx, 2) and not layout_locked then
         local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 2, 0, 0)
         if dx ~= 0 or dy ~= 0 then
             canvas_offset_x = canvas_offset_x + dx
@@ -3497,7 +4384,7 @@ function ShowRoutingPatchbay()
         end
     end
 
-    if r.ImGui_IsWindowHovered(ctx) and not layout_locked then
+    if r.ImGui_IsWindowHovered(ctx) and not PB.fx_schema_mouse_block and not layout_locked then
         local wheel = r.ImGui_GetMouseWheel(ctx)
         if wheel ~= 0 then
             local mxw, myw = r.ImGui_GetMousePos(ctx)
@@ -3523,6 +4410,7 @@ function ShowRoutingPatchbay()
     end
 
     EnsurePositions(tracks)
+    PatchbayPlacePendingVisibleNodes(tracks, avail_w, avail_h)
 
     if pending_fit_view then
         pending_fit_view = false
@@ -3630,6 +4518,22 @@ function ShowRoutingPatchbay()
     local selected_track = _G.TRACK
     local hide_child_master_flow = cfg.patchbay_hide_child_master_flow == true
     local solo_path_enabled = (cfg.patchbay_solo_path == true) and selected_track and r.ValidatePtr(selected_track, "MediaTrack*")
+    local fx_schema_layout = nil
+    local fx_schema_open_seen = false
+    for i = 1, #tracks do
+        local tr = tracks[i]
+        if PB.fx_schema_open_guid == tr.guid then
+            fx_schema_open_seen = true
+            local x1, y1, x2, y2 = NodeRect(tr.guid)
+            if x1 and not tr.is_master and not collapsed_nodes[tr.guid] and r.ValidatePtr(tr.track, "MediaTrack*") then
+                fx_schema_layout = PatchbayFxSchemaBuildLayout(ctx, tr.track, tr.name, x1, y1, x2, y2, origin_x, origin_y, origin_x + avail_w, origin_y + avail_h, canvas_zoom)
+            end
+            break
+        end
+    end
+    if PB.fx_schema_open_guid and not fx_schema_open_seen then PB.fx_schema_open_guid = nil end
+    local fx_schema_blocks_mouse = fx_schema_layout and mx >= fx_schema_layout.x and mx <= fx_schema_layout.x + fx_schema_layout.w and my >= fx_schema_layout.y and my <= fx_schema_layout.y + fx_schema_layout.h
+    PB.fx_schema_mouse_block = fx_schema_blocks_mouse == true
 
     local function CablePassesFilter(is_main, mode, muted, send_type_info)
         if route_filter == "all" then return true end
@@ -3710,6 +4614,7 @@ function ShowRoutingPatchbay()
         end
     end
 
+    local hovered_folder_link = nil
     local folder_link_style = GetCableOverlayStyle("folder_links", cfg)
     if cfg.patchbay_show_folder_links ~= false and folder_link_style.visible then
         for i = 1, #tracks do
@@ -3720,8 +4625,12 @@ function ShowRoutingPatchbay()
                 if sx and x1 then
                     local dx = (x1 + x2) * 0.5
                     local dy = y1
-                    local col = folder_link_style.color
+                    if not fx_schema_blocks_mouse and not hovered_folder_link and PointSegDist(mx, my, sx, sy, dx, dy) <= math.max(6, 7 * canvas_zoom) then
+                        hovered_folder_link = child
+                    end
+                    local col = hovered_folder_link == child and folder_link_style.hover or folder_link_style.color
                     local thickness = math.max(1.0, folder_link_style.thickness * canvas_zoom)
+                    if hovered_folder_link == child then thickness = thickness + 1 end
                     r.ImGui_DrawList_AddLine(draw_list, sx, sy, dx, dy, col, thickness)
                     r.ImGui_DrawList_AddCircleFilled(draw_list, dx, dy, math.max(2.0, 2.5 * canvas_zoom), col)
                 end
@@ -3745,7 +4654,7 @@ function ShowRoutingPatchbay()
             local cy1 = sy
             local cx2 = dx - cp_dist
             local cy2 = dy
-            if not hovered_cable and BezierHit(mx, my, sx, sy, cx1, cy1, cx2, cy2, dx, dy, 6) then
+            if not fx_schema_blocks_mouse and not hovered_cable and BezierHit(mx, my, sx, sy, cx1, cy1, cx2, cy2, dx, dy, 6) then
                 hovered_cable = c
             end
         end
@@ -3851,12 +4760,34 @@ function ShowRoutingPatchbay()
         end
     end
     
-    if hovered_cable and not node_right_click_consumed then
+    local folder_link_click_consumed = false
+    if hovered_folder_link and not node_right_click_consumed then
         local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
         local mod_alt = r.ImGui_Mod_Alt and r.ImGui_Mod_Alt() or 0
         local alt_held = (mods & mod_alt) ~= 0
         if alt_held and r.ImGui_IsMouseClicked(ctx, 0) then
-            if RemovePatchbayCable(hovered_cable) then hovered_cable = nil end
+            RemoveSelectedFolderLinks(hovered_folder_link)
+            folder_link_click_consumed = true
+            hovered_folder_link = nil
+        elseif hovered_folder_link then
+            local parent = FindTrackByGuidLocal(hovered_folder_link.folder_parent_guid)
+            local parent_name = "Parent"
+            if parent and r.ValidatePtr(parent, "MediaTrack*") then
+                local _, name = r.GetTrackName(parent)
+                parent_name = name or parent_name
+            end
+            local child_name = hovered_folder_link.name or "Child"
+            local folder_tip = pb_selected_set[hovered_folder_link.guid] and "Alt-click: remove selected children from this parent folder" or "Alt-click: remove from parent folder"
+            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s", parent_name, child_name, folder_tip))
+        end
+    end
+
+    if hovered_cable and not hovered_folder_link and not folder_link_click_consumed and not node_right_click_consumed then
+        local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
+        local mod_alt = r.ImGui_Mod_Alt and r.ImGui_Mod_Alt() or 0
+        local alt_held = (mods & mod_alt) ~= 0
+        if alt_held and r.ImGui_IsMouseClicked(ctx, 0) then
+            if RemoveSelectedPatchbayCableRelations(hovered_cable) then hovered_cable = nil end
         end
         if hovered_cable then
             local _, sname = r.GetTrackName(hovered_cable.src)
@@ -3880,7 +4811,15 @@ function ShowRoutingPatchbay()
             end
             local vol_db = vol > 0 and (20 * math.log(vol, 10)) or -150
             local type_details = send_type_info and send_type_info.details or "Type: Audio"
-            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB\n%s", sname, dname, mlabel, vol_db, type_details))
+            local src_guid = r.GetTrackGUID(hovered_cable.src)
+            local multi_remove = pb_selected_set[src_guid] == true
+            if not multi_remove and not hovered_cable.is_main and hovered_cable.dst and r.ValidatePtr(hovered_cable.dst, "MediaTrack*") then
+                multi_remove = pb_selected_set[r.GetTrackGUID(hovered_cable.dst)] == true
+            elseif not multi_remove and hovered_cable.is_main then
+                multi_remove = pb_selected_set[MASTER_GUID] == true
+            end
+            local remove_tip = multi_remove and "Alt-click: remove matching selected connections" or "Alt-click: remove connection"
+            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB\n%s\n%s", sname, dname, mlabel, vol_db, type_details, remove_tip))
             if r.ImGui_IsMouseClicked(ctx, 1) then
                 right_click_send = { src = hovered_cable.src, dst = hovered_cable.dst, is_main = hovered_cable.is_main }
                 request_open_popup = true
@@ -3888,7 +4827,7 @@ function ShowRoutingPatchbay()
         end
     end
 
-    if not hovered_cable and not node_right_click_consumed and bg_hovered and not pb_rubber_active and pending_connection == nil and pending_folder_connection == nil and r.ImGui_IsMouseClicked(ctx, 1) then
+    if not fx_schema_blocks_mouse and not hovered_cable and not hovered_folder_link and not node_right_click_consumed and bg_hovered and not pb_rubber_active and pending_connection == nil and pending_folder_connection == nil and r.ImGui_IsMouseClicked(ctx, 1) then
         local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
         local mod_shift = r.ImGui_Mod_Shift and r.ImGui_Mod_Shift() or 0
         local shift_held = (mods & mod_shift) ~= 0
@@ -3907,10 +4846,8 @@ function ShowRoutingPatchbay()
             local is_master_node = tr.is_master
             local is_multi = pb_selected_set[g] == true
             local in_solo_focus = (not solo_path_enabled) or (solo_focus_guids and solo_focus_guids[g] == true)
-            local show_zoom_badge = canvas_zoom >= 0.75
-            local show_zoom_stats = canvas_zoom >= 0.85
+            local show_zoom_stats = canvas_zoom >= 0.70
             local show_zoom_markers = canvas_zoom >= 0.70
-            local show_zoom_ms = canvas_zoom >= 0.60
 
             local r8, g8, b8 = 96, 96, 96
             if not is_master_node then
@@ -3960,7 +4897,22 @@ function ShowRoutingPatchbay()
                 local split_x = x1 + ((x2 - x1) * 0.5)
                 r.ImGui_DrawList_AddRectFilled(draw_list, split_x, y1 + 1, x2 - 1, y2 - 1, split_body_col, 0)
             end
-            r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x1 + 5, y2, bar_col, 6)
+            local bar_w = is_master_node and 7 or 14
+            r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x1 + bar_w, y2, bar_col, 6)
+            local folder_role = nil
+            if not is_master_node then
+                if tr.folder_is_parent then
+                    folder_role = "F"
+                elseif tr.is_folder_child then
+                    folder_role = "C"
+                end
+            end
+            if folder_role and show_zoom_markers then
+                local role_col = ((r8 * 0.299 + g8 * 0.587 + b8 * 0.114) > 150) and 0x111111DD or 0xFFFFFFFF
+                if not in_solo_focus then role_col = 0xFFFFFF99 end
+                local role_w, role_h = r.ImGui_CalcTextSize(ctx, folder_role)
+                r.ImGui_DrawList_AddText(draw_list, x1 + ((bar_w - (role_w or 0)) * 0.5), y1 + 6, role_col, folder_role)
+            end
             local border
             if is_master_node then
                 border = (is_selected and 0xFFD060FF) or (is_multi and 0xCCFF88FF) or 0x886633FF
@@ -3978,33 +4930,30 @@ function ShowRoutingPatchbay()
             else
                 label = string.format("#%d  %s", tr.idx + 1, tr.name)
             end
-            local trunc = TruncateText(ctx, label, NodeW() * canvas_zoom - 14)
+            local label_x = x1 + bar_w + 6
+            local trunc = TruncateText(ctx, label, NodeW() * canvas_zoom - (bar_w + 12))
             local label_col = is_master_node and 0xFFE090FF or 0xEEEEEEFF
             local node_is_pinned = pinned_nodes[g] == true
             local node_is_collapsed = collapsed_nodes[g] == true
-            local folder_badge = nil
-            if tr.folder_group_name and tr.folder_group_name ~= "" then
-                folder_badge = tr.folder_group_name
-            end
             if not in_solo_focus then
                 label_col = 0x8A8A8ACC
             end
-            r.ImGui_DrawList_AddText(draw_list, x1 + 10, y1 + 6, label_col, trunc)
-            if node_is_pinned and show_zoom_markers then
+            r.ImGui_DrawList_AddText(draw_list, label_x, y1 + 6, label_col, trunc)
+            if node_is_pinned and show_zoom_markers and node_is_collapsed then
                 r.ImGui_DrawList_AddText(draw_list, x2 - 14, y1 + 6, 0xE0C050FF, "P")
             end
-            if folder_badge and show_zoom_badge and not is_master_node and not node_is_collapsed then
-                local bcol = in_solo_focus and 0x88D0FFFF or 0x5D7E8FCC
-                local btxt = TruncateText(ctx, "[" .. folder_badge .. "]", NodeW() * canvas_zoom - 22)
-                local by = y1 + 22
-                r.ImGui_DrawList_AddText(draw_list, x1 + 10, by, bcol, btxt)
-            end
-            if folder_badge and show_zoom_markers and not is_master_node and node_is_collapsed then
-                local bcol = in_solo_focus and 0x88D0FFFF or 0x5D7E8FCC
-                local fx = node_is_pinned and (x2 - 30) or (x2 - 14)
-                local ftxt = tr.folder_is_parent and "F" or "C"
-                r.ImGui_DrawList_AddText(draw_list, fx, y1 + 6, bcol, ftxt)
-            end
+
+            local node_screen_w = NodeW() * canvas_zoom
+            local node_screen_h = NodeH(g) * canvas_zoom
+            local control_size = math.max(10, math.min(14, math.floor(14 * canvas_zoom + 0.5)))
+            local control_gap = math.max(2, math.floor(3 * canvas_zoom + 0.5))
+            local control_pad_y = math.max(5, math.floor(6 * canvas_zoom + 0.5))
+            local control_group_w = (control_size * 2) + control_gap
+            local show_node_controls = (not is_master_node) and (not node_is_collapsed) and canvas_zoom >= 0.50 and node_screen_w >= ((control_group_w * 2) + bar_w + 21) and node_screen_h >= (control_size + 22)
+            local control_left_x = x1 + bar_w + 5
+            local control_right_x = x2 - 8 - control_group_w
+            local control_y = y2 - control_size - control_pad_y
+            local node_control_hit = show_node_controls and my >= control_y - 4 and my <= y2 and ((mx >= control_left_x - 4 and mx <= control_left_x + control_group_w + 4) or (mx >= control_right_x - 4 and mx <= control_right_x + control_group_w + 4))
 
             if show_zoom_stats and not node_is_collapsed then
                 local stats
@@ -4021,11 +4970,11 @@ function ShowRoutingPatchbay()
                     local nsnd = r.GetTrackNumSends(tr.track, 0)
                     stats = string.format("%d in / %d out", nrec, nsnd)
                 end
-                local stats_max_w = (NodeW() * canvas_zoom) - 24
+                local stats_max_w = (NodeW() * canvas_zoom) - (bar_w + 18)
                 if not is_master_node then stats_max_w = stats_max_w - (2 * (14 * canvas_zoom) + 10) end
                 local stats_trunc = TruncateText(ctx, stats, stats_max_w)
                 local stats_col = in_solo_focus and 0xAAAAAAFF or 0x676767CC
-                r.ImGui_DrawList_AddText(draw_list, x1 + 10, y2 - 18, stats_col, stats_trunc)
+                r.ImGui_DrawList_AddText(draw_list, label_x, y1 + 22, stats_col, stats_trunc)
             end
 
             local in_x, in_y = PinPos(g, "in")
@@ -4040,7 +4989,7 @@ function ShowRoutingPatchbay()
             r.ImGui_InvisibleButton(ctx, "##body", NodeW() * canvas_zoom, NodeH(g) * canvas_zoom)
             local body_active = r.ImGui_IsItemActive(ctx)
             local body_hovered = r.ImGui_IsItemHovered(ctx)
-            if body_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
+            if not fx_schema_blocks_mouse and body_hovered and not node_control_hit and r.ImGui_IsMouseClicked(ctx, 1) then
                 node_right_click_consumed = true
                 if not is_master_node then
                     node_popup_track = tr.track
@@ -4048,7 +4997,7 @@ function ShowRoutingPatchbay()
                     request_open_node_popup = true
                 end
             end
-            if body_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+            if not fx_schema_blocks_mouse and body_hovered and not node_control_hit and r.ImGui_IsMouseClicked(ctx, 0) then
                 local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
                 local mod_ctrl = r.ImGui_Mod_Ctrl and r.ImGui_Mod_Ctrl() or 0
                 local ctrl_held = (mods & mod_ctrl) ~= 0
@@ -4093,7 +5042,7 @@ function ShowRoutingPatchbay()
                 else
 
                     if is_master_node then
-                        pb_selected_set = {}
+                        pb_selected_set = { [g] = true }
                     elseif ctrl_held then
                         if pb_selected_set[g] then
                             pb_selected_set[g] = nil
@@ -4105,28 +5054,14 @@ function ShowRoutingPatchbay()
                             pb_selected_set = { [g] = true }
                         end
                     end
-
-                    if is_master_node then
-                        local nt = r.CountTracks(0)
-                        for ti = 0, nt - 1 do
-                            r.SetMediaTrackInfo_Value(r.GetTrack(0, ti), "I_SELECTED", 0)
-                        end
-                        r.SetMediaTrackInfo_Value(tr.track, "I_SELECTED", 1)
-                        _G.TRACK = tr.track
-                        r.UpdateArrange()
-                    else
-                        r.SetOnlyTrackSelected(tr.track)
-                        _G.TRACK = tr.track
-                        if r.SetMixerScroll then r.SetMixerScroll(tr.track) end
-                        r.UpdateArrange()
-                    end
+                    PatchbaySyncSelectedSetToTCP(tr.track)
                     if not ctrl_held then
                         pb_press_guid = g
                         pb_press_dragged = false
                     end
                 end
             end
-            if body_active and pending_connection == nil and pending_folder_connection == nil and not layout_locked then
+            if not fx_schema_blocks_mouse and body_active and not node_control_hit and pending_connection == nil and pending_folder_connection == nil and not layout_locked then
                 local ddx, ddy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
                 if ddx ~= 0 or ddy ~= 0 then
                     if not node_is_pinned then
@@ -4152,45 +5087,57 @@ function ShowRoutingPatchbay()
                     r.ImGui_ResetMouseDragDelta(ctx, 0)
                 end
             end
-            if show_zoom_ms and not is_master_node and not node_is_collapsed then
-                local btn_size = 14 * canvas_zoom
-                if btn_size < 10 then btn_size = 10 end
-                local btn_y1 = y2 - btn_size - 3
-                local btn_y2 = btn_y1 + btn_size
-                local s_x2 = x2 - 6
-                local s_x1 = s_x2 - btn_size
-                local m_x2 = s_x1 - 4
-                local m_x1 = m_x2 - btn_size
-
+            if show_node_controls then
                 local mute_on = r.GetMediaTrackInfo_Value(tr.track, "B_MUTE") == 1
                 local solo_on = r.GetMediaTrackInfo_Value(tr.track, "I_SOLO") ~= 0
-                local m_col = mute_on and 0xCC3333FF or 0x4A4A4AFF
-                local s_col = solo_on and 0xCCBB33FF or 0x4A4A4AFF
-                r.ImGui_DrawList_AddRectFilled(draw_list, m_x1, btn_y1, m_x2, btn_y2, m_col, 3)
-                r.ImGui_DrawList_AddRect(draw_list, m_x1, btn_y1, m_x2, btn_y2, 0x000000AA, 3)
-                r.ImGui_DrawList_AddRectFilled(draw_list, s_x1, btn_y1, s_x2, btn_y2, s_col, 3)
-                r.ImGui_DrawList_AddRect(draw_list, s_x1, btn_y1, s_x2, btn_y2, 0x000000AA, 3)
-                local tw_m = r.ImGui_CalcTextSize(ctx, "M")
-                local tw_s = r.ImGui_CalcTextSize(ctx, "S")
-                r.ImGui_DrawList_AddText(draw_list, m_x1 + (btn_size - tw_m) * 0.5, btn_y1 + (btn_size - 12) * 0.5, 0xFFFFFFFF, "M")
-                r.ImGui_DrawList_AddText(draw_list, s_x1 + (btn_size - tw_s) * 0.5, btn_y1 + (btn_size - 12) * 0.5, 0xFFFFFFFF, "S")
-
-                if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
-                r.ImGui_SetCursorScreenPos(ctx, m_x1, btn_y1)
-                r.ImGui_InvisibleButton(ctx, "##mute_btn", btn_size, btn_size)
-                if r.ImGui_IsItemClicked(ctx, 0) and not all_locked then
-                    r.Undo_BeginBlock()
-                    r.SetMediaTrackInfo_Value(tr.track, "B_MUTE", mute_on and 0 or 1)
-                    r.Undo_EndBlock("Patchbay: toggle mute", -1)
-                end
-
-                if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
-                r.ImGui_SetCursorScreenPos(ctx, s_x1, btn_y1)
-                r.ImGui_InvisibleButton(ctx, "##solo_btn", btn_size, btn_size)
-                if r.ImGui_IsItemClicked(ctx, 0) and not all_locked then
-                    r.Undo_BeginBlock()
-                    r.SetMediaTrackInfo_Value(tr.track, "I_SOLO", solo_on and 0 or 2)
-                    r.Undo_EndBlock("Patchbay: toggle solo", -1)
+                local controls = {
+                    { id = "##pin_btn", action = "pin", icon = "pin", width = control_size, x = control_left_x, active = node_is_pinned, on = 0xD7B95DFF, off = 0x4A4A4AFF, tip = node_is_pinned and "Unpin node" or "Pin node" },
+                    { id = "##schema_btn", action = "schema", icon = "schema", width = control_size, x = control_left_x + control_size + control_gap, active = PB.fx_schema_open_guid == g, on = 0x6FB6D8FF, off = 0x4A4A4AFF, tip = PB.fx_schema_open_guid == g and "Hide FX chain schema" or "Show FX chain schema" },
+                    { id = "##mute_btn", action = "mute", label = "M", width = control_size, x = control_right_x, active = mute_on, on = 0xCC3333FF, off = 0x4A4A4AFF, tip = mute_on and "Unmute track" or "Mute track" },
+                    { id = "##solo_btn", action = "solo", label = "S", width = control_size, x = control_right_x + control_size + control_gap, active = solo_on, on = 0xCCBB33FF, off = 0x4A4A4AFF, tip = solo_on and "Unsolo track" or "Solo track" }
+                }
+                for ci = 1, #controls do
+                    local ctrl = controls[ci]
+                    local ctrl_w = ctrl.width or control_size
+                    local bx1 = ctrl.x
+                    local by1 = control_y
+                    local bx2 = bx1 + ctrl_w
+                    local by2 = by1 + control_size
+                    local bg_col = ctrl.active and ctrl.on or body_col
+                    if not in_solo_focus then bg_col = ctrl.active and 0x777777CC or body_col end
+                    r.ImGui_DrawList_AddRectFilled(draw_list, bx1, by1, bx2, by2, bg_col, 3)
+                    r.ImGui_DrawList_AddRect(draw_list, bx1, by1, bx2, by2, 0x000000AA, 3)
+                    if ctrl.icon == "pin" then
+                        PatchbayDrawPinSymbol(draw_list, bx1, by1, bx2, by2, ctrl.active and 0xFFE080FF or 0xFFFFFFFF)
+                    elseif ctrl.icon == "schema" then
+                        PatchbayDrawSchemaSymbol(draw_list, bx1, by1, bx2, by2, ctrl.active and 0xD7F4FFFF or 0xFFFFFFFF)
+                    else
+                        local tw = r.ImGui_CalcTextSize(ctx, ctrl.label)
+                        r.ImGui_DrawList_AddText(draw_list, bx1 + ((ctrl_w - tw) * 0.5), by1 + ((control_size - 12) * 0.5), 0xFFFFFFFF, ctrl.label)
+                    end
+                    if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+                    r.ImGui_SetCursorScreenPos(ctx, bx1, by1)
+                    r.ImGui_InvisibleButton(ctx, ctrl.id, ctrl_w, control_size)
+                    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, ctrl.tip) end
+                    if r.ImGui_IsItemClicked(ctx, 0) then
+                        if ctrl.action == "pin" then
+                            BatchSetPinned({ { track = tr.track, guid = g, name = tr.name } }, not node_is_pinned)
+                        elseif ctrl.action == "schema" then
+                            if PB.fx_schema_open_guid == g then
+                                PB.fx_schema_open_guid = nil
+                            else
+                                PB.fx_schema_open_guid = g
+                            end
+                        elseif ctrl.action == "mute" and not all_locked then
+                            r.Undo_BeginBlock()
+                            r.SetMediaTrackInfo_Value(tr.track, "B_MUTE", mute_on and 0 or 1)
+                            r.Undo_EndBlock("Patchbay: toggle mute", -1)
+                        elseif ctrl.action == "solo" and not all_locked then
+                            r.Undo_BeginBlock()
+                            r.SetMediaTrackInfo_Value(tr.track, "I_SOLO", solo_on and 0 or 2)
+                            r.Undo_EndBlock("Patchbay: toggle solo", -1)
+                        end
+                    end
                 end
             end
 
@@ -4225,7 +5172,7 @@ function ShowRoutingPatchbay()
 
             r.ImGui_SetCursorScreenPos(ctx, in_x - pin_r, in_y - pin_r)
             r.ImGui_InvisibleButton(ctx, "##pin_in", pin_r * 2, pin_r * 2)
-            if r.ImGui_IsItemHovered(ctx) then
+            if not fx_schema_blocks_mouse and r.ImGui_IsItemHovered(ctx) then
                 hovered_input_guid = g
                 r.ImGui_DrawList_AddCircle(draw_list, in_x, in_y, pin_r + 2, 0xFFFFFFFF, nil, 2)
             end
@@ -4233,10 +5180,10 @@ function ShowRoutingPatchbay()
             if not is_master_node then
                 r.ImGui_SetCursorScreenPos(ctx, out_x - pin_r, out_y - pin_r)
                 r.ImGui_InvisibleButton(ctx, "##pin_out", pin_r * 2, pin_r * 2)
-                if r.ImGui_IsItemHovered(ctx) then
+                if not fx_schema_blocks_mouse and r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_DrawList_AddCircle(draw_list, out_x, out_y, pin_r + 2, 0xFFFFFFFF, nil, 2)
                 end
-                if r.ImGui_IsItemActive(ctx) and not all_locked then
+                if not fx_schema_blocks_mouse and r.ImGui_IsItemActive(ctx) and not all_locked then
                     if not pending_connection and not pending_folder_connection then
                         pending_connection = { src = tr.track, src_guid = g }
                     end
@@ -4244,7 +5191,7 @@ function ShowRoutingPatchbay()
 
                 r.ImGui_SetCursorScreenPos(ctx, folder_x - pin_r, folder_y - pin_r)
                 r.ImGui_InvisibleButton(ctx, "##pin_folder", pin_r * 2, pin_r * 2)
-                if r.ImGui_IsItemHovered(ctx) then
+                if not fx_schema_blocks_mouse and r.ImGui_IsItemHovered(ctx) then
                     local folder_pin_enabled = CanStartFolderPin(tr)
                     local hcol = folder_pin_enabled and 0xD8FFE0FF or 0x777777FF
                     r.ImGui_DrawList_AddCircle(draw_list, folder_x, folder_y, pin_r + 2, hcol, nil, 2)
@@ -4258,7 +5205,7 @@ function ShowRoutingPatchbay()
                         r.ImGui_SetTooltip(ctx, "Drag to assign one child\nStructure only, not audio routing")
                     end
                 end
-                if r.ImGui_IsItemActive(ctx) and CanStartFolderPin(tr) then
+                if not fx_schema_blocks_mouse and r.ImGui_IsItemActive(ctx) and CanStartFolderPin(tr) then
                     if not pending_folder_connection and not pending_connection then
                         pending_folder_connection = { parent = tr.track, parent_guid = g }
                     end
@@ -4268,6 +5215,8 @@ function ShowRoutingPatchbay()
             r.ImGui_PopID(ctx)
         end
     end
+
+    if fx_schema_layout then PatchbayFxSchemaRender(ctx, draw_list, fx_schema_layout) end
 
     if pending_folder_connection then
         local sx, sy = PinPos(pending_folder_connection.parent_guid, "bottom")
@@ -4417,12 +5366,6 @@ function ShowRoutingPatchbay()
             local is_click_only = math.abs(cmx - pb_rubber_start_x) < 3 and math.abs(cmy - pb_rubber_start_y) < 3
             if is_click_only and not pb_rubber_additive then
                 pb_selected_set = {}
-                local nt = r.CountTracks(0)
-                for ti = 0, nt - 1 do
-                    r.SetMediaTrackInfo_Value(r.GetTrack(0, ti), "I_SELECTED", 0)
-                end
-                _G.TRACK = nil
-                r.UpdateArrange()
             else
                 for i = 1, #tracks do
                     local g2 = tracks[i].guid
@@ -4432,6 +5375,7 @@ function ShowRoutingPatchbay()
                     end
                 end
             end
+            PatchbaySyncSelectedSetToTCP(nil)
             pb_rubber_additive = false
             pb_rubber_active = false
         end
