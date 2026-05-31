@@ -1,7 +1,12 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.5
+-- @version 1.1.6
 -- @changelog:
+--   v1.1.6:
+--       + Added Patchbay hover-info for connection pins and folder links.
+--       + Added inherited folder mute/solo indicators, cable dimming and folder-link tinting.
+--       + Added send Channel I/O controls for audio source/destination and MIDI channel routing.
+--       + Added Layout > Folder Tree to show folder hierarchies with loose tracks stacked below.
 --   v1.1.5:
 --       + Added a read-only FX-chain schema popover per node, with compact container/nested-container visualization.
 --       + Added Paranormal FX launch integration from the FX-chain schema popover without duplicating Paranormal editing features.

@@ -1,8 +1,14 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.0.3
+-- @version 3.0.4
 -- @changelog:
 --[[ 
+    v3.0.4:
+        + Patchbay: added hover-info for connection pins and folder links.
+        + Patchbay: added inherited folder mute/solo indicators, cable dimming and folder-link tinting.
+        + Patchbay: added send Channel I/O controls for audio source/destination and MIDI channel routing.
+        + Patchbay: added Layout > Folder Tree to show folder hierarchies with loose tracks stacked below.
+
     v3.0.3:
         + Patchbay: added read-only FX-chain schema popovers with compact container and nested-container visualization.
         + Patchbay: added Paranormal FX launcher integration from the schema popover.

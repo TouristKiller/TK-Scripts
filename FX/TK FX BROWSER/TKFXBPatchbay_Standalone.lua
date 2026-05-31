@@ -125,16 +125,18 @@ local CABLE_SHOP_DEFAULTS = {
 }
 local CABLE_SHOP_USER_PRESET_SLOTS = 6
 
-local LAYOUT_PRESET_ORDER = { "compact", "hybrid", "wide" }
+local LAYOUT_PRESET_ORDER = { "compact", "hybrid", "wide", "folder_tree" }
 local LAYOUT_PRESET_LABELS = {
     compact = "Compact",
     hybrid = "Standard",
-    wide = "Wide"
+    wide = "Wide",
+    folder_tree = "Folder Tree"
 }
 local LAYOUT_PRESET_GAPS = {
     compact = { col = 36, row = 64 },
     hybrid = { col = 60, row = 80 },
-    wide = { col = 96, row = 108 }
+    wide = { col = 96, row = 108 },
+    folder_tree = { col = 72, row = 98 }
 }
 
 local function NextRouteFilter(v)
@@ -1344,6 +1346,11 @@ local function LayoutRowH(cfg)
     return g.row
 end
 
+function PatchbayLayoutKind(preset)
+    if preset == "folder_tree" then return "folder" end
+    return "signal"
+end
+
 GetLockMode = function(cfg)
     local m = cfg and cfg.patchbay_lock_mode or "none"
     if m ~= "none" and m ~= "layout" and m ~= "all" then m = "none" end
@@ -1741,6 +1748,24 @@ local function CollectVisibleTracks()
         local folder_parent_g = folder_top and folder_top.g or nil
         local folder_parent_b = folder_top and folder_top.b or nil
         local is_folder_child = folder_parent_guid ~= nil
+        local track_muted = r.GetMediaTrackInfo_Value(t, "B_MUTE") == 1
+        local track_soloed = r.GetMediaTrackInfo_Value(t, "I_SOLO") ~= 0
+        local ancestor_muted = false
+        local ancestor_muted_name = nil
+        local ancestor_soloed = false
+        local ancestor_soloed_name = nil
+        for ancestor_index = #folder_stack, 1, -1 do
+            local ancestor = folder_stack[ancestor_index]
+            if ancestor.muted and not ancestor_muted then
+                ancestor_muted = true
+                ancestor_muted_name = ancestor.name
+            end
+            if ancestor.soloed and not ancestor_soloed then
+                ancestor_soloed = true
+                ancestor_soloed_name = ancestor.name
+            end
+            if ancestor_muted and ancestor_soloed then break end
+        end
         if folder_is_parent then
             folder_group_guid = guid
             folder_group_name = name
@@ -1837,12 +1862,18 @@ local function CollectVisibleTracks()
                 folder_parent_r = folder_parent_r,
                 folder_parent_g = folder_parent_g,
                 folder_parent_b = folder_parent_b,
-                is_folder_child = is_folder_child
+                is_folder_child = is_folder_child,
+                track_muted = track_muted,
+                track_soloed = track_soloed,
+                ancestor_muted = ancestor_muted,
+                ancestor_muted_name = ancestor_muted_name,
+                ancestor_soloed = ancestor_soloed,
+                ancestor_soloed_name = ancestor_soloed_name
             }
         end
 
         if depth > 0 then
-            folder_stack[#folder_stack + 1] = { guid = guid, name = name, r = folder_group_r, g = folder_group_g, b = folder_group_b }
+            folder_stack[#folder_stack + 1] = { guid = guid, name = name, r = folder_group_r, g = folder_group_g, b = folder_group_b, muted = track_muted, soloed = track_soloed }
         elseif depth < 0 then
             for _ = 1, -depth do
                 if #folder_stack > 0 then
@@ -2033,6 +2064,10 @@ end
 
 local function AutoLayout(tracks)
     local cfg = GetConfig()
+    if PatchbayLayoutKind(GetLayoutPreset(cfg)) == "folder" then
+        PatchbayAutoLayoutFolderTree(tracks, cfg)
+        return
+    end
     local col_w = LayoutColW(cfg)
     local row_h = LayoutRowH(cfg)
     local old_positions = node_positions
@@ -2102,6 +2137,121 @@ local function AutoLayout(tracks)
     if master_entry then
         local mx = col * col_w + 40
         local my = math.max(40, ((max_rows - 1) * row_h) * 0.5 + 40)
+        if pinned_nodes[MASTER_GUID] and old_positions[MASTER_GUID] then
+            node_positions[MASTER_GUID] = { x = old_positions[MASTER_GUID].x, y = old_positions[MASTER_GUID].y }
+        else
+            node_positions[MASTER_GUID] = { x = mx, y = my }
+        end
+    end
+    canvas_offset_x = 0
+    canvas_offset_y = 0
+    canvas_zoom = 1.0
+    layout_dirty = true
+end
+
+function PatchbayAutoLayoutFolderTree(tracks, cfg)
+    local col_w = LayoutColW(cfg)
+    local row_h = LayoutRowH(cfg)
+    local old_positions = node_positions
+    local by_guid = {}
+    local children = {}
+    local roots = {}
+    local master_entry = nil
+    for i = 1, #tracks do
+        local tr = tracks[i]
+        if tr.is_master then
+            master_entry = tr
+        else
+            by_guid[tr.guid] = tr
+            children[tr.guid] = {}
+        end
+    end
+    for i = 1, #tracks do
+        local tr = tracks[i]
+        if not tr.is_master then
+            local parent_guid = tr.folder_parent_guid
+            if parent_guid and by_guid[parent_guid] then
+                children[parent_guid][#children[parent_guid] + 1] = tr
+            else
+                roots[#roots + 1] = tr
+            end
+        end
+    end
+    local function sort_by_track_index(a, b) return (a.idx or 0) < (b.idx or 0) end
+    table.sort(roots, sort_by_track_index)
+    for _, list in pairs(children) do table.sort(list, sort_by_track_index) end
+    local folder_roots = {}
+    local loose_roots = {}
+    for i = 1, #roots do
+        local tr = roots[i]
+        local child_list = children[tr.guid] or {}
+        if tr.folder_is_parent or #child_list > 0 then
+            folder_roots[#folder_roots + 1] = tr
+        else
+            loose_roots[#loose_roots + 1] = tr
+        end
+    end
+    local leaf_counts = {}
+    local function count_leaves(tr)
+        local list = children[tr.guid] or {}
+        if #list == 0 then
+            leaf_counts[tr.guid] = 1
+            return 1
+        end
+        local total = 0
+        for i = 1, #list do total = total + count_leaves(list[i]) end
+        if total < 1 then total = 1 end
+        leaf_counts[tr.guid] = total
+        return total
+    end
+    for i = 1, #folder_roots do count_leaves(folder_roots[i]) end
+    node_positions = {}
+    local max_x = 40
+    local max_y = 40
+    local function place_tree(tr, depth, left_leaf)
+        local leaves = leaf_counts[tr.guid] or 1
+        local x = 40 + (left_leaf + ((leaves - 1) * 0.5)) * col_w
+        local y = 40 + depth * row_h
+        if pinned_nodes[tr.guid] and old_positions[tr.guid] then
+            node_positions[tr.guid] = { x = old_positions[tr.guid].x, y = old_positions[tr.guid].y }
+        else
+            node_positions[tr.guid] = { x = x, y = y }
+        end
+        if x > max_x then max_x = x end
+        if y > max_y then max_y = y end
+        local child_left = left_leaf
+        local list = children[tr.guid] or {}
+        for i = 1, #list do
+            place_tree(list[i], depth + 1, child_left)
+            child_left = child_left + (leaf_counts[list[i].guid] or 1)
+        end
+    end
+    local leaf_cursor = 0
+    for i = 1, #folder_roots do
+        place_tree(folder_roots[i], 0, leaf_cursor)
+        leaf_cursor = leaf_cursor + (leaf_counts[folder_roots[i].guid] or 1) + 1
+    end
+    local tree_has_nodes = #folder_roots > 0
+    local loose_x = 40
+    if tree_has_nodes then
+        local tree_span = math.max(1, leaf_cursor - 1)
+        loose_x = 40 + math.max(0, (tree_span - 1) * col_w * 0.5)
+    end
+    local loose_y = tree_has_nodes and (max_y + row_h * 1.25) or 40
+    for i = 1, #loose_roots do
+        local tr = loose_roots[i]
+        local y = loose_y + (i - 1) * row_h
+        if pinned_nodes[tr.guid] and old_positions[tr.guid] then
+            node_positions[tr.guid] = { x = old_positions[tr.guid].x, y = old_positions[tr.guid].y }
+        else
+            node_positions[tr.guid] = { x = loose_x, y = y }
+        end
+        if loose_x > max_x then max_x = loose_x end
+        if y > max_y then max_y = y end
+    end
+    if master_entry then
+        local mx = max_x + col_w
+        local my = math.max(40, ((max_y - 40) * 0.5) + 40)
         if pinned_nodes[MASTER_GUID] and old_positions[MASTER_GUID] then
             node_positions[MASTER_GUID] = { x = old_positions[MASTER_GUID].x, y = old_positions[MASTER_GUID].y }
         else
@@ -2388,6 +2538,136 @@ local function GetSendTypeInfo(src, send_idx, is_main)
     }
 end
 
+function PatchbayTrackDisplayName(track, fallback)
+    if track and r.ValidatePtr(track, "MediaTrack*") then
+        local _, name = r.GetTrackName(track)
+        if name and name ~= "" then return name end
+    end
+    return fallback or "Track"
+end
+
+function PatchbayJoinLimitedNames(names, total_count)
+    if not total_count or total_count <= 0 then return "None" end
+    if not names or #names == 0 then return tostring(total_count) end
+    local text = table.concat(names, ", ")
+    local hidden = total_count - #names
+    if hidden > 0 then text = text .. ", +" .. tostring(hidden) end
+    return text
+end
+
+function PatchbayCollectRouteNames(track, category, max_count)
+    local names = {}
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return names, 0 end
+    local total_count = r.GetTrackNumSends(track, category)
+    local key = category == 0 and "P_DESTTRACK" or "P_SRCTRACK"
+    local limit = math.min(total_count, max_count or 4)
+    for send_index = 0, limit - 1 do
+        local other_track = r.GetTrackSendInfo_Value(track, category, send_index, key)
+        names[#names + 1] = PatchbayTrackDisplayName(other_track, category == 0 and "Destination" or "Source")
+    end
+    return names, total_count
+end
+
+function PatchbayCollectMasterSendNames(max_count)
+    local names = {}
+    local total_count = 0
+    local track_count = r.CountTracks(0)
+    for track_index = 0, track_count - 1 do
+        local track = r.GetTrack(0, track_index)
+        if r.GetMediaTrackInfo_Value(track, "B_MAINSEND") == 1 then
+            total_count = total_count + 1
+            if #names < (max_count or 4) then
+                names[#names + 1] = PatchbayTrackDisplayName(track, "Track")
+            end
+        end
+    end
+    return names, total_count
+end
+
+function PatchbayCollectFolderChildNames(track_info, tracks, max_count)
+    local names = {}
+    local total_count = 0
+    if not track_info or not tracks then return names, 0 end
+    for track_index = 1, #tracks do
+        local child = tracks[track_index]
+        if child.folder_parent_guid == track_info.guid then
+            total_count = total_count + 1
+            if #names < (max_count or 4) then
+                names[#names + 1] = child.name or "Child"
+            end
+        end
+    end
+    return names, total_count
+end
+
+function PatchbayBuildPinTooltip(track_info, side, tracks, guid_to, folder_pin_enabled, all_locked)
+    if not track_info then return "" end
+    local track_name = track_info.is_master and "MASTER" or string.format("#%d  %s", (track_info.idx or 0) + 1, track_info.name or "Track")
+    if side == "in" then
+        if track_info.is_master then
+            local main_names, main_count = PatchbayCollectMasterSendNames(4)
+            return string.format("Master input\nMain sends in: %d\nFrom: %s", main_count, PatchbayJoinLimitedNames(main_names, main_count))
+        end
+        local receive_names, receive_count = PatchbayCollectRouteNames(track_info.track, -1, 4)
+        return string.format("Input / receives\n%s\nReceives: %d\nFrom: %s", track_name, receive_count, PatchbayJoinLimitedNames(receive_names, receive_count))
+    elseif side == "out" then
+        local send_names, send_count = PatchbayCollectRouteNames(track_info.track, 0, 4)
+        local main_send = r.GetMediaTrackInfo_Value(track_info.track, "B_MAINSEND") == 1
+        local main_text = main_send and "On" or "Off"
+        return string.format("Output / sends\n%s\nExplicit sends: %d\nTo: %s\nMain send: %s", track_name, send_count, PatchbayJoinLimitedNames(send_names, send_count), main_text)
+    elseif side == "folder" then
+        local role = "Top-level"
+        if track_info.folder_is_parent and track_info.is_folder_child then
+            role = "Parent + child"
+        elseif track_info.folder_is_parent then
+            role = "Parent"
+        elseif track_info.is_folder_child then
+            role = "Child"
+        end
+        local parent_name = "None"
+        if track_info.folder_parent_guid and guid_to and guid_to[track_info.folder_parent_guid] then
+            parent_name = guid_to[track_info.folder_parent_guid].name or "Parent"
+        end
+        local child_names, child_count = PatchbayCollectFolderChildNames(track_info, tracks, 4)
+        local status = "Drag to assign one child"
+        if all_locked then
+            status = "Folder assignment is locked"
+        elseif not r.ReorderSelectedTracks then
+            status = "Folder assignment unavailable"
+        elseif not folder_pin_enabled then
+            status = "Top-level tracks only"
+        end
+        return string.format("Folder connector\n%s\nRole: %s\nParent: %s\nChildren: %d (%s)\n%s", track_name, role, parent_name, child_count, PatchbayJoinLimitedNames(child_names, child_count), status)
+    end
+    return track_name
+end
+
+function PatchbayInheritedStatusText(track_info, prefix)
+    local lines = {}
+    if track_info then
+        if track_info.ancestor_muted then
+            lines[#lines + 1] = string.format("%s muted by folder ancestor: %s", prefix or "Track", track_info.ancestor_muted_name or "Parent")
+        end
+        if track_info.ancestor_soloed then
+            lines[#lines + 1] = string.format("%s affected by soloed folder ancestor: %s", prefix or "Track", track_info.ancestor_soloed_name or "Parent")
+        end
+    end
+    if #lines == 0 then return "" end
+    return "\n" .. table.concat(lines, "\n")
+end
+
+function PatchbayCableInheritedMuteInfo(cable, guid_to)
+    local src_info = guid_to and guid_to[cable.sg] or nil
+    local dst_info = guid_to and guid_to[cable.dg] or nil
+    if src_info and (src_info.track_muted or src_info.ancestor_muted) then
+        return true, src_info.track_muted and (src_info.name or "Source") or (src_info.ancestor_muted_name or "Source ancestor"), "source"
+    end
+    if dst_info and (dst_info.track_muted or dst_info.ancestor_muted) then
+        return true, dst_info.track_muted and (dst_info.name or "Destination") or (dst_info.ancestor_muted_name or "Destination ancestor"), "destination"
+    end
+    return false, nil, nil
+end
+
 local function ApplySendTypePreset(src, dst, send_idx, preset)
     if not src or not r.ValidatePtr(src, "MediaTrack*") then return end
     r.Undo_BeginBlock()
@@ -2415,6 +2695,106 @@ local function ApplySendTypePreset(src, dst, send_idx, preset)
     r.Undo_EndBlock("Patchbay: set send type", -1)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
+end
+
+function PatchbayMidiFlags(src_chan, dst_chan, enabled)
+    if not enabled then return 1024 end
+    src_chan = math.floor(tonumber(src_chan) or 0)
+    dst_chan = math.floor(tonumber(dst_chan) or 0)
+    if src_chan < 0 then src_chan = 31 elseif src_chan > 31 then src_chan = 31 end
+    if dst_chan < 0 then dst_chan = 31 elseif dst_chan > 31 then dst_chan = 31 end
+    return src_chan | (dst_chan << 5)
+end
+
+function PatchbayEnsureTrackChannels(track, needed)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+    needed = math.floor(tonumber(needed) or 2)
+    if needed < 2 then needed = 2 end
+    if (needed % 2) ~= 0 then needed = needed + 1 end
+    local current = math.floor(r.GetMediaTrackInfo_Value(track, "I_NCHAN") or 2)
+    if current < needed then r.SetMediaTrackInfo_Value(track, "I_NCHAN", needed) end
+end
+
+function PatchbaySetSendChannelIO(src, dst, send_idx, field, value)
+    if not src or not r.ValidatePtr(src, "MediaTrack*") or send_idx < 0 then return end
+    r.Undo_BeginBlock()
+    if field == "I_DSTCHAN" then
+        PatchbayEnsureTrackChannels(dst, math.floor(tonumber(value) or 0) + 2)
+    elseif field == "I_SRCCHAN" and tonumber(value) and tonumber(value) >= 0 then
+        local chan = math.floor(tonumber(value) or 0)
+        local mono = chan >= 1024
+        if mono then chan = chan - 1024 end
+        PatchbayEnsureTrackChannels(src, chan + (mono and 1 or 2))
+    end
+    r.SetTrackSendInfo_Value(src, 0, send_idx, field, value)
+    r.Undo_EndBlock("Patchbay: set channel I/O", -1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+end
+
+function RenderChannelIOControls(ctx, src, dst, idx)
+    r.ImGui_Separator(ctx)
+    local src_chan = math.floor(r.GetTrackSendInfo_Value(src, 0, idx, "I_SRCCHAN") or -1)
+    local dst_chan = math.floor(r.GetTrackSendInfo_Value(src, 0, idx, "I_DSTCHAN") or 0)
+    local midi_flags = math.floor(r.GetTrackSendInfo_Value(src, 0, idx, "I_MIDIFLAGS") or 1024)
+    local midi_src = midi_flags & 31
+    local midi_dst = (midi_flags >> 5) & 31
+    local audio_enabled = src_chan >= 0
+    local midi_enabled = midi_flags >= 0 and (midi_flags & 1024) == 0 and midi_src ~= 31 and midi_dst ~= 31
+    local ca, va = r.ImGui_Checkbox(ctx, "Audio", audio_enabled)
+    if ca then PatchbaySetSendChannelIO(src, dst, idx, "I_SRCCHAN", va and 0 or -1) end
+    if audio_enabled then
+        r.ImGui_PushItemWidth(ctx, 180)
+        local src_channels = math.floor(r.GetMediaTrackInfo_Value(src, "I_NCHAN") or 2)
+        local max_src = math.max(16, src_channels)
+        if r.ImGui_BeginCombo(ctx, "Audio source", AudioPairLabel(src_chan)) then
+            local ch = 0
+            while ch < max_src do
+                local value = ch
+                if r.ImGui_Selectable(ctx, AudioPairLabel(value), src_chan == value) then PatchbaySetSendChannelIO(src, dst, idx, "I_SRCCHAN", value) end
+                ch = ch + 2
+            end
+            ch = 0
+            while ch < max_src do
+                local value = 1024 + ch
+                if r.ImGui_Selectable(ctx, AudioPairLabel(value), src_chan == value) then PatchbaySetSendChannelIO(src, dst, idx, "I_SRCCHAN", value) end
+                ch = ch + 1
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        local dst_channels = math.floor(r.GetMediaTrackInfo_Value(dst, "I_NCHAN") or 2)
+        local max_dst = math.max(16, dst_channels)
+        if r.ImGui_BeginCombo(ctx, "Audio destination", AudioPairLabel(dst_chan)) then
+            local ch = 0
+            while ch < max_dst do
+                if r.ImGui_Selectable(ctx, AudioPairLabel(ch), dst_chan == ch) then PatchbaySetSendChannelIO(src, dst, idx, "I_DSTCHAN", ch) end
+                ch = ch + 2
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopItemWidth(ctx)
+    end
+    r.ImGui_Separator(ctx)
+    local cm, vm = r.ImGui_Checkbox(ctx, "MIDI", midi_enabled)
+    if cm then PatchbaySetSendChannelIO(src, dst, idx, "I_MIDIFLAGS", PatchbayMidiFlags(vm and 0 or 31, vm and 0 or 31, vm)) end
+    if midi_enabled then
+        r.ImGui_PushItemWidth(ctx, 180)
+        if r.ImGui_BeginCombo(ctx, "MIDI source", MidiChannelLabel(midi_src, true)) then
+            if r.ImGui_Selectable(ctx, "all", midi_src == 0) then PatchbaySetSendChannelIO(src, dst, idx, "I_MIDIFLAGS", PatchbayMidiFlags(0, midi_dst, true)) end
+            for ch = 1, 16 do
+                if r.ImGui_Selectable(ctx, tostring(ch), midi_src == ch) then PatchbaySetSendChannelIO(src, dst, idx, "I_MIDIFLAGS", PatchbayMidiFlags(ch, midi_dst, true)) end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_BeginCombo(ctx, "MIDI destination", MidiChannelLabel(midi_dst, false)) then
+            if r.ImGui_Selectable(ctx, "original", midi_dst == 0) then PatchbaySetSendChannelIO(src, dst, idx, "I_MIDIFLAGS", PatchbayMidiFlags(midi_src, 0, true)) end
+            for ch = 1, 16 do
+                if r.ImGui_Selectable(ctx, tostring(ch), midi_dst == ch) then PatchbaySetSendChannelIO(src, dst, idx, "I_MIDIFLAGS", PatchbayMidiFlags(midi_src, ch, true)) end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopItemWidth(ctx)
+    end
 end
 
 local function FolderBodyColor(r8, g8, b8, dim)
@@ -3460,6 +3840,7 @@ local function RenderRightClickPopup()
             end
             r.ImGui_EndCombo(ctx)
         end
+        RenderChannelIOControls(ctx, src, dst, idx)
         r.ImGui_PopItemWidth(ctx)
 
         r.ImGui_Separator(ctx)
@@ -3683,8 +4064,13 @@ function ShowRoutingPatchbay()
         toolbar_popup_opened = true
         open_toolbar_popup_id = "auto"
         local cur_preset = GetLayoutPreset(cfg)
+        r.ImGui_TextDisabled(ctx, "Spacing")
         for i = 1, #LAYOUT_PRESET_ORDER do
             local p = LAYOUT_PRESET_ORDER[i]
+            if p == "folder_tree" then
+                r.ImGui_Separator(ctx)
+                r.ImGui_TextDisabled(ctx, "Structure")
+            end
             if r.ImGui_Selectable(ctx, LayoutPresetLabel(p), cur_preset == p) then
                 if not layout_locked then
                     cfg.patchbay_layout_preset = p
@@ -4628,9 +5014,18 @@ function ShowRoutingPatchbay()
                     if not fx_schema_blocks_mouse and not hovered_folder_link and PointSegDist(mx, my, sx, sy, dx, dy) <= math.max(6, 7 * canvas_zoom) then
                         hovered_folder_link = child
                     end
+                    local parent_info = guid_to[child.folder_parent_guid]
+                    local link_muted = (parent_info and (parent_info.track_muted or parent_info.ancestor_muted)) or child.ancestor_muted
+                    local link_soloed = (parent_info and (parent_info.track_soloed or parent_info.ancestor_soloed)) or child.ancestor_soloed
                     local col = hovered_folder_link == child and folder_link_style.hover or folder_link_style.color
+                    if link_muted then
+                        col = hovered_folder_link == child and 0xFF7777DD or 0xCC5555AA
+                    elseif link_soloed then
+                        col = hovered_folder_link == child and 0xFFE080DD or 0xD8B94AAA
+                    end
                     local thickness = math.max(1.0, folder_link_style.thickness * canvas_zoom)
                     if hovered_folder_link == child then thickness = thickness + 1 end
+                    if link_muted or link_soloed then thickness = thickness + 0.5 end
                     r.ImGui_DrawList_AddLine(draw_list, sx, sy, dx, dy, col, thickness)
                     r.ImGui_DrawList_AddCircleFilled(draw_list, dx, dy, math.max(2.0, 2.5 * canvas_zoom), col)
                 end
@@ -4670,6 +5065,8 @@ function ShowRoutingPatchbay()
             local muted = c.muted
             local phase = c.phase
             local vol = c.vol
+            local inherited_muted = false
+            inherited_muted = PatchbayCableInheritedMuteInfo(c, guid_to)
             local thickness = style.thickness + math.min(2.5, math.max(0, (vol - 0.5)) * 1.5)
             if hovered_cable == c then thickness = thickness + 1 end
             local col, hcol = style.color, style.hover
@@ -4682,6 +5079,10 @@ function ShowRoutingPatchbay()
                 col = 0xE3A94AE0
                 hcol = 0xFFC46EFF
                 thickness = thickness + 0.8
+            elseif inherited_muted then
+                col = 0x6A3434AA
+                hcol = 0xB85A5ADD
+                thickness = math.max(1.0, thickness - 0.4)
             end
             local use_col = (hovered_cable == c) and hcol or col
             r.ImGui_DrawList_AddBezierCubic(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, use_col, thickness)
@@ -4691,6 +5092,7 @@ function ShowRoutingPatchbay()
                     local sidechain_style = GetCableOverlayStyle("sidechain", cfg)
                     if sidechain_style.visible then
                         local sidechain_col = (hovered_cable == c) and sidechain_style.hover or sidechain_style.color
+                        if inherited_muted then sidechain_col = 0x7A5A5AAA end
                         DrawBezierStripes(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, sidechain_col, sidechain_style.thickness, thickness, true)
                     end
                 end
@@ -4698,6 +5100,7 @@ function ShowRoutingPatchbay()
                     local midi_style = GetCableOverlayStyle("midi", cfg)
                     if midi_style.visible then
                         local midi_col = (hovered_cable == c) and midi_style.hover or midi_style.color
+                        if inherited_muted then midi_col = 0x7A5A5AAA end
                         DrawBezierStripes(draw_list, sx, sy, sx + cp_dist, sy, dx - cp_dist, dy, dx, dy, midi_col, midi_style.thickness, thickness)
                     end
                 end
@@ -4708,6 +5111,8 @@ function ShowRoutingPatchbay()
                 local dot_col
                 if muted then
                     dot_col = 0x9A9A9AFF
+                elseif inherited_muted then
+                    dot_col = 0x7A5A5AFF
                 elseif hovered_cable == c then
                     dot_col = 0xFFFFFFFF
                 else
@@ -4778,7 +5183,11 @@ function ShowRoutingPatchbay()
             end
             local child_name = hovered_folder_link.name or "Child"
             local folder_tip = pb_selected_set[hovered_folder_link.guid] and "Alt-click: remove selected children from this parent folder" or "Alt-click: remove from parent folder"
-            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s", parent_name, child_name, folder_tip))
+            local parent_info = hovered_folder_link.folder_parent_guid and guid_to[hovered_folder_link.folder_parent_guid] or nil
+            local inherited_text = PatchbayInheritedStatusText(parent_info, "Parent") .. PatchbayInheritedStatusText(hovered_folder_link, "Child")
+            if parent_info and parent_info.track_muted then inherited_text = inherited_text .. "\nParent muted: " .. (parent_info.name or parent_name) end
+            if parent_info and parent_info.track_soloed then inherited_text = inherited_text .. "\nParent soloed: " .. (parent_info.name or parent_name) end
+            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s%s", parent_name, child_name, folder_tip, inherited_text))
         end
     end
 
@@ -4819,9 +5228,14 @@ function ShowRoutingPatchbay()
                 multi_remove = pb_selected_set[MASTER_GUID] == true
             end
             local remove_tip = multi_remove and "Alt-click: remove matching selected connections" or "Alt-click: remove connection"
-            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB\n%s\n%s", sname, dname, mlabel, vol_db, type_details, remove_tip))
+            local inherited_muted, inherited_mute_name, inherited_mute_side = PatchbayCableInheritedMuteInfo(hovered_cable, guid_to)
+            local inherited_tip = ""
+            if inherited_muted then
+                inherited_tip = inherited_mute_side == "destination" and ("\nDestination in muted folder: " .. tostring(inherited_mute_name or "Folder")) or ("\nMuted by folder ancestor: " .. tostring(inherited_mute_name or "Folder"))
+            end
+            r.ImGui_SetTooltip(ctx, string.format("%s \xE2\x86\x92 %s\n%s, %.1f dB\n%s%s\n%s", sname, dname, mlabel, vol_db, type_details, inherited_tip, remove_tip))
             if r.ImGui_IsMouseClicked(ctx, 1) then
-                right_click_send = { src = hovered_cable.src, dst = hovered_cable.dst, is_main = hovered_cable.is_main }
+                right_click_send = { src = hovered_cable.src, dst = hovered_cable.dst, idx = hovered_cable.idx, is_main = hovered_cable.is_main }
                 request_open_popup = true
             end
         end
@@ -5088,13 +5502,17 @@ function ShowRoutingPatchbay()
                 end
             end
             if show_node_controls then
-                local mute_on = r.GetMediaTrackInfo_Value(tr.track, "B_MUTE") == 1
-                local solo_on = r.GetMediaTrackInfo_Value(tr.track, "I_SOLO") ~= 0
+                local mute_on = tr.track_muted == true
+                local solo_on = tr.track_soloed == true
+                local mute_tip = mute_on and "Unmute track" or "Mute track"
+                local solo_tip = solo_on and "Unsolo track" or "Solo track"
+                if tr.ancestor_muted then mute_tip = mute_tip .. "\nMuted by folder ancestor: " .. tostring(tr.ancestor_muted_name or "Parent") end
+                if tr.ancestor_soloed then solo_tip = solo_tip .. "\nSolo affected by folder ancestor: " .. tostring(tr.ancestor_soloed_name or "Parent") end
                 local controls = {
                     { id = "##pin_btn", action = "pin", icon = "pin", width = control_size, x = control_left_x, active = node_is_pinned, on = 0xD7B95DFF, off = 0x4A4A4AFF, tip = node_is_pinned and "Unpin node" or "Pin node" },
                     { id = "##schema_btn", action = "schema", icon = "schema", width = control_size, x = control_left_x + control_size + control_gap, active = PB.fx_schema_open_guid == g, on = 0x6FB6D8FF, off = 0x4A4A4AFF, tip = PB.fx_schema_open_guid == g and "Hide FX chain schema" or "Show FX chain schema" },
-                    { id = "##mute_btn", action = "mute", label = "M", width = control_size, x = control_right_x, active = mute_on, on = 0xCC3333FF, off = 0x4A4A4AFF, tip = mute_on and "Unmute track" or "Mute track" },
-                    { id = "##solo_btn", action = "solo", label = "S", width = control_size, x = control_right_x + control_size + control_gap, active = solo_on, on = 0xCCBB33FF, off = 0x4A4A4AFF, tip = solo_on and "Unsolo track" or "Solo track" }
+                    { id = "##mute_btn", action = "mute", label = "M", width = control_size, x = control_right_x, active = mute_on, on = 0xCC3333FF, off = 0x4A4A4AFF, tip = mute_tip, inherited_outline = tr.ancestor_muted and 0xFF5555FF or nil, inherited_outline2 = (tr.ancestor_muted and mute_on) and 0xFF9999FF or nil },
+                    { id = "##solo_btn", action = "solo", label = "S", width = control_size, x = control_right_x + control_size + control_gap, active = solo_on, on = 0xCCBB33FF, off = 0x4A4A4AFF, tip = solo_tip, inherited_outline = tr.ancestor_soloed and 0xFFE066FF or nil, inherited_outline2 = (tr.ancestor_soloed and solo_on) and 0xFFF0AAFF or nil }
                 }
                 for ci = 1, #controls do
                     local ctrl = controls[ci]
@@ -5107,6 +5525,12 @@ function ShowRoutingPatchbay()
                     if not in_solo_focus then bg_col = ctrl.active and 0x777777CC or body_col end
                     r.ImGui_DrawList_AddRectFilled(draw_list, bx1, by1, bx2, by2, bg_col, 3)
                     r.ImGui_DrawList_AddRect(draw_list, bx1, by1, bx2, by2, 0x000000AA, 3)
+                    if ctrl.inherited_outline then
+                        r.ImGui_DrawList_AddRect(draw_list, bx1 - 1, by1 - 1, bx2 + 1, by2 + 1, ctrl.inherited_outline, 4, nil, 2)
+                    end
+                    if ctrl.inherited_outline2 then
+                        r.ImGui_DrawList_AddRect(draw_list, bx1 - 3, by1 - 3, bx2 + 3, by2 + 3, ctrl.inherited_outline2, 5, nil, 1)
+                    end
                     if ctrl.icon == "pin" then
                         PatchbayDrawPinSymbol(draw_list, bx1, by1, bx2, by2, ctrl.active and 0xFFE080FF or 0xFFFFFFFF)
                     elseif ctrl.icon == "schema" then
@@ -5175,6 +5599,7 @@ function ShowRoutingPatchbay()
             if not fx_schema_blocks_mouse and r.ImGui_IsItemHovered(ctx) then
                 hovered_input_guid = g
                 r.ImGui_DrawList_AddCircle(draw_list, in_x, in_y, pin_r + 2, 0xFFFFFFFF, nil, 2)
+                r.ImGui_SetTooltip(ctx, PatchbayBuildPinTooltip(tr, "in", tracks, guid_to))
             end
 
             if not is_master_node then
@@ -5182,6 +5607,7 @@ function ShowRoutingPatchbay()
                 r.ImGui_InvisibleButton(ctx, "##pin_out", pin_r * 2, pin_r * 2)
                 if not fx_schema_blocks_mouse and r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_DrawList_AddCircle(draw_list, out_x, out_y, pin_r + 2, 0xFFFFFFFF, nil, 2)
+                    r.ImGui_SetTooltip(ctx, PatchbayBuildPinTooltip(tr, "out", tracks, guid_to))
                 end
                 if not fx_schema_blocks_mouse and r.ImGui_IsItemActive(ctx) and not all_locked then
                     if not pending_connection and not pending_folder_connection then
@@ -5195,15 +5621,7 @@ function ShowRoutingPatchbay()
                     local folder_pin_enabled = CanStartFolderPin(tr)
                     local hcol = folder_pin_enabled and 0xD8FFE0FF or 0x777777FF
                     r.ImGui_DrawList_AddCircle(draw_list, folder_x, folder_y, pin_r + 2, hcol, nil, 2)
-                    if all_locked then
-                        r.ImGui_SetTooltip(ctx, "Folder assignment is locked")
-                    elseif not r.ReorderSelectedTracks then
-                        r.ImGui_SetTooltip(ctx, "Folder assignment unavailable")
-                    elseif not folder_pin_enabled then
-                        r.ImGui_SetTooltip(ctx, "Top-level tracks only")
-                    else
-                        r.ImGui_SetTooltip(ctx, "Drag to assign one child\nStructure only, not audio routing")
-                    end
+                    r.ImGui_SetTooltip(ctx, PatchbayBuildPinTooltip(tr, "folder", tracks, guid_to, folder_pin_enabled, all_locked))
                 end
                 if not fx_schema_blocks_mouse and r.ImGui_IsItemActive(ctx) and CanStartFolderPin(tr) then
                     if not pending_folder_connection and not pending_connection then
