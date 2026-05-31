@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.0.4
+-- @version 1.0.5
 -- @changelog:
 --[[ 
+    v1.0.5:
+        + Fix: improved ReaImGui child/style stack handling to avoid startup errors after restored window/dock states.
+        + Fix: Item FX in the Info panel now only follows selected items on the selected/target track.
+
     v1.0.4:
         + Patchbay: added hover-info for connection pins and folder links.
         + Patchbay: added inherited folder mute/solo indicators, cable dimming and folder-link tinting.
@@ -3228,6 +3232,18 @@ function GetTargetTrack()
     
     -- Otherwise try to get selected track, or fall back to first track
     return r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0)
+end
+
+function GetSelectedItemTakeForTrack(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return nil, nil end
+    local selected_count = r.CountSelectedMediaItems(0)
+    for i = 0, selected_count - 1 do
+        local item = r.GetSelectedMediaItem(0, i)
+        if item and r.GetMediaItem_Track(item) == track then
+            return item, r.GetActiveTake(item)
+        end
+    end
+    return nil, nil
 end
 
 function AddFXToTrack(track, plugin_name, preserve_order)
@@ -7551,9 +7567,8 @@ function IsArmed(track)
 end
 
 function AddFXToItem(fx_name)
-    local item = r.GetSelectedMediaItem(0, 0)
+    local item, take = GetSelectedItemTakeForTrack(TRACK or GetTargetTrack())
     if not item then return -1 end
-    local take = r.GetActiveTake(item)
     if not take then return -1 end
     
     local dest_index = r.TakeFX_GetCount(take)
@@ -14103,12 +14118,9 @@ function DrawFxChains(tbl, path, show_hover_preview)
                     local fx_chains_path = ResolveFxChainsRoot()
                     local chain_file_path = table.concat({ path, os_separator, item, extension })
                     if ADD_FX_TO_ITEM then
-                        local selected_item = r.GetSelectedMediaItem(0, 0)
-                        if selected_item then
-                            local take = r.GetActiveTake(selected_item)
-                            if take then
-                                r.TakeFX_AddByName(take, chain_file_path, 1)
-                            end
+                        local selected_item, take = GetSelectedItemTakeForTrack(TRACK or GetTargetTrack())
+                        if selected_item and take then
+                            r.TakeFX_AddByName(take, chain_file_path, 1)
                         end
                     else
                         local selected_track_count = r.CountSelectedTracks(0)
@@ -14208,12 +14220,9 @@ function DrawFxChains(tbl, path, show_hover_preview)
                             local fx_chains_path = ResolveFxChainsRoot()
                             local chain_file_path = table.concat({ path, os_separator, item[j], extension })
                             if ADD_FX_TO_ITEM then
-                                local selected_item = r.GetSelectedMediaItem(0, 0)
-                                if selected_item then
-                                    local take = r.GetActiveTake(selected_item)
-                                    if take then
-                                        r.TakeFX_AddByName(take, chain_file_path, 1)
-                                    end
+                                local selected_item, take = GetSelectedItemTakeForTrack(TRACK or GetTargetTrack())
+                                if selected_item and take then
+                                    r.TakeFX_AddByName(take, chain_file_path, 1)
                                 end
                             else
                                 local selected_track_count = r.CountSelectedTracks(0)
@@ -15466,6 +15475,7 @@ function ShowBrowserPanel()
         local bt_h = 22
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), bt_color)
         local bt_open = r.ImGui_BeginChild(ctx, "BrowserTrackHeader", -1, bt_h)
+        r.ImGui_PopStyleColor(ctx, 1)
         local bt_text_hovered = false
         if bt_open then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), bt_text_color)
@@ -15532,9 +15542,9 @@ function ShowBrowserPanel()
             end
             r.ImGui_PopStyleColor(ctx, 3)
             r.ImGui_PopStyleColor(ctx, 1)
+            r.ImGui_EndChild(ctx)
         end
-        r.ImGui_EndChild(ctx)
-        if r.ImGui_IsItemHovered(ctx) then
+        if bt_open and r.ImGui_IsItemHovered(ctx) then
             local wheel = r.ImGui_GetMouseWheel(ctx)
             if wheel ~= 0 then
                 local idx = m_floor(r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER"))
@@ -15552,7 +15562,6 @@ function ShowBrowserPanel()
                 if new_track then r.SetOnlyTrackSelected(new_track); TRACK = new_track end
             end
         end
-        r.ImGui_PopStyleColor(ctx, 1)
         if bt_open and bt_text_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
             r.ImGui_OpenPopup(ctx, "BrowserTrackHeaderCtx")
         end
@@ -17047,8 +17056,7 @@ function ShowBrowserPanel()
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
                 
-                local sel_item = r.GetSelectedMediaItem(0, 0)
-                local take = sel_item and r.GetActiveTake(sel_item) or nil
+                local sel_item, take = GetSelectedItemTakeForTrack(TRACK)
                 r.ImGui_Dummy(ctx, 0, 4)
                 r.ImGui_Separator(ctx)
                 if take then
@@ -17293,7 +17301,7 @@ function ShowBrowserPanel()
                         end
                     end
                 else
-                    r.ImGui_Text(ctx, "Item FX: - (no selected item)")
+                    r.ImGui_Text(ctx, "Item FX: - (no selected item on selected track)")
                 end
 
                 local rec_count = r.TrackFX_GetRecCount(TRACK)
@@ -22602,7 +22610,9 @@ function ShowScreenshotWindow()
         end
     end
 
-    r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0, 0, r.ImGui_WindowFlags_NoNavInputs())
+    local screenshot_list_open = r.ImGui_BeginChild(ctx, "ScreenshotList", 0, 0, 0, r.ImGui_WindowFlags_NoNavInputs())
+    if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true end
+    if screenshot_list_open then
             if config.flicker_guard_enabled then
                 local now = r.time_precise()
                 local sig = _build_screenshot_signature()
@@ -24079,6 +24089,7 @@ function ShowScreenshotWindow()
             r.ImGui_Dummy(ctx, 0, 0)
             if is_screenshot_branch then
                 r.ImGui_EndChild(ctx) 
+            end
             end
             end
         if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2) end
@@ -26125,9 +26136,8 @@ function ShowTrackFX()
 end
 
 function ShowItemFX()
-    local item = r.GetSelectedMediaItem(0, 0)
+    local item, take = GetSelectedItemTakeForTrack(TRACK or GetTargetTrack())
     if not item then return end
-    local take = r.GetActiveTake(item)
     if not take then return end
 
     local min_height = r.ImGui_GetCursorPosY(ctx)
@@ -27009,19 +27019,16 @@ function HandleDragAndDrop()
             return
         end
         if info_itemfx_drop_hovered then
-            local item = r.GetSelectedMediaItem(0, 0)
-            if item then
-                local take = r.GetActiveTake(item)
-                if take then
-                    r.Undo_BeginBlock()
-                    for _, pname in ipairs(plugins) do
-                        r.TakeFX_AddByName(take, pname, 1)
-                        LAST_USED_FX = pname
-                    end
-                    r.Undo_EndBlock("Add FX to Item", -1)
-                    if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
-                    if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
+            local item, take = GetSelectedItemTakeForTrack(TRACK)
+            if item and take then
+                r.Undo_BeginBlock()
+                for _, pname in ipairs(plugins) do
+                    r.TakeFX_AddByName(take, pname, 1)
+                    LAST_USED_FX = pname
                 end
+                r.Undo_EndBlock("Add FX to Item", -1)
+                if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+                if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
             end
             dragging_fx_name = nil
             potential_drag_fx_name = nil
