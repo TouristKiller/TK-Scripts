@@ -1,7 +1,12 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.6
+-- @version 1.1.7
 -- @changelog:
+--   v1.1.7:
+--       + Added Patchbay master-route handling in bulk routing and node context actions.
+--       + Added node context Connect to actions for tracks and MASTER.
+--       + Improved folder editing so parent folders can be assigned as children while preserving folder blocks.
+--       + Fixed Folder Tree refresh after folder hierarchy changes and folder-link removal.
 --   v1.1.6:
 --       + Added Patchbay hover-info for connection pins and folder links.
 --       + Added inherited folder mute/solo indicators, cable dimming and folder-link tinting.

@@ -14,6 +14,7 @@ local function IsMasterEntry(tr) return tr and tr.is_master end
 local GetSendIndexLocal
 local GetCtx
 local GetConfig
+local GetLayoutPreset
 local GetLockMode
 local IsLayoutLockedCfg
 local IsAllLockedCfg
@@ -589,6 +590,15 @@ local function GetDirectFolderParentLocal(tr)
     return stack[#stack], idx
 end
 
+local function MarkFolderLayoutChanged()
+    layout_dirty = true
+    local cfg = GetConfig and GetConfig() or _G.config
+    if cfg and PatchbayLayoutKind(GetLayoutPreset(cfg)) == "folder" then
+        pending_auto_layout = true
+        pending_center_view = true
+    end
+end
+
 local function PrepareSimpleFolderChildren(parent, selected_tracks)
     if not r.ReorderSelectedTracks then return nil, "ReorderSelectedTracks is not available." end
     if not parent or not r.ValidatePtr(parent, "MediaTrack*") then return nil, "Invalid parent track." end
@@ -620,14 +630,32 @@ local function PrepareSimpleFolderChildren(parent, selected_tracks)
             if child_idx < 0 then
                 return nil, "Selected child track not found."
             end
-            if child_depth ~= 0 then
-                return nil, "Selected children must not have existing folder structure."
+            if child_depth < 0 then
+                return nil, "Selected child closes a folder. Select the folder parent instead."
+            end
+            local block_start_idx = child_idx
+            local block_end_idx = child_idx
+            if child_depth > 0 then
+                _, block_end_idx = GetFolderRangeLocal(child)
+                if not block_end_idx then return nil, "Selected folder range could not be resolved." end
+            end
+            if parent_idx >= block_start_idx and parent_idx <= block_end_idx then
+                return nil, "Cannot assign a parent inside its own child folder."
             end
             if append_existing and folder_end_idx and child_idx > parent_idx and child_idx <= folder_end_idx then
                 return nil, "Selected child is already inside this folder."
             end
-            seen[guid] = true
-            children[#children + 1] = { guid = guid, track = child }
+            local block_guids = {}
+            for j = block_start_idx, block_end_idx do
+                local block_track = r.GetTrack(0, j)
+                if block_track and r.ValidatePtr(block_track, "MediaTrack*") then
+                    local block_guid = r.GetTrackGUID(block_track)
+                    if seen[block_guid] then return nil, "Selected folder blocks overlap." end
+                    seen[block_guid] = true
+                    block_guids[#block_guids + 1] = block_guid
+                end
+            end
+            children[#children + 1] = { guid = guid, track = child, block_guids = block_guids, block_last_guid = block_guids[#block_guids] }
         end
     end
     if #children == 0 then return nil, "Select one or more other nodes first." end
@@ -642,15 +670,19 @@ local function AssignSelectedTracksAsFolderChildren(parent, selected_tracks)
         return
     end
     local parent_guid = r.GetTrackGUID(parent)
-    local child_guids = {}
-    for i = 1, #children do child_guids[i] = children[i].guid end
+    local move_guids = {}
+    for i = 1, #children do
+        for j = 1, #children[i].block_guids do
+            move_guids[#move_guids + 1] = children[i].block_guids[j]
+        end
+    end
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     for i = 0, r.CountTracks(0) - 1 do
         r.SetMediaTrackInfo_Value(r.GetTrack(0, i), "I_SELECTED", 0)
     end
-    for i = 1, #child_guids do
-        local child = FindTrackByGuidLocal(child_guids[i])
+    for i = 1, #move_guids do
+        local child = FindTrackByGuidLocal(move_guids[i])
         if child and r.ValidatePtr(child, "MediaTrack*") then
             r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1)
         end
@@ -662,16 +694,23 @@ local function AssignSelectedTracksAsFolderChildren(parent, selected_tracks)
         parent_now = FindTrackByGuidLocal(parent_guid)
         local _, refreshed_end_idx = GetFolderRangeLocal(parent_now)
         local ordered_children = {}
-        for i = 1, #child_guids do
-            local child = FindTrackByGuidLocal(child_guids[i])
+        for i = 1, #children do
+            local child = FindTrackByGuidLocal(children[i].guid)
             local child_idx = GetTrackIndexLocal(child)
-            if child and child_idx >= 0 then ordered_children[#ordered_children + 1] = { track = child, idx = child_idx } end
+            if child and child_idx >= 0 then ordered_children[#ordered_children + 1] = { track = child, idx = child_idx, block_last_guid = children[i].block_last_guid } end
         end
         table.sort(ordered_children, function(a, b) return a.idx < b.idx end)
-        local contiguous = refreshed_end_idx ~= nil and #ordered_children == #child_guids
+        local ordered_moved = {}
+        for i = 1, #move_guids do
+            local moved = FindTrackByGuidLocal(move_guids[i])
+            local moved_idx = GetTrackIndexLocal(moved)
+            if moved and moved_idx >= 0 then ordered_moved[#ordered_moved + 1] = { track = moved, idx = moved_idx } end
+        end
+        table.sort(ordered_moved, function(a, b) return a.idx < b.idx end)
+        local contiguous = refreshed_end_idx ~= nil and #ordered_children == #children and #ordered_moved == #move_guids
         if contiguous then
-            for i = 1, #ordered_children do
-                if ordered_children[i].idx ~= refreshed_end_idx + i then contiguous = false; break end
+            for i = 1, #ordered_moved do
+                if ordered_moved[i].idx ~= refreshed_end_idx + i then contiguous = false; break end
             end
         end
         if not contiguous then
@@ -695,17 +734,24 @@ local function AssignSelectedTracksAsFolderChildren(parent, selected_tracks)
         if closer and r.ValidatePtr(closer, "MediaTrack*") then
             r.SetMediaTrackInfo_Value(closer, "I_FOLDERDEPTH", 0)
         end
-        for i = 1, #ordered_children do
-            local child = ordered_children[i].track
-            r.SetMediaTrackInfo_Value(child, "I_FOLDERDEPTH", i == #ordered_children and closer_depth or 0)
-            r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1)
+        local last_child = ordered_children[#ordered_children]
+        if last_child then
+            local closer_child = FindTrackByGuidLocal(last_child.block_last_guid)
+            if closer_child and r.ValidatePtr(closer_child, "MediaTrack*") then
+                local depth = math.floor(r.GetMediaTrackInfo_Value(closer_child, "I_FOLDERDEPTH") or 0)
+                r.SetMediaTrackInfo_Value(closer_child, "I_FOLDERDEPTH", depth + closer_depth)
+            end
+        end
+        for i = 1, #move_guids do
+            local child = FindTrackByGuidLocal(move_guids[i])
+            if child and r.ValidatePtr(child, "MediaTrack*") then r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1) end
         end
         r.PreventUIRefresh(-1)
         r.TrackList_AdjustWindows(false)
         r.UpdateArrange()
         r.Undo_EndBlock("Patchbay: add folder children", -1)
         _G.TRACK = FindTrackByGuidLocal(parent_guid) or _G.TRACK
-        layout_dirty = true
+        MarkFolderLayoutChanged()
         return
     end
     local parent_idx = GetTrackIndexLocal(parent_now)
@@ -713,16 +759,23 @@ local function AssignSelectedTracksAsFolderChildren(parent, selected_tracks)
     parent_now = FindTrackByGuidLocal(parent_guid)
     parent_idx = GetTrackIndexLocal(parent_now)
     local ordered_children = {}
-    for i = 1, #child_guids do
-        local child = FindTrackByGuidLocal(child_guids[i])
+    for i = 1, #children do
+        local child = FindTrackByGuidLocal(children[i].guid)
         local child_idx = GetTrackIndexLocal(child)
-        if child and child_idx >= 0 then ordered_children[#ordered_children + 1] = { track = child, idx = child_idx } end
+        if child and child_idx >= 0 then ordered_children[#ordered_children + 1] = { track = child, idx = child_idx, block_last_guid = children[i].block_last_guid } end
     end
     table.sort(ordered_children, function(a, b) return a.idx < b.idx end)
-    local contiguous = parent_idx >= 0 and #ordered_children == #child_guids
+    local ordered_moved = {}
+    for i = 1, #move_guids do
+        local moved = FindTrackByGuidLocal(move_guids[i])
+        local moved_idx = GetTrackIndexLocal(moved)
+        if moved and moved_idx >= 0 then ordered_moved[#ordered_moved + 1] = { track = moved, idx = moved_idx } end
+    end
+    table.sort(ordered_moved, function(a, b) return a.idx < b.idx end)
+    local contiguous = parent_idx >= 0 and #ordered_children == #children and #ordered_moved == #move_guids
     if contiguous then
-        for i = 1, #ordered_children do
-            if ordered_children[i].idx ~= parent_idx + i then contiguous = false; break end
+        for i = 1, #ordered_moved do
+            if ordered_moved[i].idx ~= parent_idx + i then contiguous = false; break end
         end
     end
     if not contiguous then
@@ -736,17 +789,24 @@ local function AssignSelectedTracksAsFolderChildren(parent, selected_tracks)
     if parent_now and r.ValidatePtr(parent_now, "MediaTrack*") then
         r.SetMediaTrackInfo_Value(parent_now, "I_FOLDERDEPTH", 1)
     end
-    for i = 1, #ordered_children do
-        local child = ordered_children[i].track
-        r.SetMediaTrackInfo_Value(child, "I_FOLDERDEPTH", i == #ordered_children and ((parent_start_depth or 0) - 1) or 0)
-        r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1)
+    local last_child = ordered_children[#ordered_children]
+    if last_child then
+        local closer_child = FindTrackByGuidLocal(last_child.block_last_guid)
+        if closer_child and r.ValidatePtr(closer_child, "MediaTrack*") then
+            local depth = math.floor(r.GetMediaTrackInfo_Value(closer_child, "I_FOLDERDEPTH") or 0)
+            r.SetMediaTrackInfo_Value(closer_child, "I_FOLDERDEPTH", depth + ((parent_start_depth or 0) - 1))
+        end
+    end
+    for i = 1, #move_guids do
+        local child = FindTrackByGuidLocal(move_guids[i])
+        if child and r.ValidatePtr(child, "MediaTrack*") then r.SetMediaTrackInfo_Value(child, "I_SELECTED", 1) end
     end
     r.PreventUIRefresh(-1)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
     r.Undo_EndBlock("Patchbay: assign folder children", -1)
     _G.TRACK = FindTrackByGuidLocal(parent_guid) or _G.TRACK
-    layout_dirty = true
+    MarkFolderLayoutChanged()
 end
 
 local function RemoveTrackFromFolderParent(tr)
@@ -866,7 +926,7 @@ local function RemoveTrackFromFolderParent(tr)
     r.UpdateArrange()
     r.Undo_EndBlock("Patchbay: remove from parent", -1)
     _G.TRACK = FindTrackByGuidLocal(block_guids[1]) or _G.TRACK
-    layout_dirty = true
+    MarkFolderLayoutChanged()
 end
 
 function BatchSetMute(selected_tracks, muted)
@@ -1214,10 +1274,40 @@ local function FindTrackByGuid(guid)
     return nil
 end
 
+function PatchbayBatchSetMainSend(selected_tracks, enabled, undo_name)
+    if IsAllLockedCfg(GetConfig()) then return 0 end
+    if not selected_tracks or #selected_tracks == 0 then return 0 end
+    local changes = 0
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for i = 1, #selected_tracks do
+        local src = selected_tracks[i].track
+        if src and r.ValidatePtr(src, "MediaTrack*") then
+            local current = r.GetMediaTrackInfo_Value(src, "B_MAINSEND") == 1
+            if current ~= enabled then
+                r.SetMediaTrackInfo_Value(src, "B_MAINSEND", enabled and 1 or 0)
+                changes = changes + 1
+            end
+        end
+    end
+    r.PreventUIRefresh(-1)
+    if changes > 0 then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+        r.Undo_EndBlock(undo_name, -1)
+    else
+        r.Undo_EndBlock(undo_name .. " (no changes)", -1)
+    end
+    return changes
+end
+
 function BatchConnectSelectedToDestination(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
+    if target == r.GetMasterTrack(0) then
+        return PatchbayBatchSetMainSend(selected_tracks, true, "Patchbay: bulk enable selected main sends")
+    end
     local changes = 0
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
@@ -1245,6 +1335,9 @@ function BatchDisconnectSelectedFromDestination(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
+    if target == r.GetMasterTrack(0) then
+        return PatchbayBatchSetMainSend(selected_tracks, false, "Patchbay: bulk disable selected main sends")
+    end
     local changes = 0
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
@@ -1274,6 +1367,12 @@ function BatchApplyBulkRouteSettings(selected_tracks, target, create_missing, mo
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
+    if target == r.GetMasterTrack(0) then
+        if create_missing then
+            return PatchbayBatchSetMainSend(selected_tracks, true, "Patchbay: bulk enable selected main sends")
+        end
+        return 0
+    end
     local changes = 0
     local vol = math.exp(vol_db * math.log(10) / 20)
     r.Undo_BeginBlock()
@@ -1326,7 +1425,7 @@ local function ColW()
     return NodeW() + 60
 end
 
-local function GetLayoutPreset(cfg)
+GetLayoutPreset = function(cfg)
     local p = cfg and cfg.patchbay_layout_preset or "hybrid"
     if not LAYOUT_PRESET_GAPS[p] then p = "hybrid" end
     return p
@@ -3941,6 +4040,31 @@ local function RenderNodePopup()
                     BatchDisconnectTargetToSelected(tr, selected_tracks)
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
+            end
+            r.ImGui_Separator(ctx)
+            if IsAllLockedCfg(GetConfig()) then
+                r.ImGui_TextDisabled(ctx, "Connect to")
+            elseif r.ImGui_BeginMenu(ctx, "Connect to") then
+                local source = { { track = tr, guid = node_popup_guid, name = tname } }
+                if r.ImGui_Selectable(ctx, "MASTER") then
+                    PatchbayBatchSetMainSend(source, true, "Patchbay: enable main send")
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                r.ImGui_Separator(ctx)
+                local ntracks = r.CountTracks(0)
+                for i = 0, ntracks - 1 do
+                    local dst = r.GetTrack(0, i)
+                    if dst and r.ValidatePtr(dst, "MediaTrack*") and dst ~= tr then
+                        local idx = math.floor(r.GetMediaTrackInfo_Value(dst, "IP_TRACKNUMBER") or 0)
+                        local _, name = r.GetTrackName(dst)
+                        local label = string.format("#%d %s", idx, name or "")
+                        if r.ImGui_Selectable(ctx, label, GetSendIndexLocal(tr, dst) >= 0) then
+                            BatchConnectSelectedToDestination(source, dst)
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
             end
             r.ImGui_Separator(ctx)
             if r.ImGui_BeginMenu(ctx, "Folder") then

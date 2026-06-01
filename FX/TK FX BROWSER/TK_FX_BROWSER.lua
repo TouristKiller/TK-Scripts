@@ -1,8 +1,14 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.0.5
+-- @version 3.0.6
 -- @changelog:
 --[[ 
+    v3.0.6:
+        + Patchbay: added master-route handling in bulk routing and node context actions.
+        + Patchbay: added node context Connect to actions for tracks and MASTER.
+        + Patchbay: improved folder editing so parent folders can be assigned as children while preserving folder blocks.
+        + Patchbay: fixed Folder Tree refresh after folder hierarchy changes and folder-link removal.
+
     v3.0.5:
         + Fix: improved ReaImGui child/style stack handling to avoid startup errors after restored window/dock states.
         + Fix: Item FX in the Info panel now only follows selected items on the selected/target track.
