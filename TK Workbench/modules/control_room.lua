@@ -21,6 +21,7 @@ local defaults = {
   meter_smoothing = 0.35,
   dim_db = -12,
   monitor_aliases = {},
+  monitor_modes = {},
   meter_source = "master",
   meter_fx_auto_install = true,
   meter_read_hz = 20,
@@ -67,6 +68,10 @@ local metronome_keys = {
 local METRONOME_TOGGLE_ACTION = 40364
 local REAROUTE_CHANNELS = 16
 local CUE_TRACK_EXT_KEY = "P_EXT:TK_CONTROL_ROOM_CUE"
+local MONITOR_MODES = { "stereo", "mono", "left_source", "right_source", "left_speaker", "right_speaker" }
+local MONITOR_MODE_LABELS = { stereo = "Stereo", mono = "Mono Sum", left_source = "L Source", right_source = "R Source", left_speaker = "L Speaker", right_speaker = "R Speaker" }
+local CUE_OUTPUT_MODES = { "stereo", "mono" }
+local CUE_OUTPUT_MODE_LABELS = { stereo = "Stereo", mono = "Mono Sum" }
 
 local function copy_default(value)
   if type(value) ~= "table" then return value end
@@ -591,6 +596,20 @@ local function write_cue_alias(app, settings, cue, value)
   return true
 end
 
+local function cue_output_mode_key(mode)
+  mode = tostring(mode or ""):lower()
+  if mode == "mono" or mode == "mono sum" or mode == "sum" then return "mono" end
+  return "stereo"
+end
+
+local function cue_output_mode_label(mode)
+  return CUE_OUTPUT_MODE_LABELS[cue_output_mode_key(mode)] or CUE_OUTPUT_MODE_LABELS.stereo
+end
+
+local function cue_output_mode(cue)
+  return cue_output_mode_key(cue and cue.record and cue.record.output_mode)
+end
+
 local function first_cue_target(settings, targets)
   local used = monitor_outputs(r.GetMasterTrack(0))
   for _, cue in ipairs(cue_outputs(settings)) do
@@ -957,7 +976,7 @@ local function add_cue_output(app, settings, targets)
     add_main_mix_sends_to_cue(settings, track)
     settings.cue_send_modes = type(settings.cue_send_modes) == "table" and settings.cue_send_modes or {}
     settings.cue_send_modes[guid] = settings.cue_send_prefader ~= false and "pre" or "post"
-    settings.cue_outputs[#settings.cue_outputs + 1] = { guid = guid, alias = "Cue " .. tostring(cue_number) }
+    settings.cue_outputs[#settings.cue_outputs + 1] = { guid = guid, alias = "Cue " .. tostring(cue_number), output_mode = "stereo" }
     write_cue_track_name({ index = cue_number, record = settings.cue_outputs[#settings.cue_outputs], track = track })
     settings.cue_mix_active_guid = settings.cue_mix_active_guid ~= "" and settings.cue_mix_active_guid or guid
     if app.save_settings then app.save_settings() end
@@ -986,6 +1005,20 @@ local function write_cue_destination(track, target)
     if not index then return false end
     return r.SetTrackSendInfo_Value(track, 1, index, "I_DSTCHAN", monitor_destination_value(target))
   end)
+end
+
+local function write_cue_output_mode(app, cue, mode)
+  if not cue or not cue.record or not valid_track(cue.track) or not r.SetTrackSendInfo_Value then return false end
+  mode = cue_output_mode_key(mode)
+  local ok = write_with_undo("Control Room: Cue output mode", function()
+    local index = ensure_cue_send(cue.track, nil)
+    if not index then return false end
+    return r.SetTrackSendInfo_Value(cue.track, 1, index, "B_MONO", mode == "mono" and 1 or 0)
+  end)
+  if not ok then return false end
+  cue.record.output_mode = mode
+  if app and app.save_settings then app.save_settings() end
+  return true
 end
 
 function first_free_output_target(outputs, targets)
@@ -1020,6 +1053,79 @@ local function write_monitor_source(master, index, target)
   return write_with_undo("Control Room: Monitor source", function()
     return r.SetTrackSendInfo_Value(master, 1, index, "I_SRCCHAN", monitor_source_value(target))
   end)
+end
+
+local function monitor_mode_key(mode)
+  mode = tostring(mode or ""):lower()
+  if mode == "mono sum" or mode == "sum" then return "mono" end
+  if mode == "left" or mode == "l" or mode == "left source" or mode == "l source" then return "left_source" end
+  if mode == "right" or mode == "r" or mode == "right source" or mode == "r source" then return "right_source" end
+  if mode == "left speaker" or mode == "l speaker" then return "left_speaker" end
+  if mode == "right speaker" or mode == "r speaker" then return "right_speaker" end
+  for _, item in ipairs(MONITOR_MODES) do if mode == item then return item end end
+  return "stereo"
+end
+
+local function monitor_mode_label(mode)
+  return MONITOR_MODE_LABELS[monitor_mode_key(mode)] or MONITOR_MODE_LABELS.stereo
+end
+
+local function get_monitor_mode(settings, target)
+  local key = monitor_target_key(target)
+  local modes = settings and settings.monitor_modes or nil
+  return monitor_mode_key(key and type(modes) == "table" and modes[key] or nil)
+end
+
+local function set_monitor_mode(app, settings, target, mode)
+  local key = monitor_target_key(target)
+  if not key then return false end
+  settings.monitor_modes = type(settings.monitor_modes) == "table" and settings.monitor_modes or {}
+  settings.monitor_modes[key] = monitor_mode_key(mode)
+  if app and app.save_settings then app.save_settings() end
+  return true
+end
+
+local function monitor_source_pair_channel(source)
+  local channel = source and tonumber(source.channel) or 0
+  if not channel or channel < 0 then return 0 end
+  channel = math.floor(channel)
+  if source and source.mono then return channel - (channel % 2) end
+  return channel
+end
+
+local function monitor_mode_source_target(mode, source)
+  mode = monitor_mode_key(mode)
+  local base = monitor_source_pair_channel(source)
+  if mode == "left_source" then return { channel = base, mono = true } end
+  if mode == "right_source" then return { channel = base + 1, mono = true } end
+  if mode == "mono" then return { channel = base, mono = false } end
+  return { channel = base, mono = false }
+end
+
+local function monitor_mode_pan(mode)
+  mode = monitor_mode_key(mode)
+  if mode == "left_speaker" then return -1 end
+  if mode == "right_speaker" then return 1 end
+  return 0
+end
+
+local function apply_monitor_mode(master, index, mode, source)
+  if not valid_track(master) or not index or not r.SetTrackSendInfo_Value then return false end
+  mode = monitor_mode_key(mode)
+  source = source or monitor_send_source(master, index)
+  local target = monitor_mode_source_target(mode, source)
+  return write_with_undo("Control Room: Monitor mode", function()
+    local source_ok = r.SetTrackSendInfo_Value(master, 1, index, "I_SRCCHAN", monitor_source_value(target))
+    local mono_ok = r.SetTrackSendInfo_Value(master, 1, index, "B_MONO", mode == "mono" and 1 or 0)
+    local pan_ok = r.SetTrackSendInfo_Value(master, 1, index, "D_PAN", monitor_mode_pan(mode))
+    return source_ok ~= false and mono_ok ~= false and pan_ok ~= false
+  end)
+end
+
+local function write_monitor_mode(app, settings, master, index, target, mode, source)
+  mode = monitor_mode_key(mode)
+  if not apply_monitor_mode(master, index, mode, source) then return false end
+  return set_monitor_mode(app, settings, target, mode)
 end
 
 local function add_monitor_output(master, outputs, targets)
@@ -1162,11 +1268,13 @@ local function build_lanes(app, settings)
         local monitor_value = read_monitor_volume(master, send_index)
         local monitor_muted = read_monitor_mute(master, send_index)
         local alias = monitor_alias(settings, output.target)
+        local mode = get_monitor_mode(settings, output.target)
+        local mode_label = monitor_mode_label(mode)
         local lane_id = "monitor_" .. tostring(send_index)
         lanes[#lanes + 1] = {
           id = lane_id,
           label = alias or (#outputs > 1 and ("Monitor " .. tostring(send_index + 1)) or "Monitor"),
-          subtitle = output.name,
+          subtitle = tostring(output.name or "Hardware Out") .. " | " .. mode_label,
           value = monitor_value or 1,
           meter = smoothed_meter(lane_id, read_track_peak(master), settings),
           enabled = monitor_value ~= nil,
@@ -1180,6 +1288,10 @@ local function build_lanes(app, settings)
           solo_toggle = function() return toggle_speaker_select(send_index) end,
           solo_on_tooltip = "Restore all speakers",
           solo_off_tooltip = "Select this speaker",
+          mode = mode,
+          mode_menu_title = "Monitor Mode",
+          mode_options = MONITOR_MODES,
+          set_mode = function(next_mode) return write_monitor_mode(app, settings, master, send_index, output.target, next_mode, monitor_send_source(master, send_index)) end,
           write = function(value) return write_monitor_volume(master, send_index, value) end
         }
       end
@@ -1193,10 +1305,11 @@ local function build_lanes(app, settings)
       local cue_muted = read_track_mute(track)
       local cue_enabled = cue_value ~= nil
       local lane_id = "cue_" .. tostring(cue.index)
+      local output_mode = cue_output_mode(cue)
       lanes[#lanes + 1] = {
         id = lane_id,
         label = cue_label(cue),
-        subtitle = cue.name,
+        subtitle = tostring(cue.name or "Cue Output") .. " | " .. cue_output_mode_label(output_mode),
         value = cue_value or 1,
         meter = smoothed_meter(lane_id, read_track_peak(track), settings),
         enabled = cue_enabled,
@@ -1206,6 +1319,10 @@ local function build_lanes(app, settings)
         led_off_color = Theme.colors.warning,
         led_on_tooltip = "Mute cue",
         led_off_tooltip = "Unmute cue",
+        mode = output_mode,
+        mode_menu_title = "Cue Output Mode",
+        mode_options = CUE_OUTPUT_MODES,
+        set_mode = function(next_mode) return write_cue_output_mode(app, cue, next_mode) end,
         handle_color = native_color_to_u32(valid_track(track) and r.GetTrackColor(track) or 0, 0xFF) or Theme.colors.warning,
         write = cue_enabled and function(value) return write_track_volume(track, value, "Control Room: Cue volume") end or function() return false end
       }
@@ -1472,6 +1589,15 @@ local function draw_lane(app, lane, settings, width, height)
   r.ImGui_PushID(ctx, lane.id)
   local left_x, top_y = r.ImGui_GetCursorScreenPos(ctx)
   r.ImGui_Dummy(ctx, width, height)
+  if lane.mode_options and lane.set_mode and r.ImGui_BeginPopupContextItem and r.ImGui_BeginPopupContextItem(ctx, "##control_room_lane_mode") then
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(lane.mode_menu_title or "Mode"))
+    for _, mode in ipairs(lane.mode_options) do
+      local selected = monitor_mode_key(lane.mode) == mode
+      if r.ImGui_Selectable(ctx, monitor_mode_label(mode), selected) then lane.set_mode(mode) end
+      if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+    end
+    r.ImGui_EndPopup(ctx)
+  end
   local right_x = left_x + width
   local bottom_y = top_y + height
   local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
@@ -1508,6 +1634,12 @@ local function draw_lane(app, lane, settings, width, height)
     r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, 5, led_color, 16)
     r.ImGui_DrawList_AddCircle(draw_list, led_x, led_y, 7, led_border, 16, led_hovered and 1.5 or 1)
     if led_hovered and r.ImGui_IsMouseClicked(ctx, 0) then lane.led_toggle() end
+  end
+  if lane.subtitle then
+    local subtitle_right = right_x - (lane.led_toggle and 32 or 8)
+    r.ImGui_DrawList_PushClipRect(draw_list, left_x + 8, top_y + 31, subtitle_right, top_y + 52, true)
+    r.ImGui_DrawList_AddText(draw_list, left_x + 9, top_y + 34, Theme.colors.text_dim, ellipsize_text(ctx, lane.subtitle, math.max(0, subtitle_right - left_x - 17)))
+    r.ImGui_DrawList_PopClipRect(draw_list)
   end
   local value_text = enabled and format_db(lane.value, settings) or "--"
   local value_width = calc_text_width(ctx, value_text)
@@ -1560,7 +1692,7 @@ local function draw_lane(app, lane, settings, width, height)
     local next_value = db_to_linear(next_db, settings.min_db, settings.max_db)
     if math.abs(next_value - (lane.value or 0)) > 0.0005 then lane.write(next_value) end
   end
-  if solo_hovered then r.ImGui_SetTooltip(ctx, lane.solo_state and (lane.solo_on_tooltip or "Selected") or (lane.solo_off_tooltip or "Select")) elseif led_hovered then r.ImGui_SetTooltip(ctx, lane.led_state and (lane.led_on_tooltip or "On") or (lane.led_off_tooltip or "Off")) elseif handle_hovered then r.ImGui_SetTooltip(ctx, "Drag to adjust, Shift+scroll for fine adjust, double-click for 0 dB") elseif fader_hovered then r.ImGui_SetTooltip(ctx, "Shift+scroll for fine adjust") elseif hovered and not enabled then r.ImGui_SetTooltip(ctx, tostring(lane.status or "Unavailable")) elseif hovered and lane.subtitle then r.ImGui_SetTooltip(ctx, tostring(lane.subtitle)) end
+  if solo_hovered then r.ImGui_SetTooltip(ctx, lane.solo_state and (lane.solo_on_tooltip or "Selected") or (lane.solo_off_tooltip or "Select")) elseif led_hovered then r.ImGui_SetTooltip(ctx, lane.led_state and (lane.led_on_tooltip or "On") or (lane.led_off_tooltip or "Off")) elseif handle_hovered then r.ImGui_SetTooltip(ctx, "Drag to adjust, Shift+scroll for fine adjust, double-click for 0 dB") elseif fader_hovered then r.ImGui_SetTooltip(ctx, "Shift+scroll for fine adjust") elseif hovered and not enabled then r.ImGui_SetTooltip(ctx, tostring(lane.status or "Unavailable")) elseif hovered and lane.mode_options and lane.subtitle then r.ImGui_SetTooltip(ctx, tostring(lane.subtitle) .. "\nRight-click for mode") elseif hovered and lane.subtitle then r.ImGui_SetTooltip(ctx, tostring(lane.subtitle)) end
   r.ImGui_PopID(ctx)
 end
 
@@ -1875,10 +2007,11 @@ local function draw_setup_popup(app, settings)
           local volume = read_monitor_volume(master, output.index)
           local muted = read_monitor_mute(master, output.index)
           local source = monitor_send_source(master, output.index)
+          local mode = get_monitor_mode(settings, output.target)
           local alias = monitor_alias(settings, output.target) or ""
           r.ImGui_TextColored(ctx, Theme.colors.text, "Monitor " .. tostring(output.index + 1))
           r.ImGui_SameLine(ctx)
-          r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(output.name or "Hardware Out") .. " | " .. monitor_mode_text(output) .. " | " .. tostring(source.name or "Master 1 / 2") .. " | " .. format_db(volume or 1, settings))
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(output.name or "Hardware Out") .. " | " .. monitor_mode_text(output) .. " | " .. monitor_mode_label(mode) .. " | " .. tostring(source.name or "Master 1 / 2") .. " | " .. format_db(volume or 1, settings))
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Alias")
           r.ImGui_SameLine(ctx, 64)
           r.ImGui_SetNextItemWidth(ctx, 310)
@@ -1893,7 +2026,9 @@ local function draw_setup_popup(app, settings)
           if #targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_destination", tostring(output.name or "Hardware Out")) then
             for _, target in ipairs(targets) do
               local selected = target_matches_output(target, output)
-              if r.ImGui_Selectable(ctx, tostring(target.name or "Output"), selected) then write_monitor_destination(master, output.index, target) end
+              if r.ImGui_Selectable(ctx, tostring(target.name or "Output"), selected) then
+                if write_monitor_destination(master, output.index, target) then write_monitor_mode(app, settings, master, output.index, target, mode, source) end
+              end
               if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
             end
             r.ImGui_EndCombo(ctx)
@@ -1904,12 +2039,26 @@ local function draw_setup_popup(app, settings)
           if #source_targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_source", tostring(source.name or "Master 1 / 2")) then
             for _, target in ipairs(source_targets) do
               local selected = source_targets_match(source, target)
-              if r.ImGui_Selectable(ctx, tostring(target.name or "Source"), selected) then write_monitor_source(master, output.index, target) end
+              if r.ImGui_Selectable(ctx, tostring(target.name or "Source"), selected) then
+                if write_monitor_source(master, output.index, target) then write_monitor_mode(app, settings, master, output.index, output.target, mode, target) end
+              end
               if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
             end
             r.ImGui_EndCombo(ctx)
           end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose the master channel pair feeding this monitor") end
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Mode")
+          r.ImGui_SameLine(ctx, 64)
+          r.ImGui_SetNextItemWidth(ctx, 392)
+          if r.ImGui_BeginCombo(ctx, "##monitor_mode", monitor_mode_label(mode)) then
+            for _, next_mode in ipairs(MONITOR_MODES) do
+              local selected = mode == next_mode
+              if r.ImGui_Selectable(ctx, monitor_mode_label(next_mode), selected) then write_monitor_mode(app, settings, master, output.index, output.target, next_mode, source) end
+              if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+            end
+            r.ImGui_EndCombo(ctx)
+          end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose stereo, mono sum, source check or physical speaker side") end
           if r.ImGui_Button(ctx, muted and "Unmute##monitor_setup_mute" or "Mute##monitor_setup_mute", 82, 0) then write_monitor_mute(master, output.index, muted == false) end
           r.ImGui_SameLine(ctx)
           if r.ImGui_Button(ctx, "Remove##monitor_setup_remove", 82, 0) then remove_monitor_output(master, output.index) end
@@ -1936,10 +2085,11 @@ local function draw_setup_popup(app, settings)
           local muted = read_track_mute(track)
           local volume = read_track_volume(track)
           local feed_count = cue_feed_count(settings, track)
+          local output_mode = cue_output_mode(cue)
           local alias = clean_alias(cue.record and cue.record.alias) or ""
           r.ImGui_TextColored(ctx, Theme.colors.text, cue_label(cue))
           r.ImGui_SameLine(ctx)
-          r.ImGui_TextColored(ctx, Theme.colors.text_dim, (valid_track(track) and tostring(cue.name or "Cue Output") or "Cue track missing") .. " | Feeds: " .. tostring(feed_count) .. " | " .. format_db(volume or 1, settings))
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, (valid_track(track) and tostring(cue.name or "Cue Output") or "Cue track missing") .. " | " .. cue_output_mode_label(output_mode) .. " | Feeds: " .. tostring(feed_count) .. " | " .. format_db(volume or 1, settings))
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Alias")
           r.ImGui_SameLine(ctx, 64)
           r.ImGui_SetNextItemWidth(ctx, 310)
@@ -1955,11 +2105,25 @@ local function draw_setup_popup(app, settings)
             if #targets > 0 and r.ImGui_BeginCombo(ctx, "##cue_destination", tostring(cue.name or "Cue Output")) then
               for _, target in ipairs(targets) do
                 local selected = target_matches_output(target, cue)
-                if r.ImGui_Selectable(ctx, tostring(target.name or "Output"), selected) then write_cue_destination(track, target) end
+                if r.ImGui_Selectable(ctx, tostring(target.name or "Output"), selected) then
+                  if write_cue_destination(track, target) then write_cue_output_mode(app, cue, output_mode) end
+                end
                 if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
               end
               r.ImGui_EndCombo(ctx)
             end
+            r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Mode")
+            r.ImGui_SameLine(ctx, 64)
+            r.ImGui_SetNextItemWidth(ctx, 392)
+            if r.ImGui_BeginCombo(ctx, "##cue_output_mode", cue_output_mode_label(output_mode)) then
+              for _, mode in ipairs(CUE_OUTPUT_MODES) do
+                local selected = output_mode == mode
+                if r.ImGui_Selectable(ctx, cue_output_mode_label(mode), selected) then write_cue_output_mode(app, cue, mode) end
+                if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+              end
+              r.ImGui_EndCombo(ctx)
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose stereo or mono-summed cue output") end
             if r.ImGui_Button(ctx, muted and "Unmute##cue_setup_mute" or "Mute##cue_setup_mute", 82, 0) then write_track_mute(track, muted == false, "Control Room: Cue mute") end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Sync##cue_setup_sync", 82, 0) then sync_cue_output(settings, cue) end

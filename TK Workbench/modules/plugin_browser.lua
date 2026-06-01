@@ -7,7 +7,7 @@ local M = {
   id = "plugin_browser",
   title = "Plugin Browser",
   icon = "PLG",
-  version = "0.1.0"
+  version = "0.1.1"
 }
 
 local fx_root = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/"
@@ -50,6 +50,8 @@ local min_screenshot_cache = 25
 local max_screenshot_loads_per_frame = 12
 local min_screenshot_load_interval = 0
 local min_screenshot_lifetime = 2.0
+local screenshot_signature_check_interval = 5.0
+local screenshot_normalization_version = 4
 local row_height = 40
 local uniform_ratio = 0.625
 
@@ -85,8 +87,13 @@ local state = {
   screenshot_visible_keys = {},
   screenshot_next_load_time = 0,
   screenshot_missing = {},
+  screenshot_signature = nil,
+  screenshot_signature_checked_at = 0,
+  screenshot_normalization_version = nil,
   screenshot_count = 0,
   screenshot_image_errors = 0,
+  screenshot_capture_active = false,
+  screenshot_capture_plugin = nil,
   parser_loaded = false,
   parser_categories = {},
   parser_developers = {},
@@ -250,15 +257,27 @@ end
 
 local function strip_x86(value)
   local name = tostring(value or "")
-  name = name:gsub("%s*%([xX]86%)", "")
-  name = name:gsub("%s*%([xX]64%)", "")
+  name = name:gsub("%s*[%(%[][xX]86[^%]%)]*[%]%)]", "")
+  name = name:gsub("%s*[%(%[][xX]64[^%]%)]*[%]%)]", "")
+  name = name:gsub("^[_%s%-:]*[xX]86[_%s%-]*[Bb]ridged[_%s%-:]*", "")
+  name = name:gsub("[_%s%-:]+[xX]86[_%s%-]*[Bb]ridged[_%s%-:]*", " ")
+  name = name:gsub("^[_%s%-:]*[xX]64[_%s%-]*[Bb]ridged[_%s%-:]*", "")
+  name = name:gsub("[_%s%-:]+[xX]64[_%s%-]*[Bb]ridged[_%s%-:]*", " ")
+  name = name:gsub("[_%s%-]+[xX]86[_%s%-]*$", "")
+  name = name:gsub("^[_%s%-]*[xX]86[_%s%-]+", "")
+  name = name:gsub("[_%s%-]+[xX]86[_%s%-]+", " ")
+  name = name:gsub("[_%s%-]+[xX]64[_%s%-]*$", "")
+  name = name:gsub("^[_%s%-]*[xX]64[_%s%-]+", "")
+  name = name:gsub("[_%s%-]+[xX]64[_%s%-]+", " ")
+  name = name:gsub("^[xX]86%s*:%s*", "")
+  name = name:gsub("^[xX]64%s*:%s*", "")
   return name
 end
 
 local function plugin_arch(value)
   local name = tostring(value or "")
-  if name:find("%([xX]86%)") then return "x86" end
-  if name:find("%([xX]64%)") then return "x64" end
+  if name:find("[%(%[][xX]86") or name:find("[xX]86[_%s%-]*[Bb]ridged") or name:find("[_%s%-][xX]86[_%s%-]") or name:find("^[xX]86%s*:") then return "x86" end
+  if name:find("[%(%[][xX]64") or name:find("[xX]64[_%s%-]*[Bb]ridged") or name:find("[_%s%-][xX]64[_%s%-]") or name:find("^[xX]64%s*:") then return "x64" end
   return ""
 end
 
@@ -267,6 +286,47 @@ local function clean_plugin_name(value)
   name = name:gsub("^[%w%d]+i?:%s*", "")
   name = name:gsub("%s+$", "")
   return name ~= "" and name or tostring(value or "")
+end
+
+local function strip_trailing_plugin_tag(value)
+  local name = tostring(value or "")
+  name = name:gsub("%s*%([^()]+%)%s*$", "")
+  name = name:gsub("%s*%[[^%[%]]+%]%s*$", "")
+  name = name:gsub("%s*%{[^{}]+%}%s*$", "")
+  name = name:gsub("[_%s]+_[^_]+_%s*$", "")
+  return name
+end
+
+local function strip_channel_tag(value)
+  local name = tostring(value or "")
+  name = name:gsub("%s*%([Mm]ono%)", "")
+  name = name:gsub("%s*%([Ss]tereo%)", "")
+  name = name:gsub("[_%s]+_[Mm]ono_", " ")
+  name = name:gsub("[_%s]+_[Ss]tereo_", " ")
+  return name
+end
+
+local function strip_redundant_leading_tag(value)
+  local name = tostring(value or "")
+  local prefix, body = name:match("^([Vv][Ss][Tt]3[Ii]?[%s_:%-]+)(.*)$")
+  if not prefix then prefix, body = name:match("^([Vv][Ss][Tt][Ii]?[%s_:%-]+)(.*)$") end
+  if not prefix then prefix, body = name:match("^([Jj][Ss][Ff][Xx][%s_:%-]+)(.*)$") end
+  if not prefix then prefix, body = name:match("^([Jj][Ss][%s_:%-]+)(.*)$") end
+  if not prefix then prefix, body = name:match("^([Cc][Ll][Aa][Pp][Ii]?[%s_:%-]+)(.*)$") end
+  if not prefix then prefix, body = name:match("^([Aa][Uu][Ii]?[%s_:%-]+)(.*)$") end
+  if not prefix then prefix, body = name:match("^([Ll][Vv]2[Ii]?[%s_:%-]+)(.*)$") end
+  prefix = prefix or ""
+  body = body or name
+  local content, tag = body:match("^(.-)%s*%(([^()]+)%)%s*$")
+  if not content then content, tag = body:match("^(.-)%s*%[([^%[%]]+)%]%s*$") end
+  if not content then content, tag = body:match("^(.-)%s*%{([^{}]+)%}%s*$") end
+  if not content then content, tag = body:match("^(.-)[_%s]+_([^_]+)_%s*$") end
+  if content and tag then
+    local tag_pattern = tag:gsub("([^%w])", "%%%1")
+    local stripped = content:gsub("^%s*" .. tag_pattern .. "%s+", "")
+    if stripped ~= content then return prefix .. stripped .. " (" .. tag .. ")" end
+  end
+  return name
 end
 
 local function normalize_plugin_name(value)
@@ -283,6 +343,7 @@ local function normalize_plugin_name(value)
   name = name:gsub("^au[%s_:%-]*", "")
   name = name:gsub("^lv2i[%s_:%-]*", "")
   name = name:gsub("^lv2[%s_:%-]*", "")
+  name = strip_redundant_leading_tag(name)
   name = name:gsub("^[^%w]+", "")
   name = name:gsub("%s+$", "")
   name = name:gsub("%s+", " ")
@@ -518,29 +579,54 @@ local function remove_favorite(plugin)
 end
 
 local function build_screenshot_index(force)
-  if state.screenshot_index and not force then return end
+  local now = r.time_precise()
+  if state.screenshot_normalization_version ~= screenshot_normalization_version then
+    force = true
+    state.screenshot_normalization_version = screenshot_normalization_version
+  end
+  if state.screenshot_index and not force and now - (state.screenshot_signature_checked_at or 0) < screenshot_signature_check_interval then return end
+  local signature_parts = {}
+  local signature_index = 0
+  while true do
+    local file_name = r.EnumerateFiles(state.screenshot_path, signature_index)
+    if not file_name then break end
+    local lower_file = file_name:lower()
+    if lower_file:match("%.png$") or lower_file:match("%.jpg$") or lower_file:match("%.jpeg$") then signature_parts[#signature_parts + 1] = file_name end
+    signature_index = signature_index + 1
+  end
+  local signature = tostring(#signature_parts) .. "|" .. table.concat(signature_parts, "|")
+  state.screenshot_signature_checked_at = now
+  if state.screenshot_index and not force and signature == state.screenshot_signature then return end
+  state.screenshot_signature = signature
   state.screenshot_index = {}
   state.screenshot_count = 0
   state.screenshot_missing = {}
   state.screenshot_image_errors = 0
-  local index = 0
-  while true do
-    local file_name = r.EnumerateFiles(state.screenshot_path, index)
-    if not file_name then break end
+  for _, file_name in ipairs(signature_parts) do
     local lower_file = file_name:lower()
     local base = lower_file:match("%.png$") and file_name:gsub("%.[Pp][Nn][Gg]$", "") or lower_file:match("%.jpg$") and file_name:gsub("%.[Jj][Pp][Gg]$", "") or lower_file:match("%.jpeg$") and file_name:gsub("%.[Jj][Pp][Ee][Gg]$", "")
     if base then
+      local function index_key(value)
+        local key = normalize_plugin_name(value)
+        if key ~= "" and not state.screenshot_index[key] then state.screenshot_index[key] = file_name end
+      end
       local key = normalize_plugin_name(base)
       if key ~= "" then
-        state.screenshot_index[key] = file_name
+        if not state.screenshot_index[key] then state.screenshot_index[key] = file_name end
         state.screenshot_count = state.screenshot_count + 1
       end
+      index_key(strip_trailing_plugin_tag(base))
+      index_key(strip_channel_tag(base))
+      index_key(strip_trailing_plugin_tag(strip_channel_tag(base)))
     end
-    index = index + 1
   end
 end
 
 local function screenshot_keys(plugin)
+  if type(plugin) == "table" then
+    local signature = table.concat({ tostring(plugin.name or ""), tostring(plugin.clean_name or ""), tostring(plugin.display_name or ""), tostring(plugin.alias or "") }, "\31")
+    if plugin.screenshot_keys_version == screenshot_normalization_version and plugin.screenshot_keys_signature == signature and type(plugin.screenshot_keys_cache) == "table" then return plugin.screenshot_keys_cache end
+  end
   local result = {}
   local seen = {}
   local function add(value)
@@ -550,13 +636,47 @@ local function screenshot_keys(plugin)
       result[#result + 1] = key
     end
   end
+  local function add_tagless(value)
+    add(strip_trailing_plugin_tag(value))
+  end
+  local function add_channelless(value)
+    local stripped = strip_channel_tag(value)
+    add(stripped)
+    add_tagless(stripped)
+  end
+  local function add_without_redundant_tag(value)
+    local stripped = strip_redundant_leading_tag(value)
+    add(stripped)
+    add_tagless(stripped)
+    add_channelless(stripped)
+  end
   if type(plugin) == "table" then
     add(plugin.name)
+    add_tagless(plugin.name)
+    add_channelless(plugin.name)
+    add_without_redundant_tag(plugin.name)
     add(plugin.clean_name)
+    add_tagless(plugin.clean_name)
+    add_channelless(plugin.clean_name)
+    add_without_redundant_tag(plugin.clean_name)
     add(plugin.display_name)
+    add_tagless(plugin.display_name)
+    add_channelless(plugin.display_name)
+    add_without_redundant_tag(plugin.display_name)
     add(plugin.alias)
+    add_tagless(plugin.alias)
+    add_channelless(plugin.alias)
+    add_without_redundant_tag(plugin.alias)
   else
     add(plugin)
+    add_tagless(plugin)
+    add_channelless(plugin)
+    add_without_redundant_tag(plugin)
+  end
+  if type(plugin) == "table" then
+    plugin.screenshot_keys_version = screenshot_normalization_version
+    plugin.screenshot_keys_signature = table.concat({ tostring(plugin.name or ""), tostring(plugin.clean_name or ""), tostring(plugin.display_name or ""), tostring(plugin.alias or "") }, "\31")
+    plugin.screenshot_keys_cache = result
   end
   return result
 end
@@ -628,24 +748,33 @@ end
 local function get_screenshot_image(ctx, plugin)
   build_screenshot_index(false)
   local keys = screenshot_keys(plugin)
-  local key = keys[1] or ""
-  if state.screenshot_missing[key] then return nil end
-  if state.screenshot_cache[key] then
-    touch_screenshot_image(key)
-    state.screenshot_visible_keys[key] = true
-    return state.screenshot_cache[key].image
-  end
-  local file_name
+  local now = r.time_precise()
   for _, candidate in ipairs(keys) do
-    file_name = state.screenshot_index and state.screenshot_index[candidate]
-    if file_name then
-      key = candidate
-      break
+    if state.screenshot_cache[candidate] then
+      touch_screenshot_image(candidate)
+      state.screenshot_visible_keys[candidate] = true
+      return state.screenshot_cache[candidate].image
     end
   end
-  if not file_name then state.screenshot_missing[key] = true; return nil end
+  local key = keys[1] or ""
+  local file_name
+  for _, candidate in ipairs(keys) do
+    local missing_at = state.screenshot_missing[candidate]
+    if missing_at == true or (missing_at and now - missing_at >= 2.0) then
+      state.screenshot_missing[candidate] = nil
+      missing_at = nil
+    end
+    if not missing_at then
+      file_name = state.screenshot_index and state.screenshot_index[candidate]
+      if file_name then
+        key = candidate
+        break
+      end
+    end
+  end
+  if not file_name then state.screenshot_missing[key] = now; return nil end
   local path = state.screenshot_path .. file_name
-  if not file_exists(path) then state.screenshot_missing[key] = true; return nil end
+  if not file_exists(path) then state.screenshot_missing[key] = now; return nil end
   state.screenshot_visible_keys[key] = true
   if not state.screenshot_load_queued[key] then
     state.screenshot_load_queue[key] = { key = key, path = path }
@@ -668,7 +797,7 @@ local function process_screenshot_load_queue(ctx)
     if queued and not state.screenshot_cache[key] and not state.screenshot_missing[key] then
       local path = queued.path
       if not file_exists(path) then
-        state.screenshot_missing[key] = true
+        state.screenshot_missing[key] = r.time_precise()
       else
         if #state.screenshot_cache_order >= max_screenshot_cache and not trim_screenshot_cache(ctx, max_screenshot_cache - 1, false) then
           trim_screenshot_cache(ctx, math.max(min_screenshot_cache, max_screenshot_cache - 10), true)
@@ -686,7 +815,7 @@ local function process_screenshot_load_queue(ctx)
             state.screenshot_next_load_time = now + min_screenshot_load_interval
           else
             if r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, image) end
-            state.screenshot_missing[key] = true
+            state.screenshot_missing[key] = r.time_precise()
             state.screenshot_image_errors = state.screenshot_image_errors + 1
             state.screenshot_next_load_time = now + min_screenshot_load_interval
           end
@@ -697,7 +826,7 @@ local function process_screenshot_load_queue(ctx)
             state.screenshot_next_load_time = now + 0.5
             return
           else
-            state.screenshot_missing[key] = true
+            state.screenshot_missing[key] = r.time_precise()
             state.screenshot_image_errors = state.screenshot_image_errors + 1
             state.screenshot_next_load_time = now + min_screenshot_load_interval
           end
@@ -705,6 +834,157 @@ local function process_screenshot_load_queue(ctx)
       end
     end
   end
+end
+
+local function invalidate_screenshots(ctx)
+  for index = #state.screenshot_cache_order, 1, -1 do
+    detach_screenshot_image(ctx, state.screenshot_cache_order[index])
+  end
+  state.screenshot_index = nil
+  state.screenshot_signature = nil
+  state.screenshot_signature_checked_at = 0
+  state.screenshot_missing = {}
+  state.screenshot_load_queue = {}
+  state.screenshot_load_order = {}
+  state.screenshot_load_queued = {}
+  build_screenshot_index(true)
+end
+
+local function screenshot_capture_available(screen_capture)
+  if not (r.JS_Window_GetClientRect and r.JS_GDI_Blit and r.JS_LICE_CreateBitmap and r.JS_LICE_GetDC and r.JS_LICE_WritePNG and r.JS_LICE_DestroyBitmap) then return false end
+  if screen_capture then return r.JS_Window_GetRect and r.JS_GDI_GetScreenDC and r.JS_GDI_ReleaseDC end
+  return r.JS_GDI_GetClientDC and r.JS_GDI_ReleaseDC
+end
+
+local function screenshot_file_size(path)
+  local file = io.open(path, "rb")
+  if not file then return 0 end
+  local size = file:seek("end") or 0
+  file:close()
+  return size
+end
+
+local function ensure_screenshot_folder()
+  if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(state.screenshot_path, 0) end
+end
+
+local function capture_fx_window_screenshot(plugin_name, track, fx_index, screen_capture)
+  local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
+  if not hwnd then return false, nil end
+  ensure_screenshot_folder()
+  local safe_name = plugin_name:gsub("[^%w%s-]", "_")
+  local filename = state.screenshot_path .. safe_name .. ".png"
+  local srcx, srcy = 0, 27
+  local target_w = 500
+  local ok = pcall(function()
+    local source_dc, source_bmp, dest_bmp
+    local w, h, source_x, source_y = 0, 0, srcx, srcy
+    if screen_capture then
+      local _, wl, wt, wr, wb = r.JS_Window_GetRect(hwnd)
+      local _, cl, ct, cr, cb = r.JS_Window_GetClientRect(hwnd)
+      local border_l = cl - wl
+      local border_t = ct - wt
+      local border_r = wr - cr
+      local border_b = wb - cb
+      source_x = wl + border_l
+      source_y = wt + border_t + srcy
+      w = (wr - wl) - border_l - border_r
+      h = (wb - wt) - border_t - border_b - srcy
+      source_dc = r.JS_GDI_GetScreenDC()
+    else
+      local _, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+      w = right - left
+      h = bottom - top - srcy
+      source_dc = r.JS_GDI_GetClientDC(hwnd)
+    end
+    if w <= 0 or h <= 0 or not source_dc then error("invalid screenshot size") end
+    source_bmp = r.JS_LICE_CreateBitmap(true, w, h)
+    local source_bmp_dc = r.JS_LICE_GetDC(source_bmp)
+    r.JS_GDI_Blit(source_bmp_dc, 0, 0, source_dc, source_x, source_y, w, h)
+    local scale = target_w / w
+    local target_h = math.max(1, math.floor(h * scale))
+    dest_bmp = r.JS_LICE_CreateBitmap(true, target_w, target_h)
+    if r.JS_LICE_ScaledBlit then
+      r.JS_LICE_ScaledBlit(dest_bmp, 0, 0, target_w, target_h, source_bmp, 0, 0, w, h, 1, "FAST")
+      r.JS_LICE_WritePNG(filename, dest_bmp, false)
+    else
+      r.JS_LICE_WritePNG(filename, source_bmp, false)
+    end
+    if dest_bmp then r.JS_LICE_DestroyBitmap(dest_bmp) end
+    if screen_capture then r.JS_GDI_ReleaseDC(nil, source_dc) else r.JS_GDI_ReleaseDC(hwnd, source_dc) end
+    r.JS_LICE_DestroyBitmap(source_bmp)
+  end)
+  if ok and screenshot_file_size(filename) > 0 then return true, filename end
+  return false, filename
+end
+
+local function start_screenshot_capture(app, plugin, screen_capture)
+  if state.screenshot_capture_active then
+    app.status = "Screenshot capture already running"
+    return
+  end
+  if not screenshot_capture_available(screen_capture) then
+    app.status = "JS_ReaScriptAPI is required for screenshots"
+    return
+  end
+  local plugin_name = plugin and plugin.name
+  if not plugin_name or plugin_name == "" then return end
+  local function valid_track(track)
+    if not track then return false end
+    if r.ValidatePtr2 then return r.ValidatePtr2(0, track, "MediaTrack*") end
+    if r.ValidatePtr then return r.ValidatePtr(track, "MediaTrack*") end
+    return true
+  end
+  r.Undo_BeginBlock()
+  local master = r.GetMasterTrack(0)
+  local track = master and r.IsTrackSelected and r.IsTrackSelected(master) and master or r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0)
+  local temp_track = false
+  if not valid_track(track) then
+    local track_index = r.CountTracks(0)
+    r.InsertTrackAtIndex(track_index, false)
+    track = r.GetTrack(0, track_index)
+    temp_track = true
+  end
+  if not valid_track(track) then
+    r.Undo_EndBlock("Workbench plugin screenshot", -1)
+    app.status = "No track available for screenshot capture"
+    return
+  end
+  state.screenshot_capture_active = true
+  state.screenshot_capture_plugin = plugin_name
+  app.status = "Opening " .. plugin.display_name .. " for screenshot"
+  local dest_index = r.TrackFX_GetCount(track)
+  local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - dest_index)
+  if not fx_index or fx_index < 0 then
+    if temp_track then r.DeleteTrack(track) end
+    state.screenshot_capture_active = false
+    state.screenshot_capture_plugin = nil
+    r.Undo_EndBlock("Workbench plugin screenshot", -1)
+    app.status = "Could not load plugin for screenshot"
+    return
+  end
+  r.TrackFX_Show(track, fx_index, 3)
+  local start_time = r.time_precise()
+  local function finish_capture()
+    if r.time_precise() - start_time < 0.5 then
+      r.defer(finish_capture)
+      return
+    end
+    local ok, path = capture_fx_window_screenshot(plugin_name, track, fx_index, screen_capture)
+    r.TrackFX_Show(track, fx_index, 2)
+    r.TrackFX_Delete(track, fx_index)
+    if temp_track then r.DeleteTrack(track) end
+    state.screenshot_capture_active = false
+    state.screenshot_capture_plugin = nil
+    r.Undo_EndBlock("Workbench plugin screenshot", -1)
+    if ok then
+      invalidate_screenshots(app.ctx)
+      app.status = "Screenshot saved: " .. tostring(path)
+    else
+      app.status = "Screenshot failed: " .. plugin.display_name
+    end
+  end
+  r.defer(finish_capture)
 end
 
 local function display_name_for(name)
@@ -1760,6 +2040,13 @@ local function draw_plugin_context_menu(app, settings, plugin, popup_id)
         set_plugin_rating(plugin, 0)
         app.status = plugin.display_name .. " rating cleared"
       end
+    end
+    r.ImGui_Separator(ctx)
+    if state.screenshot_capture_active then
+      r.ImGui_Text(ctx, "Screenshot capture running")
+    else
+      if r.ImGui_MenuItem(ctx, "Make Screenshot") then start_screenshot_capture(app, plugin, false) end
+      if r.ImGui_MenuItem(ctx, "Make Screenshot (OpenGL/DX)") then start_screenshot_capture(app, plugin, true) end
     end
     r.ImGui_EndPopup(ctx)
   end

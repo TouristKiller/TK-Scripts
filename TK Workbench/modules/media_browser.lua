@@ -7,7 +7,7 @@ local M = {
   id = "media_browser",
   title = "Media Browser",
   icon = "MED",
-  version = "0.1.1"
+  version = "0.1.4"
 }
 
 local resource_path = r.GetResourcePath()
@@ -31,8 +31,11 @@ local defaults = {
   max_scan_files = 50000,
   waveform_height = 128,
   preview_volume = 1.0,
+  preview_fade_ms = 0,
+  preview_restart_gap_ms = 12,
   preview_pitch = 0,
   preview_rate = 1.0,
+  preview_tape_speed = false,
   tempo_sync = false,
   loop_preview = false,
   auto_play = false,
@@ -44,6 +47,7 @@ local defaults = {
   exclusive_solo_preview = false,
   use_selected_track_for_audio = false,
   use_selected_track_for_midi = false,
+  folder_double_click_open = false,
   trim_silence_enabled = false,
   trim_silence_threshold_db = -48,
   trim_silence_padding_ms = 8
@@ -115,6 +119,11 @@ local state = {
   preview_paused = false,
   preview_paused_position = 0,
   preview_paused_project_position = nil,
+  preview_fade = nil,
+  pending_preview_file = nil,
+  pending_preview_settings = nil,
+  pending_preview_due = 0,
+  retired_preview_sources = {},
   project_files_signature = "",
   last_transport_state = 0,
   saved_loop_start = nil,
@@ -156,14 +165,23 @@ local function ensure_settings(app)
   if settings.max_scan_files ~= max_scan_files then changed = true end
   settings.max_scan_files = math.max(100, max_scan_files)
   settings.waveform_height = math.max(72, math.min(220, math.floor(tonumber(settings.waveform_height) or defaults.waveform_height)))
+  if settings.preview_fade_defaulted ~= true then
+    settings.preview_fade_ms = 0
+    settings.preview_fade_defaulted = true
+    changed = true
+  end
   settings.preview_volume = math.max(0, math.min(2, tonumber(settings.preview_volume) or defaults.preview_volume))
+  settings.preview_fade_ms = math.max(0, math.min(250, tonumber(settings.preview_fade_ms) or defaults.preview_fade_ms))
+  settings.preview_restart_gap_ms = math.max(0, math.min(100, tonumber(settings.preview_restart_gap_ms) or defaults.preview_restart_gap_ms))
   settings.preview_pitch = math.max(-24, math.min(24, tonumber(settings.preview_pitch) or defaults.preview_pitch))
   settings.preview_rate = math.max(0.25, math.min(4, tonumber(settings.preview_rate) or defaults.preview_rate))
+  settings.preview_tape_speed = settings.preview_tape_speed == true
   settings.min_display_time = (tonumber(settings.min_display_time) or 0) > 0 and 1.0 or 0
   settings.trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(settings.trim_silence_threshold_db) or defaults.trim_silence_threshold_db))
   settings.trim_silence_padding_ms = math.max(0, math.min(250, tonumber(settings.trim_silence_padding_ms) or defaults.trim_silence_padding_ms))
   if settings.location_view_mode ~= "auto" then settings.location_view_mode = "folders" end
   settings.folder_browse = settings.folder_browse == true
+  settings.folder_double_click_open = settings.folder_double_click_open == true
   settings.auto_selected_category = tostring(settings.auto_selected_category or defaults.auto_selected_category)
   if changed and app.save_settings then app.save_settings() end
   return settings
@@ -1112,6 +1130,18 @@ local function effective_playrate(source, kind, settings)
   return math.max(0.25, math.min(8, rate))
 end
 
+local function tape_speed_pitch_offset(rate)
+  rate = tonumber(rate) or 1
+  if rate <= 0 then return 0 end
+  return 12 * (math.log(rate) / math.log(2))
+end
+
+local function effective_preview_pitch(settings, rate)
+  local pitch = tonumber(settings.preview_pitch) or defaults.preview_pitch
+  if settings.preview_tape_speed == true then pitch = pitch + tape_speed_pitch_offset(rate) end
+  return math.max(-48, math.min(48, pitch))
+end
+
 local function display_playrate(settings)
   if not settings.tempo_sync then return settings.preview_rate end
   if state.preview_source then return effective_playrate(state.preview_source, state.preview_kind, settings) end
@@ -1130,6 +1160,7 @@ local function apply_track_preview_rate(settings)
   if not state.preview_track_playback or not take_pointer_valid(state.preview_take) or not r.SetMediaItemTakeInfo_Value then return end
   local rate = effective_playrate(state.preview_source, state.preview_kind, settings)
   r.SetMediaItemTakeInfo_Value(state.preview_take, "D_PLAYRATE", rate)
+  r.SetMediaItemTakeInfo_Value(state.preview_take, "D_PITCH", effective_preview_pitch(settings, rate))
   local length = state.preview_source_length > 0 and state.preview_source_length / rate or state.preview_length
   state.preview_length = length
   if state.preview_item then
@@ -1143,6 +1174,7 @@ local function apply_preview_rate(settings)
   if state.preview and r.CF_Preview_SetValue then
     local rate = effective_playrate(state.preview_source, state.preview_kind, settings)
     r.CF_Preview_SetValue(state.preview, "D_PLAYRATE", rate)
+    r.CF_Preview_SetValue(state.preview, "D_PITCH", effective_preview_pitch(settings, rate))
     state.preview_length = state.preview_source_length > 0 and state.preview_source_length / rate or state.preview_length
   elseif state.preview_track_playback then
     apply_track_preview_rate(settings)
@@ -1175,7 +1207,40 @@ local function apply_exclusive_solo(track)
   r.SetMediaTrackInfo_Value(track, "I_SOLO", 1)
 end
 
-local function destroy_preview(settings, from_transport)
+local function preview_fade_seconds(settings)
+  if not r.CF_Preview_SetValue then return 0 end
+  return math.max(0, math.min(0.25, (tonumber(settings and settings.preview_fade_ms) or defaults.preview_fade_ms) / 1000))
+end
+
+local function preview_restart_gap_seconds(settings)
+  return math.max(0, math.min(0.1, (tonumber(settings and settings.preview_restart_gap_ms) or defaults.preview_restart_gap_ms) / 1000))
+end
+
+local function retire_preview_source(source)
+  if not source or not r.PCM_Source_Destroy then return end
+  state.retired_preview_sources[#state.retired_preview_sources + 1] = {
+    source = source,
+    due = (r.time_precise and r.time_precise() or os.clock()) + 0.25
+  }
+end
+
+local function cleanup_retired_preview_sources(force)
+  if not r.PCM_Source_Destroy then state.retired_preview_sources = {}; return end
+  local now = r.time_precise and r.time_precise() or os.clock()
+  for index = #state.retired_preview_sources, 1, -1 do
+    local entry = state.retired_preview_sources[index]
+    if force or not entry or now >= (entry.due or 0) then
+      if entry and entry.source then pcall(r.PCM_Source_Destroy, entry.source) end
+      table.remove(state.retired_preview_sources, index)
+    end
+  end
+end
+
+local function set_preview_volume(volume)
+  if state.preview and r.CF_Preview_SetValue then r.CF_Preview_SetValue(state.preview, "D_VOLUME", math.max(0, tonumber(volume) or 0)) end
+end
+
+local function destroy_preview_now(settings, from_transport)
   if settings and settings.link_transport and state.preview and not from_transport and r.CSurf_OnStop then r.CSurf_OnStop() end
   if state.preview and r.CF_Preview_Stop then r.CF_Preview_Stop(state.preview) end
   state.preview = nil
@@ -1196,8 +1261,8 @@ local function destroy_preview(settings, from_transport)
   elseif state.preview_track_owned and track_pointer_valid(state.preview_track) then
     r.DeleteTrack(state.preview_track)
     if state.preview_source and r.PCM_Source_Destroy then r.PCM_Source_Destroy(state.preview_source) end
-  elseif state.preview_source and r.PCM_Source_Destroy then
-    r.PCM_Source_Destroy(state.preview_source)
+  elseif state.preview_source then
+    if state.preview_kind == "audio" then retire_preview_source(state.preview_source) elseif r.PCM_Source_Destroy then r.PCM_Source_Destroy(state.preview_source) end
   end
   state.preview_source = nil
   state.preview_path = nil
@@ -1215,11 +1280,42 @@ local function destroy_preview(settings, from_transport)
   state.preview_paused = false
   state.preview_paused_position = 0
   state.preview_paused_project_position = nil
+  state.preview_fade = nil
+  state.pending_preview_file = nil
+  state.pending_preview_settings = nil
+  state.pending_preview_due = 0
   state.saved_loop_start = nil
   state.saved_loop_end = nil
   state.saved_repeat = nil
   state.saved_cursor = nil
   state.saved_solo_states = nil
+end
+
+local function destroy_preview(settings, from_transport, immediate)
+  if immediate or state.preview_track_playback or state.preview_paused or not state.preview or state.preview_kind ~= "audio" then
+    destroy_preview_now(settings, from_transport)
+    return
+  end
+  local duration = preview_fade_seconds(settings)
+  if duration <= 0 then
+    destroy_preview_now(settings, from_transport)
+    return
+  end
+  if state.preview_fade and state.preview_fade.kind == "out" then return end
+  local current_volume = tonumber(settings and settings.preview_volume) or defaults.preview_volume
+  if r.CF_Preview_GetValue then
+    local ok, value_ok, value = pcall(r.CF_Preview_GetValue, state.preview, "D_VOLUME")
+    if ok and value_ok and value then current_volume = tonumber(value) or current_volume end
+  end
+  state.preview_fade = {
+    kind = "out",
+    preview = state.preview,
+    started = r.time_precise and r.time_precise() or os.clock(),
+    duration = duration,
+    from_volume = current_volume,
+    settings = settings,
+    from_transport = from_transport
+  }
 end
 
 local function validate_track(track)
@@ -1304,7 +1400,7 @@ end
 
 local function start_track_preview(settings, file)
   if not file or (file.kind ~= "midi" and file.kind ~= "video") then return false end
-  destroy_preview()
+  destroy_preview(nil, nil, true)
   local source = r.PCM_Source_CreateFromFile(file.path)
   if not source then return false end
   local track = nil
@@ -1329,12 +1425,14 @@ local function start_track_preview(settings, file)
     return false
   end
   r.SetMediaItemTake_Source(take, source)
-  if r.SetMediaItemTakeInfo_Value then r.SetMediaItemTakeInfo_Value(take, "D_PITCH", settings.preview_pitch or defaults.preview_pitch) end
   local source_length = r.GetMediaSourceLength(source) or 0
   if file.kind == "midi" then source_length = source_length > 0 and source_length / 2 or 60 end
   if source_length <= 0 then source_length = 5 end
   local rate = effective_playrate(source, file.kind, settings)
-  if r.SetMediaItemTakeInfo_Value then r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate) end
+  if r.SetMediaItemTakeInfo_Value then
+    r.SetMediaItemTakeInfo_Value(take, "D_PITCH", effective_preview_pitch(settings, rate))
+    r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
+  end
   local length = source_length / rate
   r.SetMediaItemPosition(item, 0, false)
   r.SetMediaItemLength(item, length, false)
@@ -1377,8 +1475,25 @@ local function start_preview(settings, file)
   if file.kind == "midi" or file.kind == "video" then return start_track_preview(settings, file) end
   if file.kind ~= "audio" then return false end
   if not r.CF_CreatePreview or not r.CF_Preview_Play then return false end
+  if state.preview and state.preview_kind == "audio" and preview_fade_seconds(settings) > 0 then
+    state.pending_preview_file = file
+    state.pending_preview_settings = settings
+    state.pending_preview_due = 0
+    destroy_preview(settings)
+    return true
+  end
+  if state.preview and state.preview_kind == "audio" and preview_restart_gap_seconds(settings) > 0 then
+    local pending_file = file
+    local pending_settings = settings
+    local due = (r.time_precise and r.time_precise() or os.clock()) + preview_restart_gap_seconds(settings)
+    destroy_preview(settings, nil, true)
+    state.pending_preview_file = pending_file
+    state.pending_preview_settings = pending_settings
+    state.pending_preview_due = due
+    return true
+  end
   if apply_silence_trim_selection then apply_silence_trim_selection(file, settings, false) end
-  destroy_preview()
+  destroy_preview(nil, nil, true)
   local source = r.PCM_Source_CreateFromFile(file.path)
   if not source then return false end
   local source_length = r.GetMediaSourceLength(source) or 0
@@ -1392,10 +1507,12 @@ local function start_preview(settings, file)
     r.PCM_Source_Destroy(source)
     return false
   end
+  local fade_in = preview_fade_seconds(settings)
+  local target_volume = settings.preview_volume or defaults.preview_volume
   if r.CF_Preview_SetValue then
-    r.CF_Preview_SetValue(preview, "D_VOLUME", settings.preview_volume or defaults.preview_volume)
+    r.CF_Preview_SetValue(preview, "D_VOLUME", fade_in > 0 and 0 or target_volume)
     r.CF_Preview_SetValue(preview, "B_LOOP", settings.loop_preview and 1 or 0)
-    r.CF_Preview_SetValue(preview, "D_PITCH", settings.preview_pitch or defaults.preview_pitch)
+    r.CF_Preview_SetValue(preview, "D_PITCH", effective_preview_pitch(settings, rate))
     r.CF_Preview_SetValue(preview, "D_PLAYRATE", rate)
   end
   if output_track then r.CF_Preview_SetOutputTrack(preview, 0, output_track) end
@@ -1416,6 +1533,16 @@ local function start_preview(settings, file)
   state.preview_paused_position = 0
   state.preview_paused_project_position = nil
   state.last_error = nil
+  if fade_in > 0 then
+    state.preview_fade = {
+      kind = "in",
+      preview = preview,
+      started = r.time_precise and r.time_precise() or os.clock(),
+      duration = fade_in,
+      from_volume = 0,
+      target_volume = target_volume
+    }
+  end
   if settings.link_transport and r.CSurf_OnPlay then
     if settings.link_start_from_editcursor ~= true then r.SetEditCurPos(0, false, false) end
     r.CSurf_OnPlay()
@@ -1435,10 +1562,12 @@ local function restart_audio_preview_at(settings, position)
   local rate = effective_playrate(source, state.preview_kind, settings)
   local output_track = nil
   if settings.use_selected_track_for_audio and r.CF_Preview_SetOutputTrack then output_track = r.GetSelectedTrack(0, 0) end
+  local fade_in = preview_fade_seconds(settings)
+  local target_volume = settings.preview_volume or defaults.preview_volume
   if r.CF_Preview_SetValue then
-    r.CF_Preview_SetValue(preview, "D_VOLUME", settings.preview_volume or defaults.preview_volume)
+    r.CF_Preview_SetValue(preview, "D_VOLUME", fade_in > 0 and 0 or target_volume)
     r.CF_Preview_SetValue(preview, "B_LOOP", settings.loop_preview and 1 or 0)
-    r.CF_Preview_SetValue(preview, "D_PITCH", settings.preview_pitch or defaults.preview_pitch)
+    r.CF_Preview_SetValue(preview, "D_PITCH", effective_preview_pitch(settings, rate))
     r.CF_Preview_SetValue(preview, "D_PLAYRATE", rate)
     r.CF_Preview_SetValue(preview, "D_POSITION", position)
   end
@@ -1453,6 +1582,16 @@ local function restart_audio_preview_at(settings, position)
   state.preview_paused_position = 0
   state.preview_paused_project_position = nil
   state.preview_started_at = (r.time_precise and r.time_precise() or os.clock()) - position
+  if fade_in > 0 then
+    state.preview_fade = {
+      kind = "in",
+      preview = preview,
+      started = r.time_precise and r.time_precise() or os.clock(),
+      duration = fade_in,
+      from_volume = 0,
+      target_volume = target_volume
+    }
+  end
   return true
 end
 
@@ -1500,7 +1639,7 @@ local function pause_preview(settings, from_transport)
     if r.CF_Preview_SetValue then
       r.CF_Preview_SetValue(preview, "D_VOLUME", settings.preview_volume or defaults.preview_volume)
       r.CF_Preview_SetValue(preview, "B_LOOP", settings.loop_preview and 1 or 0)
-      r.CF_Preview_SetValue(preview, "D_PITCH", settings.preview_pitch or defaults.preview_pitch)
+      r.CF_Preview_SetValue(preview, "D_PITCH", effective_preview_pitch(settings, rate))
       r.CF_Preview_SetValue(preview, "D_PLAYRATE", rate)
       r.CF_Preview_SetValue(preview, "D_POSITION", state.preview_paused_position or 0)
     end
@@ -1518,6 +1657,54 @@ local function pause_preview(settings, from_transport)
     state.preview_paused_position = 0
     state.preview_paused_project_position = nil
   end
+end
+
+local function update_preview_fades(settings)
+  local fade = state.preview_fade
+  if not fade then return end
+  if not fade.preview or state.preview ~= fade.preview or not r.CF_Preview_SetValue then state.preview_fade = nil; return end
+  local now = r.time_precise and r.time_precise() or os.clock()
+  local progress = math.max(0, math.min(1, (now - (fade.started or now)) / math.max(0.001, fade.duration or 0.001)))
+  if fade.kind == "out" then
+    set_preview_volume((fade.from_volume or 0) * (1 - progress))
+    if progress >= 1 then
+      local pending_file = state.pending_preview_file
+      local pending_settings = state.pending_preview_settings or settings
+      destroy_preview_now(fade.settings or settings, fade.from_transport)
+      if pending_file then
+        local gap = preview_restart_gap_seconds(pending_settings)
+        if gap > 0 then
+          state.pending_preview_file = pending_file
+          state.pending_preview_settings = pending_settings
+          state.pending_preview_due = (r.time_precise and r.time_precise() or os.clock()) + gap
+        else
+          start_preview(pending_settings, pending_file)
+        end
+      end
+    end
+  elseif fade.kind == "in" then
+    local target = tonumber(settings and settings.preview_volume) or fade.target_volume or defaults.preview_volume
+    set_preview_volume((fade.from_volume or 0) + (target - (fade.from_volume or 0)) * progress)
+    if progress >= 1 then
+      set_preview_volume(target)
+      state.preview_fade = nil
+    end
+  else
+    state.preview_fade = nil
+  end
+end
+
+local function update_pending_preview(settings)
+  if not state.pending_preview_file then return end
+  if state.preview_fade then return end
+  local due = tonumber(state.pending_preview_due) or 0
+  if due > 0 and (r.time_precise and r.time_precise() or os.clock()) < due then return end
+  local file = state.pending_preview_file
+  local pending_settings = state.pending_preview_settings or settings
+  state.pending_preview_file = nil
+  state.pending_preview_settings = nil
+  state.pending_preview_due = 0
+  start_preview(pending_settings, file)
 end
 
 local function can_preview_file(file)
@@ -2279,7 +2466,7 @@ local function insert_file_on_track(app, file, track, target_lane)
       if apply_silence_trim_selection then apply_silence_trim_selection(file, settings, false) end
       local selection_start, selection_end = waveform_selection_range(file, display_length)
       r.SetMediaItemTakeInfo_Value(take, "D_VOL", settings.preview_volume or defaults.preview_volume)
-      r.SetMediaItemTakeInfo_Value(take, "D_PITCH", settings.preview_pitch or defaults.preview_pitch)
+      r.SetMediaItemTakeInfo_Value(take, "D_PITCH", effective_preview_pitch(settings, rate))
       r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
       if selection_start and selection_end then
         r.SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", selection_start * rate)
@@ -3206,7 +3393,19 @@ local function draw_media_settings_popup(app, settings)
     end
   end
   c, v = r.ImGui_Checkbox(ctx, "Sync rate to project tempo", settings.tempo_sync == true)
-  if c then settings.tempo_sync = v; changed = true; apply_preview_rate(settings) end
+  if c then
+    settings.tempo_sync = v
+    if v then settings.preview_tape_speed = false end
+    changed = true
+    apply_preview_rate(settings)
+  end
+  c, v = r.ImGui_Checkbox(ctx, "Tape-speed rate", settings.preview_tape_speed == true)
+  if c then
+    settings.preview_tape_speed = v
+    if v then settings.tempo_sync = false end
+    changed = true
+    apply_preview_rate(settings)
+  end
   c, v = r.ImGui_Checkbox(ctx, "Loop preview", settings.loop_preview == true)
   if c then
     settings.loop_preview = v
@@ -3223,6 +3422,16 @@ local function draw_media_settings_popup(app, settings)
   if c then settings.auto_play_next = v; changed = true end
   c, v = r.ImGui_Checkbox(ctx, "Random play next", settings.random_play_next == true)
   if c then settings.random_play_next = v; changed = true end
+  r.ImGui_PushItemWidth(ctx, 170)
+  c, v = r.ImGui_SliderDouble(ctx, "Preview fade ms", settings.preview_fade_ms or defaults.preview_fade_ms, 0, 250, "%.0f")
+  if c then settings.preview_fade_ms = v; changed = true end
+  c, v = r.ImGui_SliderDouble(ctx, "Switch gap ms", settings.preview_restart_gap_ms or defaults.preview_restart_gap_ms, 0, 100, "%.0f")
+  if c then settings.preview_restart_gap_ms = v; changed = true end
+  r.ImGui_PopItemWidth(ctx)
+  r.ImGui_Separator(ctx)
+  r.ImGui_Text(ctx, "Folder browsing")
+  c, v = r.ImGui_Checkbox(ctx, "Double-click to open folders", settings.folder_double_click_open == true)
+  if c then settings.folder_double_click_open = v; changed = true end
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Trim")
   local trim_changed = false
@@ -3454,6 +3663,7 @@ local function draw_folder_row(app, settings, entry, index, width)
   r.ImGui_PushID(ctx, "media_folder_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
+  local double_clicked = hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0)
   local x, y = r.ImGui_GetItemRectMin(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local selected = state.selected_index == index and not state.selected_file
@@ -3487,7 +3697,16 @@ local function draw_folder_row(app, settings, entry, index, width)
   local detail = entry.kind == "folder_up" and "Parent folder" or (tostring(entry.file_count or 0) .. " media")
   r.ImGui_DrawList_AddText(draw_list, text_x, y + 27, Theme.colors.text_dim, detail)
   r.ImGui_DrawList_PopClipRect(draw_list)
-  if clicked then open_folder_entry(app, entry) end
+  if clicked or double_clicked then
+    if settings.folder_double_click_open == true then
+      state.selected_index = index
+      state.selected_file = nil
+      state.file_list_keyboard_focus = true
+      if double_clicked then open_folder_entry(app, entry) end
+    else
+      open_folder_entry(app, entry)
+    end
+  end
   if hovered then r.ImGui_SetTooltip(ctx, entry.kind == "folder_up" and "Go up" or entry.path) end
   if selected and state.scroll_selected_file and r.ImGui_SetScrollHereY then
     local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
@@ -3592,12 +3811,15 @@ end
 function M.update(app)
   local settings = ensure_settings(app)
   local active = app.settings and app.settings.active_module == M.id
+  cleanup_retired_preview_sources(false)
+  update_pending_preview(settings)
   if state.activated and (active or state.scanning) then
     if is_project_files_location(selected_location(settings)) and state.loaded_location == PROJECT_FILES_LOCATION and state.project_files_signature ~= project_files_signature() then load_or_scan_location(settings, true) end
     scan_step(settings)
     if active then refresh_filter(settings) end
   end
   if preview_is_active() or settings.link_transport then
+    update_preview_fades(settings)
     monitor_transport_link(settings)
     update_auto_play(app, settings)
     monitor_audio_selection(settings)
@@ -3705,9 +3927,10 @@ function M.draw(app)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Pitch | Wheel fine tune | Right-click reset") end
   if reset_pitch then settings.preview_pitch = defaults.preview_pitch elseif changed then settings.preview_pitch = new_pitch end
   if changed or reset_pitch then
-    if state.preview and r.CF_Preview_SetValue then r.CF_Preview_SetValue(state.preview, "D_PITCH", settings.preview_pitch) end
+    local rate = effective_playrate(state.preview_source, state.preview_kind, settings)
+    if state.preview and r.CF_Preview_SetValue then r.CF_Preview_SetValue(state.preview, "D_PITCH", effective_preview_pitch(settings, rate)) end
     if state.preview_track_playback and take_pointer_valid(state.preview_take) and r.SetMediaItemTakeInfo_Value then
-      r.SetMediaItemTakeInfo_Value(state.preview_take, "D_PITCH", settings.preview_pitch)
+      r.SetMediaItemTakeInfo_Value(state.preview_take, "D_PITCH", effective_preview_pitch(settings, rate))
       if state.preview_item then r.UpdateItemInProject(state.preview_item) end
     end
     if app.save_settings then app.save_settings() end
@@ -3745,7 +3968,8 @@ function M.draw(app)
 end
 
 function M.shutdown(app)
-  destroy_preview(ensure_settings(app))
+  destroy_preview(ensure_settings(app), nil, true)
+  cleanup_retired_preview_sources(true)
   clear_drag()
   clear_waveform_pending()
   clear_image_cache(app.ctx)

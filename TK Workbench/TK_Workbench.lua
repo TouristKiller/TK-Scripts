@@ -1,7 +1,19 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.4
+-- @version 0.1.5
 -- @changelog:
+-- v0.1.5
+--   + Media Browser: Added optional fade-in/fade-out handling for onboard audio previews
+--   + Media Browser: Added configurable preview fade duration, disabled by default
+--   + Media Browser: Added configurable audio switch gap and delayed source cleanup for onboard preview file switching
+--   + Media Browser: Added optional tape-speed rate mode so pitch follows persistent rate changes while previewing files
+--   + Media Browser: Added optional double-click-to-open behavior for folder browsing
+--   + Plugin Browser: Added right-click screenshot capture with normal and OpenGL/DX modes, saved to the central TK FX BROWSER Screenshots folder
+--   + Plugin Browser: Improved screenshot matching for x86/x86 bridged, Mono/Stereo, sanitized underscore, and manufacturer-prefix variants
+--   + Control Room: Added monitor output modes for Stereo, Mono Sum, L/R Source, and L/R Speaker checks
+--   + Control Room: Added setup and right-click lane controls for monitor output modes
+--   + Control Room: Added Stereo and Mono Sum output modes for cue outputs, including setup and right-click lane controls
+--   + Track Recall: Added multi-track save for selected tracks with automatic track-name based recall names
 -- v0.1.4
 --   + Media Browser: Added lazy per-location cache loading with explicit refresh
 --   + Media Browser: Added compact folder browsing with subfolder rows

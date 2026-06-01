@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.1.4" author="TouristKiller" time="2026-05-28T13:45:00Z">
+    <version name="0.1.5" author="TouristKiller" time="2026-06-01T15:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/json.lua</source>
@@ -58,7 +58,20 @@
      <source file="modules/script_launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/script_launcher.lua</source>
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
-     <changelog><![CDATA[
+      <changelog><![CDATA[
+          v0.1.5
+          + Media Browser: Added optional fade-in/fade-out handling for onboard audio previews
+          + Media Browser: Added configurable preview fade duration, disabled by default
+          + Media Browser: Added configurable audio switch gap and delayed source cleanup for onboard preview file switching
+          + Media Browser: Added optional tape-speed rate mode so pitch follows persistent rate changes while previewing files
+          + Media Browser: Added optional double-click-to-open behavior for folder browsing
+          + Plugin Browser: Added right-click screenshot capture with normal and OpenGL/DX modes, saved to the central TK FX BROWSER Screenshots folder
+          + Plugin Browser: Improved screenshot matching for x86/x86 bridged, Mono/Stereo, sanitized underscore, and manufacturer-prefix variants
+          + Control Room: Added monitor output modes for Stereo, Mono Sum, L/R Source, and L/R Speaker checks
+          + Control Room: Added setup and right-click lane controls for monitor output modes
+          + Control Room: Added Stereo and Mono Sum output modes for cue outputs, including setup and right-click lane controls
+          + Track Recall: Added multi-track save for selected tracks with automatic track-name based recall names
+
         v0.1.4
         + Media Browser: Added lazy per-location cache loading with explicit refresh
         + Media Browser: Added compact folder browsing with subfolder rows

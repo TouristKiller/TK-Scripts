@@ -119,6 +119,20 @@ local function selected_track(app)
   return nil
 end
 
+local function selected_tracks(app)
+  local tracks = {}
+  local count = r.CountSelectedTracks and (r.CountSelectedTracks(0) or 0) or 0
+  for index = 0, count - 1 do
+    local track = r.GetSelectedTrack(0, index)
+    if track and r.ValidatePtr2(0, track, "MediaTrack*") then tracks[#tracks + 1] = track end
+  end
+  if #tracks == 0 then
+    local track = selected_track(app)
+    if track then tracks[#tracks + 1] = track end
+  end
+  return tracks
+end
+
 local function track_guid(track)
   if not track then return nil end
   if r.GetTrackGUID then return r.GetTrackGUID(track) end
@@ -550,6 +564,33 @@ local function add_recall(app, track, name)
   app.status = "Saved Track Recall: " .. name
 end
 
+local function multi_track_recall_name(track, base_name)
+  return clean_name(track_name(track), "Track") .. " - " .. clean_name(base_name, "Recall")
+end
+
+local function add_recall_to_tracks(app, tracks, primary_track, name)
+  local saved = 0
+  local failed = 0
+  local base_name = clean_name(name, "Recall")
+  for _, track in ipairs(tracks or {}) do
+    load_for_track(track)
+    local before_count = state.data and #(state.data.states or {}) or 0
+    add_recall(app, track, multi_track_recall_name(track, base_name))
+    local after_count = state.data and #(state.data.states or {}) or 0
+    if after_count > before_count then saved = saved + 1 else failed = failed + 1 end
+  end
+  if primary_track then load_for_track(primary_track) end
+  if saved > 0 and failed > 0 then
+    app.status = "Saved Track Recall for " .. tostring(saved) .. " tracks, " .. tostring(failed) .. " failed"
+  elseif saved > 1 then
+    app.status = "Saved Track Recall for " .. tostring(saved) .. " tracks: " .. base_name
+  elseif saved == 1 then
+    app.status = "Saved Track Recall: " .. base_name
+  else
+    app.status = "Could not save Track Recall"
+  end
+end
+
 local function find_recall(id)
   for index, recall in ipairs(state.data and state.data.states or {}) do
     if recall.id == id then return recall, index end
@@ -601,8 +642,8 @@ local function duplicate_recall(app, track, id)
   app.status = "Duplicated Track Recall: " .. duplicate.name
 end
 
-local function begin_create_recall(track)
-  state.create_name = track_name(track) .. " Recall"
+local function begin_create_recall(track, tracks)
+  state.create_name = #(tracks or {}) > 1 and "Track Recall" or (track_name(track) .. " Recall")
 end
 
 local function restore_options(settings)
@@ -769,12 +810,14 @@ local function draw_create_popup(app, track)
     state.create_open = false
   end
   if not r.ImGui_BeginPopup(ctx, "Create Recall") then return end
+  local tracks = selected_tracks(app)
+  if #tracks > 1 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Save to " .. tostring(#tracks) .. " selected tracks as: Track name - Name") end
   local changed, value = r.ImGui_InputText(ctx, "Name", state.create_name or "")
   if changed then state.create_name = value end
   local can_save = clean_name(state.create_name, "") ~= ""
   if not can_save and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
   if r.ImGui_Button(ctx, "Save", 70, 0) and can_save then
-    add_recall(app, track, state.create_name)
+    if #tracks > 1 then add_recall_to_tracks(app, tracks, track, state.create_name) else add_recall(app, track, state.create_name) end
     r.ImGui_CloseCurrentPopup(ctx)
   end
   if not can_save and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
@@ -851,7 +894,7 @@ local function draw_add_recall_button(app, track, size, centered)
   r.ImGui_DrawList_AddLine(draw_list, cx - 6, cy, cx + 6, cy, Theme.colors.text, 2)
   r.ImGui_DrawList_AddLine(draw_list, cx, cy - 6, cx, cy + 6, Theme.colors.text, 2)
   if hovered then r.ImGui_SetTooltip(ctx, "Save Track Recall") end
-  if clicked then begin_create_recall(track); state.create_open = true end
+  if clicked then begin_create_recall(track, selected_tracks(app)); state.create_open = true end
 end
 
 local function draw_recall_row(app, track, recall, settings)
