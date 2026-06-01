@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.5
+-- @version 0.1.6
 -- @changelog:
+-- v0.1.6
+--   + Project Browser: Added compact Workbench module for projects, project templates, and track templates
+--   + Project Browser: Added per-type user locations, recursive scanning, search/filter, date sorting, cover previews, and open/insert actions
+--   + Project Browser: Added read-only project metadata for BPM, signature, tracks, sample rate, modified date, and lightweight length detection
 -- v0.1.5
 --   + Media Browser: Added optional fade-in/fade-out handling for onboard audio previews
 --   + Media Browser: Added configurable preview fade duration, disabled by default
@@ -93,6 +97,7 @@ local MODULE_REORDER_PAYLOAD = "TK_WORKBENCH_MODULE_REORDER"
 
 local module_names = {
   "project_overview",
+  "project_browser",
   "action_browser",
   "script_launcher",
   "track_recall",
