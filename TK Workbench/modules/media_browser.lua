@@ -726,7 +726,7 @@ local function load_or_scan_location(settings, force_refresh)
   start_scan(settings)
 end
 
-local function category_for_file(file)
+function category_for_file(file)
   if not file then return "other" end
   local key = file.path or file.name or ""
   local cached = state.category_cache[key]
@@ -737,26 +737,41 @@ local function category_for_file(file)
   return category
 end
 
-local function build_category_counts(settings)
-  local key = table.concat({ selected_location(settings), tostring(#state.files) }, "|")
+function auto_category_scope(settings)
+  if settings.location_view_mode ~= "auto" then return "" end
+  if is_project_files_location(selected_location(settings)) then return "" end
+  return tostring(state.folder_path or "")
+end
+
+function file_in_folder_scope(file, folder_path)
+  if folder_path == "" then return true end
+  return tostring(file and file.rel_dir or "") == folder_path
+end
+
+function build_category_counts(settings)
+  local folder_scope = auto_category_scope(settings)
+  local key = table.concat({ selected_location(settings), folder_scope, tostring(#state.files) }, "|")
   if state.category_counts_key == key then return end
-  local counts = { All = #state.files, other = 0 }
+  local counts = { All = 0, other = 0 }
   for _, category in ipairs(categorizer.get_category_order()) do counts[category] = 0 end
   for _, file in ipairs(state.files) do
-    local category = category_for_file(file)
-    counts[category] = (counts[category] or 0) + 1
+    if file_in_folder_scope(file, folder_scope) then
+      counts.All = counts.All + 1
+      local category = category_for_file(file)
+      counts[category] = (counts[category] or 0) + 1
+    end
   end
   state.category_counts = counts
   state.category_counts_key = key
 end
 
-local function category_label(category)
+function category_label(category)
   if category == "All" then return "All" end
   local text = tostring(category or "other")
   return text:sub(1, 1):upper() .. text:sub(2)
 end
 
-local function folder_browse_active(settings)
+function folder_browse_active(settings)
   return settings.folder_browse == true and settings.location_view_mode ~= "auto" and not is_project_files_location(selected_location(settings))
 end
 
@@ -815,6 +830,7 @@ local function refresh_filter(settings)
   local key = filter_key(settings)
   if key == state.last_filter_key then return end
   local term = tostring(settings.search_term or ""):lower()
+  local auto_scope = settings.location_view_mode == "auto" and auto_category_scope(settings) or ""
   local result = {}
   for _, file in ipairs(state.files) do
     local include = true
@@ -822,6 +838,7 @@ local function refresh_filter(settings)
     if file.kind == "midi" and settings.show_midi == false then include = false end
     if file.kind == "video" and settings.show_video ~= true then include = false end
     if file.kind == "image" and settings.show_image ~= true then include = false end
+    if include and settings.location_view_mode == "auto" and not file_in_folder_scope(file, auto_scope) then include = false end
     if include and settings.location_view_mode == "auto" and settings.auto_selected_category ~= "All" then
       include = category_for_file(file) == settings.auto_selected_category
     end

@@ -199,6 +199,10 @@ local function ensure_settings(app)
     settings.return_to_chain_builder_after_add_initialized = true
     changed = true
   end
+  if settings.double_click_instruments_as_virtual_track ~= nil then
+    settings.double_click_instruments_as_virtual_track = nil
+    changed = true
+  end
   if changed and app.save_settings then app.save_settings() end
   return settings
 end
@@ -364,6 +368,21 @@ end
 local function is_instrument(value)
   local name = tostring(value or "")
   return name:match("^VSTi:") or name:match("^VST3i:") or name:match("^CLAPi:") or name:match("^AUi:") or name:match("^LV2i:") or false
+end
+
+local function instrument_track_name(plugin)
+  local name = plugin and (plugin.display_name or plugin.clean_name or clean_plugin_name(plugin.name)) or ""
+  name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if name == "" and plugin then name = clean_plugin_name(plugin.name) end
+  return name ~= "" and name or "Instrument"
+end
+
+local function virtual_track_midi_input_value(midi_input_value)
+  local value = tonumber(midi_input_value) or 6112
+  if value == 6112 then return 6112 end
+  local device_index = value - 6113
+  if device_index < 0 then return 6112 end
+  return (device_index * 32) + 4096
 end
 
 local function fuzzy_normalize(value)
@@ -1842,6 +1861,40 @@ local function add_fx_to_track(app, settings, plugin)
   end
 end
 
+local function add_instrument_to_new_track(app, settings, plugin, midi_input_value)
+  if not plugin then return end
+  local index = r.CountTracks(0) or 0
+  local track = nil
+  local added = false
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  r.InsertTrackAtIndex(index, true)
+  track = r.GetTrack(0, index)
+  if validate_track(track) then
+    added = add_fx_to_track_pointer(track, plugin)
+    if added then
+      r.GetSetMediaTrackInfo_String(track, "P_NAME", instrument_track_name(plugin), true)
+      r.SetMediaTrackInfo_Value(track, "I_RECINPUT", virtual_track_midi_input_value(midi_input_value))
+      r.SetMediaTrackInfo_Value(track, "I_RECMODE", 0)
+      r.SetMediaTrackInfo_Value(track, "I_RECMON", 2)
+      r.SetOnlyTrackSelected(track)
+    elseif r.DeleteTrack then
+      r.DeleteTrack(track)
+    end
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Add virtual instrument track from Workbench", -1)
+  if added then
+    add_recent(settings, plugin.name)
+    state.last_filter_key = nil
+    r.UpdateArrange()
+    app.status = "Added " .. plugin.display_name .. " as virtual instrument track"
+    return_to_rack_after_add(app, settings)
+  else
+    app.status = "Could not create virtual instrument track for " .. plugin.display_name
+  end
+end
+
 local function handle_plugin_click(app, settings, plugin, index, double_clicked)
   local ctx = app.ctx
   local ctrl = is_selection_ctrl_down(ctx)
@@ -2004,6 +2057,17 @@ local function draw_plugin_context_menu(app, settings, plugin, popup_id)
     local chain_plugins = drag_plugins_for(plugin)
     if r.ImGui_MenuItem(ctx, "Add to selected track(s)") then add_fx_to_selected_tracks(app, settings, plugin) end
     if r.ImGui_MenuItem(ctx, "Add to new track") then add_fx_to_new_track(app, settings, plugin) end
+    if is_instrument(plugin.name) and r.ImGui_BeginMenu(ctx, "Add as virtual instrument to new track") then
+      if r.ImGui_MenuItem(ctx, "All MIDI inputs") then add_instrument_to_new_track(app, settings, plugin, 6112) end
+      local num_midi_inputs = r.GetNumMIDIInputs and r.GetNumMIDIInputs() or 0
+      for index = 0, num_midi_inputs - 1 do
+        local ok, name = r.GetMIDIInputName(index, "")
+        if ok and name and name ~= "" then
+          if r.ImGui_MenuItem(ctx, name) then add_instrument_to_new_track(app, settings, plugin, 6113 + index) end
+        end
+      end
+      r.ImGui_EndMenu(ctx)
+    end
     if r.ImGui_MenuItem(ctx, #chain_plugins > 1 and ("Add " .. drag_plugins_label(chain_plugins) .. " to Chain Builder") or "Add to Chain Builder") then add_plugins_to_chain_builder(app, settings, chain_plugins) end
     local is_favorite = state.favorite_set[plugin.name] == true
     if r.ImGui_MenuItem(ctx, is_favorite and "Remove from favorites" or "Add to favorites") then

@@ -1,7 +1,20 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.7
+-- @version 0.1.8
 -- @changelog:
+-- v0.1.8
+--   + Action Browser: Added Action Clipboard footer with 5 recent, lockable action slots
+--   + Action Browser: Added C shortcut to show or hide the Action Clipboard footer
+--   + Action Browser: Added context menu actions to add actions to the clipboard or directly to a specific slot
+--   + Action Clipboard: Added mappable run and lock-toggle slot scripts that work without Workbench being open
+--   + Action Clipboard: Added persistent slot storage, external refresh handling, clearer lock styling, and shortcut details in tooltips
+--   + Media Browser: Auto Categories now works on the currently open subfolder when folder browsing is active
+--   + Project Browser: Added optional folder view for browsing subfolders in projects, project templates, and track templates
+--   + Plugin Browser: Added virtual instrument new-track action with MIDI input selection
+--   + Workbench: Added REAPER Theme preset for deriving Workbench colors from the active REAPER theme
+--   + Workbench: Added mappable module actions for opening Home and each Workbench module, with automatic Workbench launch
+--   + Workbench: Added separate Action Clipboard Actions and Module Actions folders for cleaner REAPER action organization
+--   + Workbench: Added ExtState command handling for external clipboard and module action scripts
 -- v0.1.7
 --   + Project Browser: Added compact Workbench module for projects, project templates, and track templates
 --   + Project Browser: Added per-type user locations, recursive scanning, search/filter, date sorting, cover previews, and open/insert actions
@@ -68,6 +81,7 @@ local Theme = require("core.theme")
 local Selection = require("core.selection")
 local ModuleLoader = require("core.module_loader")
 local UI = require("core.ui")
+local ActionClipboard = require("modules.action_clipboard")
 
 local ctx = r.ImGui_CreateContext(SCRIPT_NAME)
 local config_name = rawget(_G, "TK_WORKBENCH_CONFIG_NAME") or "config.json"
@@ -94,6 +108,10 @@ app.cache.saved_theme_preset = settings.theme_preset or "Graphite"
 
 local HOME_MODULE_ID = "__home"
 local MODULE_REORDER_PAYLOAD = "TK_WORKBENCH_MODULE_REORDER"
+local MODULE_ACTION_EXT_SECTION = "TK_WORKBENCH_MODULE_ACTIONS"
+local MODULE_ACTION_COMMAND_KEY = "command"
+local MODULE_ACTION_RUNNING_KEY = "running"
+local MODULE_ACTION_HEARTBEAT_KEY = "heartbeat"
 
 local module_names = {
   "project_overview",
@@ -161,7 +179,14 @@ local function normalize_module_order()
       used[module.id] = true
     end
   end
+  local changed = #normalized ~= #order
+  if not changed then
+    for index, id in ipairs(normalized) do
+      if order[index] ~= id then changed = true; break end
+    end
+  end
   app.settings.module_order = normalized
+  if changed then save_settings() end
   return normalized
 end
 
@@ -210,6 +235,21 @@ local function set_active_view(id)
 end
 
 app.set_active_view = set_active_view
+
+local function process_module_action_commands()
+  local command = r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY) or ""
+  if command == "" then return end
+  r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY, "", false)
+  local action, target = command:match("^([%w_]+):(.+)$")
+  if action ~= "open" or not target or target == "" then return end
+  if target == HOME_MODULE_ID or app.modules_by_id[target] then
+    set_active_view(target)
+    local module = app.modules_by_id[target]
+    app.status = "Opened " .. tostring(module and (module.title or module.id) or "Home")
+  else
+    app.status = "Workbench module not found: " .. tostring(target)
+  end
+end
 
 local function get_active_module()
   local active_id = app.settings.active_module
@@ -514,6 +554,7 @@ end
 local function is_reserved_theme_name(name)
   local normalized = trim_text(name):lower()
   if normalized == "unsaved custom" then return true end
+  if Theme.is_reserved_preset_name and Theme.is_reserved_preset_name(normalized) then return true end
   for preset_name in pairs(Theme.presets or {}) do
     if preset_name:lower() == normalized then return true end
   end
@@ -524,6 +565,9 @@ local function draw_theme_settings()
   if app.settings_panel == "theme" then
     app.cache.theme_settings_open = true
     app.settings_panel = nil
+    if app.settings.theme_preset == Theme.reaper_preset_name then
+      Theme.set_preset(Theme.reaper_preset_name, app.settings.custom_themes)
+    end
   end
   if not app.cache.theme_settings_open then return end
   r.ImGui_SetNextWindowSize(ctx, 360, 500, r.ImGui_Cond_Appearing())
@@ -568,6 +612,15 @@ local function draw_theme_settings()
         if selected then r.ImGui_SetItemDefaultFocus(ctx) end
       end
       r.ImGui_EndCombo(ctx)
+    end
+    if current == Theme.reaper_preset_name then
+      if r.ImGui_Button(ctx, "Refresh REAPER Theme", 160, 24) then
+        app.settings.theme_preset = Theme.set_preset(Theme.reaper_preset_name, app.settings.custom_themes)
+        app.cache.saved_theme_preset = app.settings.theme_preset
+        app.status = "REAPER theme colors refreshed"
+        save_settings()
+      end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Read colors from the active REAPER theme") end
     end
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preview")
@@ -797,6 +850,8 @@ end
 local function shutdown()
   if app.cache.shutdown_done then return end
   app.cache.shutdown_done = true
+  r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY, "false", false)
+  r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_HEARTBEAT_KEY, "", false)
   for _, module in ipairs(app.modules) do
     if module.shutdown then pcall(module.shutdown, app) end
   end
@@ -834,6 +889,10 @@ local function loop()
   end
   app.selection = Selection.scan()
   update_modules()
+  r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY, "true", false)
+  r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_HEARTBEAT_KEY, tostring(r.time_precise and r.time_precise() or os.clock()), false)
+  process_module_action_commands()
+  ActionClipboard.process_commands(app)
   UI.begin_tooltip_frame(app)
   r.ImGui_SetNextWindowSize(ctx, app.settings.window_width or 430, app.settings.window_height or 760, r.ImGui_Cond_FirstUseEver())
   if (app.settings.theme_preset or "Graphite") ~= Theme.current_preset then

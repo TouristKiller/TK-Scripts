@@ -30,6 +30,8 @@ local defaults = {
   pending_location = "",
   pending_locations = {},
   recursive = true,
+  folder_view = true,
+  folder_paths = {},
   max_depth = 5,
   max_scan_projects = 5000,
   open_new_tab_on_double_click = false,
@@ -41,8 +43,11 @@ local state = {
   locations = {},
   projects = {},
   filtered = {},
+  visible_entries = {},
+  folder_entries = {},
   selected_index = nil,
   selected_project = nil,
+  selected_folder = nil,
   project_list_keyboard_focus = false,
   scroll_selected_project = false,
   scan_queue = {},
@@ -97,6 +102,22 @@ local function set_mode_pending_location(settings, mode, value)
   if mode == "projects" then settings.pending_location = settings.pending_locations[mode] end
 end
 
+local function clean_relative_folder(path)
+  path = tostring(path or ""):gsub("\\", "/"):gsub("/+$", ""):gsub("^/+", "")
+  if path == "." then return "" end
+  return path
+end
+
+local function get_mode_folder_path(settings, mode)
+  settings.folder_paths = type(settings.folder_paths) == "table" and settings.folder_paths or {}
+  return clean_relative_folder(settings.folder_paths[mode] or "")
+end
+
+local function set_mode_folder_path(settings, mode, value)
+  settings.folder_paths = type(settings.folder_paths) == "table" and settings.folder_paths or {}
+  settings.folder_paths[mode] = clean_relative_folder(value or "")
+end
+
 local function copy_default(value)
   if type(value) ~= "table" then return value end
   local target = {}
@@ -117,12 +138,14 @@ local function ensure_settings(app)
   settings.max_depth = math.max(0, math.min(12, math.floor(tonumber(settings.max_depth) or defaults.max_depth)))
   settings.max_scan_projects = math.max(50, math.min(50000, math.floor(tonumber(settings.max_scan_projects) or defaults.max_scan_projects)))
   settings.recursive = settings.recursive ~= false
+  settings.folder_view = settings.folder_view ~= false
   settings.open_new_tab_on_double_click = settings.open_new_tab_on_double_click == true
   settings.search_term = tostring(settings.search_term or "")
   settings.pending_location = tostring(settings.pending_location or "")
   settings.current_location = tostring(settings.current_location or "")
   settings.current_locations = type(settings.current_locations) == "table" and settings.current_locations or {}
   settings.pending_locations = type(settings.pending_locations) == "table" and settings.pending_locations or {}
+  settings.folder_paths = type(settings.folder_paths) == "table" and settings.folder_paths or {}
   active_mode(settings)
   if settings.sort_by ~= "path" and settings.sort_by ~= "date" then settings.sort_by = "name" end
   settings.sort_ascending = settings.sort_ascending ~= false
@@ -175,6 +198,35 @@ local function compact_path(path)
   return folder
 end
 
+local function relative_folder(path, root)
+  root = normalize_path(root)
+  local folder = project_folder(path)
+  if root == "" or folder == "" then return "" end
+  local lower_folder = folder:lower()
+  local lower_root = root:lower()
+  if lower_folder == lower_root then return "" end
+  if lower_folder:sub(1, #lower_root + 1) == lower_root .. "/" then return clean_relative_folder(folder:sub(#root + 2)) end
+  return clean_relative_folder(folder)
+end
+
+local function direct_child_folder(rel_dir, current)
+  rel_dir = clean_relative_folder(rel_dir)
+  current = clean_relative_folder(current)
+  if rel_dir == "" or rel_dir == current then return nil end
+  if current ~= "" then
+    local lower_rel = rel_dir:lower()
+    local lower_current = current:lower()
+    if lower_rel:sub(1, #lower_current + 1) ~= lower_current .. "/" then return nil end
+    rel_dir = rel_dir:sub(#current + 2)
+  end
+  return rel_dir:match("^[^/]+")
+end
+
+local function folder_parent(path)
+  path = clean_relative_folder(path)
+  return clean_relative_folder(path:match("(.+)/[^/]+$") or "")
+end
+
 local function read_locations(mode_def)
   local result = {}
   local seen = {}
@@ -212,7 +264,7 @@ local function refresh_locations(settings)
   for _, path in ipairs(state.locations) do
     if path == current then found = true; break end
   end
-  if not found then set_mode_location(settings, mode, state.locations[1] or "") end
+  if not found then set_mode_location(settings, mode, state.locations[1] or ""); set_mode_folder_path(settings, mode, "") end
 end
 
 local function add_location(app, settings, path)
@@ -222,11 +274,12 @@ local function add_location(app, settings, path)
   if not directory_exists(path) then state.last_error = "Folder not found"; return false end
   local key = path:lower()
   for _, existing in ipairs(state.locations) do
-    if existing:lower() == key then set_mode_location(settings, mode, existing); return true end
+    if existing:lower() == key then set_mode_location(settings, mode, existing); set_mode_folder_path(settings, mode, ""); return true end
   end
   state.locations[#state.locations + 1] = path
   write_locations(mode_def, state.locations)
   set_mode_location(settings, mode, path)
+  set_mode_folder_path(settings, mode, "")
   set_mode_pending_location(settings, mode, "")
   if app.save_settings then app.save_settings() end
   return true
@@ -241,6 +294,7 @@ local function remove_current_location(app, settings)
   end
   write_locations(mode_def, state.locations)
   set_mode_location(settings, mode, state.locations[1] or "")
+  set_mode_folder_path(settings, mode, "")
   if app.save_settings then app.save_settings() end
 end
 
@@ -304,10 +358,10 @@ local function project_date_sort_value(value)
   return value
 end
 
-local function make_project(path, mode)
+local function make_project(path, mode, root)
   path = normalize_path(path)
   local date_sort = project_file_date_value(path)
-  return { path = path, name = project_name(path), folder = project_folder(path), date = project_date(date_sort), date_sort = date_sort, mode = mode or "projects" }
+  return { path = path, name = project_name(path), folder = project_folder(path), rel_dir = relative_folder(path, root or state.scan_location), date = project_date(date_sort), date_sort = date_sort, mode = mode or "projects" }
 end
 
 local function refresh_project_date(project)
@@ -342,27 +396,77 @@ end
 
 local function apply_filter(settings)
   state.filtered = {}
+  state.visible_entries = {}
+  state.folder_entries = {}
   local term = tostring(settings.search_term or "")
+  local mode = active_mode(settings)
+  local folder_view = settings.folder_view == true and term == ""
+  local current_folder = get_mode_folder_path(settings, mode)
+  local folder_map = {}
   for _, project in ipairs(state.projects) do
     local haystack = table.concat({ project.name or "", project.path or "", project.folder or "" }, " ")
-    if fuzzy_find(haystack, term) then state.filtered[#state.filtered + 1] = project end
+    if fuzzy_find(haystack, term) then
+      if folder_view then
+        project.rel_dir = project.rel_dir or relative_folder(project.path, state.scan_location)
+        local child_name = direct_child_folder(project.rel_dir, current_folder)
+        if child_name then
+          local child_path = current_folder == "" and child_name or (current_folder .. "/" .. child_name)
+          local key = child_path:lower()
+          local folder = folder_map[key]
+          if not folder then
+            folder = { name = child_name, path = child_path, count = 0 }
+            folder_map[key] = folder
+            state.folder_entries[#state.folder_entries + 1] = folder
+          end
+          folder.count = folder.count + 1
+        elseif clean_relative_folder(project.rel_dir) == current_folder then
+          state.filtered[#state.filtered + 1] = project
+        end
+      else
+        state.filtered[#state.filtered + 1] = project
+      end
+    end
   end
+  table.sort(state.folder_entries, function(a, b) return tostring(a.name or ""):lower() < tostring(b.name or ""):lower() end)
   sort_projects(state.filtered, settings)
+  if folder_view and current_folder ~= "" then
+    state.visible_entries[#state.visible_entries + 1] = { kind = "folder", folder = { name = "..", path = folder_parent(current_folder), count = 0, up = true } }
+  end
+  for _, folder in ipairs(state.folder_entries) do state.visible_entries[#state.visible_entries + 1] = { kind = "folder", folder = folder } end
+  for _, project in ipairs(state.filtered) do state.visible_entries[#state.visible_entries + 1] = { kind = "project", project = project } end
   if state.selected_project then
     local selected_found = false
-    for index, project in ipairs(state.filtered) do
-      if project.path == state.selected_project.path then
+    for index, entry in ipairs(state.visible_entries) do
+      if entry.kind == "project" and entry.project and entry.project.path == state.selected_project.path then
         state.selected_index = index
-        state.selected_project = project
+        state.selected_project = entry.project
         selected_found = true
         break
       end
     end
-    if not selected_found then state.selected_index = nil; state.selected_project = nil end
+    if not selected_found then state.selected_index = nil; state.selected_project = nil; state.selected_folder = nil end
   end
-  if not state.selected_project and state.filtered[1] then
-    state.selected_index = 1
-    state.selected_project = state.filtered[1]
+  if state.selected_folder then
+    local selected_found = false
+    for index, entry in ipairs(state.visible_entries) do
+      local folder = entry.kind == "folder" and entry.folder or nil
+      if folder and folder.path == state.selected_folder.path and folder.up == state.selected_folder.up then
+        state.selected_index = index
+        state.selected_folder = folder
+        selected_found = true
+        break
+      end
+    end
+    if not selected_found then state.selected_index = nil; state.selected_folder = nil end
+  end
+  if not state.selected_project and not state.selected_folder then
+    for index, entry in ipairs(state.visible_entries) do
+      if entry.kind == "project" and entry.project then
+        state.selected_index = index
+        state.selected_project = entry.project
+        break
+      end
+    end
   end
   state.filter_dirty = false
 end
@@ -384,8 +488,11 @@ local function start_scan(app, settings)
   local mode, mode_def = active_mode(settings)
   state.projects = {}
   state.filtered = {}
+  state.visible_entries = {}
+  state.folder_entries = {}
   state.selected_index = nil
   state.selected_project = nil
+  state.selected_folder = nil
   state.scan_queue = {}
   state.scan_seen_dirs = {}
   state.scan_seen_projects = {}
@@ -418,7 +525,7 @@ local function scan_directory(settings, entry)
       local key = path:lower()
       if not state.scan_seen_projects[key] then
         state.scan_seen_projects[key] = true
-        state.projects[#state.projects + 1] = make_project(path, mode)
+        state.projects[#state.projects + 1] = make_project(path, mode, state.scan_location)
       end
     end
     file_index = file_index + 1
@@ -596,6 +703,17 @@ local function open_project(app, project, new_tab)
   app.status = "Opening " .. mode_def.item_label .. ": " .. project.name
 end
 
+local function navigate_folder(app, settings, folder_path)
+  local mode = active_mode(settings)
+  set_mode_folder_path(settings, mode, folder_path)
+  state.selected_index = nil
+  state.selected_project = nil
+  state.selected_folder = nil
+  state.scroll_selected_project = false
+  state.filter_dirty = true
+  if app.save_settings then app.save_settings() end
+end
+
 local function visible_range(ctx, count, row_h, overscan, height)
   if count <= 0 then return 1, 0, 0, 0 end
   local scroll_y = r.ImGui_GetScrollY and r.ImGui_GetScrollY(ctx) or 0
@@ -656,28 +774,33 @@ end
 
 local function handle_project_list_keyboard(app, settings, row_h)
   local ctx = app.ctx
-  if #state.filtered == 0 or not project_list_window_active(ctx) or not keyboard_input_available(ctx) then return false end
+  if #state.visible_entries == 0 or not project_list_window_active(ctx) or not keyboard_input_available(ctx) then return false end
   local index = state.selected_index
   local target_index = nil
   if key_pressed(ctx, "UpArrow") then target_index = index and math.max(1, index - 1) or 1
-  elseif key_pressed(ctx, "DownArrow") then target_index = index and math.min(#state.filtered, index + 1) or 1
+  elseif key_pressed(ctx, "DownArrow") then target_index = index and math.min(#state.visible_entries, index + 1) or 1
   elseif key_pressed(ctx, "PageUp") then target_index = index and math.max(1, index - 10) or 1
-  elseif key_pressed(ctx, "PageDown") then target_index = index and math.min(#state.filtered, index + 10) or 1
+  elseif key_pressed(ctx, "PageDown") then target_index = index and math.min(#state.visible_entries, index + 10) or 1
   elseif key_pressed(ctx, "Home") then target_index = 1
-  elseif key_pressed(ctx, "End") then target_index = #state.filtered end
+  elseif key_pressed(ctx, "End") then target_index = #state.visible_entries end
   if target_index then
-    local project = state.filtered[target_index]
-    if project then
-      state.selected_project = project
+    local entry = state.visible_entries[target_index]
+    if entry then
       state.selected_index = target_index
+      state.selected_project = entry.kind == "project" and entry.project or nil
+      state.selected_folder = entry.kind == "folder" and entry.folder or nil
       state.project_list_keyboard_focus = true
       state.scroll_selected_project = true
       scroll_selected_project_into_view(ctx, row_h)
     end
     return true
   end
-  if state.selected_project and (key_pressed(ctx, "Enter") or key_pressed(ctx, "KeypadEnter")) then
-    open_project(app, state.selected_project, settings.open_new_tab_on_double_click)
+  if key_pressed(ctx, "Enter") or key_pressed(ctx, "KeypadEnter") then
+    if state.selected_folder then
+      navigate_folder(app, settings, state.selected_folder.path)
+    elseif state.selected_project then
+      open_project(app, state.selected_project, settings.open_new_tab_on_double_click)
+    end
     return true
   end
   return false
@@ -685,8 +808,48 @@ end
 
 local function select_project(project, index)
   state.selected_project = project
+  state.selected_folder = nil
   state.selected_index = index
   state.project_list_keyboard_focus = true
+end
+
+local function select_folder(folder, index)
+  state.selected_folder = folder
+  state.selected_project = nil
+  state.selected_index = index
+  state.project_list_keyboard_focus = true
+end
+
+local function draw_folder_row(app, settings, folder, index, width)
+  local ctx = app.ctx
+  local row_h = 54
+  r.ImGui_PushID(ctx, "folder_" .. tostring(folder.path or folder.name or index))
+  local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local double_clicked = hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0)
+  local x, y = r.ImGui_GetItemRectMin(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local selected = state.selected_folder and state.selected_folder.path == folder.path and state.selected_folder.up == folder.up
+  local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
+  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + width, y + row_h - 2, bg, 5) end
+  r.ImGui_DrawList_AddRect(draw_list, x, y + 2, x + width, y + row_h - 2, selected and Theme.colors.accent or Theme.colors.border, 5, 0, selected and 1.4 or 0.7)
+  local icon_x, icon_y = x + 25, y + 26
+  r.ImGui_DrawList_AddRect(draw_list, icon_x - 16, icon_y - 9, icon_x + 16, icon_y + 12, Theme.colors.accent, 4, 0, 2)
+  r.ImGui_DrawList_AddLine(draw_list, icon_x - 13, icon_y - 9, icon_x - 5, icon_y - 16, Theme.colors.accent, 2)
+  r.ImGui_DrawList_AddLine(draw_list, icon_x - 5, icon_y - 16, icon_x + 6, icon_y - 16, Theme.colors.accent, 2)
+  r.ImGui_DrawList_PushClipRect(draw_list, x + 52, y + 4, x + width - 8, y + row_h - 4, true)
+  r.ImGui_DrawList_AddText(draw_list, x + 52, y + 8, Theme.colors.text, folder.name or "Folder")
+  local detail = folder.up and "Parent folder" or (tostring(folder.count or 0) .. " items")
+  r.ImGui_DrawList_AddText(draw_list, x + 52, y + 29, Theme.colors.text_dim, detail)
+  r.ImGui_DrawList_PopClipRect(draw_list)
+  if clicked then select_folder(folder, index) end
+  if double_clicked then navigate_folder(app, settings, folder.path) end
+  if hovered then r.ImGui_SetTooltip(ctx, folder.up and "Go up" or folder.path) end
+  if selected and state.scroll_selected_project and r.ImGui_SetScrollHereY then
+    local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
+    if ok then state.scroll_selected_project = false end
+  end
+  r.ImGui_PopID(ctx)
 end
 
 local function draw_project_row(app, settings, project, index, width)
@@ -751,14 +914,18 @@ local function draw_project_list(app, settings, width, height)
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Add a " .. mode_def.item_label .. " location")
     elseif state.scanning then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Scanning... " .. tostring(#state.projects) .. " " .. mode_def.plural)
-    elseif #state.filtered == 0 then
+    elseif #state.visible_entries == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No " .. mode_def.plural .. " found")
     end
-    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_h, 6, height)
+    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.visible_entries, row_h, 6, height)
     if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
     for index = first, last do
-      local project = state.filtered[index]
-      if project then draw_project_row(app, settings, project, index, math.max(80, width - 12)) end
+      local entry = state.visible_entries[index]
+      if entry and entry.kind == "folder" and entry.folder then
+        draw_folder_row(app, settings, entry.folder, index, math.max(80, width - 12))
+      elseif entry and entry.kind == "project" and entry.project then
+        draw_project_row(app, settings, entry.project, index, math.max(80, width - 12))
+      end
     end
     if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
     r.ImGui_EndChild(ctx)
@@ -834,6 +1001,8 @@ local function draw_settings_popup(app, settings)
     if r.ImGui_Button(ctx, "Remove Current", 120, 0) then remove_current_location(app, settings); start_scan(app, settings) end
     local c, v = r.ImGui_Checkbox(ctx, "Recursive scan", settings.recursive == true)
     if c then settings.recursive = v; if app.save_settings then app.save_settings() end end
+    c, v = r.ImGui_Checkbox(ctx, "Folder view", settings.folder_view == true)
+    if c then settings.folder_view = v; state.filter_dirty = true; if app.save_settings then app.save_settings() end end
     if r.ImGui_SliderInt then
       c, v = r.ImGui_SliderInt(ctx, "Max depth", settings.max_depth, 0, 12)
       if c then settings.max_depth = v; if app.save_settings then app.save_settings() end end
@@ -886,7 +1055,7 @@ local function draw_toolbar(app, settings)
   if r.ImGui_BeginCombo(ctx, "##project_location", current_location ~= "" and current_location or "No location") then
     for _, location in ipairs(state.locations) do
       local selected = location == current_location
-      if r.ImGui_Selectable(ctx, location, selected) then set_mode_location(settings, mode, location); if app.save_settings then app.save_settings() end; start_scan(app, settings) end
+      if r.ImGui_Selectable(ctx, location, selected) then set_mode_location(settings, mode, location); set_mode_folder_path(settings, mode, ""); if app.save_settings then app.save_settings() end; start_scan(app, settings) end
       if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
     end
     r.ImGui_EndCombo(ctx)
@@ -935,6 +1104,12 @@ function M.draw(app)
   draw_project_list(app, settings, width, list_h)
   draw_project_detail(app, state.selected_project, width, detail_h)
   local status = mode_def.label .. ": " .. tostring(#state.filtered)
+  local mode = active_mode(settings)
+  local folder_path = get_mode_folder_path(settings, mode)
+  if settings.folder_view == true and tostring(settings.search_term or "") == "" then
+    status = mode_def.label .. ": " .. tostring(#state.visible_entries) .. " entries"
+    if folder_path ~= "" then status = status .. " | " .. folder_path end
+  end
   if state.scanning then status = status .. " | scanning " .. tostring(#state.projects) end
   if state.scan_limited then status = status .. " | limited" end
   if state.last_error then status = status .. " | " .. state.last_error end

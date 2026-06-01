@@ -33,10 +33,21 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.1.7" author="TouristKiller" time="2026-06-01T19:30:00Z">
+    <version name="0.1.8" author="TouristKiller" time="2026-06-01T22:10:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_4.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_5.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_1.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_2.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_3.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_4.lua</source>
+     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_5.lua</source>
      <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/json.lua</source>
+     <source file="core/action_clipboard_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/action_clipboard_runner.lua</source>
      <source file="core/media_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/media_categorizer.lua</source>
      <source file="core/meter_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/meter_engine.lua</source>
      <source file="core/module_loader.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/module_loader.lua</source>
@@ -45,7 +56,23 @@
      <source file="core/settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/settings.lua</source>
      <source file="core/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/theme.lua</source>
      <source file="core/ui.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui.lua</source>
+    <source file="core/workbench_module_action_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/workbench_module_action_runner.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Action_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Action_Browser.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Automation_Item_Manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Automation_Item_Manager.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Color_Studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Color_Studio.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Control_Room.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Control_Room.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_FX_Chain_Builder.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_FX_Chain_Builder.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Home.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Home.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Instrument_Rack.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Instrument_Rack.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Media_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Media_Browser.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Notes.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Notes.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Plugin_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Plugin_Browser.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Project_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Project_Browser.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Project_Overview.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Project_Overview.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Script_Launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Script_Launcher.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Track_Recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Track_Recall.lua</source>
      <source file="modules/action_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_browser.lua</source>
+    <source file="modules/action_clipboard.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_clipboard.lua</source>
      <source file="modules/automation_item_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/automation_item_manager.lua</source>
      <source file="modules/color_studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/color_studio.lua</source>
      <source file="modules/control_room.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/control_room.lua</source>
@@ -60,39 +87,24 @@
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+          v0.1.8
+          + Action Browser: Added Action Clipboard footer with 5 recent, lockable action slots
+          + Action Browser: Added C shortcut to show or hide the Action Clipboard footer
+          + Action Browser: Added context menu actions to add actions to the clipboard or directly to a specific slot
+          + Action Clipboard: Added mappable run and lock-toggle slot scripts that work without Workbench being open
+          + Action Clipboard: Added persistent slot storage, external refresh handling, clearer lock styling, and shortcut details in tooltips
+          + Media Browser: Auto Categories now works on the currently open subfolder when folder browsing is active
+          + Project Browser: Added optional folder view for browsing subfolders in projects, project templates, and track templates
+          + Plugin Browser: Added virtual instrument new-track action with MIDI input selection
+          + Workbench: Added REAPER Theme preset for deriving Workbench colors from the active REAPER theme
+          + Workbench: Added mappable module actions for opening Home and each Workbench module, with automatic Workbench launch
+          + Workbench: Added separate Action Clipboard Actions and Module Actions folders for cleaner REAPER action organization
+          + Workbench: Added ExtState command handling for external clipboard and module action scripts
+
           v0.1.7
           + Project Browser: Added compact Workbench module for projects, project templates, and track templates
           + Project Browser: Added per-type user locations, recursive scanning, search/filter, date sorting, cover previews, and open/insert actions
           + Project Browser: Added read-only project metadata for BPM, signature, tracks, sample rate, modified date, and lightweight length detection
-
-          v0.1.5
-          + Media Browser: Added optional fade-in/fade-out handling for onboard audio previews
-          + Media Browser: Added configurable preview fade duration, disabled by default
-          + Media Browser: Added configurable audio switch gap and delayed source cleanup for onboard preview file switching
-          + Media Browser: Added optional tape-speed rate mode so pitch follows persistent rate changes while previewing files
-          + Media Browser: Added optional double-click-to-open behavior for folder browsing
-          + Plugin Browser: Added right-click screenshot capture with normal and OpenGL/DX modes, saved to the central TK FX BROWSER Screenshots folder
-          + Plugin Browser: Improved screenshot matching for x86/x86 bridged, Mono/Stereo, sanitized underscore, and manufacturer-prefix variants
-          + Control Room: Added monitor output modes for Stereo, Mono Sum, L/R Source, and L/R Speaker checks
-          + Control Room: Added setup and right-click lane controls for monitor output modes
-          + Control Room: Added Stereo and Mono Sum output modes for cue outputs, including setup and right-click lane controls
-          + Track Recall: Added multi-track save for selected tracks with automatic track-name based recall names
-
-        v0.1.4
-        + Media Browser: Added lazy per-location cache loading with explicit refresh
-        + Media Browser: Added compact folder browsing with subfolder rows
-        + Media Browser: Added folder cover-art thumbnails for cover/folder/front images
-        + Media Browser: Reworked media cache storage to avoid large Lua cache load errors
-        + Media Browser: Added option for random navigation during auto-preview playback
-        + Media Browser: Fixed drag-and-drop insertion into REAPER fixed item lanes
-        + Media Browser: Added audio-file context menu actions for RS5K and Cartridge loading
-        + Media Browser: Added RS5K Manager pad load/create/delete actions from the audio context menu
-        + Media Browser: Added RS5K Manager toggle action matching the standalone browser workflow
-        + Workbench: Added global tooltip enable and delay preferences
-        + Workbench: Added optional compact Info box footer with clipped text and hover details
-        + Workbench: Centralized Info box positioning so it stays aligned across modules
-        + Workbench: Improved module error display with compact diagnostics
-        + Color Studio: Added optional auto-apply for matching track color rules
 ]]></changelog>
      </version>
      </reapack>

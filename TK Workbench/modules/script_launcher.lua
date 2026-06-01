@@ -615,18 +615,21 @@ local function draw_grid(app, settings, items, width)
   local ctx = app.ctx
   local spacing = 8
   local min_card_w = 150
-  local max_card_w = 220
   local columns = math.max(1, math.floor((width + spacing) / (min_card_w + spacing)))
-  local card_w = math.min(max_card_w, math.floor((width - spacing * (columns - 1)) / columns))
+  local card_w = (width - spacing * (columns - 1)) / columns
   local card_h = math.floor(card_w * 0.72) + 28
-  local row_start_x = select(1, r.ImGui_GetCursorScreenPos(ctx))
-  for index, item in ipairs(items) do
-    r.ImGui_PushID(ctx, "script_launcher_" .. tostring(item.index))
-    local card_ok, card_err = pcall(draw_entry_card, app, item, card_w, card_h)
-    r.ImGui_PopID(ctx)
-    if not card_ok then error(card_err) end
-    local max_x = select(1, r.ImGui_GetItemRectMax(ctx))
-    if index < #items and max_x + spacing + card_w <= row_start_x + width then r.ImGui_SameLine(ctx, 0, spacing) end
+  local index = 1
+  while index <= #items do
+    local row_columns = math.min(columns, #items - index + 1)
+    for column = 1, row_columns do
+      local item = items[index]
+      r.ImGui_PushID(ctx, "script_launcher_" .. tostring(item.index))
+      local card_ok, card_err = pcall(draw_entry_card, app, item, card_w, card_h)
+      r.ImGui_PopID(ctx)
+      if not card_ok then error(card_err) end
+      if column < row_columns then r.ImGui_SameLine(ctx, 0, spacing) end
+      index = index + 1
+    end
   end
 end
 

@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local ActionClipboard = require("modules.action_clipboard")
 
 local M = {
   id = "action_browser",
@@ -52,6 +53,14 @@ local fallback_actions = {
   { name = "Item: Split items at edit cursor", id = 40746 },
   { name = "View: Zoom to fit all in window", id = 40031 }
 }
+
+local function ensure_settings(app)
+  app.settings.action_browser = app.settings.action_browser or {}
+  if app.settings.action_browser.show_clipboard_slots == nil then
+    app.settings.action_browser.show_clipboard_slots = true
+  end
+  return app.settings.action_browser
+end
 
 local function fuzzy_normalize(value)
   if not value then return "" end
@@ -168,6 +177,7 @@ end
 local function execute_action(app, action)
   if not action then return end
   r.Main_OnCommand(action.id, 0)
+  ActionClipboard.record_action(app, action, false)
   app.status = "Executed: " .. action.name
 end
 
@@ -237,6 +247,13 @@ local function draw_action_context_menu(app, action, popup_id)
         app.status = "Script Launcher module not loaded"
       end
     end
+    if r.ImGui_MenuItem(ctx, "Add to Action Clipboard") then ActionClipboard.record_action(app, action, true) end
+    if r.ImGui_BeginMenu(ctx, "Add to Clipboard Slot") then
+      for index = 1, ActionClipboard.slot_count do
+        if r.ImGui_MenuItem(ctx, "Slot " .. tostring(index)) then ActionClipboard.set_slot(app, action, index, true) end
+      end
+      r.ImGui_EndMenu(ctx)
+    end
     if r.ImGui_MenuItem(ctx, "Copy Command ID") then copy_to_clipboard(app, action.id, "command ID") end
     if r.ImGui_MenuItem(ctx, "Copy Action Text") then copy_to_clipboard(app, action.name, "action text") end
     r.ImGui_EndPopup(ctx)
@@ -265,18 +282,26 @@ end
 
 function M.draw(app)
   local ctx = app.ctx
+  local settings = ensure_settings(app)
   if not state.loaded then load_actions() end
 
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
   local button_h = r.ImGui_GetFrameHeight(ctx)
   local button_w = button_h
-  r.ImGui_PushItemWidth(ctx, math.max(80, avail_w - (button_w * 3) - 24))
+  r.ImGui_PushItemWidth(ctx, math.max(80, avail_w - (button_w * 4) - 30))
   local changed, search = r.ImGui_InputTextWithHint(ctx, "##action_browser_search", "Search actions", state.search_term or "")
   if changed then
     state.search_term = search
     state.search_change_time = r.time_precise()
   end
   r.ImGui_PopItemWidth(ctx)
+
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, settings.show_clipboard_slots and "C" or "c", button_w, button_h) then
+    settings.show_clipboard_slots = not settings.show_clipboard_slots
+    if app.save_settings then app.save_settings() end
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, settings.show_clipboard_slots and "Hide action clipboard" or "Show action clipboard") end
 
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, state.show_categories and "G" or "F", button_w, button_h) then
@@ -302,7 +327,9 @@ function M.draw(app)
   refresh_cache(false)
 
   local info_h = UI.info_line_height(ctx)
-  local list_h = math.max(120, (avail_h or 300) - button_h - info_h)
+  local _, list_avail_h = r.ImGui_GetContentRegionAvail(ctx)
+  local footer_h = settings.show_clipboard_slots and ActionClipboard.panel_height(ctx) or 0
+  local list_h = math.max(60, (list_avail_h or avail_h or 300) - info_h - footer_h)
   if r.ImGui_BeginChild(ctx, "##action_browser_list", 0, list_h, 0) then
     if state.show_categories then
       for _, category in ipairs(state.cached_items or {}) do
@@ -320,6 +347,8 @@ function M.draw(app)
     end
     r.ImGui_EndChild(ctx)
   end
+
+  if settings.show_clipboard_slots then ActionClipboard.draw_panel(app) end
 
   UI.draw_info_line(ctx, tostring(#state.actions) .. " actions | " .. state.source .. " | Left-click executes, right-click opens context")
 end
