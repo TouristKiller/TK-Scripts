@@ -1,8 +1,8 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.6
+-- @version 0.1.7
 -- @changelog:
--- v0.1.6
+-- v0.1.7
 --   + Project Browser: Added compact Workbench module for projects, project templates, and track templates
 --   + Project Browser: Added per-type user locations, recursive scanning, search/filter, date sorting, cover previews, and open/insert actions
 --   + Project Browser: Added read-only project metadata for BPM, signature, tracks, sample rate, modified date, and lightweight length detection

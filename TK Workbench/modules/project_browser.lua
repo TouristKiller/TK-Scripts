@@ -43,6 +43,8 @@ local state = {
   filtered = {},
   selected_index = nil,
   selected_project = nil,
+  project_list_keyboard_focus = false,
+  scroll_selected_project = false,
   scan_queue = {},
   scan_seen_dirs = {},
   scan_seen_projects = {},
@@ -605,9 +607,86 @@ local function visible_range(ctx, count, row_h, overscan, height)
   return first, last, top_pad, bottom_pad
 end
 
+local function key_pressed(ctx, name)
+  if not r.ImGui_IsKeyPressed then return false end
+  local key = r["ImGui_Key_" .. name]
+  if not key then return false end
+  local ok_key, key_value = pcall(key)
+  if not ok_key or not key_value then return false end
+  local ok, pressed = pcall(r.ImGui_IsKeyPressed, ctx, key_value)
+  return ok and pressed == true
+end
+
+local function keyboard_input_available(ctx)
+  if r.ImGui_IsAnyItemActive then
+    local ok, active = pcall(r.ImGui_IsAnyItemActive, ctx)
+    if ok and active then return false end
+  end
+  if r.ImGui_IsPopupOpen and r.ImGui_PopupFlags_AnyPopupId then
+    local ok, any_popup = pcall(r.ImGui_IsPopupOpen, ctx, "", r.ImGui_PopupFlags_AnyPopupId())
+    if ok and any_popup then return false end
+  end
+  return true
+end
+
+local function scroll_selected_project_into_view(ctx, row_h)
+  if not state.selected_index or not r.ImGui_GetScrollY or not r.ImGui_GetWindowHeight or not r.ImGui_SetScrollY then return end
+  local top = (state.selected_index - 1) * row_h
+  local bottom = top + row_h
+  local scroll_y = r.ImGui_GetScrollY(ctx)
+  local window_h = math.max(row_h, r.ImGui_GetWindowHeight(ctx) - (row_h * 1.5))
+  if top < scroll_y then
+    r.ImGui_SetScrollY(ctx, math.max(0, top - row_h))
+  elseif bottom > scroll_y + window_h then
+    r.ImGui_SetScrollY(ctx, math.max(0, bottom - window_h + row_h))
+  end
+end
+
+local function project_list_window_active(ctx)
+  if r.ImGui_IsWindowHovered then
+    local ok, hovered = pcall(r.ImGui_IsWindowHovered, ctx)
+    if ok and hovered then return true end
+  end
+  if r.ImGui_IsWindowFocused then
+    local ok, focused = pcall(r.ImGui_IsWindowFocused, ctx)
+    if ok and focused then return true end
+  end
+  return state.project_list_keyboard_focus == true
+end
+
+local function handle_project_list_keyboard(app, settings, row_h)
+  local ctx = app.ctx
+  if #state.filtered == 0 or not project_list_window_active(ctx) or not keyboard_input_available(ctx) then return false end
+  local index = state.selected_index
+  local target_index = nil
+  if key_pressed(ctx, "UpArrow") then target_index = index and math.max(1, index - 1) or 1
+  elseif key_pressed(ctx, "DownArrow") then target_index = index and math.min(#state.filtered, index + 1) or 1
+  elseif key_pressed(ctx, "PageUp") then target_index = index and math.max(1, index - 10) or 1
+  elseif key_pressed(ctx, "PageDown") then target_index = index and math.min(#state.filtered, index + 10) or 1
+  elseif key_pressed(ctx, "Home") then target_index = 1
+  elseif key_pressed(ctx, "End") then target_index = #state.filtered end
+  if target_index then
+    local project = state.filtered[target_index]
+    if project then
+      state.selected_project = project
+      state.selected_index = target_index
+      state.project_list_keyboard_focus = true
+      state.scroll_selected_project = true
+      scroll_selected_project_into_view(ctx, row_h)
+    end
+    return true
+  end
+  if state.selected_project and (key_pressed(ctx, "Enter") or key_pressed(ctx, "KeypadEnter")) then
+    open_project(app, state.selected_project, settings.open_new_tab_on_double_click)
+    return true
+  end
+  return false
+end
+
 local function select_project(project, index)
   state.selected_project = project
   state.selected_index = index
+  state.project_list_keyboard_focus = true
 end
 
 local function draw_project_row(app, settings, project, index, width)
@@ -646,6 +725,10 @@ local function draw_project_row(app, settings, project, index, width)
     r.ImGui_EndPopup(ctx)
   end
   if hovered then r.ImGui_SetTooltip(ctx, project.path) end
+  if selected and state.scroll_selected_project and r.ImGui_SetScrollHereY then
+    local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
+    if ok then state.scroll_selected_project = false end
+  end
   r.ImGui_PopID(ctx)
 end
 
@@ -653,7 +736,17 @@ local function draw_project_list(app, settings, width, height)
   local ctx = app.ctx
   local _, mode_def = active_mode(settings)
   local row_h = 54
-  if r.ImGui_BeginChild(ctx, "##project_list", 0, height, 0) then
+  local child_flags = 0
+  if r.ImGui_WindowFlags_NoNavInputs then
+    local ok_flags, flags = pcall(r.ImGui_WindowFlags_NoNavInputs)
+    if ok_flags and flags then child_flags = flags end
+  end
+  if r.ImGui_WindowFlags_NoNavFocus then
+    local ok_flags, flags = pcall(r.ImGui_WindowFlags_NoNavFocus)
+    if ok_flags and flags then child_flags = child_flags | flags end
+  end
+  if r.ImGui_BeginChild(ctx, "##project_list", 0, height, 0, child_flags) then
+    handle_project_list_keyboard(app, settings, row_h)
     if #state.locations == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Add a " .. mode_def.item_label .. " location")
     elseif state.scanning then
@@ -685,6 +778,8 @@ local function draw_project_detail(app, project, width, height)
   local detail_flags = 0
   if r.ImGui_WindowFlags_NoScrollbar then detail_flags = detail_flags | r.ImGui_WindowFlags_NoScrollbar() end
   if r.ImGui_WindowFlags_NoScrollWithMouse then detail_flags = detail_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
+  if r.ImGui_WindowFlags_NoNavInputs then detail_flags = detail_flags | r.ImGui_WindowFlags_NoNavInputs() end
+  if r.ImGui_WindowFlags_NoNavFocus then detail_flags = detail_flags | r.ImGui_WindowFlags_NoNavFocus() end
   if r.ImGui_BeginChild(ctx, "##project_detail", width, height, 1, detail_flags) then
     if not project then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Select a project")
