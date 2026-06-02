@@ -81,7 +81,6 @@ local Theme = require("core.theme")
 local Selection = require("core.selection")
 local ModuleLoader = require("core.module_loader")
 local UI = require("core.ui")
-local ActionClipboard = require("modules.action_clipboard")
 
 local ctx = r.ImGui_CreateContext(SCRIPT_NAME)
 local config_name = rawget(_G, "TK_WORKBENCH_CONFIG_NAME") or "config.json"
@@ -117,6 +116,7 @@ local module_names = {
   "project_overview",
   "project_browser",
   "action_browser",
+  "action_clipboard",
   "script_launcher",
   "track_recall",
   "automation_item_manager",
@@ -336,6 +336,15 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, left + 25, cy + 8, left + 34, cy + 8, color, 2)
     r.ImGui_DrawList_AddLine(draw_list, left + 14, bottom - 17, right - 16, bottom - 17, color, 2)
     r.ImGui_DrawList_AddLine(draw_list, left + 14, bottom - 10, right - 24, bottom - 10, color, 2)
+  elseif id == "action_clipboard" then
+    r.ImGui_DrawList_AddRect(draw_list, left + 9, top + 10, right - 9, bottom - 5, color, 4, 0, 2)
+    r.ImGui_DrawList_AddRect(draw_list, cx - 10, top + 5, cx + 10, top + 15, color, 4, 0, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 17, top + 25, left + 21, top + 29, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 21, top + 29, left + 27, top + 20, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 32, top + 26, right - 16, top + 26, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 17, top + 36, left + 21, top + 40, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 21, top + 40, left + 27, top + 31, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 32, top + 37, right - 16, top + 37, color, 2)
   elseif id == "script_launcher" then
     r.ImGui_DrawList_AddRect(draw_list, left + 7, top + 8, right - 7, bottom - 8, color, 4, 0, 2)
     r.ImGui_DrawList_AddLine(draw_list, left + 17, top + 16, left + 17, bottom - 16, color, 2)
@@ -892,7 +901,6 @@ local function loop()
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY, "true", false)
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_HEARTBEAT_KEY, tostring(r.time_precise and r.time_precise() or os.clock()), false)
   process_module_action_commands()
-  ActionClipboard.process_commands(app)
   UI.begin_tooltip_frame(app)
   r.ImGui_SetNextWindowSize(ctx, app.settings.window_width or 430, app.settings.window_height or 760, r.ImGui_Cond_FirstUseEver())
   if (app.settings.theme_preset or "Graphite") ~= Theme.current_preset then

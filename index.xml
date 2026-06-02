@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.1.8" author="TouristKiller" time="2026-06-01T22:10:00Z">
+    <version name="0.1.9" author="TouristKiller" time="2026-06-02T16:00:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua</source>
@@ -41,11 +41,21 @@
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_4.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_5.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_6.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_7.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_8.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_8.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_9.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_9.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_10.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_10.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_1.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_2.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_3.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_4.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_5.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_6.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_7.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_8.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_8.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_9.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_9.lua</source>
+    <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_10.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_10.lua</source>
      <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/json.lua</source>
      <source file="core/action_clipboard_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/action_clipboard_runner.lua</source>
      <source file="core/media_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/media_categorizer.lua</source>
@@ -58,6 +68,7 @@
      <source file="core/ui.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui.lua</source>
     <source file="core/workbench_module_action_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/workbench_module_action_runner.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Action_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Action_Browser.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Action_Clipboard.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Action_Clipboard.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Automation_Item_Manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Automation_Item_Manager.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Color_Studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Color_Studio.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Control_Room.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Control_Room.lua</source>
@@ -87,6 +98,15 @@
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+        v0.1.9
+        + Action Clipboard: Split from Action Browser footer into a standalone Workbench module
+        + Action Clipboard: Added Windows native action capture bridge for Action List, menu, toolbar, floating toolbar, shortcut, and custom action captures
+        + Action Clipboard: Added native capture toggle and availability/last-capture status in the module UI
+        + Action Clipboard: Added mappable module action for opening Action Clipboard directly
+        + Action Browser: Removed embedded Action Clipboard footer while keeping context menu add/set-slot actions
+        + Workbench: Added Action Clipboard module tile with clipboard icon
+        + Native capture: Windows x64 DLL is provided separately for manual installation in REAPER/UserPlugins
+
           v0.1.8
           + Action Browser: Added Action Clipboard footer with 5 recent, lockable action slots
           + Action Browser: Added C shortcut to show or hide the Action Clipboard footer

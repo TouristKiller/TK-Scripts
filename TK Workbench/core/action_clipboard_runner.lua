@@ -3,7 +3,9 @@ local json = require("core.json")
 
 local M = {}
 
-local SLOT_COUNT = 5
+local DEFAULT_SLOT_COUNT = 5
+local MIN_SLOT_COUNT = 1
+local MAX_SLOT_COUNT = 10
 local EXT_SECTION = "TK_WORKBENCH_ACTION_CLIPBOARD"
 local CHANGE_KEY = "changed"
 local DATA_FILE = "actions_clipboard.json"
@@ -22,6 +24,24 @@ end
 
 local function trim(value)
   return tostring(value or ""):match("^%s*(.-)%s*$") or ""
+end
+
+local function clamp_slot_count(value)
+  value = math.floor(tonumber(value) or DEFAULT_SLOT_COUNT)
+  return math.max(MIN_SLOT_COUNT, math.min(MAX_SLOT_COUNT, value))
+end
+
+local function active_slot_count(slots, requested_index)
+  local stored_count = slots and slots._slot_count or math.max(DEFAULT_SLOT_COUNT, math.min(#slots, MAX_SLOT_COUNT))
+  return clamp_slot_count(stored_count)
+end
+
+local function show_missing_slot(action, index, slot_count)
+  if r.MB then
+    r.MB("Action Clipboard slot " .. tostring(index) .. " bestaat niet. Het huidige aantal slots is " .. tostring(slot_count) .. ".", "TK Workbench", 0)
+  elseif r.ShowMessageBox then
+    r.ShowMessageBox("Action Clipboard slot " .. tostring(index) .. " bestaat niet. Het huidige aantal slots is " .. tostring(slot_count) .. ".", "TK Workbench", 0)
+  end
 end
 
 local function read_text(path)
@@ -92,23 +112,29 @@ local function normalize_slot(slot, index)
   }
 end
 
-local function load_slots()
+local function load_slots(requested_index)
   local slots = {}
   local content = read_text(data_path)
   if content and content ~= "" then
     local ok, decoded = pcall(json.decode, content)
     if ok and type(decoded) == "table" then
       local source = type(decoded.slots) == "table" and decoded.slots or decoded
-      for index = 1, SLOT_COUNT do slots[index] = normalize_slot(source[index], index) end
+      for index = 1, MAX_SLOT_COUNT do
+        if source[index] ~= nil then slots[index] = normalize_slot(source[index], index) end
+      end
+      slots._slot_count = clamp_slot_count(decoded.slot_count or #source)
     end
   end
-  for index = 1, SLOT_COUNT do slots[index] = normalize_slot(slots[index], index) end
+  for index = 1, active_slot_count(slots, requested_index) do slots[index] = normalize_slot(slots[index], index) end
   return slots
 end
 
 local function save_slots(slots)
-  for index = 1, SLOT_COUNT do slots[index] = normalize_slot(slots[index], index) end
-  return write_json(data_path, { slots = slots })
+  local slot_count = active_slot_count(slots)
+  local save_limit = math.max(slot_count, math.min(#slots, MAX_SLOT_COUNT))
+  local saved_slots = {}
+  for index = 1, save_limit do saved_slots[index] = normalize_slot(slots[index], index) end
+  return write_json(data_path, { slot_count = slot_count, slots = saved_slots })
 end
 
 local function mark_changed()
@@ -127,7 +153,7 @@ end
 
 local function unlocked_indices(slots)
   local indices = {}
-  for index = 1, SLOT_COUNT do
+  for index = 1, active_slot_count(slots) do
     if not slots[index].locked then indices[#indices + 1] = index end
   end
   return indices
@@ -151,7 +177,12 @@ end
 
 function M.run(index)
   index = tonumber(index) or 0
-  local slots = load_slots()
+  local slots = load_slots(index)
+  local slot_count = active_slot_count(slots)
+  if index < 1 or index > slot_count then
+    show_missing_slot("run", index, slot_count)
+    return false
+  end
   local slot = slots[index]
   if not slot or slot.cmd == "" then return false end
   local command_id = resolve_command(slot.cmd)
@@ -166,7 +197,12 @@ end
 
 function M.toggle_lock(index)
   index = tonumber(index) or 0
-  local slots = load_slots()
+  local slots = load_slots(index)
+  local slot_count = active_slot_count(slots)
+  if index < 1 or index > slot_count then
+    show_missing_slot("toggle_lock", index, slot_count)
+    return false
+  end
   if not slots[index] then return false end
   slots[index].locked = not slots[index].locked
   save_slots(slots)

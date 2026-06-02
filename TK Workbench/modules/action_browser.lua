@@ -54,14 +54,6 @@ local fallback_actions = {
   { name = "View: Zoom to fit all in window", id = 40031 }
 }
 
-local function ensure_settings(app)
-  app.settings.action_browser = app.settings.action_browser or {}
-  if app.settings.action_browser.show_clipboard_slots == nil then
-    app.settings.action_browser.show_clipboard_slots = true
-  end
-  return app.settings.action_browser
-end
-
 local function fuzzy_normalize(value)
   if not value then return "" end
   local cached = fuzzy_cache[value]
@@ -127,6 +119,18 @@ local function shortcut_for_action(action_id)
   local ok_desc, has_desc, desc = pcall(r.GetActionShortcutDesc, 0, action_id, 0)
   if ok_desc and has_desc and desc and desc ~= "" then return desc end
   return nil
+end
+
+local function command_identifier(command_id)
+  if r.ReverseNamedCommandLookup then
+    local ok, name = pcall(r.ReverseNamedCommandLookup, command_id)
+    name = ok and tostring(name or ""):match("^%s*(.-)%s*$") or ""
+    if name ~= "" then
+      if name:sub(1, 1) ~= "_" then name = "_" .. name end
+      return name
+    end
+  end
+  return tostring(command_id or "")
 end
 
 local function add_action(action)
@@ -249,12 +253,13 @@ local function draw_action_context_menu(app, action, popup_id)
     end
     if r.ImGui_MenuItem(ctx, "Add to Action Clipboard") then ActionClipboard.record_action(app, action, true) end
     if r.ImGui_BeginMenu(ctx, "Add to Clipboard Slot") then
-      for index = 1, ActionClipboard.slot_count do
+      local slot_count = ActionClipboard.get_slot_count and ActionClipboard.get_slot_count(app) or ActionClipboard.slot_count
+      for index = 1, slot_count do
         if r.ImGui_MenuItem(ctx, "Slot " .. tostring(index)) then ActionClipboard.set_slot(app, action, index, true) end
       end
       r.ImGui_EndMenu(ctx)
     end
-    if r.ImGui_MenuItem(ctx, "Copy Command ID") then copy_to_clipboard(app, action.id, "command ID") end
+    if r.ImGui_MenuItem(ctx, "Copy Command ID") then copy_to_clipboard(app, command_identifier(action.id), "command ID") end
     if r.ImGui_MenuItem(ctx, "Copy Action Text") then copy_to_clipboard(app, action.name, "action text") end
     r.ImGui_EndPopup(ctx)
   end
@@ -282,26 +287,18 @@ end
 
 function M.draw(app)
   local ctx = app.ctx
-  local settings = ensure_settings(app)
   if not state.loaded then load_actions() end
 
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
   local button_h = r.ImGui_GetFrameHeight(ctx)
   local button_w = button_h
-  r.ImGui_PushItemWidth(ctx, math.max(80, avail_w - (button_w * 4) - 30))
+  r.ImGui_PushItemWidth(ctx, math.max(80, avail_w - (button_w * 3) - 24))
   local changed, search = r.ImGui_InputTextWithHint(ctx, "##action_browser_search", "Search actions", state.search_term or "")
   if changed then
     state.search_term = search
     state.search_change_time = r.time_precise()
   end
   r.ImGui_PopItemWidth(ctx)
-
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, settings.show_clipboard_slots and "C" or "c", button_w, button_h) then
-    settings.show_clipboard_slots = not settings.show_clipboard_slots
-    if app.save_settings then app.save_settings() end
-  end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, settings.show_clipboard_slots and "Hide action clipboard" or "Show action clipboard") end
 
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, state.show_categories and "G" or "F", button_w, button_h) then
@@ -328,8 +325,7 @@ function M.draw(app)
 
   local info_h = UI.info_line_height(ctx)
   local _, list_avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  local footer_h = settings.show_clipboard_slots and ActionClipboard.panel_height(ctx) or 0
-  local list_h = math.max(60, (list_avail_h or avail_h or 300) - info_h - footer_h)
+  local list_h = math.max(60, (list_avail_h or avail_h or 300) - info_h)
   if r.ImGui_BeginChild(ctx, "##action_browser_list", 0, list_h, 0) then
     if state.show_categories then
       for _, category in ipairs(state.cached_items or {}) do
@@ -347,8 +343,6 @@ function M.draw(app)
     end
     r.ImGui_EndChild(ctx)
   end
-
-  if settings.show_clipboard_slots then ActionClipboard.draw_panel(app) end
 
   UI.draw_info_line(ctx, tostring(#state.actions) .. " actions | " .. state.source .. " | Left-click executes, right-click opens context")
 end
