@@ -12,7 +12,7 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
 #### Gewijzigd
 - **Action Browser**: Clipboard footer verwijderd; acties kunnen nog steeds via contextmenu naar Action Clipboard worden gestuurd.
-- **Native capture distributie**: Windows x64 DLL wordt los meegeleverd voor handmatige installatie in `REAPER/UserPlugins`. macOS/Linux blijven de Lua-basis zonder native capture gebruiken.
+- **Native capture distributie**: Windows x64 DLL wordt via ReaPack direct in de Workbench-map meegeleverd voor handmatige kopie naar `REAPER/UserPlugins`. macOS/Linux blijven de Lua-basis zonder native capture gebruiken.
 
 ## [2.2.7] - 2025-11-24
 
