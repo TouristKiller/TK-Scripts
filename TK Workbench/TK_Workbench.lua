@@ -1,8 +1,8 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.1.8
+-- @version 0.2.1
 -- @changelog:
--- v0.1.8
+-- v0.2.1
 --   + Action Browser: Added Action Clipboard footer with 5 recent, lockable action slots
 --   + Action Browser: Added C shortcut to show or hide the Action Clipboard footer
 --   + Action Browser: Added context menu actions to add actions to the clipboard or directly to a specific slot
