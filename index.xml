@@ -133,7 +133,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.0.6" author="TouristKiller" time="2026-06-01T10:50:00Z">
+    <version name="3.0.8" author="TouristKiller" time="2026-06-03T20:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -154,7 +154,7 @@
     </reapack>
 
     <reapack name="TK_Patchbay_Standalone.lua" type="script" desc="TK Patchbay Viewer (Standalone)">
-    <version name="1.1.7" author="TouristKiller" time="2026-06-05T10:50:00Z">
+    <version name="1.1.8" author="TouristKiller" time="2026-06-05T20:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Patchbay_Standalone.lua</source>
     <source file="TKFXBPatchbay_Standalone.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBPatchbay_Standalone.lua</source>
                 <changelog><![CDATA[

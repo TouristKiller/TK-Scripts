@@ -1,7 +1,16 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.7
+-- @version 1.1.8
 -- @changelog:
+--   v1.1.8:
+--       + Added Patchbay pin right-click route context for send/receive settings and master-send disconnects.
+--       + Added Layout > Snap to grid and Layout > Prevent overlap options for node positioning.
+--       + Improved new-node and dragged-node placement to avoid accidentally hiding tracks behind overlapping nodes.
+--       + Added Ctrl+N track creation at the mouse position with visible placement for newly added Patchbay nodes.
+--       + Added View > Focus selected tree to show the complete folder tree around selected tracks with routing neighbors.
+--       + Added zoomed-out Patchbay node name tooltips.
+--       + Added OR/AND Patchbay track filtering with comma and plus separators.
+--       + Added View > Mirror view to TCP with session restore of original TCP visibility.
 --   v1.1.7:
 --       + Added Patchbay master-route handling in bulk routing and node context actions.
 --       + Added node context Connect to actions for tracks and MASTER.
@@ -86,8 +95,11 @@ _G.ctx = r.ImGui_CreateContext("TK Patchbay Viewer")
 -- Initialize config with defaults (isolated from TK FX BROWSER)
 _G.config = {
     patchbay_node_width = 180,
+    patchbay_snap_to_grid = false,
+    patchbay_prevent_overlap = true,
     patchbay_show_master = true,
     patchbay_hide_child_master_flow = false,
+    patchbay_selected_with_children = false,
     patchbay_only_explicit_routing = false,
     patchbay_show_flow = true,
     patchbay_show_folder_links = true,

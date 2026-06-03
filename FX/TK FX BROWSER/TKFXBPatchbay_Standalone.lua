@@ -38,6 +38,7 @@ local hovered_input_guid = nil
 local pending_auto_layout = false
 local pending_center_view = false
 local pending_fit_view = false
+local pending_spawn_nodes = nil
 local pb_press_guid = nil
 local pb_press_dragged = false
 local node_popup_track = nil
@@ -88,6 +89,8 @@ local cable_shop_user_name = "Preset 1"
 PB.fx_schema_open_guid = nil
 PB.fx_schema_monochrome = true
 PB.fx_schema_mouse_block = false
+PB.tcp_mirror_enabled = false
+PB.tcp_mirror_original = nil
 
 local ROUTE_FILTER_ORDER = { "all", "post-fader", "pre-fader", "pre-fx", "muted", "audio", "sidechain", "midi" }
 local ROUTE_FILTER_LABELS = {
@@ -126,18 +129,22 @@ local CABLE_SHOP_DEFAULTS = {
 }
 local CABLE_SHOP_USER_PRESET_SLOTS = 6
 
-local LAYOUT_PRESET_ORDER = { "compact", "hybrid", "wide", "folder_tree" }
+local LAYOUT_PRESET_ORDER = { "compact", "hybrid", "wide", "folder_tree", "folder_tree_compact", "folder_tree_horizontal" }
 local LAYOUT_PRESET_LABELS = {
     compact = "Compact",
     hybrid = "Standard",
     wide = "Wide",
-    folder_tree = "Folder Tree"
+    folder_tree = "Folder Tree",
+    folder_tree_compact = "Folder Tree Compact",
+    folder_tree_horizontal = "Folder Tree Horizontal"
 }
 local LAYOUT_PRESET_GAPS = {
     compact = { col = 36, row = 64 },
     hybrid = { col = 60, row = 80 },
     wide = { col = 96, row = 108 },
-    folder_tree = { col = 72, row = 98 }
+    folder_tree = { col = 72, row = 98 },
+    folder_tree_compact = { col = 36, row = 72 },
+    folder_tree_horizontal = { col = 128, row = 76 }
 }
 
 local function NextRouteFilter(v)
@@ -314,7 +321,19 @@ local function FindTrackByGuidLocal(guid)
     return nil
 end
 
-local function InsertPatchbayTrackTemplate(full_path)
+local function RegisterPatchbaySpawnNode(guid, spawn, order)
+    if not guid or guid == "" then return end
+    pending_spawn_nodes = pending_spawn_nodes or {}
+    spawn = spawn or {}
+    pending_spawn_nodes[guid] = {
+        mode = spawn.mode or "visible",
+        screen_x = spawn.screen_x,
+        screen_y = spawn.screen_y,
+        order = order or 1
+    }
+end
+
+local function InsertPatchbayTrackTemplate(full_path, spawn)
     if IsAllLockedCfg(GetConfig()) then return end
     if not FileExists(full_path) then
         r.ShowConsoleMsg("Track template not found: " .. tostring(full_path) .. "\n")
@@ -361,6 +380,9 @@ local function InsertPatchbayTrackTemplate(full_path)
         end
         first_new = FindTrackByGuidLocal(new_guids[1]) or first_new
         if first_new and r.ValidatePtr(first_new, "MediaTrack*") then _G.TRACK = first_new end
+        for i = 1, #new_guids do
+            RegisterPatchbaySpawnNode(new_guids[i], spawn or { mode = "visible" }, i)
+        end
     end
     r.Undo_EndBlock("Patchbay: insert track template", -1)
     r.PreventUIRefresh(-1)
@@ -369,7 +391,7 @@ local function InsertPatchbayTrackTemplate(full_path)
     layout_dirty = true
 end
 
-local function AddPatchbayTrack()
+local function AddPatchbayTrack(spawn)
     if IsAllLockedCfg(GetConfig()) then return end
     local insert_idx = GetPatchbayInsertIndex()
     r.Undo_BeginBlock()
@@ -378,6 +400,7 @@ local function AddPatchbayTrack()
     if tr and r.ValidatePtr(tr, "MediaTrack*") then
         r.SetOnlyTrackSelected(tr)
         _G.TRACK = tr
+        RegisterPatchbaySpawnNode(r.GetTrackGUID(tr), spawn or { mode = "visible" }, 1)
     end
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
@@ -1446,7 +1469,7 @@ local function LayoutRowH(cfg)
 end
 
 function PatchbayLayoutKind(preset)
-    if preset == "folder_tree" then return "folder" end
+    if preset == "folder_tree" or preset == "folder_tree_compact" or preset == "folder_tree_horizontal" then return "folder" end
     return "signal"
 end
 
@@ -1538,6 +1561,93 @@ function PatchbayPlacePendingVisibleNodes(tracks, avail_w, avail_h)
         node_positions[guid] = { x = x, y = y }
     end
     PB.pending_paste_visible_guids = remaining and pending or nil
+    layout_dirty = true
+end
+
+local function ClampPatchbayNodeToVisible(guid, x, y, left, top, right, bottom, pad)
+    x = math.floor((x / GRID) + 0.5) * GRID
+    y = math.floor((y / GRID) + 0.5) * GRID
+    local min_x = left + pad
+    local max_x = right - pad - NodeW()
+    local min_y = top + pad
+    local max_y = bottom - pad - NodeH(guid)
+    if max_x < min_x then
+        x = left + math.max(0, (right - left - NodeW()) * 0.5)
+    elseif x < min_x then
+        x = min_x
+    elseif x > max_x then
+        x = max_x
+    end
+    if max_y < min_y then
+        y = top + math.max(0, (bottom - top - NodeH(guid)) * 0.5)
+    elseif y < min_y then
+        y = min_y
+    elseif y > max_y then
+        y = max_y
+    end
+    return x, y
+end
+
+local function PatchbayPlacePendingSpawnNodes(tracks, origin_x, origin_y, avail_w, avail_h)
+    if not pending_spawn_nodes then return end
+    local spawned = {}
+    local remaining = false
+    for i = 1, #tracks do
+        local guid = tracks[i].guid
+        local spawn = pending_spawn_nodes[guid]
+        if spawn and node_positions[guid] then
+            spawned[#spawned + 1] = { guid = guid, spawn = spawn }
+            pending_spawn_nodes[guid] = nil
+        end
+    end
+    for _, _ in pairs(pending_spawn_nodes) do remaining = true break end
+    if #spawned == 0 then
+        if not remaining then pending_spawn_nodes = nil end
+        return
+    end
+    table.sort(spawned, function(a, b)
+        local ao = a.spawn.order or 1
+        local bo = b.spawn.order or 1
+        if ao ~= bo then return ao < bo end
+        local ta = FindTrackByGuidLocal(a.guid)
+        local tb = FindTrackByGuidLocal(b.guid)
+        return GetTrackIndexLocal(ta) < GetTrackIndexLocal(tb)
+    end)
+    local cfg = GetConfig()
+    local pad = 24
+    local left = (-canvas_offset_x) / canvas_zoom
+    local top = (-canvas_offset_y) / canvas_zoom
+    local right = (avail_w - canvas_offset_x) / canvas_zoom
+    local bottom = (avail_h - canvas_offset_y) / canvas_zoom
+    local col_w = LayoutColW(cfg)
+    local row_h = LayoutRowH(cfg)
+    local visible_w = math.max(1, right - left - pad * 2)
+    local max_cols = math.max(1, math.floor(visible_w / math.max(1, col_w)))
+    local first = spawned[1]
+    local base_x
+    local base_y
+    if first.spawn.mode == "mouse" and first.spawn.screen_x and first.spawn.screen_y then
+        base_x = (first.spawn.screen_x - origin_x - canvas_offset_x) / canvas_zoom - NodeW() * 0.5
+        base_y = (first.spawn.screen_y - origin_y - canvas_offset_y) / canvas_zoom - NodeH(first.guid) * 0.5
+    else
+        base_x = left + math.max(0, (right - left - NodeW()) * 0.5)
+        base_y = top + math.max(0, (bottom - top - NodeH(first.guid)) * 0.5)
+    end
+    for i = 1, #spawned do
+        local guid = spawned[i].guid
+        local col = (i - 1) % max_cols
+        local row = math.floor((i - 1) / max_cols)
+        local x = base_x + col * col_w
+        local y = base_y + row * row_h
+        x, y = ClampPatchbayNodeToVisible(guid, x, y, left, top, right, bottom, pad)
+        node_positions[guid] = { x = x, y = y }
+    end
+    if cfg.patchbay_prevent_overlap ~= false then
+        for i = 1, #spawned do
+            ResolveMovedNodesOverlap(spawned[i].guid, tracks)
+        end
+    end
+    pending_spawn_nodes = remaining and pending_spawn_nodes or nil
     layout_dirty = true
 end
 
@@ -1669,6 +1779,7 @@ local function BuildSnapshotPayload(cfg)
     lines[#lines + 1] = "layout=" .. UrlEncode(EncodeLayout())
     lines[#lines + 1] = "routing_filter_text=" .. UrlEncode(cfg.routing_filter_text or "")
     lines[#lines + 1] = "routing_only_selected=" .. ((cfg.routing_only_selected and 1) or 0)
+    lines[#lines + 1] = "patchbay_selected_with_children=" .. ((cfg.patchbay_selected_with_children and 1) or 0)
     lines[#lines + 1] = "patchbay_only_explicit_routing=" .. ((cfg.patchbay_only_explicit_routing and 1) or 0)
     lines[#lines + 1] = "patchbay_explicit_show_mainsend=" .. ((cfg.patchbay_explicit_show_mainsend and 1) or 0)
     lines[#lines + 1] = "patchbay_show_unrouted=" .. ((cfg.patchbay_show_unrouted and 1) or 0)
@@ -1696,6 +1807,8 @@ local function ApplySnapshotPayload(payload, cfg)
                 cfg.routing_filter_text = UrlDecode(v)
             elseif k == "routing_only_selected" then
                 cfg.routing_only_selected = (v == "1")
+            elseif k == "patchbay_selected_with_children" then
+                cfg.patchbay_selected_with_children = (v == "1")
             elseif k == "patchbay_only_explicit_routing" then
                 cfg.patchbay_only_explicit_routing = (v == "1")
             elseif k == "patchbay_explicit_show_mainsend" then
@@ -1781,10 +1894,188 @@ local function GetCurrentProjectKey()
     return fn or ""
 end
 
+function PatchbayCollectSelectedTreeSet(selected_set)
+    local roots = {}
+    if not selected_set then return {} end
+    local folder_stack = {}
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            local depth = math.floor(r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") or 0)
+            if selected_set[tr] then
+                roots[tr] = true
+                for si = 1, #folder_stack do
+                    if folder_stack[si] then roots[folder_stack[si]] = true end
+                end
+            end
+            if depth > 0 then
+                folder_stack[#folder_stack + 1] = tr
+            elseif depth < 0 then
+                for _ = 1, -depth do
+                    if #folder_stack > 0 then table.remove(folder_stack) end
+                end
+            end
+        end
+    end
+    local out = {}
+    local active_child_depths = {}
+    local depth_level = 0
+    for i = 0, n - 1 do
+        while #active_child_depths > 0 and depth_level < active_child_depths[#active_child_depths] do
+            table.remove(active_child_depths)
+        end
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            local depth = math.floor(r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") or 0)
+            if roots[tr] or #active_child_depths > 0 then out[tr] = true end
+            if roots[tr] and depth > 0 then active_child_depths[#active_child_depths + 1] = depth_level + 1 end
+            depth_level = depth_level + depth
+            if depth_level < 0 then depth_level = 0 end
+        end
+    end
+    return out
+end
+
+function PatchbayFilterMatchesName(filter_text, name)
+    local filter = ((filter_text or "")):lower()
+    if filter == "" then return true end
+    local lower_name = ((name or "")):lower()
+    local has_token = false
+    for group in filter:gmatch("[^,;]+") do
+        local group_matches = true
+        local group_has_token = false
+        for token in group:gmatch("[^+]+") do
+            token = token:match("^%s*(.-)%s*$")
+            if token ~= "" then
+                has_token = true
+                group_has_token = true
+                if lower_name:find(token, 1, true) == nil then
+                    group_matches = false
+                    break
+                end
+            end
+        end
+        if group_has_token and group_matches then return true end
+    end
+    return not has_token
+end
+
+function PatchbayBuildTcpMirrorVisibleSet(tracks)
+    local visible = {}
+    if tracks then
+        for i = 1, #tracks do
+            local tr = tracks[i]
+            if tr and not tr.is_master and tr.guid then
+                visible[tr.guid] = true
+            end
+        end
+    end
+    local stack = {}
+    local total_tracks = r.CountTracks(0)
+    for i = 0, total_tracks - 1 do
+        local track = r.GetTrack(0, i)
+        if track and r.ValidatePtr(track, "MediaTrack*") then
+            local guid = r.GetTrackGUID(track)
+            if visible[guid] then
+                for si = 1, #stack do
+                    visible[stack[si]] = true
+                end
+            end
+            local depth = math.floor(r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") or 0)
+            if depth > 0 then
+                stack[#stack + 1] = guid
+            elseif depth < 0 then
+                for _ = 1, -depth do
+                    if #stack > 0 then table.remove(stack) end
+                end
+            end
+        end
+    end
+    return visible
+end
+
+function PatchbaySnapshotTcpMirrorTrack(track, guid)
+    if not track or not guid or guid == MASTER_GUID then return end
+    if not r.ValidatePtr(track, "MediaTrack*") then return end
+    PB.tcp_mirror_original = PB.tcp_mirror_original or {}
+    if PB.tcp_mirror_original[guid] == nil then
+        PB.tcp_mirror_original[guid] = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1 and 1 or 0
+    end
+end
+
+function PatchbayApplyTcpMirror(tracks)
+    if PB.tcp_mirror_enabled ~= true then return end
+    local visible = PatchbayBuildTcpMirrorVisibleSet(tracks)
+    local changed = false
+    r.PreventUIRefresh(1)
+    local total_tracks = r.CountTracks(0)
+    for i = 0, total_tracks - 1 do
+        local track = r.GetTrack(0, i)
+        if track and r.ValidatePtr(track, "MediaTrack*") then
+            local guid = r.GetTrackGUID(track)
+            PatchbaySnapshotTcpMirrorTrack(track, guid)
+            local target = visible[guid] and 1 or 0
+            if r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") ~= target then
+                r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", target)
+                changed = true
+            end
+        end
+    end
+    r.PreventUIRefresh(-1)
+    if changed then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+    end
+end
+
+function PatchbayRestoreTcpMirror()
+    if not PB.tcp_mirror_original then
+        PB.tcp_mirror_enabled = false
+        return
+    end
+    local changed = false
+    r.PreventUIRefresh(1)
+    local total_tracks = r.CountTracks(0)
+    for i = 0, total_tracks - 1 do
+        local track = r.GetTrack(0, i)
+        if track and r.ValidatePtr(track, "MediaTrack*") then
+            local guid = r.GetTrackGUID(track)
+            local original = PB.tcp_mirror_original[guid]
+            if original ~= nil and r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") ~= original then
+                r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", original)
+                changed = true
+            end
+        end
+    end
+    r.PreventUIRefresh(-1)
+    PB.tcp_mirror_enabled = false
+    PB.tcp_mirror_original = nil
+    if changed then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+    end
+end
+
+function PatchbaySetTcpMirrorEnabled(enabled, tracks)
+    if enabled then
+        if PB.tcp_mirror_enabled ~= true then
+            PB.tcp_mirror_enabled = true
+            PB.tcp_mirror_original = {}
+        end
+        if tracks then PatchbayApplyTcpMirror(tracks) end
+    else
+        PatchbayRestoreTcpMirror()
+    end
+end
+
+if r.atexit then r.atexit(PatchbayRestoreTcpMirror) end
+
 local function CollectVisibleTracks()
     local cfg = GetConfig()
-    local filter = ((cfg.routing_filter_text or "")):lower()
+    local filter = cfg.routing_filter_text or ""
     local only_selected = cfg.routing_only_selected
+    local selected_with_children = cfg.patchbay_selected_with_children == true
     local only_explicit = cfg.patchbay_only_explicit_routing == true
     local explicit_show_mainsend = cfg.patchbay_explicit_show_mainsend == true
     local show_unrouted = cfg.patchbay_show_unrouted == true
@@ -1793,8 +2084,9 @@ local function CollectVisibleTracks()
     local folder_stack = {}
     local selected_tracks = {}
     local selected_set = {}
+    local selected_child_set = nil
 
-    if only_selected then
+    if only_selected or selected_with_children then
         local sel_count = r.CountSelectedTracks(0)
         for i = 0, sel_count - 1 do
             local st = r.GetSelectedTrack(0, i)
@@ -1811,6 +2103,18 @@ local function CollectVisibleTracks()
             selected_set[TRACK_SEL] = true
             selected_tracks[#selected_tracks + 1] = TRACK_SEL
         end
+    end
+    if selected_with_children and #selected_tracks > 0 then
+        selected_child_set = PatchbayCollectSelectedTreeSet(selected_set)
+        if selected_set[master] then selected_child_set[master] = true end
+        selected_set = selected_child_set
+        selected_tracks = {}
+        local total_tracks = r.CountTracks(0)
+        for i = 0, total_tracks - 1 do
+            local st = r.GetTrack(0, i)
+            if st and selected_set[st] then selected_tracks[#selected_tracks + 1] = st end
+        end
+        if selected_set[master] then selected_tracks[#selected_tracks + 1] = master end
     end
 
     local function TrackHasExplicitSend(src, dst)
@@ -1909,9 +2213,9 @@ local function CollectVisibleTracks()
         else
             has_routing = (has_explicit or mainsend)
         end
-        local match_filter = filter == "" or name:lower():find(filter, 1, true) ~= nil
+        local match_filter = PatchbayFilterMatchesName(filter, name)
         local match_sel = true
-        if only_selected and #selected_tracks > 0 then
+        if (only_selected or selected_with_children) and #selected_tracks > 0 then
             if selected_set[t] then
                 match_sel = true
             else
@@ -1942,7 +2246,7 @@ local function CollectVisibleTracks()
                 end
             end
         end
-        if has_routing and match_filter and match_sel then
+        if (has_routing or (selected_with_children and selected_child_set and selected_child_set[t] == true)) and match_filter and match_sel then
             if mainsend then visible_mainsend = true end
             list[#list + 1] = {
                 track = t,
@@ -1981,9 +2285,9 @@ local function CollectVisibleTracks()
             end
         end
     end
-    local master_match_filter = filter == "" or ("master"):find(filter, 1, true) ~= nil
+    local master_match_filter = PatchbayFilterMatchesName(filter, "master")
     local master_match_sel = true
-    if only_selected and #selected_tracks > 0 then
+    if (only_selected or selected_with_children) and #selected_tracks > 0 then
         if selected_set[master] then
             master_match_sel = true
         else
@@ -2022,6 +2326,7 @@ local function CollectVisibleTracks()
     else
         master_has_routing = (any_mainsend or nmsnd > 0 or nmrec > 0)
     end
+    if selected_with_children and selected_set[master] then master_has_routing = true end
     local show_master = cfg.patchbay_show_master ~= false
     if show_master and master_has_routing and master_match_filter and master_match_sel then
         list[#list + 1] = { track = master, idx = -1, name = "MASTER", guid = MASTER_GUID, is_master = true }
@@ -2251,6 +2556,7 @@ end
 function PatchbayAutoLayoutFolderTree(tracks, cfg)
     local col_w = LayoutColW(cfg)
     local row_h = LayoutRowH(cfg)
+    local preset = GetLayoutPreset(cfg)
     local old_positions = node_positions
     local by_guid = {}
     local children = {}
@@ -2307,17 +2613,58 @@ function PatchbayAutoLayoutFolderTree(tracks, cfg)
     node_positions = {}
     local max_x = 40
     local max_y = 40
-    local function place_tree(tr, depth, left_leaf)
-        local leaves = leaf_counts[tr.guid] or 1
-        local x = 40 + (left_leaf + ((leaves - 1) * 0.5)) * col_w
-        local y = 40 + depth * row_h
+    local function place_node(tr, x, y)
         if pinned_nodes[tr.guid] and old_positions[tr.guid] then
             node_positions[tr.guid] = { x = old_positions[tr.guid].x, y = old_positions[tr.guid].y }
         else
             node_positions[tr.guid] = { x = x, y = y }
         end
-        if x > max_x then max_x = x end
-        if y > max_y then max_y = y end
+        local p = node_positions[tr.guid]
+        if p.x > max_x then max_x = p.x end
+        if p.y > max_y then max_y = p.y end
+    end
+    if preset == "folder_tree_horizontal" then
+        local function place_tree_horizontal(tr, depth, top_leaf)
+            local leaves = leaf_counts[tr.guid] or 1
+            local x = 40 + depth * col_w
+            local y = 40 + (top_leaf + ((leaves - 1) * 0.5)) * row_h
+            place_node(tr, x, y)
+            local child_top = top_leaf
+            local list = children[tr.guid] or {}
+            for i = 1, #list do
+                place_tree_horizontal(list[i], depth + 1, child_top)
+                child_top = child_top + (leaf_counts[list[i].guid] or 1)
+            end
+        end
+        local leaf_cursor = 0
+        for i = 1, #folder_roots do
+            place_tree_horizontal(folder_roots[i], 0, leaf_cursor)
+            leaf_cursor = leaf_cursor + (leaf_counts[folder_roots[i].guid] or 1) + 1
+        end
+        local loose_x = (#folder_roots > 0) and (max_x + col_w) or 40
+        for i = 1, #loose_roots do
+            place_node(loose_roots[i], loose_x, 40 + (i - 1) * row_h)
+        end
+        if master_entry then
+            local mx = max_x + col_w
+            local my = math.max(40, ((max_y - 40) * 0.5) + 40)
+            if pinned_nodes[MASTER_GUID] and old_positions[MASTER_GUID] then
+                node_positions[MASTER_GUID] = { x = old_positions[MASTER_GUID].x, y = old_positions[MASTER_GUID].y }
+            else
+                node_positions[MASTER_GUID] = { x = mx, y = my }
+            end
+        end
+        canvas_offset_x = 0
+        canvas_offset_y = 0
+        canvas_zoom = 1.0
+        layout_dirty = true
+        return
+    end
+    local function place_tree(tr, depth, left_leaf)
+        local leaves = leaf_counts[tr.guid] or 1
+        local x = 40 + (left_leaf + ((leaves - 1) * 0.5)) * col_w
+        local y = 40 + depth * row_h
+        place_node(tr, x, y)
         local child_left = left_leaf
         local list = children[tr.guid] or {}
         for i = 1, #list do
@@ -2340,13 +2687,7 @@ function PatchbayAutoLayoutFolderTree(tracks, cfg)
     for i = 1, #loose_roots do
         local tr = loose_roots[i]
         local y = loose_y + (i - 1) * row_h
-        if pinned_nodes[tr.guid] and old_positions[tr.guid] then
-            node_positions[tr.guid] = { x = old_positions[tr.guid].x, y = old_positions[tr.guid].y }
-        else
-            node_positions[tr.guid] = { x = loose_x, y = y }
-        end
-        if loose_x > max_x then max_x = loose_x end
-        if y > max_y then max_y = y end
+        place_node(tr, loose_x, y)
     end
     if master_entry then
         local mx = max_x + col_w
@@ -2387,25 +2728,165 @@ local function EnsurePositions(tracks)
     end
 end
 
+function SnapNodeToGrid(guid)
+    local p = node_positions[guid]
+    if not p or pinned_nodes[guid] then return false end
+    local nx = math.floor((p.x / GRID) + 0.5) * GRID
+    local ny = math.floor((p.y / GRID) + 0.5) * GRID
+    if nx == p.x and ny == p.y then return false end
+    p.x = nx
+    p.y = ny
+    return true
+end
+
 local function AlignVisibleNodesToGrid(tracks)
     if not tracks or #tracks == 0 then return end
     local moved = false
     for i = 1, #tracks do
         local g = tracks[i].guid
-        local p = node_positions[g]
-        if p and not pinned_nodes[g] then
-            local nx = math.floor((p.x / GRID) + 0.5) * GRID
-            local ny = math.floor((p.y / GRID) + 0.5) * GRID
-            if nx ~= p.x or ny ~= p.y then
-                p.x = nx
-                p.y = ny
-                moved = true
-            end
-        end
+        if SnapNodeToGrid(g) then moved = true end
     end
     if moved then
         layout_dirty = true
     end
+end
+
+function SnapMovedNodesToGrid(guid)
+    if not guid then return false end
+    local moved = false
+    if pb_selected_set[guid] then
+        for sg, _ in pairs(pb_selected_set) do
+            if SnapNodeToGrid(sg) then moved = true end
+        end
+    else
+        moved = SnapNodeToGrid(guid)
+    end
+    if moved then layout_dirty = true end
+    return moved
+end
+
+function PatchbayMovedNodeGuids(guid)
+    local guids = {}
+    if not guid then return guids end
+    if pb_selected_set[guid] then
+        for sg, _ in pairs(pb_selected_set) do
+            if node_positions[sg] and not pinned_nodes[sg] then
+                guids[#guids + 1] = sg
+            end
+        end
+    elseif node_positions[guid] and not pinned_nodes[guid] then
+        guids[#guids + 1] = guid
+    end
+    return guids
+end
+
+function PatchbayNodeLayoutRect(guid, dx, dy)
+    local p = node_positions[guid]
+    if not p then return nil end
+    dx = dx or 0
+    dy = dy or 0
+    local x1 = p.x + dx
+    local y1 = p.y + dy
+    return x1, y1, x1 + NodeW(), y1 + NodeH(guid)
+end
+
+function PatchbayMovedGroupRect(guids, dx, dy)
+    local min_x, min_y, max_x, max_y = nil, nil, nil, nil
+    for i = 1, #guids do
+        local x1, y1, x2, y2 = PatchbayNodeLayoutRect(guids[i], dx, dy)
+        if x1 then
+            if not min_x then
+                min_x, min_y, max_x, max_y = x1, y1, x2, y2
+            else
+                if x1 < min_x then min_x = x1 end
+                if y1 < min_y then min_y = y1 end
+                if x2 > max_x then max_x = x2 end
+                if y2 > max_y then max_y = y2 end
+            end
+        end
+    end
+    return min_x, min_y, max_x, max_y
+end
+
+function PatchbayRectsOverlap(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2, pad)
+    return ax1 < bx2 + pad and ax2 > bx1 - pad and ay1 < by2 + pad and ay2 > by1 - pad
+end
+
+function PatchbayOffsetHasOverlap(guids, moving_set, tracks, dx, dy, pad)
+    local ax1, ay1, ax2, ay2 = PatchbayMovedGroupRect(guids, dx, dy)
+    if not ax1 then return false end
+    for i = 1, #tracks do
+        local guid = tracks[i].guid
+        if not moving_set[guid] then
+            local bx1, by1, bx2, by2 = PatchbayNodeLayoutRect(guid, 0, 0)
+            if bx1 and PatchbayRectsOverlap(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2, pad) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function PatchbayCollectOverlapTracks(visible_tracks)
+    local out = {}
+    local seen = {}
+    local function add_guid(guid)
+        if guid and node_positions[guid] and not seen[guid] then
+            seen[guid] = true
+            out[#out + 1] = { guid = guid }
+        end
+    end
+    if visible_tracks then
+        for i = 1, #visible_tracks do add_guid(visible_tracks[i].guid) end
+    end
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr then add_guid(r.GetTrackGUID(tr)) end
+    end
+    add_guid(MASTER_GUID)
+    return out
+end
+
+function ResolveMovedNodesOverlap(guid, tracks)
+    if not guid or not tracks then return false end
+    tracks = PatchbayCollectOverlapTracks(tracks)
+    local guids = PatchbayMovedNodeGuids(guid)
+    if #guids == 0 then return false end
+    local moving_set = {}
+    for i = 1, #guids do moving_set[guids[i]] = true end
+    local pad = 8
+    if not PatchbayOffsetHasOverlap(guids, moving_set, tracks, 0, 0, pad) then return false end
+    local cfg = GetConfig()
+    local step = ((cfg and cfg.patchbay_snap_to_grid == true) and GRID) or 20
+    local best_dx, best_dy, best_d2 = nil, nil, nil
+    for ring = 1, 40 do
+        for gx = -ring, ring do
+            for gy = -ring, ring do
+                if math.abs(gx) == ring or math.abs(gy) == ring then
+                    local dx = gx * step
+                    local dy = gy * step
+                    if not PatchbayOffsetHasOverlap(guids, moving_set, tracks, dx, dy, pad) then
+                        local d2 = dx * dx + dy * dy
+                        if not best_d2 or d2 < best_d2 then
+                            best_dx, best_dy, best_d2 = dx, dy, d2
+                        end
+                    end
+                end
+            end
+        end
+        if best_dx then break end
+    end
+    if not best_dx then return false end
+    for i = 1, #guids do
+        local p = node_positions[guids[i]]
+        if p then
+            p.x = p.x + best_dx
+            p.y = p.y + best_dy
+        end
+    end
+    layout_dirty = true
+    return true
 end
 
 GetSendIndexLocal = function(src, dst)
@@ -3228,6 +3709,8 @@ local function RenderViewHelpWindow()
         RenderViewHelpItem(ctx, "Folder links", "Shows or hides the visual parent-to-child folder relationship lines.")
         RenderViewHelpItem(ctx, "Send type badges", "Shows audio, sidechain, and MIDI badges on send cables.")
         RenderViewHelpItem(ctx, "Focus selected", "Limits the view to selected tracks and their direct routing neighbors.")
+        RenderViewHelpItem(ctx, "Focus selected tree", "Focuses the complete folder tree around selected tracks, plus routing neighbors.")
+        RenderViewHelpItem(ctx, "Mirror view to TCP", "Temporarily mirrors the Patchbay visible track set to the TCP. The original TCP visibility is restored when the option is disabled or the script exits.")
         RenderViewHelpItem(ctx, "Solo path", "Visually emphasizes the current selected track path and dims unrelated visible nodes and cables.")
     end
     r.ImGui_End(ctx)
@@ -3816,6 +4299,106 @@ local function RemoveSelectedFolderLinks(folder_link)
     return changed
 end
 
+function PatchbayPopupTrackLabel(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return "Track" end
+    if track == r.GetMasterTrack(0) then return "MASTER" end
+    local idx = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 0)
+    local _, name = r.GetTrackName(track)
+    if idx > 0 then return string.format("#%d %s", idx, name or "") end
+    return name or "Track"
+end
+
+function CollectPinConnectionRoutes(track, guid, side)
+    local routes = {}
+    local master_track = r.GetMasterTrack(0)
+    if side == "out" then
+        if not track or not r.ValidatePtr(track, "MediaTrack*") then return routes end
+        local nsnd = r.GetTrackNumSends(track, 0)
+        for idx = 0, nsnd - 1 do
+            local dst = r.GetTrackSendInfo_Value(track, 0, idx, "P_DESTTRACK")
+            if dst and r.ValidatePtr(dst, "MediaTrack*") then
+                routes[#routes + 1] = { src = track, dst = dst, idx = idx, is_main = false, label = "To " .. PatchbayPopupTrackLabel(dst) }
+            end
+        end
+        if r.GetMediaTrackInfo_Value(track, "B_MAINSEND") == 1 then
+            routes[#routes + 1] = { src = track, dst = master_track, idx = -1, is_main = true, label = "To MASTER" }
+        end
+    elseif side == "in" then
+        if guid == MASTER_GUID or track == master_track then
+            local n = r.CountTracks(0)
+            for i = 0, n - 1 do
+                local src = r.GetTrack(0, i)
+                if src and r.ValidatePtr(src, "MediaTrack*") and r.GetMediaTrackInfo_Value(src, "B_MAINSEND") == 1 then
+                    routes[#routes + 1] = { src = src, dst = master_track, idx = -1, is_main = true, label = "From " .. PatchbayPopupTrackLabel(src) }
+                end
+            end
+        else
+            if not track or not r.ValidatePtr(track, "MediaTrack*") then return routes end
+            local n = r.CountTracks(0)
+            for i = 0, n - 1 do
+                local src = r.GetTrack(0, i)
+                if src and r.ValidatePtr(src, "MediaTrack*") then
+                    local nsnd = r.GetTrackNumSends(src, 0)
+                    for idx = 0, nsnd - 1 do
+                        local dst = r.GetTrackSendInfo_Value(src, 0, idx, "P_DESTTRACK")
+                        if dst == track then
+                            routes[#routes + 1] = { src = src, dst = track, idx = idx, is_main = false, label = "From " .. PatchbayPopupTrackLabel(src) }
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return routes
+end
+
+function OpenPinRouteContext(track, guid, side)
+    PB.pin_popup_track = track
+    PB.pin_popup_guid = guid
+    PB.pin_popup_side = side
+    local routes = CollectPinConnectionRoutes(track, guid, side)
+    if #routes == 1 then
+        local route = routes[1]
+        right_click_send = { src = route.src, dst = route.dst, idx = route.idx, is_main = route.is_main }
+        PB.pin_popup_track = nil
+        PB.pin_popup_guid = nil
+        PB.pin_popup_side = nil
+        return true
+    end
+    return false
+end
+
+function RenderPinConnectionPopup()
+    local ctx = GetCtx()
+    if not PB.pin_popup_guid or not PB.pin_popup_side then return end
+    if r.ImGui_BeginPopup(ctx, "PatchbayPinPopup") then
+        local routes = CollectPinConnectionRoutes(PB.pin_popup_track, PB.pin_popup_guid, PB.pin_popup_side)
+        local title = PB.pin_popup_side == "out" and "Outgoing routes" or "Incoming routes"
+        r.ImGui_TextDisabled(ctx, title)
+        r.ImGui_Separator(ctx)
+        if #routes == 0 then
+            r.ImGui_TextDisabled(ctx, PB.pin_popup_side == "out" and "No outgoing sends." or "No incoming sends.")
+        else
+            for i = 1, #routes do
+                local route = routes[i]
+                if r.ImGui_Selectable(ctx, route.label) then
+                    right_click_send = { src = route.src, dst = route.dst, idx = route.idx, is_main = route.is_main }
+                    PB.pin_popup_track = nil
+                    PB.pin_popup_guid = nil
+                    PB.pin_popup_side = nil
+                    PB.open_send_popup_from_pin = true
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+            end
+        end
+        r.ImGui_EndPopup(ctx)
+    else
+        PB.pin_popup_track = nil
+        PB.pin_popup_guid = nil
+        PB.pin_popup_side = nil
+    end
+end
+
 local function RenderRightClickPopup()
     local ctx = GetCtx()
     local cfg = GetConfig()
@@ -4232,6 +4815,15 @@ function ShowRoutingPatchbay()
                 AlignVisibleNodesToGrid(cur_tracks)
             end
         end
+        local snap_to_grid = cfg.patchbay_snap_to_grid == true
+        if r.ImGui_Selectable(ctx, "Snap", snap_to_grid) then
+            cfg.patchbay_snap_to_grid = not snap_to_grid
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        if r.ImGui_Selectable(ctx, "Prevent overlap", cfg.patchbay_prevent_overlap ~= false) then
+            cfg.patchbay_prevent_overlap = not (cfg.patchbay_prevent_overlap ~= false)
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
         r.ImGui_EndPopup(ctx)
     end
     r.ImGui_SameLine(ctx)
@@ -4309,7 +4901,20 @@ function ShowRoutingPatchbay()
         local changed_focus_selected, new_focus_selected = r.ImGui_Checkbox(ctx, "Focus selected", focus_selected)
         if changed_focus_selected then
             cfg.routing_only_selected = new_focus_selected
+            if new_focus_selected then cfg.patchbay_selected_with_children = false end
             if _G.SaveConfig then _G.SaveConfig() end
+        end
+        local selected_with_children = cfg.patchbay_selected_with_children == true
+        local changed_selected_with_children, new_selected_with_children = r.ImGui_Checkbox(ctx, "Focus selected tree", selected_with_children)
+        if changed_selected_with_children then
+            cfg.patchbay_selected_with_children = new_selected_with_children
+            if new_selected_with_children then cfg.routing_only_selected = false end
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        local tcp_mirror = PB.tcp_mirror_enabled == true
+        local changed_tcp_mirror, new_tcp_mirror = r.ImGui_Checkbox(ctx, "Mirror view to TCP", tcp_mirror)
+        if changed_tcp_mirror then
+            PatchbaySetTcpMirrorEnabled(new_tcp_mirror)
         end
         local solo_path = cfg.patchbay_solo_path == true
         local changed_solo_path, new_solo_path = r.ImGui_Checkbox(ctx, "Solo path", solo_path)
@@ -4503,7 +5108,7 @@ function ShowRoutingPatchbay()
         if r.ImGui_Selectable(ctx, "Browse template...") then
             local ok, path = r.GetUserFileNameForRead((root or "") .. "/", "Select track template", ".RTrackTemplate")
             if ok and path and path ~= "" then
-                InsertPatchbayTrackTemplate(path)
+                InsertPatchbayTrackTemplate(path, { mode = "visible" })
                 r.ImGui_CloseCurrentPopup(ctx)
             end
         end
@@ -4549,7 +5154,7 @@ function ShowRoutingPatchbay()
             for i = 1, #templates do
                 local item = templates[i]
                 if r.ImGui_Selectable(ctx, item.label .. "##patchbay_template_" .. i) then
-                    InsertPatchbayTrackTemplate(item.full_path)
+                    InsertPatchbayTrackTemplate(item.full_path, { mode = "visible" })
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
                 if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, item.full_path) end
@@ -4571,6 +5176,9 @@ function ShowRoutingPatchbay()
             PatchbayCopySelectedTracks()
         elseif PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_V) then
             PatchbayPasteTracks()
+        elseif r.ImGui_Key_N and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_N) then
+            local spawn_x, spawn_y = r.ImGui_GetMousePos(ctx)
+            AddPatchbayTrack({ mode = "mouse", screen_x = spawn_x, screen_y = spawn_y })
         end
     end
 
@@ -4584,7 +5192,7 @@ function ShowRoutingPatchbay()
         r.ImGui_SameLine(ctx)
     end
     if TextMenuButton(ctx, "##patchbay_menu_add_track", "+", add_btn_w) then
-        AddPatchbayTrack()
+        AddPatchbayTrack({ mode = "visible" })
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add Track") end
 
@@ -4912,6 +5520,7 @@ function ShowRoutingPatchbay()
     end
 
     local tracks = CollectVisibleTracks()
+    PatchbayApplyTcpMirror(tracks)
     if #tracks == 0 then
         r.ImGui_DrawList_AddText(draw_list, origin_x + 12, origin_y + 12, 0xAAAAAAFF, "No tracks match filter.")
         r.ImGui_EndChild(ctx)
@@ -4921,6 +5530,7 @@ function ShowRoutingPatchbay()
 
     EnsurePositions(tracks)
     PatchbayPlacePendingVisibleNodes(tracks, avail_w, avail_h)
+    PatchbayPlacePendingSpawnNodes(tracks, origin_x, origin_y, avail_w, avail_h)
 
     if pending_fit_view then
         pending_fit_view = false
@@ -5271,7 +5881,46 @@ function ShowRoutingPatchbay()
 
     local request_open_popup = false
     local request_open_node_popup = false
+    local request_open_pin_popup = false
     local node_right_click_consumed = false
+    local right_click_pin = nil
+
+    if not fx_schema_blocks_mouse and r.ImGui_IsMouseClicked(ctx, 1) then
+        local pin_r_hit = PIN_R * canvas_zoom
+        if pin_r_hit < 4 then pin_r_hit = 4 end
+        local hit_r = pin_r_hit + 4
+        local hit_r2 = hit_r * hit_r
+        for i = 1, #tracks do
+            local tr = tracks[i]
+            local ix, iy = PinPos(tr.guid, "in")
+            if ix then
+                local ddx = mx - ix
+                local ddy = my - iy
+                if ddx * ddx + ddy * ddy <= hit_r2 then
+                    right_click_pin = { track = tr.track, guid = tr.guid, side = "in" }
+                    break
+                end
+            end
+            if not tr.is_master then
+                local ox, oy = PinPos(tr.guid, "out")
+                if ox then
+                    local ddx = mx - ox
+                    local ddy = my - oy
+                    if ddx * ddx + ddy * ddy <= hit_r2 then
+                        right_click_pin = { track = tr.track, guid = tr.guid, side = "out" }
+                        break
+                    end
+                end
+            end
+        end
+        if right_click_pin then
+            if OpenPinRouteContext(right_click_pin.track, right_click_pin.guid, right_click_pin.side) then
+                request_open_popup = true
+            else
+                request_open_pin_popup = true
+            end
+        end
+    end
 
     for i = 1, #tracks do
         local tr = tracks[i]
@@ -5527,7 +6176,10 @@ function ShowRoutingPatchbay()
             r.ImGui_InvisibleButton(ctx, "##body", NodeW() * canvas_zoom, NodeH(g) * canvas_zoom)
             local body_active = r.ImGui_IsItemActive(ctx)
             local body_hovered = r.ImGui_IsItemHovered(ctx)
-            if not fx_schema_blocks_mouse and body_hovered and not node_control_hit and r.ImGui_IsMouseClicked(ctx, 1) then
+            if canvas_zoom < 0.70 and not fx_schema_blocks_mouse and body_hovered and not node_control_hit then
+                r.ImGui_SetTooltip(ctx, label)
+            end
+            if not fx_schema_blocks_mouse and not right_click_pin and body_hovered and not node_control_hit and r.ImGui_IsMouseClicked(ctx, 1) then
                 node_right_click_consumed = true
                 if not is_master_node then
                     node_popup_track = tr.track
@@ -5723,7 +6375,7 @@ function ShowRoutingPatchbay()
             if not fx_schema_blocks_mouse and r.ImGui_IsItemHovered(ctx) then
                 hovered_input_guid = g
                 r.ImGui_DrawList_AddCircle(draw_list, in_x, in_y, pin_r + 2, 0xFFFFFFFF, nil, 2)
-                r.ImGui_SetTooltip(ctx, PatchbayBuildPinTooltip(tr, "in", tracks, guid_to))
+                r.ImGui_SetTooltip(ctx, PatchbayBuildPinTooltip(tr, "in", tracks, guid_to) .. "\nRight-click: route settings")
             end
 
             if not is_master_node then
@@ -5731,7 +6383,7 @@ function ShowRoutingPatchbay()
                 r.ImGui_InvisibleButton(ctx, "##pin_out", pin_r * 2, pin_r * 2)
                 if not fx_schema_blocks_mouse and r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_DrawList_AddCircle(draw_list, out_x, out_y, pin_r + 2, 0xFFFFFFFF, nil, 2)
-                    r.ImGui_SetTooltip(ctx, PatchbayBuildPinTooltip(tr, "out", tracks, guid_to))
+                    r.ImGui_SetTooltip(ctx, PatchbayBuildPinTooltip(tr, "out", tracks, guid_to) .. "\nRight-click: route settings")
                 end
                 if not fx_schema_blocks_mouse and r.ImGui_IsItemActive(ctx) and not all_locked then
                     if not pending_connection and not pending_folder_connection then
@@ -5928,6 +6580,12 @@ function ShowRoutingPatchbay()
         pb_press_dragged = false
         pending_folder_connection = nil
         if dragging_node_guid then
+            if cfg.patchbay_snap_to_grid == true then
+                SnapMovedNodesToGrid(dragging_node_guid)
+            end
+            if cfg.patchbay_prevent_overlap ~= false then
+                ResolveMovedNodesOverlap(dragging_node_guid, tracks)
+            end
             dragging_node_guid = nil
             SaveLayout()
         end
@@ -5951,8 +6609,16 @@ function ShowRoutingPatchbay()
     if request_open_popup then
         r.ImGui_OpenPopup(ctx, "PatchbaySendPopup")
     end
+    if request_open_pin_popup then
+        r.ImGui_OpenPopup(ctx, "PatchbayPinPopup")
+    end
     if request_open_node_popup then
         r.ImGui_OpenPopup(ctx, "PatchbayNodePopup")
+    end
+    RenderPinConnectionPopup()
+    if PB.open_send_popup_from_pin then
+        r.ImGui_OpenPopup(ctx, "PatchbaySendPopup")
+        PB.open_send_popup_from_pin = false
     end
     RenderRightClickPopup()
     RenderNodePopup()

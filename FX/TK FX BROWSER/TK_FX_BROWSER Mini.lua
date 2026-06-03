@@ -1,8 +1,22 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.0.6
+-- @version 1.0.8
 -- @changelog:
 --[[ 
+    v1.0.8:
+        + Patchbay: added pin right-click route context for send/receive settings and master-send disconnects.
+        + Patchbay: added Layout > Snap to grid and Layout > Prevent overlap options for node positioning.
+        + Patchbay: improved new-node and dragged-node placement to avoid accidentally hiding tracks behind overlapping nodes.
+        + Patchbay: added Ctrl+N track creation at the mouse position with visible placement for newly added nodes.
+        + Patchbay: added View > Focus selected tree to show the complete folder tree around selected tracks with routing neighbors.
+        + Patchbay: added zoomed-out node name tooltips.
+        + Patchbay: added OR/AND track filtering with comma and plus separators.
+        + Patchbay: added View > Mirror view to TCP with session restore of original TCP visibility.
+
+    v1.0.7:
+        + Screenshot matching: improved x86/x86 bridged, Mono/Stereo, sanitized underscore and manufacturer-prefix fallbacks.
+        + Screenshot capture: fixed cache/index refresh after new captures and avoids logging success for empty/missing PNG files.
+
     v1.0.6:
         + Patchbay: added master-route handling in bulk routing and node context actions.
         + Patchbay: added node context Connect to actions for tracks and MASTER.
@@ -777,6 +791,7 @@ _search_debounce_ms = 120
 
 function MarkScreenshotsDirty()
     _screenshots_dirty = true
+    _last_screenshot_signature = nil
 end
 
 function RequestClearScreenshotCache()
@@ -1371,6 +1386,7 @@ function SetDefaultConfig()
         routing_group_by_folder = false,
         routing_hubs_show_all_tracks = false,
         patchbay_only_explicit_routing = false,
+        patchbay_selected_with_children = false,
         patchbay_show_folder_links = true,
         patchbay_show_send_type_badges = true,
         patchbay_cable_shop_post_fader_color = 0x4FB0C8FF,
@@ -1411,6 +1427,8 @@ function SetDefaultConfig()
         patchbay_cable_shop_phase_visible = true,
         patchbay_cable_shop_user_presets = "",
         patchbay_node_width = 180,
+        patchbay_snap_to_grid = false,
+        patchbay_prevent_overlap = true,
         selected_font = 1,  -- 1 = Arial (eerste in de fonts array)
         font_size = 11,  -- Default font size
         -- Custom folder font settings
@@ -3168,12 +3186,63 @@ function StripX86Markers(name)
 
     local original = name
     name = name
-        :gsub('%s*[%(%[]x86[^%]%)]*[%]%)]','')    
-        :gsub('[%s%-]+x86[%s%-]*bridged',' ')      
-        :gsub('[%s%-]x86[%s%-]',' ')               
-        :gsub('x86%s*:%s*','')                     
+        :gsub('%s*[%(%[][xX]86[^%]%)]*[%]%)]','')    
+        :gsub('%s*[%(%[][xX]64[^%]%)]*[%]%)]','')    
+        :gsub('^[_%s%-:]*[xX]86[_%s%-]*[Bb]ridged[_%s%-:]*','')      
+        :gsub('[_%s%-:]+[xX]86[_%s%-]*[Bb]ridged[_%s%-:]*',' ')      
+        :gsub('^[_%s%-:]*[xX]64[_%s%-]*[Bb]ridged[_%s%-:]*','')      
+        :gsub('[_%s%-:]+[xX]64[_%s%-]*[Bb]ridged[_%s%-:]*',' ')      
+        :gsub('[_%s%-]+[xX]86[_%s%-]*$','')               
+        :gsub('^[_%s%-]*[xX]86[_%s%-]+','')               
+        :gsub('[_%s%-]+[xX]86[_%s%-]+',' ')               
+        :gsub('[_%s%-]+[xX]64[_%s%-]*$','')               
+        :gsub('^[_%s%-]*[xX]64[_%s%-]+','')               
+        :gsub('[_%s%-]+[xX]64[_%s%-]+',' ')               
+        :gsub('^[xX]86%s*:%s*','')                     
+        :gsub('^[xX]64%s*:%s*','')                     
     
     strip_x86_cache[original] = name
+    return name
+end
+
+function StripTrailingPluginTag(name)
+    if not name then return '' end
+    name = name:gsub('%s*%([^()]+%)%s*$', '')
+    name = name:gsub('%s*%[[^%[%]]+%]%s*$', '')
+    name = name:gsub('%s*%{[^{}]+%}%s*$', '')
+    name = name:gsub('[_%s]+_[^_]+_%s*$', '')
+    return name
+end
+
+function StripChannelTag(name)
+    if not name then return '' end
+    name = name:gsub('%s*%([Mm]ono%)', '')
+    name = name:gsub('%s*%([Ss]tereo%)', '')
+    name = name:gsub('[_%s]+_[Mm]ono_', ' ')
+    name = name:gsub('[_%s]+_[Ss]tereo_', ' ')
+    return name
+end
+
+function StripRedundantLeadingTag(name)
+    if not name then return '' end
+    local prefix, body = name:match('^([Vv][Ss][Tt]3[Ii]?[%s_:%-]+)(.*)$')
+    if not prefix then prefix, body = name:match('^([Vv][Ss][Tt][Ii]?[%s_:%-]+)(.*)$') end
+    if not prefix then prefix, body = name:match('^([Jj][Ss][Ff][Xx][%s_:%-]+)(.*)$') end
+    if not prefix then prefix, body = name:match('^([Jj][Ss][%s_:%-]+)(.*)$') end
+    if not prefix then prefix, body = name:match('^([Cc][Ll][Aa][Pp][Ii]?[%s_:%-]+)(.*)$') end
+    if not prefix then prefix, body = name:match('^([Aa][Uu][Ii]?[%s_:%-]+)(.*)$') end
+    if not prefix then prefix, body = name:match('^([Ll][Vv]2[Ii]?[%s_:%-]+)(.*)$') end
+    prefix = prefix or ''
+    body = body or name
+    local content, tag = body:match('^(.-)%s*%(([^()]+)%)%s*$')
+    if not content then content, tag = body:match('^(.-)%s*%[([^%[%]]+)%]%s*$') end
+    if not content then content, tag = body:match('^(.-)%s*%{([^{}]+)%}%s*$') end
+    if not content then content, tag = body:match('^(.-)[_%s]+_([^_]+)_%s*$') end
+    if content and tag then
+        local tag_pattern = tag:gsub('([^%w])', '%%%1')
+        local stripped = content:gsub('^%s*' .. tag_pattern .. '%s+', '')
+        if stripped ~= content then return prefix .. stripped .. ' (' .. tag .. ')' end
+    end
     return name
 end
 
@@ -3184,7 +3253,8 @@ function NormalizePluginNameForMatch(name)
     if cached then return cached end
     
     local result = name:lower()
-    result = result:gsub('^vst3i?:%s*',''):gsub('^vsti?:%s*',''):gsub('^vst3:%s*',''):gsub('^vst:%s*',''):gsub('^js:%s*',''):gsub('^jsfx:%s*',''):gsub('^clapi?:%s*',''):gsub('^clap:%s*',''):gsub('^au:%s*',''):gsub('^lv2:%s*','')
+    result = result:gsub('^vst3i?[%s_:%-]*',''):gsub('^vsti?[%s_:%-]*',''):gsub('^vst3[%s_:%-]*',''):gsub('^vst[%s_:%-]*',''):gsub('^jsfx[%s_:%-]*',''):gsub('^js[%s_:%-]*',''):gsub('^clapi?[%s_:%-]*',''):gsub('^clap[%s_:%-]*',''):gsub('^au[%s_:%-]*',''):gsub('^lv2[%s_:%-]*','')
+    result = StripRedundantLeadingTag(result)
     result = StripX86Markers(result)
     result = result:gsub('%s+$','')
     result = result:gsub('%s+',' ')
@@ -3574,10 +3644,19 @@ function BuildScreenshotIndex(force)
         if not fname then break end
         local base = fname:match('(.+)%.png$') or fname:match('(.+)%.jpg$') or fname:match('(.+)%.jpeg$')
         if base then
+            local function index_norm(value)
+                local norm = NormalizePluginNameForMatch(value)
+                if norm ~= '' and not screenshot_index_norm[norm] then
+                    screenshot_index_norm[norm] = fname
+                end
+            end
             local norm = NormalizePluginNameForMatch(base)
-            if not screenshot_index_norm[norm] then
+            if norm ~= '' and not screenshot_index_norm[norm] then
                 screenshot_index_norm[norm] = fname
             end
+            index_norm(StripTrailingPluginTag(base))
+            index_norm(StripChannelTag(base))
+            index_norm(StripTrailingPluginTag(StripChannelTag(base)))
         end
         i = i + 1
     end
@@ -3642,6 +3721,18 @@ function HasScreenshot(plugin_name)
     BuildScreenshotIndex()
     local norm = NormalizePluginNameForMatch(plugin_name)
     local indexed_file = screenshot_index_norm[norm]
+    if not indexed_file then
+        indexed_file = screenshot_index_norm[NormalizePluginNameForMatch(StripTrailingPluginTag(plugin_name))]
+    end
+    if not indexed_file then
+        local stripped_tag = StripRedundantLeadingTag(plugin_name)
+        indexed_file = screenshot_index_norm[NormalizePluginNameForMatch(stripped_tag)] or screenshot_index_norm[NormalizePluginNameForMatch(StripTrailingPluginTag(stripped_tag))]
+    end
+    if not indexed_file then
+        local channelless = StripChannelTag(plugin_name)
+        local stripped_channelless = StripRedundantLeadingTag(channelless)
+        indexed_file = screenshot_index_norm[NormalizePluginNameForMatch(channelless)] or screenshot_index_norm[NormalizePluginNameForMatch(StripTrailingPluginTag(channelless))] or screenshot_index_norm[NormalizePluginNameForMatch(stripped_channelless)] or screenshot_index_norm[NormalizePluginNameForMatch(StripTrailingPluginTag(stripped_channelless))]
+    end
     if type(indexed_file) == 'string' and indexed_file ~= '' then 
         local full_path = screenshot_path .. indexed_file
         screenshot_exists_cache[plugin_name] = full_path
@@ -3649,12 +3740,28 @@ function HasScreenshot(plugin_name)
     end
     
     local stripped_x86 = StripX86Markers(plugin_name)
+    local stripped_leading_tag = StripRedundantLeadingTag(plugin_name)
+    local channelless = StripChannelTag(plugin_name)
+    local stripped_channelless = StripRedundantLeadingTag(channelless)
     local variants = {
         plugin_name,
+        StripTrailingPluginTag(plugin_name),
+        channelless,
+        StripTrailingPluginTag(channelless),
+        stripped_leading_tag,
+        StripTrailingPluginTag(stripped_leading_tag),
+        stripped_channelless,
+        StripTrailingPluginTag(stripped_channelless),
         CleanPluginName(plugin_name),
+        StripTrailingPluginTag(CleanPluginName(plugin_name)),
         (plugin_name or ''):gsub('[^%w%s-]','_'),
         CleanPluginName(plugin_name):gsub('[^%w%s-]','_'),
         stripped_x86,
+        StripTrailingPluginTag(stripped_x86),
+        StripChannelTag(stripped_x86),
+        StripTrailingPluginTag(StripChannelTag(stripped_x86)),
+        StripRedundantLeadingTag(stripped_x86),
+        StripTrailingPluginTag(StripRedundantLeadingTag(stripped_x86)),
         CleanPluginName(stripped_x86),
         StripX86Markers(CleanPluginName(plugin_name))
     }
@@ -5447,6 +5554,7 @@ function ClearScreenshotCache(periodic_cleanup)
     
     if not periodic_cleanup then
         screenshot_exists_cache = {}
+        screenshot_index_norm = nil
     end
 
     if periodic_cleanup then
@@ -8016,6 +8124,7 @@ end
 
 function CaptureScreenshot(plugin_name, fx_index)
     local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+    local captured = false
     if hwnd then
         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
         local filename
@@ -8067,6 +8176,7 @@ function CaptureScreenshot(plugin_name, fx_index)
             file:close()
             if size > 0 then
                 print("Screenshot Saved " .. filename .. " (Grootte: " .. size .. " bytes)")
+                captured = true
             else
                 print("Screenshot File is Empty: " .. filename)
             end
@@ -8078,6 +8188,7 @@ function CaptureScreenshot(plugin_name, fx_index)
     end
     r.TrackFX_Show(TRACK, fx_index, 2)
     r.TrackFX_Delete(TRACK, fx_index)
+    return captured
 end
 
 function CaptureScreenshotScreen(plugin_name, fx_index)
@@ -8337,9 +8448,14 @@ function MakeScreenshot(plugin_name, callback, is_individual)
                     CaptureARAScreenshot(TRACK, fx_index, plugin_name)
                     log_to_file("Screenshot Success: " .. plugin_name .. " (ARA)")
                 else
-                    CaptureScreenshot(plugin_name, fx_index)
-                    log_to_file("Screenshot Success: " .. plugin_name)
+                    local captured = CaptureScreenshot(plugin_name, fx_index)
+                    if captured then
+                        log_to_file("Screenshot Success: " .. plugin_name)
+                    else
+                        log_to_file("Screenshot Failed: " .. plugin_name)
+                    end
                 end
+                if RequestClearScreenshotCache then RequestClearScreenshotCache() end
                 r.TrackFX_Show(TRACK, fx_index, 2)
                 r.TrackFX_Delete(TRACK, fx_index)
                 EnsurePluginRemoved(fx_index, callback)
