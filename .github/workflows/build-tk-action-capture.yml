@@ -1,0 +1,69 @@
+name: Build TK Action Capture
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "TK Workbench/Native/TKActionCapture/**"
+      - ".github/workflows/build-tk-action-capture.yml"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            build_dir: windows-x64
+            extension: dll
+            artifact: tk-action-capture-windows-x64
+          - name: macOS Universal
+            os: macos-latest
+            build_dir: macos-universal
+            extension: dylib
+            artifact: tk-action-capture-macos-universal
+          - name: Linux x64
+            os: ubuntu-latest
+            build_dir: linux-x64
+            extension: so
+            artifact: tk-action-capture-linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $source = "TK Workbench/Native/TKActionCapture"
+          $build = Join-Path $source "build/${{ matrix.build_dir }}"
+          if ($env:RUNNER_OS -eq "macOS") {
+            cmake -S $source -B $build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64"
+          } else {
+            cmake -S $source -B $build -DCMAKE_BUILD_TYPE=Release
+          }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $source = "TK Workbench/Native/TKActionCapture"
+          $build = Join-Path $source "build/${{ matrix.build_dir }}"
+          cmake --build $build --config Release
+
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          $source = "TK Workbench/Native/TKActionCapture"
+          $build = Join-Path $source "build/${{ matrix.build_dir }}"
+          $artifact = "artifacts/${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Force -Path $artifact | Out-Null
+          Copy-Item (Join-Path $build "bin/reaper_tk_action_capture.${{ matrix.extension }}") $artifact
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
