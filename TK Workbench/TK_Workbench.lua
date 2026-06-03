@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.1
+-- @version 0.2.2
 -- @changelog:
+-- v0.2.2
+--   + Action Clipboard: Added cross-platform TK Action Capture binaries for Windows, macOS and Linux delivery
+--   + Native capture: Updated ReaPack delivery so platform artifacts install into the Workbench folder for manual UserPlugins copy
 -- v0.2.1
 --   + Action Browser: Added Action Clipboard footer with 5 recent, lockable action slots
 --   + Action Browser: Added C shortcut to show or hide the Action Clipboard footer
