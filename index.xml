@@ -97,16 +97,18 @@
      <source file="modules/script_launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/script_launcher.lua</source>
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
         <source file="reaper_tk_action_capture.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/windows-x64/reaper_tk_action_capture.dll</source>
+        <source file="reaper_tk_action_capture.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/macos-universal/reaper_tk_action_capture.dylib</source>
+        <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
         v0.1.9
         + Action Clipboard: Split from Action Browser footer into a standalone Workbench module
-        + Action Clipboard: Added Windows native action capture bridge for Action List, menu, toolbar, floating toolbar, shortcut, and custom action captures
+        + Action Clipboard: Added cross-platform native action capture bridge for Action List, menu, toolbar, floating toolbar, shortcut, and custom action captures
         + Action Clipboard: Added native capture toggle and availability/last-capture status in the module UI
         + Action Clipboard: Added mappable module action for opening Action Clipboard directly
         + Action Browser: Removed embedded Action Clipboard footer while keeping context menu add/set-slot actions
         + Workbench: Added Action Clipboard module tile with clipboard icon
-                + Native capture: Windows x64 DLL is included directly in the Workbench folder for manual copy to REAPER/UserPlugins
+                + Native capture: Windows x64, macOS universal, and Linux x64 binaries are included directly in the Workbench folder for manual copy to REAPER/UserPlugins
 
           v0.1.8
           + Action Browser: Added Action Clipboard footer with 5 recent, lockable action slots

@@ -7,12 +7,12 @@ Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 ### TK Workbench
 #### Toegevoegd
 - **Action Clipboard module**: Action Clipboard is losgetrokken uit de Action Browser en als zelfstandige Workbench-module toegevoegd.
-- **Native action capture voor Windows**: Nieuwe `reaper_tk_action_capture.dll` extensie vangt REAPER actions uit Action List, menus, toolbar buttons, floating toolbars, shortcuts en custom actions op.
+- **Native action capture voor Windows/macOS/Linux**: Nieuwe `reaper_tk_action_capture` extensie vangt REAPER actions uit Action List, menus, toolbar buttons, floating toolbars, shortcuts en custom actions op.
 - **Action Clipboard opener**: Nieuwe mappable module-action om Action Clipboard direct te openen.
 
 #### Gewijzigd
 - **Action Browser**: Clipboard footer verwijderd; acties kunnen nog steeds via contextmenu naar Action Clipboard worden gestuurd.
-- **Native capture distributie**: Windows x64 DLL wordt via ReaPack direct in de Workbench-map meegeleverd voor handmatige kopie naar `REAPER/UserPlugins`. macOS/Linux blijven de Lua-basis zonder native capture gebruiken.
+- **Native capture distributie**: Windows x64 DLL, macOS universal dylib en Linux x64 SO worden via ReaPack direct in de Workbench-map meegeleverd voor handmatige kopie naar `REAPER/UserPlugins`.
 
 ## [2.2.7] - 2025-11-24
 

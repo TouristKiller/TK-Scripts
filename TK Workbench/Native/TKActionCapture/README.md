@@ -6,9 +6,9 @@ The extension registers REAPER post-command hooks and writes captured action eve
 
 ## Build outputs
 
-- Windows: `reaper_tk_action_capture.dll`
-- macOS: `reaper_tk_action_capture.dylib`
-- Linux: `reaper_tk_action_capture.so`
+- Windows: `bin/windows-x64/reaper_tk_action_capture.dll`
+- macOS: `bin/macos-universal/reaper_tk_action_capture.dylib`
+- Linux: `bin/linux-x64/reaper_tk_action_capture.so`
 
 ## Local build
 
@@ -43,7 +43,7 @@ Copy the built extension from the preset `build/*/bin` folder to the REAPER `Use
 
 ## CI build
 
-The repository workflow builds Windows, macOS and Linux artifacts with GitHub Actions. Download the artifact for the target platform and copy the extension manually into the REAPER `UserPlugins` folder.
+The repository workflow builds Windows, macOS and Linux artifacts with GitHub Actions. Store downloaded artifacts in the matching `bin/<platform>` folder for ReaPack delivery. ReaPack installs the native binaries into the Workbench folder; copy the extension for the target platform manually into the REAPER `UserPlugins` folder.
 
 ## ExtState
 
