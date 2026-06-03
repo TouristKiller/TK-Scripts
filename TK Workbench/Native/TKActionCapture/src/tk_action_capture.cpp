@@ -1,11 +1,17 @@
-#include "reaper_plugin.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 
-#include <algorithm>
-#include <cctype>
+#ifndef WDL_NO_DEFINE_MINMAX
+#define WDL_NO_DEFINE_MINMAX
+#endif
+
 #include <cstdio>
 #include <deque>
 #include <sstream>
 #include <string>
+
+#include "reaper_plugin.h"
 
 namespace
 {

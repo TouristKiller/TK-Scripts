@@ -57,6 +57,17 @@ target_include_directories(reaper_tk_action_capture PRIVATE
   "${REAPER_SDK_DIR}"
 )
 
+target_compile_definitions(reaper_tk_action_capture PRIVATE
+  NOMINMAX
+  WDL_NO_DEFINE_MINMAX
+)
+
+if(NOT WIN32)
+  target_compile_definitions(reaper_tk_action_capture PRIVATE
+    SWELL_PROVIDED_BY_APP
+  )
+endif()
+
 set_target_properties(reaper_tk_action_capture PROPERTIES
   PREFIX ""
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
