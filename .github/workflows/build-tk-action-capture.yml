@@ -1,5 +1,8 @@
 name: Build TK Action Capture
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
   push:
@@ -35,32 +38,69 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure
+      - name: Configure Windows
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $source = "TK Workbench/Native/TKActionCapture"
           $build = Join-Path $source "build/${{ matrix.build_dir }}"
-          if ($env:RUNNER_OS -eq "macOS") {
-            cmake -S $source -B $build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64"
-          } else {
-            cmake -S $source -B $build -DCMAKE_BUILD_TYPE=Release
-          }
+          cmake -S $source -B $build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
+      - name: Configure macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          source="TK Workbench/Native/TKActionCapture"
+          build="$source/build/${{ matrix.build_dir }}"
+          cmake -S "$source" -B "$build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+      - name: Configure Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          source="TK Workbench/Native/TKActionCapture"
+          build="$source/build/${{ matrix.build_dir }}"
+          cmake -S "$source" -B "$build" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Windows
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $source = "TK Workbench/Native/TKActionCapture"
           $build = Join-Path $source "build/${{ matrix.build_dir }}"
           cmake --build $build --config Release
 
-      - name: Stage artifact
+      - name: Build Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          source="TK Workbench/Native/TKActionCapture"
+          build="$source/build/${{ matrix.build_dir }}"
+          cmake --build "$build" --config Release
+
+      - name: Stage artifact Windows
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $source = "TK Workbench/Native/TKActionCapture"
-          $build = Join-Path $source "build/${{ matrix.build_dir }}"
           $artifact = "artifacts/${{ matrix.artifact }}"
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null
-          Copy-Item (Join-Path $build "bin/reaper_tk_action_capture.${{ matrix.extension }}") $artifact
+          $file = Get-ChildItem -Path "TK Workbench/Native/TKActionCapture/build/${{ matrix.build_dir }}" -Filter "reaper_tk_action_capture.${{ matrix.extension }}" -Recurse | Select-Object -First 1
+          if (-not $file) { throw "Artifact not found: reaper_tk_action_capture.${{ matrix.extension }}" }
+          Copy-Item $file.FullName $artifact
+
+      - name: Stage artifact Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          artifact="artifacts/${{ matrix.artifact }}"
+          mkdir -p "$artifact"
+          file=$(find "TK Workbench/Native/TKActionCapture/build/${{ matrix.build_dir }}" -name "reaper_tk_action_capture.${{ matrix.extension }}" -type f | head -n 1)
+          if [ -z "$file" ]; then
+            echo "Artifact not found: reaper_tk_action_capture.${{ matrix.extension }}"
+            find "TK Workbench/Native/TKActionCapture/build/${{ matrix.build_dir }}" -maxdepth 4 -type f
+            exit 1
+          fi
+          cp "$file" "$artifact/"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

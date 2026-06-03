@@ -15,6 +15,7 @@ if(MSVC)
 endif()
 
 option(TK_ACTION_CAPTURE_FETCH_REAPER_SDK "Fetch the REAPER SDK when REAPER_SDK_DIR is not set" ON)
+option(TK_ACTION_CAPTURE_FETCH_WDL "Fetch Cockos WDL when it is missing next to the REAPER SDK" ON)
 
 if(NOT DEFINED REAPER_SDK_DIR OR REAPER_SDK_DIR STREQUAL "")
   if(TK_ACTION_CAPTURE_FETCH_REAPER_SDK)
@@ -28,6 +29,23 @@ if(NOT DEFINED REAPER_SDK_DIR OR REAPER_SDK_DIR STREQUAL "")
     set(REAPER_SDK_DIR "${reaper_sdk_SOURCE_DIR}/sdk")
   else()
     message(FATAL_ERROR "Set REAPER_SDK_DIR to the REAPER SDK sdk folder")
+  endif()
+endif()
+
+get_filename_component(REAPER_SDK_ROOT "${REAPER_SDK_DIR}" DIRECTORY)
+
+if(NOT WIN32 AND NOT EXISTS "${REAPER_SDK_ROOT}/WDL/swell/swell.h")
+  if(TK_ACTION_CAPTURE_FETCH_WDL)
+    include(FetchContent)
+    FetchContent_Declare(
+      wdl
+      GIT_REPOSITORY https://github.com/justinfrankel/WDL.git
+      GIT_TAG main
+    )
+    FetchContent_MakeAvailable(wdl)
+    file(COPY "${wdl_SOURCE_DIR}/WDL/" DESTINATION "${REAPER_SDK_ROOT}/WDL")
+  else()
+    message(FATAL_ERROR "Cockos WDL is required next to the REAPER SDK for macOS/Linux builds")
   endif()
 endif()
 
