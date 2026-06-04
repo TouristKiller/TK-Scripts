@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.3
+-- @version 0.2.4
 -- @changelog:
+-- v0.2.4
+--   + Workbench: Improved REAPER Theme color mapping using native main window, docker, list, transport, routing, marker, region, and meter theme colors
+--   + Workbench: Added REAPER Theme - Panel and REAPER Theme - Color preset variants
+--   + Workbench: Added contrast-aware text, dim text, and badge text selection for REAPER-derived theme presets
 -- v0.2.3
 --   + Instrument Rack: Added TK FX Browser Mini as an Add FX target
 --   + Project Browser: Added compact list view with tighter row spacing
@@ -596,8 +600,8 @@ local function draw_theme_settings()
   if app.settings_panel == "theme" then
     app.cache.theme_settings_open = true
     app.settings_panel = nil
-    if app.settings.theme_preset == Theme.reaper_preset_name then
-      Theme.set_preset(Theme.reaper_preset_name, app.settings.custom_themes)
+    if Theme.is_reaper_theme_preset and Theme.is_reaper_theme_preset(app.settings.theme_preset) then
+      Theme.set_preset(app.settings.theme_preset, app.settings.custom_themes)
     end
   end
   if not app.cache.theme_settings_open then return end
@@ -644,9 +648,9 @@ local function draw_theme_settings()
       end
       r.ImGui_EndCombo(ctx)
     end
-    if current == Theme.reaper_preset_name then
+    if Theme.is_reaper_theme_preset and Theme.is_reaper_theme_preset(current) then
       if r.ImGui_Button(ctx, "Refresh REAPER Theme", 160, 24) then
-        app.settings.theme_preset = Theme.set_preset(Theme.reaper_preset_name, app.settings.custom_themes)
+        app.settings.theme_preset = Theme.set_preset(current, app.settings.custom_themes)
         app.cache.saved_theme_preset = app.settings.theme_preset
         app.status = "REAPER theme colors refreshed"
         save_settings()

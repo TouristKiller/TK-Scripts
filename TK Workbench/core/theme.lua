@@ -3,8 +3,16 @@ local M = {}
 
 M.reaper_preset_name = "REAPER Theme"
 
+M.reaper_preset_modes = {
+  [M.reaper_preset_name] = "balanced",
+  ["REAPER Theme - Panel"] = "panel",
+  ["REAPER Theme - Color"] = "color"
+}
+
 M.preset_order = {
   M.reaper_preset_name,
+  "REAPER Theme - Panel",
+  "REAPER Theme - Color",
   "Graphite",
   "Light",
   "Blue",
@@ -150,6 +158,47 @@ local function readable_text(background)
   return luminance(background) > 0.5 and 0x20242AFF or 0xF2F4F7FF
 end
 
+local function channel_luminance(value)
+  value = clamp(value / 255, 0, 1)
+  if value <= 0.03928 then return value / 12.92 end
+  return ((value + 0.055) / 1.055) ^ 2.4
+end
+
+local function contrast_luminance(color)
+  local red, green, blue = split_rgba(color)
+  return 0.2126 * channel_luminance(red) + 0.7152 * channel_luminance(green) + 0.0722 * channel_luminance(blue)
+end
+
+local function contrast_ratio(first, second)
+  local first_luminance = contrast_luminance(first)
+  local second_luminance = contrast_luminance(second)
+  local high = math.max(first_luminance, second_luminance)
+  local low = math.min(first_luminance, second_luminance)
+  return (high + 0.05) / (low + 0.05)
+end
+
+local function min_contrast(color, backgrounds)
+  local value
+  for _, background in ipairs(backgrounds) do
+    local ratio = contrast_ratio(color, background)
+    value = value and math.min(value, ratio) or ratio
+  end
+  return value or 0
+end
+
+local function best_text_for_backgrounds(backgrounds)
+  local dark_text = 0x20242AFF
+  local light_text = 0xF2F4F7FF
+  return min_contrast(dark_text, backgrounds) >= min_contrast(light_text, backgrounds) and dark_text or light_text
+end
+
+local function ensure_readable(color, backgrounds, fallback, min_ratio)
+  min_ratio = min_ratio or 4.5
+  if color and min_contrast(color, backgrounds) >= min_ratio then return color end
+  if fallback and min_contrast(fallback, backgrounds) >= min_ratio then return fallback end
+  return best_text_for_backgrounds(backgrounds)
+end
+
 local function theme_color(name, fallback)
   if not r.GetThemeColor or not r.ColorFromNative then return fallback end
   local ok_color, native = pcall(r.GetThemeColor, name, 0)
@@ -159,42 +208,99 @@ local function theme_color(name, fallback)
   return rgba(red or 0, green or 0, blue or 0, 255)
 end
 
-local function make_reaper_colors()
+local function first_theme_color(names, fallback)
+  for _, name in ipairs(names) do
+    local color = theme_color(name, nil)
+    if color then return color end
+  end
+  return fallback
+end
+
+local function color_distance(first, second)
+  local ar, ag, ab = split_rgba(first)
+  local br, bg, bb = split_rgba(second)
+  return (math.abs(ar - br) + math.abs(ag - bg) + math.abs(ab - bb)) / 765
+end
+
+local function color_chroma(color)
+  local red, green, blue = split_rgba(color)
+  local high = math.max(red, green, blue)
+  local low = math.min(red, green, blue)
+  return (high - low) / 255
+end
+
+local function has_visual_weight(color, background, min_distance, min_chroma)
+  if not color then return false end
+  if color_distance(color, background) < (min_distance or 0.16) then return false end
+  if color_chroma(color) < (min_chroma or 0) and color_distance(color, background) < 0.34 then return false end
+  return true
+end
+
+local function first_weighted_theme_color(names, background, fallback, min_distance, min_chroma)
+  for _, name in ipairs(names) do
+    local color = theme_color(name, nil)
+    if has_visual_weight(color, background, min_distance, min_chroma) then return color end
+  end
+  return has_visual_weight(fallback, background, min_distance, 0) and fallback or readable_text(background)
+end
+
+local function readable_theme_text(names, background, fallback)
+  local color = first_theme_color(names, fallback)
+  if math.abs(luminance(color) - luminance(background)) < 0.38 then return readable_text(background) end
+  return color
+end
+
+local function keep_apart(color, background, other, fallback)
+  if color_distance(color, other) < 0.12 then return fallback end
+  if not has_visual_weight(color, background, 0.14, 0.04) then return fallback end
+  return color
+end
+
+local function make_reaper_colors(mode)
   local fallback = M.presets.Graphite
-  local arrange = theme_color("col_arrangebg", fallback.window_bg)
-  local track_one = theme_color("col_tr1_bg", fallback.child_bg)
-  local track_two = theme_color("col_tr2_bg", track_one)
-  local selected_one = theme_color("selcol_tr1_bg", fallback.accent_soft)
-  local selected_two = theme_color("selcol_tr2_bg", selected_one)
-  local grid_one = theme_color("col_gridlines", fallback.separator)
-  local grid_two = theme_color("col_gridlines2", grid_one)
-  local divider_one = theme_color("col_tr1_divline", fallback.border)
-  local divider_two = theme_color("col_tr2_divline", divider_one)
-  local media_item = theme_color("col_mi_bg", selected_one)
-  local text = readable_text(arrange)
-  local dark = luminance(arrange) < 0.5
-  local child_bg = blend(track_one, track_two, 0.5)
-  local frame_bg = blend(child_bg, text, dark and 0.09 or 0.12)
-  local frame_hover = blend(frame_bg, text, dark and 0.15 or 0.18)
-  local accent = blend(selected_one, selected_two, 0.35)
-  local accent_soft = blend(accent, arrange, dark and 0.62 or 0.74)
+  mode = mode or "balanced"
+  local panel = mode == "panel"
+  local color = mode == "color"
+  local window_bg = first_theme_color(panel and { "col_main_bg", "docker_bg", "genlist_bg", "col_main_bg2", "col_arrangebg" } or { "col_main_bg", "col_main_bg2", "docker_bg", "col_arrangebg" }, fallback.window_bg)
+  local child_bg = first_theme_color(panel and { "docker_bg", "genlist_bg", "col_main_bg2", "col_tracklistbg", "col_tr1_bg" } or { "col_main_bg2", "docker_bg", "col_tracklistbg", "genlist_bg", "col_tr1_bg" }, fallback.child_bg)
+  local popup_bg = first_theme_color(panel and { "windowtab_bg", "docker_bg", "genlist_bg", "col_main_bg2" } or { "docker_bg", "windowtab_bg", "col_main_bg2", "genlist_bg" }, blend(child_bg, window_bg, 0.22))
+  local frame_bg = first_theme_color(panel and { "genlist_bg", "col_main_editbk", "col_transport_editbk", "col_buttonbg" } or { "col_main_editbk", "col_transport_editbk", "genlist_bg", "col_buttonbg" }, blend(child_bg, readable_text(child_bg), 0.08))
+  local text = readable_theme_text({ "col_main_text", "genlist_fg", "col_tcp_text", "col_mixer_text" }, window_bg, readable_text(window_bg))
+  local text_dim = first_theme_color({ "col_main_text2", "genlist_seliafg", "col_tl_fg2", "col_toolbar_text" }, blend(text, window_bg, 0.42))
+  local dark = luminance(window_bg) < 0.5
+  local highlight = first_theme_color({ "col_main_3dhl", "tcp_list_scrollbar_mouseover", "mcp_list_scrollbar_mouseover" }, text)
+  local shadow = first_theme_color({ "col_main_3dsh", "genlist_grid", "col_gridlines" }, fallback.separator)
+  local selection_keys = panel and { "docker_selface", "genlist_selbg", "col_transport_editbk", "col_main_3dhl", "col_seltrack", "marker", "region" } or (color and { "marker", "region", "col_routingact", "col_vumid", "col_vuhot", "genlist_selbg", "docker_selface", "col_seltrack", "selcol_tr1_bg", "selcol_tr2_bg" } or { "genlist_selbg", "docker_selface", "col_seltrack", "selcol_tr1_bg", "selcol_tr2_bg", "col_transport_editbk", "marker", "region", "col_routingact", "col_vumid" })
+  local selection = first_weighted_theme_color(selection_keys, window_bg, fallback.accent, color and 0.18 or 0.13, color and 0.08 or 0.04)
+  local frame_hover = blend(frame_bg, highlight, dark and 0.18 or 0.12)
+  local header = blend(frame_bg, selection, panel and 0.14 or (color and 0.36 or (dark and 0.28 or 0.2)))
+  local header_hover = blend(frame_hover, selection, panel and 0.2 or (color and 0.44 or (dark and 0.34 or 0.26)))
+  local accent = selection
+  local warning = first_weighted_theme_color(color and { "region", "marker", "playrate_edited", "col_tl_bgsel", "col_tl_bgsel2" } or { "col_tl_bgsel", "col_tl_bgsel2", "playrate_edited", "marker", "region" }, window_bg, fallback.warning, 0.14, 0.05)
+  local danger = first_weighted_theme_color({ "col_vuclip", "midi_noteon_flash", "midi_notemute_sel", "mute_overlay_col", "midi_selbg" }, window_bg, fallback.danger, 0.16, 0.06)
+  warning = keep_apart(warning, window_bg, accent, fallback.warning)
+  danger = keep_apart(danger, window_bg, accent, fallback.danger)
+  danger = keep_apart(danger, window_bg, warning, fallback.danger)
+  local text_backgrounds = { window_bg, child_bg, popup_bg, frame_bg, frame_hover, header, header_hover }
+  text = ensure_readable(text, text_backgrounds, readable_text(window_bg), 4.5)
+  text_dim = ensure_readable(text_dim, { window_bg, child_bg, popup_bg, frame_bg }, blend(text, window_bg, dark and 0.28 or 0.42), 3)
   return copy_colors({
-    window_bg = arrange,
+    window_bg = window_bg,
     child_bg = child_bg,
-    popup_bg = blend(child_bg, arrange, 0.28),
+    popup_bg = popup_bg,
     frame_bg = frame_bg,
     frame_hover = frame_hover,
-    header = blend(frame_bg, accent, 0.18),
-    header_hover = blend(frame_hover, accent, 0.26),
-    separator = blend(grid_one, grid_two, 0.5),
-    border = blend(divider_one, divider_two, 0.5),
+    header = header,
+    header_hover = header_hover,
+    separator = shadow,
+    border = blend(highlight, shadow, 0.5),
     text = text,
-    text_dim = blend(text, arrange, dark and 0.34 or 0.46),
-    badge_text = luminance(accent) > 0.55 and 0x000000DD or 0xFFFFFFFF,
+    text_dim = text_dim,
+    badge_text = ensure_readable(luminance(accent) > 0.55 and 0x000000DD or 0xFFFFFFFF, { accent }, nil, 4.5),
     accent = accent,
-    accent_soft = accent_soft,
-    warning = theme_color("col_tl_bgsel", fallback.warning),
-    danger = blend(theme_color("midi_selbg", fallback.danger), media_item, 0.35)
+    accent_soft = blend(accent, window_bg, panel and 0.82 or (color and 0.56 or (dark and 0.64 or 0.76))),
+    warning = warning,
+    danger = danger
   })
 end
 
@@ -211,14 +317,15 @@ end
 
 M.colors = copy_colors(M.presets[M.current_preset])
 
-function M.build_reaper_theme()
-  return make_reaper_colors()
+function M.build_reaper_theme(name)
+  return make_reaper_colors(M.reaper_preset_modes[name or M.reaper_preset_name] or "balanced")
 end
 
 function M.set_preset(name, custom_themes)
-  if name == M.reaper_preset_name then
-    M.current_preset = M.reaper_preset_name
-    M.colors = make_reaper_colors()
+  local reaper_mode = M.reaper_preset_modes[name]
+  if reaper_mode then
+    M.current_preset = name
+    M.colors = make_reaper_colors(reaper_mode)
     return M.current_preset
   end
   local preset = M.presets[name] or (custom_themes and custom_themes[name]) or M.presets.Graphite
@@ -243,11 +350,17 @@ end
 
 function M.is_reserved_preset_name(name)
   name = tostring(name or ""):lower()
-  if name == M.reaper_preset_name:lower() then return true end
+  for preset_name in pairs(M.reaper_preset_modes or {}) do
+    if preset_name:lower() == name then return true end
+  end
   for preset_name in pairs(M.presets or {}) do
     if preset_name:lower() == name then return true end
   end
   return false
+end
+
+function M.is_reaper_theme_preset(name)
+  return M.reaper_preset_modes[name] ~= nil
 end
 
 function M.push(ctx)
