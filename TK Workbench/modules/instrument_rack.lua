@@ -978,9 +978,10 @@ local function open_add_fx_browser(app, track)
     app.status = "Plugin Browser module not loaded"
     return
   end
-  local section = "TK_FX_BROWSER"
-  local script_rel = "/Scripts/TK Scripts/FX/TK_FX_BROWSER.lua"
-  local nice_name = "TK FX BROWSER"
+  local use_mini = target == "tk_fx_browser_mini"
+  local section = use_mini and "TK_FX_BROWSER_MINI" or "TK_FX_BROWSER"
+  local script_rel = use_mini and "/Scripts/TK Scripts/FX/TK_FX_BROWSER Mini.lua" or "/Scripts/TK Scripts/FX/TK_FX_BROWSER.lua"
+  local nice_name = use_mini and "TK FX BROWSER Mini" or "TK FX BROWSER"
   local running = r.GetExtState(section, "running") == "true"
   local heartbeat = tonumber(r.GetExtState(section, "heartbeat")) or 0
   local alive = running and (r.time_precise() - heartbeat < 2.0)
@@ -1081,6 +1082,7 @@ local function draw_header(app, ctx, settings, track)
     r.ImGui_Text(ctx, "Add FX target")
     local targets = {
       { id = "tk_fx_browser", label = "TK FX Browser" },
+      { id = "tk_fx_browser_mini", label = "TK FX Browser Mini" },
       { id = "plugin_browser", label = "Plugin Browser" },
       { id = "native", label = "Native FX Browser" }
     }
@@ -1894,7 +1896,7 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     local guid = track_guid(track)
     if payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
     if payload ~= "" and state.mouse_released then add_external_fx(app, track, payload, insert_index) end
-    local target = settings.add_fx_target == "native" and "native FX browser" or settings.add_fx_target == "plugin_browser" and "Plugin Browser" or "TK FX Browser"
+    local target = settings.add_fx_target == "native" and "native FX browser" or settings.add_fx_target == "plugin_browser" and "Plugin Browser" or settings.add_fx_target == "tk_fx_browser_mini" and "TK FX Browser Mini" or "TK FX Browser"
     r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or "Open " .. target)
   end
   if r.ImGui_BeginDragDropTarget(ctx) then

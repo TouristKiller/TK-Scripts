@@ -2,6 +2,16 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.2.3] - 2026-06-03
+
+### TK Workbench
+#### Toegevoegd
+- **Instrument Rack**: TK FX Browser Mini toegevoegd als optie voor het Add FX target.
+- **Project Browser en Media Browser**: Compact list view toegevoegd met kleinere rijafstand voor dichtere lijsten.
+
+#### Gewijzigd
+- **Project Browser**: Een via Browse gekozen locatie wordt nu direct toegevoegd en gescand, in plaats van alleen in het locatieveld te blijven staan.
+
 ## [TK Workbench 0.2.2] - 2026-06-03
 
 ### TK Workbench

@@ -22,6 +22,7 @@ local defaults = {
   last_browse_location = "",
   location_view_mode = "folders",
   folder_browse = false,
+  compact_list = false,
   auto_selected_category = "All",
   show_audio = true,
   show_midi = true,
@@ -181,6 +182,7 @@ local function ensure_settings(app)
   settings.trim_silence_padding_ms = math.max(0, math.min(250, tonumber(settings.trim_silence_padding_ms) or defaults.trim_silence_padding_ms))
   if settings.location_view_mode ~= "auto" then settings.location_view_mode = "folders" end
   settings.folder_browse = settings.folder_browse == true
+  settings.compact_list = settings.compact_list == true
   settings.folder_double_click_open = settings.folder_double_click_open == true
   settings.auto_selected_category = tostring(settings.auto_selected_category or defaults.auto_selected_category)
   if changed and app.save_settings then app.save_settings() end
@@ -3446,6 +3448,10 @@ local function draw_media_settings_popup(app, settings)
   if c then settings.preview_restart_gap_ms = v; changed = true end
   r.ImGui_PopItemWidth(ctx)
   r.ImGui_Separator(ctx)
+  r.ImGui_Text(ctx, "Display")
+  c, v = r.ImGui_Checkbox(ctx, "Compact list view", settings.compact_list == true)
+  if c then settings.compact_list = v; changed = true end
+  r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Folder browsing")
   c, v = r.ImGui_Checkbox(ctx, "Double-click to open folders", settings.folder_double_click_open == true)
   if c then settings.folder_double_click_open = v; changed = true end
@@ -3676,7 +3682,8 @@ end
 
 local function draw_folder_row(app, settings, entry, index, width)
   local ctx = app.ctx
-  local row_h = 48
+  local compact = settings.compact_list == true
+  local row_h = compact and 24 or 48
   r.ImGui_PushID(ctx, "media_folder_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -3685,13 +3692,16 @@ local function draw_folder_row(app, settings, entry, index, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local selected = state.selected_index == index and not state.selected_file
   local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
-  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + width, y + row_h - 2, bg, 5) end
-  r.ImGui_DrawList_AddRect(draw_list, x, y + 2, x + width, y + row_h - 2, selected and Theme.colors.accent or Theme.colors.border, 5, 0, selected and 1.4 or 0.7)
+  local row_top = compact and y or y + 2
+  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
+  local row_radius = compact and 2 or 5
+  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and 1.4 or 0.7)
   local icon_color = entry.kind == "folder_up" and Theme.colors.text_dim or Theme.colors.accent
-  local text_x = x + 32
+  local text_x = compact and x + 30 or x + 32
   local folder_art = nil
-  if entry.kind == "folder" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(entry.path or ""))) end
-  if entry.kind == "folder_up" and (state.folder_path or "") ~= "" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(state.folder_path or ""))) end
+  if not compact and entry.kind == "folder" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(entry.path or ""))) end
+  if not compact and entry.kind == "folder_up" and (state.folder_path or "") ~= "" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(state.folder_path or ""))) end
   local drew_art = false
   if folder_art and folder_art.image and r.ImGui_DrawList_AddImage then
     local box_x, box_y, box_size = x + 7, y + 8, 32
@@ -3706,13 +3716,20 @@ local function draw_folder_row(app, settings, entry, index, width)
     end
   end
   if not drew_art then
-    r.ImGui_DrawList_AddRectFilled(draw_list, x + 7, y + 16, x + 25, y + 29, icon_color, 3)
-    r.ImGui_DrawList_AddRectFilled(draw_list, x + 10, y + 12, x + 20, y + 18, icon_color, 2)
+    if compact then
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + 8, y + 10, x + 24, y + 19, icon_color, 2)
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + 10, y + 7, x + 19, y + 12, icon_color, 2)
+    else
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + 7, y + 16, x + 25, y + 29, icon_color, 3)
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + 10, y + 12, x + 20, y + 18, icon_color, 2)
+    end
   end
   r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, text_x, y + 7, Theme.colors.text, entry.kind == "folder_up" and ".." or entry.name)
-  local detail = entry.kind == "folder_up" and "Parent folder" or (tostring(entry.file_count or 0) .. " media")
-  r.ImGui_DrawList_AddText(draw_list, text_x, y + 27, Theme.colors.text_dim, detail)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 7, Theme.colors.text, entry.kind == "folder_up" and ".." or entry.name)
+  if not compact then
+    local detail = entry.kind == "folder_up" and "Parent folder" or (tostring(entry.file_count or 0) .. " media")
+    r.ImGui_DrawList_AddText(draw_list, text_x, y + 27, Theme.colors.text_dim, detail)
+  end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked or double_clicked then
     if settings.folder_double_click_open == true then
@@ -3732,9 +3749,10 @@ local function draw_folder_row(app, settings, entry, index, width)
   r.ImGui_PopID(ctx)
 end
 
-local function draw_file_row(app, file, index, width)
+local function draw_file_row(app, settings, file, index, width)
   local ctx = app.ctx
-  local row_h = 48
+  local compact = settings.compact_list == true
+  local row_h = compact and 24 or 48
   r.ImGui_PushID(ctx, "media_file_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -3743,15 +3761,23 @@ local function draw_file_row(app, file, index, width)
   local selected = state.selected_file and state.selected_file.path == file.path
   local previewing = state.preview_path == file.path
   local bg = selected and 0x7AA2F730 or (previewing and 0x48CFAD24 or (hovered and 0xFFFFFF12 or 0x00000000))
-  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + width, y + row_h - 2, bg, 5) end
-  r.ImGui_DrawList_AddRect(draw_list, x, y + 2, x + width, y + row_h - 2, (selected or previewing) and Theme.colors.accent or Theme.colors.border, 5, 0, (selected or previewing) and 1.4 or 0.7)
-  local kind_color = file.kind == "audio" and 0x48CFADFF or file.kind == "midi" and 0xFFCE54FF or file.kind == "video" and 0xED5565FF or 0x8F9AA8FF
-  r.ImGui_DrawList_AddRectFilled(draw_list, x + 7, y + 10, x + 23, y + 26, kind_color, 3)
-  r.ImGui_DrawList_AddText(draw_list, x + 12, y + 11, 0x111111FF, file.kind:sub(1, 1):upper())
-  r.ImGui_DrawList_PushClipRect(draw_list, x + 30, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, x + 30, y + 7, Theme.colors.text, file.name)
-  local tags = compact_tags(file)
-  if tags ~= "" then r.ImGui_DrawList_AddText(draw_list, x + 30, y + 27, Theme.colors.text_dim, tags) end
+  local row_top = compact and y or y + 2
+  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
+  local row_radius = compact and 2 or 5
+  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, (selected or previewing) and Theme.colors.accent or Theme.colors.border, row_radius, 0, (selected or previewing) and 1.4 or 0.7)
+  local text_x = compact and x + 10 or x + 30
+  if not compact then
+    local kind_color = file.kind == "audio" and 0x48CFADFF or file.kind == "midi" and 0xFFCE54FF or file.kind == "video" and 0xED5565FF or 0x8F9AA8FF
+    r.ImGui_DrawList_AddRectFilled(draw_list, x + 7, y + 10, x + 23, y + 26, kind_color, 3)
+    r.ImGui_DrawList_AddText(draw_list, x + 12, y + 11, 0x111111FF, file.kind:sub(1, 1):upper())
+  end
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 7, Theme.colors.text, file.name)
+  if not compact then
+    local tags = compact_tags(file)
+    if tags ~= "" then r.ImGui_DrawList_AddText(draw_list, text_x, y + 27, Theme.colors.text_dim, tags) end
+  end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then
     local insert_on_click = shift_down(ctx)
@@ -3799,8 +3825,10 @@ local function draw_file_list(app, settings, width, height)
     elseif #state.filtered == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, selected_location(settings) == "" and "Add a media location" or "No media found")
     end
-    local row_h = 48
+    local row_h = settings.compact_list == true and 24 or 48
     handle_file_list_keyboard(app, settings, row_h)
+    local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
+    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 0) end
     local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_h, 8)
     shown = math.max(0, last - first + 1)
     if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
@@ -3810,11 +3838,12 @@ local function draw_file_list(app, settings, width, height)
         if entry.kind == "folder" or entry.kind == "folder_up" then
           draw_folder_row(app, settings, entry, index, math.max(80, width - 12))
         else
-          draw_file_row(app, entry, index, math.max(80, width - 12))
+          draw_file_row(app, settings, entry, index, math.max(80, width - 12))
         end
       end
     end
     if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
+    if compact_spacing then r.ImGui_PopStyleVar(ctx, 1) end
     r.ImGui_EndChild(ctx)
   end
   return shown

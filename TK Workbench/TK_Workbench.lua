@@ -1,7 +1,25 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.2
+-- @version 0.2.3
 -- @changelog:
+-- v0.2.3
+--   + Instrument Rack: Added TK FX Browser Mini as an Add FX target
+--   + Project Browser: Added compact list view with tighter row spacing
+--   + Media Browser: Added compact list view with tighter row spacing
+--   + Project Browser: Browsed folders are now added immediately instead of only filling the location field
+--   + Action Clipboard: Added Ctrl+V paste from the system clipboard directly into hovered slots
+--   + Action Clipboard: Added context menu paste from clipboard for individual slots
+--   + Action Clipboard: Added support for pasted numeric command IDs, named commands, and exact action names
+--   + Action Clipboard: Added hovered-slot keyboard interception so Ctrl+V works without first focusing Workbench
+--   + Action Clipboard: Prevented REAPER's global Paste items/tracks command from being captured during slot paste
+--   + Action Browser: Clipboard slot menus now follow the configured Action Clipboard slot count
+--   + Project Browser: Added project audio preview discovery and playback for proxy and .tkprev preview files
+--   + Project Browser: Added preview creation from full project render, time selection, or a custom audio file
+--   + Project Browser: Added preview management popup to play, select active, and delete project previews
+--   + Project Browser: Added persistent active preview selection per project
+--   + Project Browser: Added preview volume, progress display, and compact playback controls
+--   + Project Browser: Added theme-aware preview volume slider styling and a square No image fallback
+--   + Project Browser: Custom audio preview file picker now opens in the project's folder
 -- v0.2.2
 --   + Action Clipboard: Added cross-platform TK Action Capture binaries for Windows, macOS and Linux delivery
 --   + Native capture: Updated ReaPack delivery so platform artifacts install into the Workbench folder for manual UserPlugins copy
@@ -466,7 +484,8 @@ local function draw_home_view()
   local _, available_h = r.ImGui_GetContentRegionAvail(ctx)
   local status_h = app.settings.show_status and UI.info_line_height(ctx) or 0
   local content_h = math.max(40, (available_h or 240) - status_h)
-  if r.ImGui_BeginChild(ctx, "##home_module_tiles", 0, content_h, 0) then
+  local child_visible = r.ImGui_BeginChild(ctx, "##home_module_tiles", 0, content_h, 0)
+  if child_visible then
     local avail_w = r.ImGui_GetContentRegionAvail(ctx) or 1
     local gap = 10
     local min_card_w = 118
@@ -486,8 +505,8 @@ local function draw_home_view()
       app.cache.pending_module_reorder = nil
       move_module_to_target(pending.source, pending.target)
     end
-    r.ImGui_EndChild(ctx)
   end
+  r.ImGui_EndChild(ctx)
 end
 
 local function draw_top_bar()
@@ -638,7 +657,8 @@ local function draw_theme_settings()
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preview")
     draw_theme_preview(Theme.colors)
     r.ImGui_Spacing(ctx)
-    if r.ImGui_BeginChild(ctx, "##theme_color_editor", 0, 190, 1) then
+    local child_visible = r.ImGui_BeginChild(ctx, "##theme_color_editor", 0, 190, 1)
+    if child_visible then
       local color_flags = r.ImGui_ColorEditFlags_NoInputs()
       for _, field in ipairs(theme_color_fields) do
         local changed, value = r.ImGui_ColorEdit4(ctx, field.label .. "##" .. field.key, Theme.colors[field.key], color_flags)
@@ -648,8 +668,8 @@ local function draw_theme_settings()
           Theme.set_colors(Theme.colors, app.settings.theme_preset)
         end
       end
-      r.ImGui_EndChild(ctx)
     end
+    r.ImGui_EndChild(ctx)
     r.ImGui_TextWrapped(ctx, "Theme changes are applied immediately. Custom themes load from the preset dropdown.")
     local name_changed, new_name = r.ImGui_InputTextWithHint(ctx, "##custom_theme_name", "Custom theme name", app.settings.custom_theme_name or "My Theme")
     if name_changed then app.settings.custom_theme_name = new_name end
@@ -806,6 +826,7 @@ local function draw_module_error(module, err)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(err))
   r.ImGui_PopTextWrapPos(ctx)
   r.ImGui_SetCursorScreenPos(ctx, x, y + height + 6)
+  r.ImGui_Dummy(ctx, 1, 1)
 end
 
 local function draw_module_canvas()
@@ -884,12 +905,14 @@ local function draw_shell()
   if r.ImGui_WindowFlags_NoScrollbar then canvas_flags = canvas_flags | r.ImGui_WindowFlags_NoScrollbar() end
   if r.ImGui_WindowFlags_NoScrollWithMouse then canvas_flags = canvas_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
   app.cache.captured_info_line = nil
-  if r.ImGui_BeginChild(ctx, "##workbench_module_canvas", 0, canvas_h, 0, canvas_flags) then
+  local child_visible = r.ImGui_BeginChild(ctx, "##workbench_module_canvas", 0, canvas_h, 0, canvas_flags)
+  if child_visible then
     UI.begin_info_line_capture(app)
     draw_module_canvas()
     UI.end_info_line_capture(app)
-    r.ImGui_EndChild(ctx)
+    r.ImGui_Dummy(ctx, 1, 1)
   end
+  r.ImGui_EndChild(ctx)
   if app.settings.show_status then draw_status_bar() end
 end
 

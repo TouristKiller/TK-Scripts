@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local json = require("core.json")
 
 local M = {
   id = "project_browser",
@@ -13,6 +14,7 @@ local locations_path = resource_path .. "/Scripts/TK_project_browser_locations.t
 local project_template_locations_path = resource_path .. "/Scripts/TK_project_template_browser_locations.txt"
 local track_template_locations_path = resource_path .. "/Scripts/TK_track_template_browser_locations.txt"
 local project_covers_path = resource_path .. "/Scripts/TK Scripts/FX/ProjectCovers/"
+local project_preview_active_path = resource_path .. "/Scripts/TK Scripts/FX/project_preview_active.json"
 
 local modes = {
   projects = { label = "Projects", short = "Projects", locations_path = locations_path, extension = "rpp", item_label = "project", plural = "projects" },
@@ -31,6 +33,8 @@ local defaults = {
   pending_locations = {},
   recursive = true,
   folder_view = true,
+  compact_list = false,
+  preview_volume = 1.0,
   folder_paths = {},
   max_depth = 5,
   max_scan_projects = 5000,
@@ -60,10 +64,25 @@ local state = {
   search_changed_at = 0,
   metadata_cache = {},
   cover_path_cache = {},
+  preview_path_cache = {},
+  preview_length_cache = {},
+  preview_active = {},
+  preview_active_loaded = false,
+  preview = nil,
+  preview_source = nil,
+  preview_project_path = nil,
+  preview_path = nil,
+  preview_length = 0,
+  preview_started_at = 0,
+  manage_previews_project = nil,
   cover_image_cache = {},
   settings_popup = false,
+  detail_panel_collapsed = false,
+  playback_panel_collapsed = false,
   last_error = nil
 }
+
+local stop_project_preview
 
 local image_ext = { png = true, jpg = true, jpeg = true, webp = true, bmp = true }
 
@@ -139,6 +158,8 @@ local function ensure_settings(app)
   settings.max_scan_projects = math.max(50, math.min(50000, math.floor(tonumber(settings.max_scan_projects) or defaults.max_scan_projects)))
   settings.recursive = settings.recursive ~= false
   settings.folder_view = settings.folder_view ~= false
+  settings.compact_list = settings.compact_list == true
+  settings.preview_volume = math.max(0, math.min(2, tonumber(settings.preview_volume) or defaults.preview_volume))
   settings.open_new_tab_on_double_click = settings.open_new_tab_on_double_click == true
   settings.search_term = tostring(settings.search_term or "")
   settings.pending_location = tostring(settings.pending_location or "")
@@ -274,7 +295,7 @@ local function add_location(app, settings, path)
   if not directory_exists(path) then state.last_error = "Folder not found"; return false end
   local key = path:lower()
   for _, existing in ipairs(state.locations) do
-    if existing:lower() == key then set_mode_location(settings, mode, existing); set_mode_folder_path(settings, mode, ""); return true end
+    if existing:lower() == key then set_mode_location(settings, mode, existing); set_mode_folder_path(settings, mode, ""); set_mode_pending_location(settings, mode, ""); if app.save_settings then app.save_settings() end; return true end
   end
   state.locations[#state.locations + 1] = path
   write_locations(mode_def, state.locations)
@@ -481,6 +502,8 @@ end
 local function clear_project_cache(ctx)
   state.metadata_cache = {}
   state.cover_path_cache = {}
+  state.preview_path_cache = {}
+  state.preview_length_cache = {}
   clear_cover_image_cache(ctx)
 end
 
@@ -568,6 +591,381 @@ local function format_project_length(seconds)
   local secs = total % 60
   if hours > 0 then return string.format("%d:%02d:%02d", hours, minutes, secs) end
   return string.format("%d:%02d", minutes, secs)
+end
+
+local function load_project_preview_active()
+  if state.preview_active_loaded then return end
+  state.preview_active_loaded = true
+  local file = io.open(project_preview_active_path, "r")
+  if not file then return end
+  local content = file:read("*a")
+  file:close()
+  local ok, data = pcall(json.decode, content)
+  state.preview_active = ok and type(data) == "table" and data or {}
+end
+
+local function active_preview_filename(project_path)
+  load_project_preview_active()
+  local value = state.preview_active[project_path]
+  if value and value ~= "" then return value end
+  return nil
+end
+
+local function save_project_preview_active()
+  local file = io.open(project_preview_active_path, "w")
+  if not file then return false end
+  file:write(json.encode(state.preview_active or {}))
+  file:close()
+  return true
+end
+
+local function set_active_preview_filename(project_path, basename)
+  if not project_path then return end
+  load_project_preview_active()
+  state.preview_active[project_path] = basename
+  save_project_preview_active()
+  state.preview_path_cache[project_path] = nil
+end
+
+local function clear_active_preview_filename(project_path)
+  if not project_path then return end
+  load_project_preview_active()
+  state.preview_active[project_path] = nil
+  save_project_preview_active()
+  state.preview_path_cache[project_path] = nil
+end
+
+local function clear_project_preview_cache(project_path)
+  if project_path then state.preview_path_cache[project_path] = nil else state.preview_path_cache = {} end
+  state.preview_length_cache = {}
+end
+
+local function project_preview_base(project)
+  if not project then return "" end
+  return project_name(project.path or project.name or "")
+end
+
+local function list_project_previews(project)
+  local list = {}
+  if not project or not project.path then return list end
+  local dir = project.folder or project_folder(project.path)
+  local base = project_preview_base(project)
+  if dir == "" or base == "" then return list end
+  local prefix = base .. ".tkprev."
+  local prefix_l = prefix:lower()
+  local allowed_ext = { wav = true, mp3 = true, flac = true, ogg = true, aif = true, aiff = true }
+  local index = 0
+  while true do
+    local name = r.EnumerateFiles(dir, index)
+    if not name then break end
+    local suffix = name:sub(#prefix + 1)
+    local ext = suffix:match("%.([^%.]+)$")
+    local has_allowed_ext = ext and allowed_ext[ext:lower()]
+    local extensionless = suffix ~= "" and not suffix:find("%.")
+    if name:lower():sub(1, #prefix_l) == prefix_l and (has_allowed_ext or extensionless) then
+      local path = join_path(dir, name)
+      local stamp_part = has_allowed_ext and suffix:sub(1, -(#ext + 2)) or suffix
+      local timestamp = tonumber(stamp_part:match("^(%d+)")) or 0
+      local modified = 0
+      if r.JS_File_Stat then
+        local ok_call, ok_stat, _, _, mtime = pcall(r.JS_File_Stat, path)
+        if ok_call and ok_stat then modified = tonumber(mtime) or 0 end
+      end
+      list[#list + 1] = { name = name, path = path, score = timestamp * 1e9 + modified }
+    end
+    index = index + 1
+  end
+  table.sort(list, function(a, b) return a.score > b.score end)
+  return list
+end
+
+local function project_preview_path(project)
+  if not project or not project.path then return nil end
+  if state.preview_path_cache[project.path] ~= nil then return state.preview_path_cache[project.path] or nil end
+  local dir = project.folder or project_folder(project.path)
+  local base = project_preview_base(project)
+  if dir ~= "" then
+    local project_file = project.path:match("([^/\\]+)$") or (base .. ".rpp")
+    local direct_proxies = { join_path(dir, project_file .. "-PROX"), join_path(dir, project_file .. "-prox") }
+    for _, proxy in ipairs(direct_proxies) do
+      if file_exists(proxy) then state.preview_path_cache[project.path] = proxy; return proxy end
+    end
+  end
+  local listed = list_project_previews(project)
+  if listed[1] and listed[1].path then
+    state.preview_path_cache[project.path] = listed[1].path
+    return listed[1].path
+  end
+  if dir ~= "" and base ~= "" then
+    local prefix = base .. ".tkprev."
+    local prefix_l = prefix:lower()
+    local allowed_ext = { wav = true, mp3 = true, flac = true, ogg = true, aif = true, aiff = true }
+    local override = active_preview_filename(project.path)
+    if override and override:lower():sub(1, #prefix_l) == prefix_l then
+      local path = join_path(dir, override)
+      if file_exists(path) then state.preview_path_cache[project.path] = path; return path end
+    end
+    local newest, newest_score = nil, -1
+    local index = 0
+    while true do
+      local name = r.EnumerateFiles(dir, index)
+      if not name then break end
+      local suffix = name:sub(#prefix + 1)
+      local ext = suffix:match("%.([^%.]+)$")
+      local has_allowed_ext = ext and allowed_ext[ext:lower()]
+      local extensionless = suffix ~= "" and not suffix:find("%.")
+      if name:lower():sub(1, #prefix_l) == prefix_l and (has_allowed_ext or extensionless) then
+        local path = join_path(dir, name)
+        local stamp_part = has_allowed_ext and suffix:sub(1, -(#ext + 2)) or suffix
+        local timestamp = tonumber(stamp_part:match("^(%d+)")) or 0
+        local modified = 0
+        if r.JS_File_Stat then
+          local ok_call, ok_stat, _, _, mtime = pcall(r.JS_File_Stat, path)
+          if ok_call and ok_stat then modified = tonumber(mtime) or 0 end
+        end
+        local score = timestamp * 1e9 + modified
+        if score >= newest_score then newest, newest_score = path, score end
+      end
+      index = index + 1
+    end
+    if newest then state.preview_path_cache[project.path] = newest; return newest end
+  end
+  local proxies = { project.path .. "-PROX", project.path .. "-prox" }
+  for _, proxy in ipairs(proxies) do
+    if file_exists(proxy) then state.preview_path_cache[project.path] = proxy; return proxy end
+  end
+  if dir ~= "" then
+    local project_file = project.path:match("([^/\\]+)$") or (base .. ".rpp")
+    local expected_proxy = (project_file .. "-prox"):lower()
+    local index = 0
+    while true do
+      local name = r.EnumerateFiles(dir, index)
+      if not name then break end
+      if name:lower() == expected_proxy then
+        local proxy = join_path(dir, name)
+        state.preview_path_cache[project.path] = proxy
+        return proxy
+      end
+      index = index + 1
+    end
+  end
+  return nil
+end
+
+local function media_source_length(source)
+  if not source or not r.GetMediaSourceLength then return 0 end
+  local ok, length = pcall(r.GetMediaSourceLength, source)
+  if ok then return tonumber(length) or 0 end
+  return 0
+end
+
+local function project_preview_length(path)
+  if not path or path == "" then return 0 end
+  if state.preview_length_cache[path] ~= nil then return state.preview_length_cache[path] end
+  local length = 0
+  if r.PCM_Source_CreateFromFile then
+    local ok_source, source = pcall(r.PCM_Source_CreateFromFile, path)
+    if ok_source and source then
+      length = media_source_length(source)
+      if r.PCM_Source_Destroy then pcall(r.PCM_Source_Destroy, source) end
+    end
+  end
+  state.preview_length_cache[path] = length
+  return length
+end
+
+stop_project_preview = function()
+  if state.preview and r.CF_Preview_Stop then pcall(r.CF_Preview_Stop, state.preview) end
+  if state.preview_source and r.PCM_Source_Destroy then pcall(r.PCM_Source_Destroy, state.preview_source) end
+  state.preview = nil
+  state.preview_source = nil
+  state.preview_project_path = nil
+  state.preview_path = nil
+  state.preview_length = 0
+  state.preview_started_at = 0
+end
+
+local function start_project_preview(app, settings, project)
+  if not r.CF_CreatePreview or not r.CF_Preview_Play or not r.PCM_Source_CreateFromFile then
+    app.status = "SWS preview API not available"
+    return false
+  end
+  local path = project_preview_path(project)
+  if not path then app.status = "No project preview found"; return false end
+  stop_project_preview()
+  local ok_source, source = pcall(r.PCM_Source_CreateFromFile, path)
+  if not ok_source or not source then app.status = "Could not open project preview"; return false end
+  local ok_preview, preview = pcall(r.CF_CreatePreview, source)
+  if not ok_preview or not preview then
+    if r.PCM_Source_Destroy then pcall(r.PCM_Source_Destroy, source) end
+    app.status = "Could not create project preview"
+    return false
+  end
+  state.preview = preview
+  state.preview_source = source
+  state.preview_project_path = project.path
+  state.preview_path = path
+  state.preview_length = media_source_length(source)
+  if state.preview_length <= 0 then state.preview_length = project_preview_length(path) end
+  state.preview_started_at = r.time_precise and r.time_precise() or os.clock()
+  if r.CF_Preview_SetValue then r.CF_Preview_SetValue(preview, "D_VOLUME", settings.preview_volume or defaults.preview_volume) end
+  pcall(r.CF_Preview_Play, preview)
+  app.status = "Playing project preview"
+  return true
+end
+
+local function play_project_preview_file(app, settings, project, path)
+  if not path or not file_exists(path) then app.status = "Preview file not found"; return false end
+  if not r.CF_CreatePreview or not r.CF_Preview_Play or not r.PCM_Source_CreateFromFile then app.status = "SWS preview API not available"; return false end
+  stop_project_preview()
+  local ok_source, source = pcall(r.PCM_Source_CreateFromFile, path)
+  if not ok_source or not source then app.status = "Could not open project preview"; return false end
+  local ok_preview, preview = pcall(r.CF_CreatePreview, source)
+  if not ok_preview or not preview then
+    if r.PCM_Source_Destroy then pcall(r.PCM_Source_Destroy, source) end
+    app.status = "Could not create project preview"
+    return false
+  end
+  state.preview = preview
+  state.preview_source = source
+  state.preview_project_path = project.path
+  state.preview_path = path
+  state.preview_length = media_source_length(source)
+  if state.preview_length <= 0 then state.preview_length = project_preview_length(path) end
+  state.preview_started_at = r.time_precise and r.time_precise() or os.clock()
+  if r.CF_Preview_SetValue then r.CF_Preview_SetValue(preview, "D_VOLUME", settings.preview_volume or defaults.preview_volume) end
+  pcall(r.CF_Preview_Play, preview)
+  app.status = "Playing project preview"
+  return true
+end
+
+local function find_open_project_by_path(project_path)
+  if not project_path then return nil end
+  local target = normalize_path(project_path):lower()
+  local index = 0
+  while true do
+    local project, filename = r.EnumProjects(index)
+    if not project then break end
+    if filename and filename ~= "" and normalize_path(filename):lower() == target then return project end
+    index = index + 1
+  end
+  return nil
+end
+
+local function make_project_preview(app, settings, project, mode)
+  if not project or not project.path then return end
+  local project_path = project.path
+  if mode == "custom" then
+    if not r.JS_Dialog_BrowseForOpenFiles then app.status = "js_ReaScriptAPI required for file dialog"; return end
+    local dir = project_path:match("(.*[/\\])") or ""
+    local nul = string.char(0)
+    local filter = "Audio files" .. nul .. "*.wav;*.mp3;*.flac;*.ogg;*.aif;*.aiff" .. nul .. "All files" .. nul .. "*.*" .. nul
+    local ok, file = r.JS_Dialog_BrowseForOpenFiles("Choose Audio File for Preview", dir, "", filter, false)
+    if not ok or not file or file == "" then return end
+    local ext = file:match("%.([^%.]+)$")
+    ext = ext and ext:lower() or nil
+    local allowed = { wav = true, mp3 = true, flac = true, ogg = true, aif = true, aiff = true }
+    if not ext or not allowed[ext] then app.status = "Unsupported audio format"; return end
+    local base = project_preview_base(project)
+    local stamp = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+    local out_path = dir .. base .. ".tkprev." .. stamp .. "." .. ext
+    local input = io.open(file, "rb")
+    if not input then app.status = "Could not read source file"; return end
+    local output = io.open(out_path, "wb")
+    if not output then input:close(); app.status = "Could not write preview file"; return end
+    while true do
+      local chunk = input:read(1024 * 1024)
+      if not chunk then break end
+      output:write(chunk)
+    end
+    input:close()
+    output:close()
+    clear_active_preview_filename(project_path)
+    clear_project_preview_cache(project_path)
+    play_project_preview_file(app, settings, project, out_path)
+    app.status = "Project preview imported"
+    return
+  end
+
+  local was_open = find_open_project_by_path(project_path) ~= nil
+  if mode == "timesel" and not was_open then
+    app.status = "Open the project first and set a time selection"
+    r.ShowMessageBox("Open the project first and set a time selection before making a time-selection preview.", "Make Preview", 0)
+    return
+  end
+  if not was_open then
+    r.Main_OnCommand(41929, 0)
+    r.Main_openProject(project_path)
+  end
+  local reaper_project = find_open_project_by_path(project_path)
+  if not reaper_project then app.status = "Could not open project"; return end
+  r.SelectProjectInstance(reaper_project)
+  if mode == "full" then
+    r.Main_OnCommand(42332, 0)
+    clear_project_preview_cache(project_path)
+    app.status = "Full project preview render started"
+    if not was_open then r.Main_OnCommand(40860, 0) end
+    return
+  end
+  local start_time, end_time = r.GetSet_LoopTimeRange2(reaper_project, false, false, 0, 0, false)
+  if not start_time or not end_time or end_time <= start_time then
+    if not was_open then r.Main_OnCommand(40860, 0) end
+    app.status = "No time selection set"
+    r.ShowMessageBox("No time selection set in the project. Set a time selection first.", "Make Preview", 0)
+    return
+  end
+  if r.CF_Preview_StopAll then r.CF_Preview_StopAll() end
+  stop_project_preview()
+  local dir = project_path:match("(.*[/\\])") or ""
+  local base = project_preview_base(project)
+  local stamp = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+  local pattern = base .. ".tkprev." .. stamp
+  local out_path = dir .. pattern .. ".wav"
+  local old_bounds = r.GetSetProjectInfo(reaper_project, "RENDER_BOUNDSFLAG", 0, false)
+  local old_settings = r.GetSetProjectInfo(reaper_project, "RENDER_SETTINGS", 0, false)
+  local _, old_file = r.GetSetProjectInfo_String(reaper_project, "RENDER_FILE", "", false)
+  local _, old_pattern = r.GetSetProjectInfo_String(reaper_project, "RENDER_PATTERN", "", false)
+  r.GetSet_LoopTimeRange2(reaper_project, true, false, start_time, end_time, false)
+  r.GetSetProjectInfo(reaper_project, "RENDER_BOUNDSFLAG", 2, true)
+  r.GetSetProjectInfo(reaper_project, "RENDER_SETTINGS", 0, true)
+  r.GetSetProjectInfo_String(reaper_project, "RENDER_FILE", dir, true)
+  r.GetSetProjectInfo_String(reaper_project, "RENDER_PATTERN", pattern, true)
+  r.Main_OnCommand(42230, 0)
+  r.GetSetProjectInfo(reaper_project, "RENDER_BOUNDSFLAG", old_bounds, true)
+  r.GetSetProjectInfo(reaper_project, "RENDER_SETTINGS", old_settings, true)
+  r.GetSetProjectInfo_String(reaper_project, "RENDER_FILE", old_file, true)
+  r.GetSetProjectInfo_String(reaper_project, "RENDER_PATTERN", old_pattern, true)
+  clear_active_preview_filename(project_path)
+  clear_project_preview_cache(project_path)
+  if file_exists(out_path) then play_project_preview_file(app, settings, project, out_path) end
+  if not was_open then r.Main_OnCommand(40860, 0) end
+  app.status = "Project preview rendered"
+end
+
+local function delete_project_preview_file(app, project, entry)
+  if not project or not entry or not entry.path then return end
+  if state.preview_path and normalize_path(state.preview_path):lower() == normalize_path(entry.path):lower() then stop_project_preview() end
+  local ok = os.remove(entry.path) ~= nil
+  local peaks = entry.path .. ".reapeaks"
+  if file_exists(peaks) then os.remove(peaks) end
+  if active_preview_filename(project.path) == entry.name then clear_active_preview_filename(project.path) end
+  clear_project_preview_cache(project.path)
+  app.status = ok and "Project preview deleted" or "Could not delete project preview"
+end
+
+local function project_preview_position()
+  if not state.preview then return 0 end
+  if r.CF_Preview_GetValue then
+    local ok, value_ok, position = pcall(r.CF_Preview_GetValue, state.preview, "D_POSITION")
+    if ok and value_ok and tonumber(position) then return math.max(0, tonumber(position)) end
+  end
+  local now = r.time_precise and r.time_precise() or os.clock()
+  return math.max(0, now - (state.preview_started_at or now))
+end
+
+local function update_project_preview(app)
+  if not state.preview then return end
+  if state.preview_length > 0 and project_preview_position() >= state.preview_length - 0.02 then stop_project_preview() end
 end
 
 local function parse_rpp(path)
@@ -668,8 +1066,9 @@ local function load_cover(ctx, project)
   return entry
 end
 
-local function draw_cover(draw_list, entry, x1, y1, x2, y2, fallback_text)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, 5)
+local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, options)
+  options = options or {}
+  if options.no_frame ~= true then r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, 5) end
   if entry and entry.image and r.ImGui_DrawList_AddImage then
     local iw = entry.width > 0 and entry.width or 1
     local ih = entry.height > 0 and entry.height or 1
@@ -677,11 +1076,22 @@ local function draw_cover(draw_list, entry, x1, y1, x2, y2, fallback_text)
     local scale = math.min(w / iw, h / ih)
     local draw_w, draw_h = iw * scale, ih * scale
     local dx, dy = x1 + (w - draw_w) * 0.5, y1 + (h - draw_h) * 0.5
+    if options.align_top_left == true then dx, dy = x1, y1 end
     r.ImGui_DrawList_AddImage(draw_list, entry.image, dx, dy, dx + draw_w, dy + draw_h, 0, 0, 1, 1, 0xFFFFFFFF)
+  elseif options.no_image_box == true then
+    local box_size = math.max(1, math.min(x2 - x1, y2 - y1))
+    x2 = x1 + box_size
+    y2 = y1 + box_size
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, 5)
+    local label = "No image"
+    local text_w = 0
+    local text_h = r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx) or 14
+    if r.ImGui_CalcTextSize then text_w = r.ImGui_CalcTextSize(ctx, label) or 0 end
+    r.ImGui_DrawList_AddText(draw_list, x1 + ((x2 - x1) - text_w) * 0.5, y1 + ((y2 - y1) - text_h) * 0.5, Theme.colors.text_dim, label)
   elseif fallback_text and fallback_text ~= "" then
     r.ImGui_DrawList_AddText(draw_list, x1 + 13, y1 + 10, Theme.colors.text_dim, fallback_text:sub(1, 1):upper())
   end
-  r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, Theme.colors.border, 5, 0, 0.8)
+  if options.no_frame ~= true then r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, Theme.colors.border, 5, 0, 0.8) end
 end
 
 local function open_project(app, project, new_tab)
@@ -811,6 +1221,7 @@ local function select_project(project, index)
   state.selected_folder = nil
   state.selected_index = index
   state.project_list_keyboard_focus = true
+  if project and project.path then clear_project_preview_cache(project.path) end
 end
 
 local function select_folder(folder, index)
@@ -822,7 +1233,8 @@ end
 
 local function draw_folder_row(app, settings, folder, index, width)
   local ctx = app.ctx
-  local row_h = 54
+  local compact = settings.compact_list == true
+  local row_h = compact and 24 or 54
   r.ImGui_PushID(ctx, "folder_" .. tostring(folder.path or folder.name or index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -831,16 +1243,22 @@ local function draw_folder_row(app, settings, folder, index, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local selected = state.selected_folder and state.selected_folder.path == folder.path and state.selected_folder.up == folder.up
   local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
-  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + width, y + row_h - 2, bg, 5) end
-  r.ImGui_DrawList_AddRect(draw_list, x, y + 2, x + width, y + row_h - 2, selected and Theme.colors.accent or Theme.colors.border, 5, 0, selected and 1.4 or 0.7)
-  local icon_x, icon_y = x + 25, y + 26
-  r.ImGui_DrawList_AddRect(draw_list, icon_x - 16, icon_y - 9, icon_x + 16, icon_y + 12, Theme.colors.accent, 4, 0, 2)
-  r.ImGui_DrawList_AddLine(draw_list, icon_x - 13, icon_y - 9, icon_x - 5, icon_y - 16, Theme.colors.accent, 2)
-  r.ImGui_DrawList_AddLine(draw_list, icon_x - 5, icon_y - 16, icon_x + 6, icon_y - 16, Theme.colors.accent, 2)
-  r.ImGui_DrawList_PushClipRect(draw_list, x + 52, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, x + 52, y + 8, Theme.colors.text, folder.name or "Folder")
-  local detail = folder.up and "Parent folder" or (tostring(folder.count or 0) .. " items")
-  r.ImGui_DrawList_AddText(draw_list, x + 52, y + 29, Theme.colors.text_dim, detail)
+  local row_top = compact and y or y + 2
+  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
+  local row_radius = compact and 2 or 5
+  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and 1.4 or 0.7)
+  local icon_x, icon_y = compact and x + 16 or x + 25, compact and y + 15 or y + 26
+  r.ImGui_DrawList_AddRect(draw_list, icon_x - 10, icon_y - 5, icon_x + 10, icon_y + 7, Theme.colors.accent, 3, 0, 1.5)
+  r.ImGui_DrawList_AddLine(draw_list, icon_x - 8, icon_y - 5, icon_x - 3, icon_y - 10, Theme.colors.accent, 1.5)
+  r.ImGui_DrawList_AddLine(draw_list, icon_x - 3, icon_y - 10, icon_x + 5, icon_y - 10, Theme.colors.accent, 1.5)
+  local text_x = compact and x + 34 or x + 52
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 8, Theme.colors.text, folder.name or "Folder")
+  if not compact then
+    local detail = folder.up and "Parent folder" or (tostring(folder.count or 0) .. " items")
+    r.ImGui_DrawList_AddText(draw_list, text_x, y + 29, Theme.colors.text_dim, detail)
+  end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then select_folder(folder, index) end
   if double_clicked then navigate_folder(app, settings, folder.path) end
@@ -855,7 +1273,8 @@ end
 local function draw_project_row(app, settings, project, index, width)
   local ctx = app.ctx
   local mode_def = modes[project.mode or "projects"] or modes.projects
-  local row_h = 54
+  local compact = settings.compact_list == true
+  local row_h = compact and 24 or 54
   r.ImGui_PushID(ctx, "project_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -864,15 +1283,23 @@ local function draw_project_row(app, settings, project, index, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local selected = state.selected_project and state.selected_project.path == project.path
   local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
-  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + width, y + row_h - 2, bg, 5) end
-  r.ImGui_DrawList_AddRect(draw_list, x, y + 2, x + width, y + row_h - 2, selected and Theme.colors.accent or Theme.colors.border, 5, 0, selected and 1.4 or 0.7)
-  local cover = load_cover(ctx, project)
-  draw_cover(draw_list, cover, x + 7, y + 8, x + 43, y + 44, project.name)
-  r.ImGui_DrawList_PushClipRect(draw_list, x + 52, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, x + 52, y + 8, Theme.colors.text, project.name)
-  local detail = compact_path(project.path)
-  if project.date ~= "" then detail = project.date .. " | " .. detail end
-  r.ImGui_DrawList_AddText(draw_list, x + 52, y + 29, Theme.colors.text_dim, detail)
+  local row_top = compact and y or y + 2
+  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
+  local row_radius = compact and 2 or 5
+  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and 1.4 or 0.7)
+  local text_x = compact and x + 10 or x + 52
+  if not compact then
+    local cover = load_cover(ctx, project)
+    draw_cover(ctx, draw_list, cover, x + 7, y + 8, x + 43, y + 44, project.name)
+  end
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 8, Theme.colors.text, project.name)
+  if not compact then
+    local detail = compact_path(project.path)
+    if project.date ~= "" then detail = project.date .. " | " .. detail end
+    r.ImGui_DrawList_AddText(draw_list, text_x, y + 29, Theme.colors.text_dim, detail)
+  end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then select_project(project, index) end
   if double_clicked then open_project(app, project, settings.open_new_tab_on_double_click) end
@@ -898,7 +1325,7 @@ end
 local function draw_project_list(app, settings, width, height)
   local ctx = app.ctx
   local _, mode_def = active_mode(settings)
-  local row_h = 54
+  local row_h = settings.compact_list == true and 24 or 54
   local child_flags = 0
   if r.ImGui_WindowFlags_NoNavInputs then
     local ok_flags, flags = pcall(r.ImGui_WindowFlags_NoNavInputs)
@@ -908,7 +1335,8 @@ local function draw_project_list(app, settings, width, height)
     local ok_flags, flags = pcall(r.ImGui_WindowFlags_NoNavFocus)
     if ok_flags and flags then child_flags = child_flags | flags end
   end
-  if r.ImGui_BeginChild(ctx, "##project_list", 0, height, 0, child_flags) then
+  local child_visible = r.ImGui_BeginChild(ctx, "##project_list", 0, height, 0, child_flags)
+  if child_visible then
     handle_project_list_keyboard(app, settings, row_h)
     if #state.locations == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Add a " .. mode_def.item_label .. " location")
@@ -917,6 +1345,8 @@ local function draw_project_list(app, settings, width, height)
     elseif #state.visible_entries == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No " .. mode_def.plural .. " found")
     end
+    local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
+    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 0) end
     local first, last, top_pad, bottom_pad = visible_range(ctx, #state.visible_entries, row_h, 6, height)
     if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
     for index = first, last do
@@ -928,8 +1358,9 @@ local function draw_project_list(app, settings, width, height)
       end
     end
     if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
-    r.ImGui_EndChild(ctx)
+    if compact_spacing then r.ImGui_PopStyleVar(ctx, 1) end
   end
+  r.ImGui_EndChild(ctx)
 end
 
 local function metadata_line(ctx, label, value)
@@ -940,6 +1371,138 @@ local function metadata_line(ctx, label, value)
   r.ImGui_TextColored(ctx, Theme.colors.text, value)
 end
 
+local function push_slider_theme(ctx)
+  local count = 0
+  if r.ImGui_Col_FrameBg then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), Theme.colors.frame_bg); count = count + 1 end
+  if r.ImGui_Col_FrameBgHovered then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), Theme.colors.frame_hover); count = count + 1 end
+  if r.ImGui_Col_FrameBgActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), Theme.colors.accent_soft); count = count + 1 end
+  if r.ImGui_Col_SliderGrab then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), Theme.colors.accent); count = count + 1 end
+  if r.ImGui_Col_SliderGrabActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), Theme.colors.text); count = count + 1 end
+  return count
+end
+
+local function pop_slider_theme(ctx, count)
+  if count and count > 0 then r.ImGui_PopStyleColor(ctx, count) end
+end
+
+local function draw_panel_header(ctx, label, collapsed, id)
+  local button_label = (collapsed and ">" or "v") .. "##" .. id
+  if r.ImGui_Button(ctx, button_label, 22, 0) then collapsed = not collapsed end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text, label)
+  return collapsed
+end
+
+local function draw_playback_collapse_button(ctx)
+  local collapsed = state.playback_panel_collapsed == true
+  if r.ImGui_Button(ctx, (collapsed and ">" or "v") .. "##project_playback_collapse", 22, 0) then
+    state.playback_panel_collapsed = not collapsed
+    collapsed = state.playback_panel_collapsed == true
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, collapsed and "Expand" or "Collapse") end
+  return collapsed
+end
+
+local function draw_playback_placeholder(ctx, text)
+  local collapsed = draw_playback_collapse_button(ctx)
+  r.ImGui_SameLine(ctx, 0, 6)
+  r.ImGui_Button(ctx, "Play##project_preview_placeholder", 58, 0)
+  if collapsed then return end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, text)
+end
+
+local function draw_project_preview_transport(app, settings, project, width)
+  local ctx = app.ctx
+  local preview_path = project_preview_path(project)
+  local is_playing = state.preview_project_path == project.path and state.preview ~= nil
+  local length = preview_path and (is_playing and state.preview_length or project_preview_length(preview_path)) or 0
+  local position = is_playing and project_preview_position() or 0
+  local button_label = is_playing and "Stop##project_preview" or "Play##project_preview"
+  local disabled = preview_path == nil or not r.CF_CreatePreview or not r.CF_Preview_Play
+  local length_text = format_project_length(length)
+  local time_text = format_project_length(position) .. " / " .. (length_text ~= "" and length_text or "0:00")
+  local preview_label = preview_path and "Preview" or "No preview"
+  local collapsed = draw_playback_collapse_button(ctx)
+  r.ImGui_SameLine(ctx, 0, 6)
+  if disabled then
+    r.ImGui_Button(ctx, "Play##project_preview", 58, 0)
+  elseif r.ImGui_Button(ctx, button_label, 58, 0) then
+    if is_playing then stop_project_preview() else start_project_preview(app, settings, project) end
+  end
+  if collapsed then return end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_TextColored(ctx, preview_path and Theme.colors.text or Theme.colors.text_dim, preview_label)
+  if preview_path and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, preview_path) end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, time_text)
+  if r.ImGui_ProgressBar then
+    local progress = length > 0 and math.max(0, math.min(1, position / length)) or 0
+    r.ImGui_ProgressBar(ctx, progress, -1, 6, "")
+  end
+  if r.ImGui_SliderDouble then
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Volume")
+    r.ImGui_SameLine(ctx)
+    local slider_w = math.max(1, select(1, r.ImGui_GetContentRegionAvail(ctx)))
+    r.ImGui_PushItemWidth(ctx, slider_w)
+    local slider_theme_count = push_slider_theme(ctx)
+    local changed, value = r.ImGui_SliderDouble(ctx, "##project_preview_volume", settings.preview_volume or defaults.preview_volume, 0, 2, "")
+    pop_slider_theme(ctx, slider_theme_count)
+    if changed then
+      settings.preview_volume = value
+      if state.preview and r.CF_Preview_SetValue then r.CF_Preview_SetValue(state.preview, "D_VOLUME", value) end
+      if app.save_settings then app.save_settings() end
+    end
+    r.ImGui_PopItemWidth(ctx)
+  end
+  local button_gap = 8
+  local action_row_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
+  local action_button_w = math.max(1, (action_row_w - button_gap) * 0.5)
+  if r.ImGui_Button(ctx, "Make Preview", action_button_w, 0) then r.ImGui_OpenPopup(ctx, "##project_preview_make") end
+  if r.ImGui_BeginPopup(ctx, "##project_preview_make") then
+    if r.ImGui_MenuItem(ctx, "Full project") then make_project_preview(app, settings, project, "full") end
+    if r.ImGui_MenuItem(ctx, "Time selection") then make_project_preview(app, settings, project, "timesel") end
+    if r.ImGui_MenuItem(ctx, "Custom audio file...") then make_project_preview(app, settings, project, "custom") end
+    r.ImGui_EndPopup(ctx)
+  end
+  r.ImGui_SameLine(ctx, 0, button_gap)
+  if r.ImGui_Button(ctx, "Manage", action_button_w, 0) then
+    state.manage_previews_project = project
+    r.ImGui_OpenPopup(ctx, "##project_preview_manage")
+  end
+  if r.ImGui_BeginPopup(ctx, "##project_preview_manage") then
+    local target = state.manage_previews_project or project
+    local list = list_project_previews(target)
+    local active = active_preview_filename(target.path)
+    r.ImGui_Text(ctx, "Previews: " .. target.name)
+    r.ImGui_Separator(ctx)
+    if #list == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "(no preview files)") end
+    for index, entry in ipairs(list) do
+      r.ImGui_PushID(ctx, index)
+      local is_active = active == entry.name or (not active and index == 1)
+      r.ImGui_TextColored(ctx, is_active and Theme.colors.accent or Theme.colors.text, (is_active and "* " or "  ") .. entry.name)
+      local playing_this = state.preview_path and normalize_path(state.preview_path):lower() == normalize_path(entry.path):lower()
+      if r.ImGui_Button(ctx, playing_this and "Stop" or "Play", 54, 0) then
+        if playing_this then stop_project_preview() else play_project_preview_file(app, settings, target, entry.path) end
+      end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_Button(ctx, "Set Active", 84, 0) then
+        set_active_preview_filename(target.path, entry.name)
+        clear_project_preview_cache(target.path)
+      end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_Button(ctx, "Delete", 64, 0) then
+        local result = r.ShowMessageBox("Delete preview file?\n\n" .. entry.name, "Confirm", 4)
+        if result == 6 then delete_project_preview_file(app, target, entry) end
+      end
+      r.ImGui_PopID(ctx)
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_Button(ctx, "Close", 80, 0) then r.ImGui_CloseCurrentPopup(ctx) end
+    r.ImGui_EndPopup(ctx)
+  end
+end
+
 local function draw_project_detail(app, project, width, height)
   local ctx = app.ctx
   local detail_flags = 0
@@ -947,34 +1510,62 @@ local function draw_project_detail(app, project, width, height)
   if r.ImGui_WindowFlags_NoScrollWithMouse then detail_flags = detail_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
   if r.ImGui_WindowFlags_NoNavInputs then detail_flags = detail_flags | r.ImGui_WindowFlags_NoNavInputs() end
   if r.ImGui_WindowFlags_NoNavFocus then detail_flags = detail_flags | r.ImGui_WindowFlags_NoNavFocus() end
-  if r.ImGui_BeginChild(ctx, "##project_detail", width, height, 1, detail_flags) then
+  local child_visible = r.ImGui_BeginChild(ctx, "##project_detail", width, height, 1, detail_flags)
+  if child_visible then
+    local label = project and project.name or "Preview"
+    state.detail_panel_collapsed = draw_panel_header(ctx, label, state.detail_panel_collapsed == true, "project_detail_collapse")
     if not project then
-      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Select a project")
-      r.ImGui_EndChild(ctx)
-      return
+      if state.detail_panel_collapsed ~= true then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Select a project") end
+    elseif state.detail_panel_collapsed ~= true then
+      local header_h = r.ImGui_GetFrameHeight and r.ImGui_GetFrameHeight(ctx) or 22
+      local available_h = math.max(52, height - header_h - 8)
+      local gap = 10
+      local meta_w = width > 430 and 176 or 146
+      local cover_w = math.max(52, width - meta_w - gap - 10)
+      local cover_bottom_padding = 14
+      local cover_h = math.max(52, available_h - cover_bottom_padding)
+      local x, y = r.ImGui_GetCursorScreenPos(ctx)
+      local draw_list = r.ImGui_GetWindowDrawList(ctx)
+      draw_cover(ctx, draw_list, load_cover(ctx, project), x, y, x + cover_w, y + cover_h, project.name, { no_frame = true, align_top_left = true, no_image_box = true })
+      r.ImGui_Dummy(ctx, cover_w, cover_h)
+      r.ImGui_SameLine(ctx, 0, gap)
+      r.ImGui_BeginGroup(ctx)
+      if project.mode == "track_templates" then
+        metadata_line(ctx, "Type", "Track template")
+      else
+        local info = parse_rpp(project.path)
+        metadata_line(ctx, "BPM", info.bpm and string.format("%.2f", info.bpm) or "")
+        metadata_line(ctx, "Sig", info.timesig)
+        metadata_line(ctx, "Tracks", info.track_count > 0 and tostring(info.track_count) or "")
+        metadata_line(ctx, "Rate", info.samplerate and tostring(info.samplerate) or "")
+        metadata_line(ctx, "Length", format_project_length(info.length))
+      end
+      r.ImGui_EndGroup(ctx)
     end
-    local cover_size = math.min(height - 18, width > 430 and 104 or 82)
-    cover_size = math.max(62, cover_size)
-    local x, y = r.ImGui_GetCursorScreenPos(ctx)
-    local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    draw_cover(draw_list, load_cover(ctx, project), x, y, x + cover_size, y + cover_size, project.name)
-    r.ImGui_Dummy(ctx, cover_size, cover_size)
-    r.ImGui_SameLine(ctx)
-    r.ImGui_BeginGroup(ctx)
-    r.ImGui_TextColored(ctx, Theme.colors.text, project.name)
-    if project.mode == "track_templates" then
-      metadata_line(ctx, "Type", "Track template")
-    else
-      local info = parse_rpp(project.path)
-      metadata_line(ctx, "BPM", info.bpm and string.format("%.2f", info.bpm) or "")
-      metadata_line(ctx, "Sig", info.timesig)
-      metadata_line(ctx, "Tracks", info.track_count > 0 and tostring(info.track_count) or "")
-      metadata_line(ctx, "Rate", info.samplerate and tostring(info.samplerate) or "")
-      metadata_line(ctx, "Length", format_project_length(info.length))
-    end
-    r.ImGui_EndGroup(ctx)
-    r.ImGui_EndChild(ctx)
   end
+  r.ImGui_EndChild(ctx)
+end
+
+local function draw_project_playback_panel(app, project, width, height)
+  local ctx = app.ctx
+  local flags = 0
+  if r.ImGui_WindowFlags_NoScrollbar then flags = flags | r.ImGui_WindowFlags_NoScrollbar() end
+  if r.ImGui_WindowFlags_NoScrollWithMouse then flags = flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
+  local child_visible = r.ImGui_BeginChild(ctx, "##project_playback", width, height, 1, flags)
+  if child_visible then
+    if not project then
+      draw_playback_placeholder(ctx, "Select a project")
+    elseif project.mode == "track_templates" then
+      draw_playback_placeholder(ctx, "No project playback for track templates")
+    else
+      local ok, err = pcall(draw_project_preview_transport, app, ensure_settings(app), project, width)
+      if not ok then
+        state.last_error = tostring(err)
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preview controls unavailable")
+      end
+    end
+  end
+  r.ImGui_EndChild(ctx)
 end
 
 local function draw_settings_popup(app, settings)
@@ -993,7 +1584,7 @@ local function draw_settings_popup(app, settings)
       r.ImGui_SameLine(ctx)
       if r.ImGui_Button(ctx, "Browse", 72, 0) then
         local ok, folder = r.JS_Dialog_BrowseForFolder("Choose " .. mode_def.item_label .. " folder", pending)
-        if ok and folder and folder ~= "" then set_mode_pending_location(settings, mode, folder); if app.save_settings then app.save_settings() end end
+        if ok and folder and folder ~= "" then set_mode_pending_location(settings, mode, folder); if add_location(app, settings, folder) then start_scan(app, settings) elseif app.save_settings then app.save_settings() end end
       end
     end
     if r.ImGui_Button(ctx, "Add Location", 110, 0) then if add_location(app, settings, get_mode_pending_location(settings, mode)) then start_scan(app, settings) end end
@@ -1003,6 +1594,8 @@ local function draw_settings_popup(app, settings)
     if c then settings.recursive = v; if app.save_settings then app.save_settings() end end
     c, v = r.ImGui_Checkbox(ctx, "Folder view", settings.folder_view == true)
     if c then settings.folder_view = v; state.filter_dirty = true; if app.save_settings then app.save_settings() end end
+    c, v = r.ImGui_Checkbox(ctx, "Compact list view", settings.compact_list == true)
+    if c then settings.compact_list = v; if app.save_settings then app.save_settings() end end
     if r.ImGui_SliderInt then
       c, v = r.ImGui_SliderInt(ctx, "Max depth", settings.max_depth, 0, 12)
       if c then settings.max_depth = v; if app.save_settings then app.save_settings() end end
@@ -1086,6 +1679,7 @@ end
 function M.update(app)
   local settings = ensure_settings(app)
   scan_step(settings)
+  update_project_preview(app)
   if state.filter_dirty then
     local now = r.time_precise and r.time_precise() or os.clock()
     if state.scanning or now - (state.search_changed_at or 0) >= 0.15 then apply_filter(settings) end
@@ -1099,10 +1693,26 @@ function M.draw(app)
   draw_toolbar(app, settings)
   draw_settings_popup(app, settings)
   local width, height = r.ImGui_GetContentRegionAvail(ctx)
-  local detail_h = math.min(156, math.max(124, height * 0.25))
-  local list_h = math.max(120, height - detail_h - 8)
+  local strip_h = (r.ImGui_GetFrameHeight and r.ImGui_GetFrameHeight(ctx) or 22) + 18
+  local detail_h = state.detail_panel_collapsed == true and strip_h or math.min(166, math.max(150, height * 0.25))
+  local playback_h = state.playback_panel_collapsed == true and strip_h or 112
+  local bottom_margin = 1
+  local spacing_h = 18 + bottom_margin
+  local list_h = height - detail_h - playback_h - spacing_h
+  if list_h < 76 then
+    local shortage = 76 - list_h
+    local detail_min = state.detail_panel_collapsed == true and strip_h or 132
+    local playback_min = state.playback_panel_collapsed == true and strip_h or 96
+    local detail_reduce = math.min(shortage, math.max(0, detail_h - detail_min))
+    detail_h = detail_h - detail_reduce
+    shortage = shortage - detail_reduce
+    if shortage > 0 then playback_h = math.max(playback_min, playback_h - shortage) end
+    list_h = math.max(48, height - detail_h - playback_h - spacing_h)
+  end
   draw_project_list(app, settings, width, list_h)
   draw_project_detail(app, state.selected_project, width, detail_h)
+  draw_project_playback_panel(app, state.selected_project, width, playback_h)
+  r.ImGui_Dummy(ctx, 1, bottom_margin)
   local status = mode_def.label .. ": " .. tostring(#state.filtered)
   local mode = active_mode(settings)
   local folder_path = get_mode_folder_path(settings, mode)
@@ -1117,6 +1727,7 @@ function M.draw(app)
 end
 
 function M.shutdown(app)
+  stop_project_preview()
   clear_project_cache(app.ctx)
 end
 

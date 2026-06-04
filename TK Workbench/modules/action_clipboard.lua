@@ -24,6 +24,10 @@ local CAPTURE_AVAILABLE_KEY = "available"
 local CAPTURE_HEARTBEAT_KEY = "heartbeat"
 local DATA_FILE = "actions_clipboard.json"
 local HISTORY_LIMIT = 20
+local VK_CONTROL = 17
+local VK_LCONTROL = 162
+local VK_RCONTROL = 163
+local VK_V = 86
 
 local state = {
   slots = {},
@@ -33,6 +37,9 @@ local state = {
   last_capture_seq = 0,
   ignore_capture_cmd = nil,
   ignore_capture_until = 0,
+  suppress_paste_capture_until = 0,
+  vkey_intercept_active = false,
+  global_v_down_last = false,
   capture_last_recorded = "",
   capture_history = {}
 }
@@ -306,6 +313,170 @@ local function copy_command_id(app, entry)
   copy_to_clipboard(app, cmd, "command ID")
 end
 
+local function get_clipboard(ctx)
+  if r.ImGui_GetClipboardText then
+    local ok, value = pcall(r.ImGui_GetClipboardText, ctx)
+    if ok and value and value ~= "" then return value end
+  end
+  if r.CF_GetClipboard then
+    local ok, value = pcall(r.CF_GetClipboard, "")
+    if ok and value and value ~= "" then return value end
+    ok, value = pcall(r.CF_GetClipboard)
+    if ok and value then return value end
+  end
+  return ""
+end
+
+local function modifier_down(ctx, name)
+  local mod = r["ImGui_Mod_" .. name]
+  if not r.ImGui_GetKeyMods or not mod then return false end
+  local ok_mod, mod_value = pcall(mod)
+  if not ok_mod or not mod_value then return false end
+  local ok, mods = pcall(r.ImGui_GetKeyMods, ctx)
+  if ok and mods then
+    local ok_bits, down = pcall(function() return (mods & mod_value) ~= 0 end)
+    return ok_bits and down == true
+  end
+  return false
+end
+
+local function key_pressed(ctx, name)
+  local key = r["ImGui_Key_" .. name]
+  if not r.ImGui_IsKeyPressed or not key then return false end
+  local ok_key, key_value = pcall(key)
+  if not ok_key or not key_value then return false end
+  local ok, pressed = pcall(r.ImGui_IsKeyPressed, ctx, key_value, false)
+  if ok then return pressed == true end
+  ok, pressed = pcall(r.ImGui_IsKeyPressed, ctx, key_value)
+  return ok and pressed == true
+end
+
+local function ctrl_v_pressed(ctx)
+  return modifier_down(ctx, "Ctrl") and key_pressed(ctx, "V")
+end
+
+local function set_vkey_intercept(enabled)
+  if not r.JS_VKeys_Intercept then return end
+  enabled = enabled == true
+  if enabled == state.vkey_intercept_active then return end
+  local ok = pcall(r.JS_VKeys_Intercept, VK_V, enabled and 1 or -1)
+  if ok then state.vkey_intercept_active = enabled end
+  if not enabled then state.global_v_down_last = false end
+end
+
+local function vkey_down(keys, key)
+  local value = type(keys) == "string" and keys:byte(key) or nil
+  return value and value ~= 0
+end
+
+local function global_ctrl_v_pressed()
+  if not r.JS_VKeys_GetState then return false end
+  local ok, keys = pcall(r.JS_VKeys_GetState, 0)
+  if not ok or type(keys) ~= "string" then return false end
+  local ctrl_down = vkey_down(keys, VK_CONTROL) or vkey_down(keys, VK_LCONTROL) or vkey_down(keys, VK_RCONTROL)
+  local v_down = vkey_down(keys, VK_V)
+  local pressed = ctrl_down and v_down and not state.global_v_down_last
+  state.global_v_down_last = v_down == true
+  return pressed == true
+end
+
+local function paste_shortcut_pressed(ctx)
+  local imgui_pressed = ctrl_v_pressed(ctx)
+  local global_pressed = global_ctrl_v_pressed()
+  return imgui_pressed or global_pressed
+end
+
+local function request_keyboard_capture(ctx)
+  if not r.ImGui_SetNextFrameWantCaptureKeyboard then return end
+  local ok = pcall(r.ImGui_SetNextFrameWantCaptureKeyboard, ctx, true)
+  if not ok then pcall(r.ImGui_SetNextFrameWantCaptureKeyboard, ctx) end
+end
+
+local function action_entry_from_command(command_id, fallback_name)
+  command_id = tonumber(command_id)
+  if not command_id or command_id == 0 then return nil end
+  local cmd = command_identifier(command_id) or tostring(command_id)
+  local name = command_text(command_id) or trim(fallback_name)
+  if name == "" then name = tostring(cmd) end
+  return {
+    cmd = tostring(cmd),
+    name = name,
+    label = "",
+    locked = false,
+    last_used = now(),
+    shortcut = shortcut_for_action(command_id)
+  }
+end
+
+local function add_clipboard_candidate(candidates, seen, value)
+  value = trim(value)
+  value = value:gsub('^"', ""):gsub('"$', ""):gsub("^'", ""):gsub("'$", "")
+  if value ~= "" and not seen[value] then
+    seen[value] = true
+    candidates[#candidates + 1] = value
+  end
+end
+
+local function action_entry_from_name(name)
+  if not r.CF_EnumerateActions then return nil end
+  local target = trim(name):lower()
+  if target == "" then return nil end
+  local index = 0
+  while true do
+    local command_id, action_name = r.CF_EnumerateActions(0, index)
+    if not command_id or command_id <= 0 then break end
+    if action_name and trim(action_name):lower() == target then return action_entry_from_command(command_id, action_name) end
+    index = index + 1
+  end
+  return nil
+end
+
+local function entry_from_clipboard_text(text)
+  text = tostring(text or ""):gsub("%z", "")
+  local candidates, seen = {}, {}
+  add_clipboard_candidate(candidates, seen, text)
+  for line in text:gmatch("[^\r\n]+") do
+    add_clipboard_candidate(candidates, seen, line)
+    add_clipboard_candidate(candidates, seen, line:match("[Cc]ommand%s*[Ii][Dd]%s*[:=]%s*(%S+)"))
+    add_clipboard_candidate(candidates, seen, line:match("[Cc]ommand%s*[:=]%s*(%S+)"))
+    for named in line:gmatch("_[%w_]+") do add_clipboard_candidate(candidates, seen, named) end
+  end
+  for _, candidate in ipairs(candidates) do
+    local command_id = resolve_command(candidate)
+    if command_id then return action_entry_from_command(command_id, candidate) end
+  end
+  for _, candidate in ipairs(candidates) do
+    local entry = action_entry_from_name(candidate)
+    if entry then return entry end
+  end
+  return nil
+end
+
+local function paste_clipboard_to_slot(app, index)
+  ensure_loaded(app)
+  state.suppress_paste_capture_until = (r.time_precise and r.time_precise() or os.clock()) + 0.75
+  index = tonumber(index) or 0
+  local slot = state.slots[index]
+  if not slot then return false end
+  if slot.locked then
+    app.status = "Action clipboard slot " .. tostring(index) .. " is locked"
+    return false
+  end
+  local text = get_clipboard(app.ctx)
+  if trim(text) == "" then app.status = "Clipboard is empty"; return false end
+  local entry = entry_from_clipboard_text(text)
+  if not entry then
+    app.status = "Clipboard does not contain a valid REAPER action"
+    return false
+  end
+  if set_slot_entry(app, entry, index, false) then
+    app.status = "Pasted action to slot " .. tostring(index) .. ": " .. tostring(entry.name or entry.cmd)
+    return true
+  end
+  app.status = "Could not paste action to slot " .. tostring(index)
+  return false
+end
+
 local function ignored_commands(settings)
   settings.ignored_capture_commands = type(settings.ignored_capture_commands) == "table" and settings.ignored_capture_commands or {}
   return settings.ignored_capture_commands
@@ -401,6 +572,10 @@ local function should_ignore_captured_action(app, command_id, name, event_time)
   if command_id <= 0 then return true end
   if command_text_value:find("^tk workbench:") then return true end
   if is_action_clipboard_control_action(command_text_value) then return true end
+  local suppress_until = tonumber(state.suppress_paste_capture_until) or 0
+  local current_time = r.time_precise and r.time_precise() or os.clock()
+  local event_time_value = tonumber(event_time) or 0
+  if command_text_value:find("paste items/tracks", 1, true) and suppress_until > 0 and (current_time <= suppress_until or (event_time_value > 0 and event_time_value <= suppress_until)) then return true end
   if is_ignored_command(app, command_id) then return true end
   if state.ignore_capture_cmd and tostring(command_id) == tostring(state.ignore_capture_cmd) then
     if (tonumber(event_time) or 0) <= (tonumber(state.ignore_capture_until) or 0) then return true end
@@ -629,6 +804,7 @@ function M.draw_panel(app)
   local settings = ensure_settings(app)
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
   local button_h = r.ImGui_GetFrameHeight(ctx)
+  local any_slot_hovered = false
   r.ImGui_TextColored(ctx, Theme.colors.accent, "Action Clipboard")
   local changed, enabled = r.ImGui_Checkbox(ctx, "Native capture", settings.capture_native_actions ~= false)
   if changed then
@@ -666,9 +842,10 @@ function M.draw_panel(app)
   r.ImGui_Separator(ctx)
   for index = 1, M.slot_count do
     local slot = state.slots[index]
+    local slot_hovered = false
     r.ImGui_PushID(ctx, "action_clipboard_slot_" .. tostring(index))
     if r.ImGui_Button(ctx, tostring(index), button_h, button_h) then M.execute_slot(app, index) end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Run slot " .. tostring(index)) end
+    if r.ImGui_IsItemHovered(ctx) then slot_hovered = true; r.ImGui_SetTooltip(ctx, "Run slot " .. tostring(index)) end
     r.ImGui_SameLine(ctx)
     local lock_label = slot.locked and "L" or "U"
     if slot.locked then
@@ -689,21 +866,31 @@ function M.draw_panel(app)
     end
     if r.ImGui_Button(ctx, lock_label, button_h, button_h) then M.toggle_lock(app, index) end
     r.ImGui_PopStyleColor(ctx, 4)
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, slot.locked and "Unlock slot" or "Lock slot") end
+    if r.ImGui_IsItemHovered(ctx) then slot_hovered = true; r.ImGui_SetTooltip(ctx, slot.locked and "Unlock slot" or "Lock slot") end
     r.ImGui_SameLine(ctx)
     local label = slot.cmd ~= "" and tostring(slot.name or slot.cmd) or "Empty"
     local text_color = slot.locked and Theme.colors.warning or (slot.cmd ~= "" and Theme.colors.text or Theme.colors.text_dim)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
     r.ImGui_Selectable(ctx, label .. "##slot_select", false, 0, math.max(80, avail_w - (button_h * 2) - 16), button_h)
     r.ImGui_PopStyleColor(ctx)
-    if r.ImGui_IsItemHovered(ctx) and slot.cmd ~= "" then
-      local details = tostring(slot.name or slot.cmd) .. "\nCommand: " .. tostring(slot.cmd)
-      if slot.shortcut then details = details .. "\nShortcut: " .. tostring(slot.shortcut) end
-      r.ImGui_SetTooltip(ctx, details)
+    if r.ImGui_IsItemHovered(ctx) then
+      slot_hovered = true
+      if slot.cmd ~= "" then
+        local details = tostring(slot.name or slot.cmd) .. "\nCommand: " .. tostring(slot.cmd)
+        if slot.shortcut then details = details .. "\nShortcut: " .. tostring(slot.shortcut) end
+        details = details .. "\nCtrl+V: paste action from clipboard"
+        r.ImGui_SetTooltip(ctx, details)
+      else
+        r.ImGui_SetTooltip(ctx, "Ctrl+V: paste action from clipboard")
+      end
     end
+    if slot_hovered then request_keyboard_capture(ctx) end
+    if slot_hovered then any_slot_hovered = true; set_vkey_intercept(true) end
+    if slot_hovered and paste_shortcut_pressed(ctx) then paste_clipboard_to_slot(app, index) end
     if r.ImGui_BeginPopupContextItem(ctx, "##slot_context") then
       if r.ImGui_MenuItem(ctx, "Run Slot") then M.execute_slot(app, index) end
       if r.ImGui_MenuItem(ctx, slot.locked and "Unlock Slot" or "Lock Slot") then M.toggle_lock(app, index) end
+      if r.ImGui_MenuItem(ctx, "Paste Action From Clipboard") then paste_clipboard_to_slot(app, index) end
       if r.ImGui_MenuItem(ctx, "Clear Slot") then M.clear_slot(app, index) end
       if slot.cmd ~= "" then
         if r.ImGui_MenuItem(ctx, "Copy Command ID") then copy_command_id(app, slot) end
@@ -713,6 +900,7 @@ function M.draw_panel(app)
     end
     r.ImGui_PopID(ctx)
   end
+  if not any_slot_hovered then set_vkey_intercept(false) end
   r.ImGui_Separator(ctx)
   draw_capture_history(app, avail_w)
 end
@@ -722,8 +910,13 @@ function M.draw(app)
 end
 
 function M.update(app)
+  if app.settings and app.settings.active_module ~= M.id then set_vkey_intercept(false) end
   M.process_commands(app)
   process_native_capture(app)
+end
+
+function M.shutdown(app)
+  set_vkey_intercept(false)
 end
 
 function M.command_script(action, index)
