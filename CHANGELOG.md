@@ -2,6 +2,20 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.2.5] - 2026-06-04
+
+### TK Workbench
+#### Toegevoegd
+- **Split screen**: Workbench kan nu twee modules boven elkaar tonen met een verstelbare splitter, swap-knop en gedeelde shell-controls.
+- **Timepiece module**: Nieuwe klokmodule toegevoegd met grote tijdweergave voor time, local clock, measures/beats, beats/ticks, seconds, samples en frames.
+- **Timepiece next marker**: Optionele full-width next marker-balk toegevoegd onder de region progress en boven de badges.
+- **Timepiece context badges**: Optionele project position, region progress, play rate, context info, lokale tijd en lokale datum toegevoegd.
+
+#### Gewijzigd
+- **Timepiece instellingen**: Status, BPM, signature, display mode, klokpositie, kloktekst-zichtbaarheid en extra badges staan in een compacte settings-popup.
+- **Timepiece klokgedrag**: De hoofdklok volgt automatisch de play position tijdens transport en de edit cursor wanneer transport stilstaat.
+- **Timepiece layout**: De hoofdklok kan nu bovenaan direct onder de statusregel worden weergegeven, met compactere afstand in top mode.
+
 ## [TK Workbench 0.2.3] - 2026-06-03
 
 ### TK Workbench

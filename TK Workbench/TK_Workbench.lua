@@ -1,7 +1,22 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.4
+-- @version 0.2.5
 -- @changelog:
+-- v0.2.5
+--   + Workbench: Added split screen mode with two stacked modules, a resizable splitter, swap control, and shared shell controls
+--   + Workbench: Added Timepiece module with a large clock display for time, local clock, measures/beats, beats/ticks, seconds, samples, and frames
+--   + Timepiece: Added optional full-width next marker bar below region progress and above the badges
+--   + Timepiece: Added optional project position, region progress, play rate, context info, local time, and local date badges
+--   + Timepiece: Added settings popup controls for status, BPM, signature, display mode, clock position, clock text visibility, and extra badges
+--   + Timepiece: Added automatic play position/edit cursor behavior and optional top-aligned clock layout
+--   + Timepiece: Added alarm and timer controls with bottom status bars and red clock feedback while ringing
+--   + Timepiece: Improved large clock sizing, horizontal alignment, next marker persistence, and compact top layout spacing
+--   + Workbench modules: Unified Plugin Browser, Instrument Rack, FX Chain Builder, and Timepiece settings access with right-aligned ... buttons
+--   + Tags: Added global track tag module compatible with TK FX Browser tag storage
+--   + Tags: Added search, tag creation, color editing, rename, global remove, and per-track/selected-track tag removal
+--   + Tags: Added single and Ctrl multi-tag selection with TCP/MCP visibility filtering and matching REAPER track selection
+--   + Tags: Added full track list navigation with active tag match highlighting even when TCP tracks are hidden
+--   + Tags: Added context actions for selecting, muting, arming, soloing, solo-selecting, and clearing tags from tagged tracks
 -- v0.2.4
 --   + Workbench: Improved REAPER Theme color mapping using native main window, docker, list, transport, routing, marker, region, and meter theme colors
 --   + Workbench: Added REAPER Theme - Panel and REAPER Theme - Color preset variants
@@ -139,11 +154,13 @@ local MODULE_ACTION_HEARTBEAT_KEY = "heartbeat"
 
 local module_names = {
   "project_overview",
+  "timepiece",
   "project_browser",
   "action_browser",
   "action_clipboard",
   "script_launcher",
   "track_recall",
+  "track_tags",
   "automation_item_manager",
   "control_room",
   "instrument_rack",
@@ -287,12 +304,87 @@ local function get_active_module()
   end
 end
 
+local function get_split_module()
+  local active_id = app.settings.active_module
+  local split_id = app.settings.split_module
+  if split_id and split_id ~= "" and split_id ~= active_id and app.modules_by_id[split_id] then return app.modules_by_id[split_id] end
+  for _, module in ipairs(app.modules) do
+    if module.id ~= active_id then return module end
+  end
+end
+
+local function split_view_available()
+  return app.settings.split_view_enabled == true and not is_home_active() and get_active_module() ~= nil and get_split_module() ~= nil
+end
+
+local function set_split_module(id)
+  if not id or id == "" or id == app.settings.active_module or not app.modules_by_id[id] then return false end
+  app.settings.split_module = id
+  app.settings.split_view_enabled = true
+  app.status = "Split module: " .. tostring(app.modules_by_id[id].title or id)
+  save_settings()
+  return true
+end
+
+local function swap_split_modules()
+  local split_module = get_split_module()
+  local active_id = app.settings.active_module
+  if not split_module or not active_id or active_id == HOME_MODULE_ID then return end
+  app.settings.split_module = active_id
+  set_active_view(split_module.id)
+  app.settings.split_view_enabled = true
+  app.status = "Split panes swapped"
+  save_settings()
+end
+
 local function calc_text_width(value)
   if r.ImGui_CalcTextSize then
     local width = r.ImGui_CalcTextSize(ctx, tostring(value or ""))
     return tonumber(width) or 0
   end
   return #(tostring(value or "")) * 7
+end
+
+local function clamp(value, min_value, max_value)
+  value = tonumber(value) or 0
+  if value < min_value then return min_value end
+  if value > max_value then return max_value end
+  return value
+end
+
+local function split_rgba(color)
+  color = math.floor(tonumber(color) or 0)
+  if color < 0 then color = color + 0x100000000 end
+  local red = math.floor(color / 0x1000000) % 0x100
+  local green = math.floor(color / 0x10000) % 0x100
+  local blue = math.floor(color / 0x100) % 0x100
+  local alpha = color % 0x100
+  return red, green, blue, alpha
+end
+
+local function rgba(red, green, blue, alpha)
+  red = math.floor(clamp(red, 0, 255) + 0.5)
+  green = math.floor(clamp(green, 0, 255) + 0.5)
+  blue = math.floor(clamp(blue, 0, 255) + 0.5)
+  alpha = math.floor(clamp(alpha or 255, 0, 255) + 0.5)
+  return red * 0x1000000 + green * 0x10000 + blue * 0x100 + alpha
+end
+
+local function blend_color(first, second, amount)
+  amount = clamp(amount, 0, 1)
+  local ar, ag, ab, aa = split_rgba(first)
+  local br, bg, bb, ba = split_rgba(second)
+  return rgba(ar + (br - ar) * amount, ag + (bg - ag) * amount, ab + (bb - ab) * amount, aa + (ba - aa) * amount)
+end
+
+local function color_luminance(color)
+  local red, green, blue = split_rgba(color)
+  return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
+end
+
+local function contrast_from_background(background, amount)
+  local target = color_luminance(background) > 0.5 and 0x000000FF or 0xFFFFFFFF
+  return blend_color(background, target, amount)
 end
 
 local function ellipsize_text(value, max_width)
@@ -342,6 +434,16 @@ local function draw_home_icon(draw_list, x, y, size, color)
   r.ImGui_DrawList_AddLine(draw_list, x + size * 0.62, y + size * 0.64, x + size * 0.62, bottom, color, 2)
 end
 
+local function draw_split_icon(draw_list, x, y, size, color)
+  local left = x + size * 0.2
+  local right = x + size * 0.8
+  local top = y + size * 0.2
+  local bottom = y + size * 0.8
+  local mid = y + size * 0.5
+  r.ImGui_DrawList_AddRect(draw_list, left, top, right, mid - 2, color, 2, 0, 2)
+  r.ImGui_DrawList_AddRect(draw_list, left, mid + 2, right, bottom, color, 2, 0, 2)
+end
+
 local function draw_module_icon(draw_list, module, cx, cy, size, color)
   local id = module and module.id or ""
   local left = cx - size * 0.5
@@ -354,6 +456,15 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, cx, cy - 2, cx, bottom - 14, color, 3)
     r.ImGui_DrawList_AddLine(draw_list, cx - 5, cy - 2, cx, cy - 2, color, 3)
     r.ImGui_DrawList_AddLine(draw_list, cx - 5, bottom - 14, cx + 5, bottom - 14, color, 3)
+  elseif id == "timepiece" then
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, 2)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, 2.4, color, 12)
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx, top + 15, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, right - 16, cy + 7, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, cx, top + 10, cx, top + 14, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, cx, bottom - 14, cx, bottom - 10, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 10, cy, left + 14, cy, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, right - 14, cy, right - 10, cy, color, 2)
   elseif id == "action_browser" then
     r.ImGui_DrawList_AddRect(draw_list, left + 7, top + 9, right - 7, bottom - 9, color, 4, 0, 2)
     r.ImGui_DrawList_AddLine(draw_list, left + 14, top + 18, left + 20, cy - 1, color, 2)
@@ -384,6 +495,15 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, right - 20, top + 15, cx, cy - 2, color, 2)
     r.ImGui_DrawList_AddLine(draw_list, cx, cy + 3, left + 21, bottom - 14, color, 2)
     r.ImGui_DrawList_AddLine(draw_list, cx, cy + 3, right - 21, bottom - 14, color, 2)
+  elseif id == "track_tags" then
+    r.ImGui_DrawList_AddLine(draw_list, left + 10, top + 14, right - 16, top + 14, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, right - 16, top + 14, right - 8, cy, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, right - 8, cy, right - 16, bottom - 14, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, right - 16, bottom - 14, left + 10, bottom - 14, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 10, bottom - 14, left + 10, top + 14, color, 2)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, left + 18, cy, 3, color, 12)
+    r.ImGui_DrawList_AddLine(draw_list, cx - 4, cy - 7, cx + 9, cy + 6, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, cx + 3, cy - 7, cx - 4, cy, color, 2)
   elseif id == "automation_item_manager" then
     r.ImGui_DrawList_AddLine(draw_list, left + 6, bottom - 12, cx - 8, cy + 7, color, 2)
     r.ImGui_DrawList_AddLine(draw_list, cx - 8, cy + 7, cx + 7, cy - 8, color, 2)
@@ -551,6 +671,42 @@ local function draw_top_bar()
   r.ImGui_DrawList_AddRect(draw_list, home_x, home_y, home_x + home_size, home_y + home_size, home_hovered and Theme.colors.accent or Theme.colors.border, 4, 0, 1)
   draw_home_icon(draw_list, home_x + 3, home_y + 3, home_size - 6, home_color)
   if home_hovered then r.ImGui_SetTooltip(ctx, "Home") end
+  r.ImGui_SameLine(ctx, 0, 6)
+  local split_x, split_y = r.ImGui_GetCursorScreenPos(ctx)
+  if r.ImGui_InvisibleButton(ctx, "##tk_workbench_split", home_size, home_size) then r.ImGui_OpenPopup(ctx, "##tk_workbench_split_menu") end
+  local split_hovered = r.ImGui_IsItemHovered(ctx)
+  local split_active = split_view_available()
+  local split_color = (split_active or split_hovered) and Theme.colors.accent or Theme.colors.text_dim
+  r.ImGui_DrawList_AddRectFilled(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_active and Theme.colors.accent_soft or Theme.colors.frame_bg, 4)
+  r.ImGui_DrawList_AddRect(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_hovered and Theme.colors.accent or Theme.colors.border, 4, 0, 1)
+  draw_split_icon(draw_list, split_x + 3, split_y + 3, home_size - 6, split_color)
+  if split_hovered then r.ImGui_SetTooltip(ctx, "Split view") end
+  if r.ImGui_BeginPopup(ctx, "##tk_workbench_split_menu") then
+    local enabled = app.settings.split_view_enabled == true
+    local changed, value = r.ImGui_Checkbox(ctx, "Split View", enabled)
+    if changed then
+      app.settings.split_view_enabled = value
+      app.status = value and "Split view enabled" or "Split view disabled"
+      save_settings()
+    end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Secondary")
+    for _, candidate in ipairs(app.modules) do
+      if candidate.id ~= app.settings.active_module then
+        local selected = app.settings.split_module == candidate.id
+        if r.ImGui_Selectable(ctx, candidate.title or candidate.id, selected) then set_split_module(candidate.id) end
+        if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+      end
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Swap panes", nil, false, split_view_available()) then swap_split_modules() end
+    if r.ImGui_MenuItem(ctx, "Close split", nil, false, enabled) then
+      app.settings.split_view_enabled = false
+      app.status = "Split view disabled"
+      save_settings()
+    end
+    r.ImGui_EndPopup(ctx)
+  end
   r.ImGui_SameLine(ctx, 0, 6)
   local combo_flags = r.ImGui_ComboFlags_HeightLargest and r.ImGui_ComboFlags_HeightLargest() or 0
   r.ImGui_PushItemWidth(ctx, -1)
@@ -833,25 +989,87 @@ local function draw_module_error(module, err)
   r.ImGui_Dummy(ctx, 1, 1)
 end
 
+local function draw_module_instance(module, pane_id)
+  if not module then
+    r.ImGui_TextColored(ctx, Theme.colors.warning, "No modules loaded")
+    return
+  end
+  r.ImGui_PushID(ctx, pane_id or module.id)
+  if module.draw then
+    local ok, err = pcall(module.draw, app)
+    if ok then
+      app.module_errors[module.id .. ".draw"] = nil
+    else
+      app.module_errors[module.id .. ".draw"] = tostring(err)
+      draw_module_error(module, err)
+    end
+  end
+  r.ImGui_PopID(ctx)
+end
+
+local function draw_splitter(total_h)
+  local width = r.ImGui_GetContentRegionAvail(ctx)
+  local height = 8
+  r.ImGui_InvisibleButton(ctx, "##workbench_splitter", width, height)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local active = r.ImGui_IsItemActive(ctx)
+  if active and r.ImGui_GetMouseDragDelta then
+    local _, drag_y = r.ImGui_GetMouseDragDelta(ctx, 0, 0)
+    if math.abs(drag_y or 0) > 0 then
+      app.settings.split_ratio = clamp((tonumber(app.settings.split_ratio) or 0.5) + drag_y / math.max(1, total_h), 0.18, 0.82)
+      app.cache.split_ratio_dirty = true
+      if r.ImGui_ResetMouseDragDelta then r.ImGui_ResetMouseDragDelta(ctx, 0) end
+    end
+  elseif app.cache.split_ratio_dirty then
+    app.cache.split_ratio_dirty = nil
+    save_settings()
+  end
+  local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+  local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local background = Theme.colors.child_bg or Theme.colors.window_bg or 0x181818FF
+  local rail_color = contrast_from_background(background, hovered and 0.16 or 0.11)
+  local grip_color = active and Theme.colors.accent or contrast_from_background(background, hovered and 0.34 or 0.24)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1 + 1, x2, y2 - 1, rail_color, 3)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x1 + 8, y1 + 3, x2 - 8, y2 - 3, grip_color, 2)
+  if hovered or active then r.ImGui_SetTooltip(ctx, "Drag to resize split") end
+end
+
 local function draw_module_canvas()
   if is_home_active() then
     draw_home_view()
     return
   end
   local module = get_active_module()
-  if module then
-    if module.draw then
-      local ok, err = pcall(module.draw, app)
-      if ok then
-        app.module_errors[module.id .. ".draw"] = nil
-      else
-        app.module_errors[module.id .. ".draw"] = tostring(err)
-        draw_module_error(module, err)
-      end
-    end
-  else
-    r.ImGui_TextColored(ctx, Theme.colors.warning, "No modules loaded")
+  if not split_view_available() then
+    draw_module_instance(module, "primary")
+    return
   end
+  local split_module = get_split_module()
+  local _, available_h = r.ImGui_GetContentRegionAvail(ctx)
+  local total_h = math.max(40, available_h or 240)
+  local splitter_h = 8
+  local spacing_y = 7
+  if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
+    local _, current_spacing_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+    spacing_y = tonumber(current_spacing_y) or spacing_y
+  end
+  local content_h = math.max(20, total_h - splitter_h - spacing_y * 2)
+  local ratio = clamp(tonumber(app.settings.split_ratio) or 0.5, 0.18, 0.82)
+  local min_h = math.min(100, math.floor(content_h * 0.45))
+  local top_h = math.floor(content_h * ratio)
+  top_h = clamp(top_h, min_h, math.max(min_h, content_h - min_h))
+  local bottom_h = math.max(20, content_h - top_h)
+  local pane_flags = 0
+  if r.ImGui_WindowFlags_NoScrollbar then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollbar() end
+  if r.ImGui_WindowFlags_NoScrollWithMouse then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
+  local primary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_primary", 0, top_h, 0, pane_flags)
+  if primary_visible then draw_module_instance(module, "primary") end
+  r.ImGui_EndChild(ctx)
+  draw_splitter(content_h)
+  local secondary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_secondary", 0, bottom_h, 0, pane_flags)
+  if secondary_visible then draw_module_instance(split_module, "secondary") end
+  r.ImGui_EndChild(ctx)
 end
 
 local function draw_status_bar()

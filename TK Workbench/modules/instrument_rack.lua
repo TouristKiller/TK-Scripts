@@ -1039,6 +1039,8 @@ local function draw_header(app, ctx, settings, track)
   r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + pad_y, text_color, label)
   r.ImGui_DrawList_PopClipRect(draw_list)
   r.ImGui_Dummy(ctx, avail, bar_h)
+  local row_start_x = r.ImGui_GetCursorPosX(ctx)
+  local button_h = r.ImGui_GetFrameHeight(ctx)
   if r.ImGui_Button(ctx, (settings.pinned_track_guid ~= "" and "Unpin" or "Pin") .. "##ir_pin") then
     if settings.pinned_track_guid ~= "" then
       settings.pinned_track_guid = ""
@@ -1052,7 +1054,10 @@ local function draw_header(app, ctx, settings, track)
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, "Add FX##ir_add_top") then open_add_fx_browser(app, track) end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Settings##ir_settings") then r.ImGui_OpenPopup(ctx, "Instrument Rack Settings") end
+  local settings_x = row_start_x + math.max(0, avail - button_h)
+  if settings_x > r.ImGui_GetCursorPosX(ctx) then r.ImGui_SetCursorPosX(ctx, settings_x) end
+  if r.ImGui_Button(ctx, "...##ir_settings", button_h, button_h) then r.ImGui_OpenPopup(ctx, "Instrument Rack Settings") end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Instrument Rack settings") end
   if r.ImGui_BeginPopup(ctx, "Instrument Rack Settings") then
     local changed, value
     changed, value = r.ImGui_Checkbox(ctx, "Show screenshots", settings.show_screenshots)

@@ -4,6 +4,9 @@ local M = {}
 
 local defaults = {
   active_module = "project_overview",
+  split_view_enabled = false,
+  split_module = "action_clipboard",
+  split_ratio = 0.5,
   rail_width = 62,
   window_width = 430,
   window_height = 760,
@@ -79,6 +82,19 @@ local defaults = {
     type_priority = { "CLAP", "VST3", "VST", "JS", "AU", "LV2", "OTHER" },
     type_filter = { VST3 = true, VST = true, CLAP = true, JS = true, AU = true, LV2 = true, OTHER = true },
     group_selection = { all = "", developer = "", category = "", folders = "", custom_folders = "" }
+  },
+  track_tags = {
+    store_mode = "auto",
+    preferred_store = "fx_browser",
+    auto_reload = true,
+    reload_interval = 2.0,
+    last_store_path = "",
+    show_empty_tracks = true,
+    show_tag_colors = true,
+    sync_strategy = "manual",
+    search_term = "",
+    filter_tag = "",
+    selected_tags = {}
   },
   media_browser = {
     search_term = "",

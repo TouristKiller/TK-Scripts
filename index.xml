@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.2.4" author="TouristKiller" time="2026-06-04T13:25:00Z">
+    <version name="0.2.5" author="TouristKiller" time="2026-06-06T00:15:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua</source>
@@ -95,12 +95,21 @@
      <source file="modules/project_overview.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/project_overview.lua</source>
     <source file="modules/project_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/project_browser.lua</source>
      <source file="modules/script_launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/script_launcher.lua</source>
+    <source file="modules/timepiece.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/timepiece.lua</source>
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
         <source file="reaper_tk_action_capture.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/windows-x64/reaper_tk_action_capture.dll</source>
         <source file="reaper_tk_action_capture.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/macos-universal/reaper_tk_action_capture.dylib</source>
         <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+                v0.2.5
+                + Workbench: Added split screen mode with two stacked modules, a resizable splitter, swap control, and shared shell controls
+                + Workbench: Added Timepiece module with a large clock display for time, local clock, measures/beats, beats/ticks, seconds, samples, and frames
+                + Timepiece: Added optional full-width next marker bar below region progress and above the badges
+                + Timepiece: Added optional project position, region progress, play rate, context info, local time, and local date badges
+                + Timepiece: Added settings popup controls for status, BPM, signature, display mode, clock position, clock text visibility, and extra badges
+                + Timepiece: Added automatic play position/edit cursor behavior and optional top-aligned clock layout
+
         v0.2.4
         + Workbench: Improved REAPER Theme color mapping using native main window, docker, list, transport, routing, marker, region, and meter theme colors
         + Workbench: Added REAPER Theme - Panel and REAPER Theme - Color preset variants

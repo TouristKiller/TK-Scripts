@@ -653,11 +653,17 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  local header_start_x = r.ImGui_GetCursorPosX(ctx)
+  local header_w = r.ImGui_GetContentRegionAvail(ctx)
+  local button_h = r.ImGui_GetFrameHeight(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.accent, "FX Chain Builder")
   r.ImGui_SameLine(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, target_label())
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Settings##fcb") then r.ImGui_OpenPopup(ctx, "##fcb_settings") end
+  local settings_x = header_start_x + math.max(0, header_w - button_h)
+  if settings_x > r.ImGui_GetCursorPosX(ctx) then r.ImGui_SetCursorPosX(ctx, settings_x) end
+  if r.ImGui_Button(ctx, "...##fcb_settings_button", button_h, button_h) then r.ImGui_OpenPopup(ctx, "##fcb_settings") end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "FX Chain Builder settings") end
   draw_settings(ctx, settings, app)
   r.ImGui_Separator(ctx)
   local pending_action = draw_chain_strip(app, settings)

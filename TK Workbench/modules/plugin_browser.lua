@@ -2483,9 +2483,8 @@ local function draw_toolbar(app, settings, avail_w)
   local source_w = math.min(118, math.max(86, width * 0.22))
   local group_w = group_kind and math.min(168, math.max(104, width * 0.30)) or 0
   local gap = 4
-  local min_search_w = 110
-  local visible = { source = true, group = group_kind ~= nil, mode = true, screenshots = true, filter = true, rescan = true }
-  local hide_order = { "rescan", "filter", "screenshots", "mode", "group", "source" }
+  local visible = { source = true, group = group_kind ~= nil, mode = true, screenshots = true, rescan = true }
+  local hide_order = { "rescan", "screenshots", "mode", "group" }
   local function item_width(name)
     if name == "source" then return source_w end
     if name == "group" then return group_w end
@@ -2494,10 +2493,11 @@ local function draw_toolbar(app, settings, avail_w)
   end
   local function total_width(include_overflow)
     local total = 0
-    for _, name in ipairs({ "source", "group", "mode", "screenshots", "filter", "rescan" }) do
+    for _, name in ipairs({ "source", "group", "mode", "screenshots", "rescan" }) do
       if visible[name] then total = total + (total > 0 and gap or 0) + item_width(name) end
     end
     if include_overflow then total = total + (total > 0 and gap or 0) + button_h end
+    total = total + (total > 0 and gap or 0) + button_h
     return total
   end
   local hidden_count = 0
@@ -2511,6 +2511,29 @@ local function draw_toolbar(app, settings, avail_w)
     index = index + 1
   end
   local has_overflow = hidden_count > 0
+  do
+    local fixed_w = button_h
+    local fixed_count = 1
+    for _, name in ipairs({ "mode", "screenshots", "rescan" }) do
+      if visible[name] then
+        fixed_w = fixed_w + item_width(name)
+        fixed_count = fixed_count + 1
+      end
+    end
+    if has_overflow then
+      fixed_w = fixed_w + button_h
+      fixed_count = fixed_count + 1
+    end
+    local dropdown_count = (visible.source and 1 or 0) + (visible.group and group_kind and 1 or 0)
+    local gaps_w = math.max(0, fixed_count + dropdown_count - 1) * gap
+    local dropdown_w = math.max(0, width - fixed_w - gaps_w)
+    if dropdown_count == 1 then
+      source_w = math.max(50, dropdown_w)
+    elseif dropdown_count == 2 then
+      group_w = math.max(70, math.floor(dropdown_w * 0.45))
+      source_w = math.max(60, dropdown_w - group_w)
+    end
+  end
   local function draw_mode_button(label, w)
     if r.ImGui_Button(ctx, label, w, button_h) then
       settings.view_mode = settings.view_mode == "tiles" and "list" or "tiles"
@@ -2525,9 +2548,9 @@ local function draw_toolbar(app, settings, avail_w)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, settings.show_screenshots and "Screenshots on" or "Screenshots off") end
   end
-  local function draw_filter_button(label, w)
-    if r.ImGui_Button(ctx, label, w, button_h) then r.ImGui_OpenPopup(ctx, "##pb_filter_menu") end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Plugin Browser options") end
+  local function draw_settings_button(w)
+    if r.ImGui_Button(ctx, "...##pb_settings", w, button_h) then r.ImGui_OpenPopup(ctx, "##pb_filter_menu") end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Plugin Browser settings") end
     draw_filter_popup(ctx, settings, app)
   end
   local function draw_rescan_button(label, w)
@@ -2563,17 +2586,13 @@ local function draw_toolbar(app, settings, avail_w)
     next_item()
     draw_screenshot_button(settings.show_screenshots and "S" or "-", button_h)
   end
-  if visible.filter then
-    next_item()
-    draw_filter_button(has_active_browser_options(settings) and "O*" or "O", button_h)
-  end
   if visible.rescan then
     next_item()
     draw_rescan_button("R", button_h)
   end
   if has_overflow then
     next_item()
-    if r.ImGui_Button(ctx, "...", button_h, button_h) then r.ImGui_OpenPopup(ctx, "##pb_overflow_menu") end
+    if r.ImGui_Button(ctx, ">", button_h, button_h) then r.ImGui_OpenPopup(ctx, "##pb_overflow_menu") end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "More controls") end
     if r.ImGui_BeginPopup(ctx, "##pb_overflow_menu") then
       local popup_w = 210
@@ -2596,10 +2615,6 @@ local function draw_toolbar(app, settings, avail_w)
         r.ImGui_Separator(ctx)
         draw_screenshot_button(settings.show_screenshots and "Screenshots: On" or "Screenshots: Off", popup_w)
       end
-      if not visible.filter then
-        r.ImGui_Separator(ctx)
-        draw_filter_button(has_active_browser_options(settings) and "Plugin options *" or "Plugin options", popup_w)
-      end
       if not visible.rescan then
         r.ImGui_Separator(ctx)
         draw_rescan_button("Rescan plugins", popup_w)
@@ -2607,6 +2622,8 @@ local function draw_toolbar(app, settings, avail_w)
       r.ImGui_EndPopup(ctx)
     end
   end
+  next_item()
+  draw_settings_button(button_h)
   if row_started then r.ImGui_SetCursorPosY(ctx, math.max(0, r.ImGui_GetCursorPosY(ctx))) end
   r.ImGui_PushItemWidth(ctx, width)
   local changed, search = r.ImGui_InputTextWithHint(ctx, "##pb_search", "Search plugins", settings.search_term or "")
