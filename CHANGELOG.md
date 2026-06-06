@@ -2,6 +2,12 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.2.8] - 2026-06-06
+
+### TK Workbench
+#### Bugfixes
+- **Tags module installatie**: `modules/track_tags.lua` toegevoegd aan de ReaPack package index, zodat de Tags-module correct wordt meegeinstalleerd bij Workbench updates.
+
 ## [TK Workbench 0.2.7] - 2026-06-06
 
 ### TK Workbench

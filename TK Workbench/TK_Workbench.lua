@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.7
+-- @version 0.2.8
 -- @changelog:
+-- v0.2.8
+--   + Workbench: Fixed ReaPack delivery for the Tags module by adding modules/track_tags.lua to the package index
 -- v0.2.7
 --   + Workbench: Added auto-collapse edge offset and close-delay preferences
 --   + Workbench: Kept auto-collapse expanded while popups, dropdowns, or hovered popup windows are active
