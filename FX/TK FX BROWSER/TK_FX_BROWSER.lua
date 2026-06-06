@@ -1,8 +1,11 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.0.8
+-- @version 3.0.9
 -- @changelog:
 --[[ 
+    v3.0.9:
+        + I/O: cached freeze status to avoid reading full track chunks every frame, fixing plugin popup conflicts with MeldaProduction windows.
+
     v3.0.8:
         + Patchbay: added pin right-click route context for send/receive settings and master-send disconnects.
         + Patchbay: added Layout > Snap to grid and Layout > Prevent overlap options for node positioning.
@@ -25773,6 +25776,38 @@ function GetAutoModeName(auto_mode)
     return modes[auto_mode] or ("Mode " .. auto_mode)
 end
 
+local io_freeze_cache_guid = nil
+local io_freeze_cache_state = false
+local io_freeze_cache_valid = false
+
+local function GetIOFreezeState(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then
+        io_freeze_cache_guid = nil
+        io_freeze_cache_state = false
+        io_freeze_cache_valid = false
+        return false
+    end
+
+    local guid = r.GetTrackGUID(track)
+    if io_freeze_cache_valid and io_freeze_cache_guid == guid then
+        return io_freeze_cache_state
+    end
+
+    local ok, trk_chunk = r.GetTrackStateChunk(track, "", false)
+    io_freeze_cache_guid = guid
+    io_freeze_cache_state = ok and trk_chunk and trk_chunk:find("\nFREEZE ") ~= nil or false
+    io_freeze_cache_valid = true
+    return io_freeze_cache_state
+end
+
+local function SetIOFreezeState(track, state)
+    if track and r.ValidatePtr(track, "MediaTrack*") then
+        io_freeze_cache_guid = r.GetTrackGUID(track)
+        io_freeze_cache_state = state and true or false
+        io_freeze_cache_valid = true
+    end
+end
+
 function DrawIOSection()
     if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then return end
     local window_width = r.ImGui_GetContentRegionAvail(ctx)
@@ -25985,8 +26020,7 @@ function DrawIOSection()
 
     r.ImGui_Spacing(ctx)
     r.ImGui_Separator(ctx)
-    local _, trk_chunk = r.GetTrackStateChunk(TRACK, "", false)
-    local is_frozen = trk_chunk:find("\nFREEZE ") ~= nil
+    local is_frozen = GetIOFreezeState(TRACK)
     local freeze_w = (window_width - spacing) * 0.5
     if is_frozen then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4488CCFF)
@@ -25998,6 +26032,7 @@ function DrawIOSection()
             r.Undo_BeginBlock()
             r.SetOnlyTrackSelected(TRACK)
             r.Main_OnCommand(41223, 0)
+            SetIOFreezeState(TRACK, true)
             r.Undo_EndBlock("Freeze track", -1)
         end
     end
@@ -26018,6 +26053,7 @@ function DrawIOSection()
             r.Undo_BeginBlock()
             r.SetOnlyTrackSelected(TRACK)
             r.Main_OnCommand(41644, 0)
+            SetIOFreezeState(TRACK, false)
             r.Undo_EndBlock("Unfreeze track", -1)
         end
     end
