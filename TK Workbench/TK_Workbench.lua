@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.6
+-- @version 0.2.7
 -- @changelog:
+-- v0.2.7
+--   + Workbench: Added auto-collapse edge offset and close-delay preferences
+--   + Workbench: Kept auto-collapse expanded while popups, dropdowns, or hovered popup windows are active
+--   + Workbench: Added module error logging to workbench_errors.txt and improved module error status labels
+--   + Workbench: Stopped stale draw errors from inactive modules from taking over the global status bar
+--   + Tags: Hardened track GUID handling with persistent fallbacks and skipped tracks without stable GUIDs
+--   + Tags: Improved portable install store path handling, color normalization, and compact pane height safety
 -- v0.2.6
 --   + Workbench: Added floating-window auto-collapse with REAPER edge pinning, a keep-expanded pin button, and a 1px transparent hover strip
 --   + Workbench: Added auto-height modes for manual height, arrange height, REAPER window height, and arrange-to-window-bottom height
@@ -202,6 +209,26 @@ local function save_settings()
 end
 
 app.save_settings = save_settings
+
+local function append_error_log(key, err)
+  local file = io.open(script_path .. "workbench_errors.txt", "a")
+  if not file then return end
+  file:write(os.date("%Y-%m-%d %H:%M:%S") .. " | " .. tostring(key) .. " | " .. tostring(err) .. "\n")
+  file:close()
+end
+
+local function record_module_error(key, err)
+  local message = tostring(err)
+  if app.module_errors[key] ~= message then append_error_log(key, message) end
+  app.module_errors[key] = message
+end
+
+local function clear_module_error(key)
+  app.module_errors[key] = nil
+end
+
+app.record_module_error = record_module_error
+app.clear_module_error = clear_module_error
 
 local function find_module_index_by_id(id)
   for index, module in ipairs(app.modules) do
@@ -979,6 +1006,24 @@ local function draw_preferences_settings()
       r.ImGui_EndCombo(ctx)
     end
     r.ImGui_PopItemWidth(ctx)
+    r.ImGui_PushItemWidth(ctx, 140)
+    changed, value = r.ImGui_SliderInt(ctx, "Edge offset", math.floor((tonumber(app.settings.auto_collapse_edge_offset) or 0) + 0.5), 0, 96, "%d px")
+    if changed and not auto_collapse_locked then
+      app.settings.auto_collapse_edge_offset = value
+      app.cache.auto_collapse_force_restore = true
+      app.status = "Auto-collapse edge offset: " .. tostring(value) .. " px"
+      save_settings()
+    end
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_PushItemWidth(ctx, 140)
+    changed, value = r.ImGui_SliderDouble(ctx, "Close delay", tonumber(app.settings.auto_collapse_delay) or 0.6, 0.1, 5.0, "%.1f s")
+    if changed and not auto_collapse_locked then
+      app.settings.auto_collapse_delay = value
+      app.cache.auto_collapse_last_hover_time = r.time_precise and r.time_precise() or os.clock()
+      app.status = "Auto-collapse close delay: " .. string.format("%.1f", value) .. " s"
+      save_settings()
+    end
+    r.ImGui_PopItemWidth(ctx)
     local height_mode = app.settings.auto_collapse_height_mode
     local height_label = "Manual"
     if height_mode == "arrange" then height_label = "Arrange" end
@@ -1071,6 +1116,10 @@ end
 
 local function auto_collapse_edge_hover_margin()
   return clamp(app.settings.auto_collapse_edge_hover_margin or 12, 0, 32)
+end
+
+local function auto_collapse_edge_offset()
+  return clamp(app.settings.auto_collapse_edge_offset or 0, 0, 96)
 end
 
 local function expanded_window_min_size()
@@ -1214,6 +1263,15 @@ local function auto_collapse_keep_open()
   if app.settings.auto_collapse_keep_expanded == true then return true end
   if auto_collapse_mouse_on_outer_edge() then return true end
   if app.cache.preferences_open or app.cache.theme_settings_open or app.settings_panel then return true end
+  if r.ImGui_IsPopupOpen and r.ImGui_PopupFlags_AnyPopupId then
+    local ok, any_popup = pcall(r.ImGui_IsPopupOpen, ctx, "", r.ImGui_PopupFlags_AnyPopupId())
+    if ok and any_popup then return true end
+  end
+  if r.ImGui_IsWindowHovered and r.ImGui_HoveredFlags_AnyWindow then
+    local flags = r.ImGui_HoveredFlags_AnyWindow()
+    if r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem then flags = flags | r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem() end
+    if r.ImGui_IsWindowHovered(ctx, flags) then return true end
+  end
   for _, module in ipairs(app.modules or {}) do
     if module.keep_workbench_expanded then
       local ok, keep = pcall(module.keep_workbench_expanded, app)
@@ -1249,7 +1307,8 @@ local function apply_auto_collapse_window()
     if not edge and side == "right" and app.cache.window_x and app.cache.window_w then edge = app.cache.window_x + app.cache.window_w end
     if not edge and side == "left" and app.cache.window_x then edge = app.cache.window_x end
     if edge then
-      local target_x = side == "right" and (edge - target_w) or edge
+      local offset = collapsed and 0 or auto_collapse_edge_offset()
+      local target_x = side == "right" and (edge - target_w - offset) or (edge + offset)
       r.ImGui_SetNextWindowPos(ctx, target_x, auto_top or app.cache.window_y or 0, cond_always)
     end
   end
@@ -1402,9 +1461,9 @@ local function draw_module_instance(module, pane_id)
   if module.draw then
     local ok, err = pcall(module.draw, app)
     if ok then
-      app.module_errors[module.id .. ".draw"] = nil
+      clear_module_error(module.id .. ".draw")
     else
-      app.module_errors[module.id .. ".draw"] = tostring(err)
+      record_module_error(module.id .. ".draw", err)
       draw_module_error(module, err)
     end
   end
@@ -1476,6 +1535,38 @@ local function draw_module_canvas()
   r.ImGui_EndChild(ctx)
 end
 
+local function visible_module_error_ids()
+  local result = {}
+  if is_home_active() then return result end
+  local active = get_active_module()
+  if active then result[active.id] = true end
+  if split_view_available() then
+    local split_module = get_split_module()
+    if split_module then result[split_module.id] = true end
+  end
+  return result
+end
+
+local function module_error_status()
+  local visible = visible_module_error_ids()
+  for key, err in pairs(app.module_errors) do
+    local module_id, phase = tostring(key):match("^(.-)%.(.+)$")
+    module_id = module_id or tostring(key)
+    phase = phase or "module"
+    if phase ~= "draw" or visible[module_id] then return key, err end
+  end
+  return nil
+end
+
+local function module_error_text(key)
+  local module_id, phase = tostring(key):match("^(.-)%.(.+)$")
+  module_id = module_id or tostring(key)
+  phase = phase or "module"
+  local module = app.modules_by_id[module_id]
+  local title = tostring(module and (module.title or module.id) or module_id)
+  return title .. " " .. phase .. " error"
+end
+
 local function draw_status_bar()
   local selection = app.selection or {}
   local captured = UI.get_captured_info_line(app)
@@ -1486,13 +1577,11 @@ local function draw_status_bar()
   if captured_options.details then details = tostring(captured_options.details) end
   if selection.track and selection.track.name then text = text .. " | Track: " .. selection.track.name end
   if selection.item and selection.item.take_name then text = text .. " | Take: " .. selection.item.take_name end
-  for key, err in pairs(app.module_errors) do
-    local module_id = tostring(key):match("^(.-)%.") or tostring(key)
-    local module = app.modules_by_id[module_id]
-    text = tostring(module and (module.title or module.id) or module_id) .. " error"
-    details = tostring(err)
+  local key, err = module_error_status()
+  if key then
+    text = module_error_text(key)
+    details = tostring(err) .. "\n\nLogged to workbench_errors.txt."
     severity = "error"
-    break
   end
   UI.draw_info_line(ctx, text, { severity = severity, details = details, force = true })
 end
@@ -1501,7 +1590,7 @@ local function update_modules()
   for _, module in ipairs(app.modules) do
     if module.update then
       local ok, err = pcall(module.update, app)
-      if ok then app.module_errors[module.id .. ".update"] = nil else app.module_errors[module.id .. ".update"] = tostring(err) end
+      if ok then clear_module_error(module.id .. ".update") else record_module_error(module.id .. ".update", err) end
     end
   end
 end

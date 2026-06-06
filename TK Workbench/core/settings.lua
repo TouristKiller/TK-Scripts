@@ -15,6 +15,7 @@ local defaults = {
   auto_collapse_delay = 0.6,
   auto_collapse_width = 2,
   auto_collapse_edge_hover_margin = 12,
+  auto_collapse_edge_offset = 0,
   auto_collapse_height_mode = "manual",
   auto_collapse_keep_expanded = false,
   show_status = true,

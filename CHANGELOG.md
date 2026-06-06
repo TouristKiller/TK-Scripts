@@ -2,6 +2,29 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.2.7] - 2026-06-06
+
+### TK Workbench
+#### Toegevoegd
+- **Auto-collapse**: Floating Workbench kan automatisch inklappen naar een smalle randstrip met REAPER edge pinning.
+- **Auto-collapse voorkeuren**: Edge offset en close delay toegevoegd zodat gebruikers zelf kunnen bepalen hoeveel ruimte Workbench vrijlaat en hoe snel het venster inklapt.
+- **Auto-height modes**: Auto-collapse kan de hoogte volgen van manual height, arrange height, REAPER window height of arrange-to-window-bottom height.
+- **Keep-expanded pin**: Pin-knop toegevoegd om Workbench tijdelijk uitgeklapt te houden.
+- **Module error logging**: Modulefouten worden gelogd naar `workbench_errors.txt` voor betere diagnose bij gebruikersrapporten.
+
+#### Gewijzigd
+- **Auto-collapse gedrag**: Workbench blijft uitgeklapt zolang popups, dropdowns, hovered popup windows of actieve module-acties open zijn.
+- **Auto-collapse positionering**: Native-to-ImGui coordinate conversion verbeterd voor scaling en multi-monitor setups.
+- **Docked gedrag**: Auto-collapse voorkeuren zijn uitgeschakeld wanneer Workbench gedockt is, omdat auto-collapse alleen voor floating windows geldt.
+- **Module errors**: Statuslabels zijn specifieker en stale draw errors van inactieve modules nemen de globale statusbalk niet meer over.
+
+#### Bugfixes
+- **Plugin Browser**: External FX drag overlay staat nu correct op secundaire monitoren.
+- **Plugin Browser**: Workbench blijft uitgeklapt tijdens pending en actieve external FX drags zodat drops niet worden onderbroken.
+- **Tags**: Track GUID handling robuuster gemaakt met persistente fallbacks en zonder onstabiele index-fallbacks.
+- **Tags**: Store path handling verbeterd voor portable installaties en custom Workbench-locaties.
+- **Tags**: Tag-kleuren worden genormaliseerd en compacte pane heights worden defensief begrensd.
+
 ## [TK Workbench 0.2.5] - 2026-06-04
 
 ### TK Workbench

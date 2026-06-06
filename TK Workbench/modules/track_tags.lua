@@ -12,8 +12,7 @@ local M = {
 
 local resource_path = r.GetResourcePath()
 local fx_root = resource_path .. "/Scripts/TK Scripts/FX/"
-local workbench_root = resource_path .. "/Scripts/TK Scripts/TK Workbench/"
-local workbench_store_path = workbench_root .. "track_tags.json"
+local workbench_store_path = resource_path .. "/Scripts/TK Scripts/TK Workbench/track_tags.json"
 local fx_store_path = fx_root .. "track_tags.json"
 local fx_folder_store_path = fx_root .. "TK FX BROWSER/track_tags.json"
 
@@ -57,7 +56,13 @@ local function copy_default(value)
   return target
 end
 
+local function configure_paths(app)
+  local path = app and app.script_path
+  if type(path) == "string" and path ~= "" then workbench_store_path = path .. "track_tags.json" end
+end
+
 local function ensure_settings(app)
+  configure_paths(app)
   app.settings.track_tags = app.settings.track_tags or {}
   local settings = app.settings.track_tags
   local changed = false
@@ -109,6 +114,32 @@ local function write_json(path, value)
   return write_text(path, encoded)
 end
 
+local function valid_guid(value)
+  return type(value) == "string" and value ~= "" and value ~= "{}"
+end
+
+local function track_guid(track)
+  if not track then return nil end
+  if r.GetTrackGUID then
+    local ok, guid = pcall(r.GetTrackGUID, track)
+    if ok and valid_guid(guid) then return guid end
+  end
+  if r.GetSetMediaTrackInfo_String then
+    for _, key in ipairs({ "GUID", "P_GUID" }) do
+      local ok, retval, guid = pcall(r.GetSetMediaTrackInfo_String, track, key, "", false)
+      if ok and retval and valid_guid(guid) then return guid end
+    end
+  end
+  if r.GetTrackStateChunk then
+    local ok, retval, chunk = pcall(r.GetTrackStateChunk, track, "", false)
+    if ok and retval and type(chunk) == "string" then
+      local guid = chunk:match("TRACKID%s+({[^%s]+})") or chunk:match("TRACKID%s+([^%s]+)")
+      if valid_guid(guid) then return guid end
+    end
+  end
+  return nil
+end
+
 local function fx_browser_available()
   return file_exists(fx_store_path) or file_exists(fx_folder_store_path) or file_exists(fx_root .. "TK_FX_BROWSER.lua") or file_exists(fx_root .. "TK_FX_BROWSER Mini.lua")
 end
@@ -148,6 +179,10 @@ local function normalize_data(data)
   data.available = type(data.available) == "table" and data.available or {}
   for guid, tags in pairs(data.tracks) do
     data.tracks[guid] = normalize_tag_array(tags)
+  end
+  for tag, color in pairs(data.colors) do
+    local numeric = tonumber(color)
+    if numeric then data.colors[tag] = numeric else data.colors[tag] = nil end
   end
   for tag, value in pairs(data.available) do
     if value == false then data.available[tag] = nil end
@@ -278,20 +313,22 @@ local function collect_tracks(settings)
   local count = r.CountTracks(0)
   for index = 0, count - 1 do
     local track = r.GetTrack(0, index)
-    local guid = r.GetTrackGUID(track)
-    local tags = state.data.tracks[guid] or {}
-    local name = track_name(track, index)
-    local include = settings.show_empty_tracks == true or #tags > 0
-    local matches_selected_tags = false
-    if selected_count > 0 then
-      for _, tag in ipairs(tags) do if selected_lookup[tag] then matches_selected_tags = true break end end
+    local guid = track_guid(track)
+    if guid then
+      local tags = state.data.tracks[guid] or {}
+      local name = track_name(track, index)
+      local include = settings.show_empty_tracks == true or #tags > 0
+      local matches_selected_tags = false
+      if selected_count > 0 then
+        for _, tag in ipairs(tags) do if selected_lookup[tag] then matches_selected_tags = true break end end
+      end
+      if include and search ~= "" then
+        local haystack = name:lower()
+        for _, tag in ipairs(tags) do haystack = haystack .. " " .. tag:lower() end
+        include = haystack:find(search, 1, true) ~= nil
+      end
+      if include then result[#result + 1] = { track = track, guid = guid, index = index, name = name, tags = tags, matches_selected_tags = matches_selected_tags } end
     end
-    if include and search ~= "" then
-      local haystack = name:lower()
-      for _, tag in ipairs(tags) do haystack = haystack .. " " .. tag:lower() end
-      include = haystack:find(search, 1, true) ~= nil
-    end
-    if include then result[#result + 1] = { track = track, guid = guid, index = index, name = name, tags = tags, matches_selected_tags = matches_selected_tags } end
   end
   state.filtered_tracks = result
 end
@@ -331,11 +368,13 @@ local function selected_tag_tracks(settings)
   local result = {}
   for index = 0, r.CountTracks(0) - 1 do
     local track = r.GetTrack(0, index)
-    local guid = r.GetTrackGUID(track)
-    local tags = state.data.tracks[guid]
-    if type(tags) == "table" then
-      for _, tag in ipairs(tags) do
-        if selected_lookup[tag] then result[#result + 1] = track break end
+    local guid = track_guid(track)
+    if guid then
+      local tags = state.data.tracks[guid]
+      if type(tags) == "table" then
+        for _, tag in ipairs(tags) do
+          if selected_lookup[tag] then result[#result + 1] = track break end
+        end
       end
     end
   end
@@ -347,7 +386,8 @@ local function selected_track_guids()
   local count = r.CountSelectedTracks(0)
   for index = 0, count - 1 do
     local track = r.GetSelectedTrack(0, index)
-    if track then result[#result + 1] = r.GetTrackGUID(track) end
+    local guid = track_guid(track)
+    if guid then result[#result + 1] = guid end
   end
   return result
 end
@@ -547,11 +587,13 @@ local function tracks_with_tag(tag)
   local result = {}
   for index = 0, r.CountTracks(0) - 1 do
     local track = r.GetTrack(0, index)
-    local guid = r.GetTrackGUID(track)
-    local tags = state.data.tracks[guid]
-    if type(tags) == "table" then
-      for _, current in ipairs(tags) do
-        if current == tag then result[#result + 1] = track break end
+    local guid = track_guid(track)
+    if guid then
+      local tags = state.data.tracks[guid]
+      if type(tags) == "table" then
+        for _, current in ipairs(tags) do
+          if current == tag then result[#result + 1] = track break end
+        end
       end
     end
   end
@@ -597,13 +639,17 @@ end
 local function solo_select_tracks_with_tag(app, tag)
   local tracks = tracks_with_tag(tag)
   local tagged = {}
-  for _, track in ipairs(tracks) do tagged[r.GetTrackGUID(track)] = true end
+  for _, track in ipairs(tracks) do
+    local guid = track_guid(track)
+    if guid then tagged[guid] = true end
+  end
   r.Undo_BeginBlock()
   r.PreventUIRefresh(1)
   r.Main_OnCommand(40297, 0)
   for index = 0, r.CountTracks(0) - 1 do
     local track = r.GetTrack(0, index)
-    local active = tagged[r.GetTrackGUID(track)] == true
+    local guid = track_guid(track)
+    local active = guid and tagged[guid] == true
     r.SetTrackSelected(track, active)
     r.SetMediaTrackInfo_Value(track, "I_SOLO", active and 1 or 0)
   end
@@ -617,14 +663,18 @@ end
 function set_selected_tags_visibility(app, settings)
   local tracks = selected_tag_tracks(settings)
   local tagged = {}
-  for _, track in ipairs(tracks) do tagged[r.GetTrackGUID(track)] = true end
+  for _, track in ipairs(tracks) do
+    local guid = track_guid(track)
+    if guid then tagged[guid] = true end
+  end
   r.Undo_BeginBlock()
   r.PreventUIRefresh(1)
   r.Main_OnCommand(40297, 0)
   for _, track in ipairs(tracks) do r.SetTrackSelected(track, true) end
   for index = 0, r.CountTracks(0) - 1 do
     local track = r.GetTrack(0, index)
-    local visible = tagged[r.GetTrackGUID(track)] == true
+    local guid = track_guid(track)
+    local visible = guid and tagged[guid] == true
     r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", visible and 1 or 0)
     r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", visible and 1 or 0)
   end
@@ -1023,7 +1073,7 @@ function M.draw(app)
     collect_tracks(settings)
     state.last_filter_key = filter_key
   end
-  if r.ImGui_BeginChild(ctx, "##track_atlas_tracks", 0, height - 118, 0) then
+  if r.ImGui_BeginChild(ctx, "##track_atlas_tracks", 0, math.max(40, height - 118), 0) then
     for _, item in ipairs(state.filtered_tracks) do draw_track_row(app, settings, item, width - 10) end
     if #state.filtered_tracks == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No tracks match") end
     r.ImGui_EndChild(ctx)

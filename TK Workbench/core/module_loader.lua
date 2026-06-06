@@ -1,5 +1,9 @@
 local M = {}
 
+local function record_error(app, key, err)
+  if app.record_module_error then app.record_module_error(key, err) else app.module_errors[key] = tostring(err) end
+end
+
 function M.load(app, module_names)
   app.modules = {}
   app.modules_by_id = {}
@@ -12,12 +16,12 @@ function M.load(app, module_names)
       module.title = module.title or module.id
       if module.init then
         local init_ok, init_err = pcall(module.init, app)
-        if not init_ok then app.module_errors[module.id .. ".init"] = tostring(init_err) end
+        if not init_ok then record_error(app, module.id .. ".init", init_err) end
       end
       app.modules[#app.modules + 1] = module
       app.modules_by_id[module.id] = module
     else
-      app.module_errors[name .. ".load"] = tostring(module)
+      record_error(app, name .. ".load", module)
     end
   end
 end
