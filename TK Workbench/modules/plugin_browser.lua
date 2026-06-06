@@ -1466,6 +1466,16 @@ local function mouse_screen_position()
   return nil, nil
 end
 
+local function mouse_imgui_position(ctx)
+  local x, y = mouse_screen_position()
+  if x and y and r.ImGui_PointConvertNative then
+    local imx, imy = r.ImGui_PointConvertNative(ctx, x, y)
+    if imx and imy then return imx, imy end
+  end
+  if r.ImGui_GetMousePos then return r.ImGui_GetMousePos(ctx) end
+  return nil, nil
+end
+
 local function track_under_mouse()
   if not r.GetTrackFromPoint then return nil end
   local x, y = mouse_screen_position()
@@ -1805,16 +1815,14 @@ local function draw_drag_overlay(app)
   local ctx = app.ctx
   local plugin = state.dragging_plugin
   local plugins = state.dragging_plugins or { plugin }
-  if not r.ImGui_GetMousePos or not r.ImGui_GetMainViewport then return end
-  local imx, imy = r.ImGui_GetMousePos(ctx)
+  local imx, imy = mouse_imgui_position(ctx)
+  if not imx or not imy then return end
   local target_type, target_name, target_color = drag_target_label(state.drag_target_track)
-  local vp = r.ImGui_GetMainViewport(ctx)
-  local vp_x, vp_y = r.ImGui_Viewport_GetPos(vp)
   local marker_radius = 24
   local marker_pad = 8
   local marker_size = (marker_radius + marker_pad) * 2
   local marker_flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs() | r.ImGui_WindowFlags_NoBackground()
-  r.ImGui_SetNextWindowPos(ctx, imx - vp_x - marker_radius - marker_pad, imy - vp_y - marker_radius - marker_pad, r.ImGui_Cond_Always())
+  r.ImGui_SetNextWindowPos(ctx, imx - marker_radius - marker_pad, imy - marker_radius - marker_pad, r.ImGui_Cond_Always())
   r.ImGui_SetNextWindowSize(ctx, marker_size, marker_size, r.ImGui_Cond_Always())
   r.ImGui_SetNextWindowBgAlpha(ctx, 0.0)
   if r.ImGui_Begin(ctx, "##tk_workbench_drag_marker", true, marker_flags) then
@@ -1829,7 +1837,7 @@ local function draw_drag_overlay(app)
   end
   local overlay_flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs()
   r.ImGui_SetNextWindowBgAlpha(ctx, 0.42)
-  r.ImGui_SetNextWindowPos(ctx, imx - vp_x + marker_radius + marker_pad + 6, imy - vp_y + marker_radius + marker_pad + 6, r.ImGui_Cond_Always())
+  r.ImGui_SetNextWindowPos(ctx, imx + marker_radius + marker_pad + 6, imy + marker_radius + marker_pad + 6, r.ImGui_Cond_Always())
   if r.ImGui_Begin(ctx, "##tk_workbench_drag_overlay", true, overlay_flags) then
     r.ImGui_Text(ctx, "FX " .. drag_plugins_label(plugins))
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), target_color)
@@ -2711,6 +2719,13 @@ function M.draw(app)
   draw_bottom_shortcuts(app, avail_w or 320)
   UI.draw_info_line(ctx, info_text)
   if settings.show_screenshots then process_screenshot_load_queue(ctx) end
+end
+
+function M.keep_workbench_expanded(app)
+  local ctx = app and app.ctx
+  if state.dragging_plugin then return true end
+  if state.potential_drag_plugin and ctx and r.ImGui_IsMouseDown and r.ImGui_IsMouseDown(ctx, 0) then return true end
+  return false
 end
 
 function M.shutdown(app)

@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.5
+-- @version 0.2.6
 -- @changelog:
+-- v0.2.6
+--   + Workbench: Added floating-window auto-collapse with REAPER edge pinning, a keep-expanded pin button, and a 1px transparent hover strip
+--   + Workbench: Added auto-height modes for manual height, arrange height, REAPER window height, and arrange-to-window-bottom height
+--   + Workbench: Improved auto-collapse positioning with native-to-ImGui coordinate conversion for scaling and multi-monitor setups
+--   + Workbench: Disabled auto-collapse preferences while Workbench is docked to clarify that auto-collapse is floating-only
+--   + Plugin Browser: Fixed external FX drag overlay positioning on secondary monitors
+--   + Plugin Browser: Kept Workbench expanded during pending and active external FX drags to prevent interrupted drops
 -- v0.2.5
 --   + Workbench: Added split screen mode with two stacked modules, a resizable splitter, swap control, and shared shell controls
 --   + Workbench: Added Timepiece module with a large clock display for time, local clock, measures/beats, beats/ticks, seconds, samples, and frames
@@ -640,8 +647,30 @@ local function draw_top_bar()
   local dot_size = 14
   local dot_gap = 8
   r.ImGui_TextColored(ctx, Theme.colors.accent, SCRIPT_NAME .. " - " .. title)
-  r.ImGui_SameLine(ctx, math.max(120, avail_w - (dot_size * 2) - dot_gap))
+  r.ImGui_SameLine(ctx, math.max(120, avail_w - (dot_size * 3) - (dot_gap * 2)))
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local pin_x, pin_y = r.ImGui_GetCursorScreenPos(ctx)
+  local pin_active = app.settings.auto_collapse_keep_expanded == true
+  local pin_color = pin_active and Theme.colors.accent or Theme.colors.text_dim
+  r.ImGui_DrawList_AddCircleFilled(draw_list, pin_x + dot_size * 0.5, pin_y + dot_size * 0.5, dot_size * 0.5, pin_active and Theme.colors.accent_soft or Theme.colors.frame_bg)
+  r.ImGui_DrawList_AddCircle(draw_list, pin_x + dot_size * 0.5, pin_y + dot_size * 0.5, dot_size * 0.5, pin_active and Theme.colors.accent or Theme.colors.border, 16, 1)
+  r.ImGui_DrawList_AddLine(draw_list, pin_x + 5, pin_y + 4, pin_x + 9, pin_y + 4, pin_color, 1.5)
+  r.ImGui_DrawList_AddLine(draw_list, pin_x + 7, pin_y + 4, pin_x + 7, pin_y + 10, pin_color, 1.5)
+  r.ImGui_DrawList_AddLine(draw_list, pin_x + 5, pin_y + 10, pin_x + 9, pin_y + 10, pin_color, 1.5)
+  if r.ImGui_InvisibleButton(ctx, "##workbench_keep_expanded_pin", dot_size, dot_size) then
+    app.settings.auto_collapse_keep_expanded = not pin_active
+    if app.settings.auto_collapse_keep_expanded then
+      app.cache.auto_collapse_collapsed = false
+      app.cache.auto_collapse_force_restore = true
+      app.status = "Workbench pinned open"
+    else
+      app.cache.auto_collapse_last_hover_time = r.time_precise and r.time_precise() or os.clock()
+      app.status = "Workbench auto-collapse active"
+    end
+    save_settings()
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, pin_active and "Allow auto-collapse" or "Keep Workbench expanded") end
+  r.ImGui_SameLine(ctx, 0, dot_gap)
   local settings_x, settings_y = r.ImGui_GetCursorScreenPos(ctx)
   local dot_y = settings_y + dot_size * 0.5
   r.ImGui_DrawList_AddCircleFilled(draw_list, settings_x + dot_size * 0.5, dot_y, dot_size * 0.5, 0xF2F2F2FF)
@@ -893,7 +922,7 @@ local function draw_preferences_settings()
     app.settings_panel = nil
   end
   if not app.cache.preferences_open then return end
-  r.ImGui_SetNextWindowSize(ctx, 300, 230, r.ImGui_Cond_Appearing())
+  r.ImGui_SetNextWindowSize(ctx, 300, 360, r.ImGui_Cond_Appearing())
   local visible, open = r.ImGui_Begin(ctx, "Preferences##tk_workbench_preferences", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
   app.cache.preferences_open = open
   if visible then
@@ -920,6 +949,72 @@ local function draw_preferences_settings()
       app.status = value and "Info box visible" or "Info box hidden"
       save_settings()
     end
+    r.ImGui_Separator(ctx)
+    local auto_collapse_locked = app.cache.window_docked == true
+    local auto_collapse_disabled_stack = auto_collapse_locked and r.ImGui_BeginDisabled and r.ImGui_EndDisabled
+    if auto_collapse_disabled_stack then r.ImGui_BeginDisabled(ctx, true) end
+    changed, value = r.ImGui_Checkbox(ctx, "Auto-collapse", app.settings.auto_collapse == true)
+    if changed and not auto_collapse_locked then
+      app.settings.auto_collapse = value
+      app.cache.auto_collapse_collapsed = false
+      app.cache.auto_collapse_force_restore = true
+      app.status = value and "Auto-collapse enabled" or "Auto-collapse disabled"
+      save_settings()
+    end
+    local side = app.settings.auto_collapse_side == "right" and "Right" or "Left"
+    r.ImGui_PushItemWidth(ctx, 140)
+    if r.ImGui_BeginCombo(ctx, "Lock side", side) then
+      if r.ImGui_Selectable(ctx, "Left", side == "Left") and not auto_collapse_locked then
+        app.settings.auto_collapse_side = "left"
+        app.cache.auto_collapse_force_restore = true
+        app.status = "Auto-collapse lock: left"
+        save_settings()
+      end
+      if r.ImGui_Selectable(ctx, "Right", side == "Right") and not auto_collapse_locked then
+        app.settings.auto_collapse_side = "right"
+        app.cache.auto_collapse_force_restore = true
+        app.status = "Auto-collapse lock: right"
+        save_settings()
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
+    local height_mode = app.settings.auto_collapse_height_mode
+    local height_label = "Manual"
+    if height_mode == "arrange" then height_label = "Arrange" end
+    if height_mode == "reaper" then height_label = "REAPER window" end
+    if height_mode == "arrange_window" then height_label = "Arrange to bottom" end
+    r.ImGui_PushItemWidth(ctx, 140)
+    if r.ImGui_BeginCombo(ctx, "Auto height", height_label) then
+      if r.ImGui_Selectable(ctx, "Manual", height_label == "Manual") and not auto_collapse_locked then
+        app.settings.auto_collapse_height_mode = "manual"
+        app.cache.auto_collapse_force_restore = true
+        app.status = "Auto height: manual"
+        save_settings()
+      end
+      if r.ImGui_Selectable(ctx, "Arrange", height_label == "Arrange") and not auto_collapse_locked then
+        app.settings.auto_collapse_height_mode = "arrange"
+        app.cache.auto_collapse_force_restore = true
+        app.status = "Auto height: arrange"
+        save_settings()
+      end
+      if r.ImGui_Selectable(ctx, "REAPER window", height_label == "REAPER window") and not auto_collapse_locked then
+        app.settings.auto_collapse_height_mode = "reaper"
+        app.cache.auto_collapse_force_restore = true
+        app.status = "Auto height: REAPER window"
+        save_settings()
+      end
+      if r.ImGui_Selectable(ctx, "Arrange to bottom", height_label == "Arrange to bottom") and not auto_collapse_locked then
+        app.settings.auto_collapse_height_mode = "arrange_window"
+        app.cache.auto_collapse_force_restore = true
+        app.status = "Auto height: arrange to bottom"
+        save_settings()
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
+    if auto_collapse_disabled_stack then r.ImGui_EndDisabled(ctx) end
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, auto_collapse_locked and "Auto-collapse is inactive while Workbench is docked." or "Floating Workbench windows only.")
     r.ImGui_Separator(ctx)
     changed, value = r.ImGui_Checkbox(ctx, "Tooltips", app.settings.tooltips_enabled ~= false)
     if changed then
@@ -957,6 +1052,315 @@ local function draw_preferences_settings()
     r.ImGui_PopItemWidth(ctx)
   end
   r.ImGui_End(ctx)
+end
+
+local function current_time()
+  return r.time_precise and r.time_precise() or os.clock()
+end
+local function auto_collapse_side()
+  return app.settings.auto_collapse_side == "right" and "right" or "left"
+end
+
+local function auto_collapse_width()
+  return clamp(app.settings.auto_collapse_width or 1, 1, 1)
+end
+
+local function auto_collapse_delay()
+  return clamp(app.settings.auto_collapse_delay or 0.6, 0.1, 5.0)
+end
+
+local function auto_collapse_edge_hover_margin()
+  return clamp(app.settings.auto_collapse_edge_hover_margin or 12, 0, 32)
+end
+
+local function expanded_window_min_size()
+  return 260, 240
+end
+
+local function auto_collapse_height_mode()
+  local mode = app.settings.auto_collapse_height_mode
+  if mode == "arrange" or mode == "reaper" or mode == "arrange_window" then return mode end
+  return "manual"
+end
+
+local function auto_collapse_target_rect(mode)
+  if not r.GetMainHwnd then return nil end
+  local hwnd = r.GetMainHwnd()
+  if not hwnd then return nil end
+  local ok, left, top, right, bottom
+  if mode == "arrange" then
+    if not r.JS_Window_FindChildByID or not r.JS_Window_GetRect then return nil end
+    local arrange = r.JS_Window_FindChildByID(hwnd, 0x3E8)
+    if not arrange then return nil end
+    ok, left, top, right, bottom = r.JS_Window_GetRect(arrange)
+  elseif mode == "arrange_window" then
+    if not r.JS_Window_FindChildByID or not r.JS_Window_GetRect then return nil end
+    local arrange = r.JS_Window_FindChildByID(hwnd, 0x3E8)
+    if not arrange then return nil end
+    local arrange_ok, arrange_left, arrange_top, arrange_right = r.JS_Window_GetRect(arrange)
+    local reaper_ok, _, _, reaper_right, reaper_bottom
+    if r.JS_Window_GetClientRect then reaper_ok, _, _, reaper_right, reaper_bottom = r.JS_Window_GetClientRect(hwnd) end
+    if not reaper_ok and r.JS_Window_GetRect then reaper_ok, _, _, reaper_right, reaper_bottom = r.JS_Window_GetRect(hwnd) end
+    if not arrange_ok or not reaper_ok then return nil end
+    ok = true
+    left = arrange_left
+    top = arrange_top
+    right = reaper_right or arrange_right
+    bottom = reaper_bottom
+  elseif mode == "reaper" then
+    if r.JS_Window_GetClientRect then ok, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd) end
+    if not ok and r.JS_Window_GetRect then ok, left, top, right, bottom = r.JS_Window_GetRect(hwnd) end
+  else
+    return nil
+  end
+  if not ok then return nil end
+  left = tonumber(left)
+  top = tonumber(top)
+  right = tonumber(right)
+  bottom = tonumber(bottom)
+  if not left or not top or not right or not bottom then return nil end
+  return left, top, right, bottom
+end
+
+local function auto_collapse_height_bounds()
+  local mode = auto_collapse_height_mode()
+  if mode == "manual" then return nil end
+  local left, top, right, bottom = auto_collapse_target_rect(mode)
+  if not left then return nil end
+  if r.ImGui_PointConvertNative then
+    local _, converted_top = r.ImGui_PointConvertNative(ctx, left, top)
+    local _, converted_bottom = r.ImGui_PointConvertNative(ctx, right, bottom)
+    top = tonumber(converted_top) or top
+    bottom = tonumber(converted_bottom) or bottom
+  end
+  if bottom <= top then return nil end
+  return top, bottom - top
+end
+
+local function auto_collapse_available()
+  return app.settings.auto_collapse == true and app.cache.window_docked == false
+end
+
+local function auto_collapse_reaper_edge(side)
+  if not r.GetMainHwnd then return nil end
+  local hwnd = r.GetMainHwnd()
+  if not hwnd then return nil end
+  local ok, left, _, right
+  if r.JS_Window_GetClientRect then ok, left, _, right = r.JS_Window_GetClientRect(hwnd) end
+  if not ok and r.JS_Window_GetRect then ok, left, _, right = r.JS_Window_GetRect(hwnd) end
+  if not ok then return nil end
+  left = tonumber(left)
+  right = tonumber(right)
+  if not left or not right then return nil end
+  if side == "right" then return right end
+  return left
+end
+
+local function auto_collapse_native_edge(side)
+  local reaper_edge = auto_collapse_reaper_edge(side)
+  if reaper_edge then return reaper_edge end
+  if not r.ImGui_GetMainViewport or not r.ImGui_Viewport_GetWorkPos or not r.ImGui_Viewport_GetWorkSize then return nil end
+  local viewport = r.ImGui_GetMainViewport(ctx)
+  if not viewport then return nil end
+  local work_x = r.ImGui_Viewport_GetWorkPos(viewport)
+  local work_w = r.ImGui_Viewport_GetWorkSize(viewport)
+  work_x = tonumber(work_x)
+  work_w = tonumber(work_w)
+  if not work_x or not work_w then return nil end
+  if side == "right" then return work_x + work_w end
+  return work_x
+end
+
+local function auto_collapse_viewport_edge(side)
+  local reaper_edge = auto_collapse_reaper_edge(side)
+  if reaper_edge then
+    if r.ImGui_PointConvertNative then
+      local converted = r.ImGui_PointConvertNative(ctx, reaper_edge, 0)
+      converted = tonumber(converted)
+      if converted then return converted end
+    end
+    return reaper_edge
+  end
+  if not r.ImGui_GetMainViewport or not r.ImGui_Viewport_GetWorkPos or not r.ImGui_Viewport_GetWorkSize then return nil end
+  local viewport = r.ImGui_GetMainViewport(ctx)
+  if not viewport then return nil end
+  local work_x = r.ImGui_Viewport_GetWorkPos(viewport)
+  local work_w = r.ImGui_Viewport_GetWorkSize(viewport)
+  work_x = tonumber(work_x)
+  work_w = tonumber(work_w)
+  if not work_x or not work_w then return nil end
+  if side == "right" then return work_x + work_w end
+  return work_x
+end
+
+local function auto_collapse_mouse_on_outer_edge()
+  if not r.GetMousePosition then return false end
+  local side = auto_collapse_side()
+  local edge = auto_collapse_native_edge(side)
+  if not edge then return false end
+  local mouse_x = r.GetMousePosition()
+  mouse_x = tonumber(mouse_x)
+  if not mouse_x then return false end
+  if not app.cache.auto_collapse_collapsed then
+    if side == "right" then return mouse_x >= edge end
+    return mouse_x <= edge
+  end
+  local margin = auto_collapse_edge_hover_margin()
+  if side == "right" then return mouse_x >= edge and mouse_x <= edge + margin end
+  return mouse_x <= edge and mouse_x >= edge - margin
+end
+
+local function auto_collapse_keep_open()
+  if app.settings.auto_collapse_keep_expanded == true then return true end
+  if auto_collapse_mouse_on_outer_edge() then return true end
+  if app.cache.preferences_open or app.cache.theme_settings_open or app.settings_panel then return true end
+  for _, module in ipairs(app.modules or {}) do
+    if module.keep_workbench_expanded then
+      local ok, keep = pcall(module.keep_workbench_expanded, app)
+      if ok and keep then return true end
+    end
+  end
+  if r.ImGui_IsAnyItemActive and r.ImGui_IsAnyItemActive(ctx) then return true end
+  return false
+end
+
+local function apply_auto_collapse_window()
+  local available = auto_collapse_available()
+  if not available then
+    app.cache.auto_collapse_collapsed = false
+    app.cache.auto_collapse_force_restore = nil
+    return
+  end
+  local collapsed = app.cache.auto_collapse_collapsed == true
+  local force_restore = app.cache.auto_collapse_force_restore == true
+  local min_w, min_h = expanded_window_min_size()
+  local expanded_w = math.max(min_w, app.cache.auto_collapse_expanded_w or app.cache.window_w or app.settings.window_width or 430)
+  local expanded_h = math.max(min_h, app.cache.auto_collapse_expanded_h or app.cache.window_h or app.settings.window_height or 760)
+  local auto_top, auto_h = auto_collapse_height_bounds()
+  if auto_h then expanded_h = math.max(min_h, auto_h) end
+  local target_w = collapsed and auto_collapse_width() or expanded_w
+  local target_h = expanded_h
+  local cond_always = r.ImGui_Cond_Always and r.ImGui_Cond_Always() or 0
+  if collapsed and r.ImGui_SetNextWindowSizeConstraints then r.ImGui_SetNextWindowSizeConstraints(ctx, target_w, target_h, target_w, target_h) end
+  if (collapsed or force_restore or auto_h) and r.ImGui_SetNextWindowSize then r.ImGui_SetNextWindowSize(ctx, target_w, target_h, cond_always) end
+  if r.ImGui_SetNextWindowPos then
+    local side = auto_collapse_side()
+    local edge = auto_collapse_viewport_edge(side)
+    if not edge and side == "right" and app.cache.window_x and app.cache.window_w then edge = app.cache.window_x + app.cache.window_w end
+    if not edge and side == "left" and app.cache.window_x then edge = app.cache.window_x end
+    if edge then
+      local target_x = side == "right" and (edge - target_w) or edge
+      r.ImGui_SetNextWindowPos(ctx, target_x, auto_top or app.cache.window_y or 0, cond_always)
+    end
+  end
+  if force_restore and not collapsed then app.cache.auto_collapse_force_restore = nil end
+end
+
+local function save_expanded_window_size(docked)
+  if docked or app.cache.auto_collapse_collapsed then return end
+  local min_w, min_h = expanded_window_min_size()
+  local width = math.floor(math.max(min_w, app.cache.window_w or app.settings.window_width or 430) + 0.5)
+  local height = math.floor(math.max(min_h, app.cache.window_h or app.settings.window_height or 760) + 0.5)
+  if math.abs(width - (tonumber(app.settings.window_width) or 0)) < 2 and math.abs(height - (tonumber(app.settings.window_height) or 0)) < 2 then return end
+  app.settings.window_width = width
+  app.settings.window_height = height
+  local now = current_time()
+  if now - (app.cache.window_size_last_save or 0) >= 0.75 then
+    app.cache.window_size_last_save = now
+    save_settings()
+  else
+    app.cache.window_size_dirty = true
+  end
+end
+
+local function flush_window_size_if_dirty()
+  if app.cache.window_size_dirty then
+    app.cache.window_size_dirty = nil
+    app.cache.window_size_last_save = current_time()
+    save_settings()
+  end
+end
+
+local function draw_auto_collapse_strip()
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local x, y = r.ImGui_GetWindowPos(ctx)
+  local w, h = r.ImGui_GetWindowSize(ctx)
+  local side = auto_collapse_side()
+  local border_x = side == "right" and x or (x + w)
+  r.ImGui_SetCursorScreenPos(ctx, x, y)
+  r.ImGui_InvisibleButton(ctx, "##auto_collapse_handle", math.max(1, w), math.max(1, h))
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  if hovered then
+    r.ImGui_DrawList_AddLine(draw_list, border_x, y, border_x, y + h, Theme.colors.accent, 1)
+    r.ImGui_SetTooltip(ctx, "Expand Workbench")
+  end
+end
+
+local function push_auto_collapse_style()
+  local vars = 0
+  local colors = 0
+  if app.cache.auto_collapse_collapsed and r.ImGui_StyleVar_WindowMinSize then
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowMinSize(), 1, 1)
+    vars = vars + 1
+  end
+  if app.cache.auto_collapse_collapsed and r.ImGui_StyleVar_WindowPadding then
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+    vars = vars + 1
+  end
+  if app.cache.auto_collapse_collapsed and r.ImGui_StyleVar_WindowBorderSize then
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 0)
+    vars = vars + 1
+  end
+  if app.cache.auto_collapse_collapsed and r.ImGui_PushStyleColor and r.ImGui_Col_WindowBg then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), 0x00000000)
+    colors = colors + 1
+  end
+  if app.cache.auto_collapse_collapsed and r.ImGui_PushStyleColor and r.ImGui_Col_Border then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x00000000)
+    colors = colors + 1
+  end
+  return vars, colors
+end
+
+local function pop_auto_collapse_style(vars, colors)
+  if colors and colors > 0 then r.ImGui_PopStyleColor(ctx, colors) end
+  if vars and vars > 0 then r.ImGui_PopStyleVar(ctx, vars) end
+end
+
+local function update_auto_collapse_state(window_hovered, docked)
+  app.cache.window_docked = docked == true
+  if app.settings.auto_collapse ~= true or docked then
+    app.cache.auto_collapse_collapsed = false
+    app.cache.auto_collapse_force_restore = nil
+    app.cache.auto_collapse_last_hover_time = current_time()
+    return
+  end
+  local now = current_time()
+  local keep_open = window_hovered or auto_collapse_keep_open()
+  if keep_open then
+    app.cache.auto_collapse_last_hover_time = now
+    if app.cache.auto_collapse_collapsed then
+      app.cache.auto_collapse_collapsed = false
+      app.cache.auto_collapse_force_restore = true
+    end
+    return
+  end
+  local last_hover = app.cache.auto_collapse_last_hover_time or now
+  app.cache.auto_collapse_last_hover_time = last_hover
+  if not app.cache.auto_collapse_collapsed and now - last_hover >= auto_collapse_delay() then
+    local min_w, min_h = expanded_window_min_size()
+    app.cache.auto_collapse_expanded_w = math.max(min_w, app.cache.window_w or app.settings.window_width or 430)
+    app.cache.auto_collapse_expanded_h = math.max(min_h, app.cache.window_h or app.settings.window_height or 760)
+    app.cache.auto_collapse_collapsed = true
+  end
+end
+
+local function workbench_window_hovered()
+  if not r.ImGui_IsWindowHovered then return false end
+  local flags = 0
+  if r.ImGui_HoveredFlags_RootAndChildWindows then flags = flags | r.ImGui_HoveredFlags_RootAndChildWindows() end
+  if r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem then flags = flags | r.ImGui_HoveredFlags_AllowWhenBlockedByActiveItem() end
+  return r.ImGui_IsWindowHovered(ctx, flags)
 end
 
 local function push_workspace_style()
@@ -1151,24 +1555,43 @@ local function loop()
   process_module_action_commands()
   UI.begin_tooltip_frame(app)
   r.ImGui_SetNextWindowSize(ctx, app.settings.window_width or 430, app.settings.window_height or 760, r.ImGui_Cond_FirstUseEver())
+  apply_auto_collapse_window()
   if (app.settings.theme_preset or "Graphite") ~= Theme.current_preset then
     app.settings.theme_preset = Theme.set_preset(app.settings.theme_preset or "Graphite", app.settings.custom_themes)
   end
   local theme_stack = Theme.push(ctx)
   local workspace_style_vars = push_workspace_style()
+  local auto_collapse_style_vars, auto_collapse_style_colors = push_auto_collapse_style()
   local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+  if app.settings.auto_collapse == true and app.cache.window_docked == false and r.ImGui_WindowFlags_NoMove then
+    window_flags = window_flags | r.ImGui_WindowFlags_NoMove()
+  end
   local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
   if visible then
     app.cache.window_x, app.cache.window_y = r.ImGui_GetWindowPos(ctx)
     app.cache.window_w, app.cache.window_h = r.ImGui_GetWindowSize(ctx)
-    draw_shell()
+    local docked = r.ImGui_IsWindowDocked and r.ImGui_IsWindowDocked(ctx) or false
+    if app.cache.auto_collapse_collapsed and not docked then
+      draw_auto_collapse_strip()
+    else
+      if app.settings.auto_collapse == true and not docked then
+        local min_w, min_h = expanded_window_min_size()
+        app.cache.auto_collapse_expanded_w = math.max(min_w, app.cache.window_w or app.settings.window_width or 430)
+        app.cache.auto_collapse_expanded_h = math.max(min_h, app.cache.window_h or app.settings.window_height or 760)
+      end
+      draw_shell()
+    end
+    save_expanded_window_size(docked)
+    update_auto_collapse_state(workbench_window_hovered(), docked)
     r.ImGui_End(ctx)
   end
   draw_theme_settings()
   draw_preferences_settings()
   UI.end_tooltip_frame(app)
+  pop_auto_collapse_style(auto_collapse_style_vars, auto_collapse_style_colors)
   pop_workspace_style(workspace_style_vars)
   Theme.pop(ctx, theme_stack)
+  flush_window_size_if_dirty()
   if open and not app.close_requested then
     r.defer(loop)
   else
