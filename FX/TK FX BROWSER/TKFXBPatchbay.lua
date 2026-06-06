@@ -92,6 +92,8 @@ PB.fx_schema_mouse_block = false
 PB.paranormal_command_id = nil
 PB.tcp_mirror_enabled = false
 PB.tcp_mirror_original = nil
+PB.external_action_serial = ""
+PB.open_route_audit_popup = false
 
 local ROUTE_FILTER_ORDER = { "all", "post-fader", "pre-fader", "pre-fx", "muted", "audio", "sidechain", "midi" }
 local ROUTE_FILTER_LABELS = {
@@ -334,6 +336,14 @@ local function RegisterPatchbaySpawnNode(guid, spawn, order)
     }
 end
 
+local function GetPatchbayMouseSpawn(ctx)
+    if r.ImGui_GetMousePos then
+        local x, y = r.ImGui_GetMousePos(ctx)
+        if x and y then return { mode = "mouse", screen_x = x, screen_y = y } end
+    end
+    return { mode = "visible" }
+end
+
 local function InsertPatchbayTrackTemplate(full_path, spawn)
     if IsAllLockedCfg(GetConfig()) then return end
     if not FileExists(full_path) then
@@ -457,6 +467,19 @@ local function GetSelectedPatchbayTracks()
     return out
 end
 
+local function GetPatchbayControlTargetTracks(track, guid, name)
+    if guid and pb_selected_set[guid] then
+        local selected_tracks = GetSelectedPatchbayTracks()
+        if #selected_tracks > 0 then return selected_tracks end
+    end
+    return { { track = track, guid = guid, name = name } }
+end
+
+local function IsPatchbayTrackFrozen(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
+    return r.GetMediaTrackInfo_Value(track, "I_FREEZECOUNT") > 0
+end
+
 function PatchbaySyncSelectedSetToTCP(focus_track)
     local focus = nil
     local has_selection = false
@@ -514,6 +537,18 @@ function PatchbayMarkSelectedTracksForVisiblePlacement()
     PB.pending_paste_visible_guids = count > 0 and pending or nil
 end
 
+function PatchbayMarkSelectedTracksForSpawnPlacement(spawn)
+    local selected_tracks = GetSelectedPatchbayTracks()
+    local order = 0
+    for i = 1, #selected_tracks do
+        local guid = selected_tracks[i].guid
+        if guid and guid ~= MASTER_GUID and not node_positions[guid] then
+            order = order + 1
+            RegisterPatchbaySpawnNode(guid, spawn, order)
+        end
+    end
+end
+
 function PatchbayFocusNativeTrackContext(track)
     if r.SetCursorContext then r.SetCursorContext(0, nil) end
     if track and r.ValidatePtr(track, "MediaTrack*") then _G.TRACK = track end
@@ -535,24 +570,28 @@ function PatchbayCopyNodeTracks(track, guid)
     return PatchbayCopySelectedTracks()
 end
 
-function PatchbayPasteTracks()
+function PatchbayPasteTracks(spawn)
     if IsAllLockedCfg(GetConfig()) then return false end
     local selected_tracks = GetSelectedPatchbayTracks()
     if #selected_tracks > 0 then PatchbaySyncSelectedSetToTCP(selected_tracks[1].track) end
     PatchbayFocusNativeTrackContext(selected_tracks[1] and selected_tracks[1].track or _G.TRACK)
     r.Main_OnCommand(42398, 0)
     PatchbaySyncTCPSelectionToSelectedSet()
-    PatchbayMarkSelectedTracksForVisiblePlacement()
+    if spawn then
+        PatchbayMarkSelectedTracksForSpawnPlacement(spawn)
+    else
+        PatchbayMarkSelectedTracksForVisiblePlacement()
+    end
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
     return true
 end
 
-function PatchbayPasteTracksAtNode(track, guid)
+function PatchbayPasteTracksAtNode(track, guid, spawn)
     if guid and guid ~= MASTER_GUID and pb_selected_set[guid] ~= true then
         pb_selected_set = { [guid] = true }
     end
-    return PatchbayPasteTracks()
+    return PatchbayPasteTracks(spawn)
 end
 
 local function GetTrackIndexLocal(tr)
@@ -953,7 +992,7 @@ local function RemoveTrackFromFolderParent(tr)
     MarkFolderLayoutChanged()
 end
 
-local function BatchSetMute(selected_tracks, muted)
+function BatchSetMute(selected_tracks, muted)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     r.Undo_BeginBlock()
@@ -967,7 +1006,7 @@ local function BatchSetMute(selected_tracks, muted)
     r.Undo_EndBlock(muted and "Patchbay: mute selected tracks" or "Patchbay: unmute selected tracks", -1)
 end
 
-local function BatchSetSolo(selected_tracks, solo_on)
+function BatchSetSolo(selected_tracks, solo_on)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     r.Undo_BeginBlock()
@@ -981,7 +1020,73 @@ local function BatchSetSolo(selected_tracks, solo_on)
     r.Undo_EndBlock(solo_on and "Patchbay: solo selected tracks" or "Patchbay: unsolo selected tracks", -1)
 end
 
-local function BatchSetPinned(selected_tracks, pin_on)
+function BatchSetRecordArm(selected_tracks, arm_on)
+    if IsAllLockedCfg(GetConfig()) then return end
+    if not selected_tracks or #selected_tracks == 0 then return end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for i = 1, #selected_tracks do
+        local tr = selected_tracks[i].track
+        if tr and r.ValidatePtr(tr, "MediaTrack*") and tr ~= r.GetMasterTrack(0) then
+            r.SetMediaTrackInfo_Value(tr, "I_RECARM", arm_on and 1 or 0)
+        end
+    end
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock(arm_on and "Patchbay: arm selected tracks" or "Patchbay: unarm selected tracks", -1)
+end
+
+function BatchSetFreeze(selected_tracks, freeze_on)
+    if IsAllLockedCfg(GetConfig()) then return end
+    if not selected_tracks or #selected_tracks == 0 then return end
+    local master = r.GetMasterTrack(0)
+    local focus_before = _G.TRACK
+    local targets = {}
+    local selected_before = {}
+    local master_selected = master and r.ValidatePtr(master, "MediaTrack*") and r.GetMediaTrackInfo_Value(master, "I_SELECTED") == 1
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") and r.GetMediaTrackInfo_Value(tr, "I_SELECTED") == 1 then
+            selected_before[r.GetTrackGUID(tr)] = true
+        end
+    end
+    for i = 1, #selected_tracks do
+        local tr = selected_tracks[i].track
+        if tr and r.ValidatePtr(tr, "MediaTrack*") and tr ~= master and IsPatchbayTrackFrozen(tr) ~= freeze_on then
+            targets[#targets + 1] = tr
+        end
+    end
+    if #targets == 0 then return end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then r.SetMediaTrackInfo_Value(tr, "I_SELECTED", 0) end
+    end
+    if master and r.ValidatePtr(master, "MediaTrack*") then r.SetMediaTrackInfo_Value(master, "I_SELECTED", 0) end
+    for i = 1, #targets do
+        if targets[i] and r.ValidatePtr(targets[i], "MediaTrack*") then r.SetMediaTrackInfo_Value(targets[i], "I_SELECTED", 1) end
+    end
+    r.Main_OnCommand(freeze_on and 41223 or 41644, 0)
+    n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            r.SetMediaTrackInfo_Value(tr, "I_SELECTED", selected_before[r.GetTrackGUID(tr)] and 1 or 0)
+        end
+    end
+    master = r.GetMasterTrack(0)
+    if master and r.ValidatePtr(master, "MediaTrack*") then r.SetMediaTrackInfo_Value(master, "I_SELECTED", master_selected and 1 or 0) end
+    _G.TRACK = focus_before and r.ValidatePtr(focus_before, "MediaTrack*") and focus_before or r.GetSelectedTrack(0, 0)
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock(freeze_on and "Patchbay: freeze selected tracks" or "Patchbay: unfreeze selected tracks", -1)
+end
+
+function BatchSetPinned(selected_tracks, pin_on)
     if IsLayoutLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     for i = 1, #selected_tracks do
@@ -1111,7 +1216,7 @@ function PatchbayDrawSchemaSymbol(draw_list, x1, y1, x2, y2, col)
     r.ImGui_DrawList_AddRect(draw_list, right_x - box_w * 0.5, mid_y - box_h * 0.5, right_x + box_w * 0.5, mid_y + box_h * 0.5, col, 1, nil, 1.2)
 end
 
-local function BatchSetCollapsed(selected_tracks, collapse_on)
+function BatchSetCollapsed(selected_tracks, collapse_on)
     if IsLayoutLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     for i = 1, #selected_tracks do
@@ -1125,7 +1230,7 @@ local function BatchSetCollapsed(selected_tracks, collapse_on)
     layout_dirty = true
 end
 
-local function BatchDeleteTracks(selected_tracks)
+function BatchDeleteTracks(selected_tracks)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     r.Undo_BeginBlock()
@@ -1171,7 +1276,7 @@ function PatchbayCtrlShortcutPressed(ctx, key_func)
     return r.ImGui_IsKeyPressed(ctx, key_func())
 end
 
-local function BatchConnectSelectedToTarget(selected_tracks, target)
+function BatchConnectSelectedToTarget(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -1197,7 +1302,7 @@ local function BatchConnectSelectedToTarget(selected_tracks, target)
     end
 end
 
-local function BatchConnectTargetToSelected(target, selected_tracks)
+function BatchConnectTargetToSelected(target, selected_tracks)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -1223,7 +1328,7 @@ local function BatchConnectTargetToSelected(target, selected_tracks)
     end
 end
 
-local function BatchDisconnectSelectedToTarget(selected_tracks, target)
+function BatchDisconnectSelectedToTarget(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -1251,7 +1356,7 @@ local function BatchDisconnectSelectedToTarget(selected_tracks, target)
     end
 end
 
-local function BatchDisconnectTargetToSelected(target, selected_tracks)
+function BatchDisconnectTargetToSelected(target, selected_tracks)
     if IsAllLockedCfg(GetConfig()) then return end
     if not selected_tracks or #selected_tracks == 0 then return end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return end
@@ -1323,7 +1428,7 @@ function PatchbayBatchSetMainSend(selected_tracks, enabled, undo_name)
     return changes
 end
 
-local function BatchConnectSelectedToDestination(selected_tracks, target)
+function BatchConnectSelectedToDestination(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
@@ -1353,7 +1458,7 @@ local function BatchConnectSelectedToDestination(selected_tracks, target)
     return changes
 end
 
-local function BatchDisconnectSelectedFromDestination(selected_tracks, target)
+function BatchDisconnectSelectedFromDestination(selected_tracks, target)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
@@ -1385,7 +1490,7 @@ local function BatchDisconnectSelectedFromDestination(selected_tracks, target)
     return changes
 end
 
-local function BatchApplyBulkRouteSettings(selected_tracks, target, create_missing, mode, vol_db, pan, mute, phase, mono)
+function BatchApplyBulkRouteSettings(selected_tracks, target, create_missing, mode, vol_db, pan, mute, phase, mono)
     if IsAllLockedCfg(GetConfig()) then return 0 end
     if not selected_tracks or #selected_tracks == 0 then return 0 end
     if not target or not r.ValidatePtr(target, "MediaTrack*") then return 0 end
@@ -1779,6 +1884,7 @@ local function BuildSnapshotPayload(cfg)
     lines[#lines + 1] = "routing_filter_text=" .. UrlEncode(cfg.routing_filter_text or "")
     lines[#lines + 1] = "routing_only_selected=" .. ((cfg.routing_only_selected and 1) or 0)
     lines[#lines + 1] = "patchbay_selected_with_children=" .. ((cfg.patchbay_selected_with_children and 1) or 0)
+    lines[#lines + 1] = "patchbay_selected_subtree=" .. ((cfg.patchbay_selected_subtree and 1) or 0)
     lines[#lines + 1] = "patchbay_only_explicit_routing=" .. ((cfg.patchbay_only_explicit_routing and 1) or 0)
     lines[#lines + 1] = "patchbay_explicit_show_mainsend=" .. ((cfg.patchbay_explicit_show_mainsend and 1) or 0)
     lines[#lines + 1] = "patchbay_show_unrouted=" .. ((cfg.patchbay_show_unrouted and 1) or 0)
@@ -1808,6 +1914,8 @@ local function ApplySnapshotPayload(payload, cfg)
                 cfg.routing_only_selected = (v == "1")
             elseif k == "patchbay_selected_with_children" then
                 cfg.patchbay_selected_with_children = (v == "1")
+            elseif k == "patchbay_selected_subtree" then
+                cfg.patchbay_selected_subtree = (v == "1")
             elseif k == "patchbay_only_explicit_routing" then
                 cfg.patchbay_only_explicit_routing = (v == "1")
             elseif k == "patchbay_explicit_show_mainsend" then
@@ -1929,6 +2037,28 @@ function PatchbayCollectSelectedTreeSet(selected_set)
             local depth = math.floor(r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") or 0)
             if roots[tr] or #active_child_depths > 0 then out[tr] = true end
             if roots[tr] and depth > 0 then active_child_depths[#active_child_depths + 1] = depth_level + 1 end
+            depth_level = depth_level + depth
+            if depth_level < 0 then depth_level = 0 end
+        end
+    end
+    return out
+end
+
+function PatchbayCollectSelectedSubtreeSet(selected_set)
+    if not selected_set then return {} end
+    local out = {}
+    local active_child_depths = {}
+    local depth_level = 0
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        while #active_child_depths > 0 and depth_level < active_child_depths[#active_child_depths] do
+            table.remove(active_child_depths)
+        end
+        local tr = r.GetTrack(0, i)
+        if tr and r.ValidatePtr(tr, "MediaTrack*") then
+            local depth = math.floor(r.GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") or 0)
+            if selected_set[tr] or #active_child_depths > 0 then out[tr] = true end
+            if selected_set[tr] and depth > 0 then active_child_depths[#active_child_depths + 1] = depth_level + 1 end
             depth_level = depth_level + depth
             if depth_level < 0 then depth_level = 0 end
         end
@@ -2075,6 +2205,7 @@ local function CollectVisibleTracks()
     local filter = cfg.routing_filter_text or ""
     local only_selected = cfg.routing_only_selected
     local selected_with_children = cfg.patchbay_selected_with_children == true
+    local selected_subtree = cfg.patchbay_selected_subtree == true
     local only_explicit = cfg.patchbay_only_explicit_routing == true
     local explicit_show_mainsend = cfg.patchbay_explicit_show_mainsend == true
     local show_unrouted = cfg.patchbay_show_unrouted == true
@@ -2085,7 +2216,7 @@ local function CollectVisibleTracks()
     local selected_set = {}
     local selected_child_set = nil
 
-    if only_selected or selected_with_children then
+    if only_selected or selected_with_children or selected_subtree then
         local sel_count = r.CountSelectedTracks(0)
         for i = 0, sel_count - 1 do
             local st = r.GetSelectedTrack(0, i)
@@ -2105,6 +2236,17 @@ local function CollectVisibleTracks()
     end
     if selected_with_children and #selected_tracks > 0 then
         selected_child_set = PatchbayCollectSelectedTreeSet(selected_set)
+        if selected_set[master] then selected_child_set[master] = true end
+        selected_set = selected_child_set
+        selected_tracks = {}
+        local total_tracks = r.CountTracks(0)
+        for i = 0, total_tracks - 1 do
+            local st = r.GetTrack(0, i)
+            if st and selected_set[st] then selected_tracks[#selected_tracks + 1] = st end
+        end
+        if selected_set[master] then selected_tracks[#selected_tracks + 1] = master end
+    elseif selected_subtree and #selected_tracks > 0 then
+        selected_child_set = PatchbayCollectSelectedSubtreeSet(selected_set)
         if selected_set[master] then selected_child_set[master] = true end
         selected_set = selected_child_set
         selected_tracks = {}
@@ -2152,6 +2294,8 @@ local function CollectVisibleTracks()
         local is_folder_child = folder_parent_guid ~= nil
         local track_muted = r.GetMediaTrackInfo_Value(t, "B_MUTE") == 1
         local track_soloed = r.GetMediaTrackInfo_Value(t, "I_SOLO") ~= 0
+        local track_armed = r.GetMediaTrackInfo_Value(t, "I_RECARM") == 1
+        local track_frozen = IsPatchbayTrackFrozen(t)
         local ancestor_muted = false
         local ancestor_muted_name = nil
         local ancestor_soloed = false
@@ -2214,7 +2358,7 @@ local function CollectVisibleTracks()
         end
         local match_filter = PatchbayFilterMatchesName(filter, name)
         local match_sel = true
-        if (only_selected or selected_with_children) and #selected_tracks > 0 then
+        if (only_selected or selected_with_children or selected_subtree) and #selected_tracks > 0 then
             if selected_set[t] then
                 match_sel = true
             else
@@ -2245,7 +2389,7 @@ local function CollectVisibleTracks()
                 end
             end
         end
-        if (has_routing or (selected_with_children and selected_child_set and selected_child_set[t] == true)) and match_filter and match_sel then
+        if (has_routing or ((selected_with_children or selected_subtree) and selected_child_set and selected_child_set[t] == true)) and match_filter and match_sel then
             if mainsend then visible_mainsend = true end
             list[#list + 1] = {
                 track = t,
@@ -2267,6 +2411,8 @@ local function CollectVisibleTracks()
                 is_folder_child = is_folder_child,
                 track_muted = track_muted,
                 track_soloed = track_soloed,
+                track_armed = track_armed,
+                track_frozen = track_frozen,
                 ancestor_muted = ancestor_muted,
                 ancestor_muted_name = ancestor_muted_name,
                 ancestor_soloed = ancestor_soloed,
@@ -2286,7 +2432,7 @@ local function CollectVisibleTracks()
     end
     local master_match_filter = PatchbayFilterMatchesName(filter, "master")
     local master_match_sel = true
-    if (only_selected or selected_with_children) and #selected_tracks > 0 then
+    if (only_selected or selected_with_children or selected_subtree) and #selected_tracks > 0 then
         if selected_set[master] then
             master_match_sel = true
         else
@@ -2325,7 +2471,7 @@ local function CollectVisibleTracks()
     else
         master_has_routing = (any_mainsend or nmsnd > 0 or nmrec > 0)
     end
-    if selected_with_children and selected_set[master] then master_has_routing = true end
+    if (selected_with_children or selected_subtree) and selected_set[master] then master_has_routing = true end
     local show_master = cfg.patchbay_show_master ~= false
     if show_master and master_has_routing and master_match_filter and master_match_sel then
         list[#list + 1] = { track = master, idx = -1, name = "MASTER", guid = MASTER_GUID, is_master = true }
@@ -2463,6 +2609,47 @@ local function RunRouteAudit()
         if ap ~= bp then return ap < bp end
         return (a.text or "") < (b.text or "")
     end)
+end
+
+function HandlePatchbayExternalAction(cfg, layout_locked)
+    local serial = r.GetExtState("TK_PATCHBAY_ACTIONS", "serial")
+    local command = r.GetExtState("TK_PATCHBAY_ACTIONS", "command")
+    if not command or command == "" or not serial or serial == "" or serial == PB.external_action_serial then return end
+    PB.external_action_serial = serial
+    r.DeleteExtState("TK_PATCHBAY_ACTIONS", "command", false)
+    r.DeleteExtState("TK_PATCHBAY_ACTIONS", "serial", false)
+    if command == "fit_view" then
+        if not layout_locked then pending_fit_view = true end
+    elseif command == "center_view" then
+        if not layout_locked then pending_center_view = true end
+    elseif command == "auto_layout" then
+        if not layout_locked then
+            pending_auto_layout = true
+            pending_center_view = true
+            layout_dirty = true
+        end
+    elseif command == "focus_selected_tree" then
+        cfg.patchbay_selected_with_children = true
+        cfg.routing_only_selected = false
+        cfg.patchbay_selected_subtree = false
+        if _G.SaveConfig then _G.SaveConfig() end
+    elseif command == "focus_selected_subtree" then
+        cfg.patchbay_selected_subtree = true
+        cfg.routing_only_selected = false
+        cfg.patchbay_selected_with_children = false
+        if _G.SaveConfig then _G.SaveConfig() end
+    elseif command == "show_all_tracks" then
+        cfg.routing_only_selected = false
+        cfg.patchbay_selected_with_children = false
+        cfg.patchbay_selected_subtree = false
+        cfg.patchbay_show_unrouted = false
+        if _G.SaveConfig then _G.SaveConfig() end
+    elseif command == "toggle_cable_shop" then
+        cable_shop_open = not cable_shop_open
+    elseif command == "toggle_route_audit" then
+        RunRouteAudit()
+        PB.open_route_audit_popup = true
+    end
 end
 
 local function AutoLayout(tracks)
@@ -2716,11 +2903,21 @@ local function EnsurePositions(tracks)
     end
     local max_x = 0
     for _, p in pairs(node_positions) do if p.x > max_x then max_x = p.x end end
-    local next_y = 40
+    local master_pos = node_positions[MASTER_GUID]
+    local next_x = master_pos and master_pos.x or (max_x + col_w)
+    local next_y = master_pos and (master_pos.y + row_h) or 40
+    if master_pos then
+        for _, p in pairs(node_positions) do
+            if math.abs((p.x or 0) - next_x) < GRID then
+                local y = (p.y or 0) + row_h
+                if y > next_y then next_y = y end
+            end
+        end
+    end
     for i = 1, #tracks do
         local g = tracks[i].guid
         if not node_positions[g] then
-            node_positions[g] = { x = max_x + col_w, y = next_y }
+            node_positions[g] = { x = next_x, y = next_y }
             next_y = next_y + row_h
             layout_dirty = true
         end
@@ -3709,6 +3906,7 @@ local function RenderViewHelpWindow()
         RenderViewHelpItem(ctx, "Send type badges", "Shows audio, sidechain, and MIDI badges on send cables.")
         RenderViewHelpItem(ctx, "Focus selected", "Limits the view to selected tracks and their direct routing neighbors.")
         RenderViewHelpItem(ctx, "Focus selected tree", "Focuses the complete folder tree around selected tracks, plus routing neighbors.")
+        RenderViewHelpItem(ctx, "Focus selected subtree", "Focuses selected tracks and their folder descendants without parent folders.")
         RenderViewHelpItem(ctx, "Mirror view to TCP", "Temporarily mirrors the Patchbay visible track set to the TCP. The original TCP visibility is restored when the option is disabled or the script exits.")
         RenderViewHelpItem(ctx, "Solo path", "Visually emphasizes the current selected track path and dims unrelated visible nodes and cables.")
     end
@@ -4178,7 +4376,7 @@ function PatchbayFxSchemaRender(ctx, draw_list, layout)
 end
 
 
-local function RemovePatchbayCableTargetNoUndo(cable)
+function RemovePatchbayCableTargetNoUndo(cable)
     if not cable or not cable.src or not r.ValidatePtr(cable.src, "MediaTrack*") then return false end
     if cable.is_main then
         if r.GetMediaTrackInfo_Value(cable.src, "B_MAINSEND") ~= 1 then return false end
@@ -4192,7 +4390,7 @@ local function RemovePatchbayCableTargetNoUndo(cable)
     return true
 end
 
-local function RemovePatchbayCable(cable)
+function RemovePatchbayCable(cable)
     if IsAllLockedCfg(GetConfig()) then return false end
     local action_name = cable and cable.is_main and "Patchbay: disable main send" or "Patchbay: delete connection"
     r.Undo_BeginBlock()
@@ -4205,7 +4403,7 @@ local function RemovePatchbayCable(cable)
     return changed
 end
 
-local function RemoveSelectedPatchbayCableRelations(cable)
+function RemoveSelectedPatchbayCableRelations(cable)
     if IsAllLockedCfg(GetConfig()) then return false end
     if not cable or not cable.src or not r.ValidatePtr(cable.src, "MediaTrack*") then return false end
     local src_guid = r.GetTrackGUID(cable.src)
@@ -4308,6 +4506,41 @@ function PatchbayPopupTrackLabel(track)
     return name or "Track"
 end
 
+function PatchbayPinConnectionLabel(src, dst, is_main)
+    local label = PatchbayPopupTrackLabel(src) .. " -> " .. PatchbayPopupTrackLabel(dst)
+    if is_main then label = label .. " (main send)" end
+    return label
+end
+function PatchbayRouteIndicatorBadges(src, idx, is_main)
+    local parts = {}
+    if is_main then
+        parts[#parts + 1] = { label = "MAIN", color = 0xA8A8A8FF }
+    else
+        local mode = math.floor(r.GetTrackSendInfo_Value(src, 0, idx, "I_SENDMODE") or 0)
+        if mode == 1 then
+            parts[#parts + 1] = { label = "PFX", color = 0xC084FCFF }
+        elseif mode == 3 then
+            parts[#parts + 1] = { label = "PRE", color = 0xE0AF68FF }
+        else
+            parts[#parts + 1] = { label = "POST", color = 0x7AA2F7FF }
+        end
+        if r.GetTrackSendInfo_Value(src, 0, idx, "B_MUTE") == 1 then parts[#parts + 1] = { label = "MUTE", color = 0xF7768EFF } end
+        if r.GetTrackSendInfo_Value(src, 0, idx, "B_PHASE") == 1 then parts[#parts + 1] = { label = "PH", color = 0xE0AF68FF } end
+        if r.GetTrackSendInfo_Value(src, 0, idx, "B_MONO") == 1 then parts[#parts + 1] = { label = "MONO", color = 0x9ECE6AFF } end
+        local type_info = GetSendTypeInfo(src, idx, false)
+        if type_info and type_info.badge and type_info.badge ~= "" then parts[#parts + 1] = { label = type_info.badge, color = type_info.badge_col or 0xA8A8A8FF } end
+    end
+    return parts
+end
+
+function RenderPatchbayRouteBadges(ctx, badges)
+    if not badges or #badges == 0 then return end
+    for i = 1, #badges do
+        r.ImGui_SameLine(ctx)
+        r.ImGui_TextColored(ctx, badges[i].color, "[" .. badges[i].label .. "]")
+    end
+end
+
 function CollectPinConnectionRoutes(track, guid, side)
     local routes = {}
     local master_track = r.GetMasterTrack(0)
@@ -4317,11 +4550,11 @@ function CollectPinConnectionRoutes(track, guid, side)
         for idx = 0, nsnd - 1 do
             local dst = r.GetTrackSendInfo_Value(track, 0, idx, "P_DESTTRACK")
             if dst and r.ValidatePtr(dst, "MediaTrack*") then
-                routes[#routes + 1] = { src = track, dst = dst, idx = idx, is_main = false, label = "To " .. PatchbayPopupTrackLabel(dst) }
+                routes[#routes + 1] = { src = track, dst = dst, idx = idx, is_main = false, label = PatchbayPinConnectionLabel(track, dst, false), badges = PatchbayRouteIndicatorBadges(track, idx, false) }
             end
         end
         if r.GetMediaTrackInfo_Value(track, "B_MAINSEND") == 1 then
-            routes[#routes + 1] = { src = track, dst = master_track, idx = -1, is_main = true, label = "To MASTER" }
+            routes[#routes + 1] = { src = track, dst = master_track, idx = -1, is_main = true, label = PatchbayPinConnectionLabel(track, master_track, true), badges = PatchbayRouteIndicatorBadges(track, -1, true) }
         end
     elseif side == "in" then
         if guid == MASTER_GUID or track == master_track then
@@ -4329,7 +4562,7 @@ function CollectPinConnectionRoutes(track, guid, side)
             for i = 0, n - 1 do
                 local src = r.GetTrack(0, i)
                 if src and r.ValidatePtr(src, "MediaTrack*") and r.GetMediaTrackInfo_Value(src, "B_MAINSEND") == 1 then
-                    routes[#routes + 1] = { src = src, dst = master_track, idx = -1, is_main = true, label = "From " .. PatchbayPopupTrackLabel(src) }
+                    routes[#routes + 1] = { src = src, dst = master_track, idx = -1, is_main = true, label = PatchbayPinConnectionLabel(src, master_track, true), badges = PatchbayRouteIndicatorBadges(src, -1, true) }
                 end
             end
         else
@@ -4342,7 +4575,7 @@ function CollectPinConnectionRoutes(track, guid, side)
                     for idx = 0, nsnd - 1 do
                         local dst = r.GetTrackSendInfo_Value(src, 0, idx, "P_DESTTRACK")
                         if dst == track then
-                            routes[#routes + 1] = { src = src, dst = track, idx = idx, is_main = false, label = "From " .. PatchbayPopupTrackLabel(src) }
+                            routes[#routes + 1] = { src = src, dst = track, idx = idx, is_main = false, label = PatchbayPinConnectionLabel(src, track, false), badges = PatchbayRouteIndicatorBadges(src, idx, false) }
                         end
                     end
                 end
@@ -4373,15 +4606,16 @@ function RenderPinConnectionPopup()
     if not PB.pin_popup_guid or not PB.pin_popup_side then return end
     if r.ImGui_BeginPopup(ctx, "PatchbayPinPopup") then
         local routes = CollectPinConnectionRoutes(PB.pin_popup_track, PB.pin_popup_guid, PB.pin_popup_side)
-        local title = PB.pin_popup_side == "out" and "Outgoing routes" or "Incoming routes"
+        local title = PB.pin_popup_side == "out" and "Output connections" or "Input connections"
         r.ImGui_TextDisabled(ctx, title)
+        if #routes > 0 then r.ImGui_TextDisabled(ctx, "Source -> Target") end
         r.ImGui_Separator(ctx)
         if #routes == 0 then
             r.ImGui_TextDisabled(ctx, PB.pin_popup_side == "out" and "No outgoing sends." or "No incoming sends.")
         else
             for i = 1, #routes do
                 local route = routes[i]
-                if r.ImGui_Selectable(ctx, route.label) then
+                if r.ImGui_Selectable(ctx, route.label .. "##pin_route_" .. i) then
                     right_click_send = { src = route.src, dst = route.dst, idx = route.idx, is_main = route.is_main }
                     PB.pin_popup_track = nil
                     PB.pin_popup_guid = nil
@@ -4389,6 +4623,7 @@ function RenderPinConnectionPopup()
                     PB.open_send_popup_from_pin = true
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
+                RenderPatchbayRouteBadges(ctx, route.badges)
             end
         end
         r.ImGui_EndPopup(ctx)
@@ -4415,8 +4650,7 @@ local function RenderRightClickPopup()
                 r.ImGui_EndPopup(ctx)
                 return
             end
-            local _, sname = r.GetTrackName(src)
-            r.ImGui_Text(ctx, sname .. " \xE2\x86\x92 MASTER")
+            r.ImGui_Text(ctx, PatchbayPopupTrackLabel(src) .. " \xE2\x86\x92 MASTER")
             if all_locked then
                 r.ImGui_Separator(ctx)
                 r.ImGui_TextDisabled(ctx, "All locked: routing is read-only.")
@@ -4458,9 +4692,7 @@ local function RenderRightClickPopup()
             r.ImGui_EndPopup(ctx)
             return
         end
-        local _, sname = r.GetTrackName(src)
-        local _, dname = r.GetTrackName(dst)
-        r.ImGui_Text(ctx, sname .. " \xE2\x86\x92 " .. dname)
+        r.ImGui_Text(ctx, PatchbayPopupTrackLabel(src) .. " \xE2\x86\x92 " .. PatchbayPopupTrackLabel(dst))
         if all_locked then
             r.ImGui_Separator(ctx)
             r.ImGui_TextDisabled(ctx, "All locked: routing is read-only.")
@@ -4600,7 +4832,7 @@ local function RenderNodePopup()
             if IsAllLockedCfg(GetConfig()) then
                 r.ImGui_TextDisabled(ctx, "Paste tracks")
             elseif r.ImGui_Selectable(ctx, "Paste tracks   Ctrl+V") then
-                PatchbayPasteTracksAtNode(tr, node_popup_guid)
+                PatchbayPasteTracksAtNode(tr, node_popup_guid, GetPatchbayMouseSpawn(ctx))
                 r.ImGui_CloseCurrentPopup(ctx)
             end
             local selected_tracks = GetSelectedPatchbayTracks()
@@ -4738,6 +4970,8 @@ function ShowRoutingPatchbay()
     local lock_mode = GetLockMode(cfg)
     local layout_locked = IsLayoutLockedCfg(cfg)
     local all_locked = IsAllLockedCfg(cfg)
+
+    HandlePatchbayExternalAction(cfg, layout_locked)
 
     local proj_key = GetCurrentProjectKey()
     if proj_key ~= layout_loaded_project then
@@ -4901,14 +5135,30 @@ function ShowRoutingPatchbay()
         local changed_focus_selected, new_focus_selected = r.ImGui_Checkbox(ctx, "Focus selected", focus_selected)
         if changed_focus_selected then
             cfg.routing_only_selected = new_focus_selected
-            if new_focus_selected then cfg.patchbay_selected_with_children = false end
+            if new_focus_selected then
+                cfg.patchbay_selected_with_children = false
+                cfg.patchbay_selected_subtree = false
+            end
             if _G.SaveConfig then _G.SaveConfig() end
         end
         local selected_with_children = cfg.patchbay_selected_with_children == true
         local changed_selected_with_children, new_selected_with_children = r.ImGui_Checkbox(ctx, "Focus selected tree", selected_with_children)
         if changed_selected_with_children then
             cfg.patchbay_selected_with_children = new_selected_with_children
-            if new_selected_with_children then cfg.routing_only_selected = false end
+            if new_selected_with_children then
+                cfg.routing_only_selected = false
+                cfg.patchbay_selected_subtree = false
+            end
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        local selected_subtree = cfg.patchbay_selected_subtree == true
+        local changed_selected_subtree, new_selected_subtree = r.ImGui_Checkbox(ctx, "Focus selected subtree", selected_subtree)
+        if changed_selected_subtree then
+            cfg.patchbay_selected_subtree = new_selected_subtree
+            if new_selected_subtree then
+                cfg.routing_only_selected = false
+                cfg.patchbay_selected_with_children = false
+            end
             if _G.SaveConfig then _G.SaveConfig() end
         end
         local tcp_mirror = PB.tcp_mirror_enabled == true
@@ -5024,6 +5274,18 @@ function ShowRoutingPatchbay()
         if r.ImGui_Selectable(ctx, "Unsolo selected") then
             BatchSetSolo(selected_tracks, false)
         end
+        if r.ImGui_Selectable(ctx, "Arm selected") then
+            BatchSetRecordArm(selected_tracks, true)
+        end
+        if r.ImGui_Selectable(ctx, "Unarm selected") then
+            BatchSetRecordArm(selected_tracks, false)
+        end
+        if r.ImGui_Selectable(ctx, "Freeze selected") then
+            BatchSetFreeze(selected_tracks, true)
+        end
+        if r.ImGui_Selectable(ctx, "Unfreeze selected") then
+            BatchSetFreeze(selected_tracks, false)
+        end
         r.ImGui_Separator(ctx)
         if r.ImGui_Selectable(ctx, "Pin selected") then
             BatchSetPinned(selected_tracks, true)
@@ -5055,7 +5317,7 @@ function ShowRoutingPatchbay()
             PatchbayCopySelectedTracks()
         end
         if r.ImGui_Selectable(ctx, "Paste tracks   Ctrl+V") then
-            PatchbayPasteTracks()
+            PatchbayPasteTracks(GetPatchbayMouseSpawn(ctx))
         end
         r.ImGui_Separator(ctx)
         if r.ImGui_Selectable(ctx, "Delete selected...   Del") then
@@ -5175,10 +5437,9 @@ function ShowRoutingPatchbay()
         if #selected_tracks > 0 and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_C) then
             PatchbayCopySelectedTracks()
         elseif PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_V) then
-            PatchbayPasteTracks()
-        elseif r.ImGui_Key_N and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_N) then
-            local spawn_x, spawn_y = r.ImGui_GetMousePos(ctx)
-            AddPatchbayTrack({ mode = "mouse", screen_x = spawn_x, screen_y = spawn_y })
+            PatchbayPasteTracks(GetPatchbayMouseSpawn(ctx))
+        elseif r.ImGui_Key_T and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_T) then
+            AddPatchbayTrack(GetPatchbayMouseSpawn(ctx))
         end
     end
 
@@ -5221,6 +5482,11 @@ function ShowRoutingPatchbay()
         end
         r.ImGui_PopStyleColor(ctx, 3)
         r.ImGui_EndPopup(ctx)
+    end
+
+    if PB.open_route_audit_popup then
+        PB.open_route_audit_popup = false
+        r.ImGui_OpenPopup(ctx, "PatchbayRouteAudit")
     end
 
     if r.ImGui_BeginPopup(ctx, "PatchbayRouteAudit") then
@@ -6127,12 +6393,13 @@ function ShowRoutingPatchbay()
             local control_size = math.max(10, math.min(14, math.floor(14 * canvas_zoom + 0.5)))
             local control_gap = math.max(2, math.floor(3 * canvas_zoom + 0.5))
             local control_pad_y = math.max(5, math.floor(6 * canvas_zoom + 0.5))
-            local control_group_w = (control_size * 2) + control_gap
-            local show_node_controls = (not is_master_node) and (not node_is_collapsed) and canvas_zoom >= 0.50 and node_screen_w >= ((control_group_w * 2) + bar_w + 21) and node_screen_h >= (control_size + 22)
+            local control_left_group_w = (control_size * 2) + control_gap
+            local control_right_group_w = (control_size * 4) + (control_gap * 3)
+            local show_node_controls = (not is_master_node) and (not node_is_collapsed) and canvas_zoom >= 0.50 and node_screen_w >= (control_left_group_w + control_right_group_w + bar_w + 21) and node_screen_h >= (control_size + 22)
             local control_left_x = x1 + bar_w + 5
-            local control_right_x = x2 - 8 - control_group_w
+            local control_right_x = x2 - 8 - control_right_group_w
             local control_y = y2 - control_size - control_pad_y
-            local node_control_hit = show_node_controls and my >= control_y - 4 and my <= y2 and ((mx >= control_left_x - 4 and mx <= control_left_x + control_group_w + 4) or (mx >= control_right_x - 4 and mx <= control_right_x + control_group_w + 4))
+            local node_control_hit = show_node_controls and my >= control_y - 4 and my <= y2 and ((mx >= control_left_x - 4 and mx <= control_left_x + control_left_group_w + 4) or (mx >= control_right_x - 4 and mx <= control_right_x + control_right_group_w + 4))
 
             if show_zoom_stats and not node_is_collapsed then
                 local stats
@@ -6272,15 +6539,21 @@ function ShowRoutingPatchbay()
             if show_node_controls then
                 local mute_on = tr.track_muted == true
                 local solo_on = tr.track_soloed == true
+                local arm_on = tr.track_armed == true
+                local freeze_on = tr.track_frozen == true
                 local mute_tip = mute_on and "Unmute track" or "Mute track"
                 local solo_tip = solo_on and "Unsolo track" or "Solo track"
+                local arm_tip = arm_on and "Unarm track" or "Arm track"
+                local freeze_tip = freeze_on and "Unfreeze track" or "Freeze track"
                 if tr.ancestor_muted then mute_tip = mute_tip .. "\nMuted by folder ancestor: " .. tostring(tr.ancestor_muted_name or "Parent") end
                 if tr.ancestor_soloed then solo_tip = solo_tip .. "\nSolo affected by folder ancestor: " .. tostring(tr.ancestor_soloed_name or "Parent") end
                 local controls = {
                     { id = "##pin_btn", action = "pin", icon = "pin", width = control_size, x = control_left_x, active = node_is_pinned, on = 0xD7B95DFF, off = 0x4A4A4AFF, tip = node_is_pinned and "Unpin node" or "Pin node" },
                     { id = "##schema_btn", action = "schema", icon = "schema", width = control_size, x = control_left_x + control_size + control_gap, active = PB.fx_schema_open_guid == g, on = 0x6FB6D8FF, off = 0x4A4A4AFF, tip = PB.fx_schema_open_guid == g and "Hide FX chain schema" or "Show FX chain schema" },
                     { id = "##mute_btn", action = "mute", label = "M", width = control_size, x = control_right_x, active = mute_on, on = 0xCC3333FF, off = 0x4A4A4AFF, tip = mute_tip, inherited_outline = tr.ancestor_muted and 0xFF5555FF or nil, inherited_outline2 = (tr.ancestor_muted and mute_on) and 0xFF9999FF or nil },
-                    { id = "##solo_btn", action = "solo", label = "S", width = control_size, x = control_right_x + control_size + control_gap, active = solo_on, on = 0xCCBB33FF, off = 0x4A4A4AFF, tip = solo_tip, inherited_outline = tr.ancestor_soloed and 0xFFE066FF or nil, inherited_outline2 = (tr.ancestor_soloed and solo_on) and 0xFFF0AAFF or nil }
+                    { id = "##solo_btn", action = "solo", label = "S", width = control_size, x = control_right_x + control_size + control_gap, active = solo_on, on = 0xCCBB33FF, off = 0x4A4A4AFF, tip = solo_tip, inherited_outline = tr.ancestor_soloed and 0xFFE066FF or nil, inherited_outline2 = (tr.ancestor_soloed and solo_on) and 0xFFF0AAFF or nil },
+                    { id = "##arm_btn", action = "arm", label = "R", width = control_size, x = control_right_x + (control_size + control_gap) * 2, active = arm_on, on = 0xE05050FF, off = 0x4A4A4AFF, tip = arm_tip },
+                    { id = "##freeze_btn", action = "freeze", label = "F", width = control_size, x = control_right_x + (control_size + control_gap) * 3, active = freeze_on, on = 0x4488CCFF, off = 0x4A4A4AFF, tip = freeze_tip }
                 }
                 for ci = 1, #controls do
                     local ctrl = controls[ci]
@@ -6321,13 +6594,13 @@ function ShowRoutingPatchbay()
                                 PB.fx_schema_open_guid = g
                             end
                         elseif ctrl.action == "mute" and not all_locked then
-                            r.Undo_BeginBlock()
-                            r.SetMediaTrackInfo_Value(tr.track, "B_MUTE", mute_on and 0 or 1)
-                            r.Undo_EndBlock("Patchbay: toggle mute", -1)
+                            BatchSetMute(GetPatchbayControlTargetTracks(tr.track, g, tr.name), not mute_on)
                         elseif ctrl.action == "solo" and not all_locked then
-                            r.Undo_BeginBlock()
-                            r.SetMediaTrackInfo_Value(tr.track, "I_SOLO", solo_on and 0 or 2)
-                            r.Undo_EndBlock("Patchbay: toggle solo", -1)
+                            BatchSetSolo(GetPatchbayControlTargetTracks(tr.track, g, tr.name), not solo_on)
+                        elseif ctrl.action == "arm" and not all_locked then
+                            BatchSetRecordArm(GetPatchbayControlTargetTracks(tr.track, g, tr.name), not arm_on)
+                        elseif ctrl.action == "freeze" and not all_locked then
+                            BatchSetFreeze(GetPatchbayControlTargetTracks(tr.track, g, tr.name), not freeze_on)
                         end
                     end
                 end

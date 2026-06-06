@@ -1,8 +1,21 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.0.9
+-- @version 3.1.0
 -- @changelog:
 --[[ 
+    v3.1.0:
+        + Patchbay: changed track creation shortcut from Ctrl+N to Ctrl+T for consistency with REAPER's default Add Track shortcut.
+        + Patchbay: improved copy/paste so pasted track nodes can spawn at the cursor position from Patchbay paste actions.
+        + Patchbay: added View > Focus selected subtree to show selected folder or bus nodes with descendants without the parent tree.
+        + Patchbay: improved placement for tracks created from the TCP so new nodes stack vertically under the MASTER node.
+        + Patchbay: added record-arm indicators and direct arm/unarm controls on track nodes.
+        + Patchbay: added multi-select support for mute, solo, and record-arm node toggles.
+        + Patchbay: added frozen-track indicators and direct freeze/unfreeze node controls with multi-select support.
+        + Patchbay: improved pin right-click connection overviews with source/target route labels.
+        + Patchbay: added track numbers to send/settings popup headers.
+        + Patchbay: added colored route-state badges for send mode, mute, phase, mono, and route type in pin connection overviews.
+        + Patchbay: added shared assignable Action List trigger scripts for view, layout, focus, Cable Shop, and Route Audit commands.
+
     v3.0.9:
         + I/O: cached freeze status to avoid reading full track chunks every frame, fixing plugin popup conflicts with MeldaProduction windows.
 
@@ -283,7 +296,7 @@ local project_preview_active_path = script_path .. "project_preview_active.json"
 local custom_folder_icons_path = script_path .. "FolderIcons" .. os_separator
 StartBulkScreenshot         = function() end
 local DrawMeterModule       = dofile(script_path .. "DrawMeter.lua")
-local TKFXBVars             = dofile(script_path .. "TKFXBVariables.lua")
+dofile(script_path .. "TKFXBVariables.lua")
 dofile(script_path .. "TKFXBPatchbay.lua")
 local window_flags          = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
 
@@ -1385,6 +1398,7 @@ function SetDefaultConfig()
         routing_hubs_show_all_tracks = false,
         patchbay_only_explicit_routing = false,
         patchbay_selected_with_children = false,
+        patchbay_selected_subtree = false,
         patchbay_node_width = 180,
         patchbay_snap_to_grid = false,
         patchbay_prevent_overlap = true,
@@ -2312,7 +2326,7 @@ end
 PROJECTS_DIR = config.last_used_project_location
 
 
-local function PathExists(path)
+function PathExists(path)
     if not path or path == '' then return false end
     local ok, _, code = os.rename(path, path)
     if ok then return true end
@@ -2320,28 +2334,28 @@ local function PathExists(path)
     return false
 end
 
-local function ResolveFxChainsRoot()
+function ResolveFxChainsRoot()
     if config.use_custom_fxchain_dir and type(config.custom_fxchain_dir) == 'string' and config.custom_fxchain_dir ~= '' then
         return config.custom_fxchain_dir
     end
     return r.GetResourcePath() .. "/FXChains"
 end
 
-local function ResolveTrackTemplatesRoot()
+function ResolveTrackTemplatesRoot()
     if config.use_custom_template_dir and type(config.custom_template_dir) == 'string' and config.custom_template_dir ~= '' then
         return config.custom_template_dir
     end
     return r.GetResourcePath() .. "/TrackTemplates"
 end
 
-local function PathJoin(a, b)
+function PathJoin(a, b)
     if not a or a == '' then return b or '' end
     if not b or b == '' then return a end
     if a:sub(-1) == os_separator then return a .. b end
     return a .. os_separator .. b
 end
 
-local function BuildTreeFromFS(base_dir, ext)
+function BuildTreeFromFS(base_dir, ext)
     if not base_dir or base_dir == "" then
         DebugLog("[BuildTreeFromFS] ERROR: Invalid base_dir")
         return {}
@@ -2383,7 +2397,7 @@ local function BuildTreeFromFS(base_dir, ext)
     return root
 end
 
-local function GetFxChainsTree()
+function GetFxChainsTree()
     local root = ResolveFxChainsRoot()
     
     -- Create state signature for caching
@@ -2421,7 +2435,7 @@ local function GetFxChainsTree()
     return tree, root
 end
 
-local function CollectAllFxChainsFlat(tbl, path, result)
+function CollectAllFxChainsFlat(tbl, path, result)
     path = path or ""
     result = result or {}
     for i = 1, #tbl do
@@ -2441,7 +2455,7 @@ local function CollectAllFxChainsFlat(tbl, path, result)
     return result
 end
 
-local function GetTrackTemplatesTree()
+function GetTrackTemplatesTree()
     local root = ResolveTrackTemplatesRoot()
     
     local current_state = tostring(root) .. "|" .. tostring(config.use_custom_template_dir)
@@ -6384,7 +6398,7 @@ function OpenScreenshotsFolder()
     end
 end
 
-local function ImportThemeFromMediaBrowser()
+function ImportThemeFromMediaBrowser()
     local options_path = r.GetResourcePath() .. "/Scripts/TK_media_browser_options.txt"
     local f = io.open(options_path, "r")
     if not f then return false end
@@ -6473,7 +6487,7 @@ local function ImportThemeFromMediaBrowser()
     return true
 end
 
-local function ResetThemeToDefaults()
+function ResetThemeToDefaults()
     local defaults = SetDefaultConfig()
     local keys = {
         "window_alpha",
@@ -9841,7 +9855,7 @@ end
 
 local info_slider_block_drag = {}
 
-local function DrawInfoSlider(id, value, min_val, max_val, label, value_text, rail_color)
+function DrawInfoSlider(id, value, min_val, max_val, label, value_text, rail_color)
     rail_color = rail_color or 0x808080FF
     local label_offset = 42
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
@@ -10829,7 +10843,7 @@ function ReleaseCurrentPreview()
     collectgarbage("collect")
 end
 
-local function TryDeleteFile(fp)
+function TryDeleteFile(fp)
     if not r.file_exists(fp) then return true end
     return os.remove(fp) ~= nil
 end
@@ -10976,7 +10990,7 @@ end
 local project_comments = {}
 local project_preview_active = {}
 
-local function LoadProjectComments()
+function LoadProjectComments()
     local f = io.open(project_comments_path, "r")
     if f then
         local content = f:read("*a")
@@ -10985,7 +10999,7 @@ local function LoadProjectComments()
     end
 end
 
-local function SaveProjectComments()
+function SaveProjectComments()
     local f = io.open(project_comments_path, "w")
     if f then
         f:write(json.encode(project_comments))
@@ -10993,7 +11007,7 @@ local function SaveProjectComments()
     end
 end
 
-local function LoadProjectPreviewActive()
+function LoadProjectPreviewActive()
     local f = io.open(project_preview_active_path, "r")
     if f then
         local content = f:read("*a")
@@ -11002,7 +11016,7 @@ local function LoadProjectPreviewActive()
     end
 end
 
-local function SaveProjectPreviewActive()
+function SaveProjectPreviewActive()
     local f = io.open(project_preview_active_path, "w")
     if f then
         f:write(json.encode(project_preview_active))
@@ -11170,7 +11184,7 @@ function BuildVisibleRoutingTracks()
     return list
 end
 
-local function DrawRoutingFilterArrowButton(id, is_redo, enabled)
+function DrawRoutingFilterArrowButton(id, is_redo, enabled)
     local h = r.ImGui_GetFrameHeight(ctx)
     local w = h
     local clicked = r.ImGui_InvisibleButton(ctx, id, w, h) and enabled
@@ -11205,14 +11219,14 @@ local function DrawRoutingFilterArrowButton(id, is_redo, enabled)
     return clicked
 end
 
-local function CanNativeUndoRedo(is_redo)
+function CanNativeUndoRedo(is_redo)
     local fn = is_redo and r.Undo_CanRedo2 or r.Undo_CanUndo2
     if not fn then return true end
     local text = fn(0)
     return text ~= nil and text ~= ""
 end
 
-local function RunNativeUndoRedo(is_redo)
+function RunNativeUndoRedo(is_redo)
     r.Main_OnCommand(is_redo and 40030 or 40029, 0)
 end
 
@@ -15195,7 +15209,7 @@ function OpenTrackTemplatesGrid()
     ClearScreenshotCache()
 end
 
-local function ApplyFolderPaginationSlice(plugins, folder_key)
+function ApplyFolderPaginationSlice(plugins, folder_key)
     local total = #plugins
     local total_pages = math.max(1, math.ceil(total / ITEMS_PER_PAGE))
     local page = math.min(folder_page_state[folder_key] or 1, total_pages)
@@ -15207,7 +15221,7 @@ local function ApplyFolderPaginationSlice(plugins, folder_key)
     return sliced, total
 end
 
-local function DrawFolderPaginationUI(folder_key, total_count)
+function DrawFolderPaginationUI(folder_key, total_count)
     local total_pages = math.max(1, math.ceil(total_count / ITEMS_PER_PAGE))
     if total_pages <= 1 then return end
     local page = folder_page_state[folder_key] or 1
@@ -19264,7 +19278,7 @@ function DrawShowcaseLayout(screenshots, top_offset)
 end
 
 local polaroid_rotations = {}
-local function GetPolaroidRotation(idx)
+function GetPolaroidRotation(idx)
     if not polaroid_rotations[idx] then
         local seed = idx * 7 + 3
         local raw = math.sin(seed * 9.2847) * 43758.5453
@@ -25780,7 +25794,7 @@ local io_freeze_cache_guid = nil
 local io_freeze_cache_state = false
 local io_freeze_cache_valid = false
 
-local function GetIOFreezeState(track)
+function GetIOFreezeState(track)
     if not track or not r.ValidatePtr(track, "MediaTrack*") then
         io_freeze_cache_guid = nil
         io_freeze_cache_state = false
@@ -25800,7 +25814,7 @@ local function GetIOFreezeState(track)
     return io_freeze_cache_state
 end
 
-local function SetIOFreezeState(track, state)
+function SetIOFreezeState(track, state)
     if track and r.ValidatePtr(track, "MediaTrack*") then
         io_freeze_cache_guid = r.GetTrackGUID(track)
         io_freeze_cache_state = state and true or false

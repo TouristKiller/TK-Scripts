@@ -1,7 +1,19 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.8
+-- @version 1.1.9
 -- @changelog:
+--   v1.1.9:
+--       + Changed Patchbay track creation shortcut from Ctrl+N to Ctrl+T for consistency with REAPER's default Add Track shortcut.
+--       + Improved Patchbay copy/paste so pasted track nodes can spawn at the cursor position from Patchbay paste actions.
+--       + Added Patchbay View > Focus selected subtree to show selected folder or bus nodes with descendants without the parent tree.
+--       + Improved Patchbay placement for tracks created from the TCP so new nodes stack vertically under the MASTER node.
+--       + Added Patchbay record-arm indicators and direct arm/unarm controls on track nodes.
+--       + Added multi-select support for Patchbay mute, solo, and record-arm node toggles.
+--       + Added Patchbay frozen-track indicators and direct freeze/unfreeze node controls with multi-select support.
+--       + Improved Patchbay pin right-click connection overviews with source/target route labels.
+--       + Added track numbers to Patchbay send/settings popup headers.
+--       + Added colored route-state badges for send mode, mute, phase, mono, and route type in Patchbay pin connection overviews.
+--       + Added shared assignable Patchbay Action List trigger scripts for view, layout, focus, Cable Shop, and Route Audit commands.
 --   v1.1.8:
 --       + Added Patchbay pin right-click route context for send/receive settings and master-send disconnects.
 --       + Added Layout > Snap to grid and Layout > Prevent overlap options for node positioning.
@@ -100,6 +112,7 @@ _G.config = {
     patchbay_show_master = true,
     patchbay_hide_child_master_flow = false,
     patchbay_selected_with_children = false,
+    patchbay_selected_subtree = false,
     patchbay_only_explicit_routing = false,
     patchbay_show_flow = true,
     patchbay_show_folder_links = true,
