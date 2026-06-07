@@ -380,6 +380,18 @@
     </version>
     </reapack>
 
+    <reapack name="TK_Instrument_Tabs.lua" type="script" desc="TK Instrument Tabs">
+    <version name="1.0.0" author="TouristKiller" time="2026-06-08T01:15:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20Instrument%20Tabs/TK_Instrument_Tabs.lua</source>
+                <changelog><![CDATA[
+v1.0.0
++ Initial ReaPack release
++ Added instrument tabs with native floating FX window placement
++ Added instrument add menu, tab context actions, MIDI input selection, settings, and close control
+]]></changelog>
+    </version>
+    </reapack>
+
 </category>
 
 <category name="Transport">
