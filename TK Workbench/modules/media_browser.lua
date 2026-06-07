@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 local categorizer = require("core.media_categorizer")
 
 local M = {
@@ -1091,7 +1092,7 @@ local function draw_slider_value(ctx, text)
   local tx = x1 + ((x2 - x1) - tw) * 0.5
   local ty = y1 + ((y2 - y1) - th) * 0.5
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, tx - 4, ty - 1, tx + tw + 4, ty + th + 1, (Theme.colors.frame_bg & 0xFFFFFF00) | 0xCC, 3)
+  r.ImGui_DrawList_AddRectFilled(draw_list, tx - UIScale.round(4), ty - UIScale.round(1), tx + tw + UIScale.round(4), ty + th + UIScale.round(1), (Theme.colors.frame_bg & 0xFFFFFF00) | 0xCC, UIScale.px(3))
   r.ImGui_DrawList_AddText(draw_list, tx, ty, Theme.colors.text, text)
 end
 
@@ -1117,16 +1118,16 @@ local function draw_transport_button(ctx, id, icon, active, enabled, size)
   elseif icon == "stop" then
     r.ImGui_DrawList_AddRectFilled(draw_list, x + size * 0.20, y + size * 0.20, x + size * 0.80, y + size * 0.80, color)
   elseif icon == "prev" then
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.22, y + size * 0.18, x + size * 0.22, y + size * 0.82, color, 1.5)
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.22, y + size * 0.18, x + size * 0.22, y + size * 0.82, color, UIScale.px(1.5))
     r.ImGui_DrawList_AddTriangleFilled(draw_list, x + size * 0.78, y + size * 0.18, x + size * 0.78, y + size * 0.82, x + size * 0.30, y + size * 0.50, color)
   elseif icon == "next" then
     r.ImGui_DrawList_AddTriangleFilled(draw_list, x + size * 0.22, y + size * 0.18, x + size * 0.22, y + size * 0.82, x + size * 0.70, y + size * 0.50, color)
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.78, y + size * 0.18, x + size * 0.78, y + size * 0.82, color, 1.5)
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.78, y + size * 0.18, x + size * 0.78, y + size * 0.82, color, UIScale.px(1.5))
   elseif icon == "random" then
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.18, y + size * 0.30, x + size * 0.42, y + size * 0.30, color, 1.5)
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.42, y + size * 0.30, x + size * 0.72, y + size * 0.70, color, 1.5)
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.18, y + size * 0.70, x + size * 0.42, y + size * 0.70, color, 1.5)
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.42, y + size * 0.70, x + size * 0.72, y + size * 0.30, color, 1.5)
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.18, y + size * 0.30, x + size * 0.42, y + size * 0.30, color, UIScale.px(1.5))
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.42, y + size * 0.30, x + size * 0.72, y + size * 0.70, color, UIScale.px(1.5))
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.18, y + size * 0.70, x + size * 0.42, y + size * 0.70, color, UIScale.px(1.5))
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.42, y + size * 0.70, x + size * 0.72, y + size * 0.30, color, UIScale.px(1.5))
     r.ImGui_DrawList_AddTriangleFilled(draw_list, x + size * 0.72, y + size * 0.24, x + size * 0.72, y + size * 0.36, x + size * 0.84, y + size * 0.30, color)
     r.ImGui_DrawList_AddTriangleFilled(draw_list, x + size * 0.72, y + size * 0.64, x + size * 0.72, y + size * 0.76, x + size * 0.84, y + size * 0.70, color)
   end
@@ -2353,8 +2354,8 @@ local function draw_waveform(ctx, file, width, height)
   r.ImGui_InvisibleButton(ctx, "##media_waveform", width, height)
   local interaction_ok, interaction_err = pcall(handle_waveform_interaction, ctx, file, x, y, width, height)
   if not interaction_ok then state.last_error = tostring(interaction_err) end
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, 4)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, 4, 0, 1)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, UIScale.px(4), 0, UIScale.px(1))
   if not file then
     local text = "Select media"
     local tw = r.ImGui_CalcTextSize(ctx, text)
@@ -2372,8 +2373,8 @@ local function draw_waveform(ctx, file, width, height)
     local img_w = entry.width or 0
     local img_h = entry.height or 0
     if img_w <= 0 or img_h <= 0 then img_w, img_h = width, height end
-    local max_w = math.max(1, width - 14)
-    local max_h = math.max(1, height - 14)
+    local max_w = math.max(1, width - UIScale.round(14))
+    local max_h = math.max(1, height - UIScale.round(14))
     local scale = math.min(max_w / img_w, max_h / img_h)
     local draw_w = math.max(1, img_w * scale)
     local draw_h = math.max(1, img_h * scale)
@@ -2399,9 +2400,9 @@ local function draw_waveform(ctx, file, width, height)
     local tw = r.ImGui_CalcTextSize(ctx, text)
     local dw = r.ImGui_CalcTextSize(ctx, detail)
     local line_h = r.ImGui_GetTextLineHeight(ctx)
-    local text_y = y + (height - line_h * 2 - 4) * 0.5
+    local text_y = y + (height - line_h * 2 - UIScale.round(4)) * 0.5
     r.ImGui_DrawList_AddText(draw_list, x + (width - tw) * 0.5, text_y, Theme.colors.text, text)
-    r.ImGui_DrawList_AddText(draw_list, x + (width - dw) * 0.5, text_y + line_h + 4, Theme.colors.text_dim, detail)
+    r.ImGui_DrawList_AddText(draw_list, x + (width - dw) * 0.5, text_y + line_h + UIScale.round(4), Theme.colors.text_dim, detail)
     draw_preview_cursor(draw_list, file, x, y, width, height)
     return
   end
@@ -2416,14 +2417,14 @@ local function draw_waveform(ctx, file, width, height)
     local rx1, ry1, rx2, ry2 = waveform_reset_rect(ctx, x, y, height)
     if rx1 then
       local hovered_reset = waveform_reset_hovered(ctx, x, y, height)
-      r.ImGui_DrawList_AddRectFilled(draw_list, rx1 - 4, ry1 - 2, rx2 + 4, ry2 + 2, hovered_reset and 0xFFFFFF33 or 0x00000077, 3)
+      r.ImGui_DrawList_AddRectFilled(draw_list, rx1 - UIScale.round(4), ry1 - UIScale.round(2), rx2 + UIScale.round(4), ry2 + UIScale.round(2), hovered_reset and 0xFFFFFF33 or 0x00000077, UIScale.px(3))
       r.ImGui_DrawList_AddText(draw_list, rx1, ry1, hovered_reset and Theme.colors.text or Theme.colors.text_dim, "RESET")
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Click seek | Drag select | Ctrl-wheel zoom | Ctrl-Alt-wheel height | Right-click clear") end
     return
   end
   local mid = y + height * 0.5
-  local half = math.max(4, height * 0.44)
+  local half = math.max(UIScale.round(4), height * 0.44)
   local count = #data.peaks
   local visible_start, visible_end, visible_duration = waveform_visible_range()
   local vertical_zoom = clamp(tonumber(state.waveform_vertical_zoom) or 1.0, 0.25, 8.0)
@@ -2432,16 +2433,16 @@ local function draw_waveform(ctx, file, width, height)
     if normalized >= visible_start and normalized <= visible_end then
       local px = x + ((normalized - visible_start) / visible_duration) * width
       local amp = math.min(1, (peak or 0) * vertical_zoom)
-      r.ImGui_DrawList_AddLine(draw_list, px, mid - amp * half, px, mid + amp * half, Theme.colors.accent, 1)
+      r.ImGui_DrawList_AddLine(draw_list, px, mid - amp * half, px, mid + amp * half, Theme.colors.accent, UIScale.px(1))
     end
   end
   draw_waveform_selection(draw_list, file, x, y, width, height)
   local label = format_duration(data.length)
-  if label ~= "" then r.ImGui_DrawList_AddText(draw_list, x + 8, y + 7, Theme.colors.text, label) end
+  if label ~= "" then r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(8), y + UIScale.round(7), Theme.colors.text, label) end
   local rx1, ry1, rx2, ry2 = waveform_reset_rect(ctx, x, y, height)
   if rx1 then
     local hovered_reset = waveform_reset_hovered(ctx, x, y, height)
-    r.ImGui_DrawList_AddRectFilled(draw_list, rx1 - 4, ry1 - 2, rx2 + 4, ry2 + 2, hovered_reset and 0xFFFFFF33 or 0x00000077, 3)
+    r.ImGui_DrawList_AddRectFilled(draw_list, rx1 - UIScale.round(4), ry1 - UIScale.round(2), rx2 + UIScale.round(4), ry2 + UIScale.round(2), hovered_reset and 0xFFFFFF33 or 0x00000077, UIScale.px(3))
     r.ImGui_DrawList_AddText(draw_list, rx1, ry1, hovered_reset and Theme.colors.text or Theme.colors.text_dim, "RESET")
   end
   draw_preview_cursor(draw_list, file, x, y, width, height)
@@ -3353,13 +3354,13 @@ local function draw_location_manager(app, settings)
   local ctx = app.ctx
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Locations")
-  local row_h = r.ImGui_GetFrameHeight(ctx) + 4
-  local child_h = math.min(180, math.max(row_h + 8, #state.locations * row_h + 8))
+  local row_h = UIScale.button_h(ctx) + UIScale.round(4)
+  local child_h = math.min(UIScale.round(180), math.max(row_h + UIScale.round(8), #state.locations * row_h + UIScale.round(8)))
   if r.ImGui_BeginChild(ctx, "##media_location_manager", 0, child_h, 1) then
     for index, path in ipairs(state.locations) do
       r.ImGui_PushID(ctx, "location_manager_" .. tostring(index))
       local current = path == selected_location(settings)
-      if r.ImGui_Button(ctx, "x", 22, 0) then remove_location(settings, app, index); r.ImGui_PopID(ctx); break end
+      if r.ImGui_Button(ctx, "x", UIScale.round(22), 0) then remove_location(settings, app, index); r.ImGui_PopID(ctx); break end
       if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Remove") end
       r.ImGui_SameLine(ctx)
       local label = filename(path) .. "##managed_location"
@@ -3441,7 +3442,7 @@ local function draw_media_settings_popup(app, settings)
   if c then settings.auto_play_next = v; changed = true end
   c, v = r.ImGui_Checkbox(ctx, "Random play next", settings.random_play_next == true)
   if c then settings.random_play_next = v; changed = true end
-  r.ImGui_PushItemWidth(ctx, 170)
+  r.ImGui_PushItemWidth(ctx, UIScale.round(170))
   c, v = r.ImGui_SliderDouble(ctx, "Preview fade ms", settings.preview_fade_ms or defaults.preview_fade_ms, 0, 250, "%.0f")
   if c then settings.preview_fade_ms = v; changed = true end
   c, v = r.ImGui_SliderDouble(ctx, "Switch gap ms", settings.preview_restart_gap_ms or defaults.preview_restart_gap_ms, 0, 100, "%.0f")
@@ -3462,7 +3463,7 @@ local function draw_media_settings_popup(app, settings)
   if c then settings.trim_silence_enabled = v; changed = true; trim_changed = true end
   local disabled = settings.trim_silence_enabled ~= true
   if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
-  r.ImGui_PushItemWidth(ctx, 170)
+  r.ImGui_PushItemWidth(ctx, UIScale.round(170))
   c, v = r.ImGui_SliderDouble(ctx, "Threshold dB", settings.trim_silence_threshold_db or defaults.trim_silence_threshold_db, -96, -12, "%.0f")
   if c then settings.trim_silence_threshold_db = v; changed = true; trim_changed = true end
   c, v = r.ImGui_SliderDouble(ctx, "Padding ms", settings.trim_silence_padding_ms or defaults.trim_silence_padding_ms, 0, 250, "%.0f")
@@ -3483,31 +3484,38 @@ end
 
 local function draw_toolbar(app, settings, width)
   local ctx = app.ctx
-  local button_h = r.ImGui_GetFrameHeight(ctx)
-  local compact = width < 330
+  local button_h = UIScale.button_h(ctx)
+  local compact = width < UIScale.round(330)
   local auto_w = button_h
-  local loc_w = compact and math.max(70, width - auto_w - button_h * 4 - 44) or math.max(120, width - auto_w - button_h * 4 - 44)
+  local loc_w = compact and math.max(UIScale.round(70), width - auto_w - button_h * 4 - UIScale.round(44)) or math.max(UIScale.round(120), width - auto_w - button_h * 4 - UIScale.round(44))
   draw_location_combo(ctx, settings, app, loc_w)
   r.ImGui_SameLine(ctx)
   local auto_active = settings.location_view_mode == "auto"
-  if auto_active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent & 0xFFFFFFAA) end
+  local mode_active_bg = Theme.colors.accent & 0xFFFFFFAA
+  if auto_active then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), mode_active_bg)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(mode_active_bg, Theme.colors.text, nil, 4.5))
+  end
   if r.ImGui_Button(ctx, "A", auto_w, button_h) then
     settings.location_view_mode = auto_active and "folders" or "auto"
     state.last_filter_key = nil
     if app.save_settings then app.save_settings() end
   end
-  if auto_active then r.ImGui_PopStyleColor(ctx) end
+  if auto_active then r.ImGui_PopStyleColor(ctx, 2) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Auto categories") end
   r.ImGui_SameLine(ctx)
   local folder_active = folder_browse_active(settings)
-  if folder_active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent & 0xFFFFFFAA) end
+  if folder_active then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), mode_active_bg)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(mode_active_bg, Theme.colors.text, nil, 4.5))
+  end
   if r.ImGui_Button(ctx, "F", button_h, button_h) then
     settings.folder_browse = not folder_active
     if settings.folder_browse then settings.location_view_mode = "folders" end
     state.last_filter_key = nil
     if app.save_settings then app.save_settings() end
   end
-  if folder_active then r.ImGui_PopStyleColor(ctx) end
+  if folder_active then r.ImGui_PopStyleColor(ctx, 2) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Folder view") end
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, "+", button_h, button_h) then add_location(settings, app) end
@@ -3531,29 +3539,29 @@ local function draw_filter_icon(draw_list, kind, x, y, size, color)
       local t = index / steps
       local nx = x + t * size
       local ny = cy + math.sin(t * math.pi * 2) * (size * 0.30)
-      r.ImGui_DrawList_AddLine(draw_list, prev_x, prev_y, nx, ny, color, 1.5)
+      r.ImGui_DrawList_AddLine(draw_list, prev_x, prev_y, nx, ny, color, UIScale.px(1.5))
       prev_x, prev_y = nx, ny
     end
   elseif kind == "midi" then
     r.ImGui_DrawList_AddCircleFilled(draw_list, x + size * 0.32, y + size * 0.72, size * 0.18, color)
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.50, y + size * 0.72, x + size * 0.50, y + size * 0.18, color, 1.6)
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.50, y + size * 0.18, x + size * 0.84, y + size * 0.32, color, 1.6)
-    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.50, y + size * 0.36, x + size * 0.84, y + size * 0.50, color, 1.6)
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.50, y + size * 0.72, x + size * 0.50, y + size * 0.18, color, UIScale.px(1.6))
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.50, y + size * 0.18, x + size * 0.84, y + size * 0.32, color, UIScale.px(1.6))
+    r.ImGui_DrawList_AddLine(draw_list, x + size * 0.50, y + size * 0.36, x + size * 0.84, y + size * 0.50, color, UIScale.px(1.6))
   elseif kind == "video" then
     local pad = size * 0.14
-    r.ImGui_DrawList_AddRect(draw_list, x + pad, y + pad, x + size - pad, y + size - pad, color, 2, 0, 1.4)
+    r.ImGui_DrawList_AddRect(draw_list, x + pad, y + pad, x + size - pad, y + size - pad, color, UIScale.px(2), 0, UIScale.px(1.4))
     r.ImGui_DrawList_AddTriangleFilled(draw_list, cx - size * 0.12, cy - size * 0.18, cx - size * 0.12, cy + size * 0.18, cx + size * 0.20, cy, color)
   elseif kind == "image" then
     local pad = size * 0.14
-    r.ImGui_DrawList_AddRect(draw_list, x + pad, y + pad, x + size - pad, y + size - pad, color, 2, 0, 1.4)
+    r.ImGui_DrawList_AddRect(draw_list, x + pad, y + pad, x + size - pad, y + size - pad, color, UIScale.px(2), 0, UIScale.px(1.4))
     r.ImGui_DrawList_AddCircleFilled(draw_list, x + size * 0.70, y + size * 0.34, size * 0.08, color)
-    r.ImGui_DrawList_AddTriangle(draw_list, x + pad + 1, y + size - pad - 1, x + size * 0.50, y + size * 0.46, x + size - pad - 1, y + size - pad - 1, color, 1.5)
+    r.ImGui_DrawList_AddTriangle(draw_list, x + pad + UIScale.px(1), y + size - pad - UIScale.px(1), x + size * 0.50, y + size * 0.46, x + size - pad - UIScale.px(1), y + size - pad - UIScale.px(1), color, UIScale.px(1.5))
   end
 end
 
 local function draw_filter_toggle(ctx, kind, active, tooltip)
-  local button_size = 22
-  local icon_size = 16
+  local button_size = UIScale.round(22)
+  local icon_size = UIScale.round(16)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local clicked = r.ImGui_InvisibleButton(ctx, "##media_filter_" .. kind, button_size, button_size)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -3566,12 +3574,12 @@ end
 
 local function draw_filter_buttons(ctx, settings, app, width)
   local changed = false
-  local row_w = width or r.ImGui_GetContentRegionAvail(ctx) or 320
-  local spacing_x = 4
+  local row_w = width or r.ImGui_GetContentRegionAvail(ctx) or UIScale.round(320)
+  local spacing_x = UIScale.round(4)
   if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
     spacing_x = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing()) or spacing_x
   end
-  local icon_w = 22
+  local icon_w = UIScale.round(22)
   local search_w = math.max(1, row_w - icon_w * 4 - spacing_x * 4)
   r.ImGui_PushItemWidth(ctx, search_w)
   local search_changed, search = r.ImGui_InputTextWithHint(ctx, "##media_search", "Search", settings.search_term or "")
@@ -3683,7 +3691,7 @@ end
 local function draw_folder_row(app, settings, entry, index, width)
   local ctx = app.ctx
   local compact = settings.compact_list == true
-  local row_h = compact and 24 or 48
+  local row_h = compact and UIScale.round(24) or UIScale.round(48)
   r.ImGui_PushID(ctx, "media_folder_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -3692,24 +3700,24 @@ local function draw_folder_row(app, settings, entry, index, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local selected = state.selected_index == index and not state.selected_file
   local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
-  local row_top = compact and y or y + 2
-  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
-  local row_radius = compact and 2 or 5
+  local row_top = compact and y or y + UIScale.round(2)
+  local row_bottom = compact and y + row_h - UIScale.round(1) or y + row_h - UIScale.round(2)
+  local row_radius = compact and UIScale.px(2) or UIScale.px(5)
   if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
-  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and 1.4 or 0.7)
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and UIScale.px(1.4) or UIScale.px(0.7))
   local icon_color = entry.kind == "folder_up" and Theme.colors.text_dim or Theme.colors.accent
-  local text_x = compact and x + 30 or x + 32
+  local text_x = compact and x + UIScale.round(30) or x + UIScale.round(32)
   local folder_art = nil
   if not compact and entry.kind == "folder" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(entry.path or ""))) end
   if not compact and entry.kind == "folder_up" and (state.folder_path or "") ~= "" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(state.folder_path or ""))) end
   local drew_art = false
   if folder_art and folder_art.image and r.ImGui_DrawList_AddImage then
-    local box_x, box_y, box_size = x + 7, y + 8, 32
-    r.ImGui_DrawList_AddRectFilled(draw_list, box_x, box_y, box_x + box_size, box_y + box_size, Theme.colors.frame_bg, 4)
-    local image_ok = pcall(r.ImGui_DrawList_AddImage, draw_list, folder_art.image, box_x + 2, box_y + 2, box_x + box_size - 2, box_y + box_size - 2, 0, 0, 1, 1, 0xFFFFFFFF)
+    local box_x, box_y, box_size = x + UIScale.round(7), y + UIScale.round(8), UIScale.round(32)
+    r.ImGui_DrawList_AddRectFilled(draw_list, box_x, box_y, box_x + box_size, box_y + box_size, Theme.colors.frame_bg, UIScale.px(4))
+    local image_ok = pcall(r.ImGui_DrawList_AddImage, draw_list, folder_art.image, box_x + UIScale.round(2), box_y + UIScale.round(2), box_x + box_size - UIScale.round(2), box_y + box_size - UIScale.round(2), 0, 0, 1, 1, 0xFFFFFFFF)
     if image_ok then
-      r.ImGui_DrawList_AddRect(draw_list, box_x, box_y, box_x + box_size, box_y + box_size, Theme.colors.border, 4, 0, 1)
-      text_x = x + 48
+      r.ImGui_DrawList_AddRect(draw_list, box_x, box_y, box_x + box_size, box_y + box_size, Theme.colors.border, UIScale.px(4), 0, UIScale.px(1))
+      text_x = x + UIScale.round(48)
       drew_art = true
     elseif folder_art.path then
       destroy_folder_art(ctx, folder_art.path)
@@ -3717,18 +3725,18 @@ local function draw_folder_row(app, settings, entry, index, width)
   end
   if not drew_art then
     if compact then
-      r.ImGui_DrawList_AddRectFilled(draw_list, x + 8, y + 10, x + 24, y + 19, icon_color, 2)
-      r.ImGui_DrawList_AddRectFilled(draw_list, x + 10, y + 7, x + 19, y + 12, icon_color, 2)
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(8), y + UIScale.round(10), x + UIScale.round(24), y + UIScale.round(19), icon_color, UIScale.px(2))
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(10), y + UIScale.round(7), x + UIScale.round(19), y + UIScale.round(12), icon_color, UIScale.px(2))
     else
-      r.ImGui_DrawList_AddRectFilled(draw_list, x + 7, y + 16, x + 25, y + 29, icon_color, 3)
-      r.ImGui_DrawList_AddRectFilled(draw_list, x + 10, y + 12, x + 20, y + 18, icon_color, 2)
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(7), y + UIScale.round(16), x + UIScale.round(25), y + UIScale.round(29), icon_color, UIScale.px(3))
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(10), y + UIScale.round(12), x + UIScale.round(20), y + UIScale.round(18), icon_color, UIScale.px(2))
     end
   end
-  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 7, Theme.colors.text, entry.kind == "folder_up" and ".." or entry.name)
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + UIScale.round(4), x + width - UIScale.round(8), y + row_h - UIScale.round(4), true)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + UIScale.round(4) or y + UIScale.round(7), Theme.colors.text, entry.kind == "folder_up" and ".." or entry.name)
   if not compact then
     local detail = entry.kind == "folder_up" and "Parent folder" or (tostring(entry.file_count or 0) .. " media")
-    r.ImGui_DrawList_AddText(draw_list, text_x, y + 27, Theme.colors.text_dim, detail)
+    r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(27), Theme.colors.text_dim, detail)
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked or double_clicked then
@@ -3752,7 +3760,7 @@ end
 local function draw_file_row(app, settings, file, index, width)
   local ctx = app.ctx
   local compact = settings.compact_list == true
-  local row_h = compact and 24 or 48
+  local row_h = compact and UIScale.round(24) or UIScale.round(48)
   r.ImGui_PushID(ctx, "media_file_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -3761,22 +3769,22 @@ local function draw_file_row(app, settings, file, index, width)
   local selected = state.selected_file and state.selected_file.path == file.path
   local previewing = state.preview_path == file.path
   local bg = selected and 0x7AA2F730 or (previewing and 0x48CFAD24 or (hovered and 0xFFFFFF12 or 0x00000000))
-  local row_top = compact and y or y + 2
-  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
-  local row_radius = compact and 2 or 5
+  local row_top = compact and y or y + UIScale.round(2)
+  local row_bottom = compact and y + row_h - UIScale.round(1) or y + row_h - UIScale.round(2)
+  local row_radius = compact and UIScale.px(2) or UIScale.px(5)
   if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
-  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, (selected or previewing) and Theme.colors.accent or Theme.colors.border, row_radius, 0, (selected or previewing) and 1.4 or 0.7)
-  local text_x = compact and x + 10 or x + 30
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, (selected or previewing) and Theme.colors.accent or Theme.colors.border, row_radius, 0, (selected or previewing) and UIScale.px(1.4) or UIScale.px(0.7))
+  local text_x = compact and x + UIScale.round(10) or x + UIScale.round(30)
   if not compact then
     local kind_color = file.kind == "audio" and 0x48CFADFF or file.kind == "midi" and 0xFFCE54FF or file.kind == "video" and 0xED5565FF or 0x8F9AA8FF
-    r.ImGui_DrawList_AddRectFilled(draw_list, x + 7, y + 10, x + 23, y + 26, kind_color, 3)
-    r.ImGui_DrawList_AddText(draw_list, x + 12, y + 11, 0x111111FF, file.kind:sub(1, 1):upper())
+    r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(7), y + UIScale.round(10), x + UIScale.round(23), y + UIScale.round(26), kind_color, UIScale.px(3))
+    r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(12), y + UIScale.round(11), 0x111111FF, file.kind:sub(1, 1):upper())
   end
-  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 7, Theme.colors.text, file.name)
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + UIScale.round(4), x + width - UIScale.round(8), y + row_h - UIScale.round(4), true)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + UIScale.round(4) or y + UIScale.round(7), Theme.colors.text, file.name)
   if not compact then
     local tags = compact_tags(file)
-    if tags ~= "" then r.ImGui_DrawList_AddText(draw_list, text_x, y + 27, Theme.colors.text_dim, tags) end
+    if tags ~= "" then r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(27), Theme.colors.text_dim, tags) end
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then
@@ -3825,20 +3833,20 @@ local function draw_file_list(app, settings, width, height)
     elseif #state.filtered == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, selected_location(settings) == "" and "Add a media location" or "No media found")
     end
-    local row_h = settings.compact_list == true and 24 or 48
+    local row_h = settings.compact_list == true and UIScale.round(24) or UIScale.round(48)
     handle_file_list_keyboard(app, settings, row_h)
     local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
-    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 0) end
-    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_h, 8)
+    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), UIScale.round(8), 0) end
+    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_h, UIScale.round(8))
     shown = math.max(0, last - first + 1)
     if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
     for index = first, last do
       local entry = state.filtered[index]
       if entry then
         if entry.kind == "folder" or entry.kind == "folder_up" then
-          draw_folder_row(app, settings, entry, index, math.max(80, width - 12))
+          draw_folder_row(app, settings, entry, index, math.max(UIScale.round(80), width - UIScale.round(12)))
         else
-          draw_file_row(app, settings, entry, index, math.max(80, width - 12))
+          draw_file_row(app, settings, entry, index, math.max(UIScale.round(80), width - UIScale.round(12)))
         end
       end
     end
@@ -3880,26 +3888,26 @@ function M.draw(app)
   update_drag(app)
   refresh_filter(settings)
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-  draw_toolbar(app, settings, avail_w or 320)
-  draw_filter_buttons(ctx, settings, app, avail_w or 320)
+  draw_toolbar(app, settings, avail_w or UIScale.round(320))
+  draw_filter_buttons(ctx, settings, app, avail_w or UIScale.round(320))
   r.ImGui_Separator(ctx)
   local _, remaining_h = r.ImGui_GetContentRegionAvail(ctx)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local button_h = UIScale.button_h(ctx)
   local status_h = app.settings.show_status and UI.info_line_height(ctx) or 0
-  local available_h = math.max(120, remaining_h or 360) - status_h
-  local controls_h = button_h * 2 + 18
-  local wave_h = math.min(settings.waveform_height, math.max(64, available_h * 0.30))
-  local list_h = math.max(56, available_h - wave_h - controls_h - 12)
-  if list_h <= 60 then
-    wave_h = math.max(48, available_h - controls_h - 72)
-    list_h = math.max(56, available_h - wave_h - controls_h - 12)
+  local available_h = math.max(UIScale.round(120), remaining_h or UIScale.round(360)) - status_h
+  local controls_h = button_h * 2 + UIScale.round(18)
+  local wave_h = math.min(UIScale.round(settings.waveform_height), math.max(UIScale.round(64), available_h * 0.30))
+  local list_h = math.max(UIScale.round(56), available_h - wave_h - controls_h - UIScale.round(12))
+  if list_h <= UIScale.round(60) then
+    wave_h = math.max(UIScale.round(48), available_h - controls_h - UIScale.round(72))
+    list_h = math.max(UIScale.round(56), available_h - wave_h - controls_h - UIScale.round(12))
   end
-  local shown = draw_file_list(app, settings, avail_w or 320, list_h)
+  local shown = draw_file_list(app, settings, avail_w or UIScale.round(320), list_h)
   r.ImGui_Spacing(ctx)
-  draw_waveform(ctx, state.selected_file, math.max(80, (avail_w or 320) - 2), wave_h)
+  draw_waveform(ctx, state.selected_file, math.max(UIScale.round(80), (avail_w or UIScale.round(320)) - UIScale.round(2)), wave_h)
   local can_preview = can_preview_file(state.selected_file)
   local preview_active = preview_is_active()
-  local transport_size = math.min(20, math.max(18, button_h))
+  local transport_size = math.min(UIScale.round(20), math.max(UIScale.round(18), button_h))
   local prev_clicked, prev_hovered = draw_transport_button(ctx, "##media_prev", "prev", false, (state.selected_index or 1) > 1, transport_size)
   if prev_hovered then r.ImGui_SetTooltip(ctx, "Previous file") end
   if prev_clicked then previous_preview_file(app, settings) end
@@ -3926,14 +3934,14 @@ function M.draw(app)
   end
   r.ImGui_SameLine(ctx)
   local min_label = (tonumber(settings.min_display_time) or 0) > 0 and "1s" or "off"
-  local min_clicked, min_hovered = draw_text_transport_button(ctx, "##media_min_display", min_label, (tonumber(settings.min_display_time) or 0) > 0, 34, transport_size)
+  local min_clicked, min_hovered = draw_text_transport_button(ctx, "##media_min_display", min_label, (tonumber(settings.min_display_time) or 0) > 0, UIScale.text_button_w(ctx, min_label, 34), transport_size)
   if min_hovered then r.ImGui_SetTooltip(ctx, "Minimum display time") end
   if min_clicked then
     settings.min_display_time = (tonumber(settings.min_display_time) or 0) > 0 and 0 or 1.0
     if app.save_settings then app.save_settings() end
   end
   r.ImGui_SameLine(ctx)
-  local link_w = 30
+  local link_w = UIScale.text_button_w(ctx, "link", 30)
   local link_clicked, link_hovered = draw_text_transport_button(ctx, "##media_link", "link", settings.link_transport == true, link_w, transport_size)
   if link_clicked then
     settings.link_transport = not settings.link_transport
@@ -3945,7 +3953,7 @@ function M.draw(app)
     if changed_link then settings.link_start_from_editcursor = start_from_cursor; if app.save_settings then app.save_settings() end end
     r.ImGui_EndPopup(ctx)
   end
-  local slider_w = math.max(62, ((avail_w or 320) - 16) / 3)
+  local slider_w = math.max(UIScale.round(62), ((avail_w or UIScale.round(320)) - UIScale.round(16)) / 3)
   local slider_colors = push_slider_theme(ctx)
   r.ImGui_PushItemWidth(ctx, slider_w)
   local volume_db = volume_to_db(settings.preview_volume)

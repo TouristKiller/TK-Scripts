@@ -1,49 +1,70 @@
 # TK Action Capture
 
-Native REAPER extension for TK Workbench Action Clipboard auto capture.
+Native REAPER extension proof-of-concept for TK Workbench Action Clipboard auto capture.
 
-The extension registers REAPER post-command hooks and writes captured action events to ExtState section `TK_WORKBENCH_ACTION_CAPTURE`. TK Workbench reads those events from Lua and records them in Action Clipboard history and slots.
+This is the live local development copy. REAPER only loads the built extension from the REAPER `UserPlugins` folder; the C++ source in this folder is only needed while developing or rebuilding the native module.
+
+The extension registers REAPER post-command hooks and writes captured action events to ExtState section `TK_WORKBENCH_ACTION_CAPTURE`. TK Workbench reads those events from Lua and records them into the Action Clipboard slots.
 
 ## Build outputs
 
-- Windows: `bin/windows-x64/reaper_tk_action_capture.dll`
-- macOS: `bin/macos-universal/reaper_tk_action_capture.dylib`
-- Linux: `bin/linux-x64/reaper_tk_action_capture.so`
+- Windows: `reaper_tk_action_capture.dll`
+- macOS: `reaper_tk_action_capture.dylib`
+- Linux: `reaper_tk_action_capture.so`
 
 ## Local build
 
-Requirements:
+Requirements on Windows:
 
+- Visual Studio 2022 Build Tools with C++ workload
 - CMake 3.21 or newer
-- A native C++ toolchain for the target OS
 - Git access to `https://github.com/justinfrankel/reaper-sdk.git`, unless `REAPER_SDK_DIR` is set manually
 
-Windows:
+From a Developer PowerShell:
 
 ```powershell
+cd "$env:APPDATA\REAPER\Scripts\TK Scripts\TK Workbench\Native\TKActionCapture"
 cmake --preset windows-msvc-x64
 cmake --build --preset windows-msvc-x64-release
 ```
 
-macOS:
+On macOS:
 
 ```sh
 cmake --preset macos-universal
 cmake --build --preset macos-universal-release
 ```
 
-Linux:
+On Linux:
 
 ```sh
 cmake --preset linux-x64
 cmake --build --preset linux-x64-release
 ```
 
-Copy the built extension from the preset `build/*/bin` folder to the REAPER `UserPlugins` folder and restart REAPER.
+Or in VS Code, open this folder and run:
+
+```text
+Terminal: Run Build Task
+```
+
+Then choose:
+
+```text
+Build and install TK Action Capture
+```
+
+Install the built DLL:
+
+```powershell
+Copy-Item .\build\windows-msvc-x64\bin\reaper_tk_action_capture.dll "$env:APPDATA\REAPER\UserPlugins\reaper_tk_action_capture.dll" -Force
+```
+
+Restart REAPER after copying the extension.
 
 ## CI build
 
-The repository workflow builds Windows, macOS and Linux artifacts with GitHub Actions. Store downloaded artifacts in the matching `bin/<platform>` folder for ReaPack delivery. ReaPack installs the native binaries into the Workbench folder; copy the extension for the target platform manually into the REAPER `UserPlugins` folder.
+The repository workflow builds Windows, macOS and Linux artifacts with GitHub Actions. Download the artifact for the target platform and copy the extension manually into the REAPER `UserPlugins` folder.
 
 ## ExtState
 

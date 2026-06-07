@@ -2,6 +2,7 @@ local r = reaper
 local json = require("core.json")
 local UI = require("core.ui")
 local Theme = require("core.theme")
+local UIScale = require("core.ui_scale")
 
 local M = {
   id = "plugin_browser",
@@ -52,7 +53,7 @@ local min_screenshot_load_interval = 0
 local min_screenshot_lifetime = 2.0
 local screenshot_signature_check_interval = 5.0
 local screenshot_normalization_version = 4
-local row_height = 40
+local base_row_height = 40
 local uniform_ratio = 0.625
 
 local state = {
@@ -1818,8 +1819,8 @@ local function draw_drag_overlay(app)
   local imx, imy = mouse_imgui_position(ctx)
   if not imx or not imy then return end
   local target_type, target_name, target_color = drag_target_label(state.drag_target_track)
-  local marker_radius = 24
-  local marker_pad = 8
+  local marker_radius = UIScale.round(24)
+  local marker_pad = UIScale.round(8)
   local marker_size = (marker_radius + marker_pad) * 2
   local marker_flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs() | r.ImGui_WindowFlags_NoBackground()
   r.ImGui_SetNextWindowPos(ctx, imx - marker_radius - marker_pad, imy - marker_radius - marker_pad, r.ImGui_Cond_Always())
@@ -1829,15 +1830,15 @@ local function draw_drag_overlay(app)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local fill_col = (target_color & 0xFFFFFF00) | 0x44
     r.ImGui_DrawList_AddCircleFilled(draw_list, imx, imy, marker_radius, fill_col, 0)
-    r.ImGui_DrawList_AddCircle(draw_list, imx, imy, marker_radius, target_color, 0, 3.0)
-    r.ImGui_DrawList_AddCircle(draw_list, imx, imy, marker_radius - 6, target_color, 0, 1.5)
-    r.ImGui_DrawList_AddLine(draw_list, imx - marker_radius * 0.55, imy, imx + marker_radius * 0.55, imy, target_color, 2.0)
-    r.ImGui_DrawList_AddLine(draw_list, imx, imy - marker_radius * 0.55, imx, imy + marker_radius * 0.55, target_color, 2.0)
+    r.ImGui_DrawList_AddCircle(draw_list, imx, imy, marker_radius, target_color, 0, UIScale.px(3.0))
+    r.ImGui_DrawList_AddCircle(draw_list, imx, imy, marker_radius - UIScale.round(6), target_color, 0, UIScale.px(1.5))
+    r.ImGui_DrawList_AddLine(draw_list, imx - marker_radius * 0.55, imy, imx + marker_radius * 0.55, imy, target_color, UIScale.px(2.0))
+    r.ImGui_DrawList_AddLine(draw_list, imx, imy - marker_radius * 0.55, imx, imy + marker_radius * 0.55, target_color, UIScale.px(2.0))
     r.ImGui_End(ctx)
   end
   local overlay_flags = r.ImGui_WindowFlags_NoDecoration() | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoMove() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_NoInputs()
   r.ImGui_SetNextWindowBgAlpha(ctx, 0.42)
-  r.ImGui_SetNextWindowPos(ctx, imx + marker_radius + marker_pad + 6, imy + marker_radius + marker_pad + 6, r.ImGui_Cond_Always())
+  r.ImGui_SetNextWindowPos(ctx, imx + marker_radius + marker_pad + UIScale.round(6), imy + marker_radius + marker_pad + UIScale.round(6), r.ImGui_Cond_Always())
   if r.ImGui_Begin(ctx, "##tk_workbench_drag_overlay", true, overlay_flags) then
     r.ImGui_Text(ctx, "FX " .. drag_plugins_label(plugins))
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), target_color)
@@ -2128,9 +2129,9 @@ local function set_next_combo_height(ctx, settings)
   local rows = math.floor(tonumber(settings.dropdown_rows) or defaults.dropdown_rows)
   if rows < 8 then rows = 8 end
   if rows > 36 then rows = 36 end
-  local height = rows * (r.ImGui_GetTextLineHeight(ctx) + 6) + 12
+  local height = rows * (r.ImGui_GetTextLineHeight(ctx) + UIScale.round(6)) + UIScale.round(12)
   if r.ImGui_SetNextWindowSizeConstraints then
-    local width = r.ImGui_CalcItemWidth and r.ImGui_CalcItemWidth(ctx) or 180
+    local width = r.ImGui_CalcItemWidth and r.ImGui_CalcItemWidth(ctx) or UIScale.round(180)
     r.ImGui_SetNextWindowSizeConstraints(ctx, width, 0, 100000, height)
   elseif r.ImGui_SetNextWindowSize then
     r.ImGui_SetNextWindowSize(ctx, 0, height, r.ImGui_Cond_Appearing())
@@ -2223,7 +2224,7 @@ local function draw_filter_popup(ctx, settings, app)
   r.ImGui_Text(ctx, "Sort")
   if settings.sort_mode == "type_priority" then settings.sort_mode = "name" end
   local sort_label = settings.sort_mode == "rating" and "Rating" or "Name"
-  if r.ImGui_Button(ctx, sort_label, 150, 0) then
+  if r.ImGui_Button(ctx, sort_label, UIScale.text_button_w(ctx, sort_label, 150, 8), 0) then
     settings.sort_mode = settings.sort_mode == "name" and state.rating_source == "shared" and "rating" or "name"
     save_filter_change(app)
   end
@@ -2266,13 +2267,13 @@ local function draw_filter_popup(ctx, settings, app)
   end
   for index, plugin_type_name in ipairs(settings.type_priority or defaults.type_priority) do
     r.ImGui_PushID(ctx, "prio_" .. tostring(index))
-    if r.ImGui_Button(ctx, "U", 22, 0) and index > 1 then
+    if r.ImGui_Button(ctx, "U", UIScale.text_button_w(ctx, "U", 22, 4), 0) and index > 1 then
       settings.type_priority[index], settings.type_priority[index - 1] = settings.type_priority[index - 1], settings.type_priority[index]
       save_filter_change(app)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move up") end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "D", 22, 0) and index < #settings.type_priority then
+    if r.ImGui_Button(ctx, "D", UIScale.text_button_w(ctx, "D", 22, 4), 0) and index < #settings.type_priority then
       settings.type_priority[index], settings.type_priority[index + 1] = settings.type_priority[index + 1], settings.type_priority[index]
       save_filter_change(app)
     end
@@ -2281,7 +2282,7 @@ local function draw_filter_popup(ctx, settings, app)
     r.ImGui_Text(ctx, tostring(index) .. ". " .. plugin_type_name)
     r.ImGui_PopID(ctx)
   end
-  if r.ImGui_Button(ctx, "Reset priority", 150, 0) then
+  if r.ImGui_Button(ctx, "Reset priority", UIScale.text_button_w(ctx, "Reset priority", 150, 8), 0) then
     settings.type_priority = copy_default(defaults.type_priority)
     save_filter_change(app)
   end
@@ -2302,7 +2303,7 @@ local function draw_row_screenshot(ctx, draw_list, settings, plugin, x, y, width
   else
     local label = plugin.type or "FX"
     local text_w = r.ImGui_CalcTextSize(ctx, label)
-    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, 3, 0, 1)
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, UIScale.px(3), 0, UIScale.px(1))
     r.ImGui_DrawList_AddText(draw_list, x + (width - text_w) * 0.5, y + (height - r.ImGui_GetTextLineHeight(ctx)) * 0.5, Theme.colors.text_dim, label)
   end
 end
@@ -2311,47 +2312,47 @@ local function draw_plugin_row(app, settings, plugin, index, row_width)
   local ctx = app.ctx
   r.ImGui_PushID(ctx, "pb_" .. tostring(index))
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  local width = math.max(40, row_width or 180)
-  local row_h = row_height
-  local gap = 6
-  local show_shot = settings.show_screenshots and width >= 170
-  local show_type = width >= 150
-  local show_add = width >= 120
-  local shot_w = show_shot and 60 or 0
-  local marker_w = width >= 220 and 58 or 24
-  local add_w = show_add and 26 or 0
-  local type_w = show_type and 42 or 0
+  local width = math.max(UIScale.round(40), row_width or UIScale.round(180))
+  local row_h = UIScale.round(base_row_height)
+  local gap = UIScale.round(6)
+  local show_shot = settings.show_screenshots and width >= UIScale.round(170)
+  local show_type = width >= UIScale.round(150)
+  local show_add = width >= UIScale.round(120)
+  local shot_w = show_shot and UIScale.round(60) or 0
+  local marker_w = width >= UIScale.round(220) and UIScale.round(58) or UIScale.round(24)
+  local add_w = show_add and UIScale.round(26) or 0
+  local type_w = show_type and UIScale.round(42) or 0
   local right_w = (show_add and (add_w + gap) or 0) + (show_type and (type_w + gap) or 0)
-  local name_w = math.max(24, width - shot_w - marker_w - gap - right_w)
+  local name_w = math.max(UIScale.round(24), width - shot_w - marker_w - gap - right_w)
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local double_clicked = hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0)
   local selected = is_plugin_selected(plugin)
   local x, y = r.ImGui_GetItemRectMin(ctx)
-  local center_y = y + (row_h - 22) * 0.5
+  local center_y = y + (row_h - UIScale.round(22)) * 0.5
   if selected then
-    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + row_h, 0x7AA2F724, 3)
-    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + row_h, Theme.colors.accent, 3, 0, 1.5)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + row_h, 0x7AA2F724, UIScale.px(3))
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + row_h, Theme.colors.accent, UIScale.px(3), 0, UIScale.px(1.5))
   end
-  if hovered then r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + row_h, 0xFFFFFF10, 3) end
+  if hovered then r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + row_h, 0xFFFFFF10, UIScale.px(3)) end
   if show_shot then
-    draw_row_screenshot(ctx, draw_list, settings, plugin, x, y + 4, 54, 32)
+    draw_row_screenshot(ctx, draw_list, settings, plugin, x, y + UIScale.round(4), UIScale.round(54), UIScale.round(32))
   end
-  local dot_x = x + shot_w + 7
-  draw_favorite_dot(draw_list, plugin, dot_x, y + row_h * 0.5, 4)
-  draw_pinned_marker(draw_list, plugin, dot_x + 12, y + row_h * 0.5, 4)
-  if width >= 220 then draw_rating_label(ctx, draw_list, plugin, dot_x + 24, center_y + 2) end
+  local dot_x = x + shot_w + UIScale.round(7)
+  draw_favorite_dot(draw_list, plugin, dot_x, y + row_h * 0.5, UIScale.px(4))
+  draw_pinned_marker(draw_list, plugin, dot_x + UIScale.round(12), y + row_h * 0.5, UIScale.px(4))
+  if width >= UIScale.round(220) then draw_rating_label(ctx, draw_list, plugin, dot_x + UIScale.round(24), center_y + UIScale.round(2)) end
   local name_x = x + shot_w + marker_w + gap
-  local display_name = truncate_text(ctx, plugin.display_name, name_w - 4)
-  r.ImGui_DrawList_AddText(draw_list, name_x, center_y + 2, Theme.colors.text, display_name)
+  local display_name = truncate_text(ctx, plugin.display_name, name_w - UIScale.round(4))
+  r.ImGui_DrawList_AddText(draw_list, name_x, center_y + UIScale.round(2), Theme.colors.text, display_name)
   if show_add then
     local add_x = x + width - right_w
-    r.ImGui_DrawList_AddRect(draw_list, add_x, center_y, add_x + add_w, center_y + 22, 0x8F9AA866, 3, 0, 1)
-    r.ImGui_DrawList_AddText(draw_list, add_x + 8, center_y + 2, Theme.colors.text, "+")
+    r.ImGui_DrawList_AddRect(draw_list, add_x, center_y, add_x + add_w, center_y + UIScale.round(22), 0x8F9AA866, UIScale.px(3), 0, UIScale.px(1))
+    r.ImGui_DrawList_AddText(draw_list, add_x + UIScale.round(8), center_y + UIScale.round(2), Theme.colors.text, "+")
   end
   if show_type then
     local type_label = truncate_text(ctx, plugin.type, type_w)
-    r.ImGui_DrawList_AddText(draw_list, x + width - type_w, center_y + 2, Theme.colors.text_dim, type_label)
+    r.ImGui_DrawList_AddText(draw_list, x + width - type_w, center_y + UIScale.round(2), Theme.colors.text_dim, type_label)
   end
   if clicked or double_clicked then handle_plugin_click(app, settings, plugin, index, double_clicked) end
   register_external_drag_source(ctx, settings, plugin, index, hovered)
@@ -2372,21 +2373,21 @@ local function draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, l
   local border = Theme.colors.border
   local hover = Theme.colors.accent
   r.ImGui_PushID(ctx, "pb_uniform_" .. tostring(index))
-  label_h = label_h or (r.ImGui_GetTextLineHeight(ctx) + 8)
+  label_h = label_h or (r.ImGui_GetTextLineHeight(ctx) + UIScale.round(8))
   local total_h = cell_h + label_h
   local clicked = r.ImGui_InvisibleButton(ctx, "##uniform_card", cell_w, total_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local double_clicked = hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0)
   local selected = is_plugin_selected(plugin)
   local x, y = r.ImGui_GetItemRectMin(ctx)
-  if selected then r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + cell_w, y + total_h, 0x7AA2F718, 4) end
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + cell_w, y + cell_h, bg, 4)
+  if selected then r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + cell_w, y + total_h, 0x7AA2F718, UIScale.px(4)) end
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + cell_w, y + cell_h, bg, UIScale.px(4))
   if settings.show_screenshots then
     local image = get_screenshot_image(ctx, plugin)
     if image then
       local image_w, image_h = r.ImGui_Image_GetSize(image)
       if image_w and image_h and image_w > 0 and image_h > 0 then
-        local inset = 8
+        local inset = UIScale.round(8)
         local inner_w = cell_w - inset * 2
         local inner_h = cell_h - inset * 2
         local scale = math.min(inner_w / image_w, inner_h / image_h)
@@ -2406,15 +2407,15 @@ local function draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, l
     local text_w = r.ImGui_CalcTextSize(ctx, text)
     r.ImGui_DrawList_AddText(draw_list, x + (cell_w - text_w) * 0.5, y + (cell_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, Theme.colors.text_dim, text)
   end
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + cell_w, y + cell_h, hovered and hover or border, 4, 0, hovered and 2 or 1.5)
-  if selected then r.ImGui_DrawList_AddRect(draw_list, x, y, x + cell_w, y + total_h, Theme.colors.accent, 4, 0, 2.0) end
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + cell_w, y + cell_h, hovered and hover or border, UIScale.px(4), 0, hovered and UIScale.px(2) or UIScale.px(1.5))
+  if selected then r.ImGui_DrawList_AddRect(draw_list, x, y, x + cell_w, y + total_h, Theme.colors.accent, UIScale.px(4), 0, UIScale.px(2.0)) end
   draw_type_badge(ctx, draw_list, plugin, x, y, cell_w)
-  draw_favorite_dot(draw_list, plugin, x + 10, y + 10, 5)
-  draw_pinned_marker(draw_list, plugin, x + 23, y + 10, 5)
-  draw_rating_label(ctx, draw_list, plugin, x + 8, y + cell_h - 22, 7)
-  local display_name = truncate_text(ctx, plugin.display_name, cell_w - 8)
+  draw_favorite_dot(draw_list, plugin, x + UIScale.round(10), y + UIScale.round(10), UIScale.px(5))
+  draw_pinned_marker(draw_list, plugin, x + UIScale.round(23), y + UIScale.round(10), UIScale.px(5))
+  draw_rating_label(ctx, draw_list, plugin, x + UIScale.round(8), y + cell_h - UIScale.round(22), UIScale.px(7))
+  local display_name = truncate_text(ctx, plugin.display_name, cell_w - UIScale.round(8))
   local name_w = r.ImGui_CalcTextSize(ctx, display_name)
-  r.ImGui_DrawList_AddText(draw_list, x + (cell_w - name_w) * 0.5, y + cell_h + 4, Theme.colors.text, display_name)
+  r.ImGui_DrawList_AddText(draw_list, x + (cell_w - name_w) * 0.5, y + cell_h + UIScale.round(4), Theme.colors.text, display_name)
   if clicked or double_clicked then handle_plugin_click(app, settings, plugin, index, double_clicked) end
   register_external_drag_source(ctx, settings, plugin, index, hovered)
   draw_plugin_context_menu(app, settings, plugin, "##plugin_context")
@@ -2441,7 +2442,8 @@ end
 
 local function draw_virtual_list(app, settings, row_width)
   local ctx = app.ctx
-  local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_height, 6)
+  local row_h = UIScale.round(base_row_height)
+  local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_h, 6)
   if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
   for index = first, last do
     local plugin = state.filtered[index]
@@ -2453,13 +2455,13 @@ end
 local function draw_virtual_tiles(app, settings, avail_w)
   local ctx = app.ctx
   local padding = 0
-  local gap = 10
+  local gap = UIScale.round(10)
   local usable_w = math.max(1, avail_w - padding * 2)
-  local preferred_w = math.max(112, math.min(150, tonumber(settings.screenshot_size) or 126))
+  local preferred_w = math.max(UIScale.round(112), math.min(UIScale.round(150), UIScale.round(tonumber(settings.screenshot_size) or 126)))
   local columns = math.max(1, math.floor((usable_w + gap) / (preferred_w + gap)))
   local cell_w = math.floor((usable_w - (columns - 1) * gap) / columns)
   local cell_h = math.floor(cell_w * uniform_ratio)
-  local label_h = r.ImGui_GetTextLineHeight(ctx) + 8
+  local label_h = r.ImGui_GetTextLineHeight(ctx) + UIScale.round(8)
   local item_h = cell_h + label_h + gap
   local row_count = math.ceil(#state.filtered / columns)
   local first_row, last_row, top_pad, bottom_pad = visible_range(ctx, row_count, item_h, 3)
@@ -2485,12 +2487,12 @@ local function draw_toolbar(app, settings, avail_w)
   local ctx = app.ctx
   local button_h = r.ImGui_GetFrameHeight(ctx)
   local mode_label = settings.view_mode == "tiles" and "Uniform" or "List"
-  local mode_w = math.max(button_h, r.ImGui_CalcTextSize(ctx, mode_label) + 14)
+  local mode_w = math.max(button_h, r.ImGui_CalcTextSize(ctx, mode_label) + UIScale.round(14))
   local group_kind = group_kind_for_source(settings.source or "All")
-  local width = math.max(1, avail_w or 320)
-  local source_w = math.min(118, math.max(86, width * 0.22))
-  local group_w = group_kind and math.min(168, math.max(104, width * 0.30)) or 0
-  local gap = 4
+  local width = math.max(1, avail_w or UIScale.round(320))
+  local source_w = math.min(UIScale.round(118), math.max(UIScale.round(86), width * 0.22))
+  local group_w = group_kind and math.min(UIScale.round(168), math.max(UIScale.round(104), width * 0.30)) or 0
+  local gap = UIScale.round(4)
   local visible = { source = true, group = group_kind ~= nil, mode = true, screenshots = true, rescan = true }
   local hide_order = { "rescan", "screenshots", "mode", "group" }
   local function item_width(name)
@@ -2536,10 +2538,10 @@ local function draw_toolbar(app, settings, avail_w)
     local gaps_w = math.max(0, fixed_count + dropdown_count - 1) * gap
     local dropdown_w = math.max(0, width - fixed_w - gaps_w)
     if dropdown_count == 1 then
-      source_w = math.max(50, dropdown_w)
+      source_w = math.max(UIScale.round(50), dropdown_w)
     elseif dropdown_count == 2 then
-      group_w = math.max(70, math.floor(dropdown_w * 0.45))
-      source_w = math.max(60, dropdown_w - group_w)
+      group_w = math.max(UIScale.round(70), math.floor(dropdown_w * 0.45))
+      source_w = math.max(UIScale.round(60), dropdown_w - group_w)
     end
   end
   local function draw_mode_button(label, w)
@@ -2603,7 +2605,7 @@ local function draw_toolbar(app, settings, avail_w)
     if r.ImGui_Button(ctx, ">", button_h, button_h) then r.ImGui_OpenPopup(ctx, "##pb_overflow_menu") end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "More controls") end
     if r.ImGui_BeginPopup(ctx, "##pb_overflow_menu") then
-      local popup_w = 210
+      local popup_w = UIScale.round(210)
       if not visible.source then
         r.ImGui_PushItemWidth(ctx, popup_w)
         draw_source_combo(ctx, settings, app)
@@ -2656,8 +2658,8 @@ end
 local function draw_bottom_shortcuts(app, width)
   local ctx = app.ctx
   local button_h = r.ImGui_GetFrameHeight(ctx)
-  local gap = 6
-  local button_w = math.max(80, ((width or 320) - gap) * 0.5)
+  local gap = UIScale.round(6)
+  local button_w = math.max(UIScale.round(80), ((width or UIScale.round(320)) - gap) * 0.5)
   if r.ImGui_Button(ctx, "Rack", button_w, button_h) then switch_module(app, "instrument_rack", "Instrument Rack") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Go to Instrument Rack") end
   r.ImGui_SameLine(ctx, 0, gap)
@@ -2678,7 +2680,7 @@ function M.draw(app)
   update_external_drag(app, settings)
   state.screenshot_visible_keys = {}
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  draw_toolbar(app, settings, avail_w or 320)
+  draw_toolbar(app, settings, avail_w or UIScale.round(320))
   if not settings.show_screenshots then
     state.screenshot_load_queue = {}
     state.screenshot_load_order = {}
@@ -2695,19 +2697,19 @@ function M.draw(app)
     info_text = state.load_error
   end
   local _, remaining_h = r.ImGui_GetContentRegionAvail(ctx)
-  local shortcut_h = r.ImGui_GetFrameHeight(ctx) + 6
-  local list_h = math.max(120, (remaining_h or avail_h or 360) - UI.info_line_height(ctx) - shortcut_h)
+  local shortcut_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(6)
+  local list_h = math.max(UIScale.round(120), (remaining_h or avail_h or UIScale.round(360)) - UI.info_line_height(ctx) - shortcut_h)
   local child_visible = r.ImGui_BeginChild(ctx, "##pb_results", 0, list_h, 0)
   local ok, err = true, nil
   if child_visible then
     ok, err = pcall(function()
-      local results_w = r.ImGui_GetContentRegionAvail(ctx) or avail_w or 320
+      local results_w = r.ImGui_GetContentRegionAvail(ctx) or avail_w or UIScale.round(320)
       if #state.plugins == 0 and not state.load_error then
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No plugins loaded")
       elseif settings.view_mode == "tiles" then
         draw_virtual_tiles(app, settings, results_w)
       else
-        local row_width = math.max(80, results_w)
+        local row_width = math.max(UIScale.round(80), results_w)
         draw_virtual_list(app, settings, row_width)
       end
       if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsAnyItemHovered(ctx) and not state.dragging_plugin then clear_selection(app) end
@@ -2716,7 +2718,7 @@ function M.draw(app)
   r.ImGui_EndChild(ctx)
   if not ok then error(err) end
   draw_drag_overlay(app)
-  draw_bottom_shortcuts(app, avail_w or 320)
+  draw_bottom_shortcuts(app, avail_w or UIScale.round(320))
   UI.draw_info_line(ctx, info_text)
   if settings.show_screenshots then process_screenshot_load_queue(ctx) end
 end

@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 
 local M = {
   id = "color_studio",
@@ -1191,7 +1192,7 @@ local function schedule_auto_apply(signature)
 end
 
 local function draw_button(ctx, label, width)
-  return r.ImGui_Button(ctx, label, width or 92, 0)
+  return r.ImGui_Button(ctx, label, width or UIScale.round(92), 0)
 end
 
 local function draw_toggle_button(ctx, label, active, width)
@@ -1199,7 +1200,8 @@ local function draw_toggle_button(ctx, label, active, width)
   if active and r.ImGui_Col_Button then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent_soft); style_count = style_count + 1 end
   if active and r.ImGui_Col_ButtonHovered then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent); style_count = style_count + 1 end
   if active and r.ImGui_Col_ButtonActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent); style_count = style_count + 1 end
-  local clicked = r.ImGui_Button(ctx, label, width or 54, 0)
+  if active and r.ImGui_Col_Text then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds({ Theme.colors.accent_soft, Theme.colors.accent }, Theme.colors.text, nil, 4.5)); style_count = style_count + 1 end
+  local clicked = r.ImGui_Button(ctx, label, width or UIScale.round(54), 0)
   if style_count > 0 then r.ImGui_PopStyleColor(ctx, style_count) end
   return clicked
 end
@@ -1218,7 +1220,7 @@ local function setup_auto_rules_overview_columns(ctx)
   local fixed = r.ImGui_TableColumnFlags_WidthFixed and r.ImGui_TableColumnFlags_WidthFixed() or 0
   r.ImGui_TableSetupColumn(ctx, "Rule", stretch, 1.0)
   r.ImGui_TableSetupColumn(ctx, "Info", stretch, 1.7)
-  r.ImGui_TableSetupColumn(ctx, "Color", fixed, 24)
+  r.ImGui_TableSetupColumn(ctx, "Color", fixed, UIScale.round(24))
 end
 
 local function draw_three_column_buttons(ctx, id, buttons)
@@ -1257,14 +1259,14 @@ end
 
 local function draw_target_selector(ctx, app, settings, selected_item_count)
   local function draw_target_button(width)
-    if r.ImGui_Button(ctx, target_label(settings, selected_item_count) .. "##color_studio_target", width or 112, 0) then
+    if r.ImGui_Button(ctx, target_label(settings, selected_item_count) .. "##color_studio_target", width or UIScale.round(112), 0) then
       cycle_target_mode(app, settings)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Auto: selected item = item, otherwise track") end
   end
 
   local function draw_count_combo(width)
-    if r.ImGui_SetNextItemWidth then r.ImGui_SetNextItemWidth(ctx, width or 72) end
+    if r.ImGui_SetNextItemWidth then r.ImGui_SetNextItemWidth(ctx, width or UIScale.round(72)) end
     if r.ImGui_BeginCombo(ctx, "##color_studio_palette_color_count", tostring(settings.palette_color_count)) then
       for _, count in ipairs(PALETTE_COLOR_COUNTS) do
         local selected = settings.palette_color_count == count
@@ -1280,7 +1282,7 @@ local function draw_target_selector(ctx, app, settings, selected_item_count)
   end
 
   local function draw_sort_button(width)
-    if r.ImGui_Button(ctx, (settings.palette_sorted and "Hue" or "Seq") .. "##color_studio_palette_sort", width or 44, 0) then
+    if r.ImGui_Button(ctx, (settings.palette_sorted and "Hue" or "Seq") .. "##color_studio_palette_sort", width or UIScale.round(44), 0) then
       settings.palette_sorted = not settings.palette_sorted
       if app.save_settings then app.save_settings() end
     end
@@ -1332,7 +1334,7 @@ local function draw_random_controls(ctx, app, settings)
 end
 
 local function draw_swatch(ctx, id, color, size, highlighted)
-  size = size or 26
+  size = UIScale.round(size or 26)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), color)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), adjust_color(color, 0.18))
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), adjust_color(color, -0.18))
@@ -1341,7 +1343,8 @@ local function draw_swatch(ctx, id, color, size, highlighted)
   if highlighted and r.ImGui_GetWindowDrawList and r.ImGui_GetItemRectMin and r.ImGui_GetItemRectMax then
     local x1, y1 = r.ImGui_GetItemRectMin(ctx)
     local x2, y2 = r.ImGui_GetItemRectMax(ctx)
-    r.ImGui_DrawList_AddRect(r.ImGui_GetWindowDrawList(ctx), x1 - 2, y1 - 2, x2 + 2, y2 + 2, Theme.colors.accent or Theme.colors.text or 0xFFFFFFFF, 3, 0, 2)
+    local outline = UIScale.round(2)
+    r.ImGui_DrawList_AddRect(r.ImGui_GetWindowDrawList(ctx), x1 - outline, y1 - outline, x2 + outline, y2 + outline, Theme.colors.accent or Theme.colors.text or 0xFFFFFFFF, UIScale.px(3), 0, UIScale.px(2))
   end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, color_hex(color)) end
   return clicked
@@ -1415,12 +1418,13 @@ end
 local function draw_swatch_grid(ctx, prefix, colors, min_size, on_click, allow_drag, highlight_color, on_edit, highlight_index)
   local count = #colors
   if count == 0 then return end
+  min_size = UIScale.round(min_size or 26)
   local available_w = r.ImGui_GetContentRegionAvail(ctx) or min_size
-  local margin = 6
-  local gap = 4
+  local margin = UIScale.round(6)
+  local gap = UIScale.gap(4)
   local grid_w = math.max(min_size, available_w - margin * 2)
   local columns = math.max(1, math.min(count, math.floor((grid_w + gap) / (min_size + gap))))
-  local size = math.max(18, math.floor((grid_w - gap * (columns - 1)) / columns))
+  local size = math.max(UIScale.round(18), math.floor((grid_w - gap * (columns - 1)) / columns))
   if r.ImGui_Indent then r.ImGui_Indent(ctx, margin) end
   for index, color in ipairs(colors) do
     if index > 1 and (index - 1) % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
@@ -1666,6 +1670,7 @@ local function draw_view_tab_button(ctx, app, settings, label, mode, width)
   if active and r.ImGui_Col_Button then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent_soft); style_count = style_count + 1 end
   if active and r.ImGui_Col_ButtonHovered then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent); style_count = style_count + 1 end
   if active and r.ImGui_Col_ButtonActive then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent); style_count = style_count + 1 end
+  if active and r.ImGui_Col_Text then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds({ Theme.colors.accent_soft, Theme.colors.accent }, Theme.colors.text, nil, 4.5)); style_count = style_count + 1 end
   if r.ImGui_Button(ctx, label .. "##color_studio_view_" .. mode, width or 92, 0) and not active then
     settings.view_mode = mode
     if app.save_settings then app.save_settings() end
@@ -1767,7 +1772,7 @@ local function draw_auto_color_slot(ctx, app, settings, rule)
   for index, color in ipairs(colors) do
     if color_matches(color, current) then selected_index = index; break end
   end
-  if r.ImGui_Indent then r.ImGui_Indent(ctx, 6) end
+  if r.ImGui_Indent then r.ImGui_Indent(ctx, UIScale.round(6)) end
   if draw_swatch(ctx, "auto_selected_color", current, 26, true) then
     if r.ImGui_OpenPopup then r.ImGui_OpenPopup(ctx, "##auto_selected_color_picker") end
   end
@@ -1788,7 +1793,7 @@ local function draw_auto_color_slot(ctx, app, settings, rule)
     end
     r.ImGui_EndPopup(ctx)
   end
-  if r.ImGui_Unindent then r.ImGui_Unindent(ctx, 6) end
+  if r.ImGui_Unindent then r.ImGui_Unindent(ctx, UIScale.round(6)) end
   r.ImGui_Spacing(ctx)
   draw_swatch_grid(ctx, "auto_color_slot_", colors, 24, function(_, index)
     local color = colors[index]
@@ -2031,7 +2036,7 @@ function M.draw(app)
   r.ImGui_Separator(ctx)
 
   local available_w, available_h = r.ImGui_GetContentRegionAvail(ctx)
-  local content_h = math.max(40, (available_h or 240) - UI.info_line_height(ctx))
+  local content_h = math.max(UIScale.round(40), (available_h or UIScale.round(240)) - UI.info_line_height(ctx))
 
   if r.ImGui_BeginChild(ctx, "##color_studio_content", 0, content_h, 0) then
     if settings.view_mode == "auto" then

@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 
 local M = {
   id = "instrument_rack",
@@ -153,9 +154,9 @@ end
 
 local function get_centered_item_width(ctx)
   local width = get_available_width(ctx)
-  if width <= 0 then return 220 end
-  if width < 240 then return math.max(1, width) end
-  return math.min(width - 12, 560)
+  if width <= 0 then return UIScale.round(220) end
+  if width < UIScale.round(240) then return math.max(1, width) end
+  return math.min(width - UIScale.round(12), UIScale.round(560))
 end
 
 local function center_next_item(ctx, item_width)
@@ -1030,11 +1031,11 @@ local function draw_header(app, ctx, settings, track)
   local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
   local avail = get_available_width(ctx)
   local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
-  local pad_x, pad_y = 6, 3
+  local pad_x, pad_y = UIScale.round(6), UIScale.round(3)
   local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
   local bar_h = text_h + pad_y * 2
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, 3)
+  r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, UIScale.px(3))
   r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, cursor_x + avail - pad_x, cursor_y + bar_h)
   r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + pad_y, text_color, label)
   r.ImGui_DrawList_PopClipRect(draw_list)
@@ -1069,7 +1070,7 @@ local function draw_header(app, ctx, settings, track)
     local slot_count = param_slot_count(settings)
     r.ImGui_Text(ctx, "Parameter buttons")
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, tostring(slot_count) .. "##ir_macro_param_slots", 60, 0) then
+    if r.ImGui_Button(ctx, tostring(slot_count) .. "##ir_macro_param_slots", UIScale.text_button_w(ctx, tostring(slot_count), 60, 8), 0) then
       settings.macro_param_slots = slot_count == 4 and 8 or 4
       if app.save_settings then app.save_settings() end
     end
@@ -1081,7 +1082,7 @@ local function draw_header(app, ctx, settings, track)
     if changed then settings.show_selected_item_fx = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Compact tiles", settings.tile_compact)
     if changed then settings.tile_compact = value; if app.save_settings then app.save_settings() end end
-    r.ImGui_SetNextItemWidth(ctx, 160)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
     changed, value = r.ImGui_SliderInt(ctx, "Screenshot height", settings.screenshot_height or 90, 48, 180, "%d px")
     if changed then settings.screenshot_height = value; if app.save_settings then app.save_settings() end end
     r.ImGui_Text(ctx, "Add FX target")
@@ -1135,7 +1136,7 @@ end
 
 local function draw_wet_popup(ctx, track, fx_index, wet_value)
   if r.ImGui_BeginPopup(ctx, "##ir_wet_pop") then
-    r.ImGui_SetNextItemWidth(ctx, 150)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
     local changed, value = r.ImGui_SliderDouble(ctx, "Wet##ir_wet_slider", wet_value, 0.0, 1.0, "%.2f")
     if changed then set_fx_wet(track, fx_index, value) end
     if r.ImGui_Button(ctx, "Reset##ir_wet_reset") then set_fx_wet(track, fx_index, 1.0) end
@@ -1192,7 +1193,7 @@ local function draw_fx_screenshot(ctx, settings, fx_name, width, height, enabled
   if not settings.show_screenshots then return end
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, 0x111111FF, 3)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, 0x111111FF, UIScale.px(3))
   local img = get_screenshot_image(ctx, fx_name)
   if img then
     local image_w, image_h = r.ImGui_Image_GetSize(img)
@@ -1205,16 +1206,16 @@ local function draw_fx_screenshot(ctx, settings, fx_name, width, height, enabled
   else
     local text = "no screenshot"
     local text_w = r.ImGui_CalcTextSize(ctx, text)
-    r.ImGui_DrawList_AddText(draw_list, x + (width - text_w) * 0.5, y + height * 0.5 - 6, Theme.colors.text_dim, text)
+    r.ImGui_DrawList_AddText(draw_list, x + (width - text_w) * 0.5, y + height * 0.5 - UIScale.round(6), Theme.colors.text_dim, text)
   end
   r.ImGui_InvisibleButton(ctx, "##ir_screenshot_hit", width, height)
 end
 
 local function draw_small_button(ctx, draw_list, id, x, y, width, height, label, bg, fg, tooltip)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, 2)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, 2, 0, 1)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, UIScale.px(2))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, UIScale.px(2), 0, UIScale.px(1))
   local text_w = r.ImGui_CalcTextSize(ctx, label)
-  r.ImGui_DrawList_AddTextEx(draw_list, nil, 10, x + (width - text_w) * 0.5, y + 1, fg, label)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, UIScale.round(10), x + (width - text_w) * 0.5, y + UIScale.round(1), fg, label)
   r.ImGui_SetCursorScreenPos(ctx, x, y)
   r.ImGui_InvisibleButton(ctx, id, width, height)
   local clicked = r.ImGui_IsItemClicked(ctx, 0)
@@ -1369,7 +1370,7 @@ local function flush_macro_changes(ctx)
 end
 
 local function macro_bar_height(ctx)
-  return 118
+  return UIScale.round(118)
 end
 
 local function remove_macro_assignment(track_id, slot, assignment_index)
@@ -1520,28 +1521,29 @@ local function draw_macro_control(app, ctx, draw_list, track, slot, x, y, width,
   local assignments = get_macro_assignments(track_id, slot)
   local name = macro.name and macro.name ~= "" and macro.name or default_macro_name(slot)
   local cx = x + width * 0.5
-  local cy = y + 20
-  local radius = math.min(19, math.max(12, math.min(width * 0.22, 18)))
+  local cy = y + UIScale.round(20)
+  local radius = math.min(UIScale.round(19), math.max(UIScale.round(12), math.min(width * 0.22, UIScale.round(18))))
   local segments = 28
   local start_angle = math.pi * 0.75
   local end_angle = math.pi * 2.25
   local value_angle = start_angle + value * (end_angle - start_angle)
   local body_col = #assignments > 0 and 0x4B5668FF or 0x383F4DFF
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + 1, cy + 1, radius, 0x00000066, segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, 0x00000066, segments)
   r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, body_col, segments)
-  r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius + 2, start_angle, end_angle, segments)
-  r.ImGui_DrawList_PathStroke(draw_list, Theme.colors.border, 0, 1.5)
+  r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius + UIScale.px(2), start_angle, end_angle, segments)
+  r.ImGui_DrawList_PathStroke(draw_list, Theme.colors.border, 0, UIScale.px(1.5))
   if value > 0.001 then
-    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius + 2, start_angle, value_angle, segments)
-    r.ImGui_DrawList_PathStroke(draw_list, Theme.colors.accent, 0, 2.4)
+    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius + UIScale.px(2), start_angle, value_angle, segments)
+    r.ImGui_DrawList_PathStroke(draw_list, Theme.colors.accent, 0, UIScale.px(2.4))
   end
   local line_x = cx + math.cos(value_angle) * radius * 0.72
   local line_y = cy + math.sin(value_angle) * radius * 0.72
-  r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, 0xFFFFFFFF, 2)
+  r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, 0xFFFFFFFF, UIScale.px(2))
   r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.38, Theme.colors.accent_soft, segments)
   local label = short_param_label(name)
-  local label_w = r.ImGui_CalcTextSize(ctx, label) * (9 / r.ImGui_GetFontSize(ctx))
-  r.ImGui_DrawList_AddTextEx(draw_list, nil, 9, x + math.max(2, (width - label_w) * 0.5), y + height - 13, Theme.colors.text, label)
+  local label_size = UIScale.round(9)
+  local label_w = r.ImGui_CalcTextSize(ctx, label) * (label_size / r.ImGui_GetFontSize(ctx))
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, label_size, x + math.max(UIScale.round(2), (width - label_w) * 0.5), y + height - UIScale.round(13), Theme.colors.text, label)
   r.ImGui_SetCursorScreenPos(ctx, x, y)
   r.ImGui_InvisibleButton(ctx, "##ir_macro_control_" .. tostring(slot), width, height)
   if r.ImGui_IsItemActive(ctx) then
@@ -1573,15 +1575,15 @@ local function draw_macro_bar(app, ctx, settings, track)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local rows = 2
   local columns = 4
-  local gap = 6
-  local top_pad = 9
-  local control_h = 50
+  local gap = UIScale.round(6)
+  local top_pad = UIScale.round(9)
+  local control_h = UIScale.round(50)
   r.ImGui_Dummy(ctx, width, height)
-  r.ImGui_DrawList_AddLine(draw_list, x + 4, y + 1, x + width - 4, y + 1, Theme.colors.separator, 1)
+  r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(4), y + UIScale.round(1), x + width - UIScale.round(4), y + UIScale.round(1), Theme.colors.separator, UIScale.px(1))
   for slot = 1, MACRO_COUNT do
     local row = math.floor((slot - 1) / columns)
     local column = ((slot - 1) % columns) + 1
-    local control_w = math.max(24, (width - gap * (columns + 1)) / columns)
+    local control_w = math.max(UIScale.round(24), (width - gap * (columns + 1)) / columns)
     local control_x = x + gap + (column - 1) * (control_w + gap)
     local control_y = y + top_pad + row * (control_h + gap)
     draw_macro_control(app, ctx, draw_list, track, slot, control_x, control_y, control_w, control_h)
@@ -1595,35 +1597,36 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
   local end_angle = math.pi * 2.25
   local value_angle = start_angle + value * (end_angle - start_angle)
   local segments = radius < 8 and 12 or (radius < 14 and 18 or 24)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + 1, cy + 1, radius, 0x00000066, segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, 0x00000066, segments)
   r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, 0x555555FF, segments)
   if value > 0.01 then
-    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - 2, start_angle, value_angle, segments)
-    r.ImGui_DrawList_PathStroke(draw_list, 0xCCCCCCFF, 0, 2.5)
+    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, value_angle, segments)
+    r.ImGui_DrawList_PathStroke(draw_list, 0xCCCCCCFF, 0, UIScale.px(2.5))
   end
   if value < 0.02 then
     local line_x = cx + math.cos(value_angle) * radius * 0.85
     local line_y = cy + math.sin(value_angle) * radius * 0.85
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, 0xCCCCCCFF, 2)
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, 0xCCCCCCFF, UIScale.px(2))
   end
   if uses_baseline then
     local mod_value = r.TrackFX_GetParamNormalized(track, fx_index, entry.param_idx)
     mod_value = math.max(0, math.min(1, mod_value or 0))
     local mod_angle = start_angle + mod_value * (end_angle - start_angle)
-    local outer_r = radius + 2
+    local outer_r = radius + UIScale.px(2)
     r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, outer_r, start_angle, end_angle, segments)
-    r.ImGui_DrawList_PathStroke(draw_list, 0x7AA2F744, 0, 1.5)
+    r.ImGui_DrawList_PathStroke(draw_list, 0x7AA2F744, 0, UIScale.px(1.5))
     if mod_value > 0.001 then
       r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, outer_r, start_angle, mod_angle, segments)
-      r.ImGui_DrawList_PathStroke(draw_list, 0x7AA2F7FF, 0, 1.8)
+      r.ImGui_DrawList_PathStroke(draw_list, 0x7AA2F7FF, 0, UIScale.px(1.8))
     end
   end
   r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.45, 0xCCCCCCFF, segments)
   local label = short_param_label(entry.param_name)
-  local text_w = r.ImGui_CalcTextSize(ctx, label) * (8 / r.ImGui_GetFontSize(ctx))
-  r.ImGui_DrawList_AddTextEx(draw_list, nil, 8, cx - text_w * 0.5, cy + radius + 1, 0xAAAAAAFF, label)
-  r.ImGui_SetCursorScreenPos(ctx, cx - radius - 4, cy - radius - 4)
-  r.ImGui_InvisibleButton(ctx, "##ir_param_knob_" .. tostring(entry.param_idx), (radius + 4) * 2, (radius + 4) * 2)
+  local param_label_size = UIScale.round(8)
+  local text_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, param_label_size, cx - text_w * 0.5, cy + radius + UIScale.round(1), 0xAAAAAAFF, label)
+  r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(4), cy - radius - UIScale.round(4))
+  r.ImGui_InvisibleButton(ctx, "##ir_param_knob_" .. tostring(entry.param_idx), (radius + UIScale.round(4)) * 2, (radius + UIScale.round(4)) * 2)
   if r.ImGui_IsItemActive(ctx) then
     local _, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
     if math.abs(dy) > 0 then
@@ -1648,11 +1651,12 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
 end
 
 local function draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, cy, radius, slot)
-  r.ImGui_DrawList_AddCircle(draw_list, cx, cy, radius, 0x4A5360AA, 0, 1)
-  local plus_w = r.ImGui_CalcTextSize(ctx, "+") * (10 / r.ImGui_GetFontSize(ctx))
-  r.ImGui_DrawList_AddTextEx(draw_list, nil, 10, cx - plus_w * 0.5, cy - 6, 0x66666688, "+")
-  r.ImGui_SetCursorScreenPos(ctx, cx - radius - 4, cy - radius - 4)
-  r.ImGui_InvisibleButton(ctx, "##ir_empty_param_" .. tostring(slot), (radius + 4) * 2, (radius + 4) * 2)
+  r.ImGui_DrawList_AddCircle(draw_list, cx, cy, radius, 0x4A5360AA, 0, UIScale.px(1))
+  local plus_size = UIScale.round(10)
+  local plus_w = r.ImGui_CalcTextSize(ctx, "+") * (plus_size / r.ImGui_GetFontSize(ctx))
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, plus_size, cx - plus_w * 0.5, cy - UIScale.round(6), 0x66666688, "+")
+  r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(4), cy - radius - UIScale.round(4))
+  r.ImGui_InvisibleButton(ctx, "##ir_empty_param_" .. tostring(slot), (radius + UIScale.round(4)) * 2, (radius + UIScale.round(4)) * 2)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click to pin a parameter") end
   if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##ir_empty_param_menu_" .. tostring(slot)) end
   if r.ImGui_BeginPopup(ctx, "##ir_empty_param_menu_" .. tostring(slot)) then
@@ -1664,10 +1668,10 @@ end
 local function draw_param_slots(app, ctx, track, fx_index, item_width)
   local settings = ensure_settings(app)
   local slot_count = param_slot_count(settings)
-  local row_width = math.max(1, item_width - 14)
+  local row_width = math.max(1, item_width - UIScale.round(14))
   local rows = slot_count > PARAM_SLOT_COLUMNS and 2 or 1
-  local row_step = 44
-  local row_height = rows == 2 and 96 or 54
+  local row_step = UIScale.round(44)
+  local row_height = rows == 2 and UIScale.round(96) or UIScale.round(54)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local pinned = get_pinned_for_fx(track, fx_index)
@@ -1679,21 +1683,21 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width)
     end
   end
   r.ImGui_Dummy(ctx, row_width, row_height)
-  r.ImGui_DrawList_AddLine(draw_list, x + 4, y + 3, x + row_width - 4, y + 3, 0x3D4450AA, 1)
+  r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(4), y + UIScale.round(3), x + row_width - UIScale.round(4), y + UIScale.round(3), 0x3D4450AA, UIScale.px(1))
   if rows == 2 then
-    r.ImGui_DrawList_AddLine(draw_list, x + 4, y + row_step + 3, x + row_width - 4, y + row_step + 3, 0x3D4450AA, 1)
+    r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(4), y + row_step + UIScale.round(3), x + row_width - UIScale.round(4), y + row_step + UIScale.round(3), 0x3D4450AA, UIScale.px(1))
   end
   for slot = 1, slot_count do
     local row = math.floor((slot - 1) / PARAM_SLOT_COLUMNS)
     local column = ((slot - 1) % PARAM_SLOT_COLUMNS) + 1
     local cell_width = row_width / PARAM_SLOT_COLUMNS
     local cx = x + (column - 0.5) * cell_width
-    local cy = y + 23 + row * row_step
+    local cy = y + UIScale.round(23) + row * row_step
     local entry = pinned_by_slot[slot]
     if entry then
-      draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, 12)
+      draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, UIScale.round(12))
     else
-      draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, cy, 12, slot)
+      draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, cy, UIScale.round(12), slot)
     end
   end
   r.ImGui_SetCursorScreenPos(ctx, x, y + row_height)
@@ -1718,11 +1722,12 @@ local function handle_reorder_item(app, ctx, draw_list, track, fx_index, short_n
   end
   if r.ImGui_BeginDragDropTarget(ctx) then
     local ok_payload, payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX")
-    r.ImGui_DrawList_AddRect(draw_list, x - 1, y - 1, x + width + 1, y + height + 1, 0x44CC44FF, 3, 0, 2)
+    r.ImGui_DrawList_AddRect(draw_list, x - UIScale.px(1), y - UIScale.px(1), x + width + UIScale.px(1), y + height + UIScale.px(1), 0x44CC44FF, UIScale.px(3), 0, UIScale.px(2))
     local hint = "Insert here"
-    local hint_w = r.ImGui_CalcTextSize(ctx, hint) * (11 / r.ImGui_GetFontSize(ctx))
-    r.ImGui_DrawList_AddRectFilled(draw_list, x + (width - hint_w) * 0.5 - 4, y + height - 16, x + (width + hint_w) * 0.5 + 4, y + height - 2, 0x000000CC, 2)
-    r.ImGui_DrawList_AddTextEx(draw_list, nil, 11, x + (width - hint_w) * 0.5, y + height - 14, 0x44CC44FF, hint)
+    local hint_size = UIScale.round(11)
+    local hint_w = r.ImGui_CalcTextSize(ctx, hint) * (hint_size / r.ImGui_GetFontSize(ctx))
+    r.ImGui_DrawList_AddRectFilled(draw_list, x + (width - hint_w) * 0.5 - UIScale.round(4), y + height - UIScale.round(16), x + (width + hint_w) * 0.5 + UIScale.round(4), y + height - UIScale.round(2), 0x000000CC, UIScale.px(2))
+    r.ImGui_DrawList_AddTextEx(draw_list, nil, hint_size, x + (width - hint_w) * 0.5, y + height - UIScale.round(14), 0x44CC44FF, hint)
     if ok_payload and payload and payload ~= "" then reorder_fx(app, track, tonumber(payload), fx_index, short_name) end
     r.ImGui_EndDragDropTarget(ctx)
   end
@@ -1735,89 +1740,89 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, all
   local short_name = get_fx_short_name(fx_name)
   r.ImGui_PushID(ctx, "ir_fx_" .. tostring(fx_index))
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
-  local shot_h = settings.show_screenshots and not settings.tile_compact and (settings.screenshot_height or 90) or 0
-  local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and 100 or 58) or 0
-  local row1_h = 18
-  local toolbar_h = 16
+  local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
+  local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and UIScale.round(100) or UIScale.round(58)) or 0
+  local row1_h = UIScale.round(18)
+  local toolbar_h = UIScale.round(16)
   local collapse_key = track_guid(track) .. "|" .. get_fx_guid(track, fx_index)
   local is_collapsed = state.collapsed[collapse_key] == true
-  local title_h = is_collapsed and row1_h or (row1_h + toolbar_h + 2)
-  local tile_h = is_collapsed and title_h or (title_h + shot_h + param_h + 4)
+  local title_h = is_collapsed and row1_h or (row1_h + toolbar_h + UIScale.round(2))
+  local tile_h = is_collapsed and title_h or (title_h + shot_h + param_h + UIScale.round(4))
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
   local tile_visible = r.ImGui_BeginChild(ctx, "##ir_fx_tile", item_width, tile_h, 0, flags)
   r.ImGui_PopStyleVar(ctx, 1)
   if tile_visible then
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local bx, by = r.ImGui_GetCursorScreenPos(ctx)
-    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + item_width, by + tile_h, Theme.colors.frame_bg, 3)
-    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and Theme.colors.border or Theme.colors.danger, 3, 0, 1)
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + item_width, by + tile_h, Theme.colors.frame_bg, UIScale.px(3))
+    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and Theme.colors.border or Theme.colors.danger, UIScale.px(3), 0, UIScale.px(1))
 
-    local delete_x = bx + item_width - 10
+    local delete_x = bx + item_width - UIScale.round(10)
     local delete_y = by + row1_h * 0.5
-    r.ImGui_DrawList_AddCircleFilled(draw_list, delete_x, delete_y, 4, 0xCC3333FF)
-    r.ImGui_SetCursorScreenPos(ctx, delete_x - 6, delete_y - 6)
-    r.ImGui_InvisibleButton(ctx, "##ir_fx_delete", 12, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, delete_x, delete_y, UIScale.px(4), 0xCC3333FF)
+    r.ImGui_SetCursorScreenPos(ctx, delete_x - UIScale.round(6), delete_y - UIScale.round(6))
+    r.ImGui_InvisibleButton(ctx, "##ir_fx_delete", UIScale.round(12), UIScale.round(12))
     if r.ImGui_IsItemClicked(ctx, 0) then r.ImGui_OpenPopup(ctx, "##ir_delete_pop") end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete FX") end
 
-    local led_x = delete_x - 14
-    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, by + row1_h * 0.5, 4, enabled and 0x44CC44FF or 0xCC3333FF)
-    r.ImGui_SetCursorScreenPos(ctx, led_x - 6, by + 2)
-    if r.ImGui_InvisibleButton(ctx, "##ir_fx_led", 12, 12) then
+    local led_x = delete_x - UIScale.round(14)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, by + row1_h * 0.5, UIScale.px(4), enabled and 0x44CC44FF or 0xCC3333FF)
+    r.ImGui_SetCursorScreenPos(ctx, led_x - UIScale.round(6), by + UIScale.round(2))
+    if r.ImGui_InvisibleButton(ctx, "##ir_fx_led", UIScale.round(12), UIScale.round(12)) then
       r.TrackFX_SetEnabled(track, fx_index, not enabled)
       app.status = (enabled and "Bypassed " or "Enabled ") .. short_name
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, enabled and "Bypass FX" or "Enable FX") end
 
-    local chev_size = 12
-    local chev_x = led_x - 20
+    local chev_size = UIScale.round(12)
+    local chev_x = led_x - UIScale.round(20)
     local chev_y = by + (row1_h - chev_size) * 0.5
     local chev_cx = chev_x + chev_size * 0.5
     local chev_cy = chev_y + chev_size * 0.5
     if is_collapsed then
-      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - 3, chev_cy - 3, chev_cx + 3, chev_cy, chev_cx - 3, chev_cy + 3, 0xAAAAAAFF)
+      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(3), chev_cy - UIScale.round(3), chev_cx + UIScale.round(3), chev_cy, chev_cx - UIScale.round(3), chev_cy + UIScale.round(3), 0xAAAAAAFF)
     else
-      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - 3, chev_cy - 2, chev_cx + 3, chev_cy - 2, chev_cx, chev_cy + 3, 0xAAAAAAFF)
+      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(3), chev_cy - UIScale.round(2), chev_cx + UIScale.round(3), chev_cy - UIScale.round(2), chev_cx, chev_cy + UIScale.round(3), 0xAAAAAAFF)
     end
     r.ImGui_SetCursorScreenPos(ctx, chev_x, chev_y)
     if r.ImGui_InvisibleButton(ctx, "##ir_fx_collapse", chev_size, chev_size) then state.collapsed[collapse_key] = not is_collapsed end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand" or "Collapse") end
 
-    local name_max_w = math.max(20, chev_x - (bx + 6) - 4)
-    r.ImGui_DrawList_PushClipRect(draw_list, bx + 6, by, bx + 6 + name_max_w, by + row1_h, true)
-    r.ImGui_DrawList_AddText(draw_list, bx + 6, by + 2, enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
+    local name_max_w = math.max(UIScale.round(20), chev_x - (bx + UIScale.round(6)) - UIScale.round(4))
+    r.ImGui_DrawList_PushClipRect(draw_list, bx + UIScale.round(6), by, bx + UIScale.round(6) + name_max_w, by + row1_h, true)
+    r.ImGui_DrawList_AddText(draw_list, bx + UIScale.round(6), by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
     r.ImGui_DrawList_PopClipRect(draw_list)
 
     if not is_collapsed then
       local tb_y = by + row1_h
-      local button_y = tb_y + 2
-      local tx = bx + 6
+      local button_y = tb_y + UIScale.round(2)
+      local tx = bx + UIScale.round(6)
       local wet_value = get_fx_wet(track, fx_index)
       local wet_alpha = math.floor((1 - math.max(0, math.min(1, wet_value))) * 0xCC + 0x44)
       local wet_bg = wet_value < 0.999 and (0x4488CC00 | wet_alpha) or 0x33333388
-      local clicked_wet, right_wet = draw_small_button(ctx, draw_list, "##ir_fx_wet", tx, button_y, 18, 12, "W", wet_bg, 0xFFFFFFFF, string.format("Wet: %d%%", math.floor(wet_value * 100 + 0.5)))
+      local clicked_wet, right_wet = draw_small_button(ctx, draw_list, "##ir_fx_wet", tx, button_y, UIScale.round(18), UIScale.round(12), "W", wet_bg, 0xFFFFFFFF, string.format("Wet: %d%%", math.floor(wet_value * 100 + 0.5)))
       if clicked_wet then r.ImGui_OpenPopup(ctx, "##ir_wet_pop") end
       if right_wet then set_fx_wet(track, fx_index, 1.0) end
       draw_wet_popup(ctx, track, fx_index, wet_value)
-      tx = tx + 22
-      if draw_small_button(ctx, draw_list, "##ir_fx_float", tx, button_y, 14, 12, "F", 0x33333388, 0xFFFFFFFF, "Open floating") then
+      tx = tx + UIScale.round(22)
+      if draw_small_button(ctx, draw_list, "##ir_fx_float", tx, button_y, UIScale.round(14), UIScale.round(12), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then
         local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
         r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
       end
-      tx = tx + 18
-      if draw_small_button(ctx, draw_list, "##ir_fx_offline", tx, button_y, 14, 12, "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring FX online" or "Set FX offline") then
+      tx = tx + UIScale.round(18)
+      if draw_small_button(ctx, draw_list, "##ir_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(12), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring FX online" or "Set FX offline") then
         r.TrackFX_SetOffline(track, fx_index, not offline)
         app.status = (offline and "Brought online " or "Set offline ") .. short_name
       end
-      tx = tx + 18
-      if draw_small_button(ctx, draw_list, "##ir_fx_preset", tx, button_y, 14, 12, "P", 0x33333388, 0xFFFFFFFF, "Preset") then r.ImGui_OpenPopup(ctx, "##ir_preset_pop") end
+      tx = tx + UIScale.round(18)
+      if draw_small_button(ctx, draw_list, "##ir_fx_preset", tx, button_y, UIScale.round(14), UIScale.round(12), "P", 0x33333388, 0xFFFFFFFF, "Preset") then r.ImGui_OpenPopup(ctx, "##ir_preset_pop") end
       draw_preset_popup(ctx, track, fx_index)
       local sep_y = by + title_h - 1
-      r.ImGui_DrawList_AddLine(draw_list, bx + 4, sep_y, bx + item_width - 4, sep_y, Theme.colors.separator, 1)
+      r.ImGui_DrawList_AddLine(draw_list, bx + UIScale.round(4), sep_y, bx + item_width - UIScale.round(4), sep_y, Theme.colors.separator, UIScale.px(1))
 
       if settings.show_screenshots and not settings.tile_compact then
-        r.ImGui_SetCursorScreenPos(ctx, bx + 2, by + title_h)
-        draw_fx_screenshot(ctx, settings, fx_name, item_width - 4, shot_h, enabled and not offline)
+        r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(2), by + title_h)
+        draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
         if r.ImGui_IsItemClicked(ctx, 0) then
           local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
           r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
@@ -1825,8 +1830,8 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, all
         if allow_reorder ~= false then handle_reorder_item(app, ctx, draw_list, track, fx_index, short_name, bx, by, item_width, tile_h) end
       end
       if settings.show_pinned_params then
-        r.ImGui_SetCursorScreenPos(ctx, bx + 7, by + title_h + shot_h + 4)
-        draw_param_slots(app, ctx, track, fx_index, item_width - 14)
+        r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(7), by + title_h + shot_h + UIScale.round(4))
+        draw_param_slots(app, ctx, track, fx_index, item_width - UIScale.round(14))
       end
     end
 
@@ -1889,13 +1894,14 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
   local label = payload ~= "" and "+ Drop to add FX" or "+ Add FX"
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  r.ImGui_InvisibleButton(ctx, "##ir_add_zone", item_width, 36)
+  local add_h = UIScale.round(36)
+  r.ImGui_InvisibleButton(ctx, "##ir_add_zone", item_width, add_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local clicked = r.ImGui_IsItemClicked(ctx, 0)
   local border = payload ~= "" and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + item_width, y + 36, border, 4, 0, payload ~= "" and 2 or 1)
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + item_width, y + add_h, border, UIScale.px(4), 0, payload ~= "" and UIScale.px(2) or UIScale.px(1))
   local text_w = r.ImGui_CalcTextSize(ctx, label)
-  r.ImGui_DrawList_AddText(draw_list, x + (item_width - text_w) * 0.5, y + 12, payload ~= "" and Theme.colors.accent or Theme.colors.text_dim, label)
+  r.ImGui_DrawList_AddText(draw_list, x + (item_width - text_w) * 0.5, y + UIScale.round(12), payload ~= "" and Theme.colors.accent or Theme.colors.text_dim, label)
   if clicked then open_add_fx_browser(app, track) end
   if hovered then
     local guid = track_guid(track)
@@ -1952,52 +1958,52 @@ local function draw_take_fx_tile(app, ctx, settings, take, fx_index, item_width)
   local short_name = get_fx_short_name(fx_name)
   r.ImGui_PushID(ctx, "ir_take_fx_" .. tostring(fx_index))
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
-  local shot_h = settings.show_screenshots and not settings.tile_compact and (settings.screenshot_height or 90) or 0
-  local row1_h = 18
-  local toolbar_h = 16
-  local tile_h = row1_h + toolbar_h + shot_h + 6
+  local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
+  local row1_h = UIScale.round(18)
+  local toolbar_h = UIScale.round(16)
+  local tile_h = row1_h + toolbar_h + shot_h + UIScale.round(6)
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
   local tile_visible = r.ImGui_BeginChild(ctx, "##ir_take_fx_tile", item_width, tile_h, 0, flags)
   r.ImGui_PopStyleVar(ctx, 1)
   if tile_visible then
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local bx, by = r.ImGui_GetCursorScreenPos(ctx)
-    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + item_width, by + tile_h, Theme.colors.frame_bg, 3)
-    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and Theme.colors.border or Theme.colors.danger, 3, 0, 1)
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + item_width, by + tile_h, Theme.colors.frame_bg, UIScale.px(3))
+    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and Theme.colors.border or Theme.colors.danger, UIScale.px(3), 0, UIScale.px(1))
 
-    local delete_x = bx + item_width - 10
+    local delete_x = bx + item_width - UIScale.round(10)
     local delete_y = by + row1_h * 0.5
-    r.ImGui_DrawList_AddCircleFilled(draw_list, delete_x, delete_y, 4, 0xCC3333FF)
-    r.ImGui_SetCursorScreenPos(ctx, delete_x - 6, delete_y - 6)
-    r.ImGui_InvisibleButton(ctx, "##ir_take_fx_delete", 12, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, delete_x, delete_y, UIScale.px(4), 0xCC3333FF)
+    r.ImGui_SetCursorScreenPos(ctx, delete_x - UIScale.round(6), delete_y - UIScale.round(6))
+    r.ImGui_InvisibleButton(ctx, "##ir_take_fx_delete", UIScale.round(12), UIScale.round(12))
     if r.ImGui_IsItemClicked(ctx, 0) then r.ImGui_OpenPopup(ctx, "##ir_take_delete_pop") end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete item FX") end
 
-    local led_x = delete_x - 14
-    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, by + row1_h * 0.5, 4, enabled and 0x44CC44FF or 0xCC3333FF)
-    r.ImGui_SetCursorScreenPos(ctx, led_x - 6, by + 2)
-    if r.ImGui_InvisibleButton(ctx, "##ir_take_fx_led", 12, 12) then
+    local led_x = delete_x - UIScale.round(14)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, by + row1_h * 0.5, UIScale.px(4), enabled and 0x44CC44FF or 0xCC3333FF)
+    r.ImGui_SetCursorScreenPos(ctx, led_x - UIScale.round(6), by + UIScale.round(2))
+    if r.ImGui_InvisibleButton(ctx, "##ir_take_fx_led", UIScale.round(12), UIScale.round(12)) then
       set_take_fx_enabled(take, fx_index, not enabled)
       app.status = (enabled and "Bypassed " or "Enabled ") .. short_name
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, enabled and "Bypass item FX" or "Enable item FX") end
 
-    local name_max_w = math.max(20, led_x - (bx + 6) - 4)
-    r.ImGui_DrawList_PushClipRect(draw_list, bx + 6, by, bx + 6 + name_max_w, by + row1_h, true)
-    r.ImGui_DrawList_AddText(draw_list, bx + 6, by + 2, enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
+    local name_max_w = math.max(UIScale.round(20), led_x - (bx + UIScale.round(6)) - UIScale.round(4))
+    r.ImGui_DrawList_PushClipRect(draw_list, bx + UIScale.round(6), by, bx + UIScale.round(6) + name_max_w, by + row1_h, true)
+    r.ImGui_DrawList_AddText(draw_list, bx + UIScale.round(6), by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
     r.ImGui_DrawList_PopClipRect(draw_list)
 
-    local button_y = by + row1_h + 2
-    local tx = bx + 6
-    if draw_small_button(ctx, draw_list, "##ir_take_fx_float", tx, button_y, 14, 12, "F", 0x33333388, 0xFFFFFFFF, "Open floating") then show_take_fx(take, fx_index) end
-    tx = tx + 18
-    if draw_small_button(ctx, draw_list, "##ir_take_fx_offline", tx, button_y, 14, 12, "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring item FX online" or "Set item FX offline") then
+    local button_y = by + row1_h + UIScale.round(2)
+    local tx = bx + UIScale.round(6)
+    if draw_small_button(ctx, draw_list, "##ir_take_fx_float", tx, button_y, UIScale.round(14), UIScale.round(12), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then show_take_fx(take, fx_index) end
+    tx = tx + UIScale.round(18)
+    if draw_small_button(ctx, draw_list, "##ir_take_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(12), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring item FX online" or "Set item FX offline") then
       set_take_fx_offline(take, fx_index, not offline)
       app.status = (offline and "Brought online " or "Set offline ") .. short_name
     end
     if settings.show_screenshots and not settings.tile_compact then
-      r.ImGui_SetCursorScreenPos(ctx, bx + 2, by + row1_h + toolbar_h + 4)
-      draw_fx_screenshot(ctx, settings, fx_name, item_width - 4, shot_h, enabled and not offline)
+      r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(2), by + row1_h + toolbar_h + UIScale.round(4))
+      draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
       if r.ImGui_IsItemClicked(ctx, 0) then show_take_fx(take, fx_index) end
     end
 
@@ -2031,18 +2037,18 @@ end
 local function draw_section_label(ctx, label, detail, count)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  local width = math.max(120, get_available_width(ctx))
-  local height = detail and detail ~= "" and 32 or 24
+  local width = math.max(UIScale.round(120), get_available_width(ctx))
+  local height = detail and detail ~= "" and UIScale.round(32) or UIScale.round(24)
   r.ImGui_Dummy(ctx, width, height)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, 4)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + 3, y + height, Theme.colors.accent, 4)
-  r.ImGui_DrawList_AddText(draw_list, x + 10, y + 5, Theme.colors.text, label)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + UIScale.round(3), y + height, Theme.colors.accent, UIScale.px(4))
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(10), y + UIScale.round(5), Theme.colors.text, label)
   if count then
     local count_text = tostring(count) .. " FX"
     local count_w = r.ImGui_CalcTextSize(ctx, count_text)
-    r.ImGui_DrawList_AddText(draw_list, x + width - count_w - 10, y + 5, Theme.colors.text_dim, count_text)
+    r.ImGui_DrawList_AddText(draw_list, x + width - count_w - UIScale.round(10), y + UIScale.round(5), Theme.colors.text_dim, count_text)
   end
-  if detail and detail ~= "" then r.ImGui_DrawList_AddTextEx(draw_list, nil, 10, x + 10, y + 20, Theme.colors.text_dim, detail) end
+  if detail and detail ~= "" then r.ImGui_DrawList_AddTextEx(draw_list, nil, UIScale.round(10), x + UIScale.round(10), y + UIScale.round(20), Theme.colors.text_dim, detail) end
 end
 
 local function info_line_text(app, track, fx_count, input_fx_count, take_fx_count, item_on_track, take)

@@ -1,4 +1,5 @@
 local r = reaper
+local UIScale = require("core.ui_scale")
 local M = {}
 
 M.reaper_preset_name = "REAPER Theme"
@@ -199,6 +200,21 @@ local function ensure_readable(color, backgrounds, fallback, min_ratio)
   return best_text_for_backgrounds(backgrounds)
 end
 
+local function normalize_backgrounds(backgrounds)
+  if type(backgrounds) ~= "table" then backgrounds = { backgrounds } end
+  local result = {}
+  for _, background in ipairs(backgrounds) do
+    if background then result[#result + 1] = background end
+  end
+  if #result == 0 then result[1] = M.colors and M.colors.window_bg or M.presets.Graphite.window_bg end
+  return result
+end
+
+local function text_backgrounds(colors)
+  colors = colors or M.colors or M.presets.Graphite
+  return normalize_backgrounds({ colors.window_bg, colors.child_bg, colors.popup_bg, colors.frame_bg, colors.frame_hover, colors.header, colors.header_hover })
+end
+
 local function theme_color(name, fallback)
   if not r.GetThemeColor or not r.ColorFromNative then return fallback end
   local ok_color, native = pcall(r.GetThemeColor, name, 0)
@@ -363,7 +379,28 @@ function M.is_reaper_theme_preset(name)
   return M.reaper_preset_modes[name] ~= nil
 end
 
+function M.contrast_ratio(first, second)
+  return contrast_ratio(first, second)
+end
+
+function M.text_for_background(background, color, fallback, min_ratio)
+  local backgrounds = normalize_backgrounds({ background })
+  return ensure_readable(color or M.colors.text, backgrounds, fallback or readable_text(backgrounds[1]), min_ratio or 4.5)
+end
+
+function M.text_for_backgrounds(backgrounds, color, fallback, min_ratio)
+  backgrounds = normalize_backgrounds(backgrounds)
+  return ensure_readable(color or M.colors.text, backgrounds, fallback or readable_text(backgrounds[1]), min_ratio or 4.5)
+end
+
+function M.dim_text_for_background(background, color, fallback)
+  local backgrounds = normalize_backgrounds({ background })
+  return ensure_readable(color or M.colors.text_dim, backgrounds, fallback or M.colors.text, 3)
+end
+
 function M.push(ctx)
+  local text = M.text_for_backgrounds(text_backgrounds(M.colors), M.colors.text, nil, 4.5)
+  local scale = UIScale.value()
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), M.colors.window_bg)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), M.colors.child_bg)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), M.colors.popup_bg)
@@ -371,18 +408,18 @@ function M.push(ctx)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), M.colors.frame_hover)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), M.colors.border)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Separator(), M.colors.separator)
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), M.colors.text)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), M.colors.frame_bg)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), M.colors.frame_hover)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), M.colors.accent_soft)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), M.colors.header)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), M.colors.header_hover)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), M.colors.accent_soft)
-  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 6)
-  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 5)
-  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4)
-  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 10, 10)
-  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 7)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 6 * scale)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ChildRounding(), 5 * scale)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4 * scale)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 10 * scale, 10 * scale)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8 * scale, 7 * scale)
   return { colors = 14, vars = 5 }
 end
 

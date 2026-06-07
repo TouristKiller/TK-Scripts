@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local UIScale = require("core.ui_scale")
 
 local M = {
   id = "fx_chain_builder",
@@ -454,12 +455,12 @@ local function apply_pending_action(app, settings, action)
 end
 
 local function draw_thumbnail(ctx, draw_list, settings, plugin_name, x, y, width, height)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, 4)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
   local image = settings.show_screenshots and screenshot_image(ctx, plugin_name) or nil
   if image then
     local image_w, image_h = r.ImGui_Image_GetSize(image)
     if image_w and image_h and image_w > 0 and image_h > 0 then
-      local inset = 5
+      local inset = UIScale.round(5)
       local inner_w = width - inset * 2
       local inner_h = height - inset * 2
       local scale = math.min(inner_w / image_w, inner_h / image_h)
@@ -470,7 +471,7 @@ local function draw_thumbnail(ctx, draw_list, settings, plugin_name, x, y, width
       r.ImGui_DrawList_AddImage(draw_list, image, draw_x, draw_y, draw_x + draw_w, draw_y + draw_h, 0, 0, 1, 1, 0xFFFFFFFF)
     end
   else
-    local label = truncate_text(ctx, display_name(plugin_name), width - 10)
+    local label = truncate_text(ctx, display_name(plugin_name), width - UIScale.round(10))
     local text_w = r.ImGui_CalcTextSize(ctx, label)
     r.ImGui_DrawList_AddText(draw_list, x + (width - text_w) * 0.5, y + (height - r.ImGui_GetTextLineHeight(ctx)) * 0.5, Theme.colors.text_dim, label)
   end
@@ -479,27 +480,27 @@ end
 local function draw_chain_item(app, settings, plugin_name, index, width, thumb_h)
   local ctx = app.ctx
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  local item_h = math.max(58, math.min(thumb_h, 118))
-  local thumb_w = math.min(math.floor(item_h * 1.35), math.max(64, math.floor(width * 0.42)))
-  local text_x_pad = 10
+  local item_h = math.max(UIScale.round(58), math.min(thumb_h, UIScale.round(118)))
+  local thumb_w = math.min(math.floor(item_h * 1.35), math.max(UIScale.round(64), math.floor(width * 0.42)))
+  local text_x_pad = UIScale.round(10)
   local pending_action = nil
   r.ImGui_PushID(ctx, "fcb_item_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##item", width, item_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local x, y = r.ImGui_GetItemRectMin(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + item_h, Theme.colors.child_bg, 5)
-  draw_thumbnail(ctx, draw_list, settings, plugin_name, x + 4, y + 4, thumb_w - 8, item_h - 8)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + item_h, hovered and Theme.colors.accent or Theme.colors.border, 5, 0, hovered and 2 or 1)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + item_h, Theme.colors.child_bg, UIScale.px(5))
+  draw_thumbnail(ctx, draw_list, settings, plugin_name, x + UIScale.round(4), y + UIScale.round(4), thumb_w - UIScale.round(8), item_h - UIScale.round(8))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + item_h, hovered and Theme.colors.accent or Theme.colors.border, UIScale.px(5), 0, hovered and UIScale.px(2) or UIScale.px(1))
   local num = tostring(index)
   local num_w = r.ImGui_CalcTextSize(ctx, num)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x + 5, y + 5, x + num_w + 13, y + 21, 0x000000B0, 3)
-  r.ImGui_DrawList_AddText(draw_list, x + 9, y + 7, Theme.colors.accent, num)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(5), y + UIScale.round(5), x + num_w + UIScale.round(13), y + UIScale.round(21), 0x000000B0, UIScale.px(3))
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(9), y + UIScale.round(7), Theme.colors.accent, num)
   local text_x = x + thumb_w + text_x_pad
-  local text_w = math.max(24, width - thumb_w - text_x_pad - 8)
+  local text_w = math.max(UIScale.round(24), width - thumb_w - text_x_pad - UIScale.round(8))
   local label = truncate_text(ctx, display_name(plugin_name), text_w)
-  r.ImGui_DrawList_AddText(draw_list, text_x, y + 10, Theme.colors.text, label)
+  r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(10), Theme.colors.text, label)
   local full = truncate_text(ctx, plugin_name, text_w)
-  r.ImGui_DrawList_AddText(draw_list, text_x, y + 10 + r.ImGui_GetTextLineHeight(ctx) + 4, Theme.colors.text_dim, full)
+  r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(10) + r.ImGui_GetTextLineHeight(ctx) + UIScale.round(4), Theme.colors.text_dim, full)
   if clicked then app.status = plugin_name end
   if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_SourceNoPreviewTooltip()) then
     r.ImGui_SetDragDropPayload(ctx, "TK_WORKBENCH_CHAIN_REORDER", tostring(index))
@@ -525,23 +526,23 @@ end
 local function draw_chain_strip(app, settings)
   local ctx = app.ctx
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  local thumb_h = settings.thumbnail_height or defaults.thumbnail_height
-  local item_h = math.max(58, math.min(thumb_h, 118))
-  local add_button_h = 44
-  local strip_h = math.max(190, (avail_h or 260) - r.ImGui_GetFrameHeight(ctx) - add_button_h - 14)
+  local thumb_h = UIScale.round(settings.thumbnail_height or defaults.thumbnail_height)
+  local item_h = math.max(UIScale.round(58), math.min(thumb_h, UIScale.round(118)))
+  local add_button_h = UIScale.round(44)
+  local strip_h = math.max(UIScale.round(190), (avail_h or UIScale.round(260)) - r.ImGui_GetFrameHeight(ctx) - add_button_h - UIScale.round(14))
   local pending_action = nil
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + avail_w, y + strip_h, Theme.colors.child_bg, 5)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + avail_w, y + strip_h, Theme.colors.border, 5, 0, 1)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + avail_w, y + strip_h, Theme.colors.child_bg, UIScale.px(5))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + avail_w, y + strip_h, Theme.colors.border, UIScale.px(5), 0, UIScale.px(1))
   local child_visible = r.ImGui_BeginChild(ctx, "##fcb_strip", 0, strip_h, 0, 0)
   if child_visible then
-    r.ImGui_SetCursorPos(ctx, 8, 8)
+    r.ImGui_SetCursorPos(ctx, UIScale.round(8), UIScale.round(8))
     if #state.plugins == 0 then
       local text = "Drag plugins here to build a chain"
       local text_w = r.ImGui_CalcTextSize(ctx, text)
-      local drop_w = math.max(1, avail_w - 16)
-      local drop_h = math.max(1, strip_h - 16)
+      local drop_w = math.max(1, avail_w - UIScale.round(16))
+      local drop_h = math.max(1, strip_h - UIScale.round(16))
       r.ImGui_InvisibleButton(ctx, "##fcb_empty_drop", drop_w, drop_h)
       local drop_hovered = r.ImGui_IsItemHovered(ctx)
       if r.ImGui_BeginDragDropTarget(ctx) then
@@ -549,14 +550,14 @@ local function draw_chain_strip(app, settings)
         if ok_plugin and payload_plugin and payload_plugin ~= "" then pending_action = { type = "add", plugin = payload_plugin } end
         r.ImGui_EndDragDropTarget(ctx)
       end
-      local text_x = x + math.max(8, (avail_w - text_w) * 0.5)
+      local text_x = x + math.max(UIScale.round(8), (avail_w - text_w) * 0.5)
       local text_y = y + (strip_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5
       r.ImGui_DrawList_AddText(draw_list, text_x, text_y, drop_hovered and Theme.colors.accent or Theme.colors.text_dim, text)
     else
-      local item_w = math.max(1, avail_w - 16)
-      r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 6)
+      local item_w = math.max(1, avail_w - UIScale.round(16))
+      r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), UIScale.round(4), UIScale.round(6))
       for index, plugin_name in ipairs(state.plugins) do
-        r.ImGui_SetCursorPosX(ctx, 8)
+        r.ImGui_SetCursorPosX(ctx, UIScale.round(8))
         local action = draw_chain_item(app, settings, plugin_name, index, item_w, item_h)
         if action and not pending_action then pending_action = action end
       end
@@ -575,7 +576,7 @@ end
 local function draw_add_plugin_button(app)
   local ctx = app.ctx
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-  local size = 34
+  local size = UIScale.round(34)
   local x = r.ImGui_GetCursorPosX(ctx) + math.max(0, (avail_w - size) * 0.5)
   r.ImGui_SetCursorPosX(ctx, x)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -588,9 +589,9 @@ local function draw_add_plugin_button(app)
   local cy = (min_y + max_y) * 0.5
   local color = hovered and Theme.colors.accent or Theme.colors.border
   r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, size * 0.5, Theme.colors.frame_bg, 32)
-  r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.5 - 1, color, 32, hovered and 2 or 1)
-  r.ImGui_DrawList_AddLine(draw_list, cx - 7, cy, cx + 7, cy, Theme.colors.text, 2)
-  r.ImGui_DrawList_AddLine(draw_list, cx, cy - 7, cx, cy + 7, Theme.colors.text, 2)
+  r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.5 - UIScale.px(1), color, 32, hovered and UIScale.px(2) or UIScale.px(1))
+  r.ImGui_DrawList_AddLine(draw_list, cx - UIScale.round(7), cy, cx + UIScale.round(7), cy, Theme.colors.text, UIScale.px(2))
+  r.ImGui_DrawList_AddLine(draw_list, cx, cy - UIScale.round(7), cx, cy + UIScale.round(7), Theme.colors.text, UIScale.px(2))
   if hovered then r.ImGui_SetTooltip(ctx, "Open Plugin Browser") end
   if clicked then
     if app.set_active_view then
@@ -607,9 +608,9 @@ local function draw_controls(app, settings)
   local ctx = app.ctx
   local button_h = r.ImGui_GetFrameHeight(ctx)
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-  local gap = 4
-  local count_w = 42
-  local button_w = math.max(45, math.floor((avail_w - count_w - gap * 7) / 6))
+  local gap = UIScale.round(4)
+  local count_w = UIScale.round(42)
+  local button_w = math.max(UIScale.round(45), math.floor((avail_w - count_w - gap * 7) / 6))
   if r.ImGui_Button(ctx, "Commit##fcb", button_w, button_h) then commit_chain(app, settings, false) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add chain to selected track(s)") end
   r.ImGui_SameLine(ctx, 0, gap)
@@ -637,7 +638,7 @@ local function draw_settings(ctx, settings, app)
   if changed then settings.preserve_chunks = value; if app.save_settings then app.save_settings() end end
   changed, value = r.ImGui_Checkbox(ctx, "Clear after commit", settings.clear_after_commit == true)
   if changed then settings.clear_after_commit = value; if app.save_settings then app.save_settings() end end
-  r.ImGui_SetNextItemWidth(ctx, 150)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
   changed, value = r.ImGui_SliderInt(ctx, "Thumbnail height", settings.thumbnail_height or defaults.thumbnail_height, 48, 180, "%d px")
   if changed then settings.thumbnail_height = value; if app.save_settings then app.save_settings() end end
   r.ImGui_EndPopup(ctx)

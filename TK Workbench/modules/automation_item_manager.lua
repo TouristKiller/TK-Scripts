@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 
 local M = {
   id = "automation_item_manager",
@@ -500,10 +501,10 @@ local function draw_preview(ctx, settings, preview, x, y, width, height)
   local preview_height = math.max(1, tonumber(height) or state.preview_height)
   local background = Theme.colors.frame_bg
   local border = Theme.colors.border
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + preview_width, y + preview_height, background, 3)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + preview_width, y + preview_height, border, 3, 0, 1)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + preview_width, y + preview_height, background, UIScale.px(3))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + preview_width, y + preview_height, border, UIScale.px(3), 0, UIScale.px(1))
   if not preview then
-    r.ImGui_DrawList_AddText(draw_list, x + 10, y + 20, Theme.colors.text_dim, "No Preview")
+    r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(10), y + UIScale.round(20), Theme.colors.text_dim, "No Preview")
     return
   end
   local source_width = math.max(1, tonumber(preview.width) or state.preview_width)
@@ -514,13 +515,13 @@ local function draw_preview(ctx, settings, preview, x, y, width, height)
     for index = 1, #preview.curve_points - 1 do
       local point_a = preview.curve_points[index]
       local point_b = preview.curve_points[index + 1]
-      r.ImGui_DrawList_AddLine(draw_list, x + point_a.x * scale_x, y + point_a.y * scale_y, x + point_b.x * scale_x, y + point_b.y * scale_y, settings.curve_color, 1.5)
+      r.ImGui_DrawList_AddLine(draw_list, x + point_a.x * scale_x, y + point_a.y * scale_y, x + point_b.x * scale_x, y + point_b.y * scale_y, settings.curve_color, UIScale.px(1.5))
     end
   end
   if not settings.show_lines_only and preview.control_points then
     for _, point in ipairs(preview.control_points) do
-      r.ImGui_DrawList_AddCircleFilled(draw_list, x + point.x * scale_x, y + point.y * scale_y, 4, settings.points_color)
-      r.ImGui_DrawList_AddCircle(draw_list, x + point.x * scale_x, y + point.y * scale_y, 4, 0x000000FF, 0, 1)
+      r.ImGui_DrawList_AddCircleFilled(draw_list, x + point.x * scale_x, y + point.y * scale_y, UIScale.px(4), settings.points_color)
+      r.ImGui_DrawList_AddCircle(draw_list, x + point.x * scale_x, y + point.y * scale_y, UIScale.px(4), 0x000000FF, 0, UIScale.px(1))
     end
   end
 end
@@ -990,8 +991,10 @@ end
 
 local function draw_header(app, ctx, settings)
   local available_width = r.ImGui_GetContentRegionAvail(ctx)
-  r.ImGui_SetCursorPosX(ctx, math.max(0, available_width - 28))
-  if r.ImGui_Button(ctx, "...", 28, 22) then r.ImGui_OpenPopup(ctx, "##aim_settings_menu") end
+  local button_w = UIScale.round(28)
+  local button_h = UIScale.button_h(ctx, 22)
+  r.ImGui_SetCursorPosX(ctx, math.max(0, available_width - button_w))
+  if r.ImGui_Button(ctx, "...", button_w, button_h) then r.ImGui_OpenPopup(ctx, "##aim_settings_menu") end
   tooltip(ctx, app, settings, "Open Automation Item Manager settings")
   draw_settings_popup(app, ctx, settings)
   r.ImGui_Separator(ctx)
@@ -1029,20 +1032,22 @@ local function draw_items_grid(app, ctx, settings)
     r.ImGui_TextWrapped(ctx, "Create or save automation items in REAPER, then click Refresh.")
     return
   end
-  local available_width = math.max(1, r.ImGui_GetContentRegionAvail(ctx) or state.preview_width)
-  local gap = 8
-  local columns = math.max(1, math.floor((available_width + gap) / (state.preview_width + gap)))
-  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_CellPadding(), 4, 4)
+  local preview_w = UIScale.round(state.preview_width)
+  local preview_h = UIScale.round(state.preview_height)
+  local available_width = math.max(1, r.ImGui_GetContentRegionAvail(ctx) or preview_w)
+  local gap = UIScale.round(8)
+  local columns = math.max(1, math.floor((available_width + gap) / (preview_w + gap)))
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_CellPadding(), UIScale.round(4), UIScale.round(4))
   local flags = r.ImGui_TableFlags_SizingStretchSame and r.ImGui_TableFlags_SizingStretchSame() or r.ImGui_TableFlags_None()
   if r.ImGui_BeginTable(ctx, "##aim_items", columns, flags) then
     for index, item in ipairs(state.items) do
       r.ImGui_TableNextColumn(ctx)
-      local card_width = math.max(1, r.ImGui_GetContentRegionAvail(ctx) or state.preview_width)
+      local card_width = math.max(1, r.ImGui_GetContentRegionAvail(ctx) or preview_w)
       local x, y = r.ImGui_GetCursorScreenPos(ctx)
-      draw_preview(ctx, settings, item.preview, x, y, card_width, state.preview_height)
+      draw_preview(ctx, settings, item.preview, x, y, card_width, preview_h)
       r.ImGui_SetCursorScreenPos(ctx, x, y)
-      if r.ImGui_InvisibleButton(ctx, "##aim_item_" .. index, card_width, state.preview_height) then apply_and_create_automation_item(app, item) end
-      if r.ImGui_IsItemActive(ctx) and r.ImGui_IsMouseDragging(ctx, r.ImGui_MouseButton_Left(), 5.0) then
+      if r.ImGui_InvisibleButton(ctx, "##aim_item_" .. index, card_width, preview_h) then apply_and_create_automation_item(app, item) end
+      if r.ImGui_IsItemActive(ctx) and r.ImGui_IsMouseDragging(ctx, r.ImGui_MouseButton_Left(), UIScale.px(5.0)) then
         state.is_dragging = true
         state.drag_item = item
       end
@@ -1065,7 +1070,7 @@ end
 
 local function draw_controls_bar(app, ctx, settings)
   local footer_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
-  if not r.ImGui_BeginChild(ctx, "##aim_controls", -1, state.controls_height, 0, footer_flags) then return end
+  if not r.ImGui_BeginChild(ctx, "##aim_controls", -1, UIScale.round(state.controls_height), 0, footer_flags) then return end
   r.ImGui_Separator(ctx)
   local envelope = r.GetSelectedEnvelope(0)
   if envelope then
@@ -1078,51 +1083,52 @@ local function draw_controls_bar(app, ctx, settings)
   else
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No envelope selected")
   end
-  r.ImGui_Dummy(ctx, 1, 6)
+  r.ImGui_Dummy(ctx, UIScale.round(1), UIScale.round(6))
   local available_width = math.max(1, r.ImGui_GetContentRegionAvail(ctx) or 1)
-  local button_gap = 4
+  local button_gap = UIScale.round(4)
+  local button_h = UIScale.button_h(ctx, 22)
   local button_width = math.max(1, math.floor((available_width - button_gap * 4) / 5))
-  if r.ImGui_Button(ctx, "Refresh", button_width, 22) then
+  if r.ImGui_Button(ctx, "Refresh", button_width, button_h) then
     scan_automation_items()
     set_footer_message("Refreshed: " .. #state.items .. " items found")
   end
   tooltip(ctx, app, settings, "Rescan AutomationItems folder")
   r.ImGui_SameLine(ctx, 0, button_gap)
-  if r.ImGui_Button(ctx, "Convert", button_width, 22) then convert_selected_envelope_points_to_automation_item() end
+  if r.ImGui_Button(ctx, "Convert", button_width, button_h) then convert_selected_envelope_points_to_automation_item() end
   tooltip(ctx, app, settings, "Convert selected envelope points to automation item")
   r.ImGui_SameLine(ctx, 0, button_gap)
-  if r.ImGui_Button(ctx, "Save", button_width, 22) then
+  if r.ImGui_Button(ctx, "Save", button_width, button_h) then
     r.Main_OnCommand(42092, 0)
     set_footer_message("Save automation item command executed")
   end
   tooltip(ctx, app, settings, "Save selected automation item to file")
   r.ImGui_SameLine(ctx, 0, button_gap)
-  if r.ImGui_Button(ctx, "Export", button_width, 22) then export_envelope_points_to_file() end
+  if r.ImGui_Button(ctx, "Export", button_width, button_h) then export_envelope_points_to_file() end
   tooltip(ctx, app, settings, "Export envelope points to .ReaperAutoItem file")
   r.ImGui_SameLine(ctx, 0, button_gap)
-  if r.ImGui_Button(ctx, "Folder", button_width, 22) then
+  if r.ImGui_Button(ctx, "Folder", button_width, button_h) then
     if ensure_automation_folder_exists() then open_path(state.automation_folder) end
   end
   tooltip(ctx, app, settings, "Open AutomationItems folder")
   local half_width = math.max(1, math.floor((available_width - button_gap) / 2))
-  if r.ImGui_Button(ctx, "Insert New", half_width, 22) then
+  if r.ImGui_Button(ctx, "Insert New", half_width, button_h) then
     r.Main_OnCommand(42082, 0)
     set_footer_message("Inserted automation item")
   end
   tooltip(ctx, app, settings, "Insert a new empty automation item")
   r.ImGui_SameLine(ctx, 0, button_gap)
-  if r.ImGui_Button(ctx, "Edge points", half_width, 22) then
+  if r.ImGui_Button(ctx, "Edge points", half_width, button_h) then
     r.Main_OnCommand(42209, 0)
     set_footer_message("Added edge points")
   end
   tooltip(ctx, app, settings, "Add edge points at automation item boundaries")
-  if r.ImGui_Button(ctx, "Pool duplicate", half_width, 22) then
+  if r.ImGui_Button(ctx, "Pool duplicate", half_width, button_h) then
     r.Main_OnCommand(42085, 0)
     set_footer_message("Pooled duplicate created")
   end
   tooltip(ctx, app, settings, "Duplicate selected automation item as pooled copy")
   r.ImGui_SameLine(ctx, 0, button_gap)
-  if r.ImGui_Button(ctx, "Unpool selected", half_width, 22) then
+  if r.ImGui_Button(ctx, "Unpool selected", half_width, button_h) then
     r.Main_OnCommand(42084, 0)
     set_footer_message("Unpooled selected item")
   end
@@ -1157,7 +1163,7 @@ function M.draw(app)
   local settings = module_settings(app)
   draw_header(app, ctx, settings)
   local available_width, available_height = r.ImGui_GetContentRegionAvail(ctx)
-  local list_height = math.max(1, (available_height or 420) - state.controls_height - UI.info_line_height(ctx))
+  local list_height = math.max(1, (available_height or UIScale.round(420)) - UIScale.round(state.controls_height) - UI.info_line_height(ctx))
   if r.ImGui_BeginChild(ctx, "##aim_items_scroll", available_width or 0, list_height, 0) then
     draw_items_grid(app, ctx, settings)
     r.ImGui_EndChild(ctx)

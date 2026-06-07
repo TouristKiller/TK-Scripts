@@ -1,2 +1,7 @@
 build/
 out/
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.lib

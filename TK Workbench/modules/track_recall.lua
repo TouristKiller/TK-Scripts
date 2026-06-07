@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 local json = require("core.json")
 
 local M = {
@@ -784,7 +785,8 @@ local function draw_rename_popup(app, track)
   local recall = find_recall(state.rename_id)
   local can_save = recall and tostring(state.rename_text or "") ~= ""
   if not can_save and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
-  if r.ImGui_Button(ctx, "Save", 70, 0) and can_save then
+  local popup_button_w = UIScale.text_button_w(ctx, "Cancel", 70)
+  if r.ImGui_Button(ctx, "Save", popup_button_w, 0) and can_save then
     if ensure_full_data(app, track) then
       recall = find_recall(state.rename_id)
       if recall then
@@ -799,7 +801,7 @@ local function draw_rename_popup(app, track)
   end
   if not can_save and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Cancel", 70, 0) then r.ImGui_CloseCurrentPopup(ctx) end
+  if r.ImGui_Button(ctx, "Cancel", popup_button_w, 0) then r.ImGui_CloseCurrentPopup(ctx) end
   r.ImGui_EndPopup(ctx)
 end
 
@@ -816,13 +818,14 @@ local function draw_create_popup(app, track)
   if changed then state.create_name = value end
   local can_save = clean_name(state.create_name, "") ~= ""
   if not can_save and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
-  if r.ImGui_Button(ctx, "Save", 70, 0) and can_save then
+  local popup_button_w = UIScale.text_button_w(ctx, "Cancel", 70)
+  if r.ImGui_Button(ctx, "Save", popup_button_w, 0) and can_save then
     if #tracks > 1 then add_recall_to_tracks(app, tracks, track, state.create_name) else add_recall(app, track, state.create_name) end
     r.ImGui_CloseCurrentPopup(ctx)
   end
   if not can_save and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Cancel", 70, 0) then r.ImGui_CloseCurrentPopup(ctx) end
+  if r.ImGui_Button(ctx, "Cancel", popup_button_w, 0) then r.ImGui_CloseCurrentPopup(ctx) end
   r.ImGui_EndPopup(ctx)
 end
 
@@ -842,7 +845,7 @@ local function draw_part_toggle(app, settings, parts, key, label, width)
   local enabled = parts[key] == true
   local button_color = enabled and Theme.colors.accent_soft or Theme.colors.frame_bg
   local hover_color = enabled and Theme.colors.accent or Theme.colors.frame_hover
-  local text_color = enabled and Theme.colors.text or Theme.colors.text_dim
+  local text_color = Theme.text_for_backgrounds({ button_color, hover_color, Theme.colors.accent }, enabled and Theme.colors.text or Theme.colors.text_dim, Theme.colors.text, 4.5)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hover_color)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent)
@@ -861,9 +864,9 @@ local function draw_recall_parts(app, settings)
   local ctx = app.ctx
   local parts = visible_parts(settings)
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-  local spacing = 8
+  local spacing = UIScale.gap(8)
   if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then spacing = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing()) or spacing end
-  local width = math.max(42, ((avail_w or 240) - spacing * 3) * 0.25)
+  local width = math.max(UIScale.round(42), ((avail_w or UIScale.round(240)) - spacing * 3) * 0.25)
   draw_part_toggle(app, settings, parts, "fx", "FX", width)
   r.ImGui_SameLine(ctx)
   draw_part_toggle(app, settings, parts, "items", "Items", width)
@@ -875,7 +878,7 @@ end
 
 local function draw_add_recall_button(app, track, size, centered)
   local ctx = app.ctx
-  size = size or r.ImGui_GetFrameHeight(ctx)
+  size = size or UIScale.button_h(ctx)
   if centered then
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
     r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + math.max(0, ((avail_w or size) - size) * 0.5))
@@ -890,9 +893,9 @@ local function draw_add_recall_button(app, track, size, centered)
   local cy = (min_y + max_y) * 0.5
   local color = hovered and Theme.colors.accent or Theme.colors.border
   r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, size * 0.5, Theme.colors.frame_bg, 32)
-  r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.5 - 1, color, 32, hovered and 2 or 1)
-  r.ImGui_DrawList_AddLine(draw_list, cx - 6, cy, cx + 6, cy, Theme.colors.text, 2)
-  r.ImGui_DrawList_AddLine(draw_list, cx, cy - 6, cx, cy + 6, Theme.colors.text, 2)
+  r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.5 - UIScale.px(1), color, 32, hovered and UIScale.px(2) or UIScale.px(1))
+  r.ImGui_DrawList_AddLine(draw_list, cx - UIScale.round(6), cy, cx + UIScale.round(6), cy, Theme.colors.text, UIScale.px(2))
+  r.ImGui_DrawList_AddLine(draw_list, cx, cy - UIScale.round(6), cx, cy + UIScale.round(6), Theme.colors.text, UIScale.px(2))
   if hovered then r.ImGui_SetTooltip(ctx, "Save Track Recall") end
   if clicked then begin_create_recall(track, selected_tracks(app)); state.create_open = true end
 end
@@ -902,22 +905,22 @@ local function draw_recall_row(app, track, recall, settings)
   local selected = state.data and state.data.selected_state_id == recall.id
   local summary = recall.summary or {}
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-  local width = math.max(120, avail_w or 120)
-  local row_h = 52
+  local width = math.max(UIScale.round(120), avail_w or UIScale.round(120))
+  local row_h = UIScale.round(52)
   r.ImGui_PushID(ctx, recall.id)
   local clicked = r.ImGui_InvisibleButton(ctx, "##recall_card", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local x, y = r.ImGui_GetItemRectMin(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
-  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + width, y + row_h - 2, bg, 5) end
-  r.ImGui_DrawList_AddRect(draw_list, x, y + 2, x + width, y + row_h - 2, selected and Theme.colors.accent or Theme.colors.border, 5, 0, selected and 1.4 or 0.7)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x + 7, y + 11, x + 23, y + 27, Theme.colors.accent, 3)
-  r.ImGui_DrawList_AddText(draw_list, x + 11, y + 12, 0x111111FF, "R")
-  r.ImGui_DrawList_PushClipRect(draw_list, x + 32, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, x + 32, y + 8, Theme.colors.text, tostring(recall.name or "Recall"))
+  if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, y + UIScale.round(2), x + width, y + row_h - UIScale.round(2), bg, UIScale.px(5)) end
+  r.ImGui_DrawList_AddRect(draw_list, x, y + UIScale.round(2), x + width, y + row_h - UIScale.round(2), selected and Theme.colors.accent or Theme.colors.border, UIScale.px(5), 0, selected and UIScale.px(1.4) or UIScale.px(0.7))
+  r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(7), y + UIScale.round(11), x + UIScale.round(23), y + UIScale.round(27), Theme.colors.accent, UIScale.px(3))
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(11), y + UIScale.round(12), 0x111111FF, "R")
+  r.ImGui_DrawList_PushClipRect(draw_list, x + UIScale.round(32), y + UIScale.round(4), x + width - UIScale.round(8), y + row_h - UIScale.round(4), true)
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(32), y + UIScale.round(8), Theme.colors.text, tostring(recall.name or "Recall"))
   local details = string.format("FX %d | Items %d | Env %d | %s", tonumber(summary.fx) or 0, tonumber(summary.items) or 0, tonumber(summary.envelopes) or 0, format_date(recall.updated_at))
-  r.ImGui_DrawList_AddText(draw_list, x + 32, y + 29, Theme.colors.text_dim, details)
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(32), y + UIScale.round(29), Theme.colors.text_dim, details)
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then restore_recall(app, track, recall, settings) end
   if hovered then r.ImGui_SetTooltip(ctx, "Click to recall the enabled parts") end
@@ -945,7 +948,7 @@ local function draw_recall_list(app, track, settings, height)
       else
         for _, recall in ipairs(state.filtered) do draw_recall_row(app, track, recall, settings) end
       end
-      draw_add_recall_button(app, track, 34, true)
+      draw_add_recall_button(app, track, UIScale.round(34), true)
     end)
     r.ImGui_EndChild(ctx)
   end
@@ -969,18 +972,18 @@ function M.draw(app)
   load_for_track(track)
   refresh_filter()
   local name = selected_track_label(app, track)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local button_h = UIScale.button_h(ctx)
   local color = r.GetTrackColor(track) or 0
   local native_color = native_color_to_u32(color, 0xCC) or Theme.colors.accent
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + 6, y + r.ImGui_GetTextLineHeight(ctx) + 2, native_color)
-  r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + 12)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y + UIScale.round(2), x + UIScale.round(6), y + r.ImGui_GetTextLineHeight(ctx) + UIScale.round(2), native_color)
+  r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + UIScale.round(12))
   r.ImGui_TextColored(ctx, Theme.colors.accent, name)
   r.ImGui_SameLine(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(#state.data.states) .. " recalls")
   r.ImGui_SameLine(ctx)
-  local reload_x = math.max(r.ImGui_GetCursorPosX(ctx), (avail_w or 320) - button_h)
+  local reload_x = math.max(r.ImGui_GetCursorPosX(ctx), (avail_w or UIScale.round(320)) - button_h)
   r.ImGui_SetCursorPosX(ctx, reload_x)
   if r.ImGui_Button(ctx, "R##track_recall_reload", button_h, button_h) then
     local guid = track_guid(track)
@@ -1000,7 +1003,7 @@ function M.draw(app)
   draw_rename_popup(app, track)
   local _, remaining_h = r.ImGui_GetContentRegionAvail(ctx)
   local info_h = UI.info_line_height(ctx)
-  local list_h = math.max(80, (remaining_h or avail_h or 300) - info_h)
+  local list_h = math.max(UIScale.round(80), (remaining_h or avail_h or UIScale.round(300)) - info_h)
   draw_recall_list(app, track, settings, list_h)
   UI.draw_info_line(ctx, tostring(#state.data.states) .. " recalls | " .. enabled_parts_text(settings))
 end

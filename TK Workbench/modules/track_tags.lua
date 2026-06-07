@@ -2,12 +2,13 @@ local r = reaper
 local json = require("core.json")
 local UI = require("core.ui")
 local Theme = require("core.theme")
+local UIScale = require("core.ui_scale")
 
 local M = {
   id = "track_tags",
   title = "Tags",
   icon = "TAG",
-  version = "0.1.0"
+  version = "0.1.1"
 }
 
 local resource_path = r.GetResourcePath()
@@ -46,7 +47,8 @@ local state = {
   pending_remove_open = false,
   filtered_tracks = {},
   available_sorted = {},
-  last_filter_key = nil
+  last_filter_key = nil,
+  visibility_snapshot = nil
 }
 
 local function copy_default(value)
@@ -398,6 +400,30 @@ end
 
 local set_selected_tags_visibility
 local show_all_tracks
+local restore_previous_visibility
+
+local function clear_visibility_snapshot()
+  state.visibility_snapshot = nil
+end
+
+local function snapshot_visibility()
+  local tracks = {}
+  for index = 0, r.CountTracks(0) - 1 do
+    local track = r.GetTrack(0, index)
+    local guid = track_guid(track)
+    if guid then
+      tracks[guid] = {
+        tcp = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") or 0,
+        mixer = r.GetMediaTrackInfo_Value(track, "B_SHOWINMIXER") or 0
+      }
+    end
+  end
+  state.visibility_snapshot = { tracks = tracks }
+end
+
+local function ensure_visibility_snapshot()
+  if state.visibility_snapshot == nil then snapshot_visibility() end
+end
 
 local function add_tag_to_guids(app, guids, tag)
   tag = clean_tag(tag)
@@ -500,7 +526,7 @@ local function remove_selected_tag_name(app, settings, removed_tag)
     settings.filter_tag = next_tags[1] or ""
     state.last_filter_key = nil
     if app.save_settings then app.save_settings() end
-    if #next_tags > 0 then set_selected_tags_visibility(app, settings) else show_all_tracks(app) end
+    if #next_tags > 0 then set_selected_tags_visibility(app, settings) else restore_previous_visibility(app) end
   end
 end
 
@@ -661,6 +687,7 @@ local function solo_select_tracks_with_tag(app, tag)
 end
 
 function set_selected_tags_visibility(app, settings)
+  ensure_visibility_snapshot()
   local tracks = selected_tag_tracks(settings)
   local tagged = {}
   for _, track in ipairs(tracks) do
@@ -685,7 +712,36 @@ function set_selected_tags_visibility(app, settings)
   app.status = "Tags selected " .. tostring(#tracks) .. " tracks"
 end
 
+function restore_previous_visibility(app)
+  local snapshot = state.visibility_snapshot
+  if type(snapshot) ~= "table" or type(snapshot.tracks) ~= "table" then
+    app.status = "Tags: no previous visibility snapshot"
+    return false
+  end
+  local restored = 0
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  for index = 0, r.CountTracks(0) - 1 do
+    local track = r.GetTrack(0, index)
+    local guid = track_guid(track)
+    local values = guid and snapshot.tracks[guid]
+    if values then
+      r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", (tonumber(values.tcp) or 0) > 0 and 1 or 0)
+      r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", (tonumber(values.mixer) or 0) > 0 and 1 or 0)
+      restored = restored + 1
+    end
+  end
+  r.PreventUIRefresh(-1)
+  r.TrackList_AdjustWindows(false)
+  r.UpdateArrange()
+  r.Undo_EndBlock("Restore tagged track visibility", -1)
+  clear_visibility_snapshot()
+  app.status = "Tags restored previous visibility: " .. tostring(restored) .. " tracks"
+  return true
+end
+
 function show_all_tracks(app)
+  clear_visibility_snapshot()
   r.Undo_BeginBlock()
   r.PreventUIRefresh(1)
   for index = 0, r.CountTracks(0) - 1 do
@@ -738,11 +794,11 @@ end
 local function draw_divider(ctx, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  local line_y = y + 4
+  local line_y = y + UIScale.round(4)
   local bg = Theme.colors.child_bg or Theme.colors.window_bg or 0x202020FF
   local line_color = contrast_color(bg, 0.32)
-  r.ImGui_DrawList_AddLine(draw_list, x, line_y, x + math.max(20, width or 100), line_y, line_color, 1.4)
-  r.ImGui_Dummy(ctx, width or 1, 9)
+  r.ImGui_DrawList_AddLine(draw_list, x, line_y, x + math.max(UIScale.round(20), width or UIScale.round(100)), line_y, line_color, UIScale.px(1.4))
+  r.ImGui_Dummy(ctx, width or 1, UIScale.round(9))
 end
 
 local function draw_remove_tag_confirm_popup(app, settings)
@@ -759,7 +815,7 @@ local function draw_remove_tag_confirm_popup(app, settings)
     r.ImGui_Separator(ctx)
     r.ImGui_TextWrapped(ctx, "This removes the tag globally and removes it from all track assignments. This can affect other projects that use this tag.")
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, tag)
-    if r.ImGui_Button(ctx, "Remove##tag_context_remove_complete_confirm", 100, 0) then
+    if r.ImGui_Button(ctx, "Remove##tag_context_remove_complete_confirm", UIScale.text_button_w(ctx, "Remove", 100), 0) then
       if remove_tag_completely(app, settings, tag) then
         state.pending_remove_tag = ""
         state.pending_remove_open = false
@@ -767,7 +823,7 @@ local function draw_remove_tag_confirm_popup(app, settings)
       end
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Cancel##tag_context_remove_complete_cancel", 90, 0) then
+    if r.ImGui_Button(ctx, "Cancel##tag_context_remove_complete_cancel", UIScale.text_button_w(ctx, "Cancel", 90), 0) then
       state.pending_remove_tag = ""
       state.pending_remove_open = false
       r.ImGui_CloseCurrentPopup(ctx)
@@ -800,14 +856,14 @@ local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
       settings.filter_tag = next_tags[1] or ""
       state.last_filter_key = nil
       if app.save_settings then app.save_settings() end
-      if #next_tags > 0 then set_selected_tags_visibility(app, settings) else show_all_tracks(app) end
+      if #next_tags > 0 then set_selected_tags_visibility(app, settings) else restore_previous_visibility(app) end
     else
       if #selected_tags == 1 and selected_tags[1] == tag then
         settings.selected_tags = {}
         settings.filter_tag = ""
         state.last_filter_key = nil
         if app.save_settings then app.save_settings() end
-        show_all_tracks(app)
+        restore_previous_visibility(app)
       else
         settings.selected_tags = { tag }
         settings.filter_tag = tag
@@ -821,8 +877,8 @@ local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
     local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
-    r.ImGui_DrawList_AddRect(draw_list, min_x - 1, min_y - 1, max_x + 1, max_y + 1, Theme.colors.accent, 4, 0, 2)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, max_x - 6, min_y + 6, 3, Theme.colors.accent, 12)
+    r.ImGui_DrawList_AddRect(draw_list, min_x - UIScale.round(1), min_y - UIScale.round(1), max_x + UIScale.round(1), max_y + UIScale.round(1), Theme.colors.accent, UIScale.px(4), 0, UIScale.px(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, max_x - UIScale.round(6), min_y + UIScale.round(6), UIScale.px(3), Theme.colors.accent, 12)
   end
   if pushed > 0 then r.ImGui_PopStyleColor(ctx, pushed) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Filter by " .. tostring(tag)) end
@@ -858,7 +914,7 @@ local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
         state.rename_tag = tag
         state.rename_tag_text = tag
       end
-      r.ImGui_SetNextItemWidth(ctx, 170)
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
       local rename_changed, rename_value = r.ImGui_InputTextWithHint(ctx, "##tag_context_rename", "Tag name", state.rename_tag_text or tag)
       if rename_changed then state.rename_tag_text = rename_value end
       if r.ImGui_Button(ctx, "Apply##tag_context_rename_apply") then
@@ -928,19 +984,19 @@ local function draw_new_tag_popup(app)
   if not r.ImGui_BeginPopup(ctx, "##track_atlas_new_tag_popup") then return end
   r.ImGui_TextColored(ctx, Theme.colors.accent, "New tag")
   r.ImGui_Separator(ctx)
-  r.ImGui_SetNextItemWidth(ctx, 180)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
   local changed, value = r.ImGui_InputTextWithHint(ctx, "Name##track_atlas_new_tag_name", "Tag name", state.new_tag_text or "")
   if changed then state.new_tag_text = value end
   local color_changed, color_value = r.ImGui_ColorEdit4(ctx, "Color##track_atlas_new_tag_color", state.new_tag_color, r.ImGui_ColorEditFlags_NoInputs())
   if color_changed then state.new_tag_color = color_value end
-  if r.ImGui_Button(ctx, "Add to selected tracks##track_atlas_new_tag_add", 150, 0) then
+  if r.ImGui_Button(ctx, "Add to selected tracks##track_atlas_new_tag_add", UIScale.text_button_w(ctx, "Add to selected tracks", 150), 0) then
     if create_tag(app, state.new_tag_text, state.new_tag_color) then
       state.new_tag_text = ""
       r.ImGui_CloseCurrentPopup(ctx)
     end
   end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Create only##track_atlas_new_tag_create", 95, 0) then
+  if r.ImGui_Button(ctx, "Create only##track_atlas_new_tag_create", UIScale.text_button_w(ctx, "Create only", 95), 0) then
     local tag = clean_tag(state.new_tag_text)
     if tag ~= "" then
       state.data.available[tag] = true
@@ -959,10 +1015,10 @@ end
 
 local function draw_toolbar(app, settings, width)
   local ctx = app.ctx
-  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local button_h = UIScale.button_h(ctx)
   local settings_w = button_h
   local add_w = button_h
-  local search_w = math.max(82, width - settings_w - add_w - 18)
+  local search_w = math.max(UIScale.round(82), width - settings_w - add_w - UIScale.round(18))
   r.ImGui_SetNextItemWidth(ctx, search_w)
   local search_changed, search = r.ImGui_InputTextWithHint(ctx, "##track_atlas_search", "Search tracks or tags", settings.search_term or "")
   if search_changed then settings.search_term = search; state.last_filter_key = nil; if app.save_settings then app.save_settings() end end
@@ -981,22 +1037,22 @@ local function draw_available_tags(app, settings, width)
   if #state.available_sorted == 0 then return end
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Tags")
   local line_w = 0
-  local max_w = math.max(80, width - 2)
+  local max_w = math.max(UIScale.round(80), width - UIScale.round(2))
   for index, tag in ipairs(state.available_sorted) do
-    local tag_w = r.ImGui_CalcTextSize(ctx, tag) + 14
+    local tag_w = r.ImGui_CalcTextSize(ctx, tag) + UIScale.round(14)
     if line_w > 0 and line_w + tag_w > max_w then
       line_w = 0
     elseif line_w > 0 then
       r.ImGui_SameLine(ctx)
     end
     draw_tag_chip(ctx, app, settings, tag, "available_" .. tostring(index), nil)
-    line_w = line_w + tag_w + 6
+    line_w = line_w + tag_w + UIScale.gap(6)
   end
   draw_divider(ctx, width)
 end
 
 local function tag_chip_width(ctx, tag)
-  return r.ImGui_CalcTextSize(ctx, tag) + 14
+  return r.ImGui_CalcTextSize(ctx, tag) + UIScale.round(14)
 end
 
 local function draw_track_row(app, settings, item, width)
@@ -1006,8 +1062,8 @@ local function draw_track_row(app, settings, item, width)
   local label = string.format("%02d  %s##track_atlas_row", item.index + 1, item.name)
   local row_x = r.ImGui_GetCursorPosX(ctx)
   local row_screen_x, row_screen_y = r.ImGui_GetCursorScreenPos(ctx)
-  local gap = 6
-  local min_track_w = math.min(width, math.max(90, width * 0.32))
+  local gap = UIScale.gap(6)
+  local min_track_w = math.min(width, math.max(UIScale.round(90), width * 0.32))
   local tag_total_w = 0
   for index, tag in ipairs(item.tags) do
     tag_total_w = tag_total_w + tag_chip_width(ctx, tag)
@@ -1017,15 +1073,15 @@ local function draw_track_row(app, settings, item, width)
   local track_w = width
   if #item.tags > 0 then
     tag_start = math.max(row_x + min_track_w + gap, tag_start)
-    track_w = math.max(40, tag_start - row_x - gap)
+    track_w = math.max(UIScale.round(40), tag_start - row_x - gap)
   end
   local row_selected = selected or item.matches_selected_tags
   if row_selected then
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    local row_h = math.max(24, r.ImGui_GetFrameHeight(ctx)) + 4
-    r.ImGui_DrawList_AddRectFilled(draw_list, row_screen_x, row_screen_y - 5, row_screen_x + width, row_screen_y + row_h, Theme.colors.accent_soft, 0)
+    local row_h = math.max(UIScale.round(24), UIScale.button_h(ctx)) + UIScale.round(4)
+    r.ImGui_DrawList_AddRectFilled(draw_list, row_screen_x, row_screen_y - UIScale.round(5), row_screen_x + width, row_screen_y + row_h, Theme.colors.accent_soft, 0)
   end
-  if r.ImGui_Selectable(ctx, label, false, 0, track_w, 24) then
+  if r.ImGui_Selectable(ctx, label, false, 0, track_w, UIScale.round(24)) then
     if r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()) then
       r.SetTrackSelected(item.track, not selected)
     else
@@ -1035,6 +1091,7 @@ local function draw_track_row(app, settings, item, width)
   end
   if r.ImGui_BeginPopupContextItem(ctx, "##track_atlas_track_context") then
     if r.ImGui_MenuItem(ctx, "Show all tracks") then show_all_tracks(app) end
+    if r.ImGui_MenuItem(ctx, "Restore previous visibility") then restore_previous_visibility(app) end
     r.ImGui_EndPopup(ctx)
   end
   if #item.tags > 0 then
@@ -1046,7 +1103,7 @@ local function draw_track_row(app, settings, item, width)
     end
   else
     r.ImGui_SameLine(ctx)
-    r.ImGui_SetCursorPosX(ctx, math.max(row_x + 40, row_x + width - 48))
+    r.ImGui_SetCursorPosX(ctx, math.max(row_x + UIScale.round(40), row_x + width - UIScale.round(48)))
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No tags")
   end
   draw_divider(ctx, width)
@@ -1063,8 +1120,8 @@ function M.draw(app)
   local settings = ensure_settings(app)
   load_store(settings, false)
   local width, height = r.ImGui_GetContentRegionAvail(ctx)
-  width = math.max(140, width or 320)
-  height = math.max(120, (height or 320) - UI.info_line_height(ctx))
+  width = math.max(UIScale.round(140), width or UIScale.round(320))
+  height = math.max(UIScale.round(120), (height or UIScale.round(320)) - UI.info_line_height(ctx))
   draw_toolbar(app, settings, width)
   draw_available_tags(app, settings, width)
   local selected_tags = normalize_selected_tags(settings)
@@ -1073,8 +1130,8 @@ function M.draw(app)
     collect_tracks(settings)
     state.last_filter_key = filter_key
   end
-  if r.ImGui_BeginChild(ctx, "##track_atlas_tracks", 0, math.max(40, height - 118), 0) then
-    for _, item in ipairs(state.filtered_tracks) do draw_track_row(app, settings, item, width - 10) end
+  if r.ImGui_BeginChild(ctx, "##track_atlas_tracks", 0, math.max(UIScale.round(40), height - UIScale.round(118)), 0) then
+    for _, item in ipairs(state.filtered_tracks) do draw_track_row(app, settings, item, width - UIScale.round(10)) end
     if #state.filtered_tracks == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No tracks match") end
     r.ImGui_EndChild(ctx)
   end

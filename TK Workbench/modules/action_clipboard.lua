@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local UIScale = require("core.ui_scale")
 local json = require("core.json")
 
 local M = {
@@ -765,13 +766,13 @@ local function draw_capture_history(app, avail_w)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(#state.capture_history) .. "/" .. tostring(HISTORY_LIMIT))
   if #state.capture_history > 0 then
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Clear##capture_history", 58, 0) then state.capture_history = {} end
+    if r.ImGui_Button(ctx, "Clear##capture_history", UIScale.text_button_w(ctx, "Clear", 58), 0) then state.capture_history = {} end
   end
   if ignored_command_count(app) > 0 then
     r.ImGui_SameLine(ctx)
     if r.ImGui_Button(ctx, "Clear Ignored##capture_history_clear_ignored") then clear_ignored_commands(app) end
   end
-  local history_h = (r.ImGui_GetFrameHeight(ctx) + 4) * 7
+  local history_h = (UIScale.button_h(ctx) + UIScale.round(4)) * 7
   if r.ImGui_BeginChild(ctx, "##action_clipboard_capture_history", 0, history_h, 1) then
     if #state.capture_history == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No captured actions yet")
@@ -780,7 +781,7 @@ local function draw_capture_history(app, avail_w)
         r.ImGui_PushID(ctx, "capture_history_" .. tostring(index))
         local label = tostring(entry.name or entry.cmd)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.text)
-        if r.ImGui_Selectable(ctx, label .. "##history_select", false, 0, math.max(80, avail_w - 16), line_h + 4) then record_entry(app, entry, true) end
+        if r.ImGui_Selectable(ctx, label .. "##history_select", false, 0, math.max(UIScale.round(80), avail_w - UIScale.round(16)), line_h + UIScale.round(4)) then record_entry(app, entry, true) end
         r.ImGui_PopStyleColor(ctx)
         if r.ImGui_IsItemHovered(ctx) then
           local details = tostring(entry.name or entry.cmd) .. "\nCommand: " .. tostring(entry.cmd)
@@ -803,7 +804,7 @@ function M.draw_panel(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local button_h = UIScale.button_h(ctx)
   local any_slot_hovered = false
   r.ImGui_TextColored(ctx, Theme.colors.accent, "Action Clipboard")
   local changed, enabled = r.ImGui_Checkbox(ctx, "Native capture", settings.capture_native_actions ~= false)
@@ -828,7 +829,7 @@ function M.draw_panel(app)
   if state.capture_last_recorded ~= "" then
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Last native capture: " .. tostring(state.capture_last_recorded))
   end
-  r.ImGui_SetNextItemWidth(ctx, math.min(180, math.max(120, avail_w * 0.45)))
+  r.ImGui_SetNextItemWidth(ctx, math.min(UIScale.round(180), math.max(UIScale.round(120), avail_w * 0.45)))
   local slider_style_count = push_slider_theme(ctx)
   local slot_changed, slot_count = r.ImGui_SliderInt(ctx, "Slots", settings.slot_count, MIN_SLOT_COUNT, MAX_SLOT_COUNT, "%d")
   pop_slider_theme(ctx, slider_style_count)
@@ -849,29 +850,32 @@ function M.draw_panel(app)
     r.ImGui_SameLine(ctx)
     local lock_label = slot.locked and "L" or "U"
     if slot.locked then
+      local lock_text = Theme.text_for_background(Theme.colors.warning, Theme.colors.badge_text, nil, 4.5)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.badge_text)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), lock_text)
     elseif slot.cmd == "" then
+      local empty_text = Theme.text_for_backgrounds({ Theme.colors.frame_bg, Theme.colors.frame_hover }, Theme.colors.text_dim, Theme.colors.text, 4.5)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.frame_bg)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.frame_hover)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.frame_hover)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.text_dim)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), empty_text)
     else
+      local used_text = Theme.text_for_backgrounds({ Theme.colors.frame_bg, Theme.colors.header_hover, Theme.colors.header }, Theme.colors.text, nil, 4.5)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.frame_bg)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.header_hover)
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.header)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.text)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), used_text)
     end
     if r.ImGui_Button(ctx, lock_label, button_h, button_h) then M.toggle_lock(app, index) end
     r.ImGui_PopStyleColor(ctx, 4)
     if r.ImGui_IsItemHovered(ctx) then slot_hovered = true; r.ImGui_SetTooltip(ctx, slot.locked and "Unlock slot" or "Lock slot") end
     r.ImGui_SameLine(ctx)
     local label = slot.cmd ~= "" and tostring(slot.name or slot.cmd) or "Empty"
-    local text_color = slot.locked and Theme.colors.warning or (slot.cmd ~= "" and Theme.colors.text or Theme.colors.text_dim)
+    local text_color = Theme.text_for_backgrounds({ Theme.colors.window_bg, Theme.colors.child_bg, Theme.colors.frame_bg }, slot.locked and Theme.colors.warning or (slot.cmd ~= "" and Theme.colors.text or Theme.colors.text_dim), Theme.colors.text, 4.5)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
-    r.ImGui_Selectable(ctx, label .. "##slot_select", false, 0, math.max(80, avail_w - (button_h * 2) - 16), button_h)
+    r.ImGui_Selectable(ctx, label .. "##slot_select", false, 0, math.max(UIScale.round(80), avail_w - (button_h * 2) - UIScale.round(16)), button_h)
     r.ImGui_PopStyleColor(ctx)
     if r.ImGui_IsItemHovered(ctx) then
       slot_hovered = true

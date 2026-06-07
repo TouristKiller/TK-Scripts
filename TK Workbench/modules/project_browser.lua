@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local UIScale = require("core.ui_scale")
 local json = require("core.json")
 
 local M = {
@@ -1068,7 +1069,7 @@ end
 
 local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, options)
   options = options or {}
-  if options.no_frame ~= true then r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, 5) end
+  if options.no_frame ~= true then r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, UIScale.px(5)) end
   if entry and entry.image and r.ImGui_DrawList_AddImage then
     local iw = entry.width > 0 and entry.width or 1
     local ih = entry.height > 0 and entry.height or 1
@@ -1082,16 +1083,16 @@ local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, 
     local box_size = math.max(1, math.min(x2 - x1, y2 - y1))
     x2 = x1 + box_size
     y2 = y1 + box_size
-    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, 5)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, UIScale.px(5))
     local label = "No image"
     local text_w = 0
-    local text_h = r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx) or 14
+    local text_h = r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx) or UIScale.round(14)
     if r.ImGui_CalcTextSize then text_w = r.ImGui_CalcTextSize(ctx, label) or 0 end
     r.ImGui_DrawList_AddText(draw_list, x1 + ((x2 - x1) - text_w) * 0.5, y1 + ((y2 - y1) - text_h) * 0.5, Theme.colors.text_dim, label)
   elseif fallback_text and fallback_text ~= "" then
-    r.ImGui_DrawList_AddText(draw_list, x1 + 13, y1 + 10, Theme.colors.text_dim, fallback_text:sub(1, 1):upper())
+    r.ImGui_DrawList_AddText(draw_list, x1 + UIScale.round(13), y1 + UIScale.round(10), Theme.colors.text_dim, fallback_text:sub(1, 1):upper())
   end
-  if options.no_frame ~= true then r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, Theme.colors.border, 5, 0, 0.8) end
+  if options.no_frame ~= true then r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, Theme.colors.border, UIScale.px(5), 0, UIScale.px(0.8)) end
 end
 
 local function open_project(app, project, new_tab)
@@ -1234,7 +1235,7 @@ end
 local function draw_folder_row(app, settings, folder, index, width)
   local ctx = app.ctx
   local compact = settings.compact_list == true
-  local row_h = compact and 24 or 54
+  local row_h = compact and UIScale.round(24) or UIScale.round(54)
   r.ImGui_PushID(ctx, "folder_" .. tostring(folder.path or folder.name or index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -1243,21 +1244,21 @@ local function draw_folder_row(app, settings, folder, index, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local selected = state.selected_folder and state.selected_folder.path == folder.path and state.selected_folder.up == folder.up
   local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
-  local row_top = compact and y or y + 2
-  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
-  local row_radius = compact and 2 or 5
+  local row_top = compact and y or y + UIScale.round(2)
+  local row_bottom = compact and y + row_h - UIScale.round(1) or y + row_h - UIScale.round(2)
+  local row_radius = compact and UIScale.px(2) or UIScale.px(5)
   if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
-  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and 1.4 or 0.7)
-  local icon_x, icon_y = compact and x + 16 or x + 25, compact and y + 15 or y + 26
-  r.ImGui_DrawList_AddRect(draw_list, icon_x - 10, icon_y - 5, icon_x + 10, icon_y + 7, Theme.colors.accent, 3, 0, 1.5)
-  r.ImGui_DrawList_AddLine(draw_list, icon_x - 8, icon_y - 5, icon_x - 3, icon_y - 10, Theme.colors.accent, 1.5)
-  r.ImGui_DrawList_AddLine(draw_list, icon_x - 3, icon_y - 10, icon_x + 5, icon_y - 10, Theme.colors.accent, 1.5)
-  local text_x = compact and x + 34 or x + 52
-  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 8, Theme.colors.text, folder.name or "Folder")
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and UIScale.px(1.4) or UIScale.px(0.7))
+  local icon_x, icon_y = compact and x + UIScale.round(16) or x + UIScale.round(25), compact and y + UIScale.round(15) or y + UIScale.round(26)
+  r.ImGui_DrawList_AddRect(draw_list, icon_x - UIScale.round(10), icon_y - UIScale.round(5), icon_x + UIScale.round(10), icon_y + UIScale.round(7), Theme.colors.accent, UIScale.px(3), 0, UIScale.px(1.5))
+  r.ImGui_DrawList_AddLine(draw_list, icon_x - UIScale.round(8), icon_y - UIScale.round(5), icon_x - UIScale.round(3), icon_y - UIScale.round(10), Theme.colors.accent, UIScale.px(1.5))
+  r.ImGui_DrawList_AddLine(draw_list, icon_x - UIScale.round(3), icon_y - UIScale.round(10), icon_x + UIScale.round(5), icon_y - UIScale.round(10), Theme.colors.accent, UIScale.px(1.5))
+  local text_x = compact and x + UIScale.round(34) or x + UIScale.round(52)
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + UIScale.round(4), x + width - UIScale.round(8), y + row_h - UIScale.round(4), true)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + UIScale.round(4) or y + UIScale.round(8), Theme.colors.text, folder.name or "Folder")
   if not compact then
     local detail = folder.up and "Parent folder" or (tostring(folder.count or 0) .. " items")
-    r.ImGui_DrawList_AddText(draw_list, text_x, y + 29, Theme.colors.text_dim, detail)
+    r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(29), Theme.colors.text_dim, detail)
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then select_folder(folder, index) end
@@ -1274,7 +1275,7 @@ local function draw_project_row(app, settings, project, index, width)
   local ctx = app.ctx
   local mode_def = modes[project.mode or "projects"] or modes.projects
   local compact = settings.compact_list == true
-  local row_h = compact and 24 or 54
+  local row_h = compact and UIScale.round(24) or UIScale.round(54)
   r.ImGui_PushID(ctx, "project_" .. tostring(index))
   local clicked = r.ImGui_InvisibleButton(ctx, "##row", width, row_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
@@ -1283,22 +1284,22 @@ local function draw_project_row(app, settings, project, index, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local selected = state.selected_project and state.selected_project.path == project.path
   local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
-  local row_top = compact and y or y + 2
-  local row_bottom = compact and y + row_h - 1 or y + row_h - 2
-  local row_radius = compact and 2 or 5
+  local row_top = compact and y or y + UIScale.round(2)
+  local row_bottom = compact and y + row_h - UIScale.round(1) or y + row_h - UIScale.round(2)
+  local row_radius = compact and UIScale.px(2) or UIScale.px(5)
   if bg ~= 0x00000000 then r.ImGui_DrawList_AddRectFilled(draw_list, x, row_top, x + width, row_bottom, bg, row_radius) end
-  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and 1.4 or 0.7)
-  local text_x = compact and x + 10 or x + 52
+  r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, selected and Theme.colors.accent or Theme.colors.border, row_radius, 0, selected and UIScale.px(1.4) or UIScale.px(0.7))
+  local text_x = compact and x + UIScale.round(10) or x + UIScale.round(52)
   if not compact then
     local cover = load_cover(ctx, project)
-    draw_cover(ctx, draw_list, cover, x + 7, y + 8, x + 43, y + 44, project.name)
+    draw_cover(ctx, draw_list, cover, x + UIScale.round(7), y + UIScale.round(8), x + UIScale.round(43), y + UIScale.round(44), project.name)
   end
-  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 4, x + width - 8, y + row_h - 4, true)
-  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + 4 or y + 8, Theme.colors.text, project.name)
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + UIScale.round(4), x + width - UIScale.round(8), y + row_h - UIScale.round(4), true)
+  r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + UIScale.round(4) or y + UIScale.round(8), Theme.colors.text, project.name)
   if not compact then
     local detail = compact_path(project.path)
     if project.date ~= "" then detail = project.date .. " | " .. detail end
-    r.ImGui_DrawList_AddText(draw_list, text_x, y + 29, Theme.colors.text_dim, detail)
+    r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(29), Theme.colors.text_dim, detail)
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then select_project(project, index) end
@@ -1325,7 +1326,7 @@ end
 local function draw_project_list(app, settings, width, height)
   local ctx = app.ctx
   local _, mode_def = active_mode(settings)
-  local row_h = settings.compact_list == true and 24 or 54
+  local row_h = settings.compact_list == true and UIScale.round(24) or UIScale.round(54)
   local child_flags = 0
   if r.ImGui_WindowFlags_NoNavInputs then
     local ok_flags, flags = pcall(r.ImGui_WindowFlags_NoNavInputs)
@@ -1346,15 +1347,15 @@ local function draw_project_list(app, settings, width, height)
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No " .. mode_def.plural .. " found")
     end
     local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
-    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 0) end
-    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.visible_entries, row_h, 6, height)
+    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), UIScale.round(8), 0) end
+    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.visible_entries, row_h, UIScale.round(6), height)
     if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
     for index = first, last do
       local entry = state.visible_entries[index]
       if entry and entry.kind == "folder" and entry.folder then
-        draw_folder_row(app, settings, entry.folder, index, math.max(80, width - 12))
+        draw_folder_row(app, settings, entry.folder, index, math.max(UIScale.round(80), width - UIScale.round(12)))
       elseif entry and entry.kind == "project" and entry.project then
-        draw_project_row(app, settings, entry.project, index, math.max(80, width - 12))
+        draw_project_row(app, settings, entry.project, index, math.max(UIScale.round(80), width - UIScale.round(12)))
       end
     end
     if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
@@ -1367,7 +1368,7 @@ local function metadata_line(ctx, label, value)
   value = tostring(value or "")
   if value == "" then return end
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
-  r.ImGui_SameLine(ctx, 72)
+  r.ImGui_SameLine(ctx, UIScale.round(72))
   r.ImGui_TextColored(ctx, Theme.colors.text, value)
 end
 
@@ -1387,7 +1388,7 @@ end
 
 local function draw_panel_header(ctx, label, collapsed, id)
   local button_label = (collapsed and ">" or "v") .. "##" .. id
-  if r.ImGui_Button(ctx, button_label, 22, 0) then collapsed = not collapsed end
+  if r.ImGui_Button(ctx, button_label, UIScale.round(22), 0) then collapsed = not collapsed end
   r.ImGui_SameLine(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.text, label)
   return collapsed
@@ -1395,7 +1396,7 @@ end
 
 local function draw_playback_collapse_button(ctx)
   local collapsed = state.playback_panel_collapsed == true
-  if r.ImGui_Button(ctx, (collapsed and ">" or "v") .. "##project_playback_collapse", 22, 0) then
+  if r.ImGui_Button(ctx, (collapsed and ">" or "v") .. "##project_playback_collapse", UIScale.round(22), 0) then
     state.playback_panel_collapsed = not collapsed
     collapsed = state.playback_panel_collapsed == true
   end
@@ -1405,8 +1406,8 @@ end
 
 local function draw_playback_placeholder(ctx, text)
   local collapsed = draw_playback_collapse_button(ctx)
-  r.ImGui_SameLine(ctx, 0, 6)
-  r.ImGui_Button(ctx, "Play##project_preview_placeholder", 58, 0)
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
+  r.ImGui_Button(ctx, "Play##project_preview_placeholder", UIScale.text_button_w(ctx, "Play", 58), 0)
   if collapsed then return end
   r.ImGui_SameLine(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, text)
@@ -1424,10 +1425,10 @@ local function draw_project_preview_transport(app, settings, project, width)
   local time_text = format_project_length(position) .. " / " .. (length_text ~= "" and length_text or "0:00")
   local preview_label = preview_path and "Preview" or "No preview"
   local collapsed = draw_playback_collapse_button(ctx)
-  r.ImGui_SameLine(ctx, 0, 6)
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
   if disabled then
-    r.ImGui_Button(ctx, "Play##project_preview", 58, 0)
-  elseif r.ImGui_Button(ctx, button_label, 58, 0) then
+    r.ImGui_Button(ctx, "Play##project_preview", UIScale.text_button_w(ctx, "Play", 58), 0)
+  elseif r.ImGui_Button(ctx, button_label, UIScale.text_button_w(ctx, "Stop", 58), 0) then
     if is_playing then stop_project_preview() else start_project_preview(app, settings, project) end
   end
   if collapsed then return end
@@ -1438,7 +1439,7 @@ local function draw_project_preview_transport(app, settings, project, width)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, time_text)
   if r.ImGui_ProgressBar then
     local progress = length > 0 and math.max(0, math.min(1, position / length)) or 0
-    r.ImGui_ProgressBar(ctx, progress, -1, 6, "")
+    r.ImGui_ProgressBar(ctx, progress, -1, UIScale.round(6), "")
   end
   if r.ImGui_SliderDouble then
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Volume")
@@ -1455,7 +1456,7 @@ local function draw_project_preview_transport(app, settings, project, width)
     end
     r.ImGui_PopItemWidth(ctx)
   end
-  local button_gap = 8
+  local button_gap = UIScale.gap(8)
   local action_row_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
   local action_button_w = math.max(1, (action_row_w - button_gap) * 0.5)
   if r.ImGui_Button(ctx, "Make Preview", action_button_w, 0) then r.ImGui_OpenPopup(ctx, "##project_preview_make") end
@@ -1482,23 +1483,23 @@ local function draw_project_preview_transport(app, settings, project, width)
       local is_active = active == entry.name or (not active and index == 1)
       r.ImGui_TextColored(ctx, is_active and Theme.colors.accent or Theme.colors.text, (is_active and "* " or "  ") .. entry.name)
       local playing_this = state.preview_path and normalize_path(state.preview_path):lower() == normalize_path(entry.path):lower()
-      if r.ImGui_Button(ctx, playing_this and "Stop" or "Play", 54, 0) then
+      if r.ImGui_Button(ctx, playing_this and "Stop" or "Play", UIScale.text_button_w(ctx, "Stop", 54), 0) then
         if playing_this then stop_project_preview() else play_project_preview_file(app, settings, target, entry.path) end
       end
       r.ImGui_SameLine(ctx)
-      if r.ImGui_Button(ctx, "Set Active", 84, 0) then
+      if r.ImGui_Button(ctx, "Set Active", UIScale.text_button_w(ctx, "Set Active", 84), 0) then
         set_active_preview_filename(target.path, entry.name)
         clear_project_preview_cache(target.path)
       end
       r.ImGui_SameLine(ctx)
-      if r.ImGui_Button(ctx, "Delete", 64, 0) then
+      if r.ImGui_Button(ctx, "Delete", UIScale.text_button_w(ctx, "Delete", 64), 0) then
         local result = r.ShowMessageBox("Delete preview file?\n\n" .. entry.name, "Confirm", 4)
         if result == 6 then delete_project_preview_file(app, target, entry) end
       end
       r.ImGui_PopID(ctx)
     end
     r.ImGui_Separator(ctx)
-    if r.ImGui_Button(ctx, "Close", 80, 0) then r.ImGui_CloseCurrentPopup(ctx) end
+    if r.ImGui_Button(ctx, "Close", UIScale.text_button_w(ctx, "Close", 80), 0) then r.ImGui_CloseCurrentPopup(ctx) end
     r.ImGui_EndPopup(ctx)
   end
 end
@@ -1517,13 +1518,13 @@ local function draw_project_detail(app, project, width, height)
     if not project then
       if state.detail_panel_collapsed ~= true then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Select a project") end
     elseif state.detail_panel_collapsed ~= true then
-      local header_h = r.ImGui_GetFrameHeight and r.ImGui_GetFrameHeight(ctx) or 22
-      local available_h = math.max(52, height - header_h - 8)
-      local gap = 10
-      local meta_w = width > 430 and 176 or 146
-      local cover_w = math.max(52, width - meta_w - gap - 10)
-      local cover_bottom_padding = 14
-      local cover_h = math.max(52, available_h - cover_bottom_padding)
+      local header_h = r.ImGui_GetFrameHeight and r.ImGui_GetFrameHeight(ctx) or UIScale.round(22)
+      local available_h = math.max(UIScale.round(52), height - header_h - UIScale.round(8))
+      local gap = UIScale.gap(10)
+      local meta_w = width > UIScale.round(430) and UIScale.round(176) or UIScale.round(146)
+      local cover_w = math.max(UIScale.round(52), width - meta_w - gap - UIScale.round(10))
+      local cover_bottom_padding = UIScale.round(14)
+      local cover_h = math.max(UIScale.round(52), available_h - cover_bottom_padding)
       local x, y = r.ImGui_GetCursorScreenPos(ctx)
       local draw_list = r.ImGui_GetWindowDrawList(ctx)
       draw_cover(ctx, draw_list, load_cover(ctx, project), x, y, x + cover_w, y + cover_h, project.name, { no_frame = true, align_top_left = true, no_image_box = true })
@@ -1582,14 +1583,14 @@ local function draw_settings_popup(app, settings)
     if changed then set_mode_pending_location(settings, mode, value); if app.save_settings then app.save_settings() end end
     if r.JS_Dialog_BrowseForFolder then
       r.ImGui_SameLine(ctx)
-      if r.ImGui_Button(ctx, "Browse", 72, 0) then
+      if r.ImGui_Button(ctx, "Browse", UIScale.text_button_w(ctx, "Browse", 72), 0) then
         local ok, folder = r.JS_Dialog_BrowseForFolder("Choose " .. mode_def.item_label .. " folder", pending)
         if ok and folder and folder ~= "" then set_mode_pending_location(settings, mode, folder); if add_location(app, settings, folder) then start_scan(app, settings) elseif app.save_settings then app.save_settings() end end
       end
     end
-    if r.ImGui_Button(ctx, "Add Location", 110, 0) then if add_location(app, settings, get_mode_pending_location(settings, mode)) then start_scan(app, settings) end end
+    if r.ImGui_Button(ctx, "Add Location", UIScale.text_button_w(ctx, "Add Location", 110), 0) then if add_location(app, settings, get_mode_pending_location(settings, mode)) then start_scan(app, settings) end end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Remove Current", 120, 0) then remove_current_location(app, settings); start_scan(app, settings) end
+    if r.ImGui_Button(ctx, "Remove Current", UIScale.text_button_w(ctx, "Remove Current", 120), 0) then remove_current_location(app, settings); start_scan(app, settings) end
     local c, v = r.ImGui_Checkbox(ctx, "Recursive scan", settings.recursive == true)
     if c then settings.recursive = v; if app.save_settings then app.save_settings() end end
     c, v = r.ImGui_Checkbox(ctx, "Folder view", settings.folder_view == true)
@@ -1623,10 +1624,10 @@ local function draw_toolbar(app, settings)
   local ctx = app.ctx
   local mode, mode_def = active_mode(settings)
   local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
-  local button_w = 28
-  local spacing = 6
-  local mode_w = math.min(126, math.max(92, avail_w * 0.28))
-  local combo_w = math.max(70, avail_w - mode_w - (button_w * 2) - (spacing * 3))
+  local button_w = UIScale.round(28)
+  local spacing = UIScale.gap(6)
+  local mode_w = math.min(UIScale.round(126), math.max(UIScale.round(92), avail_w * 0.28))
+  local combo_w = math.max(UIScale.round(70), avail_w - mode_w - (button_w * 2) - (spacing * 3))
   r.ImGui_SetNextItemWidth(ctx, mode_w)
   if r.ImGui_BeginCombo(ctx, "##project_browser_mode", mode_def.short) then
     for _, item in ipairs(mode_order) do
@@ -1693,21 +1694,21 @@ function M.draw(app)
   draw_toolbar(app, settings)
   draw_settings_popup(app, settings)
   local width, height = r.ImGui_GetContentRegionAvail(ctx)
-  local strip_h = (r.ImGui_GetFrameHeight and r.ImGui_GetFrameHeight(ctx) or 22) + 18
-  local detail_h = state.detail_panel_collapsed == true and strip_h or math.min(166, math.max(150, height * 0.25))
-  local playback_h = state.playback_panel_collapsed == true and strip_h or 112
+  local strip_h = (r.ImGui_GetFrameHeight and r.ImGui_GetFrameHeight(ctx) or UIScale.round(22)) + UIScale.round(18)
+  local detail_h = state.detail_panel_collapsed == true and strip_h or math.min(UIScale.round(166), math.max(UIScale.round(150), height * 0.25))
+  local playback_h = state.playback_panel_collapsed == true and strip_h or UIScale.round(112)
   local bottom_margin = 1
-  local spacing_h = 18 + bottom_margin
+  local spacing_h = UIScale.round(18) + bottom_margin
   local list_h = height - detail_h - playback_h - spacing_h
-  if list_h < 76 then
-    local shortage = 76 - list_h
-    local detail_min = state.detail_panel_collapsed == true and strip_h or 132
-    local playback_min = state.playback_panel_collapsed == true and strip_h or 96
+  if list_h < UIScale.round(76) then
+    local shortage = UIScale.round(76) - list_h
+    local detail_min = state.detail_panel_collapsed == true and strip_h or UIScale.round(132)
+    local playback_min = state.playback_panel_collapsed == true and strip_h or UIScale.round(96)
     local detail_reduce = math.min(shortage, math.max(0, detail_h - detail_min))
     detail_h = detail_h - detail_reduce
     shortage = shortage - detail_reduce
     if shortage > 0 then playback_h = math.max(playback_min, playback_h - shortage) end
-    list_h = math.max(48, height - detail_h - playback_h - spacing_h)
+    list_h = math.max(UIScale.round(48), height - detail_h - playback_h - spacing_h)
   end
   draw_project_list(app, settings, width, list_h)
   draw_project_detail(app, state.selected_project, width, detail_h)

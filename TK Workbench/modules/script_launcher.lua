@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 local json = require("core.json")
 
 local M = {
@@ -476,7 +477,8 @@ local function draw_form_popup(app)
   local name = tostring(state.form_name or ""):match("^%s*(.-)%s*$")
   local can_save = cmd ~= "" and name ~= "" and not command_exists_elsewhere(cmd, state.edit_index)
   if not can_save and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
-  if r.ImGui_Button(ctx, "Save##script_launcher_save", 70, 0) and can_save then
+  local popup_button_w = UIScale.text_button_w(ctx, "Cancel", 70)
+  if r.ImGui_Button(ctx, "Save##script_launcher_save", popup_button_w, 0) and can_save then
     if state.popup_mode == "edit" and state.edit_index and state.entries[state.edit_index] then
       local entry = state.entries[state.edit_index]
       entry.name = name
@@ -503,18 +505,19 @@ local function draw_form_popup(app)
   end
   if not can_save and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Cancel##script_launcher_cancel", 70, 0) then r.ImGui_CloseCurrentPopup(ctx) end
+  if r.ImGui_Button(ctx, "Cancel##script_launcher_cancel", popup_button_w, 0) then r.ImGui_CloseCurrentPopup(ctx) end
   if state.popup_mode == "edit" then
     r.ImGui_SameLine(ctx)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.danger)
-    if r.ImGui_Button(ctx, "Delete##script_launcher_delete", 70, 0) then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.danger, Theme.colors.text, nil, 4.5))
+    if r.ImGui_Button(ctx, "Delete##script_launcher_delete", popup_button_w, 0) then
       if state.edit_index then table.remove(state.entries, state.edit_index) end
       save_entries()
       state.dirty_filter = true
       app.status = "Deleted launcher item"
       r.ImGui_CloseCurrentPopup(ctx)
     end
-    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_PopStyleColor(ctx, 2)
   end
   if not can_save then
     r.ImGui_TextColored(ctx, Theme.colors.warning, command_exists_elsewhere(cmd, state.edit_index) and "Command already exists" or "Name and command are required")
@@ -566,14 +569,14 @@ local function draw_entry_card(app, item, width, height)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local bg = hovered and Theme.colors.header_hover or Theme.colors.frame_bg
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, 4)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, 4, 0, 1)
-  local image_h = math.max(28, height - 28)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, UIScale.px(4), 0, UIScale.px(1))
+  local image_h = math.max(UIScale.round(28), height - UIScale.round(28))
   local texture = load_texture(ctx, entry.thumb)
   if texture and r.ImGui_DrawList_AddImage then
     local ok_size, image_w, image_h_source = pcall(r.ImGui_Image_GetSize, texture)
     if ok_size and image_w and image_h_source and image_w > 0 and image_h_source > 0 then
-      local inset = 8
+      local inset = UIScale.round(8)
       local inner_w = width - inset * 2
       local inner_h = image_h - inset * 2
       local scale = math.min(inner_w / image_w, inner_h / image_h_source)
@@ -590,8 +593,8 @@ local function draw_entry_card(app, item, width, height)
     r.ImGui_DrawList_AddText(draw_list, x + (width - tw) * 0.5, y + (image_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, command_id and Theme.colors.accent or Theme.colors.warning, mark)
   end
   local label = tostring(entry.name or entry.cmd)
-  r.ImGui_DrawList_PushClipRect(draw_list, x + 6, y + image_h + 3, x + width - 6, y + height - 3, true)
-  r.ImGui_DrawList_AddText(draw_list, x + 6, y + image_h + 4, Theme.colors.text, label)
+  r.ImGui_DrawList_PushClipRect(draw_list, x + UIScale.round(6), y + image_h + UIScale.round(3), x + width - UIScale.round(6), y + height - UIScale.round(3), true)
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(6), y + image_h + UIScale.round(4), Theme.colors.text, label)
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then execute_entry(app, entry) end
   if r.ImGui_BeginPopupContextItem(ctx, "##script_launcher_tile_ctx") then
@@ -613,11 +616,11 @@ end
 
 local function draw_grid(app, settings, items, width)
   local ctx = app.ctx
-  local spacing = 8
-  local min_card_w = 150
+  local spacing = UIScale.round(8)
+  local min_card_w = UIScale.round(150)
   local columns = math.max(1, math.floor((width + spacing) / (min_card_w + spacing)))
   local card_w = (width - spacing * (columns - 1)) / columns
-  local card_h = math.floor(card_w * 0.72) + 28
+  local card_h = math.floor(card_w * 0.72) + UIScale.round(28)
   local index = 1
   while index <= #items do
     local row_columns = math.min(columns, #items - index + 1)
@@ -680,7 +683,7 @@ function M.draw(app)
   local settings = ensure_settings(app)
   if not state.loaded then load_entries(app) end
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local button_h = UIScale.button_h(ctx)
   if r.ImGui_Button(ctx, "+##script_launcher_add", button_h, button_h) then
     begin_form("add", nil, nil)
     r.ImGui_OpenPopup(ctx, "Add Script")
@@ -696,13 +699,14 @@ function M.draw(app)
   r.ImGui_SameLine(ctx)
   local labels_active = settings.show_labels ~= false
   if not labels_active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x555555FF) end
-  if r.ImGui_Button(ctx, "Labels##script_launcher_labels", 58, button_h) then
+  local labels_w = UIScale.text_button_w(ctx, "Labels", 58)
+  if r.ImGui_Button(ctx, "Labels##script_launcher_labels", labels_w, button_h) then
     settings.show_labels = not labels_active
     if app.save_settings then app.save_settings() end
   end
   if not labels_active then r.ImGui_PopStyleColor(ctx) end
   r.ImGui_SameLine(ctx)
-  local search_w = math.max(80, (avail_w or 320) - button_h * 2 - 58 - 32)
+  local search_w = math.max(UIScale.round(80), (avail_w or UIScale.round(320)) - button_h * 2 - labels_w - UIScale.round(32))
   r.ImGui_SetNextItemWidth(ctx, search_w)
   local search_changed, search = r.ImGui_InputTextWithHint(ctx, "##script_launcher_search", "Search scripts", settings.search_term or "")
   if search_changed then settings.search_term = search; state.dirty_filter = true; if app.save_settings then app.save_settings() end end
@@ -718,7 +722,7 @@ function M.draw(app)
   trim_image_cache(settings)
   refresh_filter(settings)
   local info_h = UI.info_line_height(ctx)
-  local list_h = math.max(80, (avail_h or 300) - button_h - info_h)
+  local list_h = math.max(UIScale.round(80), (avail_h or UIScale.round(300)) - button_h - info_h)
   local list_visible = r.ImGui_BeginChild(ctx, "##script_launcher_list", 0, list_h, 0)
   local list_ok = true
   local list_err = nil
@@ -733,11 +737,11 @@ function M.draw(app)
         for _, label in ipairs(order) do
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
           r.ImGui_Separator(ctx)
-          draw_grid(app, settings, groups[label], math.max(80, avail_w or 320))
+          draw_grid(app, settings, groups[label], math.max(UIScale.round(80), avail_w or UIScale.round(320)))
           r.ImGui_Spacing(ctx)
         end
       else
-        draw_grid(app, settings, state.filtered, math.max(80, avail_w or 320))
+        draw_grid(app, settings, state.filtered, math.max(UIScale.round(80), avail_w or UIScale.round(320)))
       end
     end)
   end

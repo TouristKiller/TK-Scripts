@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 local ActionClipboard = require("modules.action_clipboard")
 
 local M = {
@@ -268,7 +269,7 @@ end
 local function draw_action_row(app, action, suffix)
   local ctx = app.ctx
   local active = action.state == 1
-  if active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.danger) end
+  if active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds({ Theme.colors.window_bg, Theme.colors.child_bg, Theme.colors.frame_bg }, Theme.colors.danger, Theme.colors.text, 4.5)) end
   local prefix = active and "[ON] " or ""
   if r.ImGui_Selectable(ctx, prefix .. action.name .. "##" .. suffix .. tostring(action.id), false, r.ImGui_SelectableFlags_AllowOverlap()) then
     execute_action(app, action)
@@ -290,9 +291,9 @@ function M.draw(app)
   if not state.loaded then load_actions() end
 
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local button_h = UIScale.button_h(ctx)
   local button_w = button_h
-  r.ImGui_PushItemWidth(ctx, math.max(80, avail_w - (button_w * 3) - 24))
+  r.ImGui_PushItemWidth(ctx, math.max(UIScale.round(80), avail_w - (button_w * 3) - UIScale.round(24)))
   local changed, search = r.ImGui_InputTextWithHint(ctx, "##action_browser_search", "Search actions", state.search_term or "")
   if changed then
     state.search_term = search
@@ -325,7 +326,7 @@ function M.draw(app)
 
   local info_h = UI.info_line_height(ctx)
   local _, list_avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  local list_h = math.max(60, (list_avail_h or avail_h or 300) - info_h)
+  local list_h = math.max(UIScale.round(60), (list_avail_h or avail_h or UIScale.round(300)) - info_h)
   if r.ImGui_BeginChild(ctx, "##action_browser_list", 0, list_h, 0) then
     if state.show_categories then
       for _, category in ipairs(state.cached_items or {}) do

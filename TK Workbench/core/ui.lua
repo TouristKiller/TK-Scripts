@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local UIScale = require("core.ui_scale")
 
 local M = {}
 
@@ -101,7 +102,7 @@ end
 
 local function actual_info_line_height(ctx)
 	if not info_line_enabled() then return 0 end
-	return r.ImGui_GetTextLineHeight(ctx) + 12
+	return r.ImGui_GetTextLineHeight(ctx) + UIScale.round(12)
 end
 
 function M.info_line_height(ctx, force)
@@ -140,16 +141,21 @@ function M.draw_info_line(ctx, text, options)
 	local is_warning = options.severity == "warning"
 	local bg = options.bg or Theme.colors.frame_bg or 0x242424FF
 	local border = options.border or Theme.colors.border or 0x444444FF
-	local color = options.text_color or Theme.colors.text_dim or 0xA0A0A0FF
+	local color = Theme.text_for_background(bg, options.text_color or Theme.colors.text_dim or 0xA0A0A0FF, Theme.colors.text or 0xF0F0F0FF, 4.5)
 	local dot = is_error and (Theme.colors.danger or 0xBF616AFF) or (is_warning and (Theme.colors.warning or 0xEBCB8BFF) or (Theme.colors.accent or 0xD8DEE9FF))
 	local text_h = r.ImGui_GetTextLineHeight(ctx)
+	local top_pad = UIScale.round(2)
+	local text_pad = UIScale.round(18)
+	local right_pad = UIScale.round(6)
+	local dot_x = UIScale.round(9)
+	local dot_radius = UIScale.px(2.4)
 	local text_y = y + math.max(0, (height - text_h) * 0.5)
-	local text_x = x + 18
-	local display = fit_text(ctx, full_text, math.max(0, width - 26))
-	r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 2, x + width, y + height, bg, 4)
-	r.ImGui_DrawList_AddLine(draw_list, x, y + 2, x + width, y + 2, border, 1)
-	r.ImGui_DrawList_AddCircleFilled(draw_list, x + 9, y + height * 0.5 + 1, 2.4, dot, 12)
-	r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + 2, x + width - 6, y + height, true)
+	local text_x = x + text_pad
+	local display = fit_text(ctx, full_text, math.max(0, width - text_pad - right_pad))
+	r.ImGui_DrawList_AddRectFilled(draw_list, x, y + top_pad, x + width, y + height, bg, UIScale.px(4))
+	r.ImGui_DrawList_AddLine(draw_list, x, y + top_pad, x + width, y + top_pad, border, UIScale.px(1))
+	r.ImGui_DrawList_AddCircleFilled(draw_list, x + dot_x, y + height * 0.5 + UIScale.px(1), dot_radius, dot, 12)
+	r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + top_pad, x + width - right_pad, y + height, true)
 	r.ImGui_DrawList_AddText(draw_list, text_x, text_y + 1, color, display)
 	r.ImGui_DrawList_PopClipRect(draw_list)
 	local app = tooltip_app

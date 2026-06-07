@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 
 local M = {
   id = "timepiece",
@@ -359,7 +360,7 @@ end
 
 local function get_clock_font(ctx, font_size)
   if not r.ImGui_CreateFont then return nil end
-  font_size = math.max(14, math.floor((tonumber(font_size) or 24) + 0.5))
+  font_size = math.max(UIScale.round(14), math.floor((tonumber(font_size) or UIScale.round(24)) + 0.5))
   local key = tostring(font_size)
   if state.fonts[key] then return state.fonts[key] end
   local ok, font = pcall(r.ImGui_CreateFont, "sans-serif", font_size)
@@ -389,33 +390,33 @@ end
 local function draw_badge(ctx, label, value, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  local height = 26
+  local height = UIScale.round(26)
   r.ImGui_InvisibleButton(ctx, "##badge_" .. label, width, height)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local bg = hovered and Theme.colors.frame_hover or Theme.colors.frame_bg
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, 5)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, 5, 0, 1)
-  r.ImGui_DrawList_AddText(draw_list, x + 8, y + 6, Theme.colors.text_dim, label)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, UIScale.px(5))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, UIScale.px(5), 0, UIScale.px(1))
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(8), y + UIScale.round(6), Theme.colors.text_dim, label)
   local label_w = calc_text_width(ctx, label)
-  local value_text = fit_text(ctx, tostring(value or "-"), math.max(20, width - label_w - 26))
+  local value_text = fit_text(ctx, tostring(value or "-"), math.max(UIScale.round(20), width - label_w - UIScale.round(26)))
   local value_w = calc_text_width(ctx, value_text)
-  r.ImGui_DrawList_AddText(draw_list, x + width - value_w - 8, y + 6, Theme.colors.text, value_text)
+  r.ImGui_DrawList_AddText(draw_list, x + width - value_w - UIScale.round(8), y + UIScale.round(6), Theme.colors.text, value_text)
 end
 
 local function draw_alarm_bar(ctx, item, width)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  local height = 26
+  local height = UIScale.round(26)
   local color = item.color or Theme.colors.accent
   r.ImGui_InvisibleButton(ctx, "##alarm_" .. tostring(item.label), width, height)
   local bg = r.ImGui_IsItemHovered(ctx) and color_with_alpha(color, 0x38) or color_with_alpha(color, 0x24)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, 5)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, color_with_alpha(color, 0xAA), 5, 0, 1)
-  r.ImGui_DrawList_AddText(draw_list, x + 8, y + 6, Theme.colors.text_dim, item.label)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, UIScale.px(5))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, color_with_alpha(color, 0xAA), UIScale.px(5), 0, UIScale.px(1))
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(8), y + UIScale.round(6), Theme.colors.text_dim, item.label)
   local label_w = calc_text_width(ctx, item.label)
-  local value_text = fit_text(ctx, tostring(item.value or "-"), math.max(20, width - label_w - 26))
+  local value_text = fit_text(ctx, tostring(item.value or "-"), math.max(UIScale.round(20), width - label_w - UIScale.round(26)))
   local value_w = calc_text_width(ctx, value_text)
-  r.ImGui_DrawList_AddText(draw_list, x + width - value_w - 8, y + 6, Theme.colors.text, value_text)
+  r.ImGui_DrawList_AddText(draw_list, x + width - value_w - UIScale.round(8), y + UIScale.round(6), Theme.colors.text, value_text)
 end
 
 local function add_badge(items, label, value)
@@ -424,7 +425,7 @@ end
 
 local function draw_badge_items(ctx, items, x, y, width, row_h, gap)
   if #items == 0 then return end
-  local badge_w = math.max(80, (width - gap) * 0.5)
+  local badge_w = math.max(UIScale.round(80), (width - gap) * 0.5)
   for index, item in ipairs(items) do
     local column = (index - 1) % 2
     local row = math.floor((index - 1) / 2)
@@ -442,21 +443,21 @@ end
 
 local function draw_region_progress(ctx, draw_list, region, x, y, width)
   if not region then return end
-  local height = 22
+  local height = UIScale.round(22)
   local fill = native_color_to_u32(region.color, 0xEE) or Theme.colors.accent
   local track = color_with_alpha(fill, 0x24)
   local progress = math.max(0, math.min(1, tonumber(region.progress) or 0))
-  local label = fit_text(ctx, tostring(region.name or "Region") .. "  " .. tostring(math.floor(progress * 100 + 0.5)) .. "%", math.max(24, width - 18))
+  local label = fit_text(ctx, tostring(region.name or "Region") .. "  " .. tostring(math.floor(progress * 100 + 0.5)) .. "%", math.max(UIScale.round(24), width - UIScale.round(18)))
   local label_w = calc_text_width(ctx, label)
   r.ImGui_SetCursorScreenPos(ctx, x, y)
   r.ImGui_InvisibleButton(ctx, "##timepiece_region_progress", width, height)
   if r.ImGui_IsItemHovered(ctx) then
     r.ImGui_SetTooltip(ctx, tostring(region.name or "Region") .. " " .. tostring(math.floor(progress * 100 + 0.5)) .. "%")
   end
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, track, 4)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width * progress, y + height, fill, 4)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, color_with_alpha(fill, 0x88), 4, 0, 1)
-  r.ImGui_DrawList_AddText(draw_list, x + math.max(8, (width - label_w) * 0.5), y + 4, Theme.colors.text, label)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, track, UIScale.px(4))
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width * progress, y + height, fill, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, color_with_alpha(fill, 0x88), UIScale.px(4), 0, UIScale.px(1))
+  r.ImGui_DrawList_AddText(draw_list, x + math.max(UIScale.round(8), (width - label_w) * 0.5), y + UIScale.round(4), Theme.colors.text, label)
 end
 
 local function draw_toggle(ctx, app, settings, key, label)
@@ -484,7 +485,7 @@ end
 
 local function draw_visibility_slider(ctx, app, settings)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Clock text")
-  r.ImGui_SetNextItemWidth(ctx, 180)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
   local style_count = push_slider_style(ctx)
   local shown = (settings.clock_visibility or 1.0) * 100
   local changed, value = r.ImGui_SliderDouble(ctx, "Visibility##timepiece_clock_visibility", shown, 10, 100, "%.0f%%")
@@ -499,7 +500,7 @@ end
 local function draw_display_mode_combo(ctx, app, settings)
   local current = display_mode_def(settings.display_mode)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Display")
-  r.ImGui_SetNextItemWidth(ctx, 180)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
   if r.ImGui_BeginCombo(ctx, "##timepiece_display_mode", current.label) then
     for _, option in ipairs(display_modes) do
       local selected = settings.display_mode == option.id
@@ -515,11 +516,11 @@ end
 
 local function draw_alarm_settings(ctx, app, settings)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Alarm")
-  r.ImGui_SetNextItemWidth(ctx, 110)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(110))
   local changed, value = r.ImGui_InputText(ctx, "Time##timepiece_alarm_time", settings.alarm_time_text or defaults.alarm_time_text)
   if changed then settings.alarm_time_text = value; if app.save_settings then app.save_settings() end end
   local alarm_active = settings.alarm_target_epoch > 0 or settings.alarm_ringing == true
-  if r.ImGui_Button(ctx, alarm_active and "Stop alarm##timepiece_alarm" or "Arm alarm##timepiece_alarm", 110, 0) then
+  if r.ImGui_Button(ctx, alarm_active and "Stop alarm##timepiece_alarm" or "Arm alarm##timepiece_alarm", UIScale.text_button_w(ctx, "Stop alarm", 110), 0) then
     if alarm_active then
       settings.alarm_target_epoch = 0
       settings.alarm_ringing = false
@@ -542,11 +543,11 @@ local function draw_alarm_settings(ctx, app, settings)
   end
   r.ImGui_Separator(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Timer")
-  r.ImGui_SetNextItemWidth(ctx, 110)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(110))
   changed, value = r.ImGui_InputText(ctx, "Duration##timepiece_timer_duration", settings.timer_duration_text or defaults.timer_duration_text)
   if changed then settings.timer_duration_text = value; if app.save_settings then app.save_settings() end end
   local timer_active = settings.timer_target_epoch > 0 or settings.timer_ringing == true
-  if r.ImGui_Button(ctx, timer_active and "Stop timer##timepiece_timer" or "Start timer##timepiece_timer", 110, 0) then
+  if r.ImGui_Button(ctx, timer_active and "Stop timer##timepiece_timer" or "Start timer##timepiece_timer", UIScale.text_button_w(ctx, "Start timer", 110), 0) then
     if timer_active then
       settings.timer_target_epoch = 0
       settings.timer_ringing = false
@@ -570,8 +571,8 @@ local function draw_alarm_settings(ctx, app, settings)
 end
 
 local function draw_settings_button(ctx, app, settings, x, y, width)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
-  r.ImGui_SetCursorScreenPos(ctx, x + width - button_h - 6, y + 8)
+  local button_h = UIScale.button_h(ctx)
+  r.ImGui_SetCursorScreenPos(ctx, x + width - button_h - UIScale.round(6), y + UIScale.round(8))
   if r.ImGui_Button(ctx, "...##timepiece_settings", button_h, button_h) then r.ImGui_OpenPopup(ctx, "##timepiece_settings_popup") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Timepiece settings") end
   if r.ImGui_BeginPopup(ctx, "##timepiece_settings_popup") then
@@ -603,8 +604,8 @@ function M.draw(app)
   local settings = ensure_settings(app)
   update_alarm_state(app, settings)
   local available_w, available_h = r.ImGui_GetContentRegionAvail(ctx)
-  local width = math.max(120, available_w or 320)
-  local height = math.max(90, (available_h or 240) - UI.info_line_height(ctx))
+  local width = math.max(UIScale.round(120), available_w or UIScale.round(320))
+  local height = math.max(UIScale.round(90), (available_h or UIScale.round(240)) - UI.info_line_height(ctx))
   local status_text, status_color, play_state = play_state_info()
   local source_time, source_label = clock_position(play_state)
   local time_text = format_clock_position(source_time, settings)
@@ -634,35 +635,35 @@ function M.draw(app)
   if r.ImGui_BeginChild(ctx, "##timepiece_surface", 0, height, 0) then
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local x, y = r.ImGui_GetCursorScreenPos(ctx)
-    local panel_h = math.max(74, height)
-    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + panel_h, Theme.colors.child_bg, 6)
-    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + panel_h, Theme.colors.border, 6, 0, 1)
+    local panel_h = math.max(UIScale.round(74), height)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + panel_h, Theme.colors.child_bg, UIScale.px(6))
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + panel_h, Theme.colors.border, UIScale.px(6), 0, UIScale.px(1))
     draw_settings_button(ctx, app, settings, x, y, width)
-    r.ImGui_SetCursorScreenPos(ctx, x + 12, y + 12)
-    if show_top_text then draw_centered_text(ctx, top_text, settings.show_status ~= false and status_color or Theme.colors.text_dim, width - 24) end
+    r.ImGui_SetCursorScreenPos(ctx, x + UIScale.round(12), y + UIScale.round(12))
+    if show_top_text then draw_centered_text(ctx, top_text, settings.show_status ~= false and status_color or Theme.colors.text_dim, width - UIScale.round(24)) end
     local line_h = r.ImGui_GetTextLineHeight(ctx)
-    local clock_w = math.max(40, width - 22)
-    local info_x = x + 6
-    local info_w = math.max(40, width - 12)
-    local top_reserved = show_top_text and (line_h + (settings.clock_at_top ~= false and 8 or 22)) or (settings.clock_at_top ~= false and 8 or 12)
-    local badge_row_h = 26
-    local badge_gap = 6
+    local clock_w = math.max(UIScale.round(40), width - UIScale.round(22))
+    local info_x = x + UIScale.round(6)
+    local info_w = math.max(UIScale.round(40), width - UIScale.round(12))
+    local top_reserved = show_top_text and (line_h + (settings.clock_at_top ~= false and UIScale.round(8) or UIScale.round(22))) or (settings.clock_at_top ~= false and UIScale.round(8) or UIScale.round(12))
+    local badge_row_h = UIScale.round(26)
+    local badge_gap = UIScale.gap(6)
     local primary_rows = #primary_badges > 0 and 1 or 0
     local extra_rows = math.ceil(#extra_badges / 2)
     local badge_rows = primary_rows + extra_rows
     local badge_area_h = badge_rows > 0 and (badge_rows * badge_row_h + (badge_rows - 1) * badge_gap) or 0
     local show_region_bar = settings.show_region_progress ~= false and region ~= nil
-    local region_bar_h = show_region_bar and 22 or 0
+    local region_bar_h = show_region_bar and UIScale.round(22) or 0
     local next_marker_h = show_next_marker_badge and badge_row_h or 0
     local alarm_area_h = #alarms > 0 and (#alarms * badge_row_h + (#alarms - 1) * badge_gap) or 0
     local stack_h = badge_area_h
     if next_marker_h > 0 then stack_h = stack_h + (stack_h > 0 and badge_gap or 0) + next_marker_h end
     if alarm_area_h > 0 then stack_h = stack_h + (stack_h > 0 and badge_gap or 0) + alarm_area_h end
-    if region_bar_h > 0 then stack_h = stack_h + (stack_h > 0 and 8 or 0) + region_bar_h end
-    local bottom_reserved = stack_h + 18
+    if region_bar_h > 0 then stack_h = stack_h + (stack_h > 0 and UIScale.gap(8) or 0) + region_bar_h end
+    local bottom_reserved = stack_h + UIScale.round(18)
     local clock_h = math.max(line_h, panel_h - top_reserved - bottom_reserved)
     draw_clock_text(ctx, draw_list, time_text, color_with_alpha(clock_color, (settings.clock_visibility or 1.0) * 255), x, y + top_reserved, clock_w, clock_h, settings.clock_at_top ~= false)
-    local stack_y = y + panel_h - 10
+    local stack_y = y + panel_h - UIScale.round(10)
     local stack_has_items = false
     local function stack_reserve(item_h, gap_h)
       if item_h <= 0 then return stack_y end
@@ -684,7 +685,7 @@ function M.draw(app)
       draw_badge(ctx, next_marker_label or "NEXT", next_marker_value or "No marker", info_w)
     end
     if show_region_bar then
-      local region_y = stack_reserve(region_bar_h, 8)
+      local region_y = stack_reserve(region_bar_h, UIScale.gap(8))
       draw_region_progress(ctx, draw_list, region, info_x, region_y, info_w)
     end
     r.ImGui_EndChild(ctx)

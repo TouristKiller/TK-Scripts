@@ -1,7 +1,15 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.2.8
+-- @version 0.3.0
 -- @changelog:
+-- v0.3.0
+--   + Workbench: Added manual UI scaling presets for small touch screens through large high-resolution displays
+--   + Workbench: Added automatic contrast correction for readable text on light and dark theme backgrounds
+--   + Workbench modules: Scaled module controls, panels, lists, grids, cards, meters, previews, and editor layouts across the Workbench
+--   + Workbench: Fixed the module selector preview label after simplifying the title header
+-- v0.2.9
+--   + Tags: Restored previous TCP/MCP visibility when clearing active tag filters instead of forcing all tracks visible
+--   + Tags: Added Restore previous visibility alongside explicit Show all tracks
 -- v0.2.8
 --   + Workbench: Fixed ReaPack delivery for the Tags module by adding modules/track_tags.lua to the package index
 -- v0.2.7
@@ -137,11 +145,13 @@ local Theme = require("core.theme")
 local Selection = require("core.selection")
 local ModuleLoader = require("core.module_loader")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 
 local ctx = r.ImGui_CreateContext(SCRIPT_NAME)
 local config_name = rawget(_G, "TK_WORKBENCH_CONFIG_NAME") or "config.json"
 local config_path = script_path .. config_name
 local settings = Settings.load(config_path)
+UIScale.set(settings.ui_scale)
 
 local app = {
   ctx = ctx,
@@ -205,6 +215,60 @@ local theme_color_fields = {
   { key = "warning", label = "Warning" },
   { key = "danger", label = "Danger" }
 }
+
+local ui_scale_options = {
+  { label = "85%", value = 0.85 },
+  { label = "100%", value = 1.0 },
+  { label = "115%", value = 1.15 },
+  { label = "130%", value = 1.3 },
+  { label = "150%", value = 1.5 },
+  { label = "175%", value = 1.75 },
+  { label = "200%", value = 2.0 }
+}
+
+local function set_ui_scale(value)
+  local scale = UIScale.set(value)
+  app.settings.ui_scale = scale
+  return scale
+end
+
+local function ui_scale_label(scale)
+  scale = UIScale.normalize(scale)
+  for _, option in ipairs(ui_scale_options) do
+    if math.abs(scale - option.value) < 0.01 then return option.label end
+  end
+  return tostring(math.floor(scale * 100 + 0.5)) .. "%"
+end
+
+local function get_scaled_font()
+  local scale = set_ui_scale(app.settings.ui_scale or 1.0)
+  if math.abs(scale - 1.0) < 0.01 then return nil end
+  if not r.ImGui_CreateFont then return nil end
+  app.cache.ui_fonts = app.cache.ui_fonts or {}
+  if app.cache.ui_font_ctx ~= ctx then
+    app.cache.ui_fonts = {}
+    app.cache.ui_font_ctx = ctx
+  end
+  local font_size = math.max(10, math.floor(13 * scale + 0.5))
+  local key = tostring(font_size)
+  if app.cache.ui_fonts[key] then return app.cache.ui_fonts[key], font_size end
+  local ok, font = pcall(r.ImGui_CreateFont, "sans-serif", font_size)
+  if not ok or not font then return nil end
+  if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, font) end
+  app.cache.ui_fonts[key] = font
+  return font, font_size
+end
+
+local function push_scaled_font()
+  local font, font_size = get_scaled_font()
+  if not font or not r.ImGui_PushFont then return false end
+  local ok = pcall(r.ImGui_PushFont, ctx, font, font_size)
+  return ok == true
+end
+
+local function pop_scaled_font(pushed)
+  if pushed and r.ImGui_PopFont then pcall(r.ImGui_PopFont, ctx) end
+end
 
 local function save_settings()
   Settings.save(config_path, app.settings)
@@ -605,19 +669,22 @@ local function draw_module_card(module, card_width, card_height)
   local x2, y2 = r.ImGui_GetItemRectMax(ctx)
   local bg = active and Theme.colors.accent_soft or (hovered and Theme.colors.frame_hover or Theme.colors.frame_bg)
   local border = active and Theme.colors.accent or Theme.colors.border
-  local icon_color = (hovered or active) and Theme.colors.accent or Theme.colors.text_dim
-  r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, bg, 6)
-  r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, border, 6, 0, active and 1.6 or 0.8)
-  draw_module_icon(draw_list, module, (x1 + x2) * 0.5, y1 + 36, 48, icon_color)
+  local icon_color = Theme.text_for_background(bg, (hovered or active) and Theme.colors.accent or Theme.colors.text_dim, nil, 3)
+  local title_color = Theme.text_for_background(bg, Theme.colors.text, nil, 4.5)
+  local pad = UIScale.round(7)
+  local icon_size = UIScale.round(48)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, bg, UIScale.px(6))
+  r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, border, UIScale.px(6), 0, active and UIScale.px(1.6) or UIScale.px(0.8))
+  draw_module_icon(draw_list, module, (x1 + x2) * 0.5, y1 + UIScale.round(36), icon_size, icon_color)
   local title = tostring(module.title or module.id or "Module")
-  local lines = card_title_lines(title, card_width - 14)
+  local lines = card_title_lines(title, card_width - pad * 2)
   local line_h = r.ImGui_GetTextLineHeight(ctx)
-  local text_y = y2 - 12 - line_h * ((lines[2] ~= "" and 2 or 1))
-  r.ImGui_DrawList_PushClipRect(draw_list, x1 + 7, y1 + 5, x2 - 7, y2 - 5, true)
+  local text_y = y2 - UIScale.round(12) - line_h * ((lines[2] ~= "" and 2 or 1))
+  r.ImGui_DrawList_PushClipRect(draw_list, x1 + pad, y1 + UIScale.round(5), x2 - pad, y2 - UIScale.round(5), true)
   for index = 1, 2 do
     if lines[index] ~= "" then
       local text_w = calc_text_width(lines[index])
-      r.ImGui_DrawList_AddText(draw_list, x1 + math.max(7, (card_width - text_w) * 0.5), text_y + (index - 1) * line_h, Theme.colors.text, lines[index])
+      r.ImGui_DrawList_AddText(draw_list, x1 + math.max(pad, (card_width - text_w) * 0.5), text_y + (index - 1) * line_h, title_color, lines[index])
     end
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
@@ -647,15 +714,15 @@ local function draw_home_view()
   local child_visible = r.ImGui_BeginChild(ctx, "##home_module_tiles", 0, content_h, 0)
   if child_visible then
     local avail_w = r.ImGui_GetContentRegionAvail(ctx) or 1
-    local gap = 10
-    local min_card_w = 118
+    local gap = UIScale.gap(10)
+    local min_card_w = UIScale.round(118)
     local columns = math.max(1, math.floor((avail_w + gap) / (min_card_w + gap)))
     local card_w = math.max(1, math.floor((avail_w - gap * (columns - 1)) / columns))
     while columns > 1 and card_w < min_card_w do
       columns = columns - 1
       card_w = math.max(1, math.floor((avail_w - gap * (columns - 1)) / columns))
     end
-    local card_h = 104
+    local card_h = math.max(UIScale.round(104), math.ceil(r.ImGui_GetTextLineHeight(ctx) * 5.8))
     for index, module in ipairs(app.modules) do
       draw_module_card(module, card_w, card_h)
       if index % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
@@ -670,22 +737,23 @@ local function draw_home_view()
 end
 
 local function draw_top_bar()
-  local module = get_active_module()
-  local title = is_home_active() and "Home" or (module and (module.title or module.id) or "No modules")
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
-  local dot_size = 14
-  local dot_gap = 8
-  r.ImGui_TextColored(ctx, Theme.colors.accent, SCRIPT_NAME .. " - " .. title)
-  r.ImGui_SameLine(ctx, math.max(120, avail_w - (dot_size * 3) - (dot_gap * 2)))
+  local active_module = get_active_module()
+  local title = is_home_active() and "Home" or tostring(active_module and (active_module.title or active_module.id) or "Module")
+  local dot_size = UIScale.round(14)
+  local dot_gap = UIScale.gap(8)
+  local dot_unit = dot_size / 14
+  r.ImGui_TextColored(ctx, Theme.colors.accent, SCRIPT_NAME)
+  r.ImGui_SameLine(ctx, math.max(UIScale.round(120), avail_w - (dot_size * 3) - (dot_gap * 2)))
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local pin_x, pin_y = r.ImGui_GetCursorScreenPos(ctx)
   local pin_active = app.settings.auto_collapse_keep_expanded == true
   local pin_color = pin_active and Theme.colors.accent or Theme.colors.text_dim
   r.ImGui_DrawList_AddCircleFilled(draw_list, pin_x + dot_size * 0.5, pin_y + dot_size * 0.5, dot_size * 0.5, pin_active and Theme.colors.accent_soft or Theme.colors.frame_bg)
   r.ImGui_DrawList_AddCircle(draw_list, pin_x + dot_size * 0.5, pin_y + dot_size * 0.5, dot_size * 0.5, pin_active and Theme.colors.accent or Theme.colors.border, 16, 1)
-  r.ImGui_DrawList_AddLine(draw_list, pin_x + 5, pin_y + 4, pin_x + 9, pin_y + 4, pin_color, 1.5)
-  r.ImGui_DrawList_AddLine(draw_list, pin_x + 7, pin_y + 4, pin_x + 7, pin_y + 10, pin_color, 1.5)
-  r.ImGui_DrawList_AddLine(draw_list, pin_x + 5, pin_y + 10, pin_x + 9, pin_y + 10, pin_color, 1.5)
+  r.ImGui_DrawList_AddLine(draw_list, pin_x + 5 * dot_unit, pin_y + 4 * dot_unit, pin_x + 9 * dot_unit, pin_y + 4 * dot_unit, pin_color, UIScale.px(1.5))
+  r.ImGui_DrawList_AddLine(draw_list, pin_x + 7 * dot_unit, pin_y + 4 * dot_unit, pin_x + 7 * dot_unit, pin_y + 10 * dot_unit, pin_color, UIScale.px(1.5))
+  r.ImGui_DrawList_AddLine(draw_list, pin_x + 5 * dot_unit, pin_y + 10 * dot_unit, pin_x + 9 * dot_unit, pin_y + 10 * dot_unit, pin_color, UIScale.px(1.5))
   if r.ImGui_InvisibleButton(ctx, "##workbench_keep_expanded_pin", dot_size, dot_size) then
     app.settings.auto_collapse_keep_expanded = not pin_active
     if app.settings.auto_collapse_keep_expanded then
@@ -725,19 +793,20 @@ local function draw_top_bar()
   if r.ImGui_InvisibleButton(ctx, "##tk_workbench_home", home_size, home_size) then set_active_view(HOME_MODULE_ID) end
   local home_hovered = r.ImGui_IsItemHovered(ctx)
   local home_color = (is_home_active() or home_hovered) and Theme.colors.accent or Theme.colors.text_dim
-  r.ImGui_DrawList_AddRectFilled(draw_list, home_x, home_y, home_x + home_size, home_y + home_size, is_home_active() and Theme.colors.accent_soft or Theme.colors.frame_bg, 4)
-  r.ImGui_DrawList_AddRect(draw_list, home_x, home_y, home_x + home_size, home_y + home_size, home_hovered and Theme.colors.accent or Theme.colors.border, 4, 0, 1)
-  draw_home_icon(draw_list, home_x + 3, home_y + 3, home_size - 6, home_color)
+  r.ImGui_DrawList_AddRectFilled(draw_list, home_x, home_y, home_x + home_size, home_y + home_size, is_home_active() and Theme.colors.accent_soft or Theme.colors.frame_bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, home_x, home_y, home_x + home_size, home_y + home_size, home_hovered and Theme.colors.accent or Theme.colors.border, UIScale.px(4), 0, UIScale.px(1))
+  local icon_inset = UIScale.round(3)
+  draw_home_icon(draw_list, home_x + icon_inset, home_y + icon_inset, home_size - icon_inset * 2, home_color)
   if home_hovered then r.ImGui_SetTooltip(ctx, "Home") end
-  r.ImGui_SameLine(ctx, 0, 6)
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
   local split_x, split_y = r.ImGui_GetCursorScreenPos(ctx)
   if r.ImGui_InvisibleButton(ctx, "##tk_workbench_split", home_size, home_size) then r.ImGui_OpenPopup(ctx, "##tk_workbench_split_menu") end
   local split_hovered = r.ImGui_IsItemHovered(ctx)
   local split_active = split_view_available()
   local split_color = (split_active or split_hovered) and Theme.colors.accent or Theme.colors.text_dim
-  r.ImGui_DrawList_AddRectFilled(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_active and Theme.colors.accent_soft or Theme.colors.frame_bg, 4)
-  r.ImGui_DrawList_AddRect(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_hovered and Theme.colors.accent or Theme.colors.border, 4, 0, 1)
-  draw_split_icon(draw_list, split_x + 3, split_y + 3, home_size - 6, split_color)
+  r.ImGui_DrawList_AddRectFilled(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_active and Theme.colors.accent_soft or Theme.colors.frame_bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_hovered and Theme.colors.accent or Theme.colors.border, UIScale.px(4), 0, UIScale.px(1))
+  draw_split_icon(draw_list, split_x + icon_inset, split_y + icon_inset, home_size - icon_inset * 2, split_color)
   if split_hovered then r.ImGui_SetTooltip(ctx, "Split view") end
   if r.ImGui_BeginPopup(ctx, "##tk_workbench_split_menu") then
     local enabled = app.settings.split_view_enabled == true
@@ -765,7 +834,7 @@ local function draw_top_bar()
     end
     r.ImGui_EndPopup(ctx)
   end
-  r.ImGui_SameLine(ctx, 0, 6)
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
   local combo_flags = r.ImGui_ComboFlags_HeightLargest and r.ImGui_ComboFlags_HeightLargest() or 0
   r.ImGui_PushItemWidth(ctx, -1)
   if r.ImGui_BeginCombo(ctx, "##tk_workbench_module_select", title, combo_flags) then
@@ -785,13 +854,13 @@ end
 local function draw_theme_preview(colors)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  local size = 18
-  local gap = 6
+  local size = UIScale.round(18)
+  local gap = UIScale.gap(6)
   local swatches = { colors.window_bg, colors.child_bg, colors.frame_bg, colors.accent, colors.warning, colors.danger }
   for index, color in ipairs(swatches) do
     local left = x + (index - 1) * (size + gap)
-    r.ImGui_DrawList_AddRectFilled(draw_list, left, y, left + size, y + size, color, 3)
-    r.ImGui_DrawList_AddRect(draw_list, left, y, left + size, y + size, Theme.colors.border, 3, 0, 1)
+    r.ImGui_DrawList_AddRectFilled(draw_list, left, y, left + size, y + size, color, UIScale.px(3))
+    r.ImGui_DrawList_AddRect(draw_list, left, y, left + size, y + size, Theme.colors.border, UIScale.px(3), 0, UIScale.px(1))
   end
   r.ImGui_Dummy(ctx, (#swatches * (size + gap)) - gap, size)
 end
@@ -819,17 +888,19 @@ local function draw_theme_settings()
     end
   end
   if not app.cache.theme_settings_open then return end
-  r.ImGui_SetNextWindowSize(ctx, 360, 500, r.ImGui_Cond_Appearing())
+  local settings_w, settings_h = UIScale.window_size(360, 500)
+  r.ImGui_SetNextWindowSize(ctx, settings_w, settings_h, r.ImGui_Cond_Appearing())
   local visible, open = r.ImGui_Begin(ctx, "Theme Settings##tk_workbench_theme_settings", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
   app.cache.theme_settings_open = open
   if visible then
     r.ImGui_TextColored(ctx, Theme.colors.accent, "Theme Settings")
-    r.ImGui_SameLine(ctx, 330)
+    local close_size = UIScale.round(14)
+    r.ImGui_SameLine(ctx, math.max(UIScale.round(180), settings_w - close_size - UIScale.round(16)))
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + 7, close_y + 7, 7, 0xF7768EFF)
-    r.ImGui_DrawList_AddCircle(draw_list, close_x + 7, close_y + 7, 7, 0x3A1018FF, 16, 1)
-    if r.ImGui_InvisibleButton(ctx, "##theme_settings_close", 14, 14) then app.cache.theme_settings_open = false end
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0xF7768EFF)
+    r.ImGui_DrawList_AddCircle(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0x3A1018FF, 16, UIScale.px(1))
+    if r.ImGui_InvisibleButton(ctx, "##theme_settings_close", close_size, close_size) then app.cache.theme_settings_open = false end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preset")
@@ -863,7 +934,7 @@ local function draw_theme_settings()
       r.ImGui_EndCombo(ctx)
     end
     if Theme.is_reaper_theme_preset and Theme.is_reaper_theme_preset(current) then
-      if r.ImGui_Button(ctx, "Refresh REAPER Theme", 160, 24) then
+      if r.ImGui_Button(ctx, "Refresh REAPER Theme", UIScale.text_button_w(ctx, "Refresh REAPER Theme", 160, 8), UIScale.button_h(ctx, 24)) then
         app.settings.theme_preset = Theme.set_preset(current, app.settings.custom_themes)
         app.cache.saved_theme_preset = app.settings.theme_preset
         app.status = "REAPER theme colors refreshed"
@@ -875,7 +946,7 @@ local function draw_theme_settings()
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preview")
     draw_theme_preview(Theme.colors)
     r.ImGui_Spacing(ctx)
-    local child_visible = r.ImGui_BeginChild(ctx, "##theme_color_editor", 0, 190, 1)
+    local child_visible = r.ImGui_BeginChild(ctx, "##theme_color_editor", 0, UIScale.round(190), 1)
     if child_visible then
       local color_flags = r.ImGui_ColorEditFlags_NoInputs()
       for _, field in ipairs(theme_color_fields) do
@@ -933,14 +1004,14 @@ local function draw_theme_settings()
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete custom theme by name") end
     r.ImGui_Separator(ctx)
-    if r.ImGui_Button(ctx, "Reset", 90, 24) then
+    if r.ImGui_Button(ctx, "Reset", UIScale.text_button_w(ctx, "Reset", 90, 8), UIScale.button_h(ctx, 24)) then
       app.settings.theme_preset = Theme.set_preset("Graphite", app.settings.custom_themes)
       app.cache.saved_theme_preset = app.settings.theme_preset
       app.status = "Theme preset reset"
       save_settings()
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Close", 90, 24) then app.cache.theme_settings_open = false end
+    if r.ImGui_Button(ctx, "Close", UIScale.text_button_w(ctx, "Close", 90, 8), UIScale.button_h(ctx, 24)) then app.cache.theme_settings_open = false end
   end
   r.ImGui_End(ctx)
 end
@@ -951,18 +1022,38 @@ local function draw_preferences_settings()
     app.settings_panel = nil
   end
   if not app.cache.preferences_open then return end
-  r.ImGui_SetNextWindowSize(ctx, 300, 360, r.ImGui_Cond_Appearing())
+  local prefs_w, prefs_h = UIScale.window_size(300, 360)
+  r.ImGui_SetNextWindowSize(ctx, prefs_w, prefs_h, r.ImGui_Cond_Appearing())
   local visible, open = r.ImGui_Begin(ctx, "Preferences##tk_workbench_preferences", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
   app.cache.preferences_open = open
   if visible then
     r.ImGui_TextColored(ctx, Theme.colors.accent, "Preferences")
-    r.ImGui_SameLine(ctx, 270)
+    local close_size = UIScale.round(14)
+    r.ImGui_SameLine(ctx, math.max(UIScale.round(140), prefs_w - close_size - UIScale.round(16)))
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + 7, close_y + 7, 7, 0xF7768EFF)
-    r.ImGui_DrawList_AddCircle(draw_list, close_x + 7, close_y + 7, 7, 0x3A1018FF, 16, 1)
-    if r.ImGui_InvisibleButton(ctx, "##preferences_close", 14, 14) then app.cache.preferences_open = false end
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0xF7768EFF)
+    r.ImGui_DrawList_AddCircle(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0x3A1018FF, 16, UIScale.px(1))
+    if r.ImGui_InvisibleButton(ctx, "##preferences_close", close_size, close_size) then app.cache.preferences_open = false end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "UI scale")
+    r.ImGui_PushItemWidth(ctx, 140)
+    local current_scale = set_ui_scale(app.settings.ui_scale or 1.0)
+    if r.ImGui_BeginCombo(ctx, "##workbench_ui_scale", ui_scale_label(current_scale)) then
+      for _, option in ipairs(ui_scale_options) do
+        local selected = math.abs(current_scale - option.value) < 0.01
+        if r.ImGui_Selectable(ctx, option.label, selected) then
+          set_ui_scale(option.value)
+          app.cache.ui_fonts = {}
+          app.status = "UI scale: " .. option.label
+          save_settings()
+        end
+        if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
     r.ImGui_Separator(ctx)
     local changed, value = r.ImGui_Checkbox(ctx, "Hide scrollbars", app.settings.hide_scrollbars == true)
     if changed then
@@ -1441,22 +1532,26 @@ local function draw_module_error(module, err)
   local width = r.ImGui_GetContentRegionAvail(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  local height = 72
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, 5)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.warning, 5, 0, 1)
-  r.ImGui_SetCursorScreenPos(ctx, x + 10, y + 8)
-  r.ImGui_TextColored(ctx, Theme.colors.warning, tostring(module and (module.title or module.id) or "Module") .. " error")
-  r.ImGui_SetCursorScreenPos(ctx, x + 10, y + 30)
-  r.ImGui_PushTextWrapPos(ctx, x + width - 10)
-  r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(err))
+  local pad = UIScale.round(10)
+  local height = math.max(UIScale.round(72), math.ceil(r.ImGui_GetTextLineHeight(ctx) * 4.2))
+  local bg = Theme.colors.frame_bg
+  local warning_text = Theme.text_for_background(bg, Theme.colors.warning, nil, 4.5)
+  local detail_text = Theme.text_for_background(bg, Theme.colors.text_dim, Theme.colors.text, 4.5)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, UIScale.px(5))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.warning, UIScale.px(5), 0, UIScale.px(1))
+  r.ImGui_SetCursorScreenPos(ctx, x + pad, y + UIScale.round(8))
+  r.ImGui_TextColored(ctx, warning_text, tostring(module and (module.title or module.id) or "Module") .. " error")
+  r.ImGui_SetCursorScreenPos(ctx, x + pad, y + UIScale.round(30))
+  r.ImGui_PushTextWrapPos(ctx, x + width - pad)
+  r.ImGui_TextColored(ctx, detail_text, tostring(err))
   r.ImGui_PopTextWrapPos(ctx)
-  r.ImGui_SetCursorScreenPos(ctx, x, y + height + 6)
+  r.ImGui_SetCursorScreenPos(ctx, x, y + height + UIScale.round(6))
   r.ImGui_Dummy(ctx, 1, 1)
 end
 
 local function draw_module_instance(module, pane_id)
   if not module then
-    r.ImGui_TextColored(ctx, Theme.colors.warning, "No modules loaded")
+    r.ImGui_TextColored(ctx, Theme.text_for_backgrounds({ Theme.colors.window_bg, Theme.colors.child_bg }, Theme.colors.warning, nil, 4.5), "No modules loaded")
     return
   end
   r.ImGui_PushID(ctx, pane_id or module.id)
@@ -1474,7 +1569,7 @@ end
 
 local function draw_splitter(total_h)
   local width = r.ImGui_GetContentRegionAvail(ctx)
-  local height = 8
+  local height = UIScale.round(8)
   r.ImGui_InvisibleButton(ctx, "##workbench_splitter", width, height)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local active = r.ImGui_IsItemActive(ctx)
@@ -1638,7 +1733,10 @@ local function loop()
     ctx = r.ImGui_CreateContext(SCRIPT_NAME)
     app.ctx = ctx
     app.cache.tooltip = nil
+    app.cache.ui_fonts = {}
+    app.cache.ui_font_ctx = nil
   end
+  set_ui_scale(app.settings.ui_scale or 1.0)
   app.selection = Selection.scan()
   update_modules()
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY, "true", false)
@@ -1650,6 +1748,7 @@ local function loop()
   if (app.settings.theme_preset or "Graphite") ~= Theme.current_preset then
     app.settings.theme_preset = Theme.set_preset(app.settings.theme_preset or "Graphite", app.settings.custom_themes)
   end
+  local scaled_font_pushed = push_scaled_font()
   local theme_stack = Theme.push(ctx)
   local workspace_style_vars = push_workspace_style()
   local auto_collapse_style_vars, auto_collapse_style_colors = push_auto_collapse_style()
@@ -1682,6 +1781,7 @@ local function loop()
   pop_auto_collapse_style(auto_collapse_style_vars, auto_collapse_style_colors)
   pop_workspace_style(workspace_style_vars)
   Theme.pop(ctx, theme_stack)
+  pop_scaled_font(scaled_font_pushed)
   flush_window_size_if_dirty()
   if open and not app.close_requested then
     r.defer(loop)

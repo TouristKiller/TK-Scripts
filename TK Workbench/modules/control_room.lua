@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local UIScale = require("core.ui_scale")
 local MeterEngine = require("core.meter_engine")
 
 local M = {
@@ -1398,8 +1399,10 @@ end
 
 local function draw_meter_channel(ctx, draw_list, left_x, right_x, top_y, bottom_y, value, peak_value, peak_text, settings)
   local reset_clicked = false
-  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, right_x, bottom_y, 0x00000066, 2)
-  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, right_x, bottom_y, Theme.colors.border, 2, 0, 0.8)
+  local inset = UIScale.px(2)
+  local corner = UIScale.px(2)
+  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, right_x, bottom_y, 0x00000066, corner)
+  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, right_x, bottom_y, Theme.colors.border, corner, 0, UIScale.px(0.8))
   local fill_top = meter_value_y(value, top_y, bottom_y, settings)
   if value > 0.000001 then
     local warning_value = db_to_linear(-18, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db)
@@ -1407,39 +1410,39 @@ local function draw_meter_channel(ctx, draw_list, left_x, right_x, top_y, bottom
     local warning_y = meter_value_y(warning_value, top_y, bottom_y, settings)
     local danger_y = meter_value_y(danger_value, top_y, bottom_y, settings)
     if value > danger_value then
-      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + 2, warning_y, right_x - 2, bottom_y - 2, Theme.colors.accent, 1)
-      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + 2, danger_y, right_x - 2, warning_y, Theme.colors.warning, 1)
-      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + 2, fill_top, right_x - 2, danger_y, Theme.colors.danger, 1)
+      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + inset, warning_y, right_x - inset, bottom_y - inset, Theme.colors.accent, UIScale.px(1))
+      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + inset, danger_y, right_x - inset, warning_y, Theme.colors.warning, UIScale.px(1))
+      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + inset, fill_top, right_x - inset, danger_y, Theme.colors.danger, UIScale.px(1))
     elseif value > warning_value then
-      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + 2, warning_y, right_x - 2, bottom_y - 2, Theme.colors.accent, 1)
-      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + 2, fill_top, right_x - 2, warning_y, Theme.colors.warning, 1)
+      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + inset, warning_y, right_x - inset, bottom_y - inset, Theme.colors.accent, UIScale.px(1))
+      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + inset, fill_top, right_x - inset, warning_y, Theme.colors.warning, UIScale.px(1))
     else
-      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + 2, fill_top, right_x - 2, bottom_y - 2, Theme.colors.accent, 1)
+      r.ImGui_DrawList_AddRectFilled(draw_list, left_x + inset, fill_top, right_x - inset, bottom_y - inset, Theme.colors.accent, UIScale.px(1))
     end
   end
   if peak_value and peak_value > 0.000001 then
     local peak_y = meter_value_y(peak_value, top_y, bottom_y, settings)
     local peak_color = peak_value >= 1 and Theme.colors.danger or Theme.colors.warning
-    r.ImGui_DrawList_AddLine(draw_list, left_x + 1, peak_y, right_x - 1, peak_y, peak_color, 1.4)
+    r.ImGui_DrawList_AddLine(draw_list, left_x + UIScale.px(1), peak_y, right_x - UIScale.px(1), peak_y, peak_color, UIScale.px(1.4))
   end
-  if peak_text and bottom_y - top_y >= 44 then
-    local text = ellipsize_text(ctx, peak_text, math.max(0, right_x - left_x - 6))
+  if peak_text and bottom_y - top_y >= UIScale.round(44) then
+    local text = ellipsize_text(ctx, peak_text, math.max(0, right_x - left_x - UIScale.round(6)))
     local text_w = calc_text_width(ctx, text)
     local clipped = peak_value and peak_value >= 1
-    local badge_w = math.min(right_x - left_x - 6, text_w + 10)
-    local badge_h = 18
+    local badge_w = math.min(right_x - left_x - UIScale.round(6), text_w + UIScale.round(10))
+    local badge_h = UIScale.round(18)
     local badge_x = left_x + ((right_x - left_x) - badge_w) * 0.5
-    local badge_y = bottom_y - badge_h - 4
+    local badge_y = bottom_y - badge_h - UIScale.round(4)
     local text_x = badge_x + math.max(0, (badge_w - text_w) * 0.5)
-    local text_y = badge_y + 2
+    local text_y = badge_y + UIScale.round(2)
     local text_color = clipped and Theme.colors.danger or 0xFFFFFFFF
     local badge_border = clipped and Theme.colors.danger or 0xFFFFFF33
     local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
     local badge_hovered = mouse_x >= badge_x and mouse_x <= badge_x + badge_w and mouse_y >= badge_y and mouse_y <= badge_y + badge_h
-    r.ImGui_DrawList_PushClipRect(draw_list, left_x + 2, top_y + 2, right_x - 2, bottom_y - 2, true)
-    r.ImGui_DrawList_AddRectFilled(draw_list, badge_x + 1, badge_y + 1, badge_x + badge_w + 1, badge_y + badge_h + 1, 0x00000066, 4)
-    r.ImGui_DrawList_AddRectFilled(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, badge_hovered and 0x151515EE or 0x050505CC, 4)
-    r.ImGui_DrawList_AddRect(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, badge_hovered and 0xFFFFFFFF or badge_border, 4, 0, badge_hovered and 1.1 or (clipped and 1.2 or 0.8))
+    r.ImGui_DrawList_PushClipRect(draw_list, left_x + inset, top_y + inset, right_x - inset, bottom_y - inset, true)
+    r.ImGui_DrawList_AddRectFilled(draw_list, badge_x + UIScale.px(1), badge_y + UIScale.px(1), badge_x + badge_w + UIScale.px(1), badge_y + badge_h + UIScale.px(1), 0x00000066, UIScale.px(4))
+    r.ImGui_DrawList_AddRectFilled(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, badge_hovered and 0x151515EE or 0x050505CC, UIScale.px(4))
+    r.ImGui_DrawList_AddRect(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, badge_hovered and 0xFFFFFFFF or badge_border, UIScale.px(4), 0, badge_hovered and UIScale.px(1.1) or (clipped and UIScale.px(1.2) or UIScale.px(0.8)))
     r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
     r.ImGui_DrawList_PopClipRect(draw_list)
     if badge_hovered then
@@ -1452,26 +1455,28 @@ end
 
 local function draw_meter_scale(ctx, draw_list, left_x, right_x, top_y, bottom_y, settings)
   local height = math.max(0, bottom_y - top_y)
-  local marks = height < 190 and { 12, 6, 0, -6, -12, -24, -60 } or { 12, 9, 6, 3, 0, -3, -6, -9, -12, -18, -24, -36, -60 }
+  local marks = height < UIScale.round(190) and { 12, 6, 0, -6, -12, -24, -60 } or { 12, 9, 6, 3, 0, -3, -6, -9, -12, -18, -24, -36, -60 }
   local grid_color = color_with_alpha(Theme.colors.text_dim or Theme.colors.border, 0x4A)
   local zero_color = color_with_alpha(Theme.colors.text_dim or Theme.colors.border, 0x82)
+  local line_inset = UIScale.round(20)
+  local label_offset_y = UIScale.round(6)
   for _, db in ipairs(marks) do
     if db <= (settings.max_db or defaults.max_db) and db >= (settings.min_db or defaults.min_db) then
       local value = db_to_linear(db, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db)
       local y = meter_value_y(value, top_y, bottom_y, settings)
-      r.ImGui_DrawList_AddLine(draw_list, left_x + 20, y, right_x - 20, y, db == 0 and zero_color or grid_color, db == 0 and 1.4 or 1)
+      r.ImGui_DrawList_AddLine(draw_list, left_x + line_inset, y, right_x - line_inset, y, db == 0 and zero_color or grid_color, db == 0 and UIScale.px(1.4) or UIScale.px(1))
       local text = tostring(db)
       local left_text = db < 0 and (tostring(math.abs(db)) .. "-") or text
       local width = calc_text_width(ctx, text)
-      r.ImGui_DrawList_AddText(draw_list, left_x, y - 6, Theme.colors.text_dim, left_text)
-      r.ImGui_DrawList_AddText(draw_list, right_x - width, y - 6, Theme.colors.text_dim, text)
+      r.ImGui_DrawList_AddText(draw_list, left_x, y - label_offset_y, Theme.colors.text_dim, left_text)
+      r.ImGui_DrawList_AddText(draw_list, right_x - width, y - label_offset_y, Theme.colors.text_dim, text)
     end
   end
 end
 
 local function get_meter_value_font(ctx, font_size)
   if not r.ImGui_CreateFont then return nil end
-  font_size = math.max(16, math.floor((tonumber(font_size) or 20) + 0.5))
+  font_size = math.max(UIScale.round(16), math.floor((tonumber(font_size) or UIScale.round(20)) + 0.5))
   state.meter_value_fonts = type(state.meter_value_fonts) == "table" and state.meter_value_fonts or {}
   local key = tostring(font_size)
   if state.meter_value_fonts[key] then return state.meter_value_fonts[key] end
@@ -1494,19 +1499,20 @@ end
 local function draw_meter_info_box(ctx, draw_list, x, y, width, height, label, value, unit, value_color)
   local bg = color_with_alpha(Theme.colors.frame_bg or 0x000000FF, 0xE8)
   local border = color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0xB0)
-  local label_text = ellipsize_text(ctx, label, math.max(0, width - 10))
-  local value_text = ellipsize_text(ctx, unit and unit ~= "" and (value .. " " .. unit) or value, math.max(0, width - 10))
+  local pad = UIScale.round(5)
+  local label_text = ellipsize_text(ctx, label, math.max(0, width - pad * 2))
+  local value_text = ellipsize_text(ctx, unit and unit ~= "" and (value .. " " .. unit) or value, math.max(0, width - pad * 2))
   local label_w = calc_text_width(ctx, label_text)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, 4)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, border, 4, 0, 0.8)
-  r.ImGui_DrawList_AddText(draw_list, x + math.max(5, (width - label_w) * 0.5), y + 5, Theme.colors.text_dim, label_text)
-  local current_font_size = r.ImGui_GetFontSize and (r.ImGui_GetFontSize(ctx) or 13) or 13
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, border, UIScale.px(4), 0, UIScale.px(0.8))
+  r.ImGui_DrawList_AddText(draw_list, x + math.max(pad, (width - label_w) * 0.5), y + pad, Theme.colors.text_dim, label_text)
+  local current_font_size = r.ImGui_GetFontSize and (r.ImGui_GetFontSize(ctx) or UIScale.round(13)) or UIScale.round(13)
   local value_font_size = math.max(19, math.floor(current_font_size * 1.55 + 0.5))
   local value_font = get_meter_value_font(ctx, value_font_size)
   local scale = value_font_size / math.max(1, current_font_size)
   local value_w = calc_text_width(ctx, value_text) * scale
-  local value_x = x + math.max(5, (width - value_w) * 0.5)
-  local value_y = y + height - value_font_size - 14
+  local value_x = x + math.max(pad, (width - value_w) * 0.5)
+  local value_y = y + height - value_font_size - UIScale.round(14)
   draw_meter_value_text(ctx, draw_list, value_x, value_y, value_color or Theme.colors.text, value_text, value_font_size, value_font)
 end
 
@@ -1560,25 +1566,25 @@ local function draw_meter_settings_popup(app, settings)
   end
   r.ImGui_Separator(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Target LUFS")
-  r.ImGui_SetNextItemWidth(ctx, 170)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
   local target_changed, target_value = r.ImGui_SliderDouble(ctx, "##control_room_meter_target", tonumber(settings.meter_target_lufs) or MeterEngine.default_target_lufs, -24, -6, "%.1f")
   if target_changed then
     settings.meter_target_lufs = target_value
     if app.save_settings then app.save_settings() end
   end
-  if r.ImGui_Button(ctx, "-14##control_room_meter_target_14", 48, 0) then settings.meter_target_lufs = -14; if app.save_settings then app.save_settings() end end
+  if r.ImGui_Button(ctx, "-14##control_room_meter_target_14", UIScale.text_button_w(ctx, "-14", 48, 6), 0) then settings.meter_target_lufs = -14; if app.save_settings then app.save_settings() end end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "-16##control_room_meter_target_16", 48, 0) then settings.meter_target_lufs = -16; if app.save_settings then app.save_settings() end end
+  if r.ImGui_Button(ctx, "-16##control_room_meter_target_16", UIScale.text_button_w(ctx, "-16", 48, 6), 0) then settings.meter_target_lufs = -16; if app.save_settings then app.save_settings() end end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "-23##control_room_meter_target_23", 48, 0) then settings.meter_target_lufs = -23; if app.save_settings then app.save_settings() end end
+  if r.ImGui_Button(ctx, "-23##control_room_meter_target_23", UIScale.text_button_w(ctx, "-23", 48, 6), 0) then settings.meter_target_lufs = -23; if app.save_settings then app.save_settings() end end
   r.ImGui_Separator(ctx)
-  if r.ImGui_Button(ctx, "Default##control_room_meter_display_default", 84, 0) then
+  if r.ImGui_Button(ctx, "Default##control_room_meter_display_default", UIScale.text_button_w(ctx, "Default", 84, 8), 0) then
     settings.meter_display_items = copy_default(MeterEngine.default_display_items)
     settings.meter_target_lufs = MeterEngine.default_target_lufs
     if app.save_settings then app.save_settings() end
   end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Close##control_room_meter_display_close", 72, 0) then r.ImGui_CloseCurrentPopup(ctx) end
+  if r.ImGui_Button(ctx, "Close##control_room_meter_display_close", UIScale.text_button_w(ctx, "Close", 72, 8), 0) then r.ImGui_CloseCurrentPopup(ctx) end
   r.ImGui_EndPopup(ctx)
 end
 
@@ -1604,75 +1610,78 @@ local function draw_lane(app, lane, settings, width, height)
   local hovered = mouse_x >= left_x and mouse_x <= right_x and mouse_y >= top_y and mouse_y <= bottom_y
   local bg = hovered and Theme.colors.frame_hover or Theme.colors.frame_bg
   local border = enabled and Theme.colors.border or 0xFFFFFF22
-  local text_color = enabled and Theme.colors.text or Theme.colors.text_dim
-  local title_color = enabled and Theme.colors.accent or Theme.colors.text_dim
-  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, right_x, bottom_y, bg, 6)
-  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, right_x, bottom_y, border, 6, 0, hovered and 1.4 or 0.8)
+  local text_color = Theme.text_for_background(bg, enabled and Theme.colors.text or Theme.colors.text_dim, Theme.colors.text, 4.5)
+  local title_color = Theme.text_for_background(bg, enabled and Theme.colors.accent or Theme.colors.text_dim, Theme.colors.text, 4.5)
+  local subtitle_color = Theme.text_for_background(bg, Theme.colors.text_dim, Theme.colors.text, 4.5)
+  local pad = UIScale.round(8)
+  local corner = UIScale.px(6)
+  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, right_x, bottom_y, bg, corner)
+  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, right_x, bottom_y, border, corner, 0, hovered and UIScale.px(1.4) or UIScale.px(0.8))
   local led_hovered = false
   local solo_hovered = false
-  r.ImGui_DrawList_PushClipRect(draw_list, left_x + 8, top_y + 6, right_x - 8, top_y + 26, true)
-  r.ImGui_DrawList_AddText(draw_list, left_x + 9, top_y + 8, title_color, ellipsize_text(ctx, lane.label, right_x - left_x - 17))
+  r.ImGui_DrawList_PushClipRect(draw_list, left_x + pad, top_y + UIScale.round(6), right_x - pad, top_y + UIScale.round(26), true)
+  r.ImGui_DrawList_AddText(draw_list, left_x + UIScale.round(9), top_y + UIScale.round(8), title_color, ellipsize_text(ctx, lane.label, right_x - left_x - UIScale.round(17)))
   r.ImGui_DrawList_PopClipRect(draw_list)
-  r.ImGui_DrawList_AddLine(draw_list, left_x + 8, top_y + 29, right_x - 8, top_y + 29, 0xFFFFFF20, 1)
+  r.ImGui_DrawList_AddLine(draw_list, left_x + pad, top_y + UIScale.round(29), right_x - pad, top_y + UIScale.round(29), 0xFFFFFF20, UIScale.px(1))
   if lane.solo_toggle then
-    local solo_right = lane.led_toggle and right_x - 27 or right_x - 8
+    local solo_right = lane.led_toggle and right_x - UIScale.round(27) or right_x - pad
     local solo_width = calc_text_width(ctx, "S")
-    local solo_left = solo_right - solo_width - 4
-    local solo_top = top_y + 31
-    local solo_bottom = top_y + 47
+    local solo_left = solo_right - solo_width - UIScale.round(4)
+    local solo_top = top_y + UIScale.round(31)
+    local solo_bottom = top_y + UIScale.round(47)
     solo_hovered = enabled and mouse_x >= solo_left and mouse_x <= solo_right and mouse_y >= solo_top and mouse_y <= solo_bottom
-    local solo_text = lane.solo_state and Theme.colors.accent or (solo_hovered and Theme.colors.text or Theme.colors.text_dim)
-    r.ImGui_DrawList_AddText(draw_list, solo_left + 2, solo_top + 1, solo_text, "S")
+    local solo_text = Theme.text_for_background(bg, lane.solo_state and Theme.colors.accent or (solo_hovered and Theme.colors.text or Theme.colors.text_dim), Theme.colors.text, 4.5)
+    r.ImGui_DrawList_AddText(draw_list, solo_left + UIScale.round(2), solo_top + UIScale.round(1), solo_text, "S")
     if solo_hovered and r.ImGui_IsMouseClicked(ctx, 0) then lane.solo_toggle() end
   end
   if lane.led_toggle then
-    local led_x = right_x - 15
-    local led_y = top_y + 41
-    led_hovered = mouse_x >= led_x - 8 and mouse_x <= led_x + 8 and mouse_y >= led_y - 8 and mouse_y <= led_y + 8
+    local led_x = right_x - UIScale.round(15)
+    local led_y = top_y + UIScale.round(41)
+    led_hovered = mouse_x >= led_x - pad and mouse_x <= led_x + pad and mouse_y >= led_y - pad and mouse_y <= led_y + pad
     local led_color = lane.led_state and (lane.led_on_color or Theme.colors.accent) or (lane.led_off_color or 0x00000055)
     local led_border = led_hovered and Theme.colors.text or Theme.colors.border
-    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, 5, led_color, 16)
-    r.ImGui_DrawList_AddCircle(draw_list, led_x, led_y, 7, led_border, 16, led_hovered and 1.5 or 1)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, led_y, UIScale.px(5), led_color, 16)
+    r.ImGui_DrawList_AddCircle(draw_list, led_x, led_y, UIScale.px(7), led_border, 16, led_hovered and UIScale.px(1.5) or UIScale.px(1))
     if led_hovered and r.ImGui_IsMouseClicked(ctx, 0) then lane.led_toggle() end
   end
   if lane.subtitle then
-    local subtitle_right = right_x - (lane.led_toggle and 32 or 8)
-    r.ImGui_DrawList_PushClipRect(draw_list, left_x + 8, top_y + 31, subtitle_right, top_y + 52, true)
-    r.ImGui_DrawList_AddText(draw_list, left_x + 9, top_y + 34, Theme.colors.text_dim, ellipsize_text(ctx, lane.subtitle, math.max(0, subtitle_right - left_x - 17)))
+    local subtitle_right = right_x - (lane.led_toggle and UIScale.round(32) or pad)
+    r.ImGui_DrawList_PushClipRect(draw_list, left_x + pad, top_y + UIScale.round(31), subtitle_right, top_y + UIScale.round(52), true)
+    r.ImGui_DrawList_AddText(draw_list, left_x + UIScale.round(9), top_y + UIScale.round(34), subtitle_color, ellipsize_text(ctx, lane.subtitle, math.max(0, subtitle_right - left_x - UIScale.round(17))))
     r.ImGui_DrawList_PopClipRect(draw_list)
   end
   local value_text = enabled and format_db(lane.value, settings) or "--"
   local value_width = calc_text_width(ctx, value_text)
-  r.ImGui_DrawList_AddText(draw_list, right_x - value_width - 9, bottom_y - 24, text_color, value_text)
-  local fader_top = top_y + 64
-  local fader_bottom = bottom_y - 36
+  r.ImGui_DrawList_AddText(draw_list, right_x - value_width - UIScale.round(9), bottom_y - UIScale.round(24), text_color, value_text)
+  local fader_top = top_y + UIScale.round(64)
+  local fader_bottom = bottom_y - UIScale.round(36)
   local fader_x = left_x + width * 0.46
-  local fader_width = 8
-  local meter_left = right_x - 20
-  local meter_right = right_x - 12
+  local fader_width = UIScale.round(8)
+  local meter_left = right_x - UIScale.round(20)
+  local meter_right = right_x - UIScale.round(12)
   local range = math.max(1, fader_bottom - fader_top)
   local current_db = linear_to_db(lane.value, settings.min_db)
   local normalized = clamp((current_db - settings.min_db) / (settings.max_db - settings.min_db), 0, 1)
   local thumb_y = fader_bottom - normalized * range
-  r.ImGui_DrawList_AddRectFilled(draw_list, fader_x - fader_width * 0.5, fader_top, fader_x + fader_width * 0.5, fader_bottom, 0x00000044, 4)
-  if enabled then r.ImGui_DrawList_AddRectFilled(draw_list, fader_x - fader_width * 0.5, thumb_y, fader_x + fader_width * 0.5, fader_bottom, Theme.colors.accent_soft, 4) end
+  r.ImGui_DrawList_AddRectFilled(draw_list, fader_x - fader_width * 0.5, fader_top, fader_x + fader_width * 0.5, fader_bottom, 0x00000044, UIScale.px(4))
+  if enabled then r.ImGui_DrawList_AddRectFilled(draw_list, fader_x - fader_width * 0.5, thumb_y, fader_x + fader_width * 0.5, fader_bottom, Theme.colors.accent_soft, UIScale.px(4)) end
   local zero_normalized = clamp((0 - settings.min_db) / (settings.max_db - settings.min_db), 0, 1)
   local zero_y = fader_bottom - zero_normalized * range
-  r.ImGui_DrawList_AddLine(draw_list, fader_x - 15, zero_y, fader_x + 15, zero_y, Theme.colors.border, 1)
+  r.ImGui_DrawList_AddLine(draw_list, fader_x - UIScale.round(15), zero_y, fader_x + UIScale.round(15), zero_y, Theme.colors.border, UIScale.px(1))
   local handle_color = enabled and (lane.handle_color or Theme.colors.accent) or Theme.colors.border
-  r.ImGui_DrawList_AddRectFilled(draw_list, fader_x - 16, thumb_y - 5, fader_x + 16, thumb_y + 5, handle_color, 3)
-  r.ImGui_DrawList_AddRect(draw_list, fader_x - 16, thumb_y - 5, fader_x + 16, thumb_y + 5, 0x00000066, 3, 0, 1)
-  local handle_left = fader_x - 19
-  local handle_right = fader_x + 19
-  local handle_top = thumb_y - 8
-  local handle_bottom = thumb_y + 8
+  r.ImGui_DrawList_AddRectFilled(draw_list, fader_x - UIScale.round(16), thumb_y - UIScale.round(5), fader_x + UIScale.round(16), thumb_y + UIScale.round(5), handle_color, UIScale.px(3))
+  r.ImGui_DrawList_AddRect(draw_list, fader_x - UIScale.round(16), thumb_y - UIScale.round(5), fader_x + UIScale.round(16), thumb_y + UIScale.round(5), 0x00000066, UIScale.px(3), 0, UIScale.px(1))
+  local handle_left = fader_x - UIScale.round(19)
+  local handle_right = fader_x + UIScale.round(19)
+  local handle_top = thumb_y - UIScale.round(8)
+  local handle_bottom = thumb_y + UIScale.round(8)
   local handle_hovered = enabled and mouse_x >= handle_left and mouse_x <= handle_right and mouse_y >= handle_top and mouse_y <= handle_bottom
-  local fader_hovered = enabled and mouse_x >= fader_x - 24 and mouse_x <= fader_x + 24 and mouse_y >= fader_top - 6 and mouse_y <= fader_bottom + 6
-  r.ImGui_DrawList_AddRectFilled(draw_list, meter_left, fader_top, meter_right, fader_bottom, 0x00000055, 2)
+  local fader_hovered = enabled and mouse_x >= fader_x - UIScale.round(24) and mouse_x <= fader_x + UIScale.round(24) and mouse_y >= fader_top - UIScale.round(6) and mouse_y <= fader_bottom + UIScale.round(6)
+  r.ImGui_DrawList_AddRectFilled(draw_list, meter_left, fader_top, meter_right, fader_bottom, 0x00000055, UIScale.px(2))
   local meter_db = linear_to_db(lane.meter or 0, settings.min_db)
   local meter_normalized = clamp((meter_db - settings.min_db) / (settings.max_db - settings.min_db), 0, 1)
   local meter_top = fader_bottom - meter_normalized * range
-  if enabled and meter_normalized > 0 then r.ImGui_DrawList_AddRectFilled(draw_list, meter_left, meter_top, meter_right, fader_bottom, meter_color(lane.meter or 0), 2) end
+  if enabled and meter_normalized > 0 then r.ImGui_DrawList_AddRectFilled(draw_list, meter_left, meter_top, meter_right, fader_bottom, meter_color(lane.meter or 0), UIScale.px(2)) end
   if handle_hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
     lane.write(1)
     state.dragging_lane = nil
@@ -1711,8 +1720,8 @@ local function draw_meter_panel(app, settings, footer_height)
   local reserved_height = math.max(0, tonumber(footer_height) or 0)
   if r.ImGui_BeginChild(ctx, "##control_room_meter_panel", 0, -reserved_height, 0) then
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-    local side_padding = (avail_w or 0) >= 180 and 18 or 8
-    local panel_w = math.max(96, math.max(0, (avail_w or 170) - side_padding * 2))
+    local side_padding = (avail_w or 0) >= UIScale.round(180) and UIScale.round(18) or UIScale.round(8)
+    local panel_w = math.max(UIScale.round(96), math.max(0, (avail_w or UIScale.round(170)) - side_padding * 2))
     local start_x, start_y = r.ImGui_GetCursorScreenPos(ctx)
     local panel_x = start_x + math.max(0, ((avail_w or panel_w) - panel_w) * 0.5)
     r.ImGui_SetCursorScreenPos(ctx, panel_x, start_y)
@@ -1759,26 +1768,26 @@ local function draw_meter_panel(app, settings, footer_height)
     r.ImGui_SetCursorScreenPos(ctx, panel_x, select(2, r.ImGui_GetCursorScreenPos(ctx)))
     local meter_x, meter_y = r.ImGui_GetCursorScreenPos(ctx)
     local info_items = MeterEngine.info_items(settings, source, Theme.colors)
-    local divider_gap_top = 10
-    local divider_gap_bottom = 10
-    local info_gap = 5
-    local info_box_h = 58
+    local divider_gap_top = UIScale.round(10)
+    local divider_gap_bottom = UIScale.round(10)
+    local info_gap = UIScale.round(5)
+    local info_box_h = UIScale.round(58)
     local info_h = #info_items * info_box_h + math.max(0, #info_items - 1) * info_gap
-    local details_h = divider_gap_top + 1 + divider_gap_bottom + info_h + 4
-    local meter_h = math.max(80, math.min(360, (avail_h or 220) - details_h))
+    local details_h = divider_gap_top + UIScale.round(1) + divider_gap_bottom + info_h + UIScale.round(4)
+    local meter_h = math.max(UIScale.round(80), math.min(UIScale.round(360), (avail_h or UIScale.round(220)) - details_h))
     r.ImGui_Dummy(ctx, panel_w, meter_h)
     local bottom_y = meter_y + meter_h
-    draw_meter_scale(ctx, draw_list, meter_x + 2, meter_x + panel_w - 2, meter_y + 6, bottom_y - 4, settings)
-    local scale_margin = panel_w >= 180 and 36 or 28
-    local bar_gap = math.max(4, math.min(16, panel_w * 0.04))
-    local bar_w = math.max(10, (panel_w - scale_margin * 2 - bar_gap) * 0.5)
+    draw_meter_scale(ctx, draw_list, meter_x + UIScale.round(2), meter_x + panel_w - UIScale.round(2), meter_y + UIScale.round(6), bottom_y - UIScale.round(4), settings)
+    local scale_margin = panel_w >= UIScale.round(180) and UIScale.round(36) or UIScale.round(28)
+    local bar_gap = math.max(UIScale.round(4), math.min(UIScale.round(16), panel_w * 0.04))
+    local bar_w = math.max(UIScale.round(10), (panel_w - scale_margin * 2 - bar_gap) * 0.5)
     local bar_left = meter_x + scale_margin
-    local reset_left = draw_meter_channel(ctx, draw_list, bar_left, bar_left + bar_w, meter_y + 6, bottom_y - 4, left_value, peak.left, "L " .. format_db(peak.left or 0, settings), settings)
-    local reset_right = draw_meter_channel(ctx, draw_list, bar_left + bar_w + bar_gap, bar_left + bar_w * 2 + bar_gap, meter_y + 6, bottom_y - 4, right_value, peak.right, "R " .. format_db(peak.right or 0, settings), settings)
+    local reset_left = draw_meter_channel(ctx, draw_list, bar_left, bar_left + bar_w, meter_y + UIScale.round(6), bottom_y - UIScale.round(4), left_value, peak.left, "L " .. format_db(peak.left or 0, settings), settings)
+    local reset_right = draw_meter_channel(ctx, draw_list, bar_left + bar_w + bar_gap, bar_left + bar_w * 2 + bar_gap, meter_y + UIScale.round(6), bottom_y - UIScale.round(4), right_value, peak.right, "R " .. format_db(peak.right or 0, settings), settings)
     if reset_left then peak.left = 0 end
     if reset_right then peak.right = 0 end
     local divider_y = meter_y + meter_h + divider_gap_top
-    r.ImGui_DrawList_AddLine(draw_list, panel_x, divider_y, panel_x + panel_w, divider_y, color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0xAA), 1)
+    r.ImGui_DrawList_AddLine(draw_list, panel_x, divider_y, panel_x + panel_w, divider_y, color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0xAA), UIScale.px(1))
     r.ImGui_SetCursorScreenPos(ctx, panel_x, divider_y + divider_gap_bottom)
     local info_x, info_y = r.ImGui_GetCursorScreenPos(ctx)
     r.ImGui_Dummy(ctx, panel_w, info_h)
@@ -1794,18 +1803,20 @@ local function draw_control_footer(app, settings)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local left_x, top_y = r.ImGui_GetCursorScreenPos(ctx)
   local width = r.ImGui_GetContentRegionAvail(ctx)
-  local footer_h = r.ImGui_GetFrameHeight(ctx) + 14
-  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, left_x + width, top_y + footer_h, 0x00000033, 4)
-  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, left_x + width, top_y + footer_h, Theme.colors.border, 4, 0, 0.8)
-  r.ImGui_SetCursorScreenPos(ctx, left_x + 8, top_y + 7)
+  local footer_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(14)
+  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, left_x + width, top_y + footer_h, 0x00000033, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, left_x + width, top_y + footer_h, Theme.colors.border, UIScale.px(4), 0, UIScale.px(0.8))
+  r.ImGui_SetCursorScreenPos(ctx, left_x + UIScale.round(8), top_y + UIScale.round(7))
   local button_h = r.ImGui_GetFrameHeight(ctx)
+  local active_button_text = Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5)
   if state.dim_enabled then
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
   end
-  local dim_clicked = r.ImGui_Button(ctx, "DIM##control_room_dim", 46, button_h)
-  if state.dim_enabled then r.ImGui_PopStyleColor(ctx, 3) end
+  local dim_clicked = r.ImGui_Button(ctx, "DIM##control_room_dim", UIScale.text_button_w(ctx, "DIM", 46, 6), button_h)
+  if state.dim_enabled then r.ImGui_PopStyleColor(ctx, 4) end
   if dim_clicked then toggle_monitor_dim(settings) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.dim_enabled and "Restore monitor levels" or "Dim monitor outputs") end
   r.ImGui_SameLine(ctx)
@@ -1813,8 +1824,9 @@ local function draw_control_footer(app, settings)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-    local all_clicked = r.ImGui_Button(ctx, "ALL##control_room_speaker_all", 38, button_h)
-    r.ImGui_PopStyleColor(ctx, 3)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
+    local all_clicked = r.ImGui_Button(ctx, "ALL##control_room_speaker_all", UIScale.text_button_w(ctx, "ALL", 38, 6), button_h)
+    r.ImGui_PopStyleColor(ctx, 4)
     if all_clicked then restore_speaker_select() end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Restore all speaker mutes") end
     r.ImGui_SameLine(ctx)
@@ -1823,9 +1835,10 @@ local function draw_control_footer(app, settings)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
   end
-  local setup_clicked = r.ImGui_Button(ctx, "Setup##control_room_setup", 62, button_h)
-  if state.setup_open then r.ImGui_PopStyleColor(ctx, 3) end
+  local setup_clicked = r.ImGui_Button(ctx, "Setup##control_room_setup", UIScale.text_button_w(ctx, "Setup", 62, 8), button_h)
+  if state.setup_open then r.ImGui_PopStyleColor(ctx, 4) end
   if setup_clicked then state.setup_open = not state.setup_open end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Monitor routing setup") end
   r.ImGui_SameLine(ctx)
@@ -1833,14 +1846,16 @@ local function draw_control_footer(app, settings)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
   end
-  local compact_footer = width < 210
-  local meter_clicked = r.ImGui_Button(ctx, (compact_footer and "Mtr" or "Meter") .. "##control_room_meter", compact_footer and 42 or 58, button_h)
-  if state.meter_open then r.ImGui_PopStyleColor(ctx, 3) end
+  local compact_footer = width < UIScale.round(210)
+  local meter_label = compact_footer and "Mtr" or "Meter"
+  local meter_clicked = r.ImGui_Button(ctx, meter_label .. "##control_room_meter", UIScale.text_button_w(ctx, meter_label, compact_footer and 42 or 58, 8), button_h)
+  if state.meter_open then r.ImGui_PopStyleColor(ctx, 4) end
   if meter_clicked then state.meter_open = not state.meter_open end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.meter_open and "Hide meter" or "Show meter") end
   r.ImGui_SetCursorScreenPos(ctx, left_x, top_y)
-  r.ImGui_Dummy(ctx, width, footer_h + 4)
+  r.ImGui_Dummy(ctx, width, footer_h + UIScale.round(4))
 end
 
 local function monitor_mode_text(output)
@@ -1866,8 +1881,9 @@ local function draw_setup_section_button(ctx, label, id, selected, width)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.border)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent_soft)
   end
-  local clicked = r.ImGui_Button(ctx, label .. "##" .. id, width, 0)
-  r.ImGui_PopStyleColor(ctx, 3)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds(selected and { Theme.colors.accent, Theme.colors.warning } or { Theme.colors.frame_bg, Theme.colors.border, Theme.colors.accent_soft }, Theme.colors.text, nil, 4.5))
+  local clicked = r.ImGui_Button(ctx, label .. "##" .. id, width, UIScale.button_h(ctx, 0))
+  r.ImGui_PopStyleColor(ctx, 4)
   return clicked
 end
 
@@ -1908,13 +1924,13 @@ local function draw_apply_send_mode_popup(app, settings)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "The selected cue is no longer available.")
   end
   r.ImGui_Separator(ctx)
-  if target_cue and valid_track(target_cue.track) and r.ImGui_Button(ctx, "Apply##control_room_apply_send_mode_confirm", 84, 0) then
+  if target_cue and valid_track(target_cue.track) and r.ImGui_Button(ctx, "Apply##control_room_apply_send_mode_confirm", UIScale.text_button_w(ctx, "Apply", 84, 8), 0) then
     apply_cue_send_mode_to_existing(settings, target_cue)
     state.apply_send_mode_cue_guid = nil
     r.ImGui_CloseCurrentPopup(ctx)
   end
   if target_cue and valid_track(target_cue.track) then r.ImGui_SameLine(ctx) end
-  if r.ImGui_Button(ctx, "Cancel##control_room_apply_send_mode_cancel", 84, 0) then
+  if r.ImGui_Button(ctx, "Cancel##control_room_apply_send_mode_cancel", UIScale.text_button_w(ctx, "Cancel", 84, 8), 0) then
     state.apply_send_mode_cue_guid = nil
     r.ImGui_CloseCurrentPopup(ctx)
   end
@@ -1924,7 +1940,7 @@ end
 local function draw_setup_popup(app, settings)
   local ctx = app.ctx
   if not state.setup_open then return end
-  local popup_w, popup_h = 560, 620
+  local popup_w, popup_h = UIScale.window_size(560, 620)
   local saved_window = type(settings.setup_window) == "table" and settings.setup_window or {}
   if r.ImGui_SetNextWindowSize then r.ImGui_SetNextWindowSize(ctx, popup_w, popup_h, r.ImGui_Cond_Always and r.ImGui_Cond_Always() or 0) end
   if r.ImGui_SetNextWindowPos and r.ImGui_Cond_Appearing then
@@ -1961,15 +1977,15 @@ local function draw_setup_popup(app, settings)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local header_x, header_y = r.ImGui_GetCursorScreenPos(ctx)
   local header_w = r.ImGui_GetContentRegionAvail(ctx)
-  local close_size = 14
+  local close_size = UIScale.round(14)
   r.ImGui_TextColored(ctx, Theme.colors.accent, "Control Room Setup")
-  r.ImGui_SetCursorScreenPos(ctx, header_x + header_w - close_size - 2, header_y + 2)
+  r.ImGui_SetCursorScreenPos(ctx, header_x + header_w - close_size - UIScale.round(2), header_y + UIScale.round(2))
   if r.ImGui_InvisibleButton(ctx, "##control_room_setup_close", close_size, close_size) then state.setup_open = false end
   local close_hovered = r.ImGui_IsItemHovered(ctx)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, header_x + header_w - close_size * 0.5 - 2, header_y + close_size * 0.5 + 2, close_size * 0.5, close_hovered and Theme.colors.danger or 0xF7768EFF, 16)
-  r.ImGui_DrawList_AddCircle(draw_list, header_x + header_w - close_size * 0.5 - 2, header_y + close_size * 0.5 + 2, 0x3A1018FF, 16, 1)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, header_x + header_w - close_size * 0.5 - UIScale.round(2), header_y + close_size * 0.5 + UIScale.round(2), close_size * 0.5, close_hovered and Theme.colors.danger or 0xF7768EFF, 16)
+  r.ImGui_DrawList_AddCircle(draw_list, header_x + header_w - close_size * 0.5 - UIScale.round(2), header_y + close_size * 0.5 + UIScale.round(2), close_size * 0.5, 0x3A1018FF, 16, UIScale.px(1))
   if close_hovered then r.ImGui_SetTooltip(ctx, "Close setup") end
-  r.ImGui_SetCursorScreenPos(ctx, header_x, header_y + r.ImGui_GetFrameHeight(ctx) + 6)
+  r.ImGui_SetCursorScreenPos(ctx, header_x, header_y + r.ImGui_GetFrameHeight(ctx) + UIScale.round(6))
   if r.ImGui_Separator then r.ImGui_Separator(ctx) end
   local master = r.GetMasterTrack(0)
   local outputs = monitor_outputs(master)
@@ -1978,7 +1994,7 @@ local function draw_setup_popup(app, settings)
   local cues = cue_outputs(settings)
   state.setup_tab = state.setup_tab or "monitors"
   local tab_avail = r.ImGui_GetContentRegionAvail(ctx)
-  local tab_w = math.max(82, (tab_avail - 18) / 4)
+  local tab_w = math.max(UIScale.round(82), (tab_avail - UIScale.round(18)) / 4)
   if draw_setup_section_button(ctx, "Monitors", "control_room_setup_monitors", state.setup_tab == "monitors", tab_w) then state.setup_tab = "monitors" end
   r.ImGui_SameLine(ctx)
   if draw_setup_section_button(ctx, "Cues", "control_room_setup_cues", state.setup_tab == "cues", tab_w) then state.setup_tab = "cues" end
@@ -1988,7 +2004,7 @@ local function draw_setup_popup(app, settings)
   if draw_setup_section_button(ctx, "Targets", "control_room_setup_targets", state.setup_tab == "targets", tab_w) then state.setup_tab = "targets" end
   if r.ImGui_Separator then r.ImGui_Separator(ctx) end
   if state.setup_tab == "monitors" then
-      r.ImGui_SetNextItemWidth(ctx, 180)
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
       local slider_theme_count = push_setup_slider_theme(ctx)
       local dim_changed, dim_value = r.ImGui_SliderDouble(ctx, "Dim dB##control_room_dim_db", tonumber(settings.dim_db) or defaults.dim_db, -30, -3, "%.0f dB")
       pop_setup_slider_theme(ctx, slider_theme_count)
@@ -1997,7 +2013,7 @@ local function draw_setup_popup(app, settings)
         if app.save_settings then app.save_settings() end
       end
       r.ImGui_SameLine(ctx)
-      if r.ImGui_Button(ctx, "Add Monitor Output", 150, 0) then add_monitor_output(master, outputs, targets) end
+      if r.ImGui_Button(ctx, "Add Monitor Output", UIScale.text_button_w(ctx, "Add Monitor Output", 150, 10), 0) then add_monitor_output(master, outputs, targets) end
       if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Create a new master hardware output send") end
       if #outputs == 0 then
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No master hardware outputs configured.")
@@ -2013,16 +2029,16 @@ local function draw_setup_popup(app, settings)
           r.ImGui_SameLine(ctx)
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(output.name or "Hardware Out") .. " | " .. monitor_mode_text(output) .. " | " .. monitor_mode_label(mode) .. " | " .. tostring(source.name or "Master 1 / 2") .. " | " .. format_db(volume or 1, settings))
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Alias")
-          r.ImGui_SameLine(ctx, 64)
-          r.ImGui_SetNextItemWidth(ctx, 310)
+          r.ImGui_SameLine(ctx, UIScale.round(64))
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(310))
           local alias_changed, alias_value = r.ImGui_InputText(ctx, "##monitor_alias", alias)
           if alias_changed then write_monitor_alias(app, settings, output.target, alias_value) end
           r.ImGui_SameLine(ctx)
-          if r.ImGui_Button(ctx, "Clear##monitor_alias_clear", 54, 0) then clear_monitor_alias(app, settings, output.target) end
+          if r.ImGui_Button(ctx, "Clear##monitor_alias_clear", UIScale.text_button_w(ctx, "Clear", 54, 8), 0) then clear_monitor_alias(app, settings, output.target) end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear monitor alias") end
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Output")
-          r.ImGui_SameLine(ctx, 64)
-          r.ImGui_SetNextItemWidth(ctx, 392)
+          r.ImGui_SameLine(ctx, UIScale.round(64))
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
           if #targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_destination", tostring(output.name or "Hardware Out")) then
             for _, target in ipairs(targets) do
               local selected = target_matches_output(target, output)
@@ -2034,8 +2050,8 @@ local function draw_setup_popup(app, settings)
             r.ImGui_EndCombo(ctx)
           end
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Source")
-          r.ImGui_SameLine(ctx, 64)
-          r.ImGui_SetNextItemWidth(ctx, 392)
+          r.ImGui_SameLine(ctx, UIScale.round(64))
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
           if #source_targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_source", tostring(source.name or "Master 1 / 2")) then
             for _, target in ipairs(source_targets) do
               local selected = source_targets_match(source, target)
@@ -2048,8 +2064,8 @@ local function draw_setup_popup(app, settings)
           end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose the master channel pair feeding this monitor") end
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Mode")
-          r.ImGui_SameLine(ctx, 64)
-          r.ImGui_SetNextItemWidth(ctx, 392)
+          r.ImGui_SameLine(ctx, UIScale.round(64))
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
           if r.ImGui_BeginCombo(ctx, "##monitor_mode", monitor_mode_label(mode)) then
             for _, next_mode in ipairs(MONITOR_MODES) do
               local selected = mode == next_mode
@@ -2059,9 +2075,9 @@ local function draw_setup_popup(app, settings)
             r.ImGui_EndCombo(ctx)
           end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose stereo, mono sum, source check or physical speaker side") end
-          if r.ImGui_Button(ctx, muted and "Unmute##monitor_setup_mute" or "Mute##monitor_setup_mute", 82, 0) then write_monitor_mute(master, output.index, muted == false) end
+          if r.ImGui_Button(ctx, muted and "Unmute##monitor_setup_mute" or "Mute##monitor_setup_mute", UIScale.text_button_w(ctx, muted and "Unmute" or "Mute", 82, 8), 0) then write_monitor_mute(master, output.index, muted == false) end
           r.ImGui_SameLine(ctx)
-          if r.ImGui_Button(ctx, "Remove##monitor_setup_remove", 82, 0) then remove_monitor_output(master, output.index) end
+          if r.ImGui_Button(ctx, "Remove##monitor_setup_remove", UIScale.text_button_w(ctx, "Remove", 82, 8), 0) then remove_monitor_output(master, output.index) end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Remove this master hardware output send") end
           if r.ImGui_Separator then r.ImGui_Separator(ctx) end
           r.ImGui_PopID(ctx)
@@ -2070,10 +2086,10 @@ local function draw_setup_popup(app, settings)
       end
   end
   if state.setup_tab == "cues" then
-      if r.ImGui_Button(ctx, "Add Cue", 86, 0) then add_cue_output(app, settings, targets) end
+      if r.ImGui_Button(ctx, "Add Cue", UIScale.text_button_w(ctx, "Add Cue", 86, 8), 0) then add_cue_output(app, settings, targets) end
       if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Create a managed Control Room cue track") end
       r.ImGui_SameLine(ctx)
-      if r.ImGui_Button(ctx, "Clean Stale", 104, 0) then cleanup_stale_cue_sends(app, settings) end
+      if r.ImGui_Button(ctx, "Clean Stale", UIScale.text_button_w(ctx, "Clean Stale", 104, 8), 0) then cleanup_stale_cue_sends(app, settings) end
       if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Remove stale cue records and sends to unmanaged cue tracks") end
       if state.cue_cleanup_status then r.ImGui_TextColored(ctx, Theme.colors.text_dim, state.cue_cleanup_status) end
       if #cues == 0 then
@@ -2091,17 +2107,17 @@ local function draw_setup_popup(app, settings)
           r.ImGui_SameLine(ctx)
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, (valid_track(track) and tostring(cue.name or "Cue Output") or "Cue track missing") .. " | " .. cue_output_mode_label(output_mode) .. " | Feeds: " .. tostring(feed_count) .. " | " .. format_db(volume or 1, settings))
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Alias")
-          r.ImGui_SameLine(ctx, 64)
-          r.ImGui_SetNextItemWidth(ctx, 310)
+          r.ImGui_SameLine(ctx, UIScale.round(64))
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(310))
           local alias_changed, alias_value = r.ImGui_InputText(ctx, "##cue_alias", alias)
           if alias_changed then write_cue_alias(app, settings, cue, alias_value) end
           r.ImGui_SameLine(ctx)
-          if r.ImGui_Button(ctx, "Clear##cue_alias_clear", 54, 0) then write_cue_alias(app, settings, cue, "") end
+          if r.ImGui_Button(ctx, "Clear##cue_alias_clear", UIScale.text_button_w(ctx, "Clear", 54, 8), 0) then write_cue_alias(app, settings, cue, "") end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear cue alias") end
           if valid_track(track) then
             r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Output")
-            r.ImGui_SameLine(ctx, 64)
-            r.ImGui_SetNextItemWidth(ctx, 392)
+            r.ImGui_SameLine(ctx, UIScale.round(64))
+            r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
             if #targets > 0 and r.ImGui_BeginCombo(ctx, "##cue_destination", tostring(cue.name or "Cue Output")) then
               for _, target in ipairs(targets) do
                 local selected = target_matches_output(target, cue)
@@ -2113,8 +2129,8 @@ local function draw_setup_popup(app, settings)
               r.ImGui_EndCombo(ctx)
             end
             r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Mode")
-            r.ImGui_SameLine(ctx, 64)
-            r.ImGui_SetNextItemWidth(ctx, 392)
+            r.ImGui_SameLine(ctx, UIScale.round(64))
+            r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
             if r.ImGui_BeginCombo(ctx, "##cue_output_mode", cue_output_mode_label(output_mode)) then
               for _, mode in ipairs(CUE_OUTPUT_MODES) do
                 local selected = output_mode == mode
@@ -2124,12 +2140,12 @@ local function draw_setup_popup(app, settings)
               r.ImGui_EndCombo(ctx)
             end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose stereo or mono-summed cue output") end
-            if r.ImGui_Button(ctx, muted and "Unmute##cue_setup_mute" or "Mute##cue_setup_mute", 82, 0) then write_track_mute(track, muted == false, "Control Room: Cue mute") end
+            if r.ImGui_Button(ctx, muted and "Unmute##cue_setup_mute" or "Mute##cue_setup_mute", UIScale.text_button_w(ctx, muted and "Unmute" or "Mute", 82, 8), 0) then write_track_mute(track, muted == false, "Control Room: Cue mute") end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Sync##cue_setup_sync", 82, 0) then sync_cue_output(settings, cue) end
+            if r.ImGui_Button(ctx, "Sync##cue_setup_sync", UIScale.text_button_w(ctx, "Sync", 82, 8), 0) then sync_cue_output(settings, cue) end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add missing main mix sends to this cue") end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Mix##cue_setup_mix", 70, 0) then
+            if r.ImGui_Button(ctx, "Mix##cue_setup_mix", UIScale.text_button_w(ctx, "Mix", 70, 8), 0) then
               local cue_guid = cue.record and cue.record.guid or ""
               settings.cue_mix_active_guid = cue_guid
               state.setup_tab = "mix"
@@ -2138,7 +2154,7 @@ local function draw_setup_popup(app, settings)
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Open cue mix controls") end
             r.ImGui_SameLine(ctx)
           end
-          if r.ImGui_Button(ctx, "Remove##cue_setup_remove", 82, 0) then remove_cue_output(app, settings, cue) end
+          if r.ImGui_Button(ctx, "Remove##cue_setup_remove", UIScale.text_button_w(ctx, "Remove", 82, 8), 0) then remove_cue_output(app, settings, cue) end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Remove this cue output") end
           if r.ImGui_Separator then r.ImGui_Separator(ctx) end
           r.ImGui_PopID(ctx)
@@ -2168,7 +2184,7 @@ local function draw_setup_popup(app, settings)
         if not active_cue then
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No valid cue track available.")
         else
-          r.ImGui_SetNextItemWidth(ctx, 190)
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(190))
           if r.ImGui_BeginCombo(ctx, "Cue##control_room_mix_cue", cue_label(active_cue)) then
             for _, cue in ipairs(cues) do
               if valid_track(cue.track) then
@@ -2188,35 +2204,36 @@ local function draw_setup_popup(app, settings)
           r.ImGui_SameLine(ctx)
           local active_cue_guid = cue_guid_value(active_cue)
           local prefader = cue_send_prefader_for_guid(settings, active_cue_guid)
-          if draw_setup_section_button(ctx, "Pre", "control_room_cue_mode_pre", prefader, 48) then
+          if draw_setup_section_button(ctx, "Pre", "control_room_cue_mode_pre", prefader, UIScale.text_button_w(ctx, "Pre", 48, 6)) then
             set_cue_send_prefader_for_guid(settings, active_cue_guid, true)
             if app.save_settings then app.save_settings() end
           end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "New cue sends ignore main fader moves") end
           r.ImGui_SameLine(ctx)
-          if draw_setup_section_button(ctx, "Post", "control_room_cue_mode_post", not prefader, 54) then
+          if draw_setup_section_button(ctx, "Post", "control_room_cue_mode_post", not prefader, UIScale.text_button_w(ctx, "Post", 54, 6)) then
             set_cue_send_prefader_for_guid(settings, active_cue_guid, false)
             if app.save_settings then app.save_settings() end
           end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "New cue sends follow main fader and pan") end
           r.ImGui_SameLine(ctx)
-          if r.ImGui_Button(ctx, "Apply##control_room_cue_mode_apply", 58, 0) then
+          if r.ImGui_Button(ctx, "Apply##control_room_cue_mode_apply", UIScale.text_button_w(ctx, "Apply", 58, 8), 0) then
             state.apply_send_mode_cue_guid = cue_guid_value(active_cue)
             r.ImGui_OpenPopup(ctx, "Apply Cue Send Mode")
           end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Apply current mode to existing sends for this cue") end
-          if r.ImGui_Button(ctx, "Sync##control_room_mix_sync", 82, 0) then sync_cue_output(settings, active_cue) end
+          if r.ImGui_Button(ctx, "Sync##control_room_mix_sync", UIScale.text_button_w(ctx, "Sync", 82, 8), 0) then sync_cue_output(settings, active_cue) end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add missing sends to this cue") end
           r.ImGui_SameLine(ctx)
-          if r.ImGui_Button(ctx, "Copy Main -> Cue##control_room_mix_copy", 148, 0) then copy_main_mix_to_cue(settings, active_cue) end
+          if r.ImGui_Button(ctx, "Copy Main -> Cue##control_room_mix_copy", UIScale.text_button_w(ctx, "Copy Main -> Cue", 148, 10), 0) then copy_main_mix_to_cue(settings, active_cue) end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Copy track volume and pan to cue sends") end
           if cue_listen_entry(cue_guid_value(active_cue)) then
             r.ImGui_SameLine(ctx)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-            local all_clicked = r.ImGui_Button(ctx, "ALL##control_room_mix_listen_all", 48, 0)
-            r.ImGui_PopStyleColor(ctx, 3)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5))
+            local all_clicked = r.ImGui_Button(ctx, "ALL##control_room_mix_listen_all", UIScale.text_button_w(ctx, "ALL", 48, 6), 0)
+            r.ImGui_PopStyleColor(ctx, 4)
             if all_clicked then restore_cue_listen(active_cue) end
             if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Restore all cue sends") end
           end
@@ -2233,24 +2250,25 @@ local function draw_setup_popup(app, settings)
               local shown_volume = send_volume or source.volume or 1
               local shown_db = linear_to_db(shown_volume, settings.min_db or defaults.min_db)
               local shown_pan = send_pan or source.pan or 0
-              r.ImGui_TextColored(ctx, Theme.colors.text, ellipsize_text(ctx, source.name, 190))
-              r.ImGui_SameLine(ctx, 205)
+              r.ImGui_TextColored(ctx, Theme.colors.text, ellipsize_text(ctx, source.name, UIScale.round(190)))
+              r.ImGui_SameLine(ctx, UIScale.round(205))
               local listen_active = cue_listen_matches(active_cue, source)
               if listen_active then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5))
               end
-              local listen_clicked = r.ImGui_Button(ctx, "S##cue_mix_listen", 28, 0)
-              if listen_active then r.ImGui_PopStyleColor(ctx, 3) end
+              local listen_clicked = r.ImGui_Button(ctx, "S##cue_mix_listen", UIScale.text_button_w(ctx, "S", 28, 4), 0)
+              if listen_active then r.ImGui_PopStyleColor(ctx, 4) end
               if listen_clicked then toggle_cue_listen(settings, active_cue, source) end
               if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, listen_active and "Restore cue listen" or "Listen to this source in this cue") end
               r.ImGui_SameLine(ctx)
-              if r.ImGui_Button(ctx, send_mute and "Muted##cue_mix_mute" or "On##cue_mix_mute", 58, 0) then write_cue_send_mute(track, active_cue.track, not send_mute, settings) end
+              if r.ImGui_Button(ctx, send_mute and "Muted##cue_mix_mute" or "On##cue_mix_mute", UIScale.text_button_w(ctx, send_mute and "Muted" or "On", 58, 8), 0) then write_cue_send_mute(track, active_cue.track, not send_mute, settings) end
               if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, send_mute and "Unmute cue send" or "Mute cue send") end
               r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Vol")
-              r.ImGui_SameLine(ctx, 42)
-              r.ImGui_SetNextItemWidth(ctx, 210)
+              r.ImGui_SameLine(ctx, UIScale.round(42))
+              r.ImGui_SetNextItemWidth(ctx, UIScale.round(210))
               local slider_theme_count = push_setup_slider_theme(ctx)
               local volume_changed, next_db = r.ImGui_SliderDouble(ctx, "##cue_mix_volume", shown_db, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db, "%.1f dB")
               local volume_reset = cue_mix_item_right_clicked(ctx)
@@ -2258,8 +2276,8 @@ local function draw_setup_popup(app, settings)
               pop_setup_slider_theme(ctx, slider_theme_count)
               if volume_reset then write_cue_send_volume(track, active_cue.track, 1, settings) elseif volume_changed then write_cue_send_volume(track, active_cue.track, db_to_linear(next_db, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db), settings) end
               r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Pan")
-              r.ImGui_SameLine(ctx, 42)
-              r.ImGui_SetNextItemWidth(ctx, 210)
+              r.ImGui_SameLine(ctx, UIScale.round(42))
+              r.ImGui_SetNextItemWidth(ctx, UIScale.round(210))
               slider_theme_count = push_setup_slider_theme(ctx)
               local pan_changed, next_pan = r.ImGui_SliderDouble(ctx, "##cue_mix_pan", shown_pan, -1, 1, "%.2f")
               local pan_reset = cue_mix_item_right_clicked(ctx)
@@ -2292,13 +2310,13 @@ end
 local function draw_lanes(app, settings, lanes, footer_height)
   local ctx = app.ctx
   local avail_width, avail_height = r.ImGui_GetContentRegionAvail(ctx)
-  local spacing = 8
+  local spacing = UIScale.round(8)
   local columns = 1
-  if avail_width >= 390 then columns = 4 elseif avail_width >= 300 then columns = 3 elseif avail_width >= 190 then columns = 2 end
+  if avail_width >= UIScale.round(390) then columns = 4 elseif avail_width >= UIScale.round(300) then columns = 3 elseif avail_width >= UIScale.round(190) then columns = 2 end
   columns = math.max(1, math.min(columns, #lanes))
-  local lane_width = math.max(78, ((avail_width or 320) - spacing * (columns - 1)) / columns)
+  local lane_width = math.max(UIScale.round(78), ((avail_width or UIScale.round(320)) - spacing * (columns - 1)) / columns)
   local reserved_height = math.max(0, tonumber(footer_height) or 0)
-  local lane_height = math.max(190, math.min(245, (avail_height or 245) - reserved_height - 4))
+  local lane_height = math.max(UIScale.round(190), math.min(UIScale.round(245), (avail_height or UIScale.round(245)) - reserved_height - UIScale.round(4)))
   if r.ImGui_BeginChild(ctx, "##control_room_lanes", 0, -reserved_height, 0) then
     for index, lane in ipairs(lanes) do
       draw_lane(app, lane, settings, lane_width, lane_height)
@@ -2330,9 +2348,9 @@ function M.draw(app)
     if not ok and app then app.status = "Meter reset failed: " .. tostring(err) end
   end
   local lanes = build_lanes(app, settings)
-  local footer_height = r.ImGui_GetFrameHeight(ctx) + 22
+  local footer_height = r.ImGui_GetFrameHeight(ctx) + UIScale.round(22)
   draw_header(app, lanes)
-  r.ImGui_Dummy(ctx, 1, 4)
+  r.ImGui_Dummy(ctx, UIScale.round(1), UIScale.round(4))
   if state.meter_open then
     draw_meter_panel(app, settings, footer_height)
   else

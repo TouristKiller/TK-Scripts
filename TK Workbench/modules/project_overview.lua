@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 local ProjectHealth = require("core.project_health")
 local M = {
   id = "project_overview",
@@ -34,7 +35,7 @@ end
 
 local function draw_row(ctx, label, value)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
-  r.ImGui_SameLine(ctx, 150)
+  r.ImGui_SameLine(ctx, UIScale.round(150))
   r.ImGui_Text(ctx, tostring(value or "-"))
 end
 
@@ -80,8 +81,8 @@ local function run_project_action(app, action)
 end
 
 local function draw_project_actions(ctx, app, width)
-  local gap = 6
-  local button_w = math.max(90, ((width or 320) - gap) * 0.5)
+  local gap = UIScale.gap(6)
+  local button_w = math.max(UIScale.round(90), ((width or UIScale.round(320)) - gap) * 0.5)
   for index, action in ipairs(PROJECT_ACTIONS) do
     if index % 2 == 0 then r.ImGui_SameLine(ctx, 0, gap) end
     if r.ImGui_Button(ctx, action.label, button_w, 0) then run_project_action(app, action) end
@@ -95,9 +96,10 @@ local function draw_tab_button(ctx, label, id)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5))
   end
-  local clicked = r.ImGui_Button(ctx, label .. "##project_overview_tab_" .. id, 92, 0)
-  if active then r.ImGui_PopStyleColor(ctx, 3) end
+  local clicked = r.ImGui_Button(ctx, label .. "##project_overview_tab_" .. id, UIScale.text_button_w(ctx, label, 92), 0)
+  if active then r.ImGui_PopStyleColor(ctx, 4) end
   if clicked then state.tab = id end
 end
 
@@ -132,16 +134,16 @@ end
 local function draw_health_issue(ctx, app, issue, index)
   local color = severity_color(issue.severity)
   r.ImGui_TextColored(ctx, color, string.upper(tostring(issue.severity or "info")))
-  r.ImGui_SameLine(ctx, 86)
+  r.ImGui_SameLine(ctx, UIScale.round(86))
   r.ImGui_TextColored(ctx, Theme.colors.text, tostring(issue.title or "Issue"))
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(issue.category or "Project") .. " | " .. tostring(issue.detail or ""))
-  if issue.action and issue.action_label and r.ImGui_Button(ctx, tostring(issue.action_label) .. "##health_action_" .. tostring(index), 82, 0) then
+  if issue.action and issue.action_label and r.ImGui_Button(ctx, tostring(issue.action_label) .. "##health_action_" .. tostring(index), UIScale.text_button_w(ctx, tostring(issue.action_label), 82), 0) then
     local ok, err = pcall(issue.action)
     app.status = ok and tostring(issue.title or "Health action") or ("Health action failed: " .. tostring(err))
   end
   if issue.repair and issue.repair_label then
     if issue.action and issue.action_label then r.ImGui_SameLine(ctx) end
-    if r.ImGui_Button(ctx, tostring(issue.repair_label) .. "##health_repair_" .. tostring(index), 104, 0) then
+    if r.ImGui_Button(ctx, tostring(issue.repair_label) .. "##health_repair_" .. tostring(index), UIScale.text_button_w(ctx, tostring(issue.repair_label), 104), 0) then
       local ok, err = pcall(issue.repair)
       if ok then
         state.health = nil
@@ -158,7 +160,7 @@ local function draw_health_tab(ctx, app, project)
   local health = ensure_health(app, project, false)
   draw_health_summary(ctx, health.summary)
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Refresh##project_health_refresh", 74, 0) then health = ensure_health(app, project, true) end
+  if r.ImGui_Button(ctx, "Refresh##project_health_refresh", UIScale.text_button_w(ctx, "Refresh", 74), 0) then health = ensure_health(app, project, true) end
   r.ImGui_Separator(ctx)
   if not health.issues or #health.issues == 0 then
     r.ImGui_TextColored(ctx, Theme.colors.accent, "No project health issues found.")
@@ -176,7 +178,7 @@ local function draw_overview_tab(ctx, app, project, selection, width)
   end
 
   r.ImGui_Separator(ctx)
-  draw_project_actions(ctx, app, width or 320)
+  draw_project_actions(ctx, app, width or UIScale.round(320))
 
   r.ImGui_Separator(ctx)
   draw_row(ctx, "Status", project.dirty and "Modified" or "Saved")
@@ -228,10 +230,10 @@ function M.draw(app)
   r.ImGui_Separator(ctx)
 
   local available_w, available_h = r.ImGui_GetContentRegionAvail(ctx)
-  local content_h = math.max(40, (available_h or 240) - UI.info_line_height(ctx))
+  local content_h = math.max(UIScale.round(40), (available_h or UIScale.round(240)) - UI.info_line_height(ctx))
 
   if r.ImGui_BeginChild(ctx, "##project_overview_content", 0, content_h, 0) then
-    if state.tab == "health" then draw_health_tab(ctx, app, project) else draw_overview_tab(ctx, app, project, selection, available_w or 320) end
+    if state.tab == "health" then draw_health_tab(ctx, app, project) else draw_overview_tab(ctx, app, project, selection, available_w or UIScale.round(320)) end
     r.ImGui_EndChild(ctx)
   end
   local health = state.health and state.health.summary

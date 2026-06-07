@@ -10,6 +10,7 @@ local defaults = {
   rail_width = 62,
   window_width = 430,
   window_height = 760,
+  ui_scale = 1.0,
   auto_collapse = false,
   auto_collapse_side = "left",
   auto_collapse_delay = 0.6,

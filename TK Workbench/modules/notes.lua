@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
+local UIScale = require("core.ui_scale")
 local json = require("core.json")
 
 local M = {
@@ -520,7 +521,11 @@ end
 
 local function context_button(ctx, app, settings, id, label, active, enabled, width)
   if enabled == false and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
-  if active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent & 0xFFFFFFAA) end
+  local active_bg = Theme.colors.accent & 0xFFFFFFAA
+  if active then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), active_bg)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(active_bg, Theme.colors.text, nil, 4.5))
+  end
   if r.ImGui_Button(ctx, label, width or 0, 0) then
     save_current(app)
     if id == "auto" then
@@ -532,14 +537,14 @@ local function context_button(ctx, app, settings, id, label, active, enabled, wi
     state.loaded = false
     if app.save_settings then app.save_settings() end
   end
-  if active then r.ImGui_PopStyleColor(ctx) end
+  if active then r.ImGui_PopStyleColor(ctx, 2) end
   if enabled == false and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
 end
 
 local function draw_context_bar(app, settings, info, width)
   local ctx = app.ctx
-  local gap = 4
-  local button_w = math.max(48, ((width or 320) - gap * 4) / 5)
+  local gap = UIScale.gap(4)
+  local button_w = math.max(UIScale.round(48), ((width or UIScale.round(320)) - gap * 4) / 5)
   context_button(ctx, app, settings, "auto", "Auto", settings.auto_context == true, true, button_w)
   r.ImGui_SameLine(ctx, 0, gap)
   context_button(ctx, app, settings, "global", "Global", settings.auto_context ~= true and settings.active_context == "global", true, button_w)
@@ -596,13 +601,13 @@ local function draw_font_size_popup(ctx, block)
   local value = normalize_font_size(block.font_size)
   local family = normalize_font_family(block.font_family)
   local changed = false
-  if r.ImGui_Button(ctx, "-", 24, 0) then value = normalize_font_size(value - 1); changed = true end
+  if r.ImGui_Button(ctx, "-", UIScale.round(24), 0) then value = normalize_font_size(value - 1); changed = true end
   r.ImGui_SameLine(ctx)
-  r.ImGui_SetNextItemWidth(ctx, 120)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(120))
   local slider_changed, slider_value = r.ImGui_SliderInt(ctx, "##font_size_slider", value, MIN_FONT_SIZE, MAX_FONT_SIZE, "%d px")
   if slider_changed then value = normalize_font_size(slider_value); changed = true end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "+", 24, 0) then value = normalize_font_size(value + 1); changed = true end
+  if r.ImGui_Button(ctx, "+", UIScale.round(24), 0) then value = normalize_font_size(value + 1); changed = true end
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Font")
   for _, option in ipairs(FONT_FAMILIES) do
@@ -1317,15 +1322,16 @@ end
 local function draw_body_editor(ctx, block, width, height, note_color, text_color)
   local editor = ensure_body_editor(block)
   local text = tostring(block.body or "")
-  local font_size = normalize_font_size(block.font_size)
+  local scale = UIScale.value()
+  local font_size = UIScale.round(normalize_font_size(block.font_size))
   local font_family = normalize_font_family(block.font_family)
   local font = get_note_font(ctx, font_family, font_size)
-  local checkbox_indent = math.max(16, font_size + 4)
-  local line_height = font_size + 6
-  local padding_x = 8
-  local padding_y = 6
-  local child_w = width or 320
-  local child_h = height or 120
+  local checkbox_indent = math.max(UIScale.round(16), font_size + UIScale.round(4))
+  local line_height = font_size + UIScale.round(6)
+  local padding_x = UIScale.round(8)
+  local padding_y = UIScale.round(6)
+  local child_w = width or UIScale.round(320)
+  local child_h = height or UIScale.round(120)
   local style_count = 0
   if r.ImGui_Col_ChildBg then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), note_color); style_count = style_count + 1 end
   if r.ImGui_Col_Border then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), Theme.colors.border or 0x444444FF); style_count = style_count + 1 end
@@ -1335,14 +1341,14 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
   local visible = r.ImGui_BeginChild(ctx, "##body_editor", child_w, child_h, 1, child_flags)
   if visible then
     local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-    avail_w = math.max(40, avail_w or child_w)
-    avail_h = math.max(40, avail_h or child_h)
-    local wrap_width = math.max(24, avail_w - padding_x * 2 - checkbox_indent)
+    avail_w = math.max(UIScale.round(40), avail_w or child_w)
+    avail_h = math.max(UIScale.round(40), avail_h or child_h)
+    local wrap_width = math.max(UIScale.round(24), avail_w - padding_x * 2 - checkbox_indent)
     local layout = build_body_layout(ctx, text, wrap_width, line_height, font_size)
     local image_rects = collect_image_rects(ctx, block)
     local fit_margin = line_height + padding_y
     local content_height = math.max(layout.total_height, image_content_height(block))
-    block.body_fit_height = math.max(MIN_BLOCK_HEIGHT, math.min(MAX_BLOCK_HEIGHT, content_height + padding_y * 2 + fit_margin))
+    block.body_fit_height = math.max(MIN_BLOCK_HEIGHT, math.min(MAX_BLOCK_HEIGHT, (content_height + padding_y * 2 + fit_margin) / math.max(0.01, scale)))
     local origin_x, origin_y = r.ImGui_GetCursorScreenPos(ctx)
     local function is_first_visual_line(idx)
       local line = layout.lines[idx]
@@ -1698,7 +1704,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
           end
           if active then r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + start_x, line_y, origin_x + padding_x + indent + end_x, line_y + line_height, highlight) end
           if line.newline_byte and line.newline_byte >= sel_start + 1 and line.newline_byte <= sel_end then
-            r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + line.width, line_y, origin_x + padding_x + indent + line.width + math.max(6, line_height * 0.4), line_y + line_height, highlight)
+            r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + line.width, line_y, origin_x + padding_x + indent + line.width + math.max(UIScale.round(6), line_height * 0.4), line_y + line_height, highlight)
           end
         end
       end
@@ -1708,20 +1714,20 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       if line_y > origin_y - line_height and line_y < origin_y + avail_h then
         local draw_color = (block.line_colors and line.source_line and block.line_colors[line.source_line]) or text_color
         if line.checkbox and is_first_visual_line(idx) then
-          local size = math.max(10, math.min(16, font_size * 0.85))
+          local size = math.max(UIScale.round(10), math.min(UIScale.round(16), font_size * 0.85))
           local box_x = origin_x + padding_x
           local box_y = line_y + (line_height - size) * 0.5
-          r.ImGui_DrawList_AddRect(draw_list, box_x, box_y, box_x + size, box_y + size, draw_color, 2, 0, 1.2)
+          r.ImGui_DrawList_AddRect(draw_list, box_x, box_y, box_x + size, box_y + size, draw_color, UIScale.px(2), 0, UIScale.px(1.2))
           if line.checked then
-            r.ImGui_DrawList_AddLine(draw_list, box_x + size * 0.22, box_y + size * 0.52, box_x + size * 0.42, box_y + size * 0.74, draw_color, 1.8)
-            r.ImGui_DrawList_AddLine(draw_list, box_x + size * 0.42, box_y + size * 0.74, box_x + size * 0.82, box_y + size * 0.26, draw_color, 1.8)
+            r.ImGui_DrawList_AddLine(draw_list, box_x + size * 0.22, box_y + size * 0.52, box_x + size * 0.42, box_y + size * 0.74, draw_color, UIScale.px(1.8))
+            r.ImGui_DrawList_AddLine(draw_list, box_x + size * 0.42, box_y + size * 0.74, box_x + size * 0.82, box_y + size * 0.26, draw_color, UIScale.px(1.8))
           end
         end
         local indent = line_indent(line)
         for _, char in ipairs(line.chars or {}) do
           local char_x = origin_x + padding_x + indent + char.x0
           draw_text_sized(ctx, draw_list, char_x, line_y, draw_color, char.char or "", font_size, font)
-          if bold_lookup[char.byte_start] then draw_text_sized(ctx, draw_list, char_x + math.max(0.7, font_size * 0.05), line_y, draw_color, char.char or "", font_size, font) end
+              if bold_lookup[char.byte_start] then draw_text_sized(ctx, draw_list, char_x + math.max(UIScale.px(0.7), font_size * 0.05), line_y, draw_color, char.char or "", font_size, font) end
         end
       end
     end
@@ -1730,7 +1736,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local more_w = scaled_text_width(ctx, more_text, font_size)
       local more_y = origin_y + avail_h - line_height
       local more_bg = (note_color & 0xFFFFFF00) | 0xEE
-      r.ImGui_DrawList_AddRectFilled(draw_list, origin_x, more_y - 2, origin_x + avail_w, origin_y + avail_h, more_bg)
+      r.ImGui_DrawList_AddRectFilled(draw_list, origin_x, more_y - UIScale.round(2), origin_x + avail_w, origin_y + avail_h, more_bg)
       draw_text_sized(ctx, draw_list, origin_x + math.max(padding_x, avail_w - more_w - padding_x), more_y, text_color, more_text, font_size, font)
     end
     draw_note_images(ctx, draw_list, block, image_rects, origin_x, origin_y, text_color)
@@ -1738,7 +1744,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local _, caret_x, caret_y, caret_line = locate_caret(layout, text, editor.caret)
       local x = origin_x + padding_x + line_indent(caret_line) + caret_x
       local y = origin_y + padding_y + caret_y
-      if y >= origin_y and y <= origin_y + avail_h then r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + line_height, text_color, 1.4) end
+      if y >= origin_y and y <= origin_y + avail_h then r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + line_height, text_color, UIScale.px(1.4)) end
     end
     r.ImGui_DrawList_PopClipRect(draw_list)
     r.ImGui_EndChild(ctx)
@@ -1746,25 +1752,25 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
   if style_count > 0 then r.ImGui_PopStyleColor(ctx, style_count) end
 
   local handle_x, handle_y = r.ImGui_GetCursorScreenPos(ctx)
-  r.ImGui_InvisibleButton(ctx, "##body_resize", child_w, 8)
+  r.ImGui_InvisibleButton(ctx, "##body_resize", child_w, UIScale.round(8))
   local handle_active = r.ImGui_IsItemActive(ctx)
   local handle_hovered = r.ImGui_IsItemHovered(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local handle_color = handle_active and (Theme.colors.accent or 0x7AA2F7FF) or (handle_hovered and (Theme.colors.text_dim or 0xA0A0A0FF) or (Theme.colors.border or 0x444444FF))
-  r.ImGui_DrawList_AddLine(draw_list, handle_x + 12, handle_y + 4, handle_x + child_w - 12, handle_y + 4, handle_color, handle_active and 2.0 or 1.0)
+  r.ImGui_DrawList_AddLine(draw_list, handle_x + UIScale.round(12), handle_y + UIScale.round(4), handle_x + child_w - UIScale.round(12), handle_y + UIScale.round(4), handle_color, handle_active and UIScale.px(2.0) or UIScale.px(1.0))
   if handle_hovered then r.ImGui_SetTooltip(ctx, "Drag to resize note | Double-click to fit") end
   local mouse_button = r.ImGui_MouseButton_Left and r.ImGui_MouseButton_Left() or 0
   local fit_clicked = handle_hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, mouse_button)
   if fit_clicked then
-    local new_height = math.max(MIN_BLOCK_HEIGHT, math.min(MAX_BLOCK_HEIGHT, block.body_fit_height or child_h))
+    local new_height = math.max(MIN_BLOCK_HEIGHT, math.min(MAX_BLOCK_HEIGHT, block.body_fit_height or (child_h / math.max(0.01, scale))))
     if math.floor(new_height + 0.5) ~= math.floor((block.height or child_h) + 0.5) then
       block.height = new_height
       mark_dirty(block)
     end
   elseif handle_active and r.ImGui_GetMouseDragDelta then
-    if not block.resize_start_height then block.resize_start_height = block.height or child_h end
+    if not block.resize_start_height then block.resize_start_height = block.height or (child_h / math.max(0.01, scale)) end
     local _, drag_y = r.ImGui_GetMouseDragDelta(ctx, mouse_button, 0)
-    local new_height = math.max(MIN_BLOCK_HEIGHT, math.min(MAX_BLOCK_HEIGHT, (block.resize_start_height or child_h) + (drag_y or 0)))
+    local new_height = math.max(MIN_BLOCK_HEIGHT, math.min(MAX_BLOCK_HEIGHT, (block.resize_start_height or (child_h / math.max(0.01, scale))) + ((drag_y or 0) / math.max(0.01, scale))))
     if math.floor(new_height + 0.5) ~= math.floor((block.height or child_h) + 0.5) then
       block.height = new_height
       mark_dirty(block)
@@ -1781,9 +1787,10 @@ local function draw_block(app, settings, block, index, width)
   local text_color = opaque_color(block.text_color, DEFAULT_TEXT_COLOR)
   r.ImGui_PushID(ctx, block.id or tostring(index))
   local arrow = block.collapsed and ">" or "v"
-  if r.ImGui_Button(ctx, arrow, 22, 0) then block.collapsed = not block.collapsed; mark_dirty(block) end
+  local icon_button_w = UIScale.round(22)
+  if r.ImGui_Button(ctx, arrow, icon_button_w, 0) then block.collapsed = not block.collapsed; mark_dirty(block) end
   r.ImGui_SameLine(ctx)
-  r.ImGui_PushItemWidth(ctx, math.max(80, (width or 320) - 154))
+  r.ImGui_PushItemWidth(ctx, math.max(UIScale.round(80), (width or UIScale.round(320)) - UIScale.round(154)))
   local style_count = push_note_style(ctx, note_color, text_color)
   local title_changed, title = r.ImGui_InputText(ctx, "##title", block.title or "Notes")
   pop_note_style(ctx, style_count)
@@ -1791,22 +1798,22 @@ local function draw_block(app, settings, block, index, width)
   r.ImGui_PopItemWidth(ctx)
   r.ImGui_SameLine(ctx)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), note_color)
-  if r.ImGui_Button(ctx, "C", 22, 0) then r.ImGui_OpenPopup(ctx, "##note_colors") end
+  if r.ImGui_Button(ctx, "C", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##note_colors") end
   r.ImGui_PopStyleColor(ctx)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Colors") end
   draw_color_popup(ctx, block, state.context_info)
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "A", 22, 0) then r.ImGui_OpenPopup(ctx, "##font_size") end
+  if r.ImGui_Button(ctx, "A", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##font_size") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, normalize_font_family(block.font_family) .. " | " .. tostring(normalize_font_size(block.font_size)) .. " px") end
   draw_font_size_popup(ctx, block)
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "D", 22, 0) then duplicate_block(index) end
+  if r.ImGui_Button(ctx, "D", icon_button_w, 0) then duplicate_block(index) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Duplicate") end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "x", 22, 0) then remove_block(index); r.ImGui_PopID(ctx); return end
+  if r.ImGui_Button(ctx, "x", icon_button_w, 0) then remove_block(index); r.ImGui_PopID(ctx); return end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, #state.blocks <= 1 and "Clear" or "Delete") end
   if not block.collapsed then
-    draw_body_editor(ctx, block, width or 320, block.height or settings.block_height, note_color, text_color)
+    draw_body_editor(ctx, block, width or UIScale.round(320), UIScale.round(block.height or settings.block_height), note_color, text_color)
   end
   r.ImGui_Spacing(ctx)
   r.ImGui_PopID(ctx)
@@ -1827,19 +1834,19 @@ function M.draw(app)
   local width = r.ImGui_GetContentRegionAvail(ctx)
   draw_context_bar(app, settings, info, width)
   if info.can_edit then
-    if r.ImGui_Button(ctx, "+ Note", math.max(80, width or 320), 0) then add_block() end
+    if r.ImGui_Button(ctx, "+ Note", math.max(UIScale.round(80), width or UIScale.round(320)), 0) then add_block() end
   else
     r.ImGui_BeginDisabled(ctx, true)
-    r.ImGui_Button(ctx, "+ Note", math.max(80, width or 320), 0)
+    r.ImGui_Button(ctx, "+ Note", math.max(UIScale.round(80), width or UIScale.round(320)), 0)
     r.ImGui_EndDisabled(ctx)
   end
   r.ImGui_Separator(ctx)
   local _, remaining_h = r.ImGui_GetContentRegionAvail(ctx)
-  local list_h = math.max(40, (remaining_h or 200) - UI.info_line_height(ctx))
+  local list_h = math.max(UIScale.round(40), (remaining_h or UIScale.round(200)) - UI.info_line_height(ctx))
   local child_visible = r.ImGui_BeginChild(ctx, "##notes_blocks", 0, list_h, 0)
   if child_visible then
     if info.can_edit then
-      for index, block in ipairs(state.blocks) do draw_block(app, settings, block, index, math.max(120, (width or 320) - 4)) end
+      for index, block in ipairs(state.blocks) do draw_block(app, settings, block, index, math.max(UIScale.round(120), (width or UIScale.round(320)) - UIScale.round(4))) end
     else
       r.ImGui_TextColored(ctx, Theme.colors.warning, info.label or "Context unavailable")
     end
