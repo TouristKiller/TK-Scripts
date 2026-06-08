@@ -44,6 +44,9 @@ local defaults = {
     show_selected_track = true,
     show_monitor = true,
     monitor_send_index = -1,
+    meter_open = false,
+    meter_compact = true,
+    meter_adaptive_height = true,
     meter_smoothing = 0.35
   },
   instrument_rack = {

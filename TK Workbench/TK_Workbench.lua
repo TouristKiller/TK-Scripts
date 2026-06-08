@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.0
+-- @version 0.3.1
 -- @changelog:
+-- v0.3.1
+--   + Control Room: Restored master meter screen state across REAPER restarts
+--   + Control Room: Added a focused meter view with Back, Reset, settings, removable info labels, and adaptive meter height
+--   + Notes: Kept the custom body editor typing target active so REAPER global shortcuts do not intercept note input
 -- v0.3.0
 --   + Workbench: Added manual UI scaling presets for small touch screens through large high-resolution displays
 --   + Workbench: Added automatic contrast correction for readable text on light and dark theme backgrounds

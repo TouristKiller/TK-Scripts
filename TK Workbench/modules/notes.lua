@@ -72,6 +72,12 @@ local state = {
   font_cache = {}
 }
 
+local function request_keyboard_capture(ctx)
+  if not r.ImGui_SetNextFrameWantCaptureKeyboard then return end
+  local ok = pcall(r.ImGui_SetNextFrameWantCaptureKeyboard, ctx, true)
+  if not ok then pcall(r.ImGui_SetNextFrameWantCaptureKeyboard, ctx) end
+end
+
 local function copy_default(value)
   if type(value) ~= "table" then return value end
   local target = {}
@@ -1516,6 +1522,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       return apply_candidate(new_text, new_caret, selection_start, selection_end)
     end
     if editor.active then
+      request_keyboard_capture(ctx)
       local ctrl_down = false
       if r.ImGui_IsKeyDown and r.ImGui_Key_LeftCtrl and r.ImGui_Key_RightCtrl then ctrl_down = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftCtrl()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightCtrl()) end
       if ctrl_down and r.ImGui_Key_A and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_A(), false) then

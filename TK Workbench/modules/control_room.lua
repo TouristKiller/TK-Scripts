@@ -23,6 +23,9 @@ local defaults = {
   dim_db = -12,
   monitor_aliases = {},
   monitor_modes = {},
+  meter_open = false,
+  meter_compact = true,
+  meter_adaptive_height = true,
   meter_source = "master",
   meter_fx_auto_install = true,
   meter_read_hz = 20,
@@ -1534,7 +1537,6 @@ local function set_meter_item_selected(settings, id, enabled)
   local selected = selected_meter_item_map(settings)
   local count = selected_meter_item_count(settings)
   if enabled and not selected[id] and count >= (MeterEngine.max_display_items or 6) then return false end
-  if not enabled and selected[id] and count <= 1 then return false end
   selected[id] = enabled == true
   local next_items = {}
   for _, item in ipairs(MeterEngine.available_items or {}) do
@@ -1562,8 +1564,14 @@ local function draw_meter_settings_popup(app, settings)
     local changed, value = r.ImGui_Checkbox(ctx, tostring(item.label or item.id), checked)
     if changed and set_meter_item_selected(settings, item.id, value) and app.save_settings then app.save_settings() end
     if not checked and count >= (MeterEngine.max_display_items or 6) and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Maximum 6 values") end
-    if checked and count <= 1 and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "At least 1 value") end
   end
+  r.ImGui_Separator(ctx)
+  local adaptive_changed, adaptive_value = r.ImGui_Checkbox(ctx, "Adaptive height", settings.meter_adaptive_height ~= false)
+  if adaptive_changed then
+    settings.meter_adaptive_height = adaptive_value == true
+    if app.save_settings then app.save_settings() end
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Use all available height for the meter") end
   r.ImGui_Separator(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Target LUFS")
   r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
@@ -1705,6 +1713,22 @@ local function draw_lane(app, lane, settings, width, height)
   r.ImGui_PopID(ctx)
 end
 
+local function set_meter_open(app, settings, open)
+  open = open == true
+  state.meter_open = open
+  settings.meter_open = open
+  if open then state.setup_open = false end
+  if app.save_settings then app.save_settings() end
+end
+
+local function queue_meter_reset(source)
+  if not source then return end
+  state.pending_meter_reset = { source_id = source.id, track_guid = track_guid(source.track) }
+  state.meter_peaks[source.id or "none"] = { left = 0, right = 0 }
+  state.meters["meter_l:" .. tostring(source.id or "none")] = 0
+  state.meters["meter_r:" .. tostring(source.id or "none")] = 0
+end
+
 local function draw_header(app, lanes)
   local ctx = app.ctx
   local active_count = 0
@@ -1727,20 +1751,17 @@ local function draw_meter_panel(app, settings, footer_height)
     r.ImGui_SetCursorScreenPos(ctx, panel_x, start_y)
     local source, sources = active_meter_source(app, settings)
     if source and source.id ~= settings.meter_source and valid_track(source.track) then settings.meter_source = source.id end
-    r.ImGui_TextColored(ctx, Theme.colors.accent, "Meter")
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Reset##control_room_meter_reset") then
-      if source then
-        state.pending_meter_reset = { source_id = source.id, track_guid = track_guid(source.track) }
-        state.meter_peaks[source.id or "none"] = { left = 0, right = 0 }
-        state.meters["meter_l:" .. tostring(source.id or "none")] = 0
-        state.meters["meter_r:" .. tostring(source.id or "none")] = 0
-      end
-    end
+    local button_gap = UIScale.gap(6)
+    local settings_button_w = UIScale.text_button_w(ctx, "...", 34, 6)
+    local main_button_w = math.max(UIScale.round(44), (panel_w - settings_button_w - button_gap * 2) / 2)
+    if r.ImGui_Button(ctx, "Reset##control_room_meter_reset", main_button_w, 0) then queue_meter_reset(source) end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Reset meter history") end
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Settings##control_room_meter_settings") then state.meter_settings_open = true end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose visible meter values") end
+    r.ImGui_SameLine(ctx, 0, button_gap)
+    if r.ImGui_Button(ctx, "Back##control_room_meter_back", main_button_w, 0) then set_meter_open(app, settings, false) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Back to Control Room") end
+    r.ImGui_SameLine(ctx, 0, button_gap)
+    if r.ImGui_Button(ctx, "...##control_room_meter_settings", settings_button_w, 0) then state.meter_settings_open = true end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Meter settings") end
     r.ImGui_SetCursorScreenPos(ctx, panel_x, select(2, r.ImGui_GetCursorScreenPos(ctx)))
     r.ImGui_SetNextItemWidth(ctx, panel_w)
     if r.ImGui_BeginCombo(ctx, "##control_room_meter_source", source and source.label or "Master") then
@@ -1767,14 +1788,17 @@ local function draw_meter_panel(app, settings, footer_height)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_SetCursorScreenPos(ctx, panel_x, select(2, r.ImGui_GetCursorScreenPos(ctx)))
     local meter_x, meter_y = r.ImGui_GetCursorScreenPos(ctx)
+    local _, meter_avail_h = r.ImGui_GetContentRegionAvail(ctx)
     local info_items = MeterEngine.info_items(settings, source, Theme.colors)
     local divider_gap_top = UIScale.round(10)
     local divider_gap_bottom = UIScale.round(10)
     local info_gap = UIScale.round(5)
     local info_box_h = UIScale.round(58)
     local info_h = #info_items * info_box_h + math.max(0, #info_items - 1) * info_gap
-    local details_h = divider_gap_top + UIScale.round(1) + divider_gap_bottom + info_h + UIScale.round(4)
-    local meter_h = math.max(UIScale.round(80), math.min(UIScale.round(360), (avail_h or UIScale.round(220)) - details_h))
+    local details_h = #info_items > 0 and (divider_gap_top + UIScale.round(1) + divider_gap_bottom + info_h + UIScale.round(4)) or 0
+    local available_meter_h = (meter_avail_h or UIScale.round(220)) - details_h
+    local meter_h = settings.meter_adaptive_height ~= false and available_meter_h or math.min(UIScale.round(360), available_meter_h)
+    meter_h = math.max(UIScale.round(80), meter_h)
     r.ImGui_Dummy(ctx, panel_w, meter_h)
     local bottom_y = meter_y + meter_h
     draw_meter_scale(ctx, draw_list, meter_x + UIScale.round(2), meter_x + panel_w - UIScale.round(2), meter_y + UIScale.round(6), bottom_y - UIScale.round(4), settings)
@@ -1786,13 +1810,15 @@ local function draw_meter_panel(app, settings, footer_height)
     local reset_right = draw_meter_channel(ctx, draw_list, bar_left + bar_w + bar_gap, bar_left + bar_w * 2 + bar_gap, meter_y + UIScale.round(6), bottom_y - UIScale.round(4), right_value, peak.right, "R " .. format_db(peak.right or 0, settings), settings)
     if reset_left then peak.left = 0 end
     if reset_right then peak.right = 0 end
-    local divider_y = meter_y + meter_h + divider_gap_top
-    r.ImGui_DrawList_AddLine(draw_list, panel_x, divider_y, panel_x + panel_w, divider_y, color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0xAA), UIScale.px(1))
-    r.ImGui_SetCursorScreenPos(ctx, panel_x, divider_y + divider_gap_bottom)
-    local info_x, info_y = r.ImGui_GetCursorScreenPos(ctx)
-    r.ImGui_Dummy(ctx, panel_w, info_h)
-    for index, item in ipairs(info_items) do
-      draw_meter_info_box(ctx, draw_list, info_x, info_y + (index - 1) * (info_box_h + info_gap), panel_w, info_box_h, item.label, item.value, item.unit, item.color)
+    if #info_items > 0 then
+      local divider_y = meter_y + meter_h + divider_gap_top
+      r.ImGui_DrawList_AddLine(draw_list, panel_x, divider_y, panel_x + panel_w, divider_y, color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0xAA), UIScale.px(1))
+      r.ImGui_SetCursorScreenPos(ctx, panel_x, divider_y + divider_gap_bottom)
+      local info_x, info_y = r.ImGui_GetCursorScreenPos(ctx)
+      r.ImGui_Dummy(ctx, panel_w, info_h)
+      for index, item in ipairs(info_items) do
+        draw_meter_info_box(ctx, draw_list, info_x, info_y + (index - 1) * (info_box_h + info_gap), panel_w, info_box_h, item.label, item.value, item.unit, item.color)
+      end
     end
     r.ImGui_EndChild(ctx)
   end
@@ -1804,44 +1830,47 @@ local function draw_control_footer(app, settings)
   local left_x, top_y = r.ImGui_GetCursorScreenPos(ctx)
   local width = r.ImGui_GetContentRegionAvail(ctx)
   local footer_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(14)
+  local meter_compact = state.meter_open and settings.meter_compact == true
   r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, left_x + width, top_y + footer_h, 0x00000033, UIScale.px(4))
   r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, left_x + width, top_y + footer_h, Theme.colors.border, UIScale.px(4), 0, UIScale.px(0.8))
   r.ImGui_SetCursorScreenPos(ctx, left_x + UIScale.round(8), top_y + UIScale.round(7))
   local button_h = r.ImGui_GetFrameHeight(ctx)
   local active_button_text = Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5)
-  if state.dim_enabled then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-  end
-  local dim_clicked = r.ImGui_Button(ctx, "DIM##control_room_dim", UIScale.text_button_w(ctx, "DIM", 46, 6), button_h)
-  if state.dim_enabled then r.ImGui_PopStyleColor(ctx, 4) end
-  if dim_clicked then toggle_monitor_dim(settings) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.dim_enabled and "Restore monitor levels" or "Dim monitor outputs") end
-  r.ImGui_SameLine(ctx)
-  if state.speaker_select_index ~= nil then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-    local all_clicked = r.ImGui_Button(ctx, "ALL##control_room_speaker_all", UIScale.text_button_w(ctx, "ALL", 38, 6), button_h)
-    r.ImGui_PopStyleColor(ctx, 4)
-    if all_clicked then restore_speaker_select() end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Restore all speaker mutes") end
+  if not meter_compact then
+    if state.dim_enabled then
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
+    end
+    local dim_clicked = r.ImGui_Button(ctx, "DIM##control_room_dim", UIScale.text_button_w(ctx, "DIM", 46, 6), button_h)
+    if state.dim_enabled then r.ImGui_PopStyleColor(ctx, 4) end
+    if dim_clicked then toggle_monitor_dim(settings) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.dim_enabled and "Restore monitor levels" or "Dim monitor outputs") end
+    r.ImGui_SameLine(ctx)
+    if state.speaker_select_index ~= nil then
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
+      local all_clicked = r.ImGui_Button(ctx, "ALL##control_room_speaker_all", UIScale.text_button_w(ctx, "ALL", 38, 6), button_h)
+      r.ImGui_PopStyleColor(ctx, 4)
+      if all_clicked then restore_speaker_select() end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Restore all speaker mutes") end
+      r.ImGui_SameLine(ctx)
+    end
+    if state.setup_open then
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
+    end
+    local setup_clicked = r.ImGui_Button(ctx, "Setup##control_room_setup", UIScale.text_button_w(ctx, "Setup", 62, 8), button_h)
+    if state.setup_open then r.ImGui_PopStyleColor(ctx, 4) end
+    if setup_clicked then state.setup_open = not state.setup_open end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Monitor routing setup") end
     r.ImGui_SameLine(ctx)
   end
-  if state.setup_open then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-  end
-  local setup_clicked = r.ImGui_Button(ctx, "Setup##control_room_setup", UIScale.text_button_w(ctx, "Setup", 62, 8), button_h)
-  if state.setup_open then r.ImGui_PopStyleColor(ctx, 4) end
-  if setup_clicked then state.setup_open = not state.setup_open end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Monitor routing setup") end
-  r.ImGui_SameLine(ctx)
   if state.meter_open then
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
@@ -1852,7 +1881,7 @@ local function draw_control_footer(app, settings)
   local meter_label = compact_footer and "Mtr" or "Meter"
   local meter_clicked = r.ImGui_Button(ctx, meter_label .. "##control_room_meter", UIScale.text_button_w(ctx, meter_label, compact_footer and 42 or 58, 8), button_h)
   if state.meter_open then r.ImGui_PopStyleColor(ctx, 4) end
-  if meter_clicked then state.meter_open = not state.meter_open end
+  if meter_clicked then set_meter_open(app, settings, not state.meter_open) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.meter_open and "Hide meter" or "Show meter") end
   r.ImGui_SetCursorScreenPos(ctx, left_x, top_y)
   r.ImGui_Dummy(ctx, width, footer_h + UIScale.round(4))
@@ -2327,12 +2356,14 @@ local function draw_lanes(app, settings, lanes, footer_height)
 end
 
 function M.init(app)
-  ensure_settings(app)
+  local settings = ensure_settings(app)
+  state.meter_open = settings.meter_open == true
 end
 
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  state.meter_open = settings.meter_open == true
   if not state.cue_names_synced then
     sync_cue_track_names(settings)
     state.cue_names_synced = true
@@ -2348,17 +2379,23 @@ function M.draw(app)
     if not ok and app then app.status = "Meter reset failed: " .. tostring(err) end
   end
   local lanes = build_lanes(app, settings)
-  local footer_height = r.ImGui_GetFrameHeight(ctx) + UIScale.round(22)
-  draw_header(app, lanes)
-  r.ImGui_Dummy(ctx, UIScale.round(1), UIScale.round(4))
+  local footer_height = state.meter_open and 0 or (r.ImGui_GetFrameHeight(ctx) + UIScale.round(22))
+  if not state.meter_open then
+    draw_header(app, lanes)
+    r.ImGui_Dummy(ctx, UIScale.round(1), UIScale.round(4))
+  end
   if state.meter_open then
     draw_meter_panel(app, settings, footer_height)
   else
     draw_lanes(app, settings, lanes, footer_height)
   end
-  draw_control_footer(app, settings)
-  draw_setup_popup(app, settings)
-  draw_meter_settings_popup(app, settings)
+  if not state.meter_open then
+    draw_control_footer(app, settings)
+    draw_setup_popup(app, settings)
+    draw_meter_settings_popup(app, settings)
+  else
+    draw_meter_settings_popup(app, settings)
+  end
 end
 
 return M

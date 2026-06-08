@@ -209,9 +209,6 @@ local function selected_items(settings)
       selected[#selected + 1] = id
     end
   end
-  if #selected == 0 and source ~= M.default_display_items then
-    for _, id in ipairs(M.default_display_items) do selected[#selected + 1] = id end
-  end
   return selected
 end
 
