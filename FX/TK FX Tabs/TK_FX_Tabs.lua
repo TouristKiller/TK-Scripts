@@ -1,7 +1,9 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.0.1
 -- @changelog:
+--   + Added owner-pairing debug status in settings
+--   + Fixed viewport fallback startup error when native window rect is unavailable
 --   + Initial FX Tabs release
 --   + Added tabs for track FX and instruments with native floating FX window placement
 --   + Added All FX / Instruments only content modes and tab filters
@@ -160,6 +162,22 @@ end
 local function imgui_to_native(x, y)
   if r.ImGui_PointConvertNative then return r.ImGui_PointConvertNative(ctx, x, y, true) end
   return x, y
+end
+
+local function main_viewport_rect()
+  local vx, vy, vw, vh = 80, 80, 1280, 720
+  local vp = r.ImGui_GetMainViewport and r.ImGui_GetMainViewport(ctx)
+  if vp then
+    if r.ImGui_Viewport_GetPos then
+      local x, y = r.ImGui_Viewport_GetPos(vp)
+      if x and y then vx, vy = x, y end
+    end
+    if r.ImGui_Viewport_GetSize then
+      local w, h = r.ImGui_Viewport_GetSize(vp)
+      if w and h and w > 0 and h > 0 then vw, vh = w, h end
+    end
+  end
+  return vx, vy, vw, vh
 end
 
 local function reaper_window_rect()
@@ -462,22 +480,6 @@ local function draw_topbar_background()
       r.ImGui_DrawList_AddLine(draw_list, line_x2, line_y + rounding, line_x2, line_bottom, border_color, 1)
     end
   end
-end
-
-local function main_viewport_rect()
-  local vx, vy, vw, vh = 80, 80, 1280, 720
-  local vp = r.ImGui_GetMainViewport and r.ImGui_GetMainViewport(ctx)
-  if vp then
-    if r.ImGui_Viewport_GetPos then
-      local x, y = r.ImGui_Viewport_GetPos(vp)
-      if x and y then vx, vy = x, y end
-    end
-    if r.ImGui_Viewport_GetSize then
-      local w, h = r.ImGui_Viewport_GetSize(vp)
-      if w and h and w > 0 and h > 0 then vw, vh = w, h end
-    end
-  end
-  return vx, vy, vw, vh
 end
 
 local function is_valid_media_track(track)
@@ -831,6 +833,16 @@ end
 
 local function topbar_owner_active()
   return topbar_owner_supported and topbar_owner_hwnd == topbar_hwnd() and topbar_owner_fx_hwnd ~= nil
+end
+
+function owner_pairing_status_label()
+  if not IS_WINDOWS then return "Owner pairing: unsupported (non-Windows)" end
+  if not r.JS_Window_SetLong or not r.JS_Window_AddressFromHandle then return "Owner pairing: unavailable (js_ReaScriptAPI owner API missing)" end
+  if not topbar_owner_supported then return "Owner pairing: failed" end
+  if active_key == "" then return "Owner pairing: waiting for active FX" end
+  if entry_blocked_state(find_entry_by_key(active_key)) then return "Owner pairing: not used for bypass/offline state" end
+  if topbar_owner_active() then return "Owner pairing: active" end
+  return "Owner pairing: waiting for FX window"
 end
 
 local function current_foreground_hwnd()
@@ -1977,6 +1989,8 @@ local function draw_settings_popup()
     end
     local changed_select, next_select = r.ImGui_Checkbox(ctx, "Select track on tab change", settings.select_track_on_open)
     if changed_select then settings.select_track_on_open = next_select; ext_set_bool("select_track_on_open", next_select) end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, theme.text_dim, owner_pairing_status_label())
     r.ImGui_Separator(ctx)
     draw_theme_settings()
     r.ImGui_EndPopup(ctx)
