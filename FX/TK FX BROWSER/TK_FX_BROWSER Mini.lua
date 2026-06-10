@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.1.1
 -- @changelog:
 --[[ 
+    v1.1.1:
+        + Patchbay: added a Track notes panel (View > Show notes) that shows read-only track notes from TK Notes or Workbench directly inside the canvas.
+        + Patchbay: the notes panel can be dragged anywhere in the canvas, resized via the bottom-right grip, and switched between TK Notes and Workbench sources.
+
     v1.1.0:
         + Patchbay: added node Groups to create named groups from selected nodes and recall only that group via the Groups toolbar.
         + Patchbay: added node right-click Add to group and Remove from group submenus, working on the full selection or the single node.

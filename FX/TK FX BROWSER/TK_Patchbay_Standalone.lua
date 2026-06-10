@@ -1,7 +1,10 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.2.1
 -- @changelog:
+--   v1.2.1:
+--       + Added a Track notes panel (View > Show notes) that shows read-only track notes from TK Notes or Workbench directly inside the canvas.
+--       + The notes panel can be dragged anywhere in the canvas, resized via the bottom-right grip, and switched between TK Notes and Workbench sources.
 --   v1.2.0:
 --       + Added Patchbay node Groups: create named groups from selected nodes and recall only that group of nodes via the Groups toolbar.
 --       + Added node right-click Add to group and Remove from group submenus, working on the full selection or the single node.

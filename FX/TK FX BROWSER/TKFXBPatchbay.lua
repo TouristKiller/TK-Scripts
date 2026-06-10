@@ -3937,8 +3937,398 @@ local function RenderCableShopHeader(ctx)
     return false
 end
 
+function NotesReadProjExt(key)
+    if type(r.GetSetProjExtState) == "function" then
+        local _, value = r.GetSetProjExtState(0, "TK_NOTES", key, "")
+        if value and value ~= "" then return value end
+    end
+    if type(r.GetProjExtState) == "function" then
+        local ok, value = r.GetProjExtState(0, "TK_NOTES", key)
+        if (ok == true or ok == 1) and value and value ~= "" then return value end
+    end
+    return ""
+end
+
+function NotesReadWorkbench(key)
+    if type(r.GetSetProjExtState) == "function" then
+        local _, value = r.GetSetProjExtState(0, "TK_WORKBENCH_NOTES", key, "")
+        if value and value ~= "" then return value end
+    end
+    if type(r.GetProjExtState) == "function" then
+        local ok, value = r.GetProjExtState(0, "TK_WORKBENCH_NOTES", key)
+        if (ok == true or ok == 1) and value and value ~= "" then return value end
+    end
+    return ""
+end
+
+function NotesJsonDecode(str)
+    if type(str) ~= "string" or str == "" then return nil end
+    local pos = 1
+    local parse_value
+    local function skip_ws()
+        local _, e = str:find("^[ \t\r\n]*", pos)
+        if e then pos = e + 1 end
+    end
+    local function parse_string()
+        pos = pos + 1
+        local buf = {}
+        while pos <= #str do
+            local c = str:sub(pos, pos)
+            if c == '"' then
+                pos = pos + 1
+                return table.concat(buf)
+            elseif c == "\\" then
+                local n = str:sub(pos + 1, pos + 1)
+                if n == "n" then buf[#buf + 1] = "\n"
+                elseif n == "t" then buf[#buf + 1] = "\t"
+                elseif n == "r" then buf[#buf + 1] = "\r"
+                elseif n == "b" then buf[#buf + 1] = "\b"
+                elseif n == "f" then buf[#buf + 1] = "\f"
+                elseif n == "/" then buf[#buf + 1] = "/"
+                elseif n == "u" then
+                    local hex = str:sub(pos + 2, pos + 5)
+                    local cp = tonumber(hex, 16)
+                    if cp then
+                        if cp < 0x80 then
+                            buf[#buf + 1] = string.char(cp)
+                        elseif cp < 0x800 then
+                            buf[#buf + 1] = string.char(0xC0 + math.floor(cp / 0x40), 0x80 + (cp % 0x40))
+                        else
+                            buf[#buf + 1] = string.char(0xE0 + math.floor(cp / 0x1000), 0x80 + (math.floor(cp / 0x40) % 0x40), 0x80 + (cp % 0x40))
+                        end
+                    end
+                    pos = pos + 4
+                else
+                    buf[#buf + 1] = n
+                end
+                pos = pos + 2
+            else
+                buf[#buf + 1] = c
+                pos = pos + 1
+            end
+        end
+        return table.concat(buf)
+    end
+    local function parse_array()
+        pos = pos + 1
+        local arr = {}
+        skip_ws()
+        if str:sub(pos, pos) == "]" then pos = pos + 1; return arr end
+        while pos <= #str do
+            skip_ws()
+            arr[#arr + 1] = parse_value()
+            skip_ws()
+            local c = str:sub(pos, pos)
+            if c == "," then pos = pos + 1
+            elseif c == "]" then pos = pos + 1; return arr
+            else return arr end
+        end
+        return arr
+    end
+    local function parse_object()
+        pos = pos + 1
+        local obj = {}
+        skip_ws()
+        if str:sub(pos, pos) == "}" then pos = pos + 1; return obj end
+        while pos <= #str do
+            skip_ws()
+            if str:sub(pos, pos) ~= '"' then return obj end
+            local key = parse_string()
+            skip_ws()
+            if str:sub(pos, pos) ~= ":" then return obj end
+            pos = pos + 1
+            skip_ws()
+            obj[key] = parse_value()
+            skip_ws()
+            local c = str:sub(pos, pos)
+            if c == "," then pos = pos + 1
+            elseif c == "}" then pos = pos + 1; return obj
+            else return obj end
+        end
+        return obj
+    end
+    parse_value = function()
+        skip_ws()
+        local c = str:sub(pos, pos)
+        if c == '"' then return parse_string()
+        elseif c == "{" then return parse_object()
+        elseif c == "[" then return parse_array()
+        elseif c == "t" then pos = pos + 4; return true
+        elseif c == "f" then pos = pos + 5; return false
+        elseif c == "n" then pos = pos + 4; return nil
+        else
+            local num = str:match("^%-?%d+%.?%d*[eE]?[%+%-]?%d*", pos)
+            if num and num ~= "" then
+                pos = pos + #num
+                return tonumber(num)
+            end
+            pos = pos + 1
+            return nil
+        end
+    end
+    local ok, result = pcall(parse_value)
+    if ok then return result end
+    return nil
+end
+
+function NotesUnescapeTk(s)
+    return (s:gsub("::", "\0"):gsub("||", "\1"):gsub("%z", ":"):gsub("\1", "|"))
+end
+
+function NotesTkText(guid)
+    local tabs_enabled = NotesReadProjExt(guid .. "::tabs_enabled")
+    if tabs_enabled == "true" then
+        local data = NotesReadProjExt(guid .. "::tabs_data")
+        if data ~= "" then
+            local protected = data:gsub("||", "\1"):gsub("::", "\2")
+            local parts = {}
+            for piece in (protected .. "|"):gmatch("([^|]*)|") do
+                parts[#parts + 1] = piece
+            end
+            local sections = {}
+            for i = 3, #parts do
+                local raw = parts[i]
+                local name, text = raw:match("^(.-)\2(.*)$")
+                if not name then name, text = raw:match("^(.-):(.*)$") end
+                name = name or ""
+                text = text or ""
+                name = (name:gsub("\2", ":"):gsub("\1", "|"))
+                text = (text:gsub("\2", ":"):gsub("\1", "|"))
+                local block = {}
+                if name ~= "" then block[#block + 1] = "[" .. name .. "]" end
+                if text ~= "" then block[#block + 1] = text end
+                if #block > 0 then sections[#sections + 1] = table.concat(block, "\n") end
+            end
+            return table.concat(sections, "\n\n")
+        end
+    end
+    return NotesReadProjExt(guid)
+end
+
+function NotesWorkbenchText(guid)
+    local raw = NotesReadWorkbench(guid .. "::blocks")
+    if raw == "" then return "" end
+    local blocks = NotesJsonDecode(raw)
+    if type(blocks) ~= "table" then return "" end
+    local sections = {}
+    for _, block in ipairs(blocks) do
+        if type(block) == "table" then
+            local title = tostring(block.title or "")
+            local body = tostring(block.body or "")
+            local part = {}
+            if title ~= "" and title ~= "Notes" then part[#part + 1] = "[" .. title .. "]" end
+            if body ~= "" then part[#part + 1] = body end
+            if #part > 0 then sections[#sections + 1] = table.concat(part, "\n") end
+        end
+    end
+    return table.concat(sections, "\n\n")
+end
+
+function NotesStripMarkup(s)
+    if not s or s == "" then return s end
+    s = s:gsub("%*%*(.-)%*%*", "%1")
+    s = s:gsub("__(.-)__", "%1")
+    return s
+end
+
+function NotesGetText(guid, source)
+    if not guid or guid == "" then return "" end
+    if source == "workbench" then
+        return NotesStripMarkup(NotesWorkbenchText(guid))
+    end
+    return NotesStripMarkup(NotesTkText(guid))
+end
+
+function NotesSourceScriptPath(source)
+    local resource = r.GetResourcePath():gsub("\\", "/")
+    if source == "workbench" then
+        return resource .. "/Scripts/TK Scripts/TK Workbench/TK_Workbench.lua"
+    end
+    return resource .. "/Scripts/TK Scripts/FX/TK_NOTES.lua"
+end
+
+function NotesSourceScriptExists(source)
+    local path = NotesSourceScriptPath(source)
+    return r.file_exists and r.file_exists(path), path
+end
+
+function NotesOpenSource(source)
+    local exists, path = NotesSourceScriptExists(source)
+    if not exists then return false end
+    local cmd
+    local named = PatchbayFindRegisteredCommandForScript(path)
+    if named and r.NamedCommandLookup then
+        cmd = r.NamedCommandLookup(named)
+    end
+    if (not cmd or cmd == 0) and r.AddRemoveReaScript then
+        cmd = r.AddRemoveReaScript(true, 0, path, true)
+    end
+    if cmd and cmd ~= 0 then
+        r.Main_OnCommand(cmd, 0)
+        return true
+    end
+    return false
+end
+
+function RenderNotesHeader(ctx, pinned)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local header_h = 30
+    r.ImGui_InvisibleButton(ctx, "##patchbay_notes_header", avail_w, header_h)
+    local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    local close_x = x2 - 16
+    local close_y = (y1 + y2) * 0.5
+    local close_hovered = mx >= close_x - 9 and mx <= close_x + 9 and my >= close_y - 9 and my <= close_y + 9
+    local close_col = close_hovered and 0xFF7474FF or 0xE94343FF
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, 0x15171BFF, 6)
+    r.ImGui_DrawList_AddLine(draw_list, x1, y2, x2, y2, 0x2A2E36FF, 1)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x, close_y, 5.5, close_col)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    r.ImGui_DrawList_AddText(draw_list, x1 + 12, y1 + ((header_h - text_h) * 0.5), 0xE8E8E8FF, "Track notes")
+    local close_clicked = close_hovered and r.ImGui_IsMouseClicked(ctx, 0)
+    return close_clicked
+end
+
+function NotesRenderBodyAndFooter(ctx, cfg, source)
+    local selected = GetSelectedPatchbayTracks()
+    local target = selected[1]
+    local body_h = -36
+
+    if target and target.guid and target.guid ~= MASTER_GUID then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+        r.ImGui_Text(ctx, target.name and target.name ~= "" and target.name or "Track")
+        r.ImGui_PopStyleColor(ctx, 1)
+        r.ImGui_Separator(ctx)
+        local text = NotesGetText(target.guid, source)
+        if r.ImGui_BeginChild(ctx, "##patchbay_notes_body", 0, body_h, 1) then
+            if text and text ~= "" then
+                r.ImGui_TextWrapped(ctx, text)
+            else
+                r.ImGui_TextDisabled(ctx, "No notes")
+            end
+            r.ImGui_EndChild(ctx)
+        end
+    else
+        if r.ImGui_BeginChild(ctx, "##patchbay_notes_body", 0, body_h, 1) then
+            r.ImGui_TextDisabled(ctx, "Select a track")
+            r.ImGui_EndChild(ctx)
+        end
+    end
+
+    r.ImGui_Separator(ctx)
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local spacing = 6
+    local has_open = NotesSourceScriptExists(source)
+    local btn_count = has_open and 3 or 2
+    local btn_w = (avail_w - spacing * (btn_count - 1)) / btn_count
+    local active_col = 0x3A6EA5FF
+    local function NotesSourceButton(label, key)
+        local is_active = source == key
+        if is_active then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), active_col)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), active_col)
+        end
+        local clicked = r.ImGui_Button(ctx, label, btn_w, 0)
+        if is_active then r.ImGui_PopStyleColor(ctx, 2) end
+        if clicked and not is_active then
+            cfg.patchbay_notes_source = key
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+    end
+    NotesSourceButton("TK Notes", "tk_notes")
+    r.ImGui_SameLine(ctx, 0, spacing)
+    NotesSourceButton("Workbench", "workbench")
+    if has_open then
+        r.ImGui_SameLine(ctx, 0, spacing)
+        if r.ImGui_Button(ctx, "Open", btn_w, 0) then
+            NotesOpenSource(source)
+        end
+    end
+end
+
+function RenderNotesPinnedOverlay(ctx, origin_x, origin_y, avail_w, avail_h)
+    local cfg = GetConfig()
+    if not (cfg and cfg.patchbay_show_notes) then return end
+    local source = cfg.patchbay_notes_source
+    if source ~= "workbench" then source = "tk_notes" end
+
+    local panel_w = tonumber(cfg.patchbay_notes_w) or 320
+    local panel_h = tonumber(cfg.patchbay_notes_h) or 420
+    panel_w = math.max(220, math.min(panel_w, avail_w - 8))
+    panel_h = math.max(140, math.min(panel_h, avail_h - 8))
+
+    local off_x = tonumber(cfg.patchbay_notes_off_x)
+    local off_y = tonumber(cfg.patchbay_notes_off_y)
+    if not off_x then off_x = avail_w - panel_w - 12 end
+    if not off_y then off_y = 12 end
+    off_x = math.max(0, math.min(off_x, avail_w - panel_w))
+    off_y = math.max(0, math.min(off_y, avail_h - panel_h))
+
+    local px = origin_x + off_x
+    local py = origin_y + off_y
+
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    r.ImGui_DrawList_AddRectFilled(draw_list, px, py, px + panel_w, py + panel_h, 0x1A1A1AFF, 6)
+    r.ImGui_DrawList_AddRect(draw_list, px, py, px + panel_w, py + panel_h, 0x3A3F49FF, 6, 0, 1)
+
+    r.ImGui_SetCursorScreenPos(ctx, px, py)
+    if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+    local child_flags = 0
+    if r.ImGui_WindowFlags_NoScrollbar then child_flags = child_flags | r.ImGui_WindowFlags_NoScrollbar() end
+    if r.ImGui_BeginChild(ctx, "##patchbay_notes_pinned", panel_w, panel_h, 0, child_flags) then
+        local close_clicked = RenderNotesHeader(ctx, true)
+        if r.ImGui_IsItemActive(ctx) and r.ImGui_IsMouseDragging(ctx, 0) then
+            local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
+            if dx ~= 0 or dy ~= 0 then
+                cfg.patchbay_notes_off_x = off_x + dx
+                cfg.patchbay_notes_off_y = off_y + dy
+                r.ImGui_ResetMouseDragDelta(ctx, 0)
+                if _G.SaveConfig then _G.SaveConfig() end
+            end
+        end
+        if close_clicked then
+            cfg.patchbay_show_notes = false
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        r.ImGui_Spacing(ctx)
+        NotesRenderBodyAndFooter(ctx, cfg, source)
+
+        local grip = 16
+        r.ImGui_SetCursorScreenPos(ctx, px + panel_w - grip, py + panel_h - grip)
+        if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+        r.ImGui_InvisibleButton(ctx, "##patchbay_notes_resize", grip, grip)
+        local grip_hovered = r.ImGui_IsItemHovered(ctx)
+        local grip_active = r.ImGui_IsItemActive(ctx)
+        if (grip_hovered or grip_active) and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNWSE then
+            r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNWSE())
+        end
+        if grip_active and r.ImGui_IsMouseDragging(ctx, 0) then
+            local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
+            if dx ~= 0 or dy ~= 0 then
+                cfg.patchbay_notes_w = math.max(220, math.min(panel_w + dx, avail_w - off_x))
+                cfg.patchbay_notes_h = math.max(140, math.min(panel_h + dy, avail_h - off_y))
+                r.ImGui_ResetMouseDragDelta(ctx, 0)
+                if _G.SaveConfig then _G.SaveConfig() end
+            end
+        end
+        local grip_col = (grip_hovered or grip_active) and 0xBFC7D2FF or 0x6A7280FF
+        local gx = px + panel_w - 4
+        local gy = py + panel_h - 4
+        for i = 0, 2 do
+            local o = i * 4
+            r.ImGui_DrawList_AddLine(draw_list, gx - o, gy, gx, gy - o, grip_col, 1.5)
+        end
+
+        r.ImGui_EndChild(ctx)
+    end
+end
+
+
 local function RenderCableShopWindow()
     if not cable_shop_open then return end
+
     local ctx = GetCtx()
     local cfg = GetConfig()
     EnsureCableShopConfig(cfg)
@@ -5440,6 +5830,12 @@ function ShowRoutingPatchbay()
         local changed_solo_path, new_solo_path = r.ImGui_Checkbox(ctx, "Solo path", solo_path)
         if changed_solo_path then
             cfg.patchbay_solo_path = new_solo_path
+            if _G.SaveConfig then _G.SaveConfig() end
+        end
+        local show_notes = cfg.patchbay_show_notes == true
+        local changed_show_notes, new_show_notes = r.ImGui_Checkbox(ctx, "Show notes", show_notes)
+        if changed_show_notes then
+            cfg.patchbay_show_notes = new_show_notes
             if _G.SaveConfig then _G.SaveConfig() end
         end
         if r.ImGui_Selectable(ctx, "Cable shop...") then
@@ -7248,6 +7644,8 @@ function ShowRoutingPatchbay()
     if layout_dirty and (r.time_precise() - last_save_time) > 2.0 and dragging_node_guid == nil then
         SaveLayout()
     end
+
+    RenderNotesPinnedOverlay(ctx, origin_x, origin_y, avail_w, avail_h)
 
     r.ImGui_EndChild(ctx)
     do

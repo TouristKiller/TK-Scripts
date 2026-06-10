@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.1.1
+-- @version 3.1.2
 -- @changelog:
 --[[ 
+    v3.1.2:
+        + Patchbay: added a Track notes panel (View > Show notes) that shows read-only track notes from TK Notes or Workbench directly inside the canvas.
+        + Patchbay: the notes panel can be dragged anywhere in the canvas, resized via the bottom-right grip, and switched between TK Notes and Workbench sources.
+
     v3.1.1:
         + Patchbay: added node Groups to create named groups from selected nodes and recall only that group via the Groups toolbar.
         + Patchbay: added node right-click Add to group and Remove from group submenus, working on the full selection or the single node.
