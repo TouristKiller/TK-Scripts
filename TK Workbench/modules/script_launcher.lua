@@ -707,8 +707,7 @@ function M.draw(app)
   if not labels_active then r.ImGui_PopStyleColor(ctx) end
   r.ImGui_SameLine(ctx)
   local search_w = math.max(UIScale.round(80), (avail_w or UIScale.round(320)) - button_h * 2 - labels_w - UIScale.round(32))
-  r.ImGui_SetNextItemWidth(ctx, search_w)
-  local search_changed, search = r.ImGui_InputTextWithHint(ctx, "##script_launcher_search", "Search scripts", settings.search_term or "")
+  local search_changed, search = UI.search_input(ctx, "##script_launcher_search", "Search scripts", settings.search_term or "", search_w)
   if search_changed then settings.search_term = search; state.dirty_filter = true; if app.save_settings then app.save_settings() end end
   if state.pending_edit_index and state.entries[state.pending_edit_index] then
     begin_form("edit", state.pending_edit_index, state.entries[state.pending_edit_index])

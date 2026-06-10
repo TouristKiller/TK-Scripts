@@ -1019,8 +1019,7 @@ local function draw_toolbar(app, settings, width)
   local settings_w = button_h
   local add_w = button_h
   local search_w = math.max(UIScale.round(82), width - settings_w - add_w - UIScale.round(18))
-  r.ImGui_SetNextItemWidth(ctx, search_w)
-  local search_changed, search = r.ImGui_InputTextWithHint(ctx, "##track_atlas_search", "Search tracks or tags", settings.search_term or "")
+  local search_changed, search = UI.search_input(ctx, "##track_atlas_search", "Search tracks or tags", settings.search_term or "", search_w)
   if search_changed then settings.search_term = search; state.last_filter_key = nil; if app.save_settings then app.save_settings() end end
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, "+##track_atlas_add", add_w, button_h) then r.ImGui_OpenPopup(ctx, "##track_atlas_new_tag_popup") end

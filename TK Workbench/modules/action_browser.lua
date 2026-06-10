@@ -293,13 +293,12 @@ function M.draw(app)
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
   local button_h = UIScale.button_h(ctx)
   local button_w = button_h
-  r.ImGui_PushItemWidth(ctx, math.max(UIScale.round(80), avail_w - (button_w * 3) - UIScale.round(24)))
-  local changed, search = r.ImGui_InputTextWithHint(ctx, "##action_browser_search", "Search actions", state.search_term or "")
+  local search_w = math.max(UIScale.round(80), avail_w - (button_w * 3) - UIScale.round(24))
+  local changed, search = UI.search_input(ctx, "##action_browser_search", "Search actions", state.search_term or "", search_w)
   if changed then
     state.search_term = search
     state.search_change_time = r.time_precise()
   end
-  r.ImGui_PopItemWidth(ctx)
 
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, state.show_categories and "G" or "F", button_w, button_h) then

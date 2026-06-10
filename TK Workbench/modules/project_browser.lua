@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
+local UI = require("core.ui")
 local json = require("core.json")
 
 local M = {
@@ -1660,8 +1661,7 @@ local function draw_toolbar(app, settings)
   r.ImGui_SameLine(ctx, 0, spacing)
   if r.ImGui_Button(ctx, "...", button_w, 0) then state.settings_popup = true end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Settings") end
-  r.ImGui_SetNextItemWidth(ctx, -1)
-  local changed, value = r.ImGui_InputText(ctx, "##project_search", settings.search_term or "")
+  local changed, value = UI.search_input(ctx, "##project_search", "Search", settings.search_term or "")
   if changed then
     settings.search_term = value
     state.search_changed_at = r.time_precise and r.time_precise() or os.clock()

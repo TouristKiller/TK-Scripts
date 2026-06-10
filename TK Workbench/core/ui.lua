@@ -170,4 +170,37 @@ function M.draw_info_line(ctx, text, options)
 	end
 end
 
+function M.search_input(ctx, id, hint, value, width)
+	value = tostring(value or "")
+	local spacing = UIScale.round(4)
+	local clear_w = UIScale.round(18)
+	local total_w = tonumber(width)
+	if not total_w or total_w <= 0 then total_w = r.ImGui_GetContentRegionAvail(ctx) or UIScale.round(200) end
+	local input_w = math.max(UIScale.round(40), total_w - clear_w - spacing)
+	r.ImGui_SetNextItemWidth(ctx, input_w)
+	local changed, new_value = r.ImGui_InputTextWithHint(ctx, id, hint, value)
+	if changed then value = new_value end
+	r.ImGui_SameLine(ctx, 0, spacing)
+	local btn_h = r.ImGui_GetFrameHeight(ctx)
+	local x, y = r.ImGui_GetCursorScreenPos(ctx)
+	local clicked = r.ImGui_InvisibleButton(ctx, id .. "_clear", clear_w, btn_h)
+	if value ~= "" then
+		local hovered = r.ImGui_IsItemHovered(ctx)
+		local draw_list = r.ImGui_GetWindowDrawList(ctx)
+		local cx = x + clear_w * 0.5
+		local cy = y + btn_h * 0.5
+		local radius = UIScale.round(7)
+		local circle = hovered and (Theme.colors.frame_hover or Theme.colors.frame_bg or 0x303030FF) or (Theme.colors.frame_bg or 0x242424FF)
+		r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, circle, 16)
+		local cross = hovered and (Theme.colors.text or 0xF0F0F0FF) or (Theme.colors.text_dim or 0xA0A0A0FF)
+		local d = UIScale.round(3)
+		local thickness = UIScale.px(1.4)
+		r.ImGui_DrawList_AddLine(draw_list, cx - d, cy - d, cx + d, cy + d, cross, thickness)
+		r.ImGui_DrawList_AddLine(draw_list, cx - d, cy + d, cx + d, cy - d, cross, thickness)
+		if hovered and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, "Clear search") end
+		if clicked then return true, "" end
+	end
+	return changed, value
+end
+
 return M

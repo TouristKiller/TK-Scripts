@@ -2635,13 +2635,11 @@ local function draw_toolbar(app, settings, avail_w)
   next_item()
   draw_settings_button(button_h)
   if row_started then r.ImGui_SetCursorPosY(ctx, math.max(0, r.ImGui_GetCursorPosY(ctx))) end
-  r.ImGui_PushItemWidth(ctx, width)
-  local changed, search = r.ImGui_InputTextWithHint(ctx, "##pb_search", "Search plugins", settings.search_term or "")
+  local changed, search = UI.search_input(ctx, "##pb_search", "Search plugins", settings.search_term or "", width)
   if changed then
     settings.search_term = search
     state.last_filter_key = nil
   end
-  r.ImGui_PopItemWidth(ctx)
   r.ImGui_Separator(ctx)
 end
 

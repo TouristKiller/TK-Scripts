@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.1
+-- @version 0.3.2
 -- @changelog:
+-- v0.3.2
+--   + Workbench: Added a clear (X) button to module search fields in Media Browser, Plugin Browser, Project Browser, Script Launcher, Track Tags, and Action Browser
+--   + Media Browser: Raised the default file scan cap to 200000 and added a configurable Max files setting up to five million
 -- v0.3.1
 --   + Control Room: Restored master meter screen state across REAPER restarts
 --   + Control Room: Added a focused meter view with Back, Reset, settings, removable info labels, and adaptive meter height

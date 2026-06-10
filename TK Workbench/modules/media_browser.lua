@@ -30,7 +30,7 @@ local defaults = {
   show_video = false,
   show_image = true,
   recursive = true,
-  max_scan_files = 50000,
+  max_scan_files = 200000,
   waveform_height = 128,
   preview_volume = 1.0,
   preview_fade_ms = 0,
@@ -163,9 +163,9 @@ local function ensure_settings(app)
     end
   end
   local max_scan_files = math.floor(tonumber(settings.max_scan_files) or defaults.max_scan_files)
-  if max_scan_files == 2500 then max_scan_files = defaults.max_scan_files end
+  if max_scan_files == 2500 or max_scan_files == 50000 then max_scan_files = defaults.max_scan_files end
   if settings.max_scan_files ~= max_scan_files then changed = true end
-  settings.max_scan_files = math.max(100, max_scan_files)
+  settings.max_scan_files = math.max(1000, math.min(5000000, max_scan_files))
   settings.waveform_height = math.max(72, math.min(220, math.floor(tonumber(settings.waveform_height) or defaults.waveform_height)))
   if settings.preview_fade_defaulted ~= true then
     settings.preview_fade_ms = 0
@@ -3453,6 +3453,21 @@ local function draw_media_settings_popup(app, settings)
   c, v = r.ImGui_Checkbox(ctx, "Compact list view", settings.compact_list == true)
   if c then settings.compact_list = v; changed = true end
   r.ImGui_Separator(ctx)
+  r.ImGui_Text(ctx, "Scanning")
+  r.ImGui_PushItemWidth(ctx, UIScale.round(170))
+  local scan_value = math.floor(tonumber(settings.max_scan_files) or defaults.max_scan_files)
+  if r.ImGui_InputInt then
+    c, v = r.ImGui_InputInt(ctx, "Max files", scan_value, 5000, 50000)
+    if c then settings.max_scan_files = math.max(1000, math.min(5000000, math.floor(v))); changed = true end
+  else
+    c, v = r.ImGui_SliderInt(ctx, "Max files", scan_value, 1000, 1000000, "%d")
+    if c then settings.max_scan_files = math.max(1000, math.min(5000000, math.floor(v))); changed = true end
+  end
+  r.ImGui_PopItemWidth(ctx)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.text_dim)
+  r.ImGui_TextWrapped(ctx, "Maximum files loaded per location. Higher values use more memory; press Refresh to rescan.")
+  r.ImGui_PopStyleColor(ctx)
+  r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Folder browsing")
   c, v = r.ImGui_Checkbox(ctx, "Double-click to open folders", settings.folder_double_click_open == true)
   if c then settings.folder_double_click_open = v; changed = true end
@@ -3581,10 +3596,8 @@ local function draw_filter_buttons(ctx, settings, app, width)
   end
   local icon_w = UIScale.round(22)
   local search_w = math.max(1, row_w - icon_w * 4 - spacing_x * 4)
-  r.ImGui_PushItemWidth(ctx, search_w)
-  local search_changed, search = r.ImGui_InputTextWithHint(ctx, "##media_search", "Search", settings.search_term or "")
+  local search_changed, search = UI.search_input(ctx, "##media_search", "Search", settings.search_term or "", search_w)
   if search_changed then settings.search_term = search; state.last_filter_key = nil; if app.save_settings then app.save_settings() end end
-  r.ImGui_PopItemWidth(ctx)
   r.ImGui_SameLine(ctx)
   if draw_filter_toggle(ctx, "audio", settings.show_audio ~= false, "Audio files") then settings.show_audio = not (settings.show_audio ~= false); changed = true end
   r.ImGui_SameLine(ctx)
