@@ -53,6 +53,10 @@ local snapshot_names = {}
 local snapshot_map = {}
 local snapshot_selected_name = nil
 local snapshot_name_input = ""
+local group_names = {}
+local group_map = {}
+local active_group_name = nil
+local group_name_input = ""
 local route_audit_issues = {}
 local route_audit_error_count = 0
 local route_audit_warn_count = 0
@@ -1997,6 +2001,234 @@ local function DeleteSnapshotNamed(name)
     return true
 end
 
+function SaveGroupStore()
+    local lines = {}
+    for i = 1, #group_names do
+        local name = group_names[i]
+        local guids = group_map[name]
+        if name and name ~= "" and guids and #guids > 0 then
+            local parts = {}
+            for j = 1, #guids do
+                parts[#parts + 1] = UrlEncode(guids[j])
+            end
+            lines[#lines + 1] = UrlEncode(name) .. "|" .. table.concat(parts, ",")
+        end
+    end
+    r.SetProjExtState(0, "TK_FXB_PATCHBAY_GROUPS", "items", table.concat(lines, "\n"))
+    r.SetProjExtState(0, "TK_FXB_PATCHBAY_GROUPS", "active", active_group_name and UrlEncode(active_group_name) or "")
+end
+
+function LoadGroupStore()
+    group_names = {}
+    group_map = {}
+    local _, raw = r.GetProjExtState(0, "TK_FXB_PATCHBAY_GROUPS", "items")
+    if raw and raw ~= "" then
+        for line in raw:gmatch("([^\n]+)") do
+            local a, b = line:match("^([^|]+)|(.*)$")
+            if a then
+                local name = UrlDecode(a)
+                if name ~= "" and not group_map[name] then
+                    local guids = {}
+                    if b and b ~= "" then
+                        for tok in b:gmatch("([^,]+)") do
+                            local g = UrlDecode(tok)
+                            if g ~= "" then guids[#guids + 1] = g end
+                        end
+                    end
+                    group_names[#group_names + 1] = name
+                    group_map[name] = guids
+                end
+            end
+        end
+    end
+    local _, act = r.GetProjExtState(0, "TK_FXB_PATCHBAY_GROUPS", "active")
+    if act and act ~= "" then
+        local nm = UrlDecode(act)
+        active_group_name = group_map[nm] and nm or nil
+    else
+        active_group_name = nil
+    end
+end
+
+function SaveGroupNamed(name)
+    local n = Trim(name)
+    if n == "" then return false end
+    local guids = {}
+    local seen = {}
+    for guid, on in pairs(pb_selected_set) do
+        if on and guid and not seen[guid] then
+            seen[guid] = true
+            guids[#guids + 1] = guid
+        end
+    end
+    if #guids == 0 then return false end
+    if not group_map[n] then
+        group_names[#group_names + 1] = n
+    end
+    group_map[n] = guids
+    SaveGroupStore()
+    return true
+end
+
+function RecallGroup(name)
+    local n = Trim(name)
+    if not group_map[n] then return false end
+    active_group_name = n
+    local cfg = GetConfig()
+    if cfg then
+        cfg.routing_only_selected = false
+        cfg.patchbay_selected_with_children = false
+        cfg.patchbay_selected_subtree = false
+        if _G.SaveConfig then _G.SaveConfig() end
+    end
+    SaveGroupStore()
+    layout_dirty = true
+    return true
+end
+
+function ClearActiveGroup()
+    active_group_name = nil
+    SaveGroupStore()
+    layout_dirty = true
+end
+
+function DeleteGroupNamed(name)
+    local n = Trim(name)
+    if n == "" or not group_map[n] then return false end
+    group_map[n] = nil
+    for i = #group_names, 1, -1 do
+        if group_names[i] == n then
+            table.remove(group_names, i)
+            break
+        end
+    end
+    if active_group_name == n then active_group_name = nil end
+    SaveGroupStore()
+    return true
+end
+
+function AddGuidsToGroupNamed(name, guids)
+    local n = Trim(name)
+    if n == "" or not guids or #guids == 0 then return false end
+    local list = group_map[n]
+    if not list then
+        list = {}
+        group_map[n] = list
+        group_names[#group_names + 1] = n
+    end
+    local seen = {}
+    for i = 1, #list do seen[list[i]] = true end
+    local added = false
+    for i = 1, #guids do
+        local g = guids[i]
+        if g and not seen[g] then
+            seen[g] = true
+            list[#list + 1] = g
+            added = true
+        end
+    end
+    if added then SaveGroupStore() end
+    return added
+end
+
+function PatchbayNodeGroupTargetGuids(guid)
+    local guids = {}
+    if guid and pb_selected_set[guid] then
+        for g, on in pairs(pb_selected_set) do
+            if on and g then guids[#guids + 1] = g end
+        end
+    elseif guid then
+        guids[1] = guid
+    end
+    return guids
+end
+
+function RemoveGuidsFromGroupNamed(name, guids)
+    local n = Trim(name)
+    local list = group_map[n]
+    if n == "" or not list or not guids or #guids == 0 then return false end
+    local drop = {}
+    for i = 1, #guids do drop[guids[i]] = true end
+    local removed = false
+    for i = #list, 1, -1 do
+        if drop[list[i]] then
+            table.remove(list, i)
+            removed = true
+        end
+    end
+    if removed then
+        if #list == 0 then
+            DeleteGroupNamed(n)
+        else
+            SaveGroupStore()
+        end
+        layout_dirty = true
+    end
+    return removed
+end
+
+function PatchbayNodeGroupsContaining(guids)
+    local names = {}
+    if not guids or #guids == 0 then return names end
+    local want = {}
+    for i = 1, #guids do want[guids[i]] = true end
+    for gi = 1, #group_names do
+        local nm = group_names[gi]
+        local list = group_map[nm]
+        if list then
+            for i = 1, #list do
+                if want[list[i]] then
+                    names[#names + 1] = nm
+                    break
+                end
+            end
+        end
+    end
+    return names
+end
+
+function BuildActiveGroupVisibleSet()
+    if not active_group_name then return nil end
+    local guids = group_map[active_group_name]
+    if not guids or #guids == 0 then return nil end
+    local base = {}
+    local set = {}
+    for i = 1, #guids do
+        base[guids[i]] = true
+        set[guids[i]] = true
+    end
+    local cfg = GetConfig()
+    local include_neighbors = not (cfg and cfg.patchbay_group_include_neighbors == false)
+    if not include_neighbors then return set end
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local t = r.GetTrack(0, i)
+        if t and r.ValidatePtr(t, "MediaTrack*") then
+            local guid = r.GetTrackGUID(t)
+            if base[guid] then
+                local nsnd = r.GetTrackNumSends(t, 0)
+                for k = 0, nsnd - 1 do
+                    local d = r.GetTrackSendInfo_Value(t, 0, k, "P_DESTTRACK")
+                    if d and r.ValidatePtr(d, "MediaTrack*") then
+                        set[r.GetTrackGUID(d)] = true
+                    end
+                end
+                local nrec = r.GetTrackNumSends(t, -1)
+                for k = 0, nrec - 1 do
+                    local s = r.GetTrackSendInfo_Value(t, -1, k, "P_SRCTRACK")
+                    if s and r.ValidatePtr(s, "MediaTrack*") then
+                        set[r.GetTrackGUID(s)] = true
+                    end
+                end
+                if r.GetMediaTrackInfo_Value(t, "B_MAINSEND") == 1 then
+                    set[MASTER_GUID] = true
+                end
+            end
+        end
+    end
+    return set
+end
+
 local function GetCurrentProjectKey()
     local _, fn = r.EnumProjects(-1)
     return fn or ""
@@ -2212,6 +2444,7 @@ local function CollectVisibleTracks()
     local show_unrouted = cfg.patchbay_show_unrouted == true
     local TRACK_SEL = _G.TRACK
     local master = r.GetMasterTrack(0)
+    local group_set = BuildActiveGroupVisibleSet()
     local folder_stack = {}
     local selected_tracks = {}
     local selected_set = {}
@@ -2390,7 +2623,7 @@ local function CollectVisibleTracks()
                 end
             end
         end
-        if (has_routing or ((selected_with_children or selected_subtree) and selected_child_set and selected_child_set[t] == true)) and match_filter and match_sel then
+        if (has_routing or ((selected_with_children or selected_subtree) and selected_child_set and selected_child_set[t] == true)) and match_filter and match_sel and (not group_set or group_set[guid]) then
             if mainsend then visible_mainsend = true end
             list[#list + 1] = {
                 track = t,
@@ -2474,7 +2707,7 @@ local function CollectVisibleTracks()
     end
     if (selected_with_children or selected_subtree) and selected_set[master] then master_has_routing = true end
     local show_master = cfg.patchbay_show_master ~= false
-    if show_master and master_has_routing and master_match_filter and master_match_sel then
+    if show_master and master_has_routing and master_match_filter and master_match_sel and (not group_set or group_set[MASTER_GUID]) then
         list[#list + 1] = { track = master, idx = -1, name = "MASTER", guid = MASTER_GUID, is_master = true }
     end
     return list
@@ -4931,6 +5164,42 @@ local function RenderNodePopup()
                 layout_dirty = true
                 r.ImGui_CloseCurrentPopup(ctx)
             end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_BeginMenu(ctx, "Add to group") then
+                local group_target_guids = PatchbayNodeGroupTargetGuids(node_popup_guid)
+                r.ImGui_TextDisabled(ctx, string.format("%d node(s)", #group_target_guids))
+                r.ImGui_Separator(ctx)
+                if r.ImGui_Selectable(ctx, "New group...") then
+                    local ok, gname = r.GetUserInputs("Add to group", 1, "Group name:", "")
+                    if ok and Trim(gname) ~= "" then
+                        AddGuidsToGroupNamed(gname, group_target_guids)
+                    end
+                    r.ImGui_CloseCurrentPopup(ctx)
+                end
+                if #group_names > 0 then
+                    r.ImGui_Separator(ctx)
+                    for gi = 1, #group_names do
+                        local gnm = group_names[gi]
+                        if r.ImGui_Selectable(ctx, gnm) then
+                            AddGuidsToGroupNamed(gnm, group_target_guids)
+                            r.ImGui_CloseCurrentPopup(ctx)
+                        end
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+            local member_groups = PatchbayNodeGroupsContaining(PatchbayNodeGroupTargetGuids(node_popup_guid))
+            if #member_groups > 0 and r.ImGui_BeginMenu(ctx, "Remove from group") then
+                local remove_target_guids = PatchbayNodeGroupTargetGuids(node_popup_guid)
+                for gi = 1, #member_groups do
+                    local gnm = member_groups[gi]
+                    if r.ImGui_Selectable(ctx, gnm) then
+                        RemoveGuidsFromGroupNamed(gnm, remove_target_guids)
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
+            end
         end
         if r.ImGui_Selectable(ctx, "Remove Track...") then
             DeletePatchbayTrack(tr, node_popup_guid)
@@ -4979,6 +5248,7 @@ function ShowRoutingPatchbay()
         layout_loaded_project = proj_key
         LoadLayout()
         LoadSnapshotStore()
+        LoadGroupStore()
         pending_center_view = true
     end
 
@@ -5712,6 +5982,96 @@ function ShowRoutingPatchbay()
         r.ImGui_EndCombo(ctx)
     end
     r.ImGui_PopItemWidth(ctx)
+
+    r.ImGui_SameLine(ctx)
+    r.ImGui_PushItemWidth(ctx, 130)
+    local ch_grp, v_grp = r.ImGui_InputTextWithHint(ctx, "##patchbay_group_name", "Group name", group_name_input or "")
+    if ch_grp then group_name_input = v_grp end
+    local grp_input_x2, grp_input_y1 = nil, nil
+    if r.ImGui_GetItemRectMax and r.ImGui_GetItemRectMin then
+        grp_input_x2 = select(1, r.ImGui_GetItemRectMax(ctx))
+        grp_input_y1 = select(2, r.ImGui_GetItemRectMin(ctx))
+    end
+    r.ImGui_PopItemWidth(ctx)
+    if grp_input_x2 and grp_input_y1 and r.ImGui_SetCursorScreenPos then
+        r.ImGui_SetCursorScreenPos(ctx, grp_input_x2, grp_input_y1)
+    else
+        r.ImGui_SameLine(ctx)
+    end
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 2)
+    local grp_save_h = r.ImGui_GetFrameHeight(ctx)
+    if r.ImGui_Button(ctx, "G##patchbay_group_save", grp_save_h, grp_save_h) then
+        local name = Trim(group_name_input)
+        if name ~= "" and SaveGroupNamed(name) then
+            group_name_input = ""
+        end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Create group from selected nodes")
+    end
+    r.ImGui_PopStyleVar(ctx, 1)
+    r.ImGui_SameLine(ctx)
+    local grp_label = active_group_name or "Groups"
+    r.ImGui_PushItemWidth(ctx, 130)
+    local grp_flags = r.ImGui_ComboFlags_HeightLargest and r.ImGui_ComboFlags_HeightLargest() or 0
+    if r.ImGui_GetCursorScreenPos and r.ImGui_GetFrameHeight and r.ImGui_SetNextWindowPos then
+        local rx, ry = r.ImGui_GetCursorScreenPos(ctx)
+        local cond = r.ImGui_Cond_Appearing and r.ImGui_Cond_Appearing() or 0
+        r.ImGui_SetNextWindowPos(ctx, rx, ry + r.ImGui_GetFrameHeight(ctx) + 4, cond)
+    end
+    if r.ImGui_BeginCombo(ctx, "##patchbay_group_recall", grp_label, grp_flags) then
+        local include_neighbors = not (cfg.patchbay_group_include_neighbors == false)
+        local ch_nb, v_nb = r.ImGui_Checkbox(ctx, "Include neighbors", include_neighbors)
+        if ch_nb then
+            cfg.patchbay_group_include_neighbors = v_nb
+            if _G.SaveConfig then _G.SaveConfig() end
+            layout_dirty = true
+        end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Selectable(ctx, "Show all", active_group_name == nil) then
+            ClearActiveGroup()
+        end
+        r.ImGui_Separator(ctx)
+        local delete_group_name = nil
+        if r.ImGui_BeginTable then
+            if r.ImGui_BeginTable(ctx, "##patchbay_group_recall_table", 2) then
+                if r.ImGui_TableSetupColumn then
+                    local stretch = r.ImGui_TableColumnFlags_WidthStretch and r.ImGui_TableColumnFlags_WidthStretch() or 0
+                    local fixed = r.ImGui_TableColumnFlags_WidthFixed and r.ImGui_TableColumnFlags_WidthFixed() or 0
+                    r.ImGui_TableSetupColumn(ctx, "Name", stretch)
+                    r.ImGui_TableSetupColumn(ctx, "Del", fixed, 22)
+                end
+                for i = 1, #group_names do
+                    local nm = group_names[i]
+                    if r.ImGui_TableNextRow then r.ImGui_TableNextRow(ctx) end
+                    if r.ImGui_TableSetColumnIndex then r.ImGui_TableSetColumnIndex(ctx, 0) end
+                    if r.ImGui_Selectable(ctx, nm, active_group_name == nm) then
+                        RecallGroup(nm)
+                    end
+                    if r.ImGui_TableSetColumnIndex then r.ImGui_TableSetColumnIndex(ctx, 1) end
+                    if r.ImGui_SmallButton and r.ImGui_SmallButton(ctx, "x##group_del_" .. i) then
+                        delete_group_name = nm
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Delete group")
+                    end
+                end
+                r.ImGui_EndTable(ctx)
+            end
+        else
+            for i = 1, #group_names do
+                local nm = group_names[i]
+                if r.ImGui_Selectable(ctx, nm, active_group_name == nm) then
+                    RecallGroup(nm)
+                end
+            end
+        end
+        if delete_group_name then
+            DeleteGroupNamed(delete_group_name)
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopItemWidth(ctx)
     local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
     local hint_h = 22
     if not r.ImGui_BeginChild(ctx, "PatchbayCanvas", 0, -hint_h, 1, flags) then
@@ -6409,6 +6769,35 @@ function ShowRoutingPatchbay()
             local control_y = y2 - control_size - control_pad_y
             local node_control_hit = show_node_controls and my >= control_y - 4 and my <= y2 and ((mx >= control_left_x - 4 and mx <= control_left_x + control_left_group_w + 4) or (mx >= control_right_x - 4 and mx <= control_right_x + control_right_group_w + 4))
 
+            if (not is_master_node) and (not show_node_controls) then
+                local st_mute = tr.track_muted == true
+                local st_arm = tr.track_armed == true
+                local st_solo = tr.track_soloed == true
+                local st_freeze = tr.track_frozen == true
+                if st_mute or st_arm or st_solo or st_freeze then
+                    local strip_h = math.max(3, math.floor(4 * canvas_zoom + 0.5))
+                    local sx1 = x1 + bar_w
+                    local sx2 = x2 - 2
+                    local sy2 = y2 - 2
+                    local sy1 = sy2 - strip_h
+                    local seg_w = (sx2 - sx1) / 4
+                    r.ImGui_DrawList_AddRectFilled(draw_list, sx1, sy1, sx2, sy2, 0x000000AA, 0)
+                    local state_segs = {
+                        { on = st_mute, col = in_solo_focus and 0xC94FB0FF or 0xC94FB099 },
+                        { on = st_arm, col = in_solo_focus and 0xE05050FF or 0xE0505099 },
+                        { on = st_solo, col = in_solo_focus and 0xCCBB33FF or 0xCCBB3399 },
+                        { on = st_freeze, col = in_solo_focus and 0x4488CCFF or 0x4488CC99 },
+                    }
+                    for si = 1, 4 do
+                        if state_segs[si].on then
+                            local gx1 = sx1 + seg_w * (si - 1)
+                            local gx2 = (si == 4) and sx2 or (sx1 + seg_w * si)
+                            r.ImGui_DrawList_AddRectFilled(draw_list, gx1, sy1, gx2, sy2, state_segs[si].col, 0)
+                        end
+                    end
+                end
+            end
+
             if show_zoom_stats and not node_is_collapsed then
                 local stats
                 if is_master_node then
@@ -6558,7 +6947,7 @@ function ShowRoutingPatchbay()
                 local controls = {
                     { id = "##pin_btn", action = "pin", icon = "pin", width = control_size, x = control_left_x, active = node_is_pinned, on = 0xD7B95DFF, off = 0x4A4A4AFF, tip = node_is_pinned and "Unpin node" or "Pin node" },
                     { id = "##schema_btn", action = "schema", icon = "schema", width = control_size, x = control_left_x + control_size + control_gap, active = PB.fx_schema_open_guid == g, on = 0x6FB6D8FF, off = 0x4A4A4AFF, tip = PB.fx_schema_open_guid == g and "Hide FX chain schema" or "Show FX chain schema" },
-                    { id = "##mute_btn", action = "mute", label = "M", width = control_size, x = control_right_x, active = mute_on, on = 0xCC3333FF, off = 0x4A4A4AFF, tip = mute_tip, inherited_outline = tr.ancestor_muted and 0xFF5555FF or nil, inherited_outline2 = (tr.ancestor_muted and mute_on) and 0xFF9999FF or nil },
+                    { id = "##mute_btn", action = "mute", label = "M", width = control_size, x = control_right_x, active = mute_on, on = 0xC94FB0FF, off = 0x4A4A4AFF, tip = mute_tip, inherited_outline = tr.ancestor_muted and 0xFF5555FF or nil, inherited_outline2 = (tr.ancestor_muted and mute_on) and 0xFF9999FF or nil },
                     { id = "##solo_btn", action = "solo", label = "S", width = control_size, x = control_right_x + control_size + control_gap, active = solo_on, on = 0xCCBB33FF, off = 0x4A4A4AFF, tip = solo_tip, inherited_outline = tr.ancestor_soloed and 0xFFE066FF or nil, inherited_outline2 = (tr.ancestor_soloed and solo_on) and 0xFFF0AAFF or nil },
                     { id = "##arm_btn", action = "arm", label = "R", width = control_size, x = control_right_x + (control_size + control_gap) * 2, active = arm_on, on = 0xE05050FF, off = 0x4A4A4AFF, tip = arm_tip },
                     { id = "##freeze_btn", action = "freeze", label = "F", width = control_size, x = control_right_x + (control_size + control_gap) * 3, active = freeze_on, on = 0x4488CCFF, off = 0x4A4A4AFF, tip = freeze_tip }

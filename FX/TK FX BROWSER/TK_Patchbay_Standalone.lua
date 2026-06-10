@@ -1,7 +1,12 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.1.9
+-- @version 1.2.0
 -- @changelog:
+--   v1.2.0:
+--       + Added Patchbay node Groups: create named groups from selected nodes and recall only that group of nodes via the Groups toolbar.
+--       + Added node right-click Add to group and Remove from group submenus, working on the full selection or the single node.
+--       + Added a zoomed-out node state stripe showing mute, record-arm, solo, and frozen states with fixed colored segments.
+--       + Groups are stored per project and emptied groups are removed automatically.
 --   v1.1.9:
 --       + Changed Patchbay track creation shortcut from Ctrl+N to Ctrl+T for consistency with REAPER's default Add Track shortcut.
 --       + Improved Patchbay copy/paste so pasted track nodes can spawn at the cursor position from Patchbay paste actions.

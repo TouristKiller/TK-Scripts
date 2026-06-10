@@ -178,7 +178,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.1.0" author="TouristKiller" time="2026-06-06T20:00:00Z">
+    <version name="3.1.1" author="TouristKiller" time="2026-06-10T21:10:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -193,6 +193,11 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
+            v3.1.1
+            + Patchbay: added node Groups to create named groups from selected nodes and recall only that group via the Groups toolbar.
+            + Patchbay: added node right-click Add to group and Remove from group submenus, working on the full selection or the single node.
+            + Patchbay: added a zoomed-out node state stripe showing mute, record-arm, solo, and frozen states with fixed colored segments.
+            + Patchbay: groups are stored per project and emptied groups are removed automatically.
             v3.1.0:
             + Patchbay: changed track creation shortcut from Ctrl+N to Ctrl+T for consistency with REAPER's default Add Track shortcut.
             + Patchbay: improved copy/paste so pasted track nodes can spawn at the cursor position from Patchbay paste actions.
@@ -210,10 +215,16 @@
     </reapack>
 
     <reapack name="TK_Patchbay_Standalone.lua" type="script" desc="TK Patchbay Viewer (Standalone)">
-    <version name="1.1.9" author="TouristKiller" time="2026-06-06T20:00:00Z">
+    <version name="1.2.0" author="TouristKiller" time="2026-06-10T21:10:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Patchbay_Standalone.lua</source>
     <source file="TKFXBPatchbay_Standalone.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBPatchbay_Standalone.lua</source>
                 <changelog><![CDATA[
+
+            v1.2.0:
+            + Added Patchbay node Groups: create named groups from selected nodes and recall only that group of nodes via the Groups toolbar.
+            + Added node right-click Add to group and Remove from group submenus, working on the full selection or the single node.
+            + Added a zoomed-out node state stripe showing mute, record-arm, solo, and frozen states with fixed colored segments.
+            + Groups are stored per project and emptied groups are removed automatically.
             v1.1.9:
             + Changed Patchbay track creation shortcut from Ctrl+N to Ctrl+T for consistency with REAPER's default Add Track shortcut.
             + Improved Patchbay copy/paste so pasted track nodes can spawn at the cursor position from Patchbay paste actions.

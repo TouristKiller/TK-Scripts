@@ -1,8 +1,14 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.1.0
+-- @version 3.1.1
 -- @changelog:
 --[[ 
+    v3.1.1:
+        + Patchbay: added node Groups to create named groups from selected nodes and recall only that group via the Groups toolbar.
+        + Patchbay: added node right-click Add to group and Remove from group submenus, working on the full selection or the single node.
+        + Patchbay: added a zoomed-out node state stripe showing mute, record-arm, solo, and frozen states with fixed colored segments.
+        + Patchbay: groups are stored per project and emptied groups are removed automatically.
+
     v3.1.0:
         + Patchbay: changed track creation shortcut from Ctrl+N to Ctrl+T for consistency with REAPER's default Add Track shortcut.
         + Patchbay: improved copy/paste so pasted track nodes can spawn at the cursor position from Patchbay paste actions.
