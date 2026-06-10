@@ -401,6 +401,17 @@ v1.0.0
     </version>
     </reapack>
 
+    <reapack name="TK_FX_Tabs_ZOrder_Test.lua" type="script" desc="TK FX Tabs - Z-Order Test">
+    <version name="1.0.1.1" author="TouristKiller" time="2026-06-10T13:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20Tabs/TK_FX_Tabs_ZOrder_Test.lua</source>
+                <changelog><![CDATA[
+v1.0.1.1
++ Test build with delayed z-order correction pulses after tab switching
++ Based on TK FX Tabs 1.0.1
+]]></changelog>
+    </version>
+    </reapack>
+
 </category>
 
 <category name="Transport">
