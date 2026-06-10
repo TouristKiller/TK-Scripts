@@ -2,6 +2,15 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK FX Tabs 1.0.2] - 2026-06-10
+
+### TK FX Tabs
+#### Toegevoegd
+- **Tabbar edge calibration**: Linker- en rechterrand van de tabbar kunnen nu apart worden afgesteld vanuit de settings.
+
+#### Gewijzigd
+- **Floating FX positionering**: Tabbar-breedtecorrecties blijven los van de floating FX-window positie, zodat het FX-window niet meesnapt tijdens edge calibration.
+
 ## [TK Workbench 0.2.8] - 2026-06-06
 
 ### TK Workbench

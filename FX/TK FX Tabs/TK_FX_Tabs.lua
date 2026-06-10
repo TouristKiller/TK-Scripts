@@ -1,7 +1,8 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.0.1
+-- @version 1.0.2
 -- @changelog:
+--   + Added left and right tab bar edge calibration without moving the floating FX window
 --   + Added owner-pairing debug status in settings
 --   + Fixed viewport fallback startup error when native window rect is unavailable
 --   + Initial FX Tabs release
@@ -128,6 +129,8 @@ local settings = {
   content_mode = ext_get_number("content_mode", CONTENT_MODE_ALL_FX),
   tab_filter_mode = ext_get_number("tab_filter_mode", TAB_FILTER_ALL),
   plugin_overlap_y = ext_get_number("plugin_overlap_y", 12),
+  topbar_left_overhang = ext_get_number("topbar_left_overhang", topbar_side_overhang),
+  topbar_right_overhang = ext_get_number("topbar_right_overhang", topbar_side_overhang),
   theme_preset = ext_get_string("theme_preset", "REAPER Theme"),
   theme_topbar_border = ext_get_bool("theme_topbar_border", true),
   scan_interval = 0.75,
@@ -148,6 +151,18 @@ end
 local function clamp(value, min_value, max_value)
   value = tonumber(value) or min_value
   return math.max(min_value, math.min(max_value, value))
+end
+
+local function topbar_left_overhang()
+  return clamp(settings.topbar_left_overhang, -24, 48)
+end
+
+local function topbar_right_overhang()
+  return clamp(settings.topbar_right_overhang, -24, 48)
+end
+
+local function topbar_window_width(width)
+  return math.max(120, (width or topbar_width) + topbar_left_overhang() + topbar_right_overhang())
 end
 
 local function js_int(value)
@@ -694,30 +709,35 @@ local function centered_topbar_position()
   local reaper_left, reaper_top, reaper_width, reaper_height = reaper_window_rect()
   local overlap = clamp(settings.plugin_overlap_y, 0, 48)
   local margin = 10
-  local combo_width = math.max(size.width + topbar_side_overhang * 2, topbar_width + topbar_side_overhang * 2)
   local combo_height = topbar_height + size.height - overlap
-  local combo_left = reaper_left + (reaper_width - combo_width) * 0.5
+  local host_left = reaper_left + (reaper_width - size.width) * 0.5
   local combo_top = reaper_top + (reaper_height - combo_height) * 0.5
   local min_left = reaper_left + margin
-  local max_left = reaper_left + reaper_width - combo_width - margin
-  if max_left >= min_left then combo_left = clamp(combo_left, min_left, max_left) end
+  local max_left = reaper_left + reaper_width - size.width - margin
+  if max_left >= min_left then host_left = clamp(host_left, min_left, max_left) end
   local min_top = reaper_top + margin
   local max_top = reaper_top + reaper_height - combo_height - margin
   if max_top >= min_top then combo_top = clamp(combo_top, min_top, max_top) else combo_top = math.max(min_top, combo_top) end
-  return combo_left, combo_top
+  return host_left - topbar_left_overhang(), combo_top, host_left
 end
 
 local function apply_centered_host_rect()
-  local centered_left, centered_top = centered_topbar_position()
+  local centered_left, centered_top, centered_host_left = centered_topbar_position()
   if not centered_left or not centered_top then return false end
-  host_rect.left = centered_left + topbar_side_overhang
+  host_rect.left = centered_host_left or centered_left + topbar_side_overhang
   host_rect.top = centered_top + topbar_height - clamp(settings.plugin_overlap_y, 0, 48)
   return true
 end
 
+local function topbar_position_from_host_rect()
+  if host_rect.width < 120 or host_rect.height < 90 then return nil end
+  return host_rect.left - topbar_left_overhang(), host_rect.top - topbar_height + clamp(settings.plugin_overlap_y, 0, 48)
+end
+
 local function update_topbar_width_from_size(width)
   local _, _, viewport_width = main_viewport_rect()
-  topbar_width = clamp(width or topbar_width, 360, math.max(360, viewport_width - 24))
+  local max_width = viewport_width - 24 - topbar_left_overhang() - topbar_right_overhang()
+  topbar_width = clamp(width or topbar_width, 360, math.max(360, max_width))
 end
 
 function sync_host_rect_to_entry_size(entry)
@@ -760,11 +780,11 @@ end
 function sync_topbar_window_to_blocked_entry(entry)
   if not entry_blocked_state(entry) then return end
   sync_host_rect_to_entry_size(entry)
-  local width = topbar_width + topbar_side_overhang * 2
+  local width = topbar_window_width(topbar_width)
   if r.ImGui_SetWindowSize then r.ImGui_SetWindowSize(ctx, width, topbar_height, imgui_flag("ImGui_Cond_Always")) end
   if not topbar_dragging then
-    local centered_left, centered_top = centered_topbar_position()
-    if centered_left and centered_top and r.ImGui_SetWindowPos then r.ImGui_SetWindowPos(ctx, centered_left, centered_top, imgui_flag("ImGui_Cond_Always")) end
+    local topbar_left, topbar_top = topbar_position_from_host_rect()
+    if topbar_left and topbar_top and r.ImGui_SetWindowPos then r.ImGui_SetWindowPos(ctx, topbar_left, topbar_top, imgui_flag("ImGui_Cond_Always")) end
   end
   if not r.JS_Window_SetPosition then return end
   local hwnd = topbar_hwnd()
@@ -1942,6 +1962,10 @@ local function draw_settings_popup()
     if r.ImGui_SliderInt then
       local changed_overlap, next_overlap = r.ImGui_SliderInt(ctx, "Plugin top overlap", settings.plugin_overlap_y, 0, 60, "%d px")
       if changed_overlap then settings.plugin_overlap_y = next_overlap; ext_set_number("plugin_overlap_y", next_overlap); pending_place_until = r.time_precise() + 0.5 end
+      local changed_left_overhang, next_left_overhang = r.ImGui_SliderInt(ctx, "Tab bar left edge", topbar_left_overhang(), -24, 48, "%d px")
+      if changed_left_overhang then settings.topbar_left_overhang = next_left_overhang; ext_set_number("topbar_left_overhang", next_left_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+      local changed_right_overhang, next_right_overhang = r.ImGui_SliderInt(ctx, "Tab bar right edge", topbar_right_overhang(), -24, 48, "%d px")
+      if changed_right_overhang then settings.topbar_right_overhang = next_right_overhang; ext_set_number("topbar_right_overhang", next_right_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
     end
     local changed_start, next_start = r.ImGui_Checkbox(ctx, "Open FX on start", settings.auto_open_on_start)
     if changed_start then settings.auto_open_on_start = next_start; ext_set_bool("auto_open_on_start", next_start); if next_start and active_key == "" then startup_open_done = false; open_startup_instrument() end end
@@ -2141,8 +2165,10 @@ local function update_plugin_rect_from_topbar()
   local viewport_bottom = viewport_top + viewport_height - 12
   local active_entry = find_entry_by_key(active_key)
   local size = entry_window_size(active_entry)
-  host_rect.left = window_left + topbar_side_overhang
-  host_rect.top = plugin_top
+  if topbar_dragging or not settings.center_fx_in_reaper_window then
+    host_rect.left = window_left + topbar_left_overhang()
+    host_rect.top = plugin_top
+  end
   host_rect.width = math.max(180, size.width)
   host_rect.height = math.max(140, math.min(size.height, viewport_bottom - plugin_top))
 end
@@ -2265,9 +2291,14 @@ local function loop()
   ensure_active_entry_visible()
   local active_entry = find_entry_by_key(active_key)
   if entry_blocked_state(active_entry) then sync_host_rect_to_entry_size(active_entry) end
-  r.ImGui_SetNextWindowSize(ctx, topbar_width + topbar_side_overhang * 2, topbar_height, imgui_flag("ImGui_Cond_Always"))
-  local centered_left, centered_top = centered_topbar_position()
-  if centered_left and centered_top then r.ImGui_SetNextWindowPos(ctx, centered_left, centered_top, imgui_flag("ImGui_Cond_Always")) end
+  r.ImGui_SetNextWindowSize(ctx, topbar_window_width(topbar_width), topbar_height, imgui_flag("ImGui_Cond_Always"))
+  local topbar_left, topbar_top = topbar_position_from_host_rect()
+  if topbar_left and topbar_top and settings.center_fx_in_reaper_window and not topbar_dragging then
+    r.ImGui_SetNextWindowPos(ctx, topbar_left, topbar_top, imgui_flag("ImGui_Cond_Always"))
+  else
+    local centered_left, centered_top = centered_topbar_position()
+    if centered_left and centered_top then r.ImGui_SetNextWindowPos(ctx, centered_left, centered_top, imgui_flag("ImGui_Cond_Always")) end
+  end
   local window_flags = 0
   window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoScrollbar")
   window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoScrollWithMouse")
