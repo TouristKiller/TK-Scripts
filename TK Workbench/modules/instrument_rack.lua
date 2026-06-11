@@ -15,6 +15,7 @@ local REC_FX_OFFSET = 0x1000000
 local MAX_PARAM_SLOTS = 8
 local PARAM_SLOT_COLUMNS = 4
 local MACRO_COUNT = 8
+local MACRO_MAX = 16
 
 local state = {
   screenshot_path = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/Screenshots/",
@@ -33,7 +34,8 @@ local state = {
   macro_name_buffers = {},
   macro_cc_learn = nil,
   midi_last_retval = nil,
-  macros_dirty = false
+  macros_dirty = false,
+  macro_count = MACRO_COUNT
 }
 
 local defaults = {
@@ -49,7 +51,12 @@ local defaults = {
   tile_compact = false,
   body_collapsed = false,
   macro_param_slots = 4,
-  show_macros = true
+  macro_count = 8,
+  show_macros = true,
+  orientation = "vertical",
+  horizontal_tile_width = 240,
+  hide_horizontal_scrollbar = false,
+  show_info_bar = true
 }
 
 local function ensure_settings(app)
@@ -340,7 +347,7 @@ local function load_macros()
       local fields = split_storage_fields(line)
       local track_id, slot, name, value = fields[1], fields[2], fields[3], fields[4]
       slot = tonumber(slot)
-      if track_id and track_id ~= "" and slot and slot >= 1 and slot <= MACRO_COUNT then
+      if track_id and track_id ~= "" and slot and slot >= 1 and slot <= MACRO_MAX then
         state.macros[track_id] = state.macros[track_id] or {}
         state.macros[track_id][slot] = {
           name = name ~= "" and name or default_macro_name(slot),
@@ -364,7 +371,7 @@ local function load_macros()
       local track_id, slot, fx_guid, param_idx, param_name, fx_name, range_min, range_max, inverted = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
       slot = tonumber(slot)
       param_idx = tonumber(param_idx)
-      if track_id and track_id ~= "" and slot and slot >= 1 and slot <= MACRO_COUNT and fx_guid and fx_guid ~= "" and param_idx then
+      if track_id and track_id ~= "" and slot and slot >= 1 and slot <= MACRO_MAX and fx_guid and fx_guid ~= "" and param_idx then
         state.macro_assignments[track_id] = state.macro_assignments[track_id] or {}
         state.macro_assignments[track_id][slot] = state.macro_assignments[track_id][slot] or {}
         state.macro_assignments[track_id][slot][#state.macro_assignments[track_id][slot] + 1] = {
@@ -862,7 +869,7 @@ local function draw_param_context_menu(app, ctx, track, fx_index, param_idx)
   end
   r.ImGui_Separator(ctx)
   if r.ImGui_BeginMenu(ctx, "Assign to Macro") then
-    for slot = 1, MACRO_COUNT do
+    for slot = 1, state.macro_count do
       if r.ImGui_MenuItem(ctx, default_macro_name(slot) .. "##ir_assign_macro_" .. tostring(slot)) then
         assign_param_to_macro(app, track, fx_index, param_idx, slot)
       end
@@ -955,12 +962,32 @@ local function select_only_track(track)
   end
 end
 
-local function open_add_fx_browser(app, track)
+local function open_input_fx_chain(track)
+  if not validate_track(track) or not r.TrackFX_Show then return false end
+  r.TrackFX_Show(track, REC_FX_OFFSET, 1)
+  return true
+end
+
+local function open_take_fx_chain(take)
+  if not validate_take(take) or not r.TakeFX_Show then return false end
+  r.TakeFX_Show(take, 0, 1)
+  return true
+end
+
+local function open_add_fx_browser(app, track, target_type, take)
   local settings = ensure_settings(app)
   if not validate_track(track) then return end
+  target_type = target_type or "track"
   select_only_track(track)
   local target = settings.add_fx_target or "tk_fx_browser"
   if target == "native" then
+    if target_type == "input" then
+      app.status = open_input_fx_chain(track) and "Opened input FX chain" or "Could not open input FX chain"
+      return
+    elseif target_type == "item" then
+      app.status = open_take_fx_chain(take) and "Opened item FX chain" or "Could not open item FX chain"
+      return
+    end
     r.Main_OnCommand(40271, 0)
     app.status = "Opened native FX browser"
     return
@@ -976,7 +1003,12 @@ local function open_add_fx_browser(app, track)
     return
   end
   if target == "plugin_browser" then
-    app.status = "Plugin Browser module not loaded"
+    local ok, runner = pcall(require, "core.workbench_module_action_runner")
+    if ok and runner and runner.open and runner.open("plugin_browser") then
+      app.status = "Opened Plugin Browser in Workbench"
+    else
+      app.status = "Could not open Workbench Plugin Browser"
+    end
     return
   end
   local use_mini = target == "tk_fx_browser_mini"
@@ -1025,24 +1057,50 @@ local function luminance(rgba)
   return (0.299 * cr + 0.587 * cg + 0.114 * cb) / 255
 end
 
+local function launch_horizontal_rack(app)
+  local script_path = (app.script_path or "") .. "TK_Instrument_Rack_Horizontal.lua"
+  if not file_exists(script_path) then
+    script_path = r.GetResourcePath() .. "/Scripts/TK Scripts/TK Workbench/TK_Instrument_Rack_Horizontal.lua"
+  end
+  if not file_exists(script_path) then
+    app.status = "Horizontal Instrument Rack script not found"
+    return
+  end
+  if r.AddRemoveReaScript then
+    local cmd_id = r.AddRemoveReaScript(true, 0, script_path, true)
+    if cmd_id and cmd_id ~= 0 then
+      r.Main_OnCommand(cmd_id, 0)
+      app.status = "Opened horizontal Instrument Rack"
+      return
+    end
+  end
+  app.status = "Start the horizontal Instrument Rack once from the Actions list"
+end
+
 local function draw_header(app, ctx, settings, track)
   local label = get_track_label(track)
   local header_color = get_track_header_color(track)
   local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
   local avail = get_available_width(ctx)
   local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+  local start_pos_x = r.ImGui_GetCursorPosX(ctx)
+  local start_pos_y = r.ImGui_GetCursorPosY(ctx)
   local pad_x, pad_y = UIScale.round(6), UIScale.round(3)
   local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
-  local bar_h = text_h + pad_y * 2
+  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local bar_h = math.max(text_h + pad_y * 2, button_h)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, UIScale.px(3))
   r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, cursor_x + avail - pad_x, cursor_y + bar_h)
-  r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + pad_y, text_color, label)
+  r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + (bar_h - text_h) * 0.5, text_color, label)
   r.ImGui_DrawList_PopClipRect(draw_list)
-  r.ImGui_Dummy(ctx, avail, bar_h)
-  local row_start_x = r.ImGui_GetCursorPosX(ctx)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
-  if r.ImGui_Button(ctx, (settings.pinned_track_guid ~= "" and "Unpin" or "Pin") .. "##ir_pin") then
+  local pin_label = (settings.pinned_track_guid ~= "" and "Unpin" or "Pin")
+  local pin_w = UIScale.text_button_w(ctx, pin_label, 0, 8)
+  local gap = UIScale.round(4)
+  local buttons_w = pin_w + gap + button_h
+  r.ImGui_SetCursorPosX(ctx, start_pos_x + math.max(0, avail - buttons_w))
+  r.ImGui_SetCursorPosY(ctx, start_pos_y + math.max(0, (bar_h - button_h) * 0.5))
+  if r.ImGui_Button(ctx, pin_label .. "##ir_pin", pin_w, button_h) then
     if settings.pinned_track_guid ~= "" then
       settings.pinned_track_guid = ""
       app.status = "Instrument Rack follows selected track"
@@ -1052,21 +1110,33 @@ local function draw_header(app, ctx, settings, track)
     end
     if app.save_settings then app.save_settings() end
   end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Add FX##ir_add_top") then open_add_fx_browser(app, track) end
-  r.ImGui_SameLine(ctx)
-  local settings_x = row_start_x + math.max(0, avail - button_h)
-  if settings_x > r.ImGui_GetCursorPosX(ctx) then r.ImGui_SetCursorPosX(ctx, settings_x) end
+  r.ImGui_SameLine(ctx, nil, gap)
   if r.ImGui_Button(ctx, "...##ir_settings", button_h, button_h) then r.ImGui_OpenPopup(ctx, "Instrument Rack Settings") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Instrument Rack settings") end
+  r.ImGui_SetCursorPosX(ctx, start_pos_x)
+  r.ImGui_SetCursorPosY(ctx, start_pos_y + bar_h)
   if r.ImGui_BeginPopup(ctx, "Instrument Rack Settings") then
     local changed, value
+    if settings.orientation ~= "horizontal" then
+      if r.ImGui_Button(ctx, "Open horizontal window##ir_open_horizontal") then
+        launch_horizontal_rack(app)
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_Separator(ctx)
+    end
     changed, value = r.ImGui_Checkbox(ctx, "Show screenshots", settings.show_screenshots)
     if changed then settings.show_screenshots = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show parameters", settings.show_pinned_params)
     if changed then settings.show_pinned_params = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show macros", settings.show_macros ~= false)
     if changed then settings.show_macros = value; if app.save_settings then app.save_settings() end end
+    local macro_total = settings.macro_count == 16 and 16 or 8
+    r.ImGui_Text(ctx, "Macro count")
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, tostring(macro_total) .. "##ir_macro_count", UIScale.text_button_w(ctx, tostring(macro_total), 60, 8), 0) then
+      settings.macro_count = macro_total == 8 and 16 or 8
+      if app.save_settings then app.save_settings() end
+    end
     local slot_count = param_slot_count(settings)
     r.ImGui_Text(ctx, "Parameter buttons")
     r.ImGui_SameLine(ctx)
@@ -1082,6 +1152,15 @@ local function draw_header(app, ctx, settings, track)
     if changed then settings.show_selected_item_fx = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Compact tiles", settings.tile_compact)
     if changed then settings.tile_compact = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Show info bar", settings.show_info_bar ~= false)
+    if changed then settings.show_info_bar = value; if app.save_settings then app.save_settings() end end
+    if settings.orientation == "horizontal" then
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+      changed, value = r.ImGui_SliderInt(ctx, "Tile width", settings.horizontal_tile_width or 240, 160, 400, "%d px")
+      if changed then settings.horizontal_tile_width = value; if app.save_settings then app.save_settings() end end
+      changed, value = r.ImGui_Checkbox(ctx, "Hide horizontal scrollbar", settings.hide_horizontal_scrollbar)
+      if changed then settings.hide_horizontal_scrollbar = value; if app.save_settings then app.save_settings() end end
+    end
     r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
     changed, value = r.ImGui_SliderInt(ctx, "Screenshot height", settings.screenshot_height or 90, 48, 180, "%d px")
     if changed then settings.screenshot_height = value; if app.save_settings then app.save_settings() end end
@@ -1187,6 +1266,51 @@ local function add_external_fx(app, track, payload, insert_index)
   r.DeleteExtState("TKFXB", "drag_fx", false)
   if r.HasExtState("TKMIX", "rack_target") then r.DeleteExtState("TKMIX", "rack_target", false) end
   app.status = "Added " .. tostring(#names) .. " FX"
+end
+
+local function payload_to_names(payload)
+  local names = {}
+  if not payload or payload == "" then return names end
+  for name in payload:gmatch("[^\n]+") do
+    if name ~= "" then names[#names + 1] = name end
+  end
+  return names
+end
+
+local function add_external_input_fx(app, track, payload)
+  if not validate_track(track) then return end
+  local names = payload_to_names(payload)
+  if #names == 0 then return end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  for _, name in ipairs(names) do
+    local dest = r.TrackFX_GetRecCount and r.TrackFX_GetRecCount(track) or 0
+    r.TrackFX_AddByName(track, name, true, -1000 - dest)
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Add input FX to instrument rack", -1)
+  r.SetExtState("TKFXB", "drag_consumed", "1", false)
+  r.DeleteExtState("TKFXB", "drag_fx", false)
+  if r.HasExtState("TKMIX", "rack_target") then r.DeleteExtState("TKMIX", "rack_target", false) end
+  app.status = "Added " .. tostring(#names) .. " input FX"
+end
+
+local function add_external_take_fx(app, take, payload)
+  if not validate_take(take) or not r.TakeFX_AddByName then return end
+  local names = payload_to_names(payload)
+  if #names == 0 then return end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  for _, name in ipairs(names) do
+    local dest = r.TakeFX_GetCount and r.TakeFX_GetCount(take) or 0
+    r.TakeFX_AddByName(take, name, -1000 - dest)
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Add item FX to instrument rack", -1)
+  r.SetExtState("TKFXB", "drag_consumed", "1", false)
+  r.DeleteExtState("TKFXB", "drag_fx", false)
+  if r.HasExtState("TKMIX", "rack_target") then r.DeleteExtState("TKMIX", "rack_target", false) end
+  app.status = "Added " .. tostring(#names) .. " item FX"
 end
 
 local function draw_fx_screenshot(ctx, settings, fx_name, width, height, enabled)
@@ -1345,7 +1469,7 @@ local function process_macro_cc_event(app, visible_track, event)
   local track_id = track_guid(visible_track)
   local macros = state.macros[track_id]
   if not macros then return end
-  for slot = 1, MACRO_COUNT do
+  for slot = 1, MACRO_MAX do
     local macro = macros[slot]
     if macro_matches_midi_event(macro, event) then
       apply_macro_value(visible_track, slot, macro_value_from_cc_event(macro, event))
@@ -1369,8 +1493,12 @@ local function flush_macro_changes(ctx)
   save_macros()
 end
 
-local function macro_bar_height(ctx)
-  return UIScale.round(118)
+local function macro_bar_height(ctx, settings)
+  local count = (settings and settings.macro_count == 16) and 16 or 8
+  if settings and settings.orientation == "horizontal" then return UIScale.round(70) end
+  local columns = 4
+  local rows = math.ceil(count / columns)
+  return UIScale.round(18) + rows * UIScale.round(56)
 end
 
 local function remove_macro_assignment(track_id, slot, assignment_index)
@@ -1569,24 +1697,36 @@ end
 local function draw_macro_bar(app, ctx, settings, track)
   if settings.show_macros == false or not validate_track(track) then return end
   ensure_macros_loaded()
-  local height = macro_bar_height(ctx)
+  local height = macro_bar_height(ctx, settings)
   local width = r.ImGui_GetContentRegionAvail(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  local rows = 2
-  local columns = 4
   local gap = UIScale.round(6)
-  local top_pad = UIScale.round(9)
-  local control_h = UIScale.round(50)
   r.ImGui_Dummy(ctx, width, height)
   r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(4), y + UIScale.round(1), x + width - UIScale.round(4), y + UIScale.round(1), Theme.colors.separator, UIScale.px(1))
-  for slot = 1, MACRO_COUNT do
-    local row = math.floor((slot - 1) / columns)
-    local column = ((slot - 1) % columns) + 1
-    local control_w = math.max(UIScale.round(24), (width - gap * (columns + 1)) / columns)
-    local control_x = x + gap + (column - 1) * (control_w + gap)
-    local control_y = y + top_pad + row * (control_h + gap)
-    draw_macro_control(app, ctx, draw_list, track, slot, control_x, control_y, control_w, control_h)
+  local count = state.macro_count
+  if settings.orientation == "horizontal" then
+    local control_w = UIScale.round(62)
+    local control_h = UIScale.round(50)
+    local top_pad = UIScale.round(9)
+    local total_w = count * control_w + (count - 1) * gap
+    local start_x = x + math.max(gap, (width - total_w) * 0.5)
+    for slot = 1, count do
+      local control_x = start_x + (slot - 1) * (control_w + gap)
+      draw_macro_control(app, ctx, draw_list, track, slot, control_x, y + top_pad, control_w, control_h)
+    end
+  else
+    local columns = 4
+    local top_pad = UIScale.round(9)
+    local control_h = UIScale.round(50)
+    for slot = 1, count do
+      local row = math.floor((slot - 1) / columns)
+      local column = ((slot - 1) % columns) + 1
+      local control_w = math.max(UIScale.round(24), (width - gap * (columns + 1)) / columns)
+      local control_x = x + gap + (column - 1) * (control_w + gap)
+      local control_y = y + top_pad + row * (control_h + gap)
+      draw_macro_control(app, ctx, draw_list, track, slot, control_x, control_y, control_w, control_h)
+    end
   end
   flush_macro_changes(ctx)
 end
@@ -1703,20 +1843,61 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width)
   r.ImGui_SetCursorScreenPos(ctx, x, y + row_height)
 end
 
-local function reorder_fx(app, track, source_index, target_index, short_name)
-  if not source_index or source_index == target_index then return end
-  local destination = source_index < target_index and target_index + 1 or target_index
-  r.Undo_BeginBlock()
-  r.PreventUIRefresh(1)
-  r.TrackFX_CopyToTrack(track, source_index, track, destination, true)
-  r.PreventUIRefresh(-1)
-  r.Undo_EndBlock("Reorder rack FX", -1)
-  app.status = "Reordered " .. short_name
+local function chain_full_index(chain, idx)
+  if chain == "input" then return REC_FX_OFFSET + idx end
+  return idx
 end
 
-local function handle_reorder_item(app, ctx, draw_list, track, fx_index, short_name, x, y, width, height)
+local function chain_count(track, take, chain)
+  if chain == "input" then return r.TrackFX_GetRecCount and r.TrackFX_GetRecCount(track) or 0 end
+  if chain == "item" then return validate_take(take) and r.TakeFX_GetCount and r.TakeFX_GetCount(take) or 0 end
+  return r.TrackFX_GetCount(track)
+end
+
+local function move_fx_between(app, track, take, src_chain, src_index, dest_chain, dest_index, short_name, append)
+  if not validate_track(track) or not src_chain or not src_index then return end
+  if not append and src_chain == dest_chain and src_index == dest_index then return end
+  local src_take = src_chain == "item"
+  local dest_take = dest_chain == "item"
+  if (src_take or dest_take) and not validate_take(take) then return end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  if not src_take and not dest_take then
+    local src_full = chain_full_index(src_chain, src_index)
+    local dest_full
+    if append then
+      dest_full = chain_full_index(dest_chain, chain_count(track, take, dest_chain))
+    else
+      local d = (src_chain == dest_chain and src_index < dest_index) and dest_index + 1 or dest_index
+      dest_full = chain_full_index(dest_chain, d)
+    end
+    r.TrackFX_CopyToTrack(track, src_full, track, dest_full, true)
+  elseif not src_take and dest_take then
+    local d = append and chain_count(track, take, "item") or dest_index
+    if r.TrackFX_CopyToTake then r.TrackFX_CopyToTake(track, chain_full_index(src_chain, src_index), take, d, true) end
+  elseif src_take and not dest_take then
+    local d = append and chain_count(track, take, dest_chain) or dest_index
+    if r.TakeFX_CopyToTrack then r.TakeFX_CopyToTrack(take, src_index, track, chain_full_index(dest_chain, d), true) end
+  else
+    local d
+    if append then d = chain_count(track, take, "item")
+    else d = (src_index < dest_index) and dest_index + 1 or dest_index end
+    if r.TakeFX_CopyToTake then r.TakeFX_CopyToTake(take, src_index, take, d, true) end
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Move rack FX", -1)
+  app.status = "Moved " .. (short_name or "FX")
+end
+
+local function internal_fx_drag_active(ctx)
+  if not r.ImGui_GetDragDropPayload then return false end
+  local rv, ptype = r.ImGui_GetDragDropPayload(ctx)
+  return rv == true and ptype == "TK_WORKBENCH_RACK_FX"
+end
+
+local function handle_fx_drag(app, ctx, draw_list, track, take, chain, local_index, short_name, x, y, width, height)
   if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_SourceNoPreviewTooltip()) then
-    r.ImGui_SetDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX", tostring(fx_index))
+    r.ImGui_SetDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX", chain .. "|" .. tostring(local_index))
     r.ImGui_Text(ctx, "Move: " .. short_name)
     r.ImGui_EndDragDropSource(ctx)
   end
@@ -1728,16 +1909,67 @@ local function handle_reorder_item(app, ctx, draw_list, track, fx_index, short_n
     local hint_w = r.ImGui_CalcTextSize(ctx, hint) * (hint_size / r.ImGui_GetFontSize(ctx))
     r.ImGui_DrawList_AddRectFilled(draw_list, x + (width - hint_w) * 0.5 - UIScale.round(4), y + height - UIScale.round(16), x + (width + hint_w) * 0.5 + UIScale.round(4), y + height - UIScale.round(2), 0x000000CC, UIScale.px(2))
     r.ImGui_DrawList_AddTextEx(draw_list, nil, hint_size, x + (width - hint_w) * 0.5, y + height - UIScale.round(14), 0x44CC44FF, hint)
-    if ok_payload and payload and payload ~= "" then reorder_fx(app, track, tonumber(payload), fx_index, short_name) end
+    if ok_payload and payload and payload ~= "" then
+      local src_chain, src_idx = payload:match("([^|]+)|(%d+)")
+      if src_chain and src_idx then move_fx_between(app, track, take, src_chain, tonumber(src_idx), chain, local_index, short_name) end
+    end
     r.ImGui_EndDragDropTarget(ctx)
   end
 end
 
-local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, allow_reorder)
+local function expanded_tile_height(settings)
+  local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
+  local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and UIScale.round(100) or UIScale.round(58)) or 0
+  local row1_h = UIScale.round(18)
+  local toolbar_h = UIScale.round(16)
+  return row1_h + toolbar_h + UIScale.round(2) + shot_h + param_h + UIScale.round(4)
+end
+
+local function draw_collapsed_tile_strip(app, ctx, settings, opts)
+  local strip_w = UIScale.round(26)
+  local th = opts.height
+  local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+  local visible = r.ImGui_BeginChild(ctx, opts.id, strip_w, th, 0, flags)
+  r.ImGui_PopStyleVar(ctx, 1)
+  if visible then
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local bx, by = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + strip_w, by + th, Theme.colors.frame_bg, UIScale.px(3))
+    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + strip_w, by + th, opts.enabled and Theme.colors.border or Theme.colors.danger, UIScale.px(3), 0, UIScale.px(1))
+    local chev_cx = bx + strip_w * 0.5
+    local chev_cy = by + UIScale.round(8)
+    r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(3), chev_cy - UIScale.round(4), chev_cx + UIScale.round(4), chev_cy, chev_cx - UIScale.round(3), chev_cy + UIScale.round(4), 0xAAAAAAFF)
+    local size = UIScale.round(12)
+    local scale = size / r.ImGui_GetFontSize(ctx)
+    local line_h = size + UIScale.round(1)
+    local color = opts.enabled and Theme.colors.text or Theme.colors.text_dim
+    local top = by + UIScale.round(20)
+    local avail_h = th - UIScale.round(24)
+    local max_chars = math.max(1, math.floor(avail_h / line_h))
+    local label = opts.label or ""
+    local chars = {}
+    for ch in label:gmatch(".") do chars[#chars + 1] = ch; if #chars >= max_chars then break end end
+    for i, ch in ipairs(chars) do
+      local ch_w = r.ImGui_CalcTextSize(ctx, ch) * scale
+      r.ImGui_DrawList_AddTextEx(draw_list, nil, size, bx + (strip_w - ch_w) * 0.5, top + (i - 1) * line_h, color, ch)
+    end
+    r.ImGui_SetCursorScreenPos(ctx, bx, by)
+    if r.ImGui_InvisibleButton(ctx, "##ir_strip_btn", strip_w, th) then state.collapsed[opts.collapse_key] = false end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, label .. " — click to expand") end
+    local d = opts.drag
+    handle_fx_drag(app, ctx, draw_list, d.track, d.take, d.chain, d.local_index, label, bx, by, strip_w, th)
+  end
+  r.ImGui_EndChild(ctx)
+end
+
+local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, chain, take)
   local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
   local enabled = r.TrackFX_GetEnabled(track, fx_index)
   local offline = r.TrackFX_GetOffline(track, fx_index)
   local short_name = get_fx_short_name(fx_name)
+  chain = chain or "track"
+  local local_index = chain == "input" and (fx_index - REC_FX_OFFSET) or fx_index
   r.ImGui_PushID(ctx, "ir_fx_" .. tostring(fx_index))
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
@@ -1746,6 +1978,18 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, all
   local toolbar_h = UIScale.round(16)
   local collapse_key = track_guid(track) .. "|" .. get_fx_guid(track, fx_index)
   local is_collapsed = state.collapsed[collapse_key] == true
+  if settings.orientation == "horizontal" and is_collapsed then
+    draw_collapsed_tile_strip(app, ctx, settings, {
+      id = "##ir_fx_tile",
+      label = short_name,
+      enabled = enabled,
+      collapse_key = collapse_key,
+      height = expanded_tile_height(settings),
+      drag = { track = track, take = take, chain = chain, local_index = local_index }
+    })
+    r.ImGui_PopID(ctx)
+    return
+  end
   local title_h = is_collapsed and row1_h or (row1_h + toolbar_h + UIScale.round(2))
   local tile_h = is_collapsed and title_h or (title_h + shot_h + param_h + UIScale.round(4))
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
@@ -1827,7 +2071,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, all
           local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
           r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
         end
-        if allow_reorder ~= false then handle_reorder_item(app, ctx, draw_list, track, fx_index, short_name, bx, by, item_width, tile_h) end
+        handle_fx_drag(app, ctx, draw_list, track, take, chain, local_index, short_name, bx, by, item_width, tile_h)
       end
       if settings.show_pinned_params then
         r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(7), by + title_h + shot_h + UIScale.round(4))
@@ -1852,7 +2096,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, all
       local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
       r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
     end
-    if allow_reorder ~= false then handle_reorder_item(app, ctx, draw_list, track, fx_index, short_name, bx, by, item_width, tile_h) end
+    handle_fx_drag(app, ctx, draw_list, track, take, chain, local_index, short_name, bx, by, item_width, tile_h)
     if r.ImGui_BeginPopupContextItem(ctx, "##ir_fx_context") then
       if r.ImGui_MenuItem(ctx, enabled and "Bypass" or "Enable") then r.TrackFX_SetEnabled(track, fx_index, not enabled) end
       if r.ImGui_MenuItem(ctx, "Open floating") then
@@ -1884,35 +2128,99 @@ end
 local function update_external_drag(ctx)
   local external_drag = r.GetExtState("TKFXB", "drag_fx")
   local mouse_down, mouse_released = mouse_release_state(ctx)
-  if external_drag ~= "" then state.last_external_drag = external_drag elseif not mouse_down then state.last_external_drag = nil end
+  if external_drag ~= "" then
+    state.last_external_drag = external_drag
+  elseif not mouse_down and not mouse_released then
+    state.last_external_drag = nil
+  end
   state.mouse_released = mouse_released
   state.mouse_down = mouse_down
 end
 
-local function draw_add_zone(app, ctx, settings, track, item_width, insert_index)
+local function draw_add_zone(app, ctx, settings, track, item_width, insert_index, target_type, take, drop_only)
+  target_type = target_type or "track"
   local payload = state.last_external_drag or ""
-  local label = payload ~= "" and "+ Drop to add FX" or "+ Add FX"
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local horizontal = settings.orientation == "horizontal"
+  local picker_name = settings.add_fx_target == "native" and "native FX browser"
+    or settings.add_fx_target == "plugin_browser" and "Plugin Browser"
+    or settings.add_fx_target == "tk_fx_browser_mini" and "TK FX Browser Mini"
+    or "TK FX Browser"
+  local kind = target_type == "input" and "input FX" or target_type == "item" and "item FX" or "FX"
+  local add_tip
+  if drop_only then add_tip = "Drop " .. kind .. " here"
+  elseif settings.add_fx_target == "native" and target_type == "input" then add_tip = "Open input FX chain"
+  elseif settings.add_fx_target == "native" and target_type == "item" then add_tip = "Open item FX chain"
+  else add_tip = "Add " .. kind .. " (" .. picker_name .. ")" end
+  local function do_open()
+    if drop_only then return end
+    open_add_fx_browser(app, track, target_type, take)
+  end
+  local function do_drop(p)
+    if target_type == "input" then add_external_input_fx(app, track, p)
+    elseif target_type == "item" then add_external_take_fx(app, take, p)
+    else add_external_fx(app, track, p, insert_index) end
+  end
+  if horizontal then
+    local size = UIScale.round(40)
+    local tile_h = expanded_tile_height(settings)
+    x, y = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_InvisibleButton(ctx, "##ir_add_zone_" .. target_type, size, tile_h)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    local clicked = r.ImGui_IsItemClicked(ctx, 0)
+    local accent = payload ~= ""
+    local color = accent and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
+    local cx = x + size * 0.5
+    local cy = y + tile_h * 0.5
+    local radius = size * 0.5 - UIScale.px(2)
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, radius, color, 0, accent and UIScale.px(2) or UIScale.px(1.5))
+    local arm = radius * 0.5
+    r.ImGui_DrawList_AddLine(draw_list, cx - arm, cy, cx + arm, cy, color, UIScale.px(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy - arm, cx, cy + arm, color, UIScale.px(2))
+    if clicked then do_open() end
+    if hovered then
+      local guid = track_guid(track)
+      if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
+      if payload ~= "" and state.mouse_released then do_drop(payload) end
+      r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or add_tip)
+    end
+    if r.ImGui_BeginDragDropTarget(ctx) then
+      local ok_payload, workbench_payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
+      if ok_payload and workbench_payload and workbench_payload ~= "" then do_drop(workbench_payload) end
+      local ok_move, move_payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX")
+      if ok_move and move_payload and move_payload ~= "" then
+        local src_chain, src_idx = move_payload:match("([^|]+)|(%d+)")
+        if src_chain and src_idx then move_fx_between(app, track, take, src_chain, tonumber(src_idx), target_type, nil, nil, true) end
+      end
+      r.ImGui_EndDragDropTarget(ctx)
+    end
+    return
+  end
+  local label = payload ~= "" and "+ Drop to add FX" or (target_type == "input" and "+ Add input FX" or target_type == "item" and "+ Add item FX" or "+ Add FX")
   local add_h = UIScale.round(36)
-  r.ImGui_InvisibleButton(ctx, "##ir_add_zone", item_width, add_h)
+  r.ImGui_InvisibleButton(ctx, "##ir_add_zone_" .. target_type, item_width, add_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local clicked = r.ImGui_IsItemClicked(ctx, 0)
   local border = payload ~= "" and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
   r.ImGui_DrawList_AddRect(draw_list, x, y, x + item_width, y + add_h, border, UIScale.px(4), 0, payload ~= "" and UIScale.px(2) or UIScale.px(1))
   local text_w = r.ImGui_CalcTextSize(ctx, label)
   r.ImGui_DrawList_AddText(draw_list, x + (item_width - text_w) * 0.5, y + UIScale.round(12), payload ~= "" and Theme.colors.accent or Theme.colors.text_dim, label)
-  if clicked then open_add_fx_browser(app, track) end
+  if clicked then do_open() end
   if hovered then
     local guid = track_guid(track)
-    if payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
-    if payload ~= "" and state.mouse_released then add_external_fx(app, track, payload, insert_index) end
-    local target = settings.add_fx_target == "native" and "native FX browser" or settings.add_fx_target == "plugin_browser" and "Plugin Browser" or settings.add_fx_target == "tk_fx_browser_mini" and "TK FX Browser Mini" or "TK FX Browser"
-    r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or "Open " .. target)
+    if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
+    if payload ~= "" and state.mouse_released then do_drop(payload) end
+    r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or add_tip)
   end
   if r.ImGui_BeginDragDropTarget(ctx) then
     local ok_payload, workbench_payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
-    if ok_payload and workbench_payload and workbench_payload ~= "" then add_external_fx(app, track, workbench_payload, insert_index) end
+    if ok_payload and workbench_payload and workbench_payload ~= "" then do_drop(workbench_payload) end
+    local ok_move, move_payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX")
+    if ok_move and move_payload and move_payload ~= "" then
+      local src_chain, src_idx = move_payload:match("([^|]+)|(%d+)")
+      if src_chain and src_idx then move_fx_between(app, track, take, src_chain, tonumber(src_idx), target_type, nil, nil, true) end
+    end
     r.ImGui_EndDragDropTarget(ctx)
   end
 end
@@ -1951,7 +2259,7 @@ local function delete_take_fx(app, take, fx_index, fx_name)
   app.status = "Deleted " .. get_fx_short_name(fx_name)
 end
 
-local function draw_take_fx_tile(app, ctx, settings, take, fx_index, item_width)
+local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item_width)
   local _, fx_name = r.TakeFX_GetFXName(take, fx_index, "")
   local enabled = take_fx_enabled(take, fx_index)
   local offline = take_fx_offline(take, fx_index)
@@ -1961,7 +2269,22 @@ local function draw_take_fx_tile(app, ctx, settings, take, fx_index, item_width)
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
   local row1_h = UIScale.round(18)
   local toolbar_h = UIScale.round(16)
-  local tile_h = row1_h + toolbar_h + shot_h + UIScale.round(6)
+  local take_guid = (r.TakeFX_GetFXGUID and r.TakeFX_GetFXGUID(take, fx_index)) or ("TAKEINDEX:" .. tostring(fx_index))
+  local collapse_key = "TAKE|" .. tostring(take_guid)
+  local is_collapsed = state.collapsed[collapse_key] == true
+  if settings.orientation == "horizontal" and is_collapsed then
+    draw_collapsed_tile_strip(app, ctx, settings, {
+      id = "##ir_take_fx_tile",
+      label = short_name,
+      enabled = enabled,
+      collapse_key = collapse_key,
+      height = row1_h + toolbar_h + shot_h + UIScale.round(6),
+      drag = { track = track, take = take, chain = "item", local_index = fx_index }
+    })
+    r.ImGui_PopID(ctx)
+    return
+  end
+  local tile_h = is_collapsed and row1_h or (row1_h + toolbar_h + shot_h + UIScale.round(6))
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
   local tile_visible = r.ImGui_BeginChild(ctx, "##ir_take_fx_tile", item_width, tile_h, 0, flags)
   r.ImGui_PopStyleVar(ctx, 1)
@@ -1988,23 +2311,40 @@ local function draw_take_fx_tile(app, ctx, settings, take, fx_index, item_width)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, enabled and "Bypass item FX" or "Enable item FX") end
 
-    local name_max_w = math.max(UIScale.round(20), led_x - (bx + UIScale.round(6)) - UIScale.round(4))
+    local chev_size = UIScale.round(12)
+    local chev_x = led_x - UIScale.round(20)
+    local chev_y = by + (row1_h - chev_size) * 0.5
+    local chev_cx = chev_x + chev_size * 0.5
+    local chev_cy = chev_y + chev_size * 0.5
+    if is_collapsed then
+      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(3), chev_cy - UIScale.round(3), chev_cx + UIScale.round(3), chev_cy, chev_cx - UIScale.round(3), chev_cy + UIScale.round(3), 0xAAAAAAFF)
+    else
+      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(3), chev_cy - UIScale.round(2), chev_cx + UIScale.round(3), chev_cy - UIScale.round(2), chev_cx, chev_cy + UIScale.round(3), 0xAAAAAAFF)
+    end
+    r.ImGui_SetCursorScreenPos(ctx, chev_x, chev_y)
+    if r.ImGui_InvisibleButton(ctx, "##ir_take_fx_collapse", chev_size, chev_size) then state.collapsed[collapse_key] = not is_collapsed end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand" or "Collapse") end
+
+    local name_max_w = math.max(UIScale.round(20), chev_x - (bx + UIScale.round(6)) - UIScale.round(4))
     r.ImGui_DrawList_PushClipRect(draw_list, bx + UIScale.round(6), by, bx + UIScale.round(6) + name_max_w, by + row1_h, true)
     r.ImGui_DrawList_AddText(draw_list, bx + UIScale.round(6), by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
     r.ImGui_DrawList_PopClipRect(draw_list)
 
-    local button_y = by + row1_h + UIScale.round(2)
-    local tx = bx + UIScale.round(6)
-    if draw_small_button(ctx, draw_list, "##ir_take_fx_float", tx, button_y, UIScale.round(14), UIScale.round(12), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then show_take_fx(take, fx_index) end
-    tx = tx + UIScale.round(18)
-    if draw_small_button(ctx, draw_list, "##ir_take_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(12), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring item FX online" or "Set item FX offline") then
-      set_take_fx_offline(take, fx_index, not offline)
-      app.status = (offline and "Brought online " or "Set offline ") .. short_name
-    end
-    if settings.show_screenshots and not settings.tile_compact then
-      r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(2), by + row1_h + toolbar_h + UIScale.round(4))
-      draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
-      if r.ImGui_IsItemClicked(ctx, 0) then show_take_fx(take, fx_index) end
+    if not is_collapsed then
+      local button_y = by + row1_h + UIScale.round(2)
+      local tx = bx + UIScale.round(6)
+      if draw_small_button(ctx, draw_list, "##ir_take_fx_float", tx, button_y, UIScale.round(14), UIScale.round(12), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then show_take_fx(take, fx_index) end
+      tx = tx + UIScale.round(18)
+      if draw_small_button(ctx, draw_list, "##ir_take_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(12), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring item FX online" or "Set item FX offline") then
+        set_take_fx_offline(take, fx_index, not offline)
+        app.status = (offline and "Brought online " or "Set offline ") .. short_name
+      end
+      if settings.show_screenshots and not settings.tile_compact then
+        r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(2), by + row1_h + toolbar_h + UIScale.round(4))
+        draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
+        if r.ImGui_IsItemClicked(ctx, 0) then show_take_fx(take, fx_index) end
+        handle_fx_drag(app, ctx, draw_list, track, take, "item", fx_index, short_name, bx, by, item_width, tile_h)
+      end
     end
 
     if r.ImGui_BeginPopup(ctx, "##ir_take_delete_pop") then
@@ -2021,10 +2361,12 @@ local function draw_take_fx_tile(app, ctx, settings, take, fx_index, item_width)
 
     r.ImGui_SetCursorScreenPos(ctx, bx, by)
     if r.ImGui_InvisibleButton(ctx, "##ir_take_fx_title_hit", math.max(1, name_max_w + 8), row1_h) then show_take_fx(take, fx_index) end
+    handle_fx_drag(app, ctx, draw_list, track, take, "item", fx_index, short_name, bx, by, item_width, tile_h)
     if r.ImGui_BeginPopupContextItem(ctx, "##ir_take_fx_context") then
       if r.ImGui_MenuItem(ctx, enabled and "Bypass" or "Enable") then set_take_fx_enabled(take, fx_index, not enabled) end
       if r.ImGui_MenuItem(ctx, "Open floating", nil, false, r.TakeFX_Show ~= nil) then show_take_fx(take, fx_index) end
       if r.ImGui_MenuItem(ctx, offline and "Bring online" or "Set offline", nil, false, r.TakeFX_SetOffline ~= nil) then set_take_fx_offline(take, fx_index, not offline) end
+      if r.ImGui_MenuItem(ctx, is_collapsed and "Expand" or "Collapse") then state.collapsed[collapse_key] = not is_collapsed end
       r.ImGui_Separator(ctx)
       if r.ImGui_MenuItem(ctx, "Remove", nil, false, r.TakeFX_Delete ~= nil) then delete_take_fx(app, take, fx_index, fx_name) end
       r.ImGui_EndPopup(ctx)
@@ -2076,6 +2418,7 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  state.macro_count = settings.macro_count == 16 and 16 or 8
   update_external_drag(ctx)
   run_pending_param_action(app)
   local track = get_target_track(settings)
@@ -2084,7 +2427,7 @@ function M.draw(app)
   r.ImGui_Separator(ctx)
   if not validate_track(track) then
     r.ImGui_TextColored(ctx, Theme.colors.warning, "Select a track to show its FX chain.")
-    UI.draw_info_line(ctx, info_line_text(app, track, 0, 0, 0, nil, nil))
+    if settings.show_info_bar ~= false then UI.draw_info_line(ctx, info_line_text(app, track, 0, 0, 0, nil, nil)) end
     return
   end
   if settings.body_collapsed then
@@ -2092,7 +2435,7 @@ function M.draw(app)
       settings.body_collapsed = false
       if app.save_settings then app.save_settings() end
     end
-    UI.draw_info_line(ctx, info_line_text(app, track, r.TrackFX_GetCount(track), 0, 0, nil, nil))
+    if settings.show_info_bar ~= false then UI.draw_info_line(ctx, info_line_text(app, track, r.TrackFX_GetCount(track), 0, 0, nil, nil)) end
     return
   end
   local fx_count = r.TrackFX_GetCount(track)
@@ -2100,50 +2443,165 @@ function M.draw(app)
   local input_fx_count = settings.show_input_fx and r.TrackFX_GetRecCount and r.TrackFX_GetRecCount(track) or 0
   local selected_item, take, item_on_track = get_selected_take(track)
   local take_fx_count = settings.show_selected_item_fx and item_on_track and validate_take(take) and r.TakeFX_GetCount and r.TakeFX_GetCount(take) or 0
-  local info_h = UI.info_line_height(ctx)
-  local macros_h = settings.show_macros ~= false and macro_bar_height(ctx) or 0
+  local info_h = settings.show_info_bar ~= false and UI.info_line_height(ctx) or 0
+  local macros_h = settings.show_macros ~= false and macro_bar_height(ctx, settings) or 0
   local flags = 0
+  local horizontal = settings.orientation == "horizontal"
+  if horizontal then
+    if r.ImGui_WindowFlags_NoScrollWithMouse then flags = flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
+    if settings.hide_horizontal_scrollbar then
+      if r.ImGui_WindowFlags_NoScrollbar then flags = flags | r.ImGui_WindowFlags_NoScrollbar() end
+    elseif r.ImGui_WindowFlags_HorizontalScrollbar then
+      flags = flags | r.ImGui_WindowFlags_HorizontalScrollbar()
+    end
+  end
   if r.ImGui_BeginChild(ctx, "##instrument_rack_scroll", 0, -(info_h + macros_h), 0, flags) then
-    local width = get_centered_item_width(ctx)
-    if show_track_fx and fx_count == 0 then
+    local hover_flags = r.ImGui_HoveredFlags_ChildWindows and r.ImGui_HoveredFlags_ChildWindows() or 0
+    if horizontal and r.ImGui_GetMouseWheel and r.ImGui_IsWindowHovered(ctx, hover_flags) then
+      local wheel_v = r.ImGui_GetMouseWheel(ctx) or 0
+      local wheel_h = r.ImGui_GetMouseWheelH and r.ImGui_GetMouseWheelH(ctx) or 0
+      local wheel = wheel_h ~= 0 and wheel_h or wheel_v
+      if wheel ~= 0 and r.ImGui_SetScrollX and r.ImGui_GetScrollX then
+        local step = UIScale.round(settings.horizontal_tile_width or 240) * 0.5
+        r.ImGui_SetScrollX(ctx, r.ImGui_GetScrollX(ctx) - wheel * step)
+      end
+    end
+    local width = horizontal and UIScale.round(settings.horizontal_tile_width or 240) or get_centered_item_width(ctx)
+    local col = 0
+    local function next_tile()
+      if horizontal then
+        if col > 0 then r.ImGui_SameLine(ctx) end
+        col = col + 1
+      else
+        center_next_item(ctx, width)
+      end
+    end
+    local function new_section()
+      col = 0
+    end
+    local function section_break(section_id, label)
+      if not horizontal then return false end
+      local sdl = r.ImGui_GetWindowDrawList(ctx)
+      local sh = expanded_tile_height(settings)
+      local size = UIScale.round(14)
+      local has_line = col > 0
+      if has_line then r.ImGui_SameLine(ctx) end
+      local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
+      local bar_w = UIScale.round(20)
+      local pad = has_line and UIScale.round(6) or 0
+      local bx = sx + pad
+      local collapse_key = "SECTION|" .. tostring(section_id)
+      local is_collapsed = state.collapsed[collapse_key] == true
+      local accent = Theme.colors.accent
+      local text_color = luminance(accent) > 0.55 and 0x000000FF or 0xFFFFFFFF
+      r.ImGui_DrawList_AddRectFilled(sdl, bx, sy, bx + bar_w, sy + sh, accent, UIScale.px(3))
+      local chev_size = UIScale.round(10)
+      local chev_cx = bx + bar_w * 0.5
+      local chev_cy = sy + UIScale.round(8)
+      if is_collapsed then
+        r.ImGui_DrawList_AddTriangleFilled(sdl, chev_cx - UIScale.round(3), chev_cy - UIScale.round(4), chev_cx + UIScale.round(4), chev_cy, chev_cx - UIScale.round(3), chev_cy + UIScale.round(4), text_color)
+      else
+        r.ImGui_DrawList_AddTriangleFilled(sdl, chev_cx + UIScale.round(3), chev_cy - UIScale.round(4), chev_cx - UIScale.round(4), chev_cy, chev_cx + UIScale.round(3), chev_cy + UIScale.round(4), text_color)
+      end
+      if label and label ~= "" then
+        label = label:upper()
+        local font_size = r.ImGui_GetFontSize(ctx)
+        local scale = size / font_size
+        local line_h = size + UIScale.round(2)
+        local chars = {}
+        for ch in label:gmatch(".") do chars[#chars + 1] = ch end
+        local total_h = #chars * line_h
+        local top = sy + chev_size + UIScale.round(8)
+        local avail_h = sh - (chev_size + UIScale.round(12))
+        local start_y = top + math.max(0, (avail_h - total_h) * 0.5)
+        for i, ch in ipairs(chars) do
+          local ch_w = r.ImGui_CalcTextSize(ctx, ch) * scale
+          r.ImGui_DrawList_AddTextEx(sdl, nil, size, bx + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, text_color, ch)
+        end
+      end
+      r.ImGui_SetCursorScreenPos(ctx, bx, sy)
+      if r.ImGui_InvisibleButton(ctx, "##ir_section_" .. tostring(section_id), bar_w, sh) then
+        state.collapsed[collapse_key] = not is_collapsed
+        is_collapsed = not is_collapsed
+      end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand section" or "Collapse section") end
+      r.ImGui_SetCursorScreenPos(ctx, sx, sy)
+      r.ImGui_Dummy(ctx, pad + bar_w, sh)
+      col = col + 1
+      return is_collapsed
+    end
+    if show_track_fx and fx_count == 0 and not horizontal then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No FX on this track.")
     end
     if show_track_fx then
-      for index = 0, fx_count - 1 do
-        center_next_item(ctx, width)
-        draw_fx_tile(app, ctx, settings, track, index, width, true)
+      local collapsed = horizontal and section_break("track", "Track FX")
+      if not collapsed then
+        for index = 0, fx_count - 1 do
+          next_tile()
+          draw_fx_tile(app, ctx, settings, track, index, width, "track", take)
+        end
+        next_tile()
+        draw_add_zone(app, ctx, settings, track, width, -1)
       end
-      center_next_item(ctx, width)
-      draw_add_zone(app, ctx, settings, track, width, -1)
     end
     if settings.show_input_fx then
-      draw_section_label(ctx, "Track Input FX", get_track_label(track), input_fx_count)
-      if input_fx_count == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No input FX on this track.") end
-      for index = 0, input_fx_count - 1 do
-        center_next_item(ctx, width)
-        draw_fx_tile(app, ctx, settings, track, REC_FX_OFFSET + index, width, false)
+      local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
+      local collapsed = false
+      if horizontal then
+        if input_fx_count > 0 or dragging then collapsed = section_break("input", "Input FX") end
+      else
+        new_section()
+        draw_section_label(ctx, "Track Input FX", get_track_label(track), input_fx_count)
+        if input_fx_count == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No input FX on this track.") end
+      end
+      if not collapsed then
+        for index = 0, input_fx_count - 1 do
+          next_tile()
+          draw_fx_tile(app, ctx, settings, track, REC_FX_OFFSET + index, width, "input", take)
+        end
+        if dragging then
+          next_tile()
+          draw_add_zone(app, ctx, settings, track, width, nil, "input", nil, true)
+        end
       end
     end
     if settings.show_selected_item_fx then
-      draw_section_label(ctx, "Selected Track Item FX", get_track_label(track), take_fx_count)
+      local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
+      if not horizontal then
+        new_section()
+        draw_section_label(ctx, "Selected Track Item FX", get_track_label(track), take_fx_count)
+      end
       if selected_item and item_on_track == false then
-        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Selected item is on another track.")
+        if not horizontal then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Selected item is on another track.") end
       elseif not validate_take(take) then
-        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No selected item with active take on this track.")
-      elseif take_fx_count == 0 then
-        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No item FX on selected item: " .. get_take_label(take))
+        if not horizontal then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No selected item with active take on this track.") end
       else
-        r.ImGui_TextColored(ctx, Theme.colors.text_dim, get_take_label(take))
-        for index = 0, take_fx_count - 1 do
-          center_next_item(ctx, width)
-          draw_take_fx_tile(app, ctx, settings, take, index, width)
+        local collapsed = false
+        if horizontal then
+          if take_fx_count > 0 or dragging then collapsed = section_break("take", "Take FX") end
+        else
+          if take_fx_count == 0 then
+            r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No item FX on selected item: " .. get_take_label(take))
+          else
+            r.ImGui_TextColored(ctx, Theme.colors.text_dim, get_take_label(take))
+          end
+        end
+        if not collapsed then
+          for index = 0, take_fx_count - 1 do
+            next_tile()
+            draw_take_fx_tile(app, ctx, settings, track, take, index, width)
+          end
+          if dragging then
+            next_tile()
+            draw_add_zone(app, ctx, settings, track, width, nil, "item", take, true)
+          end
         end
       end
     end
     r.ImGui_EndChild(ctx)
   end
   if settings.show_macros ~= false then draw_macro_bar(app, ctx, settings, track) end
-  UI.draw_info_line(ctx, info_line_text(app, track, fx_count, input_fx_count, take_fx_count, item_on_track, take))
+  if settings.show_info_bar ~= false then UI.draw_info_line(ctx, info_line_text(app, track, fx_count, input_fx_count, take_fx_count, item_on_track, take)) end
 end
 
 return M

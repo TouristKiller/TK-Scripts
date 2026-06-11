@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.2
+-- @version 0.3.3
 -- @changelog:
+-- v0.3.3
+--   + Instrument Rack: Added a horizontal Instrument Rack window that can be opened from the rack settings
+--   + Instrument Rack: Added a selectable macro count of 8 or 16
+--   + Instrument Rack: Tiles now collapse horizontally into a narrow strip in horizontal layout
 -- v0.3.2
 --   + Workbench: Added a clear (X) button to module search fields in Media Browser, Plugin Browser, Project Browser, Script Launcher, Track Tags, and Action Browser
 --   + Media Browser: Raised the default file scan cap to 200000 and added a configurable Max files setting up to five million

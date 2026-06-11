@@ -33,9 +33,10 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.3.2" author="TouristKiller" time="2026-06-10T16:25:00Z">
+    <version name="0.3.3" author="TouristKiller" time="2026-06-11T22:45:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
+     <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua</source>
@@ -104,6 +105,11 @@
         <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+        v0.3.3
+        + Instrument Rack: Added a horizontal Instrument Rack window that can be opened from the rack settings
+        + Instrument Rack: Added a selectable macro count of 8 or 16
+        + Instrument Rack: Tiles now collapse horizontally into a narrow strip in horizontal layout
+
         v0.3.2
         + Workbench: Added a clear (X) button to module search fields in Media Browser, Plugin Browser, Project Browser, Script Launcher, Track Tags, and Action Browser
         + Media Browser: Raised the default file scan cap to 200000 and added a configurable Max files setting up to five million
