@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.3
+-- @version 0.3.4
 -- @changelog:
+-- v0.3.4
+--   + Workbench: Added a side-by-side option for split view alongside the stacked layout
 -- v0.3.3
 --   + Instrument Rack: Added a horizontal Instrument Rack window that can be opened from the rack settings
 --   + Instrument Rack: Added a selectable macro count of 8 or 16
@@ -428,6 +430,10 @@ local function split_view_available()
   return app.settings.split_view_enabled == true and not is_home_active() and get_active_module() ~= nil and get_split_module() ~= nil
 end
 
+local function split_orientation()
+  return app.settings.split_orientation == "horizontal" and "horizontal" or "vertical"
+end
+
 local function set_split_module(id)
   if not id or id == "" or id == app.settings.active_module or not app.modules_by_id[id] then return false end
   app.settings.split_module = id
@@ -837,6 +843,12 @@ local function draw_top_bar()
       end
     end
     r.ImGui_Separator(ctx)
+    local is_horizontal = split_orientation() == "horizontal"
+    if r.ImGui_MenuItem(ctx, "Side by side", nil, is_horizontal) then
+      app.settings.split_orientation = is_horizontal and "vertical" or "horizontal"
+      app.status = is_horizontal and "Split stacked" or "Split side by side"
+      save_settings()
+    end
     if r.ImGui_MenuItem(ctx, "Swap panes", nil, false, split_view_available()) then swap_split_modules() end
     if r.ImGui_MenuItem(ctx, "Close split", nil, false, enabled) then
       app.settings.split_view_enabled = false
@@ -1578,16 +1590,20 @@ local function draw_module_instance(module, pane_id)
   r.ImGui_PopID(ctx)
 end
 
-local function draw_splitter(total_h)
-  local width = r.ImGui_GetContentRegionAvail(ctx)
-  local height = UIScale.round(8)
+local function draw_splitter(total, orientation)
+  local horizontal = orientation == "horizontal"
+  local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
+  local thickness = UIScale.round(8)
+  local width = horizontal and thickness or avail_w
+  local height = horizontal and avail_h or thickness
   r.ImGui_InvisibleButton(ctx, "##workbench_splitter", width, height)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local active = r.ImGui_IsItemActive(ctx)
   if active and r.ImGui_GetMouseDragDelta then
-    local _, drag_y = r.ImGui_GetMouseDragDelta(ctx, 0, 0)
-    if math.abs(drag_y or 0) > 0 then
-      app.settings.split_ratio = clamp((tonumber(app.settings.split_ratio) or 0.5) + drag_y / math.max(1, total_h), 0.18, 0.82)
+    local drag_x, drag_y = r.ImGui_GetMouseDragDelta(ctx, 0, 0)
+    local delta = horizontal and (drag_x or 0) or (drag_y or 0)
+    if math.abs(delta) > 0 then
+      app.settings.split_ratio = clamp((tonumber(app.settings.split_ratio) or 0.5) + delta / math.max(1, total), 0.18, 0.82)
       app.cache.split_ratio_dirty = true
       if r.ImGui_ResetMouseDragDelta then r.ImGui_ResetMouseDragDelta(ctx, 0) end
     end
@@ -1601,8 +1617,13 @@ local function draw_splitter(total_h)
   local background = Theme.colors.child_bg or Theme.colors.window_bg or 0x181818FF
   local rail_color = contrast_from_background(background, hovered and 0.16 or 0.11)
   local grip_color = active and Theme.colors.accent or contrast_from_background(background, hovered and 0.34 or 0.24)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1 + 1, x2, y2 - 1, rail_color, 3)
-  r.ImGui_DrawList_AddRectFilled(draw_list, x1 + 8, y1 + 3, x2 - 8, y2 - 3, grip_color, 2)
+  if horizontal then
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1 + 1, y1, x2 - 1, y2, rail_color, 3)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1 + 3, y1 + 8, x2 - 3, y2 - 8, grip_color, 2)
+  else
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1 + 1, x2, y2 - 1, rail_color, 3)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1 + 8, y1 + 3, x2 - 8, y2 - 3, grip_color, 2)
+  end
   if hovered or active then r.ImGui_SetTooltip(ctx, "Drag to resize split") end
 end
 
@@ -1617,27 +1638,50 @@ local function draw_module_canvas()
     return
   end
   local split_module = get_split_module()
-  local _, available_h = r.ImGui_GetContentRegionAvail(ctx)
+  local available_w, available_h = r.ImGui_GetContentRegionAvail(ctx)
+  local horizontal = split_orientation() == "horizontal"
+  local splitter_size = UIScale.round(8)
+  local pane_flags = 0
+  if r.ImGui_WindowFlags_NoScrollbar then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollbar() end
+  if r.ImGui_WindowFlags_NoScrollWithMouse then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
+  local ratio = clamp(tonumber(app.settings.split_ratio) or 0.5, 0.18, 0.82)
+  if horizontal then
+    local total_w = math.max(40, available_w or 240)
+    local spacing_x = 7
+    if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
+      local sx = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+      spacing_x = tonumber(sx) or spacing_x
+    end
+    local content_w = math.max(20, total_w - splitter_size - spacing_x * 2)
+    local min_w = math.min(UIScale.round(220), math.floor(content_w * 0.45))
+    local left_w = clamp(math.floor(content_w * ratio), min_w, math.max(min_w, content_w - min_w))
+    local right_w = math.max(20, content_w - left_w)
+    local left_visible = r.ImGui_BeginChild(ctx, "##workbench_split_primary", left_w, 0, 0, pane_flags)
+    if left_visible then draw_module_instance(module, "primary") end
+    r.ImGui_EndChild(ctx)
+    r.ImGui_SameLine(ctx, 0, 0)
+    draw_splitter(content_w, "horizontal")
+    r.ImGui_SameLine(ctx, 0, 0)
+    local right_visible = r.ImGui_BeginChild(ctx, "##workbench_split_secondary", right_w, 0, 0, pane_flags)
+    if right_visible then draw_module_instance(split_module, "secondary") end
+    r.ImGui_EndChild(ctx)
+    return
+  end
   local total_h = math.max(40, available_h or 240)
-  local splitter_h = 8
   local spacing_y = 7
   if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
     local _, current_spacing_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
     spacing_y = tonumber(current_spacing_y) or spacing_y
   end
-  local content_h = math.max(20, total_h - splitter_h - spacing_y * 2)
-  local ratio = clamp(tonumber(app.settings.split_ratio) or 0.5, 0.18, 0.82)
+  local content_h = math.max(20, total_h - splitter_size - spacing_y * 2)
   local min_h = math.min(100, math.floor(content_h * 0.45))
   local top_h = math.floor(content_h * ratio)
   top_h = clamp(top_h, min_h, math.max(min_h, content_h - min_h))
   local bottom_h = math.max(20, content_h - top_h)
-  local pane_flags = 0
-  if r.ImGui_WindowFlags_NoScrollbar then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollbar() end
-  if r.ImGui_WindowFlags_NoScrollWithMouse then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
   local primary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_primary", 0, top_h, 0, pane_flags)
   if primary_visible then draw_module_instance(module, "primary") end
   r.ImGui_EndChild(ctx)
-  draw_splitter(content_h)
+  draw_splitter(content_h, "vertical")
   local secondary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_secondary", 0, bottom_h, 0, pane_flags)
   if secondary_visible then draw_module_instance(split_module, "secondary") end
   r.ImGui_EndChild(ctx)

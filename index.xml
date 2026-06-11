@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.3.3" author="TouristKiller" time="2026-06-11T22:45:00Z">
+    <version name="0.3.4" author="TouristKiller" time="2026-06-11T23:20:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -105,6 +105,9 @@
         <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+        v0.3.4
+        + Workbench: Added a side-by-side option for split view alongside the stacked layout
+
         v0.3.3
         + Instrument Rack: Added a horizontal Instrument Rack window that can be opened from the rack settings
         + Instrument Rack: Added a selectable macro count of 8 or 16
