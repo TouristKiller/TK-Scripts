@@ -596,75 +596,34 @@ v1.0.1.1
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.5.5" author="TouristKiller (based on pandabot ChordGun)" time="2026-05-04T19:15:00Z">
+      <version name="2.5.6" author="TouristKiller (based on pandabot ChordGun)" time="2026-06-11T19:15:00Z">
         <changelog><![CDATA[
-2.5.5
-[Strum]
-+ Bug fix — strum offset is now correctly applied when inserting via Shift+Click (PPQ-per-beat was mis-calculated)
-+ Tempo-independent — strum delay (ms) now scales with project BPM so the feel stays consistent across tempos
-+ Combined right-click popup menu with submenus and check-marks (Speed Mode, Delay ms presets + Custom, Grid 1/8-1/64, Velocity Curve off/up/down/v/^, Ramp Amount presets + Custom) — no separate Ctrl modifier
-+ Velocity ramp curves applied to both inserted notes and live preview playback (scale chord, slot, progression incl. repeats and next-slot)
+        v2.5.6
 
-[Velocity]
-+ Default Velocity: New global velocity setting via "Vel:" button in top frame next to Oct:/Inv:. Left-click cycles presets, right-click opens menu (Follow MIDI Editor / 16 / 32 / 48 / 64 / 80 / 96 / 112 / 127 / Custom). Persists between sessions.
-+ Per-Slot Velocity: New "V" button on the left side of each progression slot opens a velocity panel with a theme-styled slider (1-127) overriding the global Vel: for that slot. Click "x" to reset to follow global. Persists with progression presets.
+        [Time Selection / Insert]
+        + Bug fix — when Note Length is set to "Time Selection" but no time selection is active, the length now correctly falls back to the MIDI Editor grid. Previously the -1 sentinel leaked into the grid calculation, producing tiny notes and a cursor that jumped back one beat.
 
-[Time Selection / Insert]
-+ Cursor now snaps to start of time selection if it lies outside, so Shift+Click always inserts at the selection start
-+ When no time selection is active, length now falls back to MIDI Editor grid (was: very short / 2 sec on new items)
-+ New MIDI items are now created at the start of the time selection (was: created from the edit cursor, which placed notes outside or in the middle of the new item)
-+ New item length now exactly matches the time selection (1-bar minimum no longer applied in this mode)
-+ Newly created MIDI items are now always at least 1 bar (was: 1/2 was too short, shorter lengths jumped to 1 bar inconsistently)
-+ Edit cursor only wraps back to time-selection start when Note Length is set to "Time Selection". With fixed note lengths the cursor now keeps moving forward through the item even if a time selection happens to be active.
+        [Note Length / Grid]
+        + Bug fix — "Grid" note length now uses the project/arrange grid when no MIDI editor is open (was: defaulted to 1/32, or even a zero-length/invisible note on the very first insert, until an item had been opened in the MIDI editor at least once). The grid length now always falls back to a valid value, so notes are never zero-length.
+        + "Grid" note length now follows the MIDI Editor grid only when the editor is actually visible. A docked MIDI Editor in a closed/hidden docker no longer counts as "open" (it kept a valid pointer), so the length correctly falls back to the arrange grid instead of a leftover editor grid (e.g. 1/32). Requires js_ReaScriptAPI for visibility detection.
 
-[Chord Recognition]
-+ Added recognition for 6, m6, add9, madd9, 9, 6/9, 11, min11, maj11, 13, min13, maj13
-+ Fixed maj13 / 13 patterns to omit the (avoid-note) 11th — Cmaj13 played as C E G B D A is now correctly recognized as Cmaj13 instead of C6
-+ Scoring now favors longer/exact patterns so e.g. Cmaj7 no longer mis-recognizes as C6 when both have the same number of matched notes
-+ Partial-match recognition: notes may now be omitted from a voicing (1 missing for 4-note chords, 2 for 5+ note chords) — e.g. Cmaj13 without the 9 is still recognized as Cmaj13 instead of Am9/C
-+ Core-interval check ensures root, 3rd and 7th are present before scoring — prevents nonsense matches on partial voicings
-+ Recognition patterns are now derived from the central chord data table (single source of truth) — no more drift between insert and recognize
-+ Fixed Dm9 / C9 / G9 etc. inserting as plain min7 / dom7 — chord data patterns were missing the 9
-+ Fixed 11, min11, 13, maj13, min13, maj#11 chord data patterns that were missing the 9 (and 11 in min13)
-+ Added madd9 and maj11 to the chord data table (were only in the recognizer before)
+        [Inversion]
+        + Simplified the inversion system to a single source of truth: Ctrl+Click on a chord button now cycles the global inversion for that scale degree (root → 1st → 2nd → ... → root, based on the actual number of chord notes) and previews it. The "Inv:" value box in the top frame always reflects the current value.
+        + Click (preview), Shift+Click (insert) and Alt+Click (add to slot) now all respect the selected inversion automatically — re-previewing is just another Click, no special modifier needed.
+        + Drag & drop onto a progression slot now also carries the selected inversion (was: always inserted the root-position chord).
+        + Removed the separate temporary cycle system: no more 2-second reset timer, no more "I1/I2/I3" badge, and Ctrl+Shift+Click / Ctrl+Alt+Click are no longer needed (they now behave like Shift+Click / Alt+Click). This fixes the preview/badge mismatch and the inability to re-preview an inversion.
 
-[Monitor]
-+ Chord/Note display now shows the current octave of the played note(s) as an "Oct: N" indicator centered directly below the chord/note name in the monitor window — useful for live monitoring with controllers like the Launchpad. The octave reflects the lowest currently-held note.
+        [MIDI Trigger]
+        + Bug fix — "Clear All Mappings" in the MIDI Trigger menu did nothing when no ChordMap presets were saved. The greyed-out "(no presets)" placeholder still consumed a menu index, so the Clear action ended up on the wrong index. The index is now calculated from the actual number of delete-menu items, so Clear All Mappings works with or without saved presets.
 
-[Inversion]
-+ Ctrl+Click on chord button cycles inversion (root → 1st → 2nd → 3rd → root) with visual badge "I1/I2/I3" in top-right corner. Cycle resets after 2 seconds of no Ctrl+Click on the same button.
-+ Ctrl+Shift+Click inserts the chord using the current cycle inversion (does NOT advance the cycle, so the badge value is what gets inserted)
-+ Ctrl+Alt+Click adds the chord to the selected progression slot using the current cycle inversion (does NOT advance the cycle)
+        [MIDI Playback / Recording]
+        + Bug fix — note-off messages from button clicks now always use the same MIDI channel as the matching note-on. Previously the channel was re-read at note-off time, so if it changed in between (MIDI editor opening/closing, or toggling Scale Filter / MIDI Trigger) the note-off landed on a different channel and the note was never released. This caused stuck notes that, with retroactive MIDI recording, were stretched all the way to the end of the item. stopAllNotesFromPlaying now also clears every channel that was actually used.
 
-[Tooltips]
-+ Tooltips now support multi-line text and are clamped within the window so they no longer extend off-screen
-+ Chord-button tooltip rewritten as multi-line list of all click actions
-
-[UI]
-+ Note Length dropdown now has visible "Note length" label and is wider so "Time selection" fits
-+ Chord Style dropdown widened so all entries are readable
-+ Inversion moved to top frame next to Octave (compact "Inv:" / "Oct:" labels) to free space on the chord-name row
-+ Chord-name display right-aligned and uses full available width to the right of the dropdowns
-+ Top button row shifted slightly left for tighter alignment
-+ Removed redundant "Scale:" label from top frame to free space for the new Velocity button
-
-[Drag & Drop]
-+ Chord buttons can now be dragged onto progression slots (alternative to Alt+Click). A ghost label follows the cursor and the target slot highlights while dragging.
-
-[Persistence]
-+ "Always on Top" and "Tooltips" toggles are now remembered between sessions (saved globally)
-+ Preset Loading: Out-of-range scale/chord indices in old preset files are clamped to valid values
-
-[Crash Fixes]
-+ Sparse table.concat crash when switching scales (e.g. Pentatonic > Blues) — ProjExtState tables are now self-healing
-+ "MediaItem_Take expected" after deleting an item and using Shift+Click — take pointers now validated via ValidatePtr + GetMediaItemTake_Item + TakeIsMIDI
-+ Shift+Click insert no longer fails with "attempt to index nil" — `playOrInsertScaleChord` now correctly resolves the selected scale note and chord type before use
-
-[State Management]
-+ Chord button highlight no longer stays "stuck" on the slot-chord after Ctrl+Alt+Click → slot select → chord click — `currentlyPlayingChord` is now cleared on every chord-button press
-+ New central `resetTransientState()` clears playback overlays (currentlyPlayingChord, slot velocity override, voice-leading reference, drag state, inversion cycle) on stop, slot remove, scale change and progression clear — prevents stale state from leaking between actions
-
-
+        [MIDI Trigger / Learn]
+        + The "Assign MIDI Trigger" / "Assign Column Trigger" flow now uses a non-blocking on-screen overlay instead of a modal pop-up. While listening you see a centered prompt; the moment a MIDI note arrives it is mapped, a short "Assigned: <note>" confirmation is shown, and the overlay closes automatically — no more clicking OK and no more wondering whether it worked.
+        + Assigning a trigger now also works while MIDI Trigger is globally OFF. The overlay shows a reminder that you still have to enable the connector icon (top bar) for triggers to actually fire, since it is off by default and the icon is not obvious.
+        + The MIDI Trigger icon now pulses with an extra ring while you are assigning a trigger, making it clear the script is waiting for a note.
+        + Press Esc or click anywhere to cancel an assignment in progress.
  ]]></changelog>
 
         <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun.lua</source>

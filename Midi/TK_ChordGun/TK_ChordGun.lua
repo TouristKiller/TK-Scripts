@@ -1,8 +1,35 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.5.5
+-- @version 2.5.6
 -- @changelog
 --[[
+2.5.6
+
+[Time Selection / Insert]
++ Bug fix — when Note Length is set to "Time Selection" but no time selection is active, the length now correctly falls back to the MIDI Editor grid. Previously the -1 sentinel leaked into the grid calculation, producing tiny notes and a cursor that jumped back one beat.
+
+[Note Length / Grid]
++ Bug fix — "Grid" note length now uses the project/arrange grid when no MIDI editor is open (was: defaulted to 1/32, or even a zero-length/invisible note on the very first insert, until an item had been opened in the MIDI editor at least once). The grid length now always falls back to a valid value, so notes are never zero-length.
++ "Grid" note length now follows the MIDI Editor grid only when the editor is actually visible. A docked MIDI Editor in a closed/hidden docker no longer counts as "open" (it kept a valid pointer), so the length correctly falls back to the arrange grid instead of a leftover editor grid (e.g. 1/32). Requires js_ReaScriptAPI for visibility detection.
+
+[Inversion]
++ Simplified the inversion system to a single source of truth: Ctrl+Click on a chord button now cycles the global inversion for that scale degree (root → 1st → 2nd → ... → root, based on the actual number of chord notes) and previews it. The "Inv:" value box in the top frame always reflects the current value.
++ Click (preview), Shift+Click (insert) and Alt+Click (add to slot) now all respect the selected inversion automatically — re-previewing is just another Click, no special modifier needed.
++ Drag & drop onto a progression slot now also carries the selected inversion (was: always inserted the root-position chord).
++ Removed the separate temporary cycle system: no more 2-second reset timer, no more "I1/I2/I3" badge, and Ctrl+Shift+Click / Ctrl+Alt+Click are no longer needed (they now behave like Shift+Click / Alt+Click). This fixes the preview/badge mismatch and the inability to re-preview an inversion.
+
+[MIDI Trigger]
++ Bug fix — "Clear All Mappings" in the MIDI Trigger menu did nothing when no ChordMap presets were saved. The greyed-out "(no presets)" placeholder still consumed a menu index, so the Clear action ended up on the wrong index. The index is now calculated from the actual number of delete-menu items, so Clear All Mappings works with or without saved presets.
+
+[MIDI Playback / Recording]
++ Bug fix — note-off messages from button clicks now always use the same MIDI channel as the matching note-on. Previously the channel was re-read at note-off time, so if it changed in between (MIDI editor opening/closing, or toggling Scale Filter / MIDI Trigger) the note-off landed on a different channel and the note was never released. This caused stuck notes that, with retroactive MIDI recording, were stretched all the way to the end of the item. stopAllNotesFromPlaying now also clears every channel that was actually used.
+
+[MIDI Trigger / Learn]
++ The "Assign MIDI Trigger" / "Assign Column Trigger" flow now uses a non-blocking on-screen overlay instead of a modal pop-up. While listening you see a centered prompt; the moment a MIDI note arrives it is mapped, a short "Assigned: <note>" confirmation is shown, and the overlay closes automatically — no more clicking OK and no more wondering whether it worked.
++ Assigning a trigger now also works while MIDI Trigger is globally OFF. The overlay shows a reminder that you still have to enable the connector icon (top bar) for triggers to actually fire, since it is off by default and the icon is not obvious.
++ The MIDI Trigger icon now pulses with an extra ring while you are assigning a trigger, making it clear the script is waiting for a note.
++ Press Esc or click anywhere to cancel an assignment in progress.
+
 2.5.5
 
 [Strum]
@@ -514,6 +541,114 @@ function renderPendingTooltips()
 	end
 end
 
+function handleMidiLearn()
+	if not midiTriggerLearnTarget then return end
+	for note = 0, 127 do
+		if externalMidiNotes[note] then
+			if midiTriggerLearnTarget.isColumn then
+				setMidiTriggerColumnMapping(note, midiTriggerLearnTarget.columnIndex)
+			else
+				setMidiTriggerMapping(note, midiTriggerLearnTarget.scaleNoteIndex, midiTriggerLearnTarget.chordTypeIndex)
+			end
+			midiTriggerLearnTarget = nil
+			externalMidiNotes[note] = nil
+			midiLearnConfirmNote = note
+			if reaper.time_precise then
+				midiLearnConfirmUntil = reaper.time_precise() + 1.2
+			else
+				midiLearnConfirmUntil = nil
+			end
+			stopAllNotesFromPlaying()
+			return
+		end
+	end
+end
+
+function renderMidiLearnOverlay()
+	local now = reaper.time_precise and reaper.time_precise() or 0
+	local listening = midiTriggerLearnTarget ~= nil
+	local confirming = midiLearnConfirmUntil ~= nil and now < midiLearnConfirmUntil
+
+	if not listening and not confirming then
+		if midiLearnConfirmUntil ~= nil and now >= midiLearnConfirmUntil then
+			midiLearnConfirmUntil = nil
+			midiLearnConfirmNote = nil
+		end
+		return
+	end
+
+	local lines = {}
+	if listening then
+		local target = midiTriggerLearnTarget
+		lines[#lines + 1] = "Listening for MIDI note..."
+		if target.isColumn then
+			lines[#lines + 1] = "Target: Column " .. tostring(target.columnIndex)
+		else
+			lines[#lines + 1] = "Target: Chord (degree " .. tostring(target.scaleNoteIndex) .. ")"
+		end
+		lines[#lines + 1] = "Press any key on your MIDI device."
+		if not midiTriggerEnabled then
+			lines[#lines + 1] = ""
+			lines[#lines + 1] = "MIDI Trigger is currently OFF."
+			lines[#lines + 1] = "Enable the connector icon (top bar) so triggers fire."
+		end
+		lines[#lines + 1] = ""
+		lines[#lines + 1] = "(Press Esc or click to cancel)"
+	else
+		lines[#lines + 1] = "Assigned: " .. getMidiNoteName(midiLearnConfirmNote)
+	end
+
+	gfx.setfont(1, "Arial", fontSize(14))
+	local maxW = 0
+	local lineH = 0
+	for i = 1, #lines do
+		local w, h = gfx.measurestr(lines[i] ~= "" and lines[i] or " ")
+		if w > maxW then maxW = w end
+		if h > lineH then lineH = h end
+	end
+
+	local padding = s(16)
+	local boxW = maxW + padding * 2
+	local boxH = lineH * #lines + padding * 2
+	local boxX = math.floor((gfx.w - boxW) / 2)
+	local boxY = math.floor((gfx.h - boxH) / 2)
+
+	gfx.set(0, 0, 0, 0.85)
+	gfx.rect(boxX, boxY, boxW, boxH, 1)
+
+	if listening then
+		local pulse = 0.5 + 0.5 * math.sin(now * 6)
+		gfx.set(0.35 + 0.45 * pulse, 0.65 + 0.25 * pulse, 1, 1)
+	else
+		gfx.set(0.3, 0.9, 0.45, 1)
+	end
+	gfx.rect(boxX, boxY, boxW, boxH, 0)
+	gfx.rect(boxX + 1, boxY + 1, boxW - 2, boxH - 2, 0)
+
+	for i = 1, #lines do
+		if lines[i] ~= "" then
+			if listening then
+				if i >= 5 and not midiTriggerEnabled and i <= 6 then
+					gfx.set(1, 0.75, 0.3, 1)
+				else
+					gfx.set(0.95, 0.95, 0.95, 1)
+				end
+			else
+				gfx.set(0.6, 1, 0.72, 1)
+			end
+			local w = gfx.measurestr(lines[i])
+			gfx.x = boxX + math.floor((boxW - w) / 2)
+			gfx.y = boxY + padding + (i - 1) * lineH
+			gfx.drawstr(lines[i])
+		end
+	end
+
+	if listening and mouseButtonIsNotPressedDown and leftMouseButtonIsHeldDown() then
+		mouseButtonIsNotPressedDown = false
+		midiTriggerLearnTarget = nil
+	end
+end
+
 dropdownBlocksInput = false
 
 function mouseIsHoveringOver(element)
@@ -864,7 +999,9 @@ local midiTriggerEnabled = false
 local midiTriggerMappings = {}
 local midiTriggerColumnMappings = {}
 local midiTriggerMode = 1
-local midiTriggerLearnTarget = nil
+midiTriggerLearnTarget = nil
+midiLearnConfirmNote = nil
+midiLearnConfirmUntil = nil
 local midiTriggerState = { _virtualDeviceCache = {} }
 local activeTriggerNote = nil
 local currentTriggerPreset = nil
@@ -2791,17 +2928,43 @@ function getNoteLengthQN()
   local take = activeTake()
 
 
-  if option and option.qn then
+  if option and option.qn and option.qn ~= -1 then
     return option.qn
   end
 
 
-  if take then
-    return reaper.MIDI_GetGrid(take)
+  local editor = reaper.MIDIEditor_GetActive()
+  local editorIsVisible = false
+  if editor then
+    if reaper.JS_Window_IsVisible then
+      editorIsVisible = reaper.JS_Window_IsVisible(editor)
+    else
+      editorIsVisible = true
+    end
+  end
+  if editorIsVisible and take and reaper.MIDIEditor_GetTake(editor) == take then
+    local editorGrid = reaper.MIDI_GetGrid(take)
+    if editorGrid and editorGrid > 0 then
+      return editorGrid
+    end
   end
 
 
-  return 0.25
+  local _, projectDivision = reaper.GetSetProjectGrid(0, false)
+  if projectDivision and projectDivision > 0 then
+    return projectDivision * 4
+  end
+
+
+  if take then
+    local takeGrid = reaper.MIDI_GetGrid(take)
+    if takeGrid and takeGrid > 0 then
+      return takeGrid
+    end
+  end
+
+
+  return 1.0
 end
 
 function gridUnitLength()
@@ -2842,7 +3005,16 @@ function getMidiEndPositionPPQ()
   else
       lengthTime = gridUnitLength()
   end
-  
+
+  if not lengthTime or lengthTime <= 0 then
+      local bpm = reaper.Master_GetTempo()
+      if bpm and bpm > 0 then
+          lengthTime = 60 / bpm
+      else
+          lengthTime = 0.5
+      end
+  end
+
   local endPositionPPQ = reaper.MIDI_GetPPQPosFromProjTime(take, startPosition + lengthTime)
   return endPositionPPQ
 end
@@ -3110,6 +3282,9 @@ function getBestVoiceLeadingInversion(root, chordData, octave)
     return bestInversion
 end
 
+playingNoteChannels = {}
+usedNoteChannels = {}
+
 function playMidiNote(midiNote, velocityOverride)
 
   local virtualKeyboardMode = 0
@@ -3123,26 +3298,35 @@ function playMidiNote(midiNote, velocityOverride)
   local velocity = velocityOverride or getCurrentVelocity()
 
   reaper.StuffMIDIMessage(virtualKeyboardMode, noteOnCommand, midiNote, velocity)
+  playingNoteChannels[midiNote] = channel
+  usedNoteChannels[channel] = true
   registerInternalNoteEvent(midiNote, true)
 end
 
 function stopAllNotesFromPlaying()
 
-  for midiNote = 0, 127 do
+  local virtualKeyboardMode = 0
+  local channels = {}
 
-    local virtualKeyboardMode = 0
-    local channel = getCurrentNoteChannel()
-    
-    if scaleFilterMode == 2 or midiTriggerEnabled then
-      channel = 15
-    end
-
-    local noteOffCommand = 0x80 + channel
-    local velocity = 0
-
-    reaper.StuffMIDIMessage(virtualKeyboardMode, noteOffCommand, midiNote, velocity)
+  for ch in pairs(usedNoteChannels) do
+    channels[ch] = true
   end
 
+  local currentChannel = getCurrentNoteChannel()
+  if scaleFilterMode == 2 or midiTriggerEnabled then
+    currentChannel = 15
+  end
+  channels[currentChannel] = true
+
+  for channel in pairs(channels) do
+    local noteOffCommand = 0x80 + channel
+    for midiNote = 0, 127 do
+      reaper.StuffMIDIMessage(virtualKeyboardMode, noteOffCommand, midiNote, 0)
+    end
+  end
+
+  playingNoteChannels = {}
+  usedNoteChannels = {}
   setNotesThatArePlaying({})
 
   if reaper.time_precise then
@@ -3153,16 +3337,20 @@ end
 function stopNoteFromPlaying(midiNote)
 
   local virtualKeyboardMode = 0
-  local channel = getCurrentNoteChannel()
-  
-  if scaleFilterMode == 2 or midiTriggerEnabled then
-    channel = 15
+  local channel = playingNoteChannels[midiNote]
+
+  if channel == nil then
+    channel = getCurrentNoteChannel()
+    if scaleFilterMode == 2 or midiTriggerEnabled then
+      channel = 15
+    end
   end
 
   local noteOffCommand = 0x80 + channel
   local velocity = 0
 
   reaper.StuffMIDIMessage(virtualKeyboardMode, noteOffCommand, midiNote, velocity)
+  playingNoteChannels[midiNote] = nil
   registerInternalNoteEvent(midiNote, false)
 end
 
@@ -4750,7 +4938,53 @@ function previewScaleChord(velocity)
   updateChordText(root, chord, chordNotesArray)
 end
 
+function extendActiveItemToFitContent()
+
+  local take = activeTake()
+  if not isValidMidiTake(take) then return end
+
+  local item = reaper.GetMediaItemTake_Item(take)
+  if not item or not reaper.ValidatePtr(item, "MediaItem*") then return end
+
+  reaper.MIDI_Sort(take)
+
+  local _, noteCount = reaper.MIDI_CountEvts(take)
+  if not noteCount or noteCount == 0 then return end
+
+  local maxEndPPQ = nil
+  for noteIndex = 0, noteCount - 1 do
+    local ok, _, _, _, noteEndPPQ = reaper.MIDI_GetNote(take, noteIndex)
+    if ok and (not maxEndPPQ or noteEndPPQ > maxEndPPQ) then
+      maxEndPPQ = noteEndPPQ
+    end
+  end
+  if not maxEndPPQ then return end
+
+  local contentEndTime = reaper.MIDI_GetProjTimeFromPPQPos(take, maxEndPPQ)
+  local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+  local itemLength = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+  local itemEnd = itemStart + itemLength
+
+  if contentEndTime > itemEnd + tolerance then
+    reaper.SetMediaItemInfo_Value(item, "D_LENGTH", contentEndTime - itemStart)
+    reaper.UpdateItemInProject(item)
+  end
+end
+
 function insertScaleChord(chordNotesArray, keepNotesSelected, selectedChord)
+
+  local cursorWasOutsideItem = false
+  if not keepNotesSelected then
+    local item = activeMediaItem()
+    if item and reaper.ValidatePtr(item, "MediaItem*") then
+      local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+      local itemEnd = itemStart + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+      local cursor = reaper.GetCursorPosition()
+      if cursor < itemStart - tolerance or cursor >= itemEnd - tolerance then
+        cursorWasOutsideItem = true
+      end
+    end
+  end
 
   deleteExistingNotesInNextInsertionTimePeriod(keepNotesSelected, selectedChord)
 
@@ -4761,7 +4995,13 @@ function insertScaleChord(chordNotesArray, keepNotesSelected, selectedChord)
     end
   end
 
-  moveCursor(keepNotesSelected, selectedChord)
+  extendActiveItemToFitContent()
+
+  if cursorWasOutsideItem then
+    moveEditCursorPosition(noteLength())
+  else
+    moveCursor(keepNotesSelected, selectedChord)
+  end
 end
 
 local lastActiveTake = nil
@@ -7108,7 +7348,6 @@ function Header:onRightClick()
       clearMidiTriggerColumnMapping(self.scaleNoteIndex)
     else
       midiTriggerLearnTarget = {isColumn = true, columnIndex = self.scaleNoteIndex}
-      reaper.ShowMessageBox("Press any MIDI key to assign it to column " .. self.scaleNoteIndex .. ".\n\nThe next incoming MIDI note will be mapped.", "MIDI Learn", 0)
     end
   end
 end
@@ -7468,7 +7707,7 @@ local lastPlayedChord = nil
 
 currentlyPlayingChord = nil
 
-local externalMidiNotes = {}
+externalMidiNotes = {}
 local lastProcessedMidiSignature = nil
 local midiQueuePrimed = false
 local internalNoteEvents = {}
@@ -7808,15 +8047,6 @@ function ChordButton:drawText()
 	gfx.x = self.x + ((self.width - stringWidth) / 2)
 	gfx.y = self.y + ((self.height - stringHeight) / 2)
 	gfx.drawstr(self.text)
-
-	if invCycleButton == self and (reaper.time_precise() - invCycleTime) < invCycleTimeout then
-		local badge = "I" .. invCycleValue
-		local bw, bh = gfx.measurestr(badge)
-		gfx.set(1, 0.85, 0.2, 1)
-		gfx.x = self.x + self.width - bw - 3
-		gfx.y = self.y + 2
-		gfx.drawstr(badge)
-	end
 end
 
 local function buttonHasBeenClicked(button)
@@ -7844,34 +8074,28 @@ function ChordButton:onPress()
 	previewScaleChord()
 end
 
-function ChordButton:getNextCycleInversion()
-	local now = reaper.time_precise()
-	if invCycleButton == self and (now - invCycleTime) < invCycleTimeout then
-		return (invCycleValue + 1) % 4
-	end
-	return 1
-end
-
-function ChordButton:getCurrentCycleInversion()
-	local now = reaper.time_precise()
-	if invCycleButton == self and (now - invCycleTime) < invCycleTimeout then
-		return invCycleValue
-	end
-	return 1
-end
-
 function ChordButton:onCtrlPress()
 	local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
 	if not chord then return end
 
-	local nextInv = self:getNextCycleInversion()
-	invCycleButton = self
-	invCycleValue = nextInv
-	invCycleTime = reaper.time_precise()
+	setSelectedScaleNote(self.scaleNoteIndex)
+	setSelectedChordType(self.scaleNoteIndex, self.chordTypeIndex)
+
+	local noteCount = 0
+	if chord.pattern then
+		for n = 1, #chord.pattern do
+			if chord.pattern:sub(n, n) == '1' then noteCount = noteCount + 1 end
+		end
+	end
+	if noteCount < 1 then noteCount = 4 end
+
+	local nextInv = getChordInversionState(self.scaleNoteIndex) + 1
+	if nextInv < 0 or nextInv >= noteCount then nextInv = 0 end
+	setChordInversionState(self.scaleNoteIndex, nextInv)
 
 	local root = scaleNotes[self.scaleNoteIndex]
 	local octave = getOctave()
-	local notes = getChordNotesArray(root, chord, octave, nextInv)
+	local notes = getChordNotesArray(root, chord, octave)
 	notes = applyArpPattern(notes)
 	playScaleChord(notes)
 	setNotesThatArePlaying(notes)
@@ -7879,47 +8103,7 @@ function ChordButton:onCtrlPress()
 end
 
 function ChordButton:onCtrlShiftPress()
-	local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
-	if not chord then return end
-
-	local inv = self:getCurrentCycleInversion()
-	invCycleButton = self
-	invCycleValue = inv
-	invCycleTime = reaper.time_precise()
-
-	local root = scaleNotes[self.scaleNoteIndex]
-	local octave = getOctave()
-	local notes = getChordNotesArray(root, chord, octave, inv)
-	notes = applyArpPattern(notes)
-
-	if ensureActiveTake() and notCurrentlyRecording() then
-		local nlOption = noteLengthOptions[getNoteLengthIndex()]
-		if nlOption and nlOption.qn == -1 then
-			local loopStart, loopEnd = reaper.GetSet_LoopTimeRange2(0, false, false, 0, 0, false)
-			if loopStart ~= loopEnd then
-				local cur = reaper.GetCursorPosition()
-				if cur < loopStart - tolerance or cur >= loopEnd - tolerance then
-					reaper.SetEditCurPos(loopStart, false, false)
-				end
-			end
-		end
-
-		startUndoBlock()
-			if thereAreNotesSelected() then
-				changeSelectedNotesToScaleChords(notes)
-			else
-				insertScaleChord(notes, false)
-			end
-		endUndoBlock("insert scale chord inv " .. inv .. " (" .. chord.code .. ")")
-
-		if not activeMidiEditor() then
-			reaper.Main_OnCommand(40289, 0)
-		end
-	end
-
-	playScaleChord(notes)
-	setNotesThatArePlaying(notes)
-	updateChordText(root, chord, notes)
+	self:onShiftPress()
 end
 
 function ChordButton:onShiftPress()
@@ -7931,26 +8115,7 @@ function ChordButton:onShiftPress()
 end
 
 function ChordButton:onCtrlAltPress()
-	local chord = scaleChords[self.scaleNoteIndex][self.chordTypeIndex]
-	if not chord then return end
-
-	local inv = self:getCurrentCycleInversion()
-	invCycleButton = self
-	invCycleValue = inv
-	invCycleTime = reaper.time_precise()
-
-	addChordToProgression(self.scaleNoteIndex, self.chordTypeIndex, self.text, selectedProgressionSlot, getOctave(), inv)
-
-	setSelectedScaleNote(self.scaleNoteIndex)
-	setSelectedChordType(self.scaleNoteIndex, self.chordTypeIndex)
-
-	local root = scaleNotes[self.scaleNoteIndex]
-	local octave = getOctave()
-	local notes = getChordNotesArray(root, chord, octave, inv)
-
-	playScaleChord(notes)
-	setNotesThatArePlaying(notes)
-	updateChordText(root, chord, notes)
+	self:onAltPress()
 end
 
 function ChordButton:onAltPress()
@@ -8098,7 +8263,6 @@ function ChordButton:onRightClick()
             clearMidiTriggerMapping(self.scaleNoteIndex, self.chordTypeIndex)
         else
             midiTriggerLearnTarget = {scaleNoteIndex = self.scaleNoteIndex, chordTypeIndex = self.chordTypeIndex}
-            reaper.ShowMessageBox("Press any MIDI key to assign it to this chord.\n\nThe next incoming MIDI note will be mapped.", "MIDI Learn", 0)
         end
     elseif selection == 5 then
         generateLeadingChords(self.scaleNoteIndex, 1, false)
@@ -8203,7 +8367,7 @@ function ChordButton:update()
 	
 
 	if tooltipsEnabled and isHovering then
-		local tooltip = "Click: Preview\nShift+Click: Insert\nAlt+Click: Add to slot\nCtrl+Click: Cycle inversion\nCtrl+Shift+Click: Insert inversion\nCtrl+Alt+Click: Add inversion to slot\nDrag: Drop on slot"
+		local tooltip = "Click: Preview\nShift+Click: Insert\nAlt+Click: Add to slot\nCtrl+Click: Cycle inversion\nDrag: Drop on slot"
 		
 		local triggerNote = getMidiTriggerNoteForChord(self.scaleNoteIndex, self.chordTypeIndex)
 		if triggerNote then
@@ -10690,7 +10854,11 @@ function handleInput(interface)
 	inputCharacter = gfx.getchar()
 	
 	if inputCharacter == inputCharacters["ESC"] then
-		gfx.quit()
+		if midiTriggerLearnTarget then
+			midiTriggerLearnTarget = nil
+		else
+			gfx.quit()
+		end
 	end
 
 	if inputCharacter == inputCharacters["LEFTARROW"] then
@@ -11158,26 +11326,11 @@ function Interface:updateElements()
 	drawSlotSettingsDropdown()
 	drawSlotVelocityDropdown()
 	renderPendingTooltips()
+	renderMidiLearnOverlay()
 end
 
 function handleMidiTriggers()
   if not midiTriggerEnabled then return end
-  
-  if midiTriggerLearnTarget then
-    for note = 0, 127 do
-      if externalMidiNotes[note] then
-        if midiTriggerLearnTarget.isColumn then
-          setMidiTriggerColumnMapping(note, midiTriggerLearnTarget.columnIndex)
-        else
-          setMidiTriggerMapping(note, midiTriggerLearnTarget.scaleNoteIndex, midiTriggerLearnTarget.chordTypeIndex)
-        end
-        midiTriggerLearnTarget = nil
-        externalMidiNotes[note] = nil
-        stopAllNotesFromPlaying()
-        return
-      end
-    end
-  end
 
   if midiTriggerMode == 1 then
     for note, mapping in pairs(midiTriggerMappings) do
@@ -11321,6 +11474,7 @@ end
 function Interface:update()
 
   processExternalMidiInput()
+  handleMidiLearn()
   handleMidiTriggers()
   
   if syncPlayEnabled then
@@ -12463,6 +12617,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       local checkColumn = midiTriggerMode == 2 and "!" or ""
       
       local presets = getChordMapPresets()
+      local deleteItemCount = (#presets > 0) and #presets or 1
       local menu = ">Mode|" .. checkChord .. "Chord Mode (" .. chordCount .. " mapped)|" .. checkColumn .. "Column Mode (" .. colCount .. " mapped)|<|"
       menu = menu .. "Save Preset...|>Load Preset|"
       menu = menu .. "White Keys (C2-B2)|"
@@ -12513,7 +12668,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
           if confirm == 6 then
             deleteChordMapPreset(presetName)
           end
-      elseif selection == 5 + #presets * 2 then
+      elseif selection == 5 + #presets + deleteItemCount then
           midiTriggerMappings = {}
           midiTriggerColumnMappings = {}
           currentTriggerPreset = nil
@@ -13477,7 +13632,12 @@ function MidiTriggerButton:new(x, y, size, onClick, getTooltip, onRightClick)
 end
 
 function MidiTriggerButton:draw()
-    if mouseIsHoveringOver(self) or midiTriggerEnabled then
+    local learning = midiTriggerLearnTarget ~= nil
+    if learning then
+        local now = reaper.time_precise and reaper.time_precise() or 0
+        local pulse = 0.5 + 0.5 * math.sin(now * 6)
+        gfx.set(0.35 + 0.45 * pulse, 0.65 + 0.25 * pulse, 1, 1)
+    elseif mouseIsHoveringOver(self) or midiTriggerEnabled then
         setThemeColor("topButtonTextHover")
     else
         setThemeColor("topButtonText")
@@ -13497,6 +13657,10 @@ function MidiTriggerButton:draw()
     
     if midiTriggerEnabled then
        gfx.circle(cx, cy, r*0.3, 1)
+    end
+
+    if learning then
+       gfx.circle(cx, cy, r + 2, 0)
     end
 
     if tooltipsEnabled and mouseIsHoveringOver(self) and self.getTooltip then
