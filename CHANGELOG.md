@@ -2,6 +2,12 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Transport 1.9.9] - 2026-06-11
+
+### TK Transport
+#### Bugfixes
+- **Settings tijdens verslepen**: Foutmelding "bad argument #5 (number has no integer representation)" opgelost die kon optreden bij het openen van de Settings terwijl het transportpaneel werd versleept.
+
 ## [TK FX Tabs 1.0.2] - 2026-06-10
 
 ### TK FX Tabs

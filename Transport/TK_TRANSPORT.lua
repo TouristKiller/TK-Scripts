@@ -1,8 +1,19 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.7
+-- @version 1.9.9
 -- @changelog 
 --[[
+    v1.9.9:
+    + Fixed: Error "bad argument #5 (number has no integer representation)" when opening Settings while dragging/moving the transport panel
+
+    v1.9.8:
+    + Added: H-Line and V-Line settings are now auto-sorted by position (H top-to-bottom, V left-to-right)
+    + Added: Bulk actions for H-Line and V-Line (full length, show/hide all, apply color, apply thickness)
+    + Added: Bulk absolute offsets (H X offset, V Y offset)
+    + Fixed: Bulk offset apply now uses absolute positioning (no cumulative jump/clamp issue)
+    + Added: Time Selection option to hide/show the "Selection:" label
+    + Added: Slider Height setting for Master Volume and Monitor Volume fader style
+
   v1.9.7:
   + Removed: MIXER (this is now a standalone script - TK_Mixer)
 
@@ -197,7 +208,7 @@ local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
 
-local script_version = "1.7.6"
+local script_version = "1.9.8"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -1295,6 +1306,8 @@ end
 
 local function DrawPixelXYControls(keyx, keyy, main_window_width, main_window_height, opts)
  opts = opts or {}
+ main_window_width = math.floor(main_window_width or 0)
+ main_window_height = math.floor(main_window_height or 0)
  local pixel_keyx = keyx .. "_px"
  local pixel_keyy = keyy .. "_px"
  
@@ -2528,12 +2541,25 @@ function ShowMasterVolumeSettings(ctx, main_window_width, main_window_height)
  
  r.ImGui_Separator(ctx)
  
+ if r.ImGui_BeginTable(ctx, "MasterVolumeSizeTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Slider Width:")
  r.ImGui_SetNextItemWidth(ctx, -1)
  local slider_width = settings.master_volume_width or 150
  rv, slider_width = r.ImGui_SliderInt(ctx, "##MasterVolumeWidth", slider_width, 50, 400)
  if rv then
  settings.master_volume_width = slider_width
+ end
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Slider Height:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local slider_height_setting = settings.master_volume_height or 20
+ rv, slider_height_setting = r.ImGui_SliderInt(ctx, "##MasterVolumeHeight", slider_height_setting, 8, 100)
+ if rv then
+ settings.master_volume_height = slider_height_setting
+ end
+ r.ImGui_EndTable(ctx)
  end
  
  r.ImGui_Spacing(ctx)
@@ -2684,12 +2710,25 @@ function ShowMonitorVolumeSettings(ctx, main_window_width, main_window_height)
  
  r.ImGui_Separator(ctx)
  
+ if r.ImGui_BeginTable(ctx, "MonitorVolumeSizeTable", 2, r.ImGui_TableFlags_SizingStretchSame()) then
+ r.ImGui_TableNextRow(ctx)
+ r.ImGui_TableSetColumnIndex(ctx, 0)
  r.ImGui_Text(ctx, "Slider Width:")
  r.ImGui_SetNextItemWidth(ctx, -1)
  local slider_width = settings.monitor_volume_width or 150
  rv, slider_width = r.ImGui_SliderInt(ctx, "##MonitorVolumeWidth", slider_width, 50, 400)
  if rv then
  settings.monitor_volume_width = slider_width
+ end
+ r.ImGui_TableSetColumnIndex(ctx, 1)
+ r.ImGui_Text(ctx, "Slider Height:")
+ r.ImGui_SetNextItemWidth(ctx, -1)
+ local slider_height_setting = settings.monitor_volume_height or 20
+ rv, slider_height_setting = r.ImGui_SliderInt(ctx, "##MonitorVolumeHeight", slider_height_setting, 8, 100)
+ if rv then
+ settings.monitor_volume_height = slider_height_setting
+ end
+ r.ImGui_EndTable(ctx)
  end
  
  r.ImGui_Spacing(ctx)
@@ -3210,6 +3249,8 @@ function ShowTimeSelectionSettings(ctx, main_window_width, main_window_height)
  rv, settings.show_time = r.ImGui_Checkbox(ctx, "Show Time", settings.show_time ~= false)
  r.ImGui_SameLine(ctx)
  rv, settings.show_beats = r.ImGui_Checkbox(ctx, "Show Beats", settings.show_beats ~= false)
+ r.ImGui_SameLine(ctx)
+ rv, settings.show_timesel_label = r.ImGui_Checkbox(ctx, "Show Label", settings.show_timesel_label ~= false)
  
  r.ImGui_Text(ctx, "Button Rounding:")
  r.ImGui_SetNextItemWidth(ctx, 150)
@@ -3745,11 +3786,69 @@ function ShowWindowSetPickerSettings(ctx, main_window_width, main_window_height)
  end
 end
 
+local function SortHLinesByPosition(main_window_width, main_window_height)
+ if not settings.h_lines or #settings.h_lines < 2 then return false end
+ local before = {}
+ for i, line in ipairs(settings.h_lines) do
+  before[i] = line.id or i
+ end
+
+ table.sort(settings.h_lines, function(a, b)
+  local ay = a.y_px or math.floor((a.y or 0.5) * main_window_height)
+  local by = b.y_px or math.floor((b.y or 0.5) * main_window_height)
+  if ay ~= by then return ay < by end
+
+  local ax = a.x_px or math.floor((a.x or 0) * main_window_width)
+  local bx = b.x_px or math.floor((b.x or 0) * main_window_width)
+  if ax ~= bx then return ax < bx end
+
+  return (a.id or 0) < (b.id or 0)
+ end)
+
+ for i, line in ipairs(settings.h_lines) do
+  if (line.id or i) ~= before[i] then
+   return true
+  end
+ end
+ return false
+end
+
+local function SortVLinesByPosition(main_window_width, main_window_height)
+ if not settings.v_lines or #settings.v_lines < 2 then return false end
+ local before = {}
+ for i, line in ipairs(settings.v_lines) do
+  before[i] = line.id or i
+ end
+
+ table.sort(settings.v_lines, function(a, b)
+  local ax = a.x_px or math.floor((a.x or 0.5) * main_window_width)
+  local bx = b.x_px or math.floor((b.x or 0.5) * main_window_width)
+  if ax ~= bx then return ax < bx end
+
+  local ay = a.y_px or math.floor((a.y or 0) * main_window_height)
+  local by = b.y_px or math.floor((b.y or 0) * main_window_height)
+  if ay ~= by then return ay < by end
+
+  return (a.id or 0) < (b.id or 0)
+ end)
+
+ for i, line in ipairs(settings.v_lines) do
+  if (line.id or i) ~= before[i] then
+   return true
+  end
+ end
+ return false
+end
+
 function ShowHLineSettings(ctx, main_window_width, main_window_height)
  local rv
  
  if not settings.h_lines then settings.h_lines = {} end
  if not settings.h_line_next_id then settings.h_line_next_id = 1 end
+
+ if SortHLinesByPosition(main_window_width, main_window_height) then
+  SaveSettings()
+ end
  
  r.ImGui_Text(ctx, "Horizontal Lines")
  r.ImGui_Separator(ctx)
@@ -3766,6 +3865,71 @@ function ShowHLineSettings(ctx, main_window_width, main_window_height)
   }
   table.insert(settings.h_lines, new_line)
   settings.h_line_next_id = settings.h_line_next_id + 1
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Full Width All") then
+  for _, line in ipairs(settings.h_lines) do
+   line.x_px = 0
+   line.x = 0
+   line.length_px = math.floor(main_window_width)
+   line.length = 1.0
+  end
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Show All##H") then
+  for _, line in ipairs(settings.h_lines) do
+   line.visible = true
+  end
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Hide All##H") then
+  for _, line in ipairs(settings.h_lines) do
+   line.visible = false
+  end
+  SaveSettings()
+ end
+
+ settings.h_line_bulk_color = settings.h_line_bulk_color or 0x888888FF
+ settings.h_line_bulk_thickness = settings.h_line_bulk_thickness or 1
+ local bulk_color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+
+ r.ImGui_SetNextItemWidth(ctx, 160)
+ rv, settings.h_line_bulk_color = r.ImGui_ColorEdit4(ctx, "Bulk Color##H", settings.h_line_bulk_color, bulk_color_flags)
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Apply Color##H") then
+  for _, line in ipairs(settings.h_lines) do
+   line.color = settings.h_line_bulk_color
+  end
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 120)
+ rv, settings.h_line_bulk_thickness = r.ImGui_SliderInt(ctx, "Bulk Thick##H", settings.h_line_bulk_thickness, 1, 10, "%d")
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Apply Thickness##H") then
+  for _, line in ipairs(settings.h_lines) do
+   line.thickness = settings.h_line_bulk_thickness
+  end
+  SaveSettings()
+ end
+
+ settings.h_line_bulk_x_offset = settings.h_line_bulk_x_offset or 0
+ r.ImGui_SetNextItemWidth(ctx, 120)
+ rv, settings.h_line_bulk_x_offset = r.ImGui_InputInt(ctx, "X Offset##H", settings.h_line_bulk_x_offset)
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Apply X Offset##H") then
+  local new_x = math.max(0, math.min(math.floor(main_window_width), settings.h_line_bulk_x_offset or 0))
+  for _, line in ipairs(settings.h_lines) do
+   line.x_px = new_x
+   line.x = new_x / math.max(1, main_window_width)
+  end
   SaveSettings()
  end
  
@@ -3886,6 +4050,10 @@ function ShowVLineSettings(ctx, main_window_width, main_window_height)
  
  if not settings.v_lines then settings.v_lines = {} end
  if not settings.v_line_next_id then settings.v_line_next_id = 1 end
+
+ if SortVLinesByPosition(main_window_width, main_window_height) then
+  SaveSettings()
+ end
  
  r.ImGui_Text(ctx, "Vertical Lines")
  r.ImGui_Separator(ctx)
@@ -3902,6 +4070,71 @@ function ShowVLineSettings(ctx, main_window_width, main_window_height)
   }
   table.insert(settings.v_lines, new_line)
   settings.v_line_next_id = settings.v_line_next_id + 1
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Full Height All") then
+  for _, line in ipairs(settings.v_lines) do
+   line.y_px = 0
+   line.y = 0
+   line.length_px = math.floor(main_window_height)
+   line.length = 1.0
+  end
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Show All##V") then
+  for _, line in ipairs(settings.v_lines) do
+   line.visible = true
+  end
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Hide All##V") then
+  for _, line in ipairs(settings.v_lines) do
+   line.visible = false
+  end
+  SaveSettings()
+ end
+
+ settings.v_line_bulk_color = settings.v_line_bulk_color or 0x888888FF
+ settings.v_line_bulk_thickness = settings.v_line_bulk_thickness or 1
+ local bulk_color_flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_AlphaBar()
+
+ r.ImGui_SetNextItemWidth(ctx, 160)
+ rv, settings.v_line_bulk_color = r.ImGui_ColorEdit4(ctx, "Bulk Color##V", settings.v_line_bulk_color, bulk_color_flags)
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Apply Color##V") then
+  for _, line in ipairs(settings.v_lines) do
+   line.color = settings.v_line_bulk_color
+  end
+  SaveSettings()
+ end
+
+ r.ImGui_SameLine(ctx)
+ r.ImGui_SetNextItemWidth(ctx, 120)
+ rv, settings.v_line_bulk_thickness = r.ImGui_SliderInt(ctx, "Bulk Thick##V", settings.v_line_bulk_thickness, 1, 10, "%d")
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Apply Thickness##V") then
+  for _, line in ipairs(settings.v_lines) do
+   line.thickness = settings.v_line_bulk_thickness
+  end
+  SaveSettings()
+ end
+
+ settings.v_line_bulk_y_offset = settings.v_line_bulk_y_offset or 0
+ r.ImGui_SetNextItemWidth(ctx, 120)
+ rv, settings.v_line_bulk_y_offset = r.ImGui_InputInt(ctx, "Y Offset##V", settings.v_line_bulk_y_offset)
+ r.ImGui_SameLine(ctx)
+ if r.ImGui_Button(ctx, "Apply Y Offset##V") then
+  local new_y = math.max(0, math.min(math.floor(main_window_height), settings.v_line_bulk_y_offset or 0))
+  for _, line in ipairs(settings.v_lines) do
+   line.y_px = new_y
+   line.y = new_y / math.max(1, main_window_height)
+  end
   SaveSettings()
  end
  
@@ -8964,7 +9197,7 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  if percentage > 100 then percentage = 100 end
  
  if style == 1 then
- local slider_height = 20
+ local slider_height = settings.master_volume_height or 20
  
  local screen_x, screen_y = r.ImGui_GetCursorScreenPos(ctx)
  
@@ -9159,7 +9392,7 @@ function MonitorVolumeSlider(main_window_width, main_window_height)
  if percentage > 100 then percentage = 100 end
  
  if style == 1 then
- local slider_height = 20
+ local slider_height = settings.monitor_volume_height or 20
  
  local screen_x, screen_y = r.ImGui_GetCursorScreenPos(ctx)
  
@@ -12345,17 +12578,21 @@ function ShowTimeSelection(main_window_width, main_window_height)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), settings.timesel_button_rounding or 0)
 
+ local label_prefix = (settings.show_timesel_label ~= false) and "Selection: " or ""
  local display_text = ""
  if settings.show_beats and settings.show_time then
- display_text = string.format("Selection: %s | %s | %s | %s | %s | %s",
+ display_text = string.format("%s%s | %s | %s | %s | %s | %s",
+ label_prefix,
  start_midi, sec_format,
  end_midi, end_format,
  len_midi, len_format)
  elseif settings.show_beats then
- display_text = string.format("Selection: %s | %s | %s",
+ display_text = string.format("%s%s | %s | %s",
+ label_prefix,
  start_midi, end_midi, len_midi)
  elseif settings.show_time then
- display_text = string.format("Selection: %s | %s | %s",
+ display_text = string.format("%s%s | %s | %s",
+ label_prefix,
  sec_format, end_format, len_format)
  end
 
