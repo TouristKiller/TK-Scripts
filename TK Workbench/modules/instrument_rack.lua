@@ -35,7 +35,10 @@ local state = {
   macro_cc_learn = nil,
   midi_last_retval = nil,
   macros_dirty = false,
-  macro_count = MACRO_COUNT
+  macro_count = MACRO_COUNT,
+  default_pins = nil,
+  default_pins_loaded = false,
+  auto_pin_checked = {}
 }
 
 local defaults = {
@@ -56,7 +59,12 @@ local defaults = {
   orientation = "vertical",
   horizontal_tile_width = 240,
   hide_horizontal_scrollbar = false,
-  show_info_bar = true
+  invert_horizontal_scroll = false,
+  section_order = "default",
+  section_track_color = false,
+  show_item_name_overlay = true,
+  show_info_bar = true,
+  auto_apply_default_pins = false
 }
 
 local function ensure_settings(app)
@@ -152,6 +160,16 @@ local function get_take_label(take)
   local ok, name = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
   if ok and name and name ~= "" then return name end
   return r.TakeIsMIDI(take) and "MIDI take" or "Audio take"
+end
+
+local function get_item_color(take)
+  if not validate_take(take) or not r.GetMediaItemTake_Item then return nil end
+  local item = r.GetMediaItemTake_Item(take)
+  if not item then return nil end
+  local native = r.GetMediaItemInfo_Value(item, "I_CUSTOMCOLOR") or 0
+  if native == 0 or (native & 0x1000000) == 0 then return nil end
+  local cr, cg, cb = r.ColorFromNative(native)
+  return ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xFF
 end
 
 local function get_available_width(ctx)
@@ -783,6 +801,143 @@ local function unpin_parameter(app, track, fx_index, param_idx)
   app.status = "Parameter unpinned"
 end
 
+local function fx_plugin_key(track, fx_index)
+  if r.TrackFX_GetNamedConfigParm then
+    local ok, ident = r.TrackFX_GetNamedConfigParm(track, fx_index, "fx_ident")
+    if ok and ident and ident ~= "" then return ident end
+  end
+  local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
+  return clean_fx_name(fx_name or "")
+end
+
+local function load_default_pins()
+  state.default_pins = {}
+  state.default_pins_loaded = true
+  if not r.GetExtState then return end
+  local content = r.GetExtState(EXT_SECTION, "default_pins")
+  if not content or content == "" then return end
+  for line in content:gmatch("[^\r\n]+") do
+    local fields = split_storage_fields(line)
+    local key, slot, param_idx, param_name = fields[1], tonumber(fields[2]), tonumber(fields[3]), fields[4]
+    if key and key ~= "" and param_idx then
+      state.default_pins[key] = state.default_pins[key] or {}
+      state.default_pins[key][#state.default_pins[key] + 1] = {
+        slot = slot,
+        param_idx = param_idx,
+        param_name = param_name or ""
+      }
+    end
+  end
+end
+
+local function ensure_default_pins_loaded()
+  if not state.default_pins_loaded then load_default_pins() end
+end
+
+local function save_default_pins()
+  if not r.SetExtState then return end
+  local lines = {}
+  for key, list in pairs(state.default_pins or {}) do
+    for _, entry in ipairs(list) do
+      lines[#lines + 1] = table.concat({
+        clean_storage_field(key),
+        tostring(tonumber(entry.slot) or ""),
+        tostring(entry.param_idx),
+        clean_storage_field(entry.param_name or "")
+      }, "\t")
+    end
+  end
+  table.sort(lines)
+  r.SetExtState(EXT_SECTION, "default_pins", table.concat(lines, "\n"), true)
+end
+
+local function has_default_pins(track, fx_index)
+  ensure_default_pins_loaded()
+  local key = fx_plugin_key(track, fx_index)
+  local list = key ~= "" and state.default_pins[key]
+  return list and #list > 0
+end
+
+local function save_current_pins_as_default(app, track, fx_index)
+  ensure_default_pins_loaded()
+  local key = fx_plugin_key(track, fx_index)
+  if key == "" then app.status = "Could not identify plugin" return end
+  local pinned = get_pinned_for_fx(track, fx_index)
+  if #pinned == 0 then app.status = "No pinned parameters to save" return end
+  local list = {}
+  for _, entry in ipairs(pinned) do
+    list[#list + 1] = {
+      slot = tonumber(entry.slot),
+      param_idx = entry.param_idx,
+      param_name = entry.param_name or ""
+    }
+  end
+  state.default_pins[key] = list
+  save_default_pins()
+  app.status = "Saved " .. tostring(#list) .. " default pins for this plugin"
+end
+
+local function clear_default_pins(app, track, fx_index)
+  ensure_default_pins_loaded()
+  local key = fx_plugin_key(track, fx_index)
+  if key == "" or not state.default_pins[key] then
+    app.status = "No default pins for this plugin"
+    return
+  end
+  state.default_pins[key] = nil
+  save_default_pins()
+  app.status = "Cleared default pins for this plugin"
+end
+
+local function apply_default_pins(app, track, fx_index, silent)
+  ensure_default_pins_loaded()
+  local key = fx_plugin_key(track, fx_index)
+  local defaults_list = key ~= "" and state.default_pins[key]
+  if not defaults_list or #defaults_list == 0 then
+    if not silent then app.status = "No default pins for this plugin" end
+    return false
+  end
+  ensure_pinned_params_loaded()
+  local track_id = track_guid(track)
+  local fx_guid = get_fx_guid(track, fx_index)
+  state.pinned_params[track_id] = state.pinned_params[track_id] or {}
+  local param_count = r.TrackFX_GetNumParams(track, fx_index)
+  local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
+  local applied = 0
+  for _, def in ipairs(defaults_list) do
+    local param_idx = def.param_idx
+    if param_idx and param_idx >= 0 and param_idx < param_count then
+      local _, pname = r.TrackFX_GetParamName(track, fx_index, param_idx, "")
+      if def.param_name and def.param_name ~= "" and pname ~= def.param_name then
+        local found = nil
+        local scan = math.min(param_count, 512)
+        for i = 0, scan - 1 do
+          local _, n = r.TrackFX_GetParamName(track, fx_index, i, "")
+          if n == def.param_name then found = i break end
+        end
+        if found then param_idx = found; pname = def.param_name end
+      end
+      local pkey = param_key(fx_guid, param_idx)
+      if not state.pinned_params[track_id][pkey] then
+        state.pinned_params[track_id][pkey] = {
+          track_guid = track_id,
+          fx_guid = fx_guid,
+          param_idx = param_idx,
+          param_name = pname ~= "" and pname or ("Param " .. tostring(param_idx)),
+          fx_name = fx_name or "",
+          slot = def.slot
+        }
+        applied = applied + 1
+      end
+    end
+  end
+  if applied > 0 then save_pinned_params() end
+  if not silent then
+    app.status = applied > 0 and ("Applied " .. tostring(applied) .. " default pins") or "Default pins already applied"
+  end
+  return applied > 0
+end
+
 local function queue_param_action(action, track, fx_index, param_idx)
   if not validate_track(track) or not action or not param_idx then return end
   state.pending_param_action = {
@@ -1057,6 +1212,17 @@ local function luminance(rgba)
   return (0.299 * cr + 0.587 * cg + 0.114 * cb) / 255
 end
 
+local function section_accent_color(settings, track)
+  if settings and settings.section_track_color and validate_track(track) then
+    local native = r.GetTrackColor(track) or 0
+    if native ~= 0 then
+      local cr, cg, cb = r.ColorFromNative(native)
+      return ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xFF
+    end
+  end
+  return Theme.colors.accent
+end
+
 local function launch_horizontal_rack(app)
   local script_path = (app.script_path or "") .. "TK_Instrument_Rack_Horizontal.lua"
   if not file_exists(script_path) then
@@ -1154,15 +1320,30 @@ local function draw_header(app, ctx, settings, track)
     if changed then settings.tile_compact = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show info bar", settings.show_info_bar ~= false)
     if changed then settings.show_info_bar = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Signal flow order (Input > Take > Track)", settings.section_order == "signal_flow")
+    if changed then settings.section_order = value and "signal_flow" or "default"; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Color sections by track color", settings.section_track_color == true)
+    if changed then settings.section_track_color = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Show item name on item FX tiles", settings.show_item_name_overlay ~= false)
+    if changed then settings.show_item_name_overlay = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Auto-apply default pins on load", settings.auto_apply_default_pins == true)
+    if changed then
+      settings.auto_apply_default_pins = value
+      state.auto_pin_checked = {}
+      if app.save_settings then app.save_settings() end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Automatically pin each plugin's saved default parameters when it first appears in the rack") end
     if settings.orientation == "horizontal" then
       r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
       changed, value = r.ImGui_SliderInt(ctx, "Tile width", settings.horizontal_tile_width or 240, 160, 400, "%d px")
       if changed then settings.horizontal_tile_width = value; if app.save_settings then app.save_settings() end end
       changed, value = r.ImGui_Checkbox(ctx, "Hide horizontal scrollbar", settings.hide_horizontal_scrollbar)
       if changed then settings.hide_horizontal_scrollbar = value; if app.save_settings then app.save_settings() end end
+      changed, value = r.ImGui_Checkbox(ctx, "Invert wheel scroll direction", settings.invert_horizontal_scroll)
+      if changed then settings.invert_horizontal_scroll = value; if app.save_settings then app.save_settings() end end
     end
     r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
-    changed, value = r.ImGui_SliderInt(ctx, "Screenshot height", settings.screenshot_height or 90, 48, 180, "%d px")
+    changed, value = r.ImGui_SliderInt(ctx, "Screenshot height", settings.screenshot_height or 90, 48, 400, "%d px")
     if changed then settings.screenshot_height = value; if app.save_settings then app.save_settings() end end
     r.ImGui_Text(ctx, "Add FX target")
     local targets = {
@@ -1339,7 +1520,7 @@ local function draw_small_button(ctx, draw_list, id, x, y, width, height, label,
   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, bg, UIScale.px(2))
   r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, Theme.colors.border, UIScale.px(2), 0, UIScale.px(1))
   local text_w = r.ImGui_CalcTextSize(ctx, label)
-  r.ImGui_DrawList_AddTextEx(draw_list, nil, UIScale.round(10), x + (width - text_w) * 0.5, y + UIScale.round(1), fg, label)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, UIScale.round(10), x + (width - text_w) * 0.5, y + (height - UIScale.round(10)) * 0.5, fg, label)
   r.ImGui_SetCursorScreenPos(ctx, x, y)
   r.ImGui_InvisibleButton(ctx, id, width, height)
   local clicked = r.ImGui_IsItemClicked(ctx, 0)
@@ -1975,8 +2156,12 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
   local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and UIScale.round(100) or UIScale.round(58)) or 0
   local row1_h = UIScale.round(18)
-  local toolbar_h = UIScale.round(16)
+  local toolbar_h = UIScale.round(20)
   local collapse_key = track_guid(track) .. "|" .. get_fx_guid(track, fx_index)
+  if settings.auto_apply_default_pins and not state.auto_pin_checked[collapse_key] then
+    state.auto_pin_checked[collapse_key] = true
+    if #get_pinned_for_fx(track, fx_index) == 0 then apply_default_pins(app, track, fx_index, true) end
+  end
   local is_collapsed = state.collapsed[collapse_key] == true
   if settings.orientation == "horizontal" and is_collapsed then
     draw_collapsed_tile_strip(app, ctx, settings, {
@@ -2044,23 +2229,25 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       local wet_value = get_fx_wet(track, fx_index)
       local wet_alpha = math.floor((1 - math.max(0, math.min(1, wet_value))) * 0xCC + 0x44)
       local wet_bg = wet_value < 0.999 and (0x4488CC00 | wet_alpha) or 0x33333388
-      local clicked_wet, right_wet = draw_small_button(ctx, draw_list, "##ir_fx_wet", tx, button_y, UIScale.round(18), UIScale.round(12), "W", wet_bg, 0xFFFFFFFF, string.format("Wet: %d%%", math.floor(wet_value * 100 + 0.5)))
+      local clicked_wet, right_wet = draw_small_button(ctx, draw_list, "##ir_fx_wet", tx, button_y, UIScale.round(18), UIScale.round(14), "W", wet_bg, 0xFFFFFFFF, string.format("Wet: %d%%", math.floor(wet_value * 100 + 0.5)))
       if clicked_wet then r.ImGui_OpenPopup(ctx, "##ir_wet_pop") end
       if right_wet then set_fx_wet(track, fx_index, 1.0) end
       draw_wet_popup(ctx, track, fx_index, wet_value)
       tx = tx + UIScale.round(22)
-      if draw_small_button(ctx, draw_list, "##ir_fx_float", tx, button_y, UIScale.round(14), UIScale.round(12), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then
+      if draw_small_button(ctx, draw_list, "##ir_fx_float", tx, button_y, UIScale.round(14), UIScale.round(14), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then
         local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
         r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
       end
       tx = tx + UIScale.round(18)
-      if draw_small_button(ctx, draw_list, "##ir_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(12), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring FX online" or "Set FX offline") then
+      if draw_small_button(ctx, draw_list, "##ir_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(14), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring FX online" or "Set FX offline") then
         r.TrackFX_SetOffline(track, fx_index, not offline)
         app.status = (offline and "Brought online " or "Set offline ") .. short_name
       end
       tx = tx + UIScale.round(18)
-      if draw_small_button(ctx, draw_list, "##ir_fx_preset", tx, button_y, UIScale.round(14), UIScale.round(12), "P", 0x33333388, 0xFFFFFFFF, "Preset") then r.ImGui_OpenPopup(ctx, "##ir_preset_pop") end
+      if draw_small_button(ctx, draw_list, "##ir_fx_preset", tx, button_y, UIScale.round(14), UIScale.round(14), "P", 0x33333388, 0xFFFFFFFF, "Preset") then r.ImGui_OpenPopup(ctx, "##ir_preset_pop") end
       draw_preset_popup(ctx, track, fx_index)
+      tx = tx + UIScale.round(18)
+      if draw_small_button(ctx, draw_list, "##ir_fx_menu", tx, button_y, UIScale.round(16), UIScale.round(14), "...", 0x33333388, 0xFFFFFFFF, "Settings") then r.ImGui_OpenPopup(ctx, "##ir_fx_menu_pop") end
       local sep_y = by + title_h - 1
       r.ImGui_DrawList_AddLine(draw_list, bx + UIScale.round(4), sep_y, bx + item_width - UIScale.round(4), sep_y, Theme.colors.separator, UIScale.px(1))
 
@@ -2097,15 +2284,27 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
     end
     handle_fx_drag(app, ctx, draw_list, track, take, chain, local_index, short_name, bx, by, item_width, tile_h)
-    if r.ImGui_BeginPopupContextItem(ctx, "##ir_fx_context") then
+    local function fx_menu_items()
       if r.ImGui_MenuItem(ctx, enabled and "Bypass" or "Enable") then r.TrackFX_SetEnabled(track, fx_index, not enabled) end
       if r.ImGui_MenuItem(ctx, "Open floating") then
         local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
         r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
       end
       if r.ImGui_MenuItem(ctx, offline and "Bring online" or "Set offline") then r.TrackFX_SetOffline(track, fx_index, not offline) end
+      if r.ImGui_MenuItem(ctx, is_collapsed and "Expand" or "Collapse") then state.collapsed[collapse_key] = not is_collapsed end
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, "Save current pins as plugin default") then save_current_pins_as_default(app, track, fx_index) end
+      if r.ImGui_MenuItem(ctx, "Apply plugin default pins", nil, false, has_default_pins(track, fx_index)) then apply_default_pins(app, track, fx_index) end
+      if r.ImGui_MenuItem(ctx, "Clear plugin default pins", nil, false, has_default_pins(track, fx_index)) then clear_default_pins(app, track, fx_index) end
       r.ImGui_Separator(ctx)
       if r.ImGui_MenuItem(ctx, "Remove") then delete_fx(app, track, fx_index, fx_name) end
+    end
+    if r.ImGui_BeginPopupContextItem(ctx, "##ir_fx_context") then
+      fx_menu_items()
+      r.ImGui_EndPopup(ctx)
+    end
+    if r.ImGui_BeginPopup(ctx, "##ir_fx_menu_pop") then
+      fx_menu_items()
       r.ImGui_EndPopup(ctx)
     end
     r.ImGui_EndChild(ctx)
@@ -2268,7 +2467,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
   local row1_h = UIScale.round(18)
-  local toolbar_h = UIScale.round(16)
+  local toolbar_h = UIScale.round(20)
   local take_guid = (r.TakeFX_GetFXGUID and r.TakeFX_GetFXGUID(take, fx_index)) or ("TAKEINDEX:" .. tostring(fx_index))
   local collapse_key = "TAKE|" .. tostring(take_guid)
   local is_collapsed = state.collapsed[collapse_key] == true
@@ -2333,16 +2532,35 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
     if not is_collapsed then
       local button_y = by + row1_h + UIScale.round(2)
       local tx = bx + UIScale.round(6)
-      if draw_small_button(ctx, draw_list, "##ir_take_fx_float", tx, button_y, UIScale.round(14), UIScale.round(12), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then show_take_fx(take, fx_index) end
+      if draw_small_button(ctx, draw_list, "##ir_take_fx_float", tx, button_y, UIScale.round(14), UIScale.round(14), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then show_take_fx(take, fx_index) end
       tx = tx + UIScale.round(18)
-      if draw_small_button(ctx, draw_list, "##ir_take_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(12), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring item FX online" or "Set item FX offline") then
+      if draw_small_button(ctx, draw_list, "##ir_take_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(14), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring item FX online" or "Set item FX offline") then
         set_take_fx_offline(take, fx_index, not offline)
         app.status = (offline and "Brought online " or "Set offline ") .. short_name
       end
+      tx = tx + UIScale.round(18)
+      if draw_small_button(ctx, draw_list, "##ir_take_fx_menu", tx, button_y, UIScale.round(16), UIScale.round(14), "...", 0x33333388, 0xFFFFFFFF, "Settings") then r.ImGui_OpenPopup(ctx, "##ir_take_fx_menu_pop") end
       if settings.show_screenshots and not settings.tile_compact then
         r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(2), by + row1_h + toolbar_h + UIScale.round(4))
         draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
         if r.ImGui_IsItemClicked(ctx, 0) then show_take_fx(take, fx_index) end
+        if settings.show_item_name_overlay ~= false then
+          local item_name = get_take_label(take)
+          if item_name and item_name ~= "" then
+            local sx = bx + UIScale.round(2)
+            local sw = item_width - UIScale.round(4)
+            local text_h = r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx) or UIScale.round(12)
+            local overlay_h = text_h + UIScale.round(4)
+            local oy = by + row1_h + toolbar_h + UIScale.round(4) + shot_h - overlay_h - UIScale.round(3)
+            local item_color = get_item_color(take)
+            local bg_color = item_color and ((item_color & 0xFFFFFF00) | 0xC8) or 0x000000B4
+            local text_color = item_color and (luminance(item_color) > 0.55 and 0x000000FF or 0xFFFFFFFF) or 0xFFFFFFFF
+            r.ImGui_DrawList_AddRectFilled(draw_list, sx, oy, sx + sw, oy + overlay_h, bg_color)
+            r.ImGui_DrawList_PushClipRect(draw_list, sx + UIScale.round(3), oy, sx + sw - UIScale.round(3), oy + overlay_h, true)
+            r.ImGui_DrawList_AddText(draw_list, sx + UIScale.round(4), oy + (overlay_h - text_h) * 0.5, text_color, item_name)
+            r.ImGui_DrawList_PopClipRect(draw_list)
+          end
+        end
         handle_fx_drag(app, ctx, draw_list, track, take, "item", fx_index, short_name, bx, by, item_width, tile_h)
       end
     end
@@ -2362,13 +2580,20 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
     r.ImGui_SetCursorScreenPos(ctx, bx, by)
     if r.ImGui_InvisibleButton(ctx, "##ir_take_fx_title_hit", math.max(1, name_max_w + 8), row1_h) then show_take_fx(take, fx_index) end
     handle_fx_drag(app, ctx, draw_list, track, take, "item", fx_index, short_name, bx, by, item_width, tile_h)
-    if r.ImGui_BeginPopupContextItem(ctx, "##ir_take_fx_context") then
+    local function take_menu_items()
       if r.ImGui_MenuItem(ctx, enabled and "Bypass" or "Enable") then set_take_fx_enabled(take, fx_index, not enabled) end
       if r.ImGui_MenuItem(ctx, "Open floating", nil, false, r.TakeFX_Show ~= nil) then show_take_fx(take, fx_index) end
       if r.ImGui_MenuItem(ctx, offline and "Bring online" or "Set offline", nil, false, r.TakeFX_SetOffline ~= nil) then set_take_fx_offline(take, fx_index, not offline) end
       if r.ImGui_MenuItem(ctx, is_collapsed and "Expand" or "Collapse") then state.collapsed[collapse_key] = not is_collapsed end
       r.ImGui_Separator(ctx)
       if r.ImGui_MenuItem(ctx, "Remove", nil, false, r.TakeFX_Delete ~= nil) then delete_take_fx(app, take, fx_index, fx_name) end
+    end
+    if r.ImGui_BeginPopupContextItem(ctx, "##ir_take_fx_context") then
+      take_menu_items()
+      r.ImGui_EndPopup(ctx)
+    end
+    if r.ImGui_BeginPopup(ctx, "##ir_take_fx_menu_pop") then
+      take_menu_items()
       r.ImGui_EndPopup(ctx)
     end
     r.ImGui_EndChild(ctx)
@@ -2376,14 +2601,14 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
   r.ImGui_PopID(ctx)
 end
 
-local function draw_section_label(ctx, label, detail, count)
+local function draw_section_label(ctx, label, detail, count, accent)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local width = math.max(UIScale.round(120), get_available_width(ctx))
   local height = detail and detail ~= "" and UIScale.round(32) or UIScale.round(24)
   r.ImGui_Dummy(ctx, width, height)
   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
-  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + UIScale.round(3), y + height, Theme.colors.accent, UIScale.px(4))
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + UIScale.round(3), y + height, accent or Theme.colors.accent, UIScale.px(4))
   r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(10), y + UIScale.round(5), Theme.colors.text, label)
   if count then
     local count_text = tostring(count) .. " FX"
@@ -2401,7 +2626,7 @@ local function info_line_text(app, track, fx_count, input_fx_count, take_fx_coun
   elseif item_on_track == false then
     detail = string.format("Track FX: %d  |  Input FX: %d  |  Selected item is on another track", fx_count or 0, input_fx_count or 0)
   elseif validate_take(take) then
-    detail = string.format("Track FX: %d  |  Input FX: %d  |  Item FX: %d", fx_count or 0, input_fx_count or 0, take_fx_count or 0)
+    detail = string.format("Track FX: %d  |  Input FX: %d  |  Item FX: %d (%s)", fx_count or 0, input_fx_count or 0, take_fx_count or 0, get_take_label(take))
   else
     detail = string.format("Track FX: %d  |  Input FX: %d", fx_count or 0, input_fx_count or 0)
   end
@@ -2460,7 +2685,8 @@ function M.draw(app)
     if horizontal and r.ImGui_GetMouseWheel and r.ImGui_IsWindowHovered(ctx, hover_flags) then
       local wheel_v = r.ImGui_GetMouseWheel(ctx) or 0
       local wheel_h = r.ImGui_GetMouseWheelH and r.ImGui_GetMouseWheelH(ctx) or 0
-      local wheel = wheel_h ~= 0 and wheel_h or wheel_v
+      local wheel = math.abs(wheel_v) >= math.abs(wheel_h) and wheel_v or wheel_h
+      if settings.invert_horizontal_scroll then wheel = -wheel end
       if wheel ~= 0 and r.ImGui_SetScrollX and r.ImGui_GetScrollX then
         local step = UIScale.round(settings.horizontal_tile_width or 240) * 0.5
         r.ImGui_SetScrollX(ctx, r.ImGui_GetScrollX(ctx) - wheel * step)
@@ -2479,7 +2705,7 @@ function M.draw(app)
     local function new_section()
       col = 0
     end
-    local function section_break(section_id, label)
+    local function section_break(section_id, label, tooltip_extra)
       if not horizontal then return false end
       local sdl = r.ImGui_GetWindowDrawList(ctx)
       local sh = expanded_tile_height(settings)
@@ -2492,7 +2718,7 @@ function M.draw(app)
       local bx = sx + pad
       local collapse_key = "SECTION|" .. tostring(section_id)
       local is_collapsed = state.collapsed[collapse_key] == true
-      local accent = Theme.colors.accent
+      local accent = section_accent_color(settings, track)
       local text_color = luminance(accent) > 0.55 and 0x000000FF or 0xFFFFFFFF
       r.ImGui_DrawList_AddRectFilled(sdl, bx, sy, bx + bar_w, sy + sh, accent, UIScale.px(3))
       local chev_size = UIScale.round(10)
@@ -2524,16 +2750,21 @@ function M.draw(app)
         state.collapsed[collapse_key] = not is_collapsed
         is_collapsed = not is_collapsed
       end
-      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand section" or "Collapse section") end
+      if r.ImGui_IsItemHovered(ctx) then
+        local tip = is_collapsed and "Expand section" or "Collapse section"
+        if tooltip_extra and tooltip_extra ~= "" then tip = tooltip_extra .. "\n" .. tip end
+        r.ImGui_SetTooltip(ctx, tip)
+      end
       r.ImGui_SetCursorScreenPos(ctx, sx, sy)
       r.ImGui_Dummy(ctx, pad + bar_w, sh)
       col = col + 1
       return is_collapsed
     end
-    if show_track_fx and fx_count == 0 and not horizontal then
-      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No FX on this track.")
-    end
-    if show_track_fx then
+    local function draw_track_section()
+      if not show_track_fx then return end
+      if fx_count == 0 and not horizontal then
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No FX on this track.")
+      end
       local collapsed = horizontal and section_break("track", "Track FX")
       if not collapsed then
         for index = 0, fx_count - 1 do
@@ -2544,14 +2775,15 @@ function M.draw(app)
         draw_add_zone(app, ctx, settings, track, width, -1)
       end
     end
-    if settings.show_input_fx then
+    local function draw_input_section()
+      if not settings.show_input_fx then return end
       local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
       local collapsed = false
       if horizontal then
         if input_fx_count > 0 or dragging then collapsed = section_break("input", "Input FX") end
       else
         new_section()
-        draw_section_label(ctx, "Track Input FX", get_track_label(track), input_fx_count)
+        draw_section_label(ctx, "Track Input FX", get_track_label(track), input_fx_count, section_accent_color(settings, track))
         if input_fx_count == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No input FX on this track.") end
       end
       if not collapsed then
@@ -2565,11 +2797,12 @@ function M.draw(app)
         end
       end
     end
-    if settings.show_selected_item_fx then
+    local function draw_take_section()
+      if not settings.show_selected_item_fx then return end
       local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
       if not horizontal then
         new_section()
-        draw_section_label(ctx, "Selected Track Item FX", get_track_label(track), take_fx_count)
+        draw_section_label(ctx, "Selected Track Item FX", get_track_label(track), take_fx_count, section_accent_color(settings, track))
       end
       if selected_item and item_on_track == false then
         if not horizontal then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Selected item is on another track.") end
@@ -2578,7 +2811,7 @@ function M.draw(app)
       else
         local collapsed = false
         if horizontal then
-          if take_fx_count > 0 or dragging then collapsed = section_break("take", "Take FX") end
+          if take_fx_count > 0 or dragging then collapsed = section_break("take", "Take FX", get_take_label(take)) end
         else
           if take_fx_count == 0 then
             r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No item FX on selected item: " .. get_take_label(take))
@@ -2597,6 +2830,15 @@ function M.draw(app)
           end
         end
       end
+    end
+    if settings.section_order == "signal_flow" then
+      draw_input_section()
+      draw_take_section()
+      draw_track_section()
+    else
+      draw_track_section()
+      draw_input_section()
+      draw_take_section()
     end
     r.ImGui_EndChild(ctx)
   end

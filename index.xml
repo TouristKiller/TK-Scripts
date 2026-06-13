@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.3.4" author="TouristKiller" time="2026-06-11T23:20:00Z">
+    <version name="0.3.5" author="TouristKiller" time="2026-06-13T14:40:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -84,7 +84,11 @@
     <source main="main" file="Module Actions/TK_Workbench_Open_Project_Overview.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Project_Overview.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Script_Launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Script_Launcher.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Track_Recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Track_Recall.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Arrange_BG.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Arrange_BG.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Timepiece.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Timepiece.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Track_Tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Track_Tags.lua</source>
      <source file="modules/action_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_browser.lua</source>
+    <source file="modules/arrange_bg_presets.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/arrange_bg_presets.lua</source>
     <source file="modules/action_clipboard.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_clipboard.lua</source>
      <source file="modules/automation_item_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/automation_item_manager.lua</source>
      <source file="modules/color_studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/color_studio.lua</source>
@@ -105,6 +109,27 @@
         <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+        v0.3.5
+        + Instrument Rack: Horizontal rack now scrolls horizontally using the dominant mouse wheel axis
+        + Instrument Rack: Added an option to invert the horizontal wheel scroll direction
+        + Instrument Rack: Added a Signal flow order option to arrange sections as Input > Take > Track
+        + Instrument Rack: Horizontal rack now follows Workbench theme and UI scale changes live without a restart
+        + Instrument Rack: Added an option to color section headers by track color
+        + Instrument Rack: Added an item name overlay on item FX tiles with item color background and the item name in the info bar and tooltip
+        + Instrument Rack: Raised the screenshot height range up to 400 px
+        + Instrument Rack: Added per-plugin default parameter pins with save, apply, and clear actions plus an optional auto-apply on load
+        + Instrument Rack: Added a settings (...) button on FX tiles that opens the same menu as right-click
+        + Workbench: Added a Background opacity slider for the main floating window
+        + Workbench: Added a separate Module panel opacity slider for module backgrounds
+        + Workbench: Preferences window now auto-resizes to its content and keeps the close button aligned to the right edge
+        + Media Browser: Sync rate to project tempo now reads embedded file BPM (ACID, ID3, Vorbis, XMP) before falling back to length matching
+        + Arrange BG: Added a new module for managing arrange, track, grid, and divider theme colors as presets
+        + Arrange BG: Added preset apply, A/B toggle, per-preset track/grid scope, color picker, and standalone action script generation
+        + Arrange BG: Added Reset colors for live theme colors and Restore theme file from backup
+        + Arrange BG: Added Grid full alpha to unlock the full grid color range with a one-time theme file backup
+        + Arrange BG: Added favorite theme loader supporting .ReaperTheme and .ReaperThemeZip files
+        + Workbench: Added mappable module actions for opening Arrange BG, Timepiece, and Track Tags
+
         v0.3.4
         + Workbench: Added a side-by-side option for split view alongside the stacked layout
 

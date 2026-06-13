@@ -1141,11 +1141,30 @@ local function draw_text_transport_button(ctx, id, label, active, width, height)
   return clicked, r.ImGui_IsItemHovered(ctx)
 end
 
+local function read_embedded_bpm(source)
+  if not source or not r.GetMediaFileMetadata then return nil end
+  local keys = { "ACID:tempo", "ID3:TBPM", "VORBIS:BPM", "VORBIS:TEMPO", "XMP:dm/tempo" }
+  for _, key in ipairs(keys) do
+    local ok, value = r.GetMediaFileMetadata(source, key)
+    if ok and ok ~= 0 and value and value ~= "" then
+      local bpm = tonumber((tostring(value):gsub(",", "."):match("[%d%.]+")))
+      if bpm and bpm > 0 then return bpm end
+    end
+  end
+  return nil
+end
+
 local function effective_playrate(source, kind, settings)
   local rate = tonumber(settings.preview_rate) or defaults.preview_rate
-  if kind == "audio" and settings.tempo_sync and r.GetTempoMatchPlayRate then
-    local ok, tempo_rate = r.GetTempoMatchPlayRate(source, 1, 0, 1)
-    if ok and tempo_rate and tempo_rate > 0 then rate = tempo_rate end
+  if kind == "audio" and settings.tempo_sync then
+    local file_bpm = read_embedded_bpm(source)
+    local project_bpm = r.Master_GetTempo and r.Master_GetTempo() or nil
+    if file_bpm and project_bpm and project_bpm > 0 then
+      rate = project_bpm / file_bpm
+    elseif r.GetTempoMatchPlayRate then
+      local ok, tempo_rate = r.GetTempoMatchPlayRate(source, 1, 0, 1)
+      if ok and tempo_rate and tempo_rate > 0 then rate = tempo_rate end
+    end
   end
   return math.max(0.25, math.min(8, rate))
 end

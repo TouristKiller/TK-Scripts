@@ -1,7 +1,27 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.4
+-- @version 0.3.5
 -- @changelog:
+-- v0.3.5
+--   + Instrument Rack: Horizontal rack now scrolls horizontally using the dominant mouse wheel axis
+--   + Instrument Rack: Added an option to invert the horizontal wheel scroll direction
+--   + Instrument Rack: Added a Signal flow order option to arrange sections as Input > Take > Track
+--   + Instrument Rack: Horizontal rack now follows Workbench theme and UI scale changes live without a restart
+--   + Instrument Rack: Added an option to color section headers by track color
+--   + Instrument Rack: Added an item name overlay on item FX tiles with item color background and the item name in the info bar and tooltip
+--   + Instrument Rack: Raised the screenshot height range up to 400 px
+--   + Instrument Rack: Added per-plugin default parameter pins with save, apply, and clear actions plus an optional auto-apply on load
+--   + Instrument Rack: Added a settings (...) button on FX tiles that opens the same menu as right-click
+--   + Workbench: Added a Background opacity slider for the main floating window
+--   + Workbench: Added a separate Module panel opacity slider for module backgrounds
+--   + Workbench: Preferences window now auto-resizes to its content and keeps the close button aligned to the right edge
+--   + Media Browser: Sync rate to project tempo now reads embedded file BPM (ACID, ID3, Vorbis, XMP) before falling back to length matching
+--   + Arrange BG: Added a new module for managing arrange, track, grid, and divider theme colors as presets
+--   + Arrange BG: Added preset apply, A/B toggle, per-preset track/grid scope, color picker, and standalone action script generation
+--   + Arrange BG: Added Reset colors for live theme colors and Restore theme file from backup
+--   + Arrange BG: Added Grid full alpha to unlock the full grid color range with a one-time theme file backup
+--   + Arrange BG: Added favorite theme loader supporting .ReaperTheme and .ReaperThemeZip files
+--   + Workbench: Added mappable module actions for opening Arrange BG, Timepiece, and Track Tags
 -- v0.3.4
 --   + Workbench: Added a side-by-side option for split view alongside the stacked layout
 -- v0.3.3
@@ -207,7 +227,8 @@ local module_names = {
   "notes",
   "plugin_browser",
   "media_browser",
-  "color_studio"
+  "color_studio",
+  "arrange_bg_presets"
 }
 
 local theme_color_fields = {
@@ -668,6 +689,14 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, left + 14, cy, cx - 6, cy - 8, color, 2)
     r.ImGui_DrawList_AddLine(draw_list, cx - 6, cy - 8, cx + 6, cy + 8, color, 2)
     r.ImGui_DrawList_AddLine(draw_list, cx + 6, cy + 8, right - 14, cy, color, 2)
+  elseif id == "arrange_bg_presets" then
+    r.ImGui_DrawList_AddRect(draw_list, left + 6, top + 9, right - 6, bottom - 9, color, 3, 0, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 7, cy - 7, right - 7, cy - 7, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, left + 7, cy + 4, right - 7, cy + 4, color, 2)
+    for index = 0, 2 do
+      local grid_x = left + 15 + index * 11
+      r.ImGui_DrawList_AddLine(draw_list, grid_x, top + 12, grid_x, bottom - 12, color, 1)
+    end
   else
     local icon = fallback_icon_text(module)
     r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, 2)
@@ -1045,14 +1074,12 @@ local function draw_preferences_settings()
     app.settings_panel = nil
   end
   if not app.cache.preferences_open then return end
-  local prefs_w, prefs_h = UIScale.window_size(300, 360)
-  r.ImGui_SetNextWindowSize(ctx, prefs_w, prefs_h, r.ImGui_Cond_Appearing())
-  local visible, open = r.ImGui_Begin(ctx, "Preferences##tk_workbench_preferences", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
+  local visible, open = r.ImGui_Begin(ctx, "Preferences##tk_workbench_preferences", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize())
   app.cache.preferences_open = open
   if visible then
     r.ImGui_TextColored(ctx, Theme.colors.accent, "Preferences")
     local close_size = UIScale.round(14)
-    r.ImGui_SameLine(ctx, math.max(UIScale.round(140), prefs_w - close_size - UIScale.round(16)))
+    r.ImGui_SameLine(ctx, math.max(UIScale.round(140), r.ImGui_GetWindowWidth(ctx) - close_size - UIScale.round(16)))
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
     r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0xF7768EFF)
@@ -1077,6 +1104,27 @@ local function draw_preferences_settings()
       r.ImGui_EndCombo(ctx)
     end
     r.ImGui_PopItemWidth(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_PushItemWidth(ctx, UIScale.round(160))
+    local alpha_pct = math.floor((app.settings.window_bg_alpha or 1.0) * 100 + 0.5)
+    local alpha_changed, alpha_value = r.ImGui_SliderInt(ctx, "Background opacity", alpha_pct, 20, 100, "%d%%")
+    if alpha_changed then
+      app.settings.window_bg_alpha = math.max(0.2, math.min(1.0, alpha_value / 100))
+      app.status = string.format("Background opacity: %d%%", alpha_value)
+      save_settings()
+    end
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Lowers the main panel background opacity (floating window).")
+    r.ImGui_PushItemWidth(ctx, UIScale.round(160))
+    local child_pct = math.floor((app.settings.child_bg_alpha or 1.0) * 100 + 0.5)
+    local child_changed, child_value = r.ImGui_SliderInt(ctx, "Module panel opacity", child_pct, 20, 100, "%d%%")
+    if child_changed then
+      app.settings.child_bg_alpha = math.max(0.2, math.min(1.0, child_value / 100))
+      app.status = string.format("Module panel opacity: %d%%", child_value)
+      save_settings()
+    end
+    r.ImGui_PopItemWidth(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Lowers the module panel background opacity.")
     r.ImGui_Separator(ctx)
     local changed, value = r.ImGui_Checkbox(ctx, "Hide scrollbars", app.settings.hide_scrollbars == true)
     if changed then
@@ -1804,12 +1852,15 @@ local function loop()
     app.settings.theme_preset = Theme.set_preset(app.settings.theme_preset or "Graphite", app.settings.custom_themes)
   end
   local scaled_font_pushed = push_scaled_font()
-  local theme_stack = Theme.push(ctx)
+  local theme_stack = Theme.push(ctx, app.settings.child_bg_alpha or 1.0)
   local workspace_style_vars = push_workspace_style()
   local auto_collapse_style_vars, auto_collapse_style_colors = push_auto_collapse_style()
   local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   if app.settings.auto_collapse == true and app.cache.window_docked == false and r.ImGui_WindowFlags_NoMove then
     window_flags = window_flags | r.ImGui_WindowFlags_NoMove()
+  end
+  if r.ImGui_SetNextWindowBgAlpha then
+    r.ImGui_SetNextWindowBgAlpha(ctx, app.settings.window_bg_alpha or 1.0)
   end
   local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
   if visible then

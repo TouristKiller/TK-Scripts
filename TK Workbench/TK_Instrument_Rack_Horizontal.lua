@@ -26,23 +26,31 @@ local config_path = script_path .. "config_instrument_rack_horizontal.json"
 local workbench_config_path = script_path .. (rawget(_G, "TK_WORKBENCH_CONFIG_NAME") or "config.json")
 local settings = Settings.load(config_path)
 
-local function read_workbench_config()
+local function read_workbench_raw()
   local file = io.open(workbench_config_path, "r")
   if not file then return nil end
   local content = file:read("*a")
   file:close()
   if not content or content == "" then return nil end
-  local ok, decoded = pcall(json.decode, content)
-  if ok and type(decoded) == "table" then return decoded end
-  return nil
+  return content
 end
 
-local wb = read_workbench_config()
-if wb then
+local workbench_last_raw = nil
+
+local function sync_workbench_settings(force)
+  local content = read_workbench_raw()
+  if not content then return end
+  if not force and content == workbench_last_raw then return end
+  workbench_last_raw = content
+  local ok, wb = pcall(json.decode, content)
+  if not ok or type(wb) ~= "table" then return end
   if wb.theme_preset ~= nil then settings.theme_preset = wb.theme_preset end
   if wb.custom_themes ~= nil then settings.custom_themes = wb.custom_themes end
   if wb.ui_scale ~= nil then settings.ui_scale = wb.ui_scale end
 end
+
+sync_workbench_settings(true)
+local workbench_sync_next = 0
 
 settings.instrument_rack = settings.instrument_rack or {}
 if settings.instrument_rack.orientation == nil then
@@ -111,6 +119,11 @@ local function loop()
     app.ctx = ctx
     app.cache.ui_fonts = {}
     app.cache.ui_font_ctx = nil
+  end
+  local now = r.time_precise()
+  if now >= workbench_sync_next then
+    workbench_sync_next = now + 0.5
+    sync_workbench_settings()
   end
   UIScale.set(app.settings.ui_scale or 1.0)
   if (app.settings.theme_preset or "Graphite") ~= Theme.current_preset then

@@ -398,11 +398,17 @@ function M.dim_text_for_background(background, color, fallback)
   return ensure_readable(color or M.colors.text_dim, backgrounds, fallback or M.colors.text, 3)
 end
 
-function M.push(ctx)
+function M.push(ctx, child_alpha)
   local text = M.text_for_backgrounds(text_backgrounds(M.colors), M.colors.text, nil, 4.5)
   local scale = UIScale.value()
+  local child_bg = M.colors.child_bg
+  if child_alpha and child_alpha < 1.0 then
+    local base_alpha = child_bg & 0xFF
+    local new_alpha = math.max(0, math.min(255, math.floor(base_alpha * child_alpha + 0.5)))
+    child_bg = (child_bg & 0xFFFFFF00) | new_alpha
+  end
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), M.colors.window_bg)
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), M.colors.child_bg)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), child_bg)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), M.colors.popup_bg)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), M.colors.frame_bg)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), M.colors.frame_hover)
