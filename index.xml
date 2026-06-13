@@ -453,7 +453,7 @@ v1.0.1.1
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="1.9.9" author="TouristKiller" time="2026-06-12T00:05:00Z">
+        <version name="2.0.0" author="TouristKiller" time="2026-06-13T18:30:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -462,6 +462,10 @@ v1.0.1.1
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
             <changelog><![CDATA[
+    v2.0.0:
+    + Fixed: Custom transport button images reverted to graphic mode after toggling Show Transport off and on again (images are now restored when the transport becomes visible)
+    + Fixed: Transport mode (Text/Graphic/Custom) and custom image settings are now saved immediately so they persist after a restart
+
     v1.9.9:
     + Fixed: Error "bad argument #5 (number has no integer representation)" when opening Settings while dragging/moving the transport panel
 

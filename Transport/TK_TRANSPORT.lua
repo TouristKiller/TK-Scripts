@@ -1,8 +1,12 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 1.9.9
+-- @version 2.0.0
 -- @changelog 
 --[[
+    v2.0.0:
+    + Fixed: Custom transport button images reverted to graphic mode after toggling Show Transport off and on again (images are now restored when the transport becomes visible)
+    + Fixed: Transport mode (Text/Graphic/Custom) and custom image settings are now saved immediately so they persist after a restart
+
     v1.9.9:
     + Fixed: Error "bad argument #5 (number has no integer representation)" when opening Settings while dragging/moving the transport panel
 
@@ -400,6 +404,7 @@ local transport_custom_images = {
  rewind = nil,
  forward = nil
 }
+local transport_was_visible = false
 
 local AUTOMATION_MODES = {
  {name = "No override", command = 40876},
@@ -1576,6 +1581,7 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  settings.transport_mode = 0
  settings.use_graphic_buttons = false
  UpdateCustomImages()
+ SaveSettings()
  end
  if text_mode_active then
  r.ImGui_PopStyleColor(ctx)
@@ -1591,6 +1597,7 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  settings.transport_mode = 1
  settings.use_graphic_buttons = true
  UpdateCustomImages()
+ SaveSettings()
  end
  if graphic_mode_active then
  r.ImGui_PopStyleColor(ctx)
@@ -1606,6 +1613,7 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  settings.transport_mode = 2
  settings.use_graphic_buttons = true  
  UpdateCustomImages()  
+ SaveSettings()
  end
  if custom_mode_active then
  r.ImGui_PopStyleColor(ctx)
@@ -1953,6 +1961,7 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  if rv_en then 
  settings[use_key] = new_enable
  UpdateCustomImages()  
+ SaveSettings()
  end
  r.ImGui_TableNextColumn(ctx)
  if settings[use_key] then
@@ -1968,6 +1977,7 @@ function ShowTransportButtonSettings(ctx, main_window_width, main_window_height)
  settings.locked_button_folder_path = file:match("(.*[\\/])") or ""
  end
  UpdateCustomImages()
+ SaveSettings()
  end
  end
  else
@@ -8801,6 +8811,10 @@ local function DrawTransportButtonBorder(ctx, mode_suffix)
 end
 
 function Transport_Buttons(main_window_width, main_window_height)
+ if settings.show_transport and not transport_was_visible then
+ UpdateCustomImages()
+ end
+ transport_was_visible = settings.show_transport
  if not settings.show_transport then return end
  local allow_input = not settings.edit_mode
 
