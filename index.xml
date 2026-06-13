@@ -778,8 +778,13 @@ v1.0.1.1
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.9.0" author="TouristKiller" time="2026-04-06T17:00:00Z">
+        <version name="1.9.1" author="TouristKiller" time="2026-06-13T17:00:00Z">
             <changelog><![CDATA[
+v1.9.1:
++ Added per-tracktype toggles: Parent, Child, Normal (independent, combinable)
++ Added combo toggles: Parent/Child, Child/Normal, Parent/Normal
++ Toggles work independently from settings checkboxes and from the Labels Toggle
+
 v1.8.9:
 + Labels Toggle: Excluded overlay grid from toggle
 
@@ -851,6 +856,12 @@ v1.7.0:
             <source main="main" file="TK_Trackname_Settings_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Settings_Toggle.lua</source>
             <source main="main" file="TK_Trackname_DarkParentToggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_DarkParentToggle.lua</source>
             <source main="main" file="TK_Trackname_Labels_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Labels_Toggle.lua</source>
+            <source main="main" file="TK_Trackname_Toggle_Parent.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Toggle_Parent.lua</source>
+            <source main="main" file="TK_Trackname_Toggle_Child.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Toggle_Child.lua</source>
+            <source main="main" file="TK_Trackname_Toggle_Normal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Toggle_Normal.lua</source>
+            <source main="main" file="TK_Trackname_Toggle_Parent_Child.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Toggle_Parent_Child.lua</source>
+            <source main="main" file="TK_Trackname_Toggle_Child_Normal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Toggle_Child_Normal.lua</source>
+            <source main="main" file="TK_Trackname_Toggle_Parent_Normal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Toggle_Parent_Normal.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/json.lua</source>
             <source file="track_icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_browser.lua</source>
             <source file="track_icon_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/track_icon_manager.lua</source>
