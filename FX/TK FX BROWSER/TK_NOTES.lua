@@ -1,7 +1,12 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.5.1
+-- @version 2.6
 -- @changelog
+-- 2.6
+--   + Scrollbar: editor now shows a scrollbar on the right when text/images exceed the visible area
+--   + Mouse wheel scrolling inside the editor
+--   + Images are clipped to the editor area while scrolling (no longer overlap menu bar or status bar)
+--   + Image height is now included in the scrollable content height
 -- 2.5.1
 --   + Small bug fix - dummy item added at end of menu bar to prevent rare ImGui crash when right-clicking toolbar button and quickly closing menu
 -- 2.5
@@ -2708,6 +2713,9 @@ EnsureEditorState = function()
             active = false,
             request_focus = true,
             scroll_to_caret = true,
+            scroll_y = 0,
+            scrollbar_dragging = false,
+            scrollbar_drag_offset = 0,
             selection_start = #state.text,
             selection_end = #state.text,
             selection_anchor = #state.text,
@@ -4938,6 +4946,26 @@ local function DrawEditor()
         layout = BuildEditorLayout(ctx, state.text, wrap_width, line_height)
     end
 
+    local total_content_height = (layout.total_height or 0) + EditorConstants.padding_y * 2
+    for _, img in ipairs(state.images) do
+        if img.width and img.width > 0 and img.height and img.height > 0 then
+            local max_width = 150
+            local base_img_h = img.height
+            if img.width > max_width then
+                base_img_h = base_img_h * (max_width / img.width)
+            end
+            local img_h = base_img_h * ((img.scale or 100) / 100.0)
+            local img_bottom = (img.pos_y or 0) + img_h + EditorConstants.padding_y
+            if img_bottom > total_content_height then
+                total_content_height = img_bottom
+            end
+        end
+    end
+    local max_scroll = math.max(0, total_content_height - editor_h)
+    if type(editor.scroll_y) ~= "number" then editor.scroll_y = 0 end
+    if editor.scroll_y > max_scroll then editor.scroll_y = max_scroll end
+    if editor.scroll_y < 0 then editor.scroll_y = 0 end
+
     local child_flags = 0
     if r.ImGui_WindowFlags_NoScrollbar then
         child_flags = child_flags | r.ImGui_WindowFlags_NoScrollbar()
@@ -5095,18 +5123,20 @@ local function DrawEditor()
             local target_list = overlay_list or (r.ImGui_GetWindowDrawList and r.ImGui_GetWindowDrawList(ctx))
             if target_list and r.ImGui_DrawList_AddImage then
                 local scroll_x = r.ImGui_GetScrollX(ctx)
-                local scroll_y = r.ImGui_GetScrollY(ctx)
+                local scroll_y = editor.scroll_y
                 local min_x = area_x + img.pos_x - scroll_x
                 local min_y = area_y + img.pos_y - scroll_y
                 local max_x = min_x + img_w
                 local max_y = min_y + img_h
-                
+
+                r.ImGui_DrawList_PushClipRect(target_list, area_x, area_y, area_x + editor_w, area_y + editor_h, true)
                 r.ImGui_DrawList_AddImage(target_list, img.texture, min_x, min_y, max_x, max_y, 0, 0, 1, 1, PackColorToU32(1.0, 1.0, 1.0, 1.0))
-                
+
                 if state.selected_image_id == img.id then
                     local border_color = PackColorToU32(0.2, 0.6, 1.0, 1.0) 
                     r.ImGui_DrawList_AddRect(target_list, min_x - 2, min_y - 2, max_x + 2, max_y + 2, border_color, 0, 0, 2.0)
                 end
+                r.ImGui_DrawList_PopClipRect(target_list)
             else
                 r.ImGui_SetCursorPos(ctx, img.pos_x, img.pos_y)
                 r.ImGui_Image(ctx, img.texture, img_w, img_h)
@@ -5131,6 +5161,69 @@ local function DrawEditor()
         local active = r.ImGui_IsItemActive(ctx)
         local io = r.ImGui_GetIO and r.ImGui_GetIO(ctx) or nil
         local shift_down = IsShiftDown(io)
+
+        if max_scroll > 0 and hovered and not editor.scrollbar_dragging and r.ImGui_GetMouseWheel then
+            local wheel_v = select(1, r.ImGui_GetMouseWheel(ctx))
+            if wheel_v and wheel_v ~= 0 then
+                editor.scroll_y = math.max(0, math.min(max_scroll, editor.scroll_y - wheel_v * line_height * 3))
+            end
+        end
+
+        local scrollbar = nil
+        local scrollbar_active = false
+        if max_scroll > 0 then
+            local sb_width = 8
+            local sb_margin = 3
+            local sb_x2 = area_x + editor_w - sb_margin
+            local sb_x1 = sb_x2 - sb_width
+            local sb_y1 = area_y + sb_margin + 6
+            local sb_y2 = area_y + editor_h - sb_margin - 6
+            local track_h = sb_y2 - sb_y1
+            if track_h > 12 then
+                local content_h = editor_h + max_scroll
+                local thumb_h = math.max(24, track_h * (editor_h / content_h))
+                if thumb_h > track_h then thumb_h = track_h end
+                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+                local hot_x1 = sb_x1 - 4
+                local denom = track_h - thumb_h
+                local ratio = max_scroll > 0 and (editor.scroll_y / max_scroll) or 0
+                local thumb_y1 = sb_y1 + denom * ratio
+                local thumb_y2 = thumb_y1 + thumb_h
+                local over_thumb = mouse_x >= hot_x1 and mouse_x <= sb_x2 + 2 and mouse_y >= thumb_y1 and mouse_y <= thumb_y2
+                local over_track = mouse_x >= hot_x1 and mouse_x <= sb_x2 + 2 and mouse_y >= sb_y1 and mouse_y <= sb_y2
+
+                if r.ImGui_IsMouseClicked(ctx, 0) then
+                    if over_thumb then
+                        editor.scrollbar_dragging = true
+                        editor.scrollbar_drag_offset = mouse_y - thumb_y1
+                    elseif over_track then
+                        editor.scrollbar_dragging = true
+                        editor.scrollbar_drag_offset = thumb_h * 0.5
+                        local r2 = denom > 0 and ((mouse_y - thumb_h * 0.5 - sb_y1) / denom) or 0
+                        editor.scroll_y = math.max(0, math.min(max_scroll, r2 * max_scroll))
+                    end
+                end
+
+                if editor.scrollbar_dragging then
+                    if r.ImGui_IsMouseDown(ctx, 0) then
+                        local new_y1 = mouse_y - (editor.scrollbar_drag_offset or 0)
+                        local r2 = denom > 0 and ((new_y1 - sb_y1) / denom) or 0
+                        editor.scroll_y = math.max(0, math.min(max_scroll, r2 * max_scroll))
+                    else
+                        editor.scrollbar_dragging = false
+                    end
+                end
+
+                scrollbar_active = editor.scrollbar_dragging or over_thumb or over_track
+                scrollbar = {
+                    x1 = sb_x1, x2 = sb_x2, y1 = sb_y1, y2 = sb_y2,
+                    thumb_h = thumb_h, track_h = track_h,
+                    hover = over_thumb or editor.scrollbar_dragging,
+                }
+            end
+        else
+            editor.scrollbar_dragging = false
+        end
 
         if can_edit and hovered and not image_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
             r.ImGui_OpenPopup(ctx, "editor_context_menu")
@@ -5189,7 +5282,7 @@ local function DrawEditor()
             r.ImGui_EndPopup(ctx)
         end
 
-        if can_edit and r.ImGui_IsItemClicked(ctx) then
+        if can_edit and r.ImGui_IsItemClicked(ctx) and not scrollbar_active then
             state.selected_image_id = nil
             
             editor.active = true
@@ -5198,7 +5291,7 @@ local function DrawEditor()
             editor.blink_time = r.time_precise()
             local previous_caret = editor.caret or 0
             local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-            local scroll_y = r.ImGui_GetScrollY(ctx)
+            local scroll_y = editor.scroll_y
             local local_x = mouse_x - (area_x + EditorConstants.padding_x)
             local local_y = mouse_y - (area_y + EditorConstants.padding_y) + scroll_y
             local caret_pos, relative_x = CaretFromMouse(layout, local_x, local_y, wrap_width, state.text_align)
@@ -5227,7 +5320,7 @@ local function DrawEditor()
         if can_edit and editor.mouse_selecting then
             if r.ImGui_IsMouseDown(ctx, 0) then
                 local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-                local scroll_y = r.ImGui_GetScrollY(ctx)
+                local scroll_y = editor.scroll_y
                 local local_x = mouse_x - (area_x + EditorConstants.padding_x)
                 local local_y = mouse_y - (area_y + EditorConstants.padding_y) + scroll_y
                 local caret_pos, relative_x = CaretFromMouse(layout, local_x, local_y, wrap_width, state.text_align)
@@ -5257,7 +5350,7 @@ local function DrawEditor()
         end
 
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
-        local scroll_y = r.ImGui_GetScrollY(ctx)
+        local scroll_y = editor.scroll_y
         
         local base_bg = state.track_bg_color or 0x202020FF
         local hover_bg = state.track_bg_color_hover or 0x303030FF
@@ -5349,14 +5442,15 @@ local function DrawEditor()
                 local visible_top = scroll_y
                 local visible_bottom = scroll_y + editor_h
                 if caret_top < visible_top then
-                    r.ImGui_SetScrollY(ctx, caret_top)
-                    scroll_y = r.ImGui_GetScrollY(ctx)
+                    editor.scroll_y = caret_top
                 elseif caret_bottom > visible_bottom then
                     local target_scroll = caret_bottom - editor_h
                     if target_scroll < 0 then target_scroll = 0 end
-                    r.ImGui_SetScrollY(ctx, target_scroll)
-                    scroll_y = r.ImGui_GetScrollY(ctx)
+                    editor.scroll_y = target_scroll
                 end
+                if editor.scroll_y < 0 then editor.scroll_y = 0 end
+                if editor.scroll_y > max_scroll then editor.scroll_y = max_scroll end
+                scroll_y = editor.scroll_y
                 editor.scroll_to_caret = false
             end
 
@@ -5380,6 +5474,17 @@ local function DrawEditor()
         end
 
         r.ImGui_DrawList_PopClipRect(draw_list)
+
+        if scrollbar then
+            local ratio = max_scroll > 0 and (editor.scroll_y / max_scroll) or 0
+            local thumb_y1 = scrollbar.y1 + (scrollbar.track_h - scrollbar.thumb_h) * ratio
+            local thumb_y2 = thumb_y1 + scrollbar.thumb_h
+            local sb_round = (scrollbar.x2 - scrollbar.x1) * 0.5
+            local track_color = ApplyAlpha(0xFFFFFFFF, 0.07) or 0xFFFFFF12
+            local thumb_color = scrollbar.hover and (ApplyAlpha(0xFFFFFFFF, 0.55) or 0xFFFFFF8C) or (ApplyAlpha(0xFFFFFFFF, 0.28) or 0xFFFFFF47)
+            r.ImGui_DrawList_AddRectFilled(draw_list, scrollbar.x1, scrollbar.y1, scrollbar.x2, scrollbar.y2, track_color, sb_round)
+            r.ImGui_DrawList_AddRectFilled(draw_list, scrollbar.x1, thumb_y1, scrollbar.x2, thumb_y2, thumb_color, sb_round)
+        end
         
         for _, stroke in ipairs(state.strokes) do
             if stroke.points and #stroke.points > 1 then

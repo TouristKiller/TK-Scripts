@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.1.2
+-- @version 3.1.3
 -- @changelog:
 --[[ 
+    v3.1.3:
+        + TK Notes: added scrollbar and mouse wheel scrolling inside the editor.
+        + TK Notes: images are now clipped to the editor area while scrolling.
+        + TK Notes: image height is now included in the scrollable content height.
     v3.1.2:
         + Patchbay: added a Track notes panel (View > Show notes) that shows read-only track notes from TK Notes or Workbench directly inside the canvas.
         + Patchbay: the notes panel can be dragged anywhere in the canvas, resized via the bottom-right grip, and switched between TK Notes and Workbench sources.
