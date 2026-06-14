@@ -212,7 +212,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.1.3" author="TouristKiller" time="2026-06-13T20:30:00Z">
+    <version name="3.1.4" author="TouristKiller" time="2026-06-14T15:10:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -227,6 +227,9 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
+            v3.1.4
+            + Typing/pasting is no longer blocked when text exceeds the window height; the editor scrolls instead
+            + Fix: text in Global/Project/Track/Item notes could revert to an older version after restart when tabs were disabled (stale tab text overrode the saved text on load)
             v3.1.3
             + TK Notes: added scrollbar and mouse wheel scrolling inside the editor.
             + TK Notes: images are now clipped to the editor area while scrolling.

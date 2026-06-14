@@ -1,7 +1,10 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.6
+-- @version 2.6.1
 -- @changelog
+-- 2.6.1
+--   + Typing/pasting is no longer blocked when text exceeds the window height; the editor scrolls instead
+--   + Fix: text in Global/Project/Track/Item notes could revert to an older version after restart when tabs were disabled (stale tab text overrode the saved text on load)
 -- 2.6
 --   + Scrollbar: editor now shows a scrollbar on the right when text/images exceed the visible area
 --   + Mouse wheel scrolling inside the editor
@@ -1311,7 +1314,7 @@ local function LoadProjectState(proj)
                 end
             end
             
-            if state.tabs[state.active_tab_index] then
+            if state.tabs_enabled and state.tabs[state.active_tab_index] then
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
@@ -1604,7 +1607,7 @@ local function LoadGlobalState()
                 end
             end
             
-            if state.tabs[state.active_tab_index] then
+            if state.tabs_enabled and state.tabs[state.active_tab_index] then
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
@@ -1893,7 +1896,7 @@ local function LoadTrackState(proj, track, track_guid)
             end
             
             -- Load the active tab's text, images and strokes
-            if state.tabs[state.active_tab_index] then
+            if state.tabs_enabled and state.tabs[state.active_tab_index] then
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
@@ -2193,7 +2196,7 @@ local function LoadItemState(proj, item, item_guid)
                 end
             end
             
-            if state.tabs[state.active_tab_index] then
+            if state.tabs_enabled and state.tabs[state.active_tab_index] then
                 state.text = state.tabs[state.active_tab_index].text or ""
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
@@ -3184,11 +3187,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
     end
 
     local function would_exceed_height(candidate_text)
-        if not max_text_height or max_text_height <= 0 then
-            return false
-        end
-        local candidate_layout = BuildEditorLayout(ctx, candidate_text, wrap_width, line_height)
-        return candidate_layout.total_height > max_text_height
+        return false
     end
 
     local function ctrl_combo(key_const)

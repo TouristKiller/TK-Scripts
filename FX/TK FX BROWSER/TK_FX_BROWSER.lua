@@ -1,8 +1,11 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.1.3
+-- @version 3.1.4
 -- @changelog:
 --[[ 
+    v3.1.4:
+        + TK Notes: Typing/pasting is no longer blocked when text exceeds the window height; the editor scrolls instead.
+        + TK Notes: Fix: text in Global/Project/Track/Item notes could revert to an older version after restart when tabs were disabled (stale tab text overrode the saved text on load).   
     v3.1.3:
         + TK Notes: added scrollbar and mouse wheel scrolling inside the editor.
         + TK Notes: images are now clipped to the editor area while scrolling.
