@@ -1,17 +1,8 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.0.2
+-- @version 1.0.3
 -- @changelog:
---   + Added left and right tab bar edge calibration without moving the floating FX window
---   + Added owner-pairing debug status in settings
---   + Fixed viewport fallback startup error when native window rect is unavailable
---   + Initial FX Tabs release
---   + Added tabs for track FX and instruments with native floating FX window placement
---   + Added All FX / Instruments only content modes and tab filters
---   + Added Add FX menu with search, folders, categories, developers, and types
---   + Added tab context actions for bypass, offline, remove, and MIDI input on instruments
---   + Added theme settings, REAPER theme color support, and tabbar border control
---   + Added blocked-state views for bypassed/offline FX
+
 
 
 local r = reaper
@@ -128,7 +119,7 @@ local settings = {
   center_fx_in_reaper_window = ext_get_bool("center_fx_in_reaper_window", true),
   content_mode = ext_get_number("content_mode", CONTENT_MODE_ALL_FX),
   tab_filter_mode = ext_get_number("tab_filter_mode", TAB_FILTER_ALL),
-  plugin_overlap_y = ext_get_number("plugin_overlap_y", 12),
+  plugin_overlap_y = ext_get_number("plugin_overlap_y", 80),
   topbar_left_overhang = ext_get_number("topbar_left_overhang", topbar_side_overhang),
   topbar_right_overhang = ext_get_number("topbar_right_overhang", topbar_side_overhang),
   theme_preset = ext_get_string("theme_preset", "REAPER Theme"),
@@ -707,7 +698,7 @@ local function centered_topbar_position()
   if not settings.center_fx_in_reaper_window or active_key == "" or topbar_dragging then return nil end
   local size = entry_window_size(find_entry_by_key(active_key))
   local reaper_left, reaper_top, reaper_width, reaper_height = reaper_window_rect()
-  local overlap = clamp(settings.plugin_overlap_y, 0, 48)
+  local overlap = clamp(settings.plugin_overlap_y, 0, 80)
   local margin = 10
   local combo_height = topbar_height + size.height - overlap
   local host_left = reaper_left + (reaper_width - size.width) * 0.5
@@ -725,13 +716,13 @@ local function apply_centered_host_rect()
   local centered_left, centered_top, centered_host_left = centered_topbar_position()
   if not centered_left or not centered_top then return false end
   host_rect.left = centered_host_left or centered_left + topbar_side_overhang
-  host_rect.top = centered_top + topbar_height - clamp(settings.plugin_overlap_y, 0, 48)
+  host_rect.top = centered_top + topbar_height - clamp(settings.plugin_overlap_y, 0, 80)
   return true
 end
 
 local function topbar_position_from_host_rect()
   if host_rect.width < 120 or host_rect.height < 90 then return nil end
-  return host_rect.left - topbar_left_overhang(), host_rect.top - topbar_height + clamp(settings.plugin_overlap_y, 0, 48)
+  return host_rect.left - topbar_left_overhang(), host_rect.top - topbar_height + clamp(settings.plugin_overlap_y, 0, 80)
 end
 
 local function update_topbar_width_from_size(width)
@@ -833,21 +824,23 @@ local function clear_topbar_owner()
 end
 
 local function set_topbar_owner(fx_hwnd)
-  if not topbar_owner_supported or not fx_hwnd then return false end
+  if not topbar_owner_supported then return false end
+  local owner_target = r.GetMainHwnd and r.GetMainHwnd() or nil
+  if not owner_target then return false end
   local hwnd = topbar_hwnd()
-  if not hwnd or hwnd == fx_hwnd then return false end
+  if not hwnd or hwnd == owner_target then return false end
   if topbar_owner_hwnd ~= hwnd then
     clear_topbar_owner()
     topbar_owner_hwnd = hwnd
     topbar_original_owner = get_window_owner(hwnd) or 0
   end
-  if topbar_owner_fx_hwnd == fx_hwnd then return true end
-  if not set_window_owner(hwnd, fx_hwnd) then
+  if topbar_owner_fx_hwnd == owner_target then return true end
+  if not set_window_owner(hwnd, owner_target) then
     topbar_owner_supported = false
     clear_topbar_owner()
     return false
   end
-  topbar_owner_fx_hwnd = fx_hwnd
+  topbar_owner_fx_hwnd = owner_target
   return true
 end
 
@@ -917,6 +910,18 @@ local function topbar_drag_active()
   return topbar_dragging and left_mouse_down()
 end
 
+local function fx_window_is_above_topbar(fx_hwnd, topbar)
+  if not fx_hwnd or not topbar or not r.JS_Window_GetRelated then return false end
+  local current = topbar
+  for _ = 1, 64 do
+    local prev = r.JS_Window_GetRelated(current, "PREV")
+    if not prev or prev == 0 or prev == current then return false end
+    if prev == fx_hwnd then return true end
+    current = prev
+  end
+  return false
+end
+
 local function place_topbar_above_fx(fx_hwnd)
   if window_touch_paused() then return end
   if topbar_mouse_captured then return end
@@ -936,6 +941,17 @@ local function bring_topbar_pair_to_front(fx_hwnd)
   local ok = r.JS_Window_SetZOrder(fx_hwnd, "INSERT_AFTER", hwnd)
   if ok == false then r.JS_Window_SetZOrder(fx_hwnd, "INSERTAFTER", hwnd) end
   r.JS_Window_SetZOrder(hwnd, "TOP")
+end
+
+local function keep_topbar_above_fx(fx_hwnd)
+  if window_touch_paused() or topbar_mouse_captured then return end
+  if topbar_popup_active or r.time_precise() < topbar_popup_hold_until then return end
+  if not fx_hwnd or not r.JS_Window_SetZOrder then return end
+  local hwnd = topbar_hwnd()
+  if not hwnd or hwnd == fx_hwnd then return end
+  if fx_window_is_above_topbar(fx_hwnd, hwnd) then
+    place_topbar_above_fx(fx_hwnd)
+  end
 end
 
 local function bring_blocked_pair_to_front()
@@ -958,10 +974,10 @@ local function window_rect_needs_update(hwnd, left, top, right, bottom)
   if not r.JS_Window_GetRect then return true end
   local ok, current_left, current_top, current_right, current_bottom = r.JS_Window_GetRect(hwnd)
   if not ok then return true end
-  return math.abs((current_left or 0) - left) > 1
-    or math.abs((current_top or 0) - top) > 1
-    or math.abs((current_right or 0) - right) > 1
-    or math.abs((current_bottom or 0) - bottom) > 1
+  return math.abs((current_left or 0) - left) > 2
+    or math.abs((current_top or 0) - top) > 2
+    or math.abs((current_right or 0) - right) > 2
+    or math.abs((current_bottom or 0) - bottom) > 2
 end
 
 local function place_active_window()
@@ -978,6 +994,7 @@ local function place_active_window()
   local hwnd = safe_trackfx_get_floating_window(track, entry.fx_index)
   if not hwnd then return false end
   set_topbar_owner(hwnd)
+  if not dragging_topbar then keep_topbar_above_fx(hwnd) end
   local pending_placement = r.time_precise() < pending_place_until
   if not dragging_topbar and not pending_placement and not foreground_allows_active_window_placement(hwnd) then return false end
   local pending_restack = r.time_precise() < topbar_restack_until and foreground_is_topbar_pair(hwnd)
@@ -1086,7 +1103,7 @@ local function update_topbar_focus_click()
       last_place_time = 0
       if entry_blocked_state(find_entry_by_key(active_key)) then pending_pair_front_until = now + 0.45 end
     end
-    if topbar_focus_click_armed and not topbar_dragging and not topbar_owner_active() then pending_pair_front_until = r.time_precise() + 0.45 end
+    if topbar_focus_click_armed and not topbar_dragging then pending_pair_front_until = r.time_precise() + 0.45 end
     topbar_mouse_captured = false
     topbar_focus_click_armed = false
     topbar_dragging = false
@@ -1179,6 +1196,7 @@ local function activate_entry(entry)
     sync_host_rect_to_entry_size(entry)
     pending_place_until = 0
     last_place_time = 0
+    pending_pair_front_until = r.time_precise() + 0.45
     return
   end
   if not safe_trackfx_show(track, entry.fx_index, 3) then return end
@@ -1960,7 +1978,7 @@ local function draw_settings_popup()
     topbar_popup_active = true
     if r.ImGui_Button(ctx, "Scan / Refresh", 132, 0) then scan_instruments(true) end
     if r.ImGui_SliderInt then
-      local changed_overlap, next_overlap = r.ImGui_SliderInt(ctx, "Plugin top overlap", settings.plugin_overlap_y, 0, 60, "%d px")
+      local changed_overlap, next_overlap = r.ImGui_SliderInt(ctx, "Plugin top overlap", settings.plugin_overlap_y, 0, 80, "%d px")
       if changed_overlap then settings.plugin_overlap_y = next_overlap; ext_set_number("plugin_overlap_y", next_overlap); pending_place_until = r.time_precise() + 0.5 end
       local changed_left_overhang, next_left_overhang = r.ImGui_SliderInt(ctx, "Tab bar left edge", topbar_left_overhang(), -24, 48, "%d px")
       if changed_left_overhang then settings.topbar_left_overhang = next_left_overhang; ext_set_number("topbar_left_overhang", next_left_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
@@ -2107,6 +2125,7 @@ local function draw_custom_tabs()
   end
   r.ImGui_DrawList_PushClipRect(draw_list, list_x, y - 1, list_x + list_w, y + tab_h, true)
   local cursor = list_x
+  local tabs_window_hovered = (not r.ImGui_IsWindowHovered) or r.ImGui_IsWindowHovered(ctx)
   for entry_index = 1, #visible_entries do
     local entry = visible_entries[entry_index]
     local width = tab_width(entry)
@@ -2115,7 +2134,7 @@ local function draw_custom_tabs()
     if tab_x2 >= list_x and tab_x1 <= list_x + list_w then
       local active = selected_key == entry.key
       local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-      local hovered = mouse_x >= tab_x1 and mouse_x <= tab_x2 and mouse_y >= y and mouse_y <= y + tab_h
+      local hovered = tabs_window_hovered and mouse_x >= tab_x1 and mouse_x <= tab_x2 and mouse_y >= y and mouse_y <= y + tab_h
       local bg = active and theme.tab_active or (hovered and theme.tab_hover or theme.tab_bg)
       local text_col = active and theme.text_active or theme.text_tab
       r.ImGui_DrawList_AddRectFilled(draw_list, tab_x1, y, tab_x2, y + tab_h - 1, bg, 5)
@@ -2161,13 +2180,13 @@ local function update_plugin_rect_from_topbar()
   local window_left, window_top = r.ImGui_GetWindowPos(ctx)
   local _, window_height = r.ImGui_GetWindowSize(ctx)
   local _, viewport_top, _, viewport_height = main_viewport_rect()
-  local plugin_top = window_top + window_height - clamp(settings.plugin_overlap_y, 0, 48)
+  local plugin_top = window_top + window_height - clamp(settings.plugin_overlap_y, 0, 80)
   local viewport_bottom = viewport_top + viewport_height - 12
   local active_entry = find_entry_by_key(active_key)
   local size = entry_window_size(active_entry)
   if topbar_dragging or not settings.center_fx_in_reaper_window then
-    host_rect.left = window_left + topbar_left_overhang()
-    host_rect.top = plugin_top
+    host_rect.left = math.floor(window_left + topbar_left_overhang() + 0.5)
+    host_rect.top = math.floor(plugin_top + 0.5)
   end
   host_rect.width = math.max(180, size.width)
   host_rect.height = math.max(140, math.min(size.height, viewport_bottom - plugin_top))
@@ -2177,7 +2196,7 @@ local function draw_blocked_state_window()
   local entry = find_entry_by_key(active_key)
   local state = entry_blocked_state(entry)
   if not state or host_rect.width < 120 or host_rect.height < 90 then return end
-  local top_offset = clamp(settings.plugin_overlap_y, 0, 48)
+  local top_offset = clamp(settings.plugin_overlap_y, 0, 80)
   local state_top = host_rect.top + top_offset
   local state_height = math.max(120, host_rect.height - top_offset)
   r.ImGui_SetNextWindowPos(ctx, host_rect.left, state_top, imgui_flag("ImGui_Cond_Always"))
@@ -2192,6 +2211,7 @@ local function draw_blocked_state_window()
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoSavedSettings")
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_TopMost")
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoBackground")
+  flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoInputs")
   local visible = r.ImGui_Begin(ctx, BLOCKED_WINDOW_NAME, true, flags)
   if visible then
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -2238,12 +2258,38 @@ local function maintain_active_window()
   end
 end
 
+local function handle_active_external_close()
+  local entry = find_entry_by_key(active_key)
+  local track = entry and resolve_entry_track(entry) or nil
+  if entry and track then
+    refresh_entry_state(entry, track)
+    if entry_blocked_state(entry) then
+      close_pending_previous()
+      pending_activate_key = ""
+      pending_activate_frames = 0
+      sync_host_rect_to_entry_size(entry)
+      pending_place_until = 0
+      last_place_time = 0
+      pending_pair_front_until = r.time_precise() + 0.45
+      return
+    end
+  end
+  close_pending_previous()
+  pending_activate_key = ""
+  pending_activate_frames = 0
+  active_key = ""
+  pending_place_until = 0
+  pending_pair_front_until = 0
+  topbar_restack_until = 0
+end
+
 local function capture_external_floating_window()
   if not settings.capture_external_floating or not r.TrackFX_GetFloatingWindow then return end
   local now = r.time_precise()
   if now - last_external_watch_time < 0.12 then return end
   last_external_watch_time = now
   local opened_entry = nil
+  local active_closed = false
   local current_open_state = {}
   for entry_index = 1, #instruments do
     local entry = instruments[entry_index]
@@ -2251,10 +2297,17 @@ local function capture_external_floating_window()
     local hwnd = track and safe_trackfx_get_floating_window(track, entry.fx_index) or nil
     local is_open = hwnd ~= nil
     current_open_state[entry.key] = is_open
-    if is_open and not external_open_state[entry.key] and entry.key ~= active_key then opened_entry = entry end
+    if entry.key == active_key then
+      if not is_open and external_open_state[entry.key] then active_closed = true end
+    elseif is_open and not external_open_state[entry.key] then
+      opened_entry = entry
+    end
   end
   external_open_state = current_open_state
-  if not opened_entry then return end
+  if not opened_entry then
+    if active_closed then handle_active_external_close() end
+    return
+  end
   local previous_key = active_key
   pending_activate_key = ""
   pending_activate_frames = 0
@@ -2326,6 +2379,7 @@ local function loop()
     cleanup()
     return
   end
+  set_topbar_owner()
   capture_external_floating_window()
   maintain_active_window()
   process_pending_pair_front()

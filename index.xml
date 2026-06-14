@@ -423,32 +423,9 @@
     </reapack>
 
     <reapack name="TK_FX_Tabs.lua" type="script" desc="TK FX Tabs">
-    <version name="1.0.2" author="TouristKiller" time="2026-06-10T14:40:00Z">
+    <version name="1.0.3" author="TouristKiller" time="2026-06-14T12:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20Tabs/TK_FX_Tabs.lua</source>
                 <changelog><![CDATA[
-v1.0.2
-+ Added left and right tab bar edge calibration without moving the floating FX window
-+ Improved centered placement so tab bar width adjustments no longer feed back into the FX window position
-
-v1.0.1
-+ Added owner-pairing debug status in settings
-+ Fixed viewport fallback startup error when the native window rectangle is unavailable
-
-v1.0.0
-+ Initial FX Tabs release
-+ Added tabs for track FX and instruments with native floating FX window placement
-+ Added All FX / Instruments only modes, tab filters, Add FX menu, context actions, MIDI input selection for instruments, theme settings, and bypass/offline state views
-]]></changelog>
-    </version>
-    </reapack>
-
-    <reapack name="TK_FX_Tabs_ZOrder_Test.lua" type="script" desc="TK FX Tabs - Z-Order Test">
-    <version name="1.0.1.1" author="TouristKiller" time="2026-06-10T13:00:00Z">
-    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20Tabs/TK_FX_Tabs_ZOrder_Test.lua</source>
-                <changelog><![CDATA[
-v1.0.1.1
-+ Test build with delayed z-order correction pulses after tab switching
-+ Based on TK FX Tabs 1.0.1
 ]]></changelog>
     </version>
     </reapack>
