@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.5
+-- @version 0.3.6
 -- @changelog:
+-- v0.3.6
+--   + Notes: Added a scrollbar on the right of the body editor when text/images exceed the visible area
+--   + Notes: Added mouse wheel scrolling inside the body editor
+--   + Notes: Typing/pasting is no longer limited to the window height; the editor scrolls instead
 -- v0.3.5
 --   + Instrument Rack: Horizontal rack now scrolls horizontally using the dominant mouse wheel axis
 --   + Instrument Rack: Added an option to invert the horizontal wheel scroll direction

@@ -8,7 +8,7 @@ local M = {
   id = "notes",
   title = "Notes",
   icon = "NOT",
-  version = "0.1.0"
+  version = "0.2.0"
 }
 
 local EXT_NAMESPACE = "TK_WORKBENCH_NOTES"
@@ -634,7 +634,8 @@ local function clamp_caret(text, caret)
 end
 
 local function ensure_body_editor(block)
-  block.editor = block.editor or { caret = #(block.body or ""), active = false, preferred_x = nil, selection_start = #(block.body or ""), selection_end = #(block.body or ""), selection_anchor = #(block.body or ""), mouse_selecting = false }
+  block.editor = block.editor or { caret = #(block.body or ""), active = false, preferred_x = nil, selection_start = #(block.body or ""), selection_end = #(block.body or ""), selection_anchor = #(block.body or ""), mouse_selecting = false, scroll_y = 0, scrollbar_dragging = false, scrollbar_drag_offset = 0, last_caret = #(block.body or "") }
+  block.editor.scroll_y = tonumber(block.editor.scroll_y) or 0
   block.editor.caret = clamp_caret(block.body or "", block.editor.caret)
   block.editor.selection_start = clamp_caret(block.body or "", block.editor.selection_start or block.editor.caret)
   block.editor.selection_end = clamp_caret(block.body or "", block.editor.selection_end or block.editor.caret)
@@ -1355,6 +1356,8 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     local fit_margin = line_height + padding_y
     local content_height = math.max(layout.total_height, image_content_height(block))
     block.body_fit_height = math.max(MIN_BLOCK_HEIGHT, math.min(MAX_BLOCK_HEIGHT, (content_height + padding_y * 2 + fit_margin) / math.max(0.01, scale)))
+    local max_scroll = math.max(0, content_height + padding_y * 2 - avail_h)
+    editor.scroll_y = math.max(0, math.min(max_scroll, tonumber(editor.scroll_y) or 0))
     local origin_x, origin_y = r.ImGui_GetCursorScreenPos(ctx)
     local function is_first_visual_line(idx)
       local line = layout.lines[idx]
@@ -1366,7 +1369,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     end
     local function caret_from_mouse()
       local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-      local local_y = mouse_y - origin_y - padding_y
+      local local_y = mouse_y - origin_y - padding_y + editor.scroll_y
       local line_idx = math.max(1, math.min(#layout.lines, math.floor(local_y / line_height) + 1))
       local line = layout.lines[line_idx]
       local local_x = mouse_x - origin_x - padding_x - line_indent(line)
@@ -1378,7 +1381,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local size = math.max(10, math.min(16, font_size * 0.85))
       for idx, line in ipairs(layout.lines) do
         if line.checkbox and is_first_visual_line(idx) then
-          local line_y = origin_y + padding_y + (idx - 1) * line_height
+          local line_y = origin_y + padding_y + (idx - 1) * line_height - editor.scroll_y
           local box_y = line_y + (line_height - size) * 0.5
           if mouse_x >= marker_x and mouse_x <= marker_x + size and mouse_y >= box_y and mouse_y <= box_y + size then return line.source_line end
         end
@@ -1388,7 +1391,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     local function image_at_mouse()
       local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
       local local_x = mouse_x - origin_x
-      local local_y = mouse_y - origin_y
+      local local_y = mouse_y - origin_y + editor.scroll_y
       for idx = #image_rects, 1, -1 do
         local rect = image_rects[idx]
         if local_x >= rect.x1 and local_x <= rect.x2 and local_y >= rect.y1 and local_y <= rect.y2 then return rect.image, rect end
@@ -1426,11 +1429,65 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     end
     r.ImGui_InvisibleButton(ctx, "##body_capture", avail_w, avail_h)
     local hovered = r.ImGui_IsItemHovered(ctx)
-    local hovered_image = hovered and image_at_mouse() or nil
+    if max_scroll > 0 and hovered and not editor.scrollbar_dragging and r.ImGui_GetMouseWheel then
+      local wheel = select(1, r.ImGui_GetMouseWheel(ctx))
+      if wheel and wheel ~= 0 then
+        editor.scroll_y = math.max(0, math.min(max_scroll, editor.scroll_y - wheel * line_height * 3))
+      end
+    end
+    local scrollbar = nil
+    local scrollbar_active = false
+    if max_scroll > 0 then
+      local sb_width = UIScale.round(7)
+      local sb_margin = UIScale.round(3)
+      local sb_x2 = origin_x + avail_w - sb_margin
+      local sb_x1 = sb_x2 - sb_width
+      local sb_y1 = origin_y + sb_margin
+      local sb_y2 = origin_y + avail_h - sb_margin
+      local track_h = sb_y2 - sb_y1
+      if track_h > UIScale.round(12) then
+        local content_h = avail_h + max_scroll
+        local thumb_h = math.max(UIScale.round(20), track_h * (avail_h / content_h))
+        if thumb_h > track_h then thumb_h = track_h end
+        local denom = track_h - thumb_h
+        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+        local hot_x1 = sb_x1 - UIScale.round(4)
+        local ratio = max_scroll > 0 and (editor.scroll_y / max_scroll) or 0
+        local thumb_y1 = sb_y1 + denom * ratio
+        local thumb_y2 = thumb_y1 + thumb_h
+        local over_thumb = mouse_x >= hot_x1 and mouse_x <= sb_x2 + 2 and mouse_y >= thumb_y1 and mouse_y <= thumb_y2
+        local over_track = mouse_x >= hot_x1 and mouse_x <= sb_x2 + 2 and mouse_y >= sb_y1 and mouse_y <= sb_y2
+        if r.ImGui_IsMouseClicked(ctx, 0) then
+          if over_thumb then
+            editor.scrollbar_dragging = true
+            editor.scrollbar_drag_offset = mouse_y - thumb_y1
+          elseif over_track then
+            editor.scrollbar_dragging = true
+            editor.scrollbar_drag_offset = thumb_h * 0.5
+            local tr = denom > 0 and ((mouse_y - thumb_h * 0.5 - sb_y1) / denom) or 0
+            editor.scroll_y = math.max(0, math.min(max_scroll, tr * max_scroll))
+          end
+        end
+        if editor.scrollbar_dragging then
+          if r.ImGui_IsMouseDown(ctx, 0) then
+            local new_y1 = mouse_y - (editor.scrollbar_drag_offset or 0)
+            local tr = denom > 0 and ((new_y1 - sb_y1) / denom) or 0
+            editor.scroll_y = math.max(0, math.min(max_scroll, tr * max_scroll))
+          else
+            editor.scrollbar_dragging = false
+          end
+        end
+        scrollbar_active = editor.scrollbar_dragging or over_thumb or over_track
+        scrollbar = { x1 = sb_x1, x2 = sb_x2, y1 = sb_y1, y2 = sb_y2, thumb_h = thumb_h, track_h = track_h, hover = over_thumb or editor.scrollbar_dragging }
+      end
+    else
+      editor.scrollbar_dragging = false
+    end
+    local hovered_image = hovered and not scrollbar_active and image_at_mouse() or nil
     if hovered_image and r.ImGui_MouseCursor_Hand then r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_Hand()) end
     if hovered_image and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, "Drag to move | Right-click for options") end
     update_image_drag()
-    if r.ImGui_IsItemClicked(ctx, 0) then
+    if r.ImGui_IsItemClicked(ctx, 0) and not scrollbar_active then
       if hovered_image then
         block.selected_image_id = hovered_image.id
         block.dragging_image_id = hovered_image.id
@@ -1486,8 +1543,6 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     end
     local max_text_height = math.max(line_height, avail_h - padding_y * 2)
     local function apply_candidate(new_text, new_caret, selection_start, selection_end)
-      local candidate_layout = build_body_layout(ctx, new_text, wrap_width, line_height, font_size)
-      if candidate_layout.total_height > max_text_height + 0.5 then return false end
       text = new_text
       editor.caret = clamp_caret(text, new_caret)
       editor.selection_start = clamp_caret(text, selection_start or editor.caret)
@@ -1511,8 +1566,6 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       end
       base_text, base_caret = trim_blank_tail_for_input(base_text, base_caret, value)
       local candidate_text, candidate_caret = insert_at(base_text, base_caret, value)
-      local candidate_layout = build_body_layout(ctx, candidate_text, wrap_width, line_height, font_size)
-      if candidate_layout.total_height > max_text_height + 0.5 then return false end
       update_line_colors_after_replace(block, old_text, replace_start, replace_end, value, candidate_text)
       apply_text(candidate_text, candidate_caret)
       return true
@@ -1682,6 +1735,23 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       layout = build_body_layout(ctx, text, wrap_width, line_height, font_size)
     end
 
+    content_height = math.max(layout.total_height, image_content_height(block))
+    max_scroll = math.max(0, content_height + padding_y * 2 - avail_h)
+    if editor.active and editor.caret ~= editor.last_caret then
+      editor.scroll_to_caret = true
+      editor.last_caret = editor.caret
+    end
+    if editor.scroll_to_caret then
+      local _, _, caret_y = locate_caret(layout, text, editor.caret)
+      local caret_top = caret_y + padding_y
+      local caret_bottom = caret_top + line_height
+      if caret_top < editor.scroll_y then editor.scroll_y = caret_top end
+      if caret_bottom > editor.scroll_y + avail_h then editor.scroll_y = caret_bottom - avail_h end
+      editor.scroll_to_caret = false
+    end
+    editor.scroll_y = math.max(0, math.min(max_scroll, editor.scroll_y))
+    local scroll_y = editor.scroll_y
+
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_DrawList_PushClipRect(draw_list, origin_x, origin_y, origin_x + avail_w, origin_y + avail_h, true)
     local sel_start, sel_end = selection_range(editor)
@@ -1691,7 +1761,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local highlight = Theme.colors.accent_soft or 0x2B4B78FF
       highlight = (highlight & 0xFFFFFF00) | 0x99
       for idx, line in ipairs(layout.lines) do
-        local line_y = origin_y + padding_y + (idx - 1) * line_height
+        local line_y = origin_y + padding_y + (idx - 1) * line_height - scroll_y
         if line_y > origin_y - line_height and line_y < origin_y + avail_h then
           local indent = line_indent(line)
           local active = false
@@ -1717,7 +1787,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       end
     end
     for idx, line in ipairs(layout.lines) do
-      local line_y = origin_y + padding_y + (idx - 1) * line_height
+      local line_y = origin_y + padding_y + (idx - 1) * line_height - scroll_y
       if line_y > origin_y - line_height and line_y < origin_y + avail_h then
         local draw_color = (block.line_colors and line.source_line and block.line_colors[line.source_line]) or text_color
         if line.checkbox and is_first_visual_line(idx) then
@@ -1738,22 +1808,24 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
         end
       end
     end
-    if layout.total_height > math.max(line_height, avail_h - padding_y * 2 - 2) + 0.5 then
-      local more_text = "more....."
-      local more_w = scaled_text_width(ctx, more_text, font_size)
-      local more_y = origin_y + avail_h - line_height
-      local more_bg = (note_color & 0xFFFFFF00) | 0xEE
-      r.ImGui_DrawList_AddRectFilled(draw_list, origin_x, more_y - UIScale.round(2), origin_x + avail_w, origin_y + avail_h, more_bg)
-      draw_text_sized(ctx, draw_list, origin_x + math.max(padding_x, avail_w - more_w - padding_x), more_y, text_color, more_text, font_size, font)
-    end
-    draw_note_images(ctx, draw_list, block, image_rects, origin_x, origin_y, text_color)
+    draw_note_images(ctx, draw_list, block, image_rects, origin_x, origin_y - scroll_y, text_color)
     if editor.active then
       local _, caret_x, caret_y, caret_line = locate_caret(layout, text, editor.caret)
       local x = origin_x + padding_x + line_indent(caret_line) + caret_x
-      local y = origin_y + padding_y + caret_y
-      if y >= origin_y and y <= origin_y + avail_h then r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + line_height, text_color, UIScale.px(1.4)) end
+      local y = origin_y + padding_y + caret_y - scroll_y
+      if y >= origin_y - line_height and y <= origin_y + avail_h then r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + line_height, text_color, UIScale.px(1.4)) end
     end
     r.ImGui_DrawList_PopClipRect(draw_list)
+    if scrollbar then
+      local ratio = max_scroll > 0 and (editor.scroll_y / max_scroll) or 0
+      local thumb_y1 = scrollbar.y1 + (scrollbar.track_h - scrollbar.thumb_h) * ratio
+      local thumb_y2 = thumb_y1 + scrollbar.thumb_h
+      local sb_round = (scrollbar.x2 - scrollbar.x1) * 0.5
+      local track_color = (0xFFFFFF00) | 0x12
+      local thumb_color = scrollbar.hover and ((0xFFFFFF00) | 0x8C) or ((0xFFFFFF00) | 0x47)
+      r.ImGui_DrawList_AddRectFilled(draw_list, scrollbar.x1, scrollbar.y1, scrollbar.x2, scrollbar.y2, track_color, sb_round)
+      r.ImGui_DrawList_AddRectFilled(draw_list, scrollbar.x1, thumb_y1, scrollbar.x2, thumb_y2, thumb_color, sb_round)
+    end
     r.ImGui_EndChild(ctx)
   end
   if style_count > 0 then r.ImGui_PopStyleColor(ctx, style_count) end
