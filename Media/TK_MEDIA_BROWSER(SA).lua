@@ -1,8 +1,15 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.2
+-- @version 0.9.3
 -- @changelog:
 --[[
+v0.9.3:
++ Tempo sync now reads the embedded BPM from the file (ID3/Vorbis/ACID/XMP) first and falls back to REAPER tempo matching
++ Added Tape speed button next to sync (mutually exclusive): playback rate changes also shift pitch, like a tape machine, and the pitch knob/readout follow the rate
++ Hold Shift while dragging a file onto a track to drop it into a new fixed lane (auto-enables fixed lanes if needed)
++ Added Stop preview on insert/load option (right-click the sync button): preview stops automatically after dragging/inserting to arrange or loading into RS5K/Cartridge
++ Fixed Add Location folder picker being restricted to Desktop/Users on some systems (incorrect dialog argument order)
+
 v0.9.2:
 + added auto trim of silence on audio files during playback and timeline insertion, with threshold and padding settings
 
@@ -169,6 +176,8 @@ local playback = {
     effective_playrate = 1.0,
     preview_volume = 1.0,
     use_original_speed = true,
+    tape_speed = false,
+    stop_on_insert = true,
     link_transport = false,
     link_start_from_editcursor = false,
     last_transport_state = 0,
@@ -403,6 +412,7 @@ local insert_state = {
     drop_file = nil,
     drop_track = nil,
     drop_lane = nil,
+    drop_new_lane = false,
     is_midi = false
 }
 
@@ -2581,6 +2591,8 @@ local function save_options()
             auto_progress = playback.auto_progress,
             min_display_time = playback.min_display_time,
             use_original_speed = playback.use_original_speed,
+            tape_speed = playback.tape_speed,
+            stop_on_insert = playback.stop_on_insert,
             link_transport = playback.link_transport,
             link_start_from_editcursor = playback.link_start_from_editcursor,
             use_exclusive_solo = playback.use_exclusive_solo,
@@ -2678,6 +2690,8 @@ local function get_settings_table()
         auto_progress = playback.auto_progress,
         min_display_time = playback.min_display_time,
         use_original_speed = playback.use_original_speed,
+        tape_speed = playback.tape_speed,
+        stop_on_insert = playback.stop_on_insert,
         link_transport = playback.link_transport,
         link_start_from_editcursor = playback.link_start_from_editcursor,
         use_exclusive_solo = playback.use_exclusive_solo,
@@ -2733,6 +2747,8 @@ local function apply_settings_from_table(settings)
     playback.auto_progress = settings.auto_progress or false
     playback.min_display_time = (settings.min_display_time or 0) > 0 and 1.0 or 0
     playback.use_original_speed = settings.use_original_speed
+    playback.tape_speed = settings.tape_speed or false
+    playback.stop_on_insert = settings.stop_on_insert ~= false
     playback.link_transport = settings.link_transport or false
     playback.link_start_from_editcursor = settings.link_start_from_editcursor or false
     playback.use_exclusive_solo = settings.use_exclusive_solo ~= nil and settings.use_exclusive_solo or true
@@ -2885,6 +2901,8 @@ local function load_options()
             playback.auto_progress = options.auto_progress or false
             playback.min_display_time = (options.min_display_time or 0) > 0 and 1.0 or 0
             playback.use_original_speed = options.use_original_speed
+            playback.tape_speed = options.tape_speed or false
+            playback.stop_on_insert = options.stop_on_insert ~= false
             playback.link_transport = options.link_transport or false
             playback.link_start_from_editcursor = options.link_start_from_editcursor or false
             playback.use_exclusive_solo = options.use_exclusive_solo ~= nil and options.use_exclusive_solo or true
@@ -2974,6 +2992,8 @@ local function load_options()
                         playback.auto_progress = options2.auto_progress or false
                         playback.min_display_time = (options2.min_display_time or 0) > 0 and 1.0 or 0
                         playback.use_original_speed = options2.use_original_speed
+                        playback.tape_speed = options2.tape_speed or false
+                        playback.stop_on_insert = options2.stop_on_insert ~= false
                         playback.link_transport = options2.link_transport or false
                         playback.preview_volume = options2.preview_volume
                         playback.skip_first_silence = options2.skip_first_silence or false
@@ -5663,8 +5683,32 @@ local function get_next_measure_position()
     return next_measure
 end
 
+local function tkmb_embedded_bpm_rate(source)
+    if not source or not r.GetMediaFileMetadata then return nil end
+    local bpm_str = get_meta_first(source, {"XMP:dm/tempo", "ID3:TBPM", "VORBIS:BPM", "VORBIS:TEMPO", "RIFF:ACID:tempo", "ACID:tempo", "tempo"})
+    if not bpm_str then return nil end
+    local file_bpm = tonumber((tostring(bpm_str):gsub(",", "."):match("[%d%.]+")))
+    if not file_bpm or file_bpm <= 0 then return nil end
+    local project_bpm = r.Master_GetTempo and r.Master_GetTempo() or nil
+    if not project_bpm or project_bpm <= 0 then return nil end
+    return project_bpm / file_bpm
+end
+
+local function tkmb_applied_pitch()
+    local pitch = playback.current_pitch or 0
+    if playback.tape_speed then
+        local rate = playback.effective_playrate or 1.0
+        if rate > 0 then
+            pitch = pitch + 12 * (math.log(rate) / math.log(2))
+        end
+    end
+    return pitch
+end
+
 local function get_sync_base_rate(reference_path)
     if playback.playing_source then
+        local embedded = tkmb_embedded_bpm_rate(playback.playing_source)
+        if embedded and embedded > 0 then return embedded end
         local _, rate = r.GetTempoMatchPlayRate(playback.playing_source, 1, 0, 1)
         if rate and rate > 0 then return rate end
     end
@@ -5684,10 +5728,12 @@ local function get_sync_base_rate(reference_path)
     local source = r.PCM_Source_CreateFromFile(file_path)
     if not source then return nil end
 
-    local base_rate
-    local _, rate = r.GetTempoMatchPlayRate(source, 1, 0, 1)
-    if rate and rate > 0 then
-        base_rate = rate
+    local base_rate = tkmb_embedded_bpm_rate(source)
+    if not base_rate or base_rate <= 0 then
+        local _, rate = r.GetTempoMatchPlayRate(source, 1, 0, 1)
+        if rate and rate > 0 then
+            base_rate = rate
+        end
     end
     r.PCM_Source_Destroy(source)
     return base_rate
@@ -5712,6 +5758,7 @@ local function update_playrate(new_effective_rate, base_rate_override)
     
     if playback.playing_preview and not playback.is_paused then
         r.CF_Preview_SetValue(playback.playing_preview, "D_PLAYRATE", playback.effective_playrate)
+        r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
     end
     update_monitor_positions()
 end
@@ -5845,6 +5892,12 @@ local function stop_playback(is_loop_restart)
         playback.prev_play_cursor = waveform.monitor_sel_start
     else
         playback.prev_play_cursor = 0
+    end
+end
+local function tkmb_stop_preview_after_insert()
+    if not playback.stop_on_insert then return end
+    if playback.playing_preview or playback.is_video_playback or playback.is_midi_playback or playback.is_paused then
+        stop_playback(false)
     end
 end
 local function start_playback(file_path)
@@ -6077,13 +6130,15 @@ local function start_playback(file_path)
         r.CF_Preview_SetValue(playback.playing_preview, "D_PLAYRATE", playback.effective_playrate)
     else
         local tempo = r.Master_GetTempo()
-        local ok, base_rate = r.GetTempoMatchPlayRate(source, 1, 0, 1)
-        if not ok or not base_rate or base_rate <= 0 then
-            base_rate = 1.0
+        local base_rate = tkmb_embedded_bpm_rate(source)
+        if not base_rate or base_rate <= 0 then
+            local ok, tmr = r.GetTempoMatchPlayRate(source, 1, 0, 1)
+            base_rate = (ok and tmr and tmr > 0) and tmr or 1.0
         end
         playback.effective_playrate = base_rate * (playback.current_playrate or 1.0)
         r.CF_Preview_SetValue(playback.playing_preview, "D_PLAYRATE", playback.effective_playrate)
     end
+    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
     update_monitor_positions()
     
     -- Calculate next measure position if needed
@@ -6203,7 +6258,7 @@ local function pause_playback()
             if playback.playing_preview then
                 r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", playback.preview_volume)
                 r.CF_Preview_SetValue(playback.playing_preview, "B_LOOP", playback.loop_play and 1 or 0)
-                r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", playback.current_pitch)
+                r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
                 r.CF_Preview_SetValue(playback.playing_preview, "D_PLAYRATE", playback.effective_playrate or 1.0)
                 r.CF_Preview_SetValue(playback.playing_preview, "D_POSITION", playback.paused_position)
                 
@@ -6563,13 +6618,13 @@ function insert_media_on_track(file_path, track, use_original_speed, custom_play
         local lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
         target_lane = math.floor(tonumber(target_lane) or 0)
         if target_lane < 0 then target_lane = 0 end
-        if lane_count > 0 then
-            if target_lane >= lane_count then
-                r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", target_lane + 1)
-                if r.UpdateTimeline then r.UpdateTimeline() end
-                lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or lane_count)
-            end
-            if target_lane >= lane_count then target_lane = lane_count - 1 end
+        if target_lane >= lane_count then
+            r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", target_lane + 1)
+            if r.UpdateTimeline then r.UpdateTimeline() end
+            lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or lane_count)
+        end
+        if target_lane >= lane_count then target_lane = lane_count - 1 end
+        if target_lane >= 0 then
             r.SetMediaItemInfo_Value(item, "I_FIXEDLANE", target_lane)
             lane_changed = true
         end
@@ -6599,6 +6654,7 @@ function insert_media_on_track(file_path, track, use_original_speed, custom_play
     r.UpdateTimeline()
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
+    tkmb_stop_preview_after_insert()
 end
 
 function render_lufs_context_menu(file_path, files_to_process, insert_track)
@@ -6663,6 +6719,7 @@ local function handle_reaper_drop()
             insert_state.saved_cursor_pos = r.GetCursorPosition()
         end
         insert_state.is_dragging = true
+        insert_state.drop_new_lane = r.JS_Mouse_GetState(8) == 8
         local mx, my = r.GetMousePosition()
         local track, info = r.GetTrackFromPoint(mx, my)
         insert_state.drop_track = track
@@ -6686,7 +6743,15 @@ local function handle_reaper_drop()
         end
     elseif mouse_state == 0 and insert_state.is_dragging then
         if insert_state.drop_file and insert_state.drop_track then
-            insert_media_on_track(insert_state.drop_file, insert_state.drop_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch, nil, insert_state.drop_lane)
+            local target_lane = insert_state.drop_lane
+            if insert_state.drop_new_lane then
+                if r.GetMediaTrackInfo_Value(insert_state.drop_track, "I_FREEMODE") ~= 2 then
+                    r.SetMediaTrackInfo_Value(insert_state.drop_track, "I_FREEMODE", 2)
+                    if r.UpdateTimeline then r.UpdateTimeline() end
+                end
+                target_lane = math.floor(r.GetMediaTrackInfo_Value(insert_state.drop_track, "I_NUMFIXEDLANES") or 0)
+            end
+            insert_media_on_track(insert_state.drop_file, insert_state.drop_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch, nil, target_lane)
         elseif insert_state.saved_cursor_pos then
             r.SetEditCurPos(insert_state.saved_cursor_pos, false, false)
         end
@@ -6694,6 +6759,7 @@ local function handle_reaper_drop()
         insert_state.drop_file = nil
         insert_state.drop_track = nil
         insert_state.drop_lane = nil
+        insert_state.drop_new_lane = false
         insert_state.saved_cursor_pos = nil
     end
 end
@@ -6737,6 +6803,7 @@ local function insert_with_reasamplomatic(file_path)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
     r.Undo_EndBlock("Insert with ReaSamplomatic5000", -1)
+    tkmb_stop_preview_after_insert()
 end
 
 local function cartridge_get_config_dir()
@@ -6870,6 +6937,7 @@ local function create_track_with_cartridge(file_path)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
     r.Undo_EndBlock("Create track with Cartridge: " .. name, -1)
+    tkmb_stop_preview_after_insert()
 end
 
 local function load_sample_to_cartridge_focused(file_path)
@@ -6889,6 +6957,7 @@ local function load_sample_to_cartridge_focused(file_path)
     local sel_start, sel_end = cartridge_get_tk_selection(file_path)
     cartridge_apply_trim(track, fx, sel_start, sel_end)
     r.Undo_EndBlock("Load sample to Cartridge", -1)
+    tkmb_stop_preview_after_insert()
 end
 
 local function replace_reasamplomatic_sample(file_path)
@@ -6936,6 +7005,7 @@ local function replace_reasamplomatic_sample(file_path)
     r.PreventUIRefresh(-1)
     r.UpdateArrange()
     r.Undo_EndBlock("Replace ReaSamplomatic5000 sample", -1)
+    tkmb_stop_preview_after_insert()
 end
 
 local NOTE_NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
@@ -7561,6 +7631,7 @@ function create_rs5k_pad_track(file_path, parent_track, note)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
     r.Undo_EndBlock("Create RS5K pad: " .. midi_note_to_name(note), -1)
+    tkmb_stop_preview_after_insert()
     return true
 end
 
@@ -10029,7 +10100,7 @@ function loop()
             local center_x = pos_x + total_width / 2
             local center_y = pos_y + button_size / 2
             if r.ImGui_InvisibleButton(ctx, "##AddLocation", total_width, button_size) then
-                local retval, folder = r.JS_Dialog_BrowseForFolder(0, "Select Folder", "")
+                local retval, folder = r.JS_Dialog_BrowseForFolder("Select Folder", "")
                 if retval and folder ~= "" then
                     if not table.contains(file_location.locations, folder) then
                         table.insert(file_location.locations, folder)
@@ -12199,7 +12270,7 @@ function loop()
         end
 
         local opt_available = r.ImGui_GetContentRegionAvail(ctx)
-        local opt_btn_count = 4
+        local opt_btn_count = 5
         local opt_btn_width = math.floor(opt_available / opt_btn_count)
         local inactive_text = r.ImGui_ColorConvertDouble4ToU32(
             ui_settings.text_brightness,
@@ -12225,6 +12296,9 @@ function loop()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), (not playback.use_original_speed) and active_color or inactive_text)
         if r.ImGui_Button(ctx, "sync", opt_btn_width, small_button_height) then
             playback.use_original_speed = not playback.use_original_speed
+            if not playback.use_original_speed then
+                playback.tape_speed = false
+            end
             playback.speed_manually_changed = true
             playback.pending_sync_refresh = true
             playback.last_sync_reference = nil
@@ -12257,6 +12331,26 @@ function loop()
                 r.ImGui_SetTooltip(ctx, "When enabled: Audio playback waits for the next measure when project is playing and sync is enabled")
             end
             r.ImGui_EndPopup(ctx)
+        end
+
+        r.ImGui_SameLine(ctx, 0, 0)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), playback.tape_speed and active_color or inactive_text)
+        if r.ImGui_Button(ctx, "tape", opt_btn_width, small_button_height) then
+            playback.tape_speed = not playback.tape_speed
+            if playback.tape_speed and not playback.use_original_speed then
+                playback.use_original_speed = true
+                playback.speed_manually_changed = true
+                playback.pending_sync_refresh = true
+                playback.last_sync_reference = nil
+                update_playrate(playback.current_playrate or 1.0)
+            elseif playback.playing_preview and not playback.is_paused then
+                r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
+            end
+            save_options()
+        end
+        r.ImGui_PopStyleColor(ctx, 1)
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Tape speed: playback rate changes also shift pitch\nMutually exclusive with sync")
         end
 
         r.ImGui_SameLine(ctx, 0, 0)
@@ -12404,7 +12498,8 @@ function loop()
         local pitch_knob_center_x = pos_x + knob_size * 0.5
         local pitch_knob_center_y = pos_y + knob_size * 0.5
         r.ImGui_InvisibleButton(ctx, "##PitchKnob", knob_size, knob_size)
-        local pitch_angle = (playback.current_pitch - (-12)) / (12 - (-12)) * 270 - 135
+        local display_pitch = tkmb_applied_pitch()
+        local pitch_angle = (math.max(-12, math.min(12, display_pitch)) - (-12)) / (12 - (-12)) * 270 - 135
         r.ImGui_DrawList_AddCircle(draw_list, pitch_knob_center_x, pitch_knob_center_y, knob_size * 0.43, 0xFFFFFFFF, 32, 1)
         r.ImGui_DrawList_AddCircle(draw_list, pitch_knob_center_x, pitch_knob_center_y, knob_size * 0.4, active_color, 32, 2)
         r.ImGui_DrawList_AddCircleFilled(draw_list, pitch_knob_center_x, pitch_knob_center_y, knob_size * 0.35, 0x404040FF, 32)
@@ -12421,7 +12516,7 @@ function loop()
             local nv = ImGui_Knob_drag_y["pitch"].v0 + delta * step
             playback.current_pitch = math.floor(math.max(-12, math.min(12, nv)) + 0.5)
             if playback.playing_preview and not playback.is_paused then
-                r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", playback.current_pitch)
+                r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
             end
         elseif not r.ImGui_IsItemActive(ctx) then
             ImGui_Knob_drag_y["pitch"] = nil
@@ -12454,7 +12549,7 @@ function loop()
             elseif pitch_dist < 20 then
                 playback.current_pitch = 0
                 if playback.playing_preview and not playback.is_paused then
-                    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", 0)
+                    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
                 end
                 ImGui_Knob_drag_y["pitch"] = nil
             end
@@ -12484,7 +12579,7 @@ function loop()
             r.ImGui_PopStyleColor(ctx, 1)
         end
 
-        local pitch_text = "Pitch " .. string.format("%d st", playback.current_pitch)
+        local pitch_text = playback.tape_speed and ("Pitch " .. string.format("%.1f st", tkmb_applied_pitch())) or ("Pitch " .. string.format("%d st", playback.current_pitch))
         local pitch_text_w = r.ImGui_CalcTextSize(ctx, pitch_text)
         r.ImGui_SetCursorPos(ctx, knob_spacing + knob_size * 2 + 80 + knob_size * 0.5 - pitch_text_w * 0.5, value_y)
         r.ImGui_Text(ctx, pitch_text)
@@ -13484,6 +13579,16 @@ function loop()
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "Used by the right-click normalized insert action when a saved LUFS analysis exists for the sample.")
                     end
+
+                    r.ImGui_Spacing(ctx)
+                    local stop_on_insert_changed, new_stop_on_insert = r.ImGui_Checkbox(ctx, "Stop Preview On Insert/Load", playback.stop_on_insert)
+                    if stop_on_insert_changed then
+                        playback.stop_on_insert = new_stop_on_insert
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Stop the preview automatically after dragging/inserting to arrange or loading into RS5K/Cartridge.")
+                    end
                     
                     r.ImGui_Spacing(ctx)
                     local pitch_detection_changed, new_pitch_detection = r.ImGui_Checkbox(ctx, "Show Pitch Detection", ui.pitch_detection_enabled)
@@ -13796,6 +13901,17 @@ function loop()
                     r.ImGui_BulletText(ctx, "Shift+Click        Insert at Edit Cursor")
                     r.ImGui_BulletText(ctx, "Click Waveform     Seek to Position")
                     r.ImGui_BulletText(ctx, "Drag Waveform      Create Time Selection")
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_Spacing(ctx)
+
+                    -- Drag & Drop
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+                    r.ImGui_Text(ctx, "DRAG & DROP TO ARRANGE")
+                    r.ImGui_PopStyleColor(ctx, 1)
+                    r.ImGui_Spacing(ctx)
+                    r.ImGui_BulletText(ctx, "Drag to Track      Insert file at drop position")
+                    r.ImGui_BulletText(ctx, "Drag to Lane       Drop onto a fixed lane to insert there")
+                    r.ImGui_BulletText(ctx, "Shift+Drag         Drop into a new fixed lane (auto-enables fixed lanes)")
                     r.ImGui_Spacing(ctx)
                     r.ImGui_Spacing(ctx)
                     
