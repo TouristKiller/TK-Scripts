@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.6
+-- @version 0.3.7
 -- @changelog:
+-- v0.3.7
+--   + Media Browser: Fixed the Add Location folder picker being restricted to Desktop/Users on some systems
+--   + Media Browser: Hold Shift while dragging a file onto a track to drop it into a new fixed lane (auto-enables fixed lanes)
+--   + Media Browser: Added Stop preview on insert/load option (right-click the sync button); preview stops automatically after inserting to arrange or loading into RS5K/Cartridge
 -- v0.3.6
 --   + Notes: Added a scrollbar on the right of the body editor when text/images exceed the visible area
 --   + Notes: Added mouse wheel scrolling inside the body editor

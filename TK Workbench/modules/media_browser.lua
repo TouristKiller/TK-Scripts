@@ -38,6 +38,7 @@ local defaults = {
   preview_pitch = 0,
   preview_rate = 1.0,
   preview_tape_speed = false,
+  stop_preview_on_insert = true,
   tempo_sync = false,
   loop_preview = false,
   auto_play = false,
@@ -178,7 +179,7 @@ local function ensure_settings(app)
   settings.preview_pitch = math.max(-24, math.min(24, tonumber(settings.preview_pitch) or defaults.preview_pitch))
   settings.preview_rate = math.max(0.25, math.min(4, tonumber(settings.preview_rate) or defaults.preview_rate))
   settings.preview_tape_speed = settings.preview_tape_speed == true
-  settings.min_display_time = (tonumber(settings.min_display_time) or 0) > 0 and 1.0 or 0
+  settings.stop_preview_on_insert = settings.stop_preview_on_insert ~= false
   settings.trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(settings.trim_silence_threshold_db) or defaults.trim_silence_threshold_db))
   settings.trim_silence_padding_ms = math.max(0, math.min(250, tonumber(settings.trim_silence_padding_ms) or defaults.trim_silence_padding_ms))
   if settings.location_view_mode ~= "auto" then settings.location_view_mode = "folders" end
@@ -525,7 +526,7 @@ local function browse_location(settings)
   local start_folder = normalize_path(settings.last_browse_location)
   if start_folder == "" then start_folder = normalize_path(selected_location(settings)) end
   if r.JS_Dialog_BrowseForFolder then
-    local ok, folder = r.JS_Dialog_BrowseForFolder(0, "Select media location", start_folder)
+    local ok, folder = r.JS_Dialog_BrowseForFolder("Select media location", start_folder)
     if ok and folder and folder ~= "" then return normalize_path(folder) end
     return ""
   end
@@ -1355,6 +1356,14 @@ local function destroy_preview(settings, from_transport, immediate)
     settings = settings,
     from_transport = from_transport
   }
+end
+
+local function stop_preview_after_insert(app)
+  local settings = ensure_settings(app)
+  if settings.stop_preview_on_insert == false then return end
+  if state.preview or state.preview_paused or state.preview_track_playback then
+    destroy_preview(settings, false, true)
+  end
 end
 
 local function validate_track(track)
@@ -2524,13 +2533,13 @@ local function insert_file_on_track(app, file, track, target_lane)
       local lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
       target_lane = math.floor(tonumber(target_lane) or 0)
       if target_lane < 0 then target_lane = 0 end
-      if lane_count > 0 then
-        if target_lane >= lane_count then
-          r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", target_lane + 1)
-          if r.UpdateTimeline then r.UpdateTimeline() end
-          lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or lane_count)
-        end
-        if target_lane >= lane_count then target_lane = lane_count - 1 end
+      if target_lane >= lane_count then
+        r.SetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES", target_lane + 1)
+        if r.UpdateTimeline then r.UpdateTimeline() end
+        lane_count = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or lane_count)
+      end
+      if target_lane >= lane_count then target_lane = lane_count - 1 end
+      if target_lane >= 0 then
         r.SetMediaItemInfo_Value(item, "I_FIXEDLANE", target_lane)
         lane_changed = true
       end
@@ -2563,6 +2572,7 @@ local function insert_file_on_track(app, file, track, target_lane)
   end
   r.Undo_EndBlock("Workbench Media Browser: Insert media", -1)
   if source then app.status = "Inserted " .. file.name .. " on " .. track_label(track) else app.status = "Could not insert " .. file.name end
+  if source then stop_preview_after_insert(app) end
 end
 
 local function insert_file(app, file)
@@ -2647,6 +2657,7 @@ function Sampler.insert_with_reasamplomatic(app, file)
   r.UpdateArrange()
   r.Undo_EndBlock("Workbench Media Browser: Add RS5K track", -1)
   app.status = fx >= 0 and ("Added RS5K track for " .. file.name) or "Could not add ReaSamplomatic5000"
+  if fx >= 0 then stop_preview_after_insert(app) end
   return fx >= 0
 end
 
@@ -2670,6 +2681,7 @@ function Sampler.replace_reasamplomatic_sample(app, file)
   r.UpdateArrange()
   r.Undo_EndBlock("Workbench Media Browser: Replace RS5K sample", -1)
   app.status = fx >= 0 and ("Loaded sample to RS5K on " .. track_label(track)) or "Could not add ReaSamplomatic5000"
+  if fx >= 0 then stop_preview_after_insert(app) end
   return fx >= 0
 end
 
@@ -2767,6 +2779,7 @@ function Sampler.create_track_with_cartridge(app, file)
   r.UpdateArrange()
   r.Undo_EndBlock("Workbench Media Browser: Add Cartridge track", -1)
   app.status = "Added Cartridge track for " .. file.name
+  stop_preview_after_insert(app)
   return true
 end
 
@@ -2779,6 +2792,7 @@ function Sampler.load_to_focused_cartridge(app, file)
   Sampler.cartridge_apply_trim(track, fx, file.path)
   r.Undo_EndBlock("Workbench Media Browser: Load Cartridge sample", -1)
   app.status = "Loaded sample to focused Cartridge"
+  stop_preview_after_insert(app)
   return true
 end
 
@@ -2819,6 +2833,7 @@ function Sampler.load_rs5k_pad(app, file, track, fx, note)
   r.UpdateArrange()
   r.Undo_EndBlock("Workbench Media Browser: Load RS5K pad", -1)
   app.status = fx and fx >= 0 and "Loaded sample to RS5K pad" or "Could not add RS5K pad"
+  if fx and fx >= 0 then stop_preview_after_insert(app) end
   return fx and fx >= 0
 end
 
@@ -3197,13 +3212,25 @@ local function update_drag(app)
         state.drag_cursor_position = cursor
         r.SetEditCurPos(cursor, false, false)
       end
-      app.status = "Drop " .. state.dragging_file.name .. " on " .. track_label(track)
+      if shift_down(ctx) then
+        app.status = "Drop " .. state.dragging_file.name .. " in new lane on " .. track_label(track)
+      else
+        app.status = "Drop " .. state.dragging_file.name .. " on " .. track_label(track)
+      end
     else
       app.status = "Drop " .. state.dragging_file.name .. " on a track"
     end
     if released or not mouse_down then
       if track then
-        insert_file_on_track(app, state.dragging_file, track, lane)
+        local target_lane = lane
+        if shift_down(ctx) then
+          if r.GetMediaTrackInfo_Value(track, "I_FREEMODE") ~= 2 then
+            r.SetMediaTrackInfo_Value(track, "I_FREEMODE", 2)
+            if r.UpdateTimeline then r.UpdateTimeline() end
+          end
+          target_lane = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
+        end
+        insert_file_on_track(app, state.dragging_file, track, target_lane)
       elseif state.drag_saved_cursor then
         r.SetEditCurPos(state.drag_saved_cursor, false, false)
       end
@@ -3444,6 +3471,11 @@ local function draw_media_settings_popup(app, settings)
     if v then settings.tempo_sync = false end
     changed = true
     apply_preview_rate(settings)
+  end
+  c, v = r.ImGui_Checkbox(ctx, "Stop preview on insert/load", settings.stop_preview_on_insert ~= false)
+  if c then
+    settings.stop_preview_on_insert = v
+    changed = true
   end
   c, v = r.ImGui_Checkbox(ctx, "Loop preview", settings.loop_preview == true)
   if c then
@@ -4008,7 +4040,12 @@ function M.draw(app)
   changed, new_pitch = r.ImGui_SliderDouble(ctx, "##media_pitch", new_pitch, -24, 24, "")
   wheel = hovered_mouse_wheel(ctx, true)
   if wheel ~= 0 then new_pitch = clamp(new_pitch + wheel * 0.1, -24, 24); changed = true end
-  draw_slider_value(ctx, string.format("%.1f st", new_pitch))
+  if settings.preview_tape_speed == true then
+    local pitch_rate = effective_playrate(state.preview_source, state.preview_kind, settings)
+    draw_slider_value(ctx, string.format("%.1f st", new_pitch + tape_speed_pitch_offset(pitch_rate)))
+  else
+    draw_slider_value(ctx, string.format("%.1f st", new_pitch))
+  end
   local reset_pitch = r.ImGui_IsItemHovered(ctx) and right_clicked(ctx)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Pitch | Wheel fine tune | Right-click reset") end
   if reset_pitch then settings.preview_pitch = defaults.preview_pitch elseif changed then settings.preview_pitch = new_pitch end
