@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.4
+-- @version 0.9.41
 -- @changelog:
 --[[
+v0.9.41:
++ Fixed arrow-key navigation following alphabetical order instead of the chosen column sort; up/down now match the visible (sorted) file order
+
 v0.9.4:
 + Added Spacebar shortcut: Play / Stop the preview (matches REAPER)
 + Enter/Return now toggles Play / Pause the preview (resumes from the pause position, matches REAPER); both are ignored while typing in the search field
@@ -9631,7 +9634,8 @@ function loop()
     if has_files then
         if file_location.flat_view then
             ui.visible_files = {}
-            local files_to_use = (search_filter.filtered_files and #search_filter.filtered_files > 0) and search_filter.filtered_files or search_filter.cached_flat_files
+            local files_to_use = (search_filter.sorted_files and #search_filter.sorted_files > 0) and search_filter.sorted_files
+                or ((search_filter.filtered_files and #search_filter.filtered_files > 0) and search_filter.filtered_files or search_filter.cached_flat_files)
             for i = 1, #files_to_use do
                 local file = files_to_use[i]
                 if file and not file.is_dir then
@@ -9645,6 +9649,23 @@ function loop()
             end
         else
             ui.visible_files = build_visible_files_list(file_location.current_files, file_location.current_location)
+            if search_filter.sorted_files and #search_filter.sorted_files > 0 then
+                local order = {}
+                for i = 1, #search_filter.sorted_files do
+                    local sf = search_filter.sorted_files[i]
+                    if sf and sf.full_path then order[sf.full_path] = i end
+                end
+                table.sort(ui.visible_files, function(a, b)
+                    local pa = a.full_path or a.path
+                    local pb = b.full_path or b.path
+                    local oa = order[pa]
+                    local ob = order[pb]
+                    if oa and ob then return oa < ob end
+                    if oa then return true end
+                    if ob then return false end
+                    return false
+                end)
+            end
         end
         local found = false
         local current_path = playback.current_playing_file
