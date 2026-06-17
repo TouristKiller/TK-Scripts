@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.8
+-- @version 0.3.9
 -- @changelog:
+-- v0.3.9
+--   + Media Browser: Spacebar now plays/stops the preview and Enter/Return toggles play/pause (resumes from the pause position), matching REAPER's transport; both are ignored while typing in a field
 -- v0.3.8
 --   + Instrument Rack: Container drop zones now double as add buttons — click one to add an FX straight into that container via the linked TK FX Browser, TK FX Browser Mini, or the internal Plugin Browser, while drag-and-drop into the container keeps working
 --   + Instrument Rack: Right-click a container drop zone for Add FX... and Add empty container inside actions

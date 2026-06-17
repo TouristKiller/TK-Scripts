@@ -3743,9 +3743,18 @@ local function handle_file_list_keyboard(app, settings, row_h)
     end
     return true
   end
+  if key_pressed(ctx, "Space") then
+    if preview_is_active() then destroy_preview(settings); return true end
+    local entry = state.filtered[index or 1]
+    if entry and (entry.kind == "folder" or entry.kind == "folder_up") then return false end
+    local file = state.selected_file or entry
+    if file and can_preview_file(file) then start_preview(settings, file); return true end
+    return false
+  end
   if key_pressed(ctx, "Enter") or key_pressed(ctx, "KeypadEnter") then
     local entry = state.filtered[index or 1]
     if entry and (entry.kind == "folder" or entry.kind == "folder_up") then return open_folder_entry(app, entry) end
+    if preview_is_active() then pause_preview(settings); return true end
     local file = state.selected_file or entry
     if file and can_preview_file(file) then start_preview(settings, file); return true end
   end
