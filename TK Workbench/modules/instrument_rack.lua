@@ -38,8 +38,18 @@ local state = {
   macro_count = MACRO_COUNT,
   default_pins = nil,
   default_pins_loaded = false,
-  auto_pin_checked = {}
+  auto_pin_checked = {},
+  fx_value_cache = {}
 }
+
+local function fx_value_bucket(fx_guid)
+  local bucket = state.fx_value_cache[fx_guid]
+  if not bucket then
+    bucket = { params = {} }
+    state.fx_value_cache[fx_guid] = bucket
+  end
+  return bucket
+end
 
 local defaults = {
   pinned_track_guid = "",
@@ -64,7 +74,8 @@ local defaults = {
   section_track_color = false,
   show_item_name_overlay = true,
   show_info_bar = true,
-  auto_apply_default_pins = false
+  auto_apply_default_pins = false,
+  restore_default_pin_values = false
 }
 
 local function ensure_settings(app)
@@ -281,6 +292,141 @@ local function find_fx_index_by_guid(track, fx_guid)
   end
   local fallback = fx_guid:match("^INDEX:(%-?%d+)$")
   return fallback and tonumber(fallback) or nil
+end
+
+local CONTAINER_BASE = 0x2000000
+
+local function fx_config_value(track, fx, key)
+  if not r.TrackFX_GetNamedConfigParm then return nil end
+  local ok, value = r.TrackFX_GetNamedConfigParm(track, fx, key)
+  if not ok then return nil end
+  return tostring(value or "")
+end
+
+local function fx_is_container(track, fx)
+  return fx_config_value(track, fx, "fx_type") == "Container"
+end
+
+local function fx_is_parallel(track, fx)
+  local v = fx_config_value(track, fx, "parallel")
+  return v ~= nil and v ~= "0"
+end
+
+local function make_fx_chain(track, take, kind)
+  return { kind = kind or "track", track = track, take = take }
+end
+
+local function as_chain(chain)
+  if type(chain) == "table" and chain.kind then return chain end
+  return make_fx_chain(chain, nil, "track")
+end
+
+local function chain_valid(chain)
+  if chain.kind == "item" then return validate_take(chain.take) end
+  return validate_track(chain.track)
+end
+
+local function cfg(chain, fx, key)
+  if chain.kind == "item" then
+    if not r.TakeFX_GetNamedConfigParm then return nil end
+    local ok, value = r.TakeFX_GetNamedConfigParm(chain.take, fx, key)
+    if not ok then return nil end
+    return tostring(value or "")
+  end
+  return fx_config_value(chain.track, fx, key)
+end
+
+local function cfg_set(chain, fx, key, value)
+  if chain.kind == "item" then
+    if r.TakeFX_SetNamedConfigParm then r.TakeFX_SetNamedConfigParm(chain.take, fx, key, value) end
+    return
+  end
+  if r.TrackFX_SetNamedConfigParm then r.TrackFX_SetNamedConfigParm(chain.track, fx, key, value) end
+end
+
+local function c_count(chain)
+  if chain.kind == "item" then return (validate_take(chain.take) and r.TakeFX_GetCount and r.TakeFX_GetCount(chain.take)) or 0 end
+  return r.TrackFX_GetCount(chain.track) or 0
+end
+
+local function c_guid(chain, fx)
+  if chain.kind == "item" then
+    local g = r.TakeFX_GetFXGUID and r.TakeFX_GetFXGUID(chain.take, fx)
+    if g and g ~= "" then return g end
+    return "INDEX:" .. tostring(fx)
+  end
+  return get_fx_guid(chain.track, fx)
+end
+
+local function c_is_container(chain, fx)
+  return cfg(chain, fx, "fx_type") == "Container"
+end
+
+local function c_is_parallel(chain, fx)
+  local v = cfg(chain, fx, "parallel")
+  return v ~= nil and v ~= "0"
+end
+
+local function c_add_capable(chain)
+  if chain.kind == "item" then return r.TakeFX_AddByName ~= nil end
+  return r.TrackFX_AddByName ~= nil
+end
+
+local function c_add(chain, name, pos)
+  if chain.kind == "item" then return r.TakeFX_AddByName and r.TakeFX_AddByName(chain.take, name, pos) end
+  return r.TrackFX_AddByName and r.TrackFX_AddByName(chain.track, name, false, pos)
+end
+
+local function c_move_capable(chain)
+  if chain.kind == "item" then return r.TakeFX_CopyToTake ~= nil end
+  return r.TrackFX_CopyToTrack ~= nil
+end
+
+local function c_move(chain, src, dest)
+  if chain.kind == "item" then return r.TakeFX_CopyToTake and r.TakeFX_CopyToTake(chain.take, src, chain.take, dest, true) end
+  return r.TrackFX_CopyToTrack and r.TrackFX_CopyToTrack(chain.track, src, chain.track, dest, true)
+end
+
+local function c_delete(chain, idx)
+  if chain.kind == "item" then return r.TakeFX_Delete and r.TakeFX_Delete(chain.take, idx) end
+  return r.TrackFX_Delete and r.TrackFX_Delete(chain.track, idx)
+end
+
+local function collect_container_nodes(chain, container_rel, parent_count, parent_diff, depth, max_depth)
+  chain = as_chain(chain)
+  local nodes = {}
+  local raw = cfg(chain, CONTAINER_BASE + container_rel, "container_count")
+  local count = math.floor(tonumber(raw) or 0)
+  if count <= 0 then return nodes, 0 end
+  local diff = (parent_count + 1) * parent_diff
+  for j = 1, count do
+    local child_rel = container_rel + diff * j
+    local api = CONTAINER_BASE + child_rel
+    local is_container = c_is_container(chain, api)
+    local node = { api = api, depth = depth, is_container = is_container, parallel = c_is_parallel(chain, api) }
+    if is_container and depth < max_depth then
+      node.children, node.child_count = collect_container_nodes(chain, child_rel, count, diff, depth + 1, max_depth)
+    elseif is_container then
+      node.children = {}
+      node.child_count = math.floor(tonumber(cfg(chain, api, "container_count")) or 0)
+    end
+    nodes[#nodes + 1] = node
+  end
+  return nodes, count
+end
+
+local function build_track_fx_tree(chain, top_count, max_depth)
+  chain = as_chain(chain)
+  local nodes = {}
+  for i = 0, top_count - 1 do
+    local is_container = c_is_container(chain, i)
+    local node = { api = i, depth = 0, is_container = is_container, parallel = c_is_parallel(chain, i) }
+    if is_container then
+      node.children, node.child_count = collect_container_nodes(chain, i + 1, top_count, 1, 1, max_depth)
+    end
+    nodes[#nodes + 1] = node
+  end
+  return nodes
 end
 
 local function param_key(fx_guid, param_idx)
@@ -720,9 +866,9 @@ local function get_pinned_for_fx(track, fx_index)
   local result = {}
   local entries = state.pinned_params[track_id]
   if not entries then return result end
-  local param_count = r.TrackFX_GetNumParams(track, fx_index)
+  local param_count = r.TrackFX_GetOffline(track, fx_index) and 0 or (r.TrackFX_GetNumParams(track, fx_index) or 0)
   for _, entry in pairs(entries) do
-    if entry.fx_guid == fx_guid and entry.param_idx >= 0 and entry.param_idx < param_count then
+    if entry.fx_guid == fx_guid and entry.param_idx >= 0 and (param_count <= 0 or entry.param_idx < param_count) then
       result[#result + 1] = entry
     end
   end
@@ -818,13 +964,14 @@ local function load_default_pins()
   if not content or content == "" then return end
   for line in content:gmatch("[^\r\n]+") do
     local fields = split_storage_fields(line)
-    local key, slot, param_idx, param_name = fields[1], tonumber(fields[2]), tonumber(fields[3]), fields[4]
+    local key, slot, param_idx, param_name, value = fields[1], tonumber(fields[2]), tonumber(fields[3]), fields[4], tonumber(fields[5])
     if key and key ~= "" and param_idx then
       state.default_pins[key] = state.default_pins[key] or {}
       state.default_pins[key][#state.default_pins[key] + 1] = {
         slot = slot,
         param_idx = param_idx,
-        param_name = param_name or ""
+        param_name = param_name or "",
+        value = value
       }
     end
   end
@@ -843,7 +990,8 @@ local function save_default_pins()
         clean_storage_field(key),
         tostring(tonumber(entry.slot) or ""),
         tostring(entry.param_idx),
-        clean_storage_field(entry.param_name or "")
+        clean_storage_field(entry.param_name or ""),
+        tostring(tonumber(entry.value) or "")
       }, "\t")
     end
   end
@@ -869,7 +1017,8 @@ local function save_current_pins_as_default(app, track, fx_index)
     list[#list + 1] = {
       slot = tonumber(entry.slot),
       param_idx = entry.param_idx,
-      param_name = entry.param_name or ""
+      param_name = entry.param_name or "",
+      value = r.TrackFX_GetParamNormalized(track, fx_index, entry.param_idx)
     }
   end
   state.default_pins[key] = list
@@ -903,7 +1052,10 @@ local function apply_default_pins(app, track, fx_index, silent)
   state.pinned_params[track_id] = state.pinned_params[track_id] or {}
   local param_count = r.TrackFX_GetNumParams(track, fx_index)
   local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
+  local ir_settings = ensure_settings(app)
+  local restore_values = ir_settings.restore_default_pin_values == true
   local applied = 0
+  local restored = 0
   for _, def in ipairs(defaults_list) do
     local param_idx = def.param_idx
     if param_idx and param_idx >= 0 and param_idx < param_count then
@@ -929,13 +1081,21 @@ local function apply_default_pins(app, track, fx_index, silent)
         }
         applied = applied + 1
       end
+      if restore_values and def.value ~= nil then
+        r.TrackFX_SetParamNormalized(track, fx_index, param_idx, math.max(0, math.min(1, def.value)))
+        restored = restored + 1
+      end
     end
   end
   if applied > 0 then save_pinned_params() end
   if not silent then
-    app.status = applied > 0 and ("Applied " .. tostring(applied) .. " default pins") or "Default pins already applied"
+    if restored > 0 then
+      app.status = "Applied " .. tostring(#defaults_list) .. " default pins (restored " .. tostring(restored) .. " values)"
+    else
+      app.status = applied > 0 and ("Applied " .. tostring(applied) .. " default pins") or "Default pins already applied"
+    end
   end
-  return applied > 0
+  return applied > 0 or restored > 0
 end
 
 local function queue_param_action(action, track, fx_index, param_idx)
@@ -1134,6 +1294,7 @@ local function open_add_fx_browser(app, track, target_type, take)
   if not validate_track(track) then return end
   target_type = target_type or "track"
   select_only_track(track)
+  r.DeleteExtState("TKMIX", "rack_add_container", false)
   local target = settings.add_fx_target or "tk_fx_browser"
   if target == "native" then
     if target_type == "input" then
@@ -1146,6 +1307,11 @@ local function open_add_fx_browser(app, track, target_type, take)
     r.Main_OnCommand(40271, 0)
     app.status = "Opened native FX browser"
     return
+  end
+  if target_type == "input" or target_type == "item" then
+    r.SetExtState("TKMIX", "rack_add_chain", target_type, false)
+  elseif r.HasExtState("TKMIX", "rack_add_chain") then
+    r.DeleteExtState("TKMIX", "rack_add_chain", false)
   end
   if target == "plugin_browser" and app.modules_by_id and app.modules_by_id.plugin_browser then
     if app.set_active_view then
@@ -1174,9 +1340,8 @@ local function open_add_fx_browser(app, track, target_type, take)
   local heartbeat = tonumber(r.GetExtState(section, "heartbeat")) or 0
   local alive = running and (r.time_precise() - heartbeat < 2.0)
   if alive then
-    local visible = r.GetExtState(section, "visibility")
-    r.SetExtState(section, "visibility", visible == "hidden" and "visible" or "hidden", true)
-    app.status = "Toggled " .. nice_name
+    r.SetExtState(section, "visibility", "visible", true)
+    app.status = "Showing " .. nice_name
     return
   end
   if running and not alive then r.SetExtState(section, "running", "false", true) end
@@ -1195,6 +1360,23 @@ local function open_add_fx_browser(app, track, target_type, take)
     end
   end
   app.status = "Start " .. nice_name .. " once from the Actions list"
+end
+
+local function open_container_add_browser(app, chain, container_api)
+  chain = as_chain(chain)
+  if not chain_valid(chain) then return end
+  local cguid = c_guid(chain, container_api)
+  if not cguid or cguid == "" then return end
+  local target = (app.settings and app.settings.add_fx_target) or "tk_fx_browser"
+  if target == "native" then
+    open_add_fx_browser(app, chain.track, chain.kind == "item" and "item" or "track", chain.take)
+    return
+  end
+  local kind = chain.kind == "item" and "item" or "track"
+  local tguid = track_guid(chain.track)
+  if not tguid or tguid == "" then return end
+  open_add_fx_browser(app, chain.track, "track", chain.take)
+  r.SetExtState("TKMIX", "rack_add_container", tguid .. "|" .. kind .. "|" .. cguid, false)
 end
 
 local function get_track_header_color(track)
@@ -1217,7 +1399,7 @@ local function section_accent_color(settings, track)
     local native = r.GetTrackColor(track) or 0
     if native ~= 0 then
       local cr, cg, cb = r.ColorFromNative(native)
-      return ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xFF
+      return ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xCC
     end
   end
   return Theme.colors.accent
@@ -1290,12 +1472,19 @@ local function draw_header(app, ctx, settings, track)
       end
       r.ImGui_Separator(ctx)
     end
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Display")
     changed, value = r.ImGui_Checkbox(ctx, "Show screenshots", settings.show_screenshots)
     if changed then settings.show_screenshots = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show parameters", settings.show_pinned_params)
     if changed then settings.show_pinned_params = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show macros", settings.show_macros ~= false)
     if changed then settings.show_macros = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Show info bar", settings.show_info_bar ~= false)
+    if changed then settings.show_info_bar = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Show item name on item FX tiles", settings.show_item_name_overlay ~= false)
+    if changed then settings.show_item_name_overlay = value; if app.save_settings then app.save_settings() end end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Controls")
     local macro_total = settings.macro_count == 16 and 16 or 8
     r.ImGui_Text(ctx, "Macro count")
     r.ImGui_SameLine(ctx)
@@ -1310,29 +1499,23 @@ local function draw_header(app, ctx, settings, track)
       settings.macro_param_slots = slot_count == 4 and 8 or 4
       if app.save_settings then app.save_settings() end
     end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "FX sources")
     changed, value = r.ImGui_Checkbox(ctx, "Show track FX", settings.show_track_fx)
     if changed then settings.show_track_fx = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Show input FX", settings.show_input_fx)
     if changed then settings.show_input_fx = value; if app.save_settings then app.save_settings() end end
-    changed, value = r.ImGui_Checkbox(ctx, "Show selected item FX", settings.show_selected_item_fx)
+    changed, value = r.ImGui_Checkbox(ctx, "Show take FX (selected item)", settings.show_selected_item_fx)
     if changed then settings.show_selected_item_fx = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Shows the take FX chain of the selected item on the track") end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Layout")
     changed, value = r.ImGui_Checkbox(ctx, "Compact tiles", settings.tile_compact)
     if changed then settings.tile_compact = value; if app.save_settings then app.save_settings() end end
-    changed, value = r.ImGui_Checkbox(ctx, "Show info bar", settings.show_info_bar ~= false)
-    if changed then settings.show_info_bar = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Signal flow order (Input > Take > Track)", settings.section_order == "signal_flow")
     if changed then settings.section_order = value and "signal_flow" or "default"; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Color sections by track color", settings.section_track_color == true)
     if changed then settings.section_track_color = value; if app.save_settings then app.save_settings() end end
-    changed, value = r.ImGui_Checkbox(ctx, "Show item name on item FX tiles", settings.show_item_name_overlay ~= false)
-    if changed then settings.show_item_name_overlay = value; if app.save_settings then app.save_settings() end end
-    changed, value = r.ImGui_Checkbox(ctx, "Auto-apply default pins on load", settings.auto_apply_default_pins == true)
-    if changed then
-      settings.auto_apply_default_pins = value
-      state.auto_pin_checked = {}
-      if app.save_settings then app.save_settings() end
-    end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Automatically pin each plugin's saved default parameters when it first appears in the rack") end
     if settings.orientation == "horizontal" then
       r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
       changed, value = r.ImGui_SliderInt(ctx, "Tile width", settings.horizontal_tile_width or 240, 160, 400, "%d px")
@@ -1345,7 +1528,24 @@ local function draw_header(app, ctx, settings, track)
     r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
     changed, value = r.ImGui_SliderInt(ctx, "Screenshot height", settings.screenshot_height or 90, 48, 400, "%d px")
     if changed then settings.screenshot_height = value; if app.save_settings then app.save_settings() end end
-    r.ImGui_Text(ctx, "Add FX target")
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Default parameter pins")
+    changed, value = r.ImGui_Checkbox(ctx, "Auto-apply default pins on load", settings.auto_apply_default_pins == true)
+    if changed then
+      settings.auto_apply_default_pins = value
+      state.auto_pin_checked = {}
+      if app.save_settings then app.save_settings() end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Automatically pin each plugin's saved default parameters when it first appears in the rack") end
+    changed, value = r.ImGui_Checkbox(ctx, "Restore saved parameter values on apply", settings.restore_default_pin_values == true)
+    if changed then
+      settings.restore_default_pin_values = value
+      state.auto_pin_checked = {}
+      if app.save_settings then app.save_settings() end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "When applying default pins, also set each parameter to the value stored when you saved the default pins") end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Add FX target")
     local targets = {
       { id = "tk_fx_browser", label = "TK FX Browser" },
       { id = "tk_fx_browser_mini", label = "TK FX Browser Mini" },
@@ -1359,6 +1559,7 @@ local function draw_header(app, ctx, settings, track)
         if app.save_settings then app.save_settings() end
       end
     end
+    r.ImGui_Separator(ctx)
     if r.ImGui_Button(ctx, "Refresh screenshots##ir_refresh_screenshots") then
       state.screenshot_index = nil
       state.screenshot_cache = {}
@@ -1382,9 +1583,19 @@ local function get_wet_param_index(track, fx_index)
 end
 
 local function get_fx_wet(track, fx_index)
+  local fx_guid = get_fx_guid(track, fx_index)
+  if r.TrackFX_GetOffline(track, fx_index) then
+    local cached = state.fx_value_cache[fx_guid]
+    return cached and cached.wet or 1.0
+  end
   local idx = get_wet_param_index(track, fx_index)
-  if not idx then return 1.0 end
-  return r.TrackFX_GetParamNormalized(track, fx_index, idx) or 1.0
+  if not idx then
+    local cached = state.fx_value_cache[fx_guid]
+    return cached and cached.wet or 1.0
+  end
+  local value = r.TrackFX_GetParamNormalized(track, fx_index, idx) or 1.0
+  fx_value_bucket(fx_guid).wet = value
+  return value
 end
 
 local function set_fx_wet(track, fx_index, value)
@@ -1394,13 +1605,53 @@ local function set_fx_wet(track, fx_index, value)
   r.TrackFX_SetParamNormalized(track, fx_index, idx, value)
 end
 
-local function draw_wet_popup(ctx, track, fx_index, wet_value)
-  if r.ImGui_BeginPopup(ctx, "##ir_wet_pop") then
-    r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
-    local changed, value = r.ImGui_SliderDouble(ctx, "Wet##ir_wet_slider", wet_value, 0.0, 1.0, "%.2f")
-    if changed then set_fx_wet(track, fx_index, value) end
-    if r.ImGui_Button(ctx, "Reset##ir_wet_reset") then set_fx_wet(track, fx_index, 1.0) end
-    r.ImGui_EndPopup(ctx)
+local function draw_wet_knob(app, ctx, draw_list, track, fx_index, cx, cy, radius)
+  local value = math.max(0, math.min(1, get_fx_wet(track, fx_index)))
+  local start_angle = math.pi * 0.75
+  local end_angle = math.pi * 2.25
+  local value_angle = start_angle + value * (end_angle - start_angle)
+  local segments = radius < 8 and 12 or (radius < 14 and 18 or 24)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, 0x00000066, segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, 0x555555FF, segments)
+  r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, end_angle, segments)
+  r.ImGui_DrawList_PathStroke(draw_list, 0x2A2A2AFF, 0, UIScale.px(2))
+  if value > 0.01 then
+    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, value_angle, segments)
+    r.ImGui_DrawList_PathStroke(draw_list, 0x4488CCFF, 0, UIScale.px(2.5))
+  end
+  local ind_x = cx + math.cos(value_angle) * (radius - UIScale.px(3))
+  local ind_y = cy + math.sin(value_angle) * (radius - UIScale.px(3))
+  r.ImGui_DrawList_AddLine(draw_list, cx, cy, ind_x, ind_y, 0xFFFFFFFF, UIScale.px(2))
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.42, 0xCCCCCCFF, segments)
+  r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(3), cy - radius - UIScale.round(3))
+  r.ImGui_InvisibleButton(ctx, "##ir_fx_wet_knob", (radius + UIScale.round(3)) * 2, (radius + UIScale.round(3)) * 2)
+  local active = r.ImGui_IsItemActive(ctx)
+  if active then
+    local _, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
+    if math.abs(dy) > 0 then
+      value = math.max(0, math.min(1, value - dy * 0.005))
+      set_fx_wet(track, fx_index, value)
+      r.ImGui_ResetMouseDragDelta(ctx, 0)
+    end
+  end
+  if active then
+    local label = string.format("%d%%", math.floor(value * 100 + 0.5))
+    local tw, th = r.ImGui_CalcTextSize(ctx, label)
+    local lx = cx - tw * 0.5
+    local ly = cy - th * 0.5
+    r.ImGui_DrawList_AddRectFilled(draw_list, lx - UIScale.px(3), ly - UIScale.px(1), lx + tw + UIScale.px(3), ly + th + UIScale.px(1), 0x000000CC, UIScale.px(3))
+    r.ImGui_DrawList_AddText(draw_list, lx, ly, 0xFFFFFFFF, label)
+  end
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    set_fx_wet(track, fx_index, 1.0)
+    if app then app.status = "Wet reset to 100%" end
+  end
+  if r.ImGui_IsItemClicked(ctx, 1) then
+    set_fx_wet(track, fx_index, 1.0)
+    if app then app.status = "Wet reset to 100%" end
+  end
+  if r.ImGui_IsItemHovered(ctx) or active then
+    r.ImGui_SetTooltip(ctx, string.format("Wet: %d%%\nDrag to adjust - double/right-click to reset", math.floor(value * 100 + 0.5)))
   end
 end
 
@@ -1426,6 +1677,160 @@ local function delete_fx(app, track, fx_index, fx_name)
   r.PreventUIRefresh(-1)
   r.Undo_EndBlock("Delete rack FX", -1)
   app.status = "Deleted " .. get_fx_short_name(fx_name)
+end
+
+local function add_empty_container(app, track, insert_index)
+  if not validate_track(track) or not r.TrackFX_AddByName then return end
+  local target = insert_index and (-1000 - insert_index) or -1
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local new_index = r.TrackFX_AddByName(track, "Container", false, target)
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Add container", -1)
+  if new_index and new_index >= 0 then
+    app.status = "Added container"
+  else
+    app.status = "Container could not be added"
+  end
+  return new_index
+end
+
+local wrap_nested_fx_in_container
+local function wrap_fx_in_container(app, chain, source_api_id)
+  chain = as_chain(chain)
+  if not chain_valid(chain) then return end
+  if not (c_add_capable(chain) and c_move_capable(chain)) then return end
+  source_api_id = math.floor(tonumber(source_api_id) or -1)
+  if source_api_id < 0 then return end
+  if source_api_id >= CONTAINER_BASE then
+    if wrap_nested_fx_in_container then wrap_nested_fx_in_container(app, chain, source_api_id) end
+    return
+  end
+  local count = c_count(chain)
+  if source_api_id >= count then return end
+  local source_parallel = cfg(chain, source_api_id, "parallel") or "0"
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local new_container_api_id = c_add(chain, "Container", -1000 - source_api_id)
+  local ok = new_container_api_id and new_container_api_id >= 0
+  if ok then
+    local container_api_id = new_container_api_id < CONTAINER_BASE and new_container_api_id or source_api_id
+    local source_after_insert = source_api_id
+    if container_api_id <= source_api_id then source_after_insert = source_api_id + 1 end
+    cfg_set(chain, container_api_id, "parallel", source_parallel)
+    cfg_set(chain, source_after_insert, "parallel", "0")
+    local container_id = container_api_id + 1
+    local parent_count = c_count(chain)
+    local insert_index = CONTAINER_BASE + container_id + ((parent_count + 1) * 1)
+    ok = c_move(chain, source_after_insert, insert_index) ~= false
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Wrap FX in container", -1)
+  app.status = ok and "Wrapped FX in container" or "FX could not be wrapped"
+end
+
+local function unpack_container(app, chain, container_api_id)
+  chain = as_chain(chain)
+  if not chain_valid(chain) then return end
+  if not (c_move_capable(chain) and c_count) then return end
+  container_api_id = math.floor(tonumber(container_api_id) or -1)
+  if container_api_id < 0 or container_api_id >= CONTAINER_BASE then
+    app.status = "Unpack is only available for top-level containers"
+    return
+  end
+  if not c_is_container(chain, container_api_id) then return end
+  local container_id = container_api_id + 1
+  local child_count = math.floor(tonumber(cfg(chain, CONTAINER_BASE + container_id, "container_count")) or 0)
+  local container_parallel = cfg(chain, container_api_id, "parallel") or "0"
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local ok = true
+  local moved = 0
+  while ok and moved < child_count do
+    local parent_count = c_count(chain)
+    local child_api_id = CONTAINER_BASE + container_id + ((parent_count + 1) * 1)
+    local child_parallel = cfg(chain, child_api_id, "parallel") or "0"
+    local dest_index = container_api_id + moved + 1
+    ok = c_move(chain, child_api_id, dest_index) ~= false
+    if ok then
+      cfg_set(chain, dest_index, "parallel", moved == 0 and container_parallel or child_parallel)
+      moved = moved + 1
+    end
+  end
+  if ok then ok = c_delete(chain, container_api_id) ~= false end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Unpack container", -1)
+  app.status = ok and "Unpacked container" or "Container could not be unpacked"
+end
+
+local function toggle_fx_parallel(app, chain, api_id)
+  chain = as_chain(chain)
+  if not chain_valid(chain) then return end
+  local current = cfg(chain, api_id, "parallel") or "0"
+  local new_value = current ~= "0" and "0" or "1"
+  r.Undo_BeginBlock()
+  cfg_set(chain, api_id, "parallel", new_value)
+  r.Undo_EndBlock("Toggle parallel", -1)
+  app.status = new_value ~= "0" and "Set parallel" or "Set serial"
+end
+
+local function container_end_insert_index(chain, container_api)
+  chain = as_chain(chain)
+  local top_count = c_count(chain)
+  if container_api < CONTAINER_BASE then
+    local container_rel = container_api + 1
+    local diff = top_count + 1
+    local child_count = math.floor(tonumber(cfg(chain, CONTAINER_BASE + container_rel, "container_count")) or 0)
+    return CONTAINER_BASE + container_rel + diff * (child_count + 1)
+  end
+  local function recurse(parent_rel, parent_count, parent_diff)
+    local count = math.floor(tonumber(cfg(chain, CONTAINER_BASE + parent_rel, "container_count")) or 0)
+    if count <= 0 then return nil end
+    local diff = (parent_count + 1) * parent_diff
+    for j = 1, count do
+      local child_rel = parent_rel + diff * j
+      local child_api = CONTAINER_BASE + child_rel
+      if child_api == container_api then
+        local inner_diff = (count + 1) * diff
+        local cc = math.floor(tonumber(cfg(chain, child_api, "container_count")) or 0)
+        return CONTAINER_BASE + child_rel + inner_diff * (cc + 1)
+      end
+      if c_is_container(chain, child_api) then
+        local res = recurse(child_rel, count, diff)
+        if res then return res end
+      end
+    end
+    return nil
+  end
+  for i = 0, top_count - 1 do
+    if c_is_container(chain, i) then
+      local res = recurse(i + 1, top_count, 1)
+      if res then return res end
+    end
+  end
+  return nil
+end
+
+local function add_container_inside(app, chain, container_api)
+  chain = as_chain(chain)
+  if not chain_valid(chain) or not c_add_capable(chain) then return end
+  if not c_is_container(chain, container_api) then return end
+  local insert_index = container_end_insert_index(chain, container_api)
+  if not insert_index then
+    app.status = "Could not calculate container insert position"
+    return
+  end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local new_index = c_add(chain, "Container", insert_index)
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Add container inside", -1)
+  if new_index and new_index >= 0 then
+    app.status = "Added container inside"
+  else
+    app.status = "Container could not be added"
+  end
+  return new_index
 end
 
 local function add_external_fx(app, track, payload, insert_index)
@@ -1589,7 +1994,15 @@ local function get_rack_param_value(track, fx_index, param_idx)
     local baseline = get_param_config_number(track, fx_index, param_idx, "mod.baseline")
     if baseline then return math.max(0, math.min(1, baseline)), true end
   end
-  return r.TrackFX_GetParamNormalized(track, fx_index, param_idx), false
+  local fx_guid = get_fx_guid(track, fx_index)
+  if r.TrackFX_GetOffline(track, fx_index) then
+    local cached = state.fx_value_cache[fx_guid]
+    local value = cached and cached.params and cached.params[param_idx]
+    return value or 0, false
+  end
+  local value = r.TrackFX_GetParamNormalized(track, fx_index, param_idx) or 0
+  fx_value_bucket(fx_guid).params[param_idx] = value
+  return value, false
 end
 
 local function set_rack_param_value(track, fx_index, param_idx, value, uses_baseline)
@@ -1912,24 +2325,29 @@ local function draw_macro_bar(app, ctx, settings, track)
   flush_macro_changes(ctx)
 end
 
-local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius)
+local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius, active)
+  if active == nil then active = true end
   local value, uses_baseline = get_rack_param_value(track, fx_index, entry.param_idx)
   local start_angle = math.pi * 0.75
   local end_angle = math.pi * 2.25
   local value_angle = start_angle + value * (end_angle - start_angle)
   local segments = radius < 8 and 12 or (radius < 14 and 18 or 24)
+  local body_color = active and 0x555555FF or 0x3C3C3CFF
+  local arc_color = active and 0xCCCCCCFF or 0x808080FF
+  local cap_color = active and 0xCCCCCCFF or 0x808080FF
+  local label_color = active and 0xAAAAAAFF or 0x808080FF
   r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, 0x00000066, segments)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, 0x555555FF, segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, body_color, segments)
   if value > 0.01 then
     r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, value_angle, segments)
-    r.ImGui_DrawList_PathStroke(draw_list, 0xCCCCCCFF, 0, UIScale.px(2.5))
+    r.ImGui_DrawList_PathStroke(draw_list, arc_color, 0, UIScale.px(2.5))
   end
   if value < 0.02 then
     local line_x = cx + math.cos(value_angle) * radius * 0.85
     local line_y = cy + math.sin(value_angle) * radius * 0.85
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, 0xCCCCCCFF, UIScale.px(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, arc_color, UIScale.px(2))
   end
-  if uses_baseline then
+  if active and uses_baseline then
     local mod_value = r.TrackFX_GetParamNormalized(track, fx_index, entry.param_idx)
     mod_value = math.max(0, math.min(1, mod_value or 0))
     local mod_angle = start_angle + mod_value * (end_angle - start_angle)
@@ -1941,11 +2359,11 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
       r.ImGui_DrawList_PathStroke(draw_list, 0x7AA2F7FF, 0, UIScale.px(1.8))
     end
   end
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.45, 0xCCCCCCFF, segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.45, cap_color, segments)
   local label = short_param_label(entry.param_name)
   local param_label_size = UIScale.round(8)
   local text_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
-  r.ImGui_DrawList_AddTextEx(draw_list, nil, param_label_size, cx - text_w * 0.5, cy + radius + UIScale.round(1), 0xAAAAAAFF, label)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, param_label_size, cx - text_w * 0.5, cy + radius + UIScale.round(1), label_color, label)
   r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(4), cy - radius - UIScale.round(4))
   r.ImGui_InvisibleButton(ctx, "##ir_param_knob_" .. tostring(entry.param_idx), (radius + UIScale.round(4)) * 2, (radius + UIScale.round(4)) * 2)
   if r.ImGui_IsItemActive(ctx) then
@@ -1955,6 +2373,11 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
       set_rack_param_value(track, fx_index, entry.param_idx, next_value, uses_baseline)
       r.ImGui_ResetMouseDragDelta(ctx, 0)
     end
+  end
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    local _, default_value = r.TrackFX_GetParamEx(track, fx_index, entry.param_idx)
+    r.TrackFX_SetParam(track, fx_index, entry.param_idx, default_value or 0)
+    app.status = "Parameter reset"
   end
   if r.ImGui_IsItemClicked(ctx, 1) then
     nudge_param_as_last_touched(track, fx_index, entry.param_idx)
@@ -1986,7 +2409,8 @@ local function draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, c
   end
 end
 
-local function draw_param_slots(app, ctx, track, fx_index, item_width)
+local function draw_param_slots(app, ctx, track, fx_index, item_width, active)
+  if active == nil then active = true end
   local settings = ensure_settings(app)
   local slot_count = param_slot_count(settings)
   local row_width = math.max(1, item_width - UIScale.round(14))
@@ -2016,7 +2440,7 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width)
     local cy = y + UIScale.round(23) + row * row_step
     local entry = pinned_by_slot[slot]
     if entry then
-      draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, UIScale.round(12))
+      draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, UIScale.round(12), active)
     else
       draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, cy, UIScale.round(12), slot)
     end
@@ -2035,6 +2459,247 @@ local function chain_count(track, take, chain)
   return r.TrackFX_GetCount(track)
 end
 
+local function find_sibling_context(chain, api)
+  chain = as_chain(chain)
+  if not api then return nil end
+  local top_count = c_count(chain)
+  if api < CONTAINER_BASE then
+    if api < 0 or api >= top_count then return nil end
+    local list = {}
+    for i = 0, top_count - 1 do list[#list + 1] = i end
+    return { siblings = list, index = api + 1, container_rel = nil }
+  end
+  local function recurse(container_rel, parent_count, parent_diff)
+    local count = math.floor(tonumber(cfg(chain, CONTAINER_BASE + container_rel, "container_count")) or 0)
+    if count <= 0 then return nil end
+    local diff = (parent_count + 1) * parent_diff
+    local list = {}
+    for j = 1, count do list[j] = CONTAINER_BASE + container_rel + diff * j end
+    for idx = 1, count do
+      if list[idx] == api then
+        return { siblings = list, index = idx, container_rel = container_rel, count = count, diff = diff }
+      end
+    end
+    for j = 1, count do
+      local child_rel = container_rel + diff * j
+      if c_is_container(chain, CONTAINER_BASE + child_rel) then
+        local res = recurse(child_rel, count, diff)
+        if res then return res end
+      end
+    end
+    return nil
+  end
+  for i = 0, top_count - 1 do
+    if c_is_container(chain, i) then
+      local res = recurse(i + 1, top_count, 1)
+      if res then return res end
+    end
+  end
+  return nil
+end
+
+local function resolve_track_move_dest(chain, src_full, dest_index)
+  chain = as_chain(chain)
+  local dctx = find_sibling_context(chain, dest_index)
+  local sctx = find_sibling_context(chain, src_full)
+  if dctx and sctx and dctx.container_rel == sctx.container_rel and sctx.index and dctx.index and sctx.index < dctx.index then
+    local next_api = dctx.siblings[dctx.index + 1]
+    if next_api then return next_api end
+    if dctx.container_rel then
+      return CONTAINER_BASE + dctx.container_rel + dctx.diff * (dctx.count + 1)
+    end
+    return c_count(chain) or dest_index
+  end
+  return dest_index
+end
+
+local function container_descendant_apis(chain, container_api, acc)
+  chain = as_chain(chain)
+  acc = acc or {}
+  if not c_is_container(chain, container_api) then return acc end
+  local top_count = c_count(chain)
+  local container_rel
+  local parent_count, parent_diff
+  if container_api < CONTAINER_BASE then
+    container_rel = container_api + 1
+    parent_count = top_count
+    parent_diff = 1
+  else
+    local sctx = find_sibling_context(chain, container_api)
+    if not sctx then return acc end
+    container_rel = container_api - CONTAINER_BASE
+    parent_count = sctx.count or top_count
+    parent_diff = sctx.diff or 1
+  end
+  local count = math.floor(tonumber(cfg(chain, CONTAINER_BASE + container_rel, "container_count")) or 0)
+  if count <= 0 then return acc end
+  local diff = (parent_count + 1) * parent_diff
+  for j = 1, count do
+    local child_api = CONTAINER_BASE + container_rel + diff * j
+    acc[child_api] = true
+    if c_is_container(chain, child_api) then container_descendant_apis(chain, child_api, acc) end
+  end
+  return acc
+end
+
+local function move_fx_into_container(app, chain, src_chain, src_index, container_api, short_name)
+  chain = as_chain(chain)
+  if not chain_valid(chain) or not c_move_capable(chain) then return end
+  if not c_is_container(chain, container_api) then return end
+  local want = chain.kind == "item" and "item" or "track"
+  if src_chain ~= want then
+    app.status = want == "item" and "Only item FX can be dropped into this container" or "Only track FX can be dropped into a container"
+    return
+  end
+  local src_full = math.floor(tonumber(src_index) or -1)
+  if src_full < 0 then return end
+  if src_full == container_api then return end
+  local descendants = container_descendant_apis(chain, container_api)
+  if descendants[src_full] then
+    app.status = "Cannot drop a container into itself"
+    return
+  end
+  local dest = container_end_insert_index(chain, container_api)
+  if not dest then
+    app.status = "Could not calculate container insert position"
+    return
+  end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  cfg_set(chain, src_full, "parallel", "0")
+  local ok = c_move(chain, src_full, dest) ~= false
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Move FX into container", -1)
+  app.status = ok and ("Moved " .. (short_name or "FX") .. " into container") or "FX could not be moved"
+end
+
+local function add_external_fx_into_container(app, chain, container_api, payload)
+  chain = as_chain(chain)
+  if not chain_valid(chain) or not c_add_capable(chain) then return end
+  if not c_is_container(chain, container_api) then return end
+  local names = {}
+  for name in (payload or ""):gmatch("[^\n]+") do
+    if name ~= "" then names[#names + 1] = name end
+  end
+  if #names == 0 then return end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  for _, name in ipairs(names) do
+    local insert_index = container_end_insert_index(chain, container_api)
+    if insert_index then c_add(chain, name, insert_index) end
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Add FX into container", -1)
+  r.SetExtState("TKFXB", "drag_consumed", "1", false)
+  r.DeleteExtState("TKFXB", "drag_fx", false)
+  if r.HasExtState("TKMIX", "rack_target") then r.DeleteExtState("TKMIX", "rack_target", false) end
+  app.status = "Added " .. tostring(#names) .. " FX into container"
+end
+
+local function container_direct_children(chain, container_api)
+  chain = as_chain(chain)
+  local children = {}
+  if not c_is_container(chain, container_api) then return children end
+  local top_count = c_count(chain)
+  local container_rel, parent_count, parent_diff
+  if container_api < CONTAINER_BASE then
+    container_rel = container_api + 1
+    parent_count = top_count
+    parent_diff = 1
+  else
+    local sctx = find_sibling_context(chain, container_api)
+    if not sctx then return children end
+    container_rel = container_api - CONTAINER_BASE
+    parent_count = sctx.count or top_count
+    parent_diff = sctx.diff or 1
+  end
+  local count = math.floor(tonumber(cfg(chain, CONTAINER_BASE + container_rel, "container_count")) or 0)
+  if count <= 0 then return children end
+  local diff = (parent_count + 1) * parent_diff
+  for j = 1, count do
+    children[#children + 1] = CONTAINER_BASE + container_rel + diff * j
+  end
+  return children
+end
+
+local function find_track_fx_api_by_guid(chain, guid)
+  chain = as_chain(chain)
+  if not guid or guid == "" then return nil end
+  local top_count = c_count(chain)
+  local function recurse(container_rel, parent_count, parent_diff)
+    local count = math.floor(tonumber(cfg(chain, CONTAINER_BASE + container_rel, "container_count")) or 0)
+    if count <= 0 then return nil end
+    local diff = (parent_count + 1) * parent_diff
+    for j = 1, count do
+      local child_rel = container_rel + diff * j
+      local child_api = CONTAINER_BASE + child_rel
+      if c_guid(chain, child_api) == guid then return child_api end
+      if c_is_container(chain, child_api) then
+        local res = recurse(child_rel, count, diff)
+        if res then return res end
+      end
+    end
+    return nil
+  end
+  for i = 0, top_count - 1 do
+    if c_guid(chain, i) == guid then return i end
+    if c_is_container(chain, i) then
+      local res = recurse(i + 1, top_count, 1)
+      if res then return res end
+    end
+  end
+  return nil
+end
+
+function wrap_nested_fx_in_container(app, chain, source_api_id)
+  chain = as_chain(chain)
+  if not chain_valid(chain) then return end
+  if not (c_add_capable(chain) and c_move_capable(chain)) then return end
+  local sctx = find_sibling_context(chain, source_api_id)
+  if not sctx or not sctx.container_rel then
+    app.status = "Could not resolve parent container"
+    return
+  end
+  local top_count = c_count(chain)
+  local parent_api
+  if sctx.container_rel <= top_count then
+    parent_api = sctx.container_rel - 1
+  else
+    parent_api = CONTAINER_BASE + sctx.container_rel
+  end
+  local source_guid = c_guid(chain, source_api_id)
+  local source_parallel = cfg(chain, source_api_id, "parallel") or "0"
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local ok = false
+  local fail_reason = nil
+  local insert_index = container_end_insert_index(chain, parent_api)
+  if insert_index then
+    local new_container_api = c_add(chain, "Container", insert_index)
+    if new_container_api and new_container_api >= 0 then
+      local children = container_direct_children(chain, parent_api)
+      local container_api2 = children[#children] or new_container_api
+      cfg_set(chain, container_api2, "parallel", source_parallel)
+      local src_api = find_track_fx_api_by_guid(chain, source_guid) or source_api_id
+      local dest = container_end_insert_index(chain, container_api2)
+      if dest then
+        cfg_set(chain, src_api, "parallel", "0")
+        ok = c_move(chain, src_api, dest) ~= false
+        if not ok then fail_reason = "move failed" end
+      else
+        fail_reason = "no dest index"
+      end
+    else
+      fail_reason = "container add failed"
+    end
+  else
+    fail_reason = "no parent insert index"
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Wrap FX in container", -1)
+  app.status = ok and "Wrapped FX in container" or ("FX could not be wrapped (" .. tostring(fail_reason) .. ")")
+end
+
 local function move_fx_between(app, track, take, src_chain, src_index, dest_chain, dest_index, short_name, append)
   if not validate_track(track) or not src_chain or not src_index then return end
   if not append and src_chain == dest_chain and src_index == dest_index then return end
@@ -2048,9 +2713,15 @@ local function move_fx_between(app, track, take, src_chain, src_index, dest_chai
     local dest_full
     if append then
       dest_full = chain_full_index(dest_chain, chain_count(track, take, dest_chain))
-    else
-      local d = (src_chain == dest_chain and src_index < dest_index) and dest_index + 1 or dest_index
+    elseif dest_chain == "input" then
+      local d = dest_index
+      if src_chain == dest_chain and src_index < dest_index then d = dest_index + 1 end
       dest_full = chain_full_index(dest_chain, d)
+    else
+      dest_full = resolve_track_move_dest(track, src_full, dest_index)
+    end
+    if (src_full >= CONTAINER_BASE or dest_full >= CONTAINER_BASE) and r.TrackFX_SetNamedConfigParm then
+      r.TrackFX_SetNamedConfigParm(track, src_full, "parallel", "0")
     end
     r.TrackFX_CopyToTrack(track, src_full, track, dest_full, true)
   elseif not src_take and dest_take then
@@ -2102,8 +2773,19 @@ local function expanded_tile_height(settings)
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
   local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and UIScale.round(100) or UIScale.round(58)) or 0
   local row1_h = UIScale.round(18)
-  local toolbar_h = UIScale.round(16)
+  local toolbar_h = UIScale.round(20)
   return row1_h + toolbar_h + UIScale.round(2) + shot_h + param_h + UIScale.round(4)
+end
+
+local function tile_mod_action(ctx)
+  if not (r.ImGui_GetKeyMods and r.ImGui_Mod_Alt) then return nil end
+  local mods = r.ImGui_GetKeyMods(ctx)
+  if (mods & r.ImGui_Mod_Alt()) ~= 0 then return "delete" end
+  local shift = (mods & r.ImGui_Mod_Shift()) ~= 0
+  local ctrl = (mods & r.ImGui_Mod_Ctrl()) ~= 0
+  if shift and ctrl then return "offline" end
+  if shift then return "bypass" end
+  return nil
 end
 
 local function draw_collapsed_tile_strip(app, ctx, settings, opts)
@@ -2136,46 +2818,75 @@ local function draw_collapsed_tile_strip(app, ctx, settings, opts)
       r.ImGui_DrawList_AddTextEx(draw_list, nil, size, bx + (strip_w - ch_w) * 0.5, top + (i - 1) * line_h, color, ch)
     end
     r.ImGui_SetCursorScreenPos(ctx, bx, by)
-    if r.ImGui_InvisibleButton(ctx, "##ir_strip_btn", strip_w, th) then state.collapsed[opts.collapse_key] = false end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, label .. " — click to expand") end
+    if r.ImGui_InvisibleButton(ctx, "##ir_strip_btn", strip_w, th) then
+      if not (opts.mod_action and opts.mod_action()) then state.collapsed[opts.collapse_key] = false end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, label .. " — click to expand (Alt-click delete, Shift bypass, Ctrl+Shift offline)") end
     local d = opts.drag
     handle_fx_drag(app, ctx, draw_list, d.track, d.take, d.chain, d.local_index, label, bx, by, strip_w, th)
   end
   r.ImGui_EndChild(ctx)
 end
 
-local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, chain, take)
+local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, chain, take, opts)
   local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
   local enabled = r.TrackFX_GetEnabled(track, fx_index)
   local offline = r.TrackFX_GetOffline(track, fx_index)
   local short_name = get_fx_short_name(fx_name)
   chain = chain or "track"
   local local_index = chain == "input" and (fx_index - REC_FX_OFFSET) or fx_index
+  local function apply_tile_mod()
+    local action = tile_mod_action(ctx)
+    if action == "delete" then
+      delete_fx(app, track, fx_index, fx_name)
+    elseif action == "bypass" then
+      r.TrackFX_SetEnabled(track, fx_index, not enabled)
+      app.status = (enabled and "Bypassed " or "Enabled ") .. short_name
+    elseif action == "offline" then
+      r.TrackFX_SetOffline(track, fx_index, not offline)
+      app.status = (offline and "Brought online " or "Set offline ") .. short_name
+    else
+      return false
+    end
+    return true
+  end
   r.ImGui_PushID(ctx, "ir_fx_" .. tostring(fx_index))
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+  local nested_scale = opts and opts.nested == true
+  local scale_y = tonumber(opts and opts.scale_y) or 1
+  if scale_y < 0.55 then scale_y = 0.55 end
+  if scale_y > 1.0 then scale_y = 1.0 end
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
   local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and UIScale.round(100) or UIScale.round(58)) or 0
   local row1_h = UIScale.round(18)
   local toolbar_h = UIScale.round(20)
+  if nested_scale then
+    if shot_h > 0 then shot_h = math.max(UIScale.round(34), UIScale.round(shot_h * scale_y)) end
+    if param_h > 0 then param_h = math.max(UIScale.round(30), UIScale.round(param_h * scale_y)) end
+    row1_h = math.max(UIScale.round(14), UIScale.round(row1_h * scale_y))
+    toolbar_h = math.max(UIScale.round(14), UIScale.round(toolbar_h * scale_y))
+  end
   local collapse_key = track_guid(track) .. "|" .. get_fx_guid(track, fx_index)
   if settings.auto_apply_default_pins and not state.auto_pin_checked[collapse_key] then
     state.auto_pin_checked[collapse_key] = true
-    if #get_pinned_for_fx(track, fx_index) == 0 then apply_default_pins(app, track, fx_index, true) end
+    if #get_pinned_for_fx(track, fx_index) == 0 or settings.restore_default_pin_values then apply_default_pins(app, track, fx_index, true) end
   end
   local is_collapsed = state.collapsed[collapse_key] == true
   if settings.orientation == "horizontal" and is_collapsed then
+    local collapsed_h = nested_scale and math.max(UIScale.round(72), UIScale.round(expanded_tile_height(settings) * scale_y)) or expanded_tile_height(settings)
     draw_collapsed_tile_strip(app, ctx, settings, {
       id = "##ir_fx_tile",
       label = short_name,
       enabled = enabled,
       collapse_key = collapse_key,
-      height = expanded_tile_height(settings),
-      drag = { track = track, take = take, chain = chain, local_index = local_index }
+      height = collapsed_h,
+      drag = { track = track, take = take, chain = chain, local_index = local_index },
+      mod_action = apply_tile_mod
     })
     r.ImGui_PopID(ctx)
     return
   end
-  local title_h = is_collapsed and row1_h or (row1_h + toolbar_h + UIScale.round(2))
+  local title_h = row1_h + toolbar_h + UIScale.round(2)
   local tile_h = is_collapsed and title_h or (title_h + shot_h + param_h + UIScale.round(4))
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
   local tile_visible = r.ImGui_BeginChild(ctx, "##ir_fx_tile", item_width, tile_h, 0, flags)
@@ -2191,8 +2902,10 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
     r.ImGui_DrawList_AddCircleFilled(draw_list, delete_x, delete_y, UIScale.px(4), 0xCC3333FF)
     r.ImGui_SetCursorScreenPos(ctx, delete_x - UIScale.round(6), delete_y - UIScale.round(6))
     r.ImGui_InvisibleButton(ctx, "##ir_fx_delete", UIScale.round(12), UIScale.round(12))
-    if r.ImGui_IsItemClicked(ctx, 0) then r.ImGui_OpenPopup(ctx, "##ir_delete_pop") end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete FX") end
+    if r.ImGui_IsItemClicked(ctx, 0) then
+      if tile_mod_action(ctx) == "delete" then delete_fx(app, track, fx_index, fx_name) else r.ImGui_OpenPopup(ctx, "##ir_delete_pop") end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete FX (Alt-click to delete instantly)") end
 
     local led_x = delete_x - UIScale.round(14)
     r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, by + row1_h * 0.5, UIScale.px(4), enabled and 0x44CC44FF or 0xCC3333FF)
@@ -2217,37 +2930,35 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
     if r.ImGui_InvisibleButton(ctx, "##ir_fx_collapse", chev_size, chev_size) then state.collapsed[collapse_key] = not is_collapsed end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand" or "Collapse") end
 
-    local name_max_w = math.max(UIScale.round(20), chev_x - (bx + UIScale.round(6)) - UIScale.round(4))
-    r.ImGui_DrawList_PushClipRect(draw_list, bx + UIScale.round(6), by, bx + UIScale.round(6) + name_max_w, by + row1_h, true)
-    r.ImGui_DrawList_AddText(draw_list, bx + UIScale.round(6), by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
+    local knob_radius = UIScale.round(13)
+    local knob_cx = bx + UIScale.round(5) + knob_radius
+    local knob_cy = by + math.floor(title_h * 0.5)
+    local content_x = knob_cx + knob_radius + UIScale.round(6)
+    draw_wet_knob(app, ctx, draw_list, track, fx_index, knob_cx, knob_cy, knob_radius)
+
+    local name_max_w = math.max(UIScale.round(20), chev_x - content_x - UIScale.round(4))
+    r.ImGui_DrawList_PushClipRect(draw_list, content_x, by, content_x + name_max_w, by + row1_h, true)
+    r.ImGui_DrawList_AddText(draw_list, content_x, by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
     r.ImGui_DrawList_PopClipRect(draw_list)
 
+    local button_y = by + row1_h + UIScale.round(2)
+    local tx = content_x
+    if draw_small_button(ctx, draw_list, "##ir_fx_float", tx, button_y, UIScale.round(14), UIScale.round(14), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then
+      local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
+      r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
+    end
+    tx = tx + UIScale.round(18)
+    if draw_small_button(ctx, draw_list, "##ir_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(14), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring FX online" or "Set FX offline") then
+      r.TrackFX_SetOffline(track, fx_index, not offline)
+      app.status = (offline and "Brought online " or "Set offline ") .. short_name
+    end
+    tx = tx + UIScale.round(18)
+    if draw_small_button(ctx, draw_list, "##ir_fx_preset", tx, button_y, UIScale.round(14), UIScale.round(14), "P", 0x33333388, 0xFFFFFFFF, "Preset") then r.ImGui_OpenPopup(ctx, "##ir_preset_pop") end
+    draw_preset_popup(ctx, track, fx_index)
+    tx = tx + UIScale.round(18)
+    if draw_small_button(ctx, draw_list, "##ir_fx_menu", tx, button_y, UIScale.round(16), UIScale.round(14), "...", 0x33333388, 0xFFFFFFFF, "Settings") then r.ImGui_OpenPopup(ctx, "##ir_fx_menu_pop") end
+
     if not is_collapsed then
-      local tb_y = by + row1_h
-      local button_y = tb_y + UIScale.round(2)
-      local tx = bx + UIScale.round(6)
-      local wet_value = get_fx_wet(track, fx_index)
-      local wet_alpha = math.floor((1 - math.max(0, math.min(1, wet_value))) * 0xCC + 0x44)
-      local wet_bg = wet_value < 0.999 and (0x4488CC00 | wet_alpha) or 0x33333388
-      local clicked_wet, right_wet = draw_small_button(ctx, draw_list, "##ir_fx_wet", tx, button_y, UIScale.round(18), UIScale.round(14), "W", wet_bg, 0xFFFFFFFF, string.format("Wet: %d%%", math.floor(wet_value * 100 + 0.5)))
-      if clicked_wet then r.ImGui_OpenPopup(ctx, "##ir_wet_pop") end
-      if right_wet then set_fx_wet(track, fx_index, 1.0) end
-      draw_wet_popup(ctx, track, fx_index, wet_value)
-      tx = tx + UIScale.round(22)
-      if draw_small_button(ctx, draw_list, "##ir_fx_float", tx, button_y, UIScale.round(14), UIScale.round(14), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then
-        local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
-        r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
-      end
-      tx = tx + UIScale.round(18)
-      if draw_small_button(ctx, draw_list, "##ir_fx_offline", tx, button_y, UIScale.round(14), UIScale.round(14), "O", offline and 0xAA3333FF or 0x33333388, 0xFFFFFFFF, offline and "Bring FX online" or "Set FX offline") then
-        r.TrackFX_SetOffline(track, fx_index, not offline)
-        app.status = (offline and "Brought online " or "Set offline ") .. short_name
-      end
-      tx = tx + UIScale.round(18)
-      if draw_small_button(ctx, draw_list, "##ir_fx_preset", tx, button_y, UIScale.round(14), UIScale.round(14), "P", 0x33333388, 0xFFFFFFFF, "Preset") then r.ImGui_OpenPopup(ctx, "##ir_preset_pop") end
-      draw_preset_popup(ctx, track, fx_index)
-      tx = tx + UIScale.round(18)
-      if draw_small_button(ctx, draw_list, "##ir_fx_menu", tx, button_y, UIScale.round(16), UIScale.round(14), "...", 0x33333388, 0xFFFFFFFF, "Settings") then r.ImGui_OpenPopup(ctx, "##ir_fx_menu_pop") end
       local sep_y = by + title_h - 1
       r.ImGui_DrawList_AddLine(draw_list, bx + UIScale.round(4), sep_y, bx + item_width - UIScale.round(4), sep_y, Theme.colors.separator, UIScale.px(1))
 
@@ -2255,14 +2966,16 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
         r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(2), by + title_h)
         draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
         if r.ImGui_IsItemClicked(ctx, 0) then
-          local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
-          r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
+          if not apply_tile_mod() then
+            local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
+            r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
+          end
         end
         handle_fx_drag(app, ctx, draw_list, track, take, chain, local_index, short_name, bx, by, item_width, tile_h)
       end
       if settings.show_pinned_params then
         r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(7), by + title_h + shot_h + UIScale.round(4))
-        draw_param_slots(app, ctx, track, fx_index, item_width - UIScale.round(14))
+        draw_param_slots(app, ctx, track, fx_index, item_width - UIScale.round(14), enabled and not offline)
       end
     end
 
@@ -2278,10 +2991,12 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       r.ImGui_EndPopup(ctx)
     end
 
-    r.ImGui_SetCursorScreenPos(ctx, bx, by)
-    if r.ImGui_InvisibleButton(ctx, "##ir_fx_title_hit", math.max(1, name_max_w + 8), row1_h) then
-      local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
-      r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
+    r.ImGui_SetCursorScreenPos(ctx, content_x, by)
+    if r.ImGui_InvisibleButton(ctx, "##ir_fx_title_hit", math.max(1, name_max_w), row1_h) then
+      if not apply_tile_mod() then
+        local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
+        r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
+      end
     end
     handle_fx_drag(app, ctx, draw_list, track, take, chain, local_index, short_name, bx, by, item_width, tile_h)
     local function fx_menu_items()
@@ -2297,6 +3012,9 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       if r.ImGui_MenuItem(ctx, "Apply plugin default pins", nil, false, has_default_pins(track, fx_index)) then apply_default_pins(app, track, fx_index) end
       if r.ImGui_MenuItem(ctx, "Clear plugin default pins", nil, false, has_default_pins(track, fx_index)) then clear_default_pins(app, track, fx_index) end
       r.ImGui_Separator(ctx)
+      local fx_parallel = (fx_config_value(track, fx_index, "parallel") or "0") ~= "0"
+      if r.ImGui_MenuItem(ctx, "Parallel", nil, fx_parallel) then toggle_fx_parallel(app, track, fx_index) end
+      if r.ImGui_MenuItem(ctx, "Wrap in container") then wrap_fx_in_container(app, track, fx_index) end
       if r.ImGui_MenuItem(ctx, "Remove") then delete_fx(app, track, fx_index, fx_name) end
     end
     if r.ImGui_BeginPopupContextItem(ctx, "##ir_fx_context") then
@@ -2361,6 +3079,16 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     elseif target_type == "item" then add_external_take_fx(app, take, p)
     else add_external_fx(app, track, p, insert_index) end
   end
+  local add_menu_id = "##ir_add_menu_" .. target_type
+  local function add_zone_menu()
+    if target_type ~= "track" then return end
+    if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, add_menu_id) end
+    if r.ImGui_BeginPopup(ctx, add_menu_id) then
+      if r.ImGui_MenuItem(ctx, "Add FX...") then do_open() end
+      if r.ImGui_MenuItem(ctx, "Add empty container") then add_empty_container(app, track, insert_index) end
+      r.ImGui_EndPopup(ctx)
+    end
+  end
   if horizontal then
     local size = UIScale.round(40)
     local tile_h = expanded_tile_height(settings)
@@ -2378,6 +3106,7 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     r.ImGui_DrawList_AddLine(draw_list, cx - arm, cy, cx + arm, cy, color, UIScale.px(2))
     r.ImGui_DrawList_AddLine(draw_list, cx, cy - arm, cx, cy + arm, color, UIScale.px(2))
     if clicked then do_open() end
+    add_zone_menu()
     if hovered then
       local guid = track_guid(track)
       if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
@@ -2406,6 +3135,7 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
   local text_w = r.ImGui_CalcTextSize(ctx, label)
   r.ImGui_DrawList_AddText(draw_list, x + (item_width - text_w) * 0.5, y + UIScale.round(12), payload ~= "" and Theme.colors.accent or Theme.colors.text_dim, label)
   if clicked then do_open() end
+  add_zone_menu()
   if hovered then
     local guid = track_guid(track)
     if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
@@ -2463,6 +3193,21 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
   local enabled = take_fx_enabled(take, fx_index)
   local offline = take_fx_offline(take, fx_index)
   local short_name = get_fx_short_name(fx_name)
+  local function apply_tile_mod()
+    local action = tile_mod_action(ctx)
+    if action == "delete" then
+      delete_take_fx(app, take, fx_index, fx_name)
+    elseif action == "bypass" then
+      set_take_fx_enabled(take, fx_index, not enabled)
+      app.status = (enabled and "Bypassed " or "Enabled ") .. short_name
+    elseif action == "offline" then
+      set_take_fx_offline(take, fx_index, not offline)
+      app.status = (offline and "Brought online " or "Set offline ") .. short_name
+    else
+      return false
+    end
+    return true
+  end
   r.ImGui_PushID(ctx, "ir_take_fx_" .. tostring(fx_index))
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
@@ -2478,7 +3223,8 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
       enabled = enabled,
       collapse_key = collapse_key,
       height = row1_h + toolbar_h + shot_h + UIScale.round(6),
-      drag = { track = track, take = take, chain = "item", local_index = fx_index }
+      drag = { track = track, take = take, chain = "item", local_index = fx_index },
+      mod_action = apply_tile_mod
     })
     r.ImGui_PopID(ctx)
     return
@@ -2498,8 +3244,10 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
     r.ImGui_DrawList_AddCircleFilled(draw_list, delete_x, delete_y, UIScale.px(4), 0xCC3333FF)
     r.ImGui_SetCursorScreenPos(ctx, delete_x - UIScale.round(6), delete_y - UIScale.round(6))
     r.ImGui_InvisibleButton(ctx, "##ir_take_fx_delete", UIScale.round(12), UIScale.round(12))
-    if r.ImGui_IsItemClicked(ctx, 0) then r.ImGui_OpenPopup(ctx, "##ir_take_delete_pop") end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete item FX") end
+    if r.ImGui_IsItemClicked(ctx, 0) then
+      if tile_mod_action(ctx) == "delete" then delete_take_fx(app, take, fx_index, fx_name) else r.ImGui_OpenPopup(ctx, "##ir_take_delete_pop") end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Delete item FX (Alt-click to delete instantly)") end
 
     local led_x = delete_x - UIScale.round(14)
     r.ImGui_DrawList_AddCircleFilled(draw_list, led_x, by + row1_h * 0.5, UIScale.px(4), enabled and 0x44CC44FF or 0xCC3333FF)
@@ -2543,7 +3291,9 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
       if settings.show_screenshots and not settings.tile_compact then
         r.ImGui_SetCursorScreenPos(ctx, bx + UIScale.round(2), by + row1_h + toolbar_h + UIScale.round(4))
         draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
-        if r.ImGui_IsItemClicked(ctx, 0) then show_take_fx(take, fx_index) end
+        if r.ImGui_IsItemClicked(ctx, 0) then
+          if not apply_tile_mod() then show_take_fx(take, fx_index) end
+        end
         if settings.show_item_name_overlay ~= false then
           local item_name = get_take_label(take)
           if item_name and item_name ~= "" then
@@ -2578,13 +3328,22 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
     end
 
     r.ImGui_SetCursorScreenPos(ctx, bx, by)
-    if r.ImGui_InvisibleButton(ctx, "##ir_take_fx_title_hit", math.max(1, name_max_w + 8), row1_h) then show_take_fx(take, fx_index) end
+    if r.ImGui_InvisibleButton(ctx, "##ir_take_fx_title_hit", math.max(1, name_max_w + 8), row1_h) then
+      if not apply_tile_mod() then show_take_fx(take, fx_index) end
+    end
     handle_fx_drag(app, ctx, draw_list, track, take, "item", fx_index, short_name, bx, by, item_width, tile_h)
     local function take_menu_items()
       if r.ImGui_MenuItem(ctx, enabled and "Bypass" or "Enable") then set_take_fx_enabled(take, fx_index, not enabled) end
       if r.ImGui_MenuItem(ctx, "Open floating", nil, false, r.TakeFX_Show ~= nil) then show_take_fx(take, fx_index) end
       if r.ImGui_MenuItem(ctx, offline and "Bring online" or "Set offline", nil, false, r.TakeFX_SetOffline ~= nil) then set_take_fx_offline(take, fx_index, not offline) end
       if r.ImGui_MenuItem(ctx, is_collapsed and "Expand" or "Collapse") then state.collapsed[collapse_key] = not is_collapsed end
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, "Parallel", nil, c_is_parallel(make_fx_chain(track, take, "item"), fx_index)) then
+        toggle_fx_parallel(app, make_fx_chain(track, take, "item"), fx_index)
+      end
+      if r.ImGui_MenuItem(ctx, "Wrap in container") then
+        wrap_fx_in_container(app, make_fx_chain(track, take, "item"), fx_index)
+      end
       r.ImGui_Separator(ctx)
       if r.ImGui_MenuItem(ctx, "Remove", nil, false, r.TakeFX_Delete ~= nil) then delete_take_fx(app, take, fx_index, fx_name) end
     end
@@ -2601,21 +3360,43 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
   r.ImGui_PopID(ctx)
 end
 
-local function draw_section_label(ctx, label, detail, count, accent)
+local function draw_section_label(ctx, label, detail, count, accent, section_id)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local width = math.max(UIScale.round(120), get_available_width(ctx))
   local height = detail and detail ~= "" and UIScale.round(32) or UIScale.round(24)
-  r.ImGui_Dummy(ctx, width, height)
+  local collapse_key = section_id and ("SECTION|" .. tostring(section_id)) or nil
+  local is_collapsed = (collapse_key and state.collapsed[collapse_key] == true) or false
+  if collapse_key then
+    if r.ImGui_InvisibleButton(ctx, "##ir_vsection_" .. tostring(section_id), width, height) then
+      state.collapsed[collapse_key] = not is_collapsed
+      is_collapsed = not is_collapsed
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand section" or "Collapse section") end
+  else
+    r.ImGui_Dummy(ctx, width, height)
+  end
   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + UIScale.round(3), y + height, accent or Theme.colors.accent, UIScale.px(4))
-  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(10), y + UIScale.round(5), Theme.colors.text, label)
+  local text_x = x + UIScale.round(10)
+  if collapse_key then
+    local chev_cx = x + UIScale.round(15)
+    local chev_cy = y + UIScale.round(12)
+    if is_collapsed then
+      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(3), chev_cy - UIScale.round(4), chev_cx + UIScale.round(4), chev_cy, chev_cx - UIScale.round(3), chev_cy + UIScale.round(4), Theme.colors.text)
+    else
+      r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(4), chev_cy - UIScale.round(3), chev_cx + UIScale.round(4), chev_cy - UIScale.round(3), chev_cx, chev_cy + UIScale.round(4), Theme.colors.text)
+    end
+    text_x = x + UIScale.round(26)
+  end
+  r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(5), Theme.colors.text, label)
   if count then
     local count_text = tostring(count) .. " FX"
     local count_w = r.ImGui_CalcTextSize(ctx, count_text)
     r.ImGui_DrawList_AddText(draw_list, x + width - count_w - UIScale.round(10), y + UIScale.round(5), Theme.colors.text_dim, count_text)
   end
-  if detail and detail ~= "" then r.ImGui_DrawList_AddTextEx(draw_list, nil, UIScale.round(10), x + UIScale.round(10), y + UIScale.round(20), Theme.colors.text_dim, detail) end
+  if detail and detail ~= "" then r.ImGui_DrawList_AddTextEx(draw_list, nil, UIScale.round(10), text_x, y + UIScale.round(20), Theme.colors.text_dim, detail) end
+  return is_collapsed
 end
 
 local function info_line_text(app, track, fx_count, input_fx_count, take_fx_count, item_on_track, take)
@@ -2682,14 +3463,14 @@ function M.draw(app)
   end
   if r.ImGui_BeginChild(ctx, "##instrument_rack_scroll", 0, -(info_h + macros_h), 0, flags) then
     local hover_flags = r.ImGui_HoveredFlags_ChildWindows and r.ImGui_HoveredFlags_ChildWindows() or 0
-    if horizontal and r.ImGui_GetMouseWheel and r.ImGui_IsWindowHovered(ctx, hover_flags) then
-      local wheel_v = r.ImGui_GetMouseWheel(ctx) or 0
-      local wheel_h = r.ImGui_GetMouseWheelH and r.ImGui_GetMouseWheelH(ctx) or 0
-      local wheel = math.abs(wheel_v) >= math.abs(wheel_h) and wheel_v or wheel_h
-      if settings.invert_horizontal_scroll then wheel = -wheel end
-      if wheel ~= 0 and r.ImGui_SetScrollX and r.ImGui_GetScrollX then
+    if horizontal and r.ImGui_IsWindowHovered(ctx, hover_flags) and r.ImGui_SetScrollX and r.ImGui_GetScrollX then
+      local wheel_v = r.ImGui_GetMouseWheel and (r.ImGui_GetMouseWheel(ctx) or 0) or 0
+      local wheel_h = r.ImGui_GetMouseWheelH and (r.ImGui_GetMouseWheelH(ctx) or 0) or 0
+      local delta = wheel_h - wheel_v
+      if settings.invert_horizontal_scroll then delta = -delta end
+      if delta ~= 0 then
         local step = UIScale.round(settings.horizontal_tile_width or 240) * 0.5
-        r.ImGui_SetScrollX(ctx, r.ImGui_GetScrollX(ctx) - wheel * step)
+        r.ImGui_SetScrollX(ctx, r.ImGui_GetScrollX(ctx) + delta * step)
       end
     end
     local width = horizontal and UIScale.round(settings.horizontal_tile_width or 240) or get_centered_item_width(ctx)
@@ -2760,16 +3541,619 @@ function M.draw(app)
       col = col + 1
       return is_collapsed
     end
+    local INDENT_STEP = UIScale.round(16)
+    local function indent_cursor(depth)
+      center_next_item(ctx, width)
+      if depth > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + depth * INDENT_STEP) end
+    end
+    local function container_menu_id(node)
+      return "##ir_cont_menu_" .. tostring(node.api)
+    end
+    local function open_container_menu(node)
+      r.ImGui_OpenPopup(ctx, container_menu_id(node))
+    end
+    local render_chain = make_fx_chain(track, take, "track")
+    local function rc_is_take()
+      return render_chain.kind == "item"
+    end
+    local function rc_name(api)
+      if rc_is_take() then
+        local _, n = r.TakeFX_GetFXName(take, api, "")
+        return n or ""
+      end
+      local _, n = r.TrackFX_GetFXName(track, api, "")
+      return n or ""
+    end
+    local function rc_enabled(api)
+      if rc_is_take() then return take_fx_enabled(take, api) end
+      return r.TrackFX_GetEnabled(track, api)
+    end
+    local function rc_set_enabled(api, value)
+      if rc_is_take() then set_take_fx_enabled(take, api, value); return end
+      r.TrackFX_SetEnabled(track, api, value)
+    end
+    local function rc_offline(api)
+      if rc_is_take() then return take_fx_offline(take, api) end
+      return r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, api) or false
+    end
+    local function rc_set_offline(api, value)
+      if rc_is_take() then set_take_fx_offline(take, api, value); return end
+      if r.TrackFX_SetOffline then r.TrackFX_SetOffline(track, api, value) end
+    end
+    local function rc_delete(api, name)
+      if rc_is_take() then delete_take_fx(app, take, api, name); return end
+      delete_fx(app, track, api, name)
+    end
+    local function rc_collapse_key(api)
+      return render_chain.kind .. "|" .. track_guid(track) .. "|" .. c_guid(render_chain, api)
+    end
+    local function rc_draw_tile(node, tile_w)
+      if rc_is_take() then
+        draw_take_fx_tile(app, ctx, settings, track, take, node.api, tile_w)
+      else
+        draw_fx_tile(app, ctx, settings, track, node.api, tile_w, "track", take)
+      end
+    end
+    local function draw_container_menu(node, name, is_collapsed, collapse_key)
+      if not r.ImGui_BeginPopup(ctx, container_menu_id(node)) then return end
+      local enabled = rc_enabled(node.api)
+      local offline = rc_offline(node.api)
+      local is_parallel = node.parallel == true
+      local top_level = node.api < CONTAINER_BASE
+      if r.ImGui_MenuItem(ctx, is_collapsed and "Expand" or "Collapse") then
+        state.collapsed[collapse_key] = not is_collapsed
+      end
+      if r.ImGui_MenuItem(ctx, "Parallel", nil, is_parallel) then
+        toggle_fx_parallel(app, render_chain, node.api)
+      end
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, "Bypass", nil, not enabled) then
+        rc_set_enabled(node.api, not enabled)
+      end
+      if r.ImGui_MenuItem(ctx, "Offline", nil, offline) then
+        rc_set_offline(node.api, not offline)
+      end
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, "Add container inside") then
+        add_container_inside(app, render_chain, node.api)
+      end
+      if r.ImGui_MenuItem(ctx, "Unpack container", nil, false, top_level) then
+        unpack_container(app, render_chain, node.api)
+      end
+      if r.ImGui_MenuItem(ctx, "Delete container") then
+        rc_delete(node.api, name)
+      end
+      r.ImGui_EndPopup(ctx)
+    end
+    local function draw_container_header(node, tile_w, collapse_key, is_collapsed)
+      local accent = section_accent_color(settings, track)
+      local name = rc_name(node.api)
+      local short = get_fx_short_name(name or "")
+      if short == nil or short == "" then short = "Container" end
+      local enabled = rc_enabled(node.api)
+      local offline = rc_offline(node.api)
+      local header_h = UIScale.round(24)
+      r.ImGui_PushID(ctx, "ir_cont_" .. tostring(node.api))
+      local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+      r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+      local visible = r.ImGui_BeginChild(ctx, "##ir_container_hdr", tile_w, header_h, 0, flags)
+      r.ImGui_PopStyleVar(ctx, 1)
+      if visible then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local bx, by = r.ImGui_GetCursorScreenPos(ctx)
+        local tint = (accent & 0xFFFFFF00) | 0x26
+        local bg = offline and 0x332020E6 or ((not enabled) and 0x24262BE6 or tint)
+        r.ImGui_DrawList_AddRectFilled(dl, bx, by, bx + tile_w, by + header_h, bg, UIScale.px(4))
+        r.ImGui_DrawList_AddRectFilled(dl, bx, by, bx + UIScale.round(4), by + header_h, accent, UIScale.px(2))
+        r.ImGui_DrawList_AddRect(dl, bx, by, bx + tile_w, by + header_h, accent, UIScale.px(4), 0, UIScale.px(1.5))
+        local chx = bx + UIScale.round(14)
+        local chy = by + header_h * 0.5
+        local col_text = enabled and Theme.colors.text or Theme.colors.text_dim
+        local icon_col = enabled and accent or Theme.colors.text_dim
+        if is_collapsed then
+          r.ImGui_DrawList_AddTriangleFilled(dl, chx - UIScale.round(3), chy - UIScale.round(4), chx + UIScale.round(4), chy, chx - UIScale.round(3), chy + UIScale.round(4), col_text)
+        else
+          r.ImGui_DrawList_AddTriangleFilled(dl, chx - UIScale.round(4), chy - UIScale.round(3), chx + UIScale.round(4), chy - UIScale.round(3), chx, chy + UIScale.round(4), col_text)
+        end
+        local fw, fh = UIScale.round(12), UIScale.round(9)
+        local fx0 = bx + UIScale.round(24)
+        local fy0 = by + (header_h - fh) * 0.5
+        r.ImGui_DrawList_AddRectFilled(dl, fx0 + UIScale.round(1), fy0 - UIScale.round(2), fx0 + UIScale.round(6), fy0 + UIScale.round(1), icon_col, UIScale.px(1))
+        r.ImGui_DrawList_AddRectFilled(dl, fx0, fy0, fx0 + fw, fy0 + fh, icon_col, UIScale.px(1.5))
+        local label = short
+        if node.child_count and node.child_count > 0 then label = short .. "   (" .. tostring(node.child_count) .. ")" end
+        r.ImGui_DrawList_AddText(dl, bx + UIScale.round(42), by + (header_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, col_text, label)
+        if node.parallel then
+          local pw = r.ImGui_CalcTextSize(ctx, "||")
+          r.ImGui_DrawList_AddText(dl, bx + tile_w - pw - UIScale.round(8), by + (header_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, accent, "||")
+        end
+        r.ImGui_SetCursorScreenPos(ctx, bx, by)
+        if r.ImGui_InvisibleButton(ctx, "##ir_container_btn", tile_w, header_h) then
+          local action = tile_mod_action(ctx)
+          if action == "delete" then
+            rc_delete(node.api, name)
+          elseif action == "bypass" then
+            rc_set_enabled(node.api, not enabled)
+          elseif action == "offline" then
+            rc_set_offline(node.api, not offline)
+          else
+            state.collapsed[collapse_key] = not is_collapsed
+          end
+        end
+        if r.ImGui_IsItemClicked(ctx, 1) then open_container_menu(node) end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, short .. (node.parallel and " (parallel)" or "") .. " — container, click to " .. (is_collapsed and "expand" or "collapse") .. " (Alt-click delete, Shift bypass, Ctrl+Shift offline)")
+        end
+        if r.ImGui_BeginDragDropTarget(ctx) then
+          local ok_payload, wp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
+          if ok_payload and wp and wp ~= "" then add_external_fx_into_container(app, render_chain, node.api, wp) end
+          local ok_move, mp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX")
+          if ok_move and mp and mp ~= "" then
+            local sc, si = mp:match("([^|]+)|(%d+)")
+            if sc and si then move_fx_into_container(app, render_chain, sc, tonumber(si), node.api) end
+          end
+          r.ImGui_EndDragDropTarget(ctx)
+        end
+        local hpayload = state.last_external_drag or ""
+        if hpayload ~= "" and state.mouse_released and r.ImGui_IsItemHovered(ctx) then
+          add_external_fx_into_container(app, render_chain, node.api, hpayload)
+        end
+        draw_container_menu(node, name, is_collapsed, collapse_key)
+        r.ImGui_EndChild(ctx)
+      end
+      r.ImGui_PopID(ctx)
+    end
+    local seam_toggle_pending = nil
+    local seam_toggle_chain = nil
+    local function draw_parallel_badge(dl, cx, cy, col, is_horizontal)
+      local hs = UIScale.round(11)
+      local x0, y0, x1, y1 = cx - hs, cy - hs, cx + hs, cy + hs
+      local sym = luminance(col) > 0.55 and 0x000000FF or 0xFFFFFFFF
+      r.ImGui_DrawList_AddRectFilled(dl, x0, y0, x1, y1, col, UIScale.px(4))
+      r.ImGui_DrawList_AddRect(dl, x0, y0, x1, y1, sym, UIScale.px(4), 0, UIScale.px(1))
+      local a = UIScale.round(3)
+      local b = UIScale.round(6)
+      if is_horizontal then
+        r.ImGui_DrawList_AddLine(dl, cx - b, cy - a, cx + b, cy - a, sym, UIScale.px(1.5))
+        r.ImGui_DrawList_AddLine(dl, cx - b, cy + a, cx + b, cy + a, sym, UIScale.px(1.5))
+      else
+        r.ImGui_DrawList_AddLine(dl, cx - a, cy - b, cx - a, cy + b, sym, UIScale.px(1.5))
+        r.ImGui_DrawList_AddLine(dl, cx + a, cy - b, cx + a, cy + b, sym, UIScale.px(1.5))
+      end
+    end
+    local function draw_serial_badge(dl, cx, cy, col, is_horizontal)
+      local hs = UIScale.round(11)
+      local x0, y0, x1, y1 = cx - hs, cy - hs, cx + hs, cy + hs
+      local sym = luminance(col) > 0.55 and 0x000000FF or 0xFFFFFFFF
+      r.ImGui_DrawList_AddRectFilled(dl, x0, y0, x1, y1, col, UIScale.px(4))
+      r.ImGui_DrawList_AddRect(dl, x0, y0, x1, y1, sym, UIScale.px(4), 0, UIScale.px(1))
+      local b = UIScale.round(6)
+      local h = UIScale.round(4)
+      if is_horizontal then
+        r.ImGui_DrawList_AddLine(dl, cx - b, cy, cx + b, cy, sym, UIScale.px(1.5))
+        r.ImGui_DrawList_AddLine(dl, cx + b - h, cy - h, cx + b, cy, sym, UIScale.px(1.5))
+        r.ImGui_DrawList_AddLine(dl, cx + b - h, cy + h, cx + b, cy, sym, UIScale.px(1.5))
+      else
+        r.ImGui_DrawList_AddLine(dl, cx, cy - b, cx, cy + b, sym, UIScale.px(1.5))
+        r.ImGui_DrawList_AddLine(dl, cx - h, cy + b - h, cx, cy + b, sym, UIScale.px(1.5))
+        r.ImGui_DrawList_AddLine(dl, cx + h, cy + b - h, cx, cy + b, sym, UIScale.px(1.5))
+      end
+    end
+    local function seam_badge_button(api, cx, cy, is_parallel)
+      if not api or not cx or not cy then return end
+      local hs = UIScale.round(11)
+      if not r.ImGui_IsMouseHoveringRect(ctx, cx - hs, cy - hs, cx + hs, cy + hs) then return end
+      if r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_Hand then
+        r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_Hand())
+      end
+      if r.ImGui_SetTooltip then
+        r.ImGui_SetTooltip(ctx, (is_parallel and "Parallel" or "Serial") .. " - click to switch to " .. (is_parallel and "serial" or "parallel"))
+      end
+      if (r.ImGui_IsMouseClicked(ctx, 0) or r.ImGui_IsMouseClicked(ctx, 1)) and not seam_toggle_pending then
+        seam_toggle_pending = api
+        seam_toggle_chain = render_chain
+      end
+    end
+    local function draw_container_inner_zone(container_api, zone_w, depth)
+      indent_cursor(depth)
+      local payload = state.last_external_drag or ""
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      local x, y = r.ImGui_GetCursorScreenPos(ctx)
+      local zone_h = UIScale.round(36)
+      r.ImGui_PushID(ctx, "ir_cdrop_" .. tostring(container_api))
+      r.ImGui_InvisibleButton(ctx, "##ir_container_drop", zone_w, zone_h)
+      local hovered = r.ImGui_IsItemHovered(ctx)
+      local clicked = r.ImGui_IsItemClicked(ctx, 0)
+      local zx0, zy0 = r.ImGui_GetItemRectMin(ctx)
+      local zx1, zy1 = r.ImGui_GetItemRectMax(ctx)
+      local active = payload ~= ""
+      local border = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
+      r.ImGui_DrawList_AddRect(dl, x, y, x + zone_w, y + zone_h, border, UIScale.px(4), 0, active and UIScale.px(2) or UIScale.px(1))
+      local label = active and "+ Drop FX into container" or "+ Add FX"
+      local tw = r.ImGui_CalcTextSize(ctx, label)
+      r.ImGui_DrawList_AddText(dl, x + (zone_w - tw) * 0.5, y + (zone_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, active and Theme.colors.accent or Theme.colors.text_dim, label)
+      if clicked and payload == "" then open_container_add_browser(app, render_chain, container_api) end
+      local inner_menu_id = "##ir_cinner_menu_" .. tostring(container_api)
+      if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, inner_menu_id) end
+      if r.ImGui_BeginPopup(ctx, inner_menu_id) then
+        if r.ImGui_MenuItem(ctx, "Add FX...") then open_container_add_browser(app, render_chain, container_api) end
+        if r.ImGui_MenuItem(ctx, "Add empty container inside") then add_container_inside(app, render_chain, container_api) end
+        r.ImGui_EndPopup(ctx)
+      end
+      if hovered then
+        if payload ~= "" and state.mouse_released then add_external_fx_into_container(app, render_chain, container_api, payload) end
+        r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here to add it inside this container" or "Add FX into this container (click) or drop FX here")
+      end
+      if r.ImGui_BeginDragDropTarget(ctx) then
+        local ok_payload, wp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
+        if ok_payload and wp and wp ~= "" then add_external_fx_into_container(app, render_chain, container_api, wp) end
+        local ok_move, mp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX")
+        if ok_move and mp and mp ~= "" then
+          local sc, si = mp:match("([^|]+)|(%d+)")
+          if sc and si then move_fx_into_container(app, render_chain, sc, tonumber(si), container_api) end
+        end
+        r.ImGui_EndDragDropTarget(ctx)
+      end
+      r.ImGui_PopID(ctx)
+      return zx0, zy0, zx1, zy1
+    end
+    local function render_fx_nodes(nodes, depth)
+      local minx, miny, maxx, maxy
+      local function acc(x0, y0, x1, y1)
+        if not x0 then return end
+        minx = minx and math.min(minx, x0) or x0
+        miny = miny and math.min(miny, y0) or y0
+        maxx = maxx and math.max(maxx, x1) or x1
+        maxy = maxy and math.max(maxy, y1) or y1
+      end
+      local items = {}
+      for _, node in ipairs(nodes) do
+        if #items > 0 then r.ImGui_Dummy(ctx, 1, UIScale.round(20)) end
+        local tile_w = width - depth * INDENT_STEP
+        local min_w = UIScale.round(140)
+        if tile_w < min_w then tile_w = min_w end
+        if node.is_container then
+          local collapse_key = rc_collapse_key(node.api)
+          local is_collapsed = state.collapsed[collapse_key] == true
+          indent_cursor(depth)
+          draw_container_header(node, tile_w, collapse_key, is_collapsed)
+          local hx0, hy0 = r.ImGui_GetItemRectMin(ctx)
+          local hx1, hy1 = r.ImGui_GetItemRectMax(ctx)
+          acc(hx0, hy0, hx1, hy1)
+          local block_bottom = hy1
+          if not is_collapsed then
+            local cminx, cmaxx, cmaxy
+            if node.children and #node.children > 0 then
+              local a, _, c, d = render_fx_nodes(node.children, depth + 1)
+              cminx, cmaxx, cmaxy = a, c, d
+            end
+            r.ImGui_Dummy(ctx, 1, UIScale.round(4))
+            local zone_w = width - (depth + 1) * INDENT_STEP
+            if zone_w < min_w then zone_w = min_w end
+            local zx0, _, zx1, zy1 = draw_container_inner_zone(node.api, zone_w, depth + 1)
+            local pad = UIScale.round(3)
+            local bx0 = math.min(hx0, cminx or hx0, zx0 or hx0) - pad
+            local by0 = hy0 - pad
+            local bx1 = math.max(hx1, cmaxx or hx1, zx1 or hx1) + pad
+            local by1 = math.max(cmaxy or hy1, zy1 or hy1) + pad
+            local accent = section_accent_color(settings, track)
+            local rail_col = (accent & 0xFFFFFF00) | 0xFF
+            r.ImGui_DrawList_AddRect(r.ImGui_GetWindowDrawList(ctx), bx0, by0, bx1, by1, rail_col, UIScale.px(3), 0, UIScale.px(2.5))
+            acc(bx0, by0, bx1, by1)
+            block_bottom = by1
+          end
+          items[#items + 1] = { x0 = hx0, x1 = hx1, top = hy0, bottom = block_bottom, parallel = node.parallel, api = node.api }
+        else
+          indent_cursor(depth)
+          rc_draw_tile(node, tile_w)
+          local tx0, ty0 = r.ImGui_GetItemRectMin(ctx)
+          local tx1, ty1 = r.ImGui_GetItemRectMax(ctx)
+          acc(tx0, ty0, tx1, ty1)
+          items[#items + 1] = { x0 = tx0, x1 = tx1, top = ty0, bottom = ty1, parallel = node.parallel, api = node.api }
+        end
+      end
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      local accent = section_accent_color(settings, track)
+      local col = (accent & 0xFFFFFF00) | 0xFF
+      for k = 2, #items do
+        local prev, cur = items[k - 1], items[k]
+        local cx = (cur.x0 + cur.x1) * 0.5
+        local cy = (prev.bottom + cur.top) * 0.5
+        if cur.parallel then
+          draw_parallel_badge(dl, cx, cy, col, false)
+        else
+          draw_serial_badge(dl, cx, cy, col, false)
+        end
+        seam_badge_button(cur.api, cx, cy, cur.parallel)
+      end
+      return minx, miny, maxx, maxy
+    end
+    local function draw_container_strip_h(node, collapse_key, is_collapsed, depth, th_override, strip_w_override)
+      local strip_w = strip_w_override or UIScale.round(26)
+      local th = th_override or expanded_tile_height(settings)
+      local accent = section_accent_color(settings, track)
+      local name = rc_name(node.api)
+      local short = get_fx_short_name(name or "")
+      if short == nil or short == "" then short = "Container" end
+      local enabled = rc_enabled(node.api)
+      local offline = rc_offline(node.api)
+      r.ImGui_PushID(ctx, "ir_conth_" .. tostring(node.api))
+      local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+      r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+      local visible = r.ImGui_BeginChild(ctx, "##ir_container_striph", strip_w, th, 0, flags)
+      r.ImGui_PopStyleVar(ctx, 1)
+      if visible then
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local bx, by = r.ImGui_GetCursorScreenPos(ctx)
+        local text_color = enabled and Theme.colors.text or Theme.colors.text_dim
+        local icon_col = enabled and accent or Theme.colors.text_dim
+        local tint_alpha = depth > 0 and 0x50 or 0x26
+        local body_bg = offline and 0x332020E6 or ((not enabled) and 0x24262BE6 or ((accent & 0xFFFFFF00) | tint_alpha))
+        r.ImGui_DrawList_AddRectFilled(dl, bx, by, bx + strip_w, by + th, body_bg, UIScale.px(3))
+        r.ImGui_DrawList_AddRect(dl, bx, by, bx + strip_w, by + th, accent, UIScale.px(3), 0, UIScale.px(1.5))
+        if depth > 0 then
+          r.ImGui_DrawList_AddRectFilled(dl, bx, by, bx + strip_w, by + UIScale.round(3), accent, UIScale.px(2))
+        end
+        local chev_cx = bx + strip_w * 0.5
+        local chev_cy = by + UIScale.round(8)
+        if is_collapsed then
+          r.ImGui_DrawList_AddTriangleFilled(dl, chev_cx - UIScale.round(3), chev_cy - UIScale.round(4), chev_cx + UIScale.round(4), chev_cy, chev_cx - UIScale.round(3), chev_cy + UIScale.round(4), text_color)
+        else
+          r.ImGui_DrawList_AddTriangleFilled(dl, chev_cx + UIScale.round(3), chev_cy - UIScale.round(4), chev_cx - UIScale.round(4), chev_cy, chev_cx + UIScale.round(3), chev_cy + UIScale.round(4), text_color)
+        end
+        local fw, fh = UIScale.round(13), UIScale.round(10)
+        local fx0 = bx + (strip_w - fw) * 0.5
+        local fy0 = by + UIScale.round(19)
+        r.ImGui_DrawList_AddRectFilled(dl, fx0 + UIScale.round(1), fy0 - UIScale.round(2), fx0 + UIScale.round(6), fy0 + UIScale.round(1), icon_col, UIScale.px(1))
+        r.ImGui_DrawList_AddRectFilled(dl, fx0, fy0, fx0 + fw, fy0 + fh, icon_col, UIScale.px(1.5))
+        local name_top = by + UIScale.round(34)
+        if node.parallel then
+          local pw = r.ImGui_CalcTextSize(ctx, "||")
+          r.ImGui_DrawList_AddText(dl, bx + (strip_w - pw) * 0.5, name_top, accent, "||")
+          name_top = name_top + UIScale.round(16)
+        end
+        local size = UIScale.round(12)
+        local scale = size / r.ImGui_GetFontSize(ctx)
+        local line_h = size + UIScale.round(1)
+        local top = name_top
+        local avail_h = th - (top - by) - UIScale.round(4)
+        local max_chars = math.max(1, math.floor(avail_h / line_h))
+        local chars = {}
+        for ch in short:gmatch(".") do chars[#chars + 1] = ch; if #chars >= max_chars then break end end
+        for i, ch in ipairs(chars) do
+          local ch_w = r.ImGui_CalcTextSize(ctx, ch) * scale
+          r.ImGui_DrawList_AddTextEx(dl, nil, size, bx + (strip_w - ch_w) * 0.5, top + (i - 1) * line_h, text_color, ch)
+        end
+        r.ImGui_SetCursorScreenPos(ctx, bx, by)
+        if r.ImGui_InvisibleButton(ctx, "##ir_container_btnh", strip_w, th) then
+          local action = tile_mod_action(ctx)
+          if action == "delete" then
+            rc_delete(node.api, name)
+          elseif action == "bypass" then
+            rc_set_enabled(node.api, not enabled)
+          elseif action == "offline" then
+            rc_set_offline(node.api, not offline)
+          else
+            state.collapsed[collapse_key] = not is_collapsed
+          end
+        end
+        if r.ImGui_IsItemClicked(ctx, 1) then open_container_menu(node) end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, short .. " — container, click to " .. (is_collapsed and "expand" or "collapse") .. " (Alt-click delete, Shift bypass, Ctrl+Shift offline)")
+        end
+        if r.ImGui_BeginDragDropTarget(ctx) then
+          local ok_payload, wp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
+          if ok_payload and wp and wp ~= "" then add_external_fx_into_container(app, render_chain, node.api, wp) end
+          local ok_move, mp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX")
+          if ok_move and mp and mp ~= "" then
+            local sc, si = mp:match("([^|]+)|(%d+)")
+            if sc and si then move_fx_into_container(app, render_chain, sc, tonumber(si), node.api) end
+          end
+          r.ImGui_EndDragDropTarget(ctx)
+        end
+        local hpayload = state.last_external_drag or ""
+        if hpayload ~= "" and state.mouse_released and r.ImGui_IsItemHovered(ctx) then
+          add_external_fx_into_container(app, render_chain, node.api, hpayload)
+        end
+        draw_container_menu(node, name, is_collapsed, collapse_key)
+        r.ImGui_EndChild(ctx)
+      end
+      r.ImGui_PopID(ctx)
+    end
+    local H_TILE_GAP = UIScale.round(20)
+    local H_STRIP_W = UIScale.round(26)
+    local H_INNER_MARGIN = UIScale.round(8)
+    local H_OUTLINE_PAD = UIScale.round(5)
+    local H_DROP_W = UIScale.round(46)
+    local function draw_container_inner_zone_h(container_api, zone_w, zone_h)
+      local payload = state.last_external_drag or ""
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      local x, y = r.ImGui_GetCursorScreenPos(ctx)
+      r.ImGui_PushID(ctx, "ir_cdroph_" .. tostring(container_api))
+      r.ImGui_InvisibleButton(ctx, "##ir_container_droph", zone_w, zone_h)
+      local hovered = r.ImGui_IsItemHovered(ctx)
+      local clicked = r.ImGui_IsItemClicked(ctx, 0)
+      local active = payload ~= ""
+      local color = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
+      local cx, cy = x + zone_w * 0.5, y + zone_h * 0.5
+      local radius = math.min(zone_w, zone_h) * 0.5 - UIScale.px(2)
+      r.ImGui_DrawList_AddCircle(dl, cx, cy, radius, color, 0, active and UIScale.px(2) or UIScale.px(1.5))
+      local arm = radius * 0.5
+      r.ImGui_DrawList_AddLine(dl, cx - arm, cy, cx + arm, cy, color, UIScale.px(2))
+      r.ImGui_DrawList_AddLine(dl, cx, cy - arm, cx, cy + arm, color, UIScale.px(2))
+      if clicked and payload == "" then open_container_add_browser(app, render_chain, container_api) end
+      local inner_menu_id = "##ir_cinnerh_menu_" .. tostring(container_api)
+      if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, inner_menu_id) end
+      if r.ImGui_BeginPopup(ctx, inner_menu_id) then
+        if r.ImGui_MenuItem(ctx, "Add FX...") then open_container_add_browser(app, render_chain, container_api) end
+        if r.ImGui_MenuItem(ctx, "Add empty container inside") then add_container_inside(app, render_chain, container_api) end
+        r.ImGui_EndPopup(ctx)
+      end
+      if hovered then
+        if payload ~= "" and state.mouse_released then add_external_fx_into_container(app, render_chain, container_api, payload) end
+        r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here to add it inside this container" or "Add FX into this container (click) or drop FX here")
+      end
+      if r.ImGui_BeginDragDropTarget(ctx) then
+        local ok_payload, wp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
+        if ok_payload and wp and wp ~= "" then add_external_fx_into_container(app, render_chain, container_api, wp) end
+        local ok_move, mp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_RACK_FX")
+        if ok_move and mp and mp ~= "" then
+          local sc, si = mp:match("([^|]+)|(%d+)")
+          if sc and si then move_fx_into_container(app, render_chain, sc, tonumber(si), container_api) end
+        end
+        r.ImGui_EndDragDropTarget(ctx)
+      end
+      r.ImGui_PopID(ctx)
+    end
+    local function node_is_container(node)
+      return node.is_container == true
+    end
+    local function node_collapse_key(node)
+      return rc_collapse_key(node.api)
+    end
+    local measure_children_h
+    local function measure_node_h(node)
+      if node_is_container(node) then
+        local collapse_key = node_collapse_key(node)
+        if state.collapsed[collapse_key] == true then
+          return H_STRIP_W, expanded_tile_height(settings)
+        end
+        local iw, ih = measure_children_h(node.children)
+        local w = H_OUTLINE_PAD + H_STRIP_W + H_INNER_MARGIN + iw + H_INNER_MARGIN + H_OUTLINE_PAD
+        local h = H_OUTLINE_PAD + math.max(expanded_tile_height(settings), ih) + H_OUTLINE_PAD
+        return w, h
+      end
+      local collapse_key = node_collapse_key(node)
+      local w = state.collapsed[collapse_key] == true and H_STRIP_W or width
+      return w, expanded_tile_height(settings)
+    end
+    function measure_children_h(nodes)
+      local total_w, max_h = 0, 0
+      for i, node in ipairs(nodes) do
+        if i > 1 then total_w = total_w + H_TILE_GAP end
+        local w, h = measure_node_h(node)
+        total_w = total_w + w
+        if h > max_h then max_h = h end
+      end
+      if #nodes > 0 then total_w = total_w + H_TILE_GAP end
+      total_w = total_w + H_DROP_W
+      if max_h <= 0 then max_h = expanded_tile_height(settings) end
+      return total_w, max_h
+    end
+    local render_node_h
+    local function render_container_h(node, depth, collapse_key)
+      local iw, ih = measure_children_h(node.children)
+      local inner_h = math.max(expanded_tile_height(settings), ih)
+      local total_w = H_OUTLINE_PAD + H_STRIP_W + H_INNER_MARGIN + iw + H_INNER_MARGIN + H_OUTLINE_PAD
+      local total_h = H_OUTLINE_PAD + inner_h + H_OUTLINE_PAD
+      local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+      r.ImGui_PushID(ctx, "ir_conwrap_" .. tostring(node.api))
+      r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
+      local visible = r.ImGui_BeginChild(ctx, "##ir_container_wrap", total_w, total_h, 0, flags)
+      r.ImGui_PopStyleVar(ctx, 1)
+      if visible then
+        local ox, oy = r.ImGui_GetCursorScreenPos(ctx)
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local accent = section_accent_color(settings, track)
+        local rail_col = (accent & 0xFFFFFF00) | 0xFF
+        local strip_x = ox + H_OUTLINE_PAD
+        local strip_y = oy + H_OUTLINE_PAD
+        r.ImGui_SetCursorScreenPos(ctx, strip_x, strip_y)
+        draw_container_strip_h(node, collapse_key, false, depth, inner_h, H_STRIP_W)
+        local child_x = strip_x + H_STRIP_W + H_INNER_MARGIN
+        local items = {}
+        for _, child in ipairs(node.children) do
+          local cw, ch = measure_node_h(child)
+          local cy = oy + H_OUTLINE_PAD + (inner_h - ch) * 0.5
+          r.ImGui_SetCursorScreenPos(ctx, child_x, cy)
+          local x0, y0, x1, y1, par = render_node_h(child, depth + 1)
+          items[#items + 1] = { left = x0, right = x1, top = y0, bottom = y1, parallel = par, api = child.api }
+          child_x = child_x + cw + H_TILE_GAP
+        end
+        local drop_y = oy + H_OUTLINE_PAD
+        r.ImGui_SetCursorScreenPos(ctx, child_x, drop_y)
+        draw_container_inner_zone_h(node.api, H_DROP_W, inner_h)
+        r.ImGui_DrawList_AddRect(dl, ox + H_OUTLINE_PAD * 0.5, oy + H_OUTLINE_PAD * 0.5, ox + total_w - H_OUTLINE_PAD * 0.5, oy + total_h - H_OUTLINE_PAD * 0.5, rail_col, UIScale.px(3), 0, UIScale.px(2.5))
+        local col = (accent & 0xFFFFFF00) | 0xFF
+        for k = 2, #items do
+          local prev, cur = items[k - 1], items[k]
+          local seam_x = (prev.right + cur.left) * 0.5
+          local cy = (cur.top + cur.bottom) * 0.5
+          if cur.parallel then
+            draw_parallel_badge(dl, seam_x, cy, col, true)
+          else
+            draw_serial_badge(dl, seam_x, cy, col, true)
+          end
+          seam_badge_button(cur.api, seam_x, cy, cur.parallel)
+        end
+        r.ImGui_EndChild(ctx)
+      end
+      r.ImGui_PopID(ctx)
+      local x0, y0 = r.ImGui_GetItemRectMin(ctx)
+      local x1, y1 = r.ImGui_GetItemRectMax(ctx)
+      return x0, y0, x1, y1, node.parallel
+    end
+    function render_node_h(node, depth)
+      if node_is_container(node) then
+        local collapse_key = node_collapse_key(node)
+        if state.collapsed[collapse_key] == true then
+          draw_container_strip_h(node, collapse_key, true, depth, expanded_tile_height(settings), H_STRIP_W)
+          local x0, y0 = r.ImGui_GetItemRectMin(ctx)
+          local x1, y1 = r.ImGui_GetItemRectMax(ctx)
+          return x0, y0, x1, y1, node.parallel
+        end
+        return render_container_h(node, depth, collapse_key)
+      end
+      rc_draw_tile(node, width)
+      local x0, y0 = r.ImGui_GetItemRectMin(ctx)
+      local x1, y1 = r.ImGui_GetItemRectMax(ctx)
+      return x0, y0, x1, y1, node.parallel
+    end
+    local function render_fx_nodes_h(nodes)
+      local items = {}
+      for _, node in ipairs(nodes) do
+        if #items > 0 then
+          r.ImGui_SameLine(ctx)
+          r.ImGui_Dummy(ctx, H_TILE_GAP, 1)
+        end
+        next_tile()
+        local x0, y0, x1, y1, par = render_node_h(node, 0)
+        items[#items + 1] = { left = x0, right = x1, top = y0, bottom = y1, parallel = par, api = node.api }
+      end
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      local accent = section_accent_color(settings, track)
+      local col = (accent & 0xFFFFFF00) | 0xFF
+      for k = 2, #items do
+        local prev, cur = items[k - 1], items[k]
+        local seam_x = (prev.right + cur.left) * 0.5
+        local cy = (cur.top + cur.bottom) * 0.5
+        if cur.parallel then
+          draw_parallel_badge(dl, seam_x, cy, col, true)
+        else
+          draw_serial_badge(dl, seam_x, cy, col, true)
+        end
+        seam_badge_button(cur.api, seam_x, cy, cur.parallel)
+      end
+    end
     local function draw_track_section()
       if not show_track_fx then return end
-      if fx_count == 0 and not horizontal then
-        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No FX on this track.")
+      local collapsed = false
+      if horizontal then
+        collapsed = section_break("track", "Track FX")
+      else
+        new_section()
+        collapsed = draw_section_label(ctx, "Track FX", nil, fx_count, section_accent_color(settings, track), "track")
+        if fx_count == 0 and not collapsed then
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No FX on this track.")
+        end
       end
-      local collapsed = horizontal and section_break("track", "Track FX")
       if not collapsed then
-        for index = 0, fx_count - 1 do
-          next_tile()
-          draw_fx_tile(app, ctx, settings, track, index, width, "track", take)
+        render_chain = make_fx_chain(track, take, "track")
+        if horizontal then
+          render_fx_nodes_h(build_track_fx_tree(render_chain, fx_count, 4))
+        else
+          local nodes = build_track_fx_tree(render_chain, fx_count, 4)
+          render_fx_nodes(nodes, 0)
         end
         next_tile()
         draw_add_zone(app, ctx, settings, track, width, -1)
@@ -2780,21 +4164,19 @@ function M.draw(app)
       local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
       local collapsed = false
       if horizontal then
-        if input_fx_count > 0 or dragging then collapsed = section_break("input", "Input FX") end
+        collapsed = section_break("input", "Input FX")
       else
         new_section()
-        draw_section_label(ctx, "Track Input FX", get_track_label(track), input_fx_count, section_accent_color(settings, track))
-        if input_fx_count == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No input FX on this track.") end
+        collapsed = draw_section_label(ctx, "Track Input FX", nil, input_fx_count, section_accent_color(settings, track), "input")
+        if input_fx_count == 0 and not collapsed then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No input FX on this track.") end
       end
       if not collapsed then
         for index = 0, input_fx_count - 1 do
           next_tile()
           draw_fx_tile(app, ctx, settings, track, REC_FX_OFFSET + index, width, "input", take)
         end
-        if dragging then
-          next_tile()
-          draw_add_zone(app, ctx, settings, track, width, nil, "input", nil, true)
-        end
+        next_tile()
+        draw_add_zone(app, ctx, settings, track, width, nil, "input", nil, false)
       end
     end
     local function draw_take_section()
@@ -2802,7 +4184,7 @@ function M.draw(app)
       local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
       if not horizontal then
         new_section()
-        draw_section_label(ctx, "Selected Track Item FX", get_track_label(track), take_fx_count, section_accent_color(settings, track))
+        if draw_section_label(ctx, "Selected Track Item FX", nil, take_fx_count, section_accent_color(settings, track), "take") then return end
       end
       if selected_item and item_on_track == false then
         if not horizontal then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Selected item is on another track.") end
@@ -2811,7 +4193,7 @@ function M.draw(app)
       else
         local collapsed = false
         if horizontal then
-          if take_fx_count > 0 or dragging then collapsed = section_break("take", "Take FX", get_take_label(take)) end
+          collapsed = section_break("take", "Take FX", get_take_label(take))
         else
           if take_fx_count == 0 then
             r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No item FX on selected item: " .. get_take_label(take))
@@ -2820,16 +4202,20 @@ function M.draw(app)
           end
         end
         if not collapsed then
-          for index = 0, take_fx_count - 1 do
-            next_tile()
-            draw_take_fx_tile(app, ctx, settings, track, take, index, width)
+          render_chain = make_fx_chain(track, take, "item")
+          if horizontal then
+            render_fx_nodes_h(build_track_fx_tree(render_chain, take_fx_count, 4))
+          else
+            render_fx_nodes(build_track_fx_tree(render_chain, take_fx_count, 4), 0)
           end
-          if dragging then
-            next_tile()
-            draw_add_zone(app, ctx, settings, track, width, nil, "item", take, true)
-          end
+          render_chain = make_fx_chain(track, take, "track")
+          next_tile()
+          draw_add_zone(app, ctx, settings, track, width, nil, "item", take, false)
         end
       end
+    end
+    if horizontal then
+      r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + UIScale.round(5))
     end
     if settings.section_order == "signal_flow" then
       draw_input_section()
@@ -2839,6 +4225,11 @@ function M.draw(app)
       draw_track_section()
       draw_input_section()
       draw_take_section()
+    end
+    if seam_toggle_pending then
+      toggle_fx_parallel(app, seam_toggle_chain or render_chain, seam_toggle_pending)
+      seam_toggle_pending = nil
+      seam_toggle_chain = nil
     end
     r.ImGui_EndChild(ctx)
   end

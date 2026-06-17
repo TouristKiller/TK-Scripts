@@ -1,7 +1,28 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.7
+-- @version 0.3.8
 -- @changelog:
+-- v0.3.8
+--   + Instrument Rack: Container drop zones now double as add buttons — click one to add an FX straight into that container via the linked TK FX Browser, TK FX Browser Mini, or the internal Plugin Browser, while drag-and-drop into the container keeps working
+--   + Instrument Rack: Right-click a container drop zone for Add FX... and Add empty container inside actions
+--   + Instrument Rack: Container drop zones now match the look of the regular add button in both the vertical and horizontal rack
+--   + Instrument Rack: Fixed a crash in the horizontal rack when a container scrolled off-screen
+--   + Instrument Rack: Added modifier-click shortcuts on the whole FX tile (vertical and horizontal rack) — Alt-click deletes the plugin without confirmation, Shift-click bypasses, and Ctrl+Shift-click toggles offline
+--   + Instrument Rack: TK FX Browser, TK FX Browser Mini, and the Plugin Browser now route added FX to the Input or Take chain when adding from the rack's Input or Item FX sections
+--   + Instrument Rack: Opening an already running external TK FX Browser or Mini now shows it instead of toggling its visibility off
+--   + Instrument Rack: Input and Item FX sections now always show their add button so you can add or drop the first FX even when the chain is empty (vertical and horizontal rack)
+--   + Instrument Rack: Pinned parameter knobs and the wet knob now keep their last known values when an FX is set offline instead of disappearing or resetting to 100%
+--   + Instrument Rack: Pinned parameter knobs now dim uniformly when an FX is set offline or bypassed
+--   + Instrument Rack: Each FX section (Track, Input, Take) in the vertical rack now has a collapsible header with a chevron, sharing the collapse state with the horizontal rack
+--   + Instrument Rack: Removed the redundant track name shown beneath the Input and Item FX section headers in the vertical rack
+--   + Instrument Rack: Replaced the wet button with a rotary wet knob on the left of each FX tile that is draggable straight away, shows the live percentage while dragging, and resets to 100% on double/right-click
+--   + Instrument Rack: Collapsing an FX tile now keeps the wet knob, name, and controls visible and only hides the screenshot and pinned parameters
+--   + Instrument Rack: Renamed the take FX source toggle to Show take FX (selected item) with a clearer tooltip
+--   + Instrument Rack: Double-click a pinned parameter under the screenshot to reset it to its default value (also in the horizontal rack)
+--   + Instrument Rack: Saving plugin default pins now also stores the current parameter values, with a Restore saved parameter values on apply option to recall them automatically
+--   + Instrument Rack: Grouped the settings popup into labelled sections (Display, Controls, FX sources, Layout, Default parameter pins, Add FX target) with divider lines
+--   + Instrument Rack: Section header colors now match the horizontal banner opacity instead of appearing brighter
+--   + Instrument Rack: Horizontal rack now also scrolls with a physical horizontal scroll wheel or tilt wheel
 -- v0.3.7
 --   + Media Browser: Fixed the Add Location folder picker being restricted to Desktop/Users on some systems
 --   + Media Browser: Hold Shift while dragging a file onto a track to drop it into a new fixed lane (auto-enables fixed lanes)

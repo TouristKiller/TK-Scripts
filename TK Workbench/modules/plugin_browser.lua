@@ -1451,6 +1451,139 @@ local function add_fx_to_item_pointer(item, plugin)
   return fx_index and fx_index >= 0, fx_index or -1, take
 end
 
+local function consume_rack_add_target(app)
+  if not r.HasExtState or not r.HasExtState("TKMIX", "rack_add_chain") then return nil end
+  local value = r.GetExtState("TKMIX", "rack_add_chain")
+  r.DeleteExtState("TKMIX", "rack_add_chain", false)
+  if value == "input" or value == "item" then return value end
+  return nil
+end
+
+local RACK_CONTAINER_BASE = 0x2000000
+
+local function rack_container_chain(kind, track)
+  if kind == "item" then
+    local take
+    local count = r.CountSelectedMediaItems(0)
+    for i = 0, count - 1 do
+      local item = r.GetSelectedMediaItem(0, i)
+      if item and r.GetMediaItem_Track(item) == track then take = r.GetActiveTake(item); break end
+    end
+    if not take or not r.TakeFX_AddByName then return nil end
+    return {
+      count = function() return r.TakeFX_GetCount(take) end,
+      guid = function(i) return r.TakeFX_GetFXGUID(take, i) end,
+      cfg = function(i, key) local _, val = r.TakeFX_GetNamedConfigParm(take, i, key); return val end,
+      add = function(name, pos) return r.TakeFX_AddByName(take, name, pos) end
+    }
+  end
+  return {
+    count = function() return r.TrackFX_GetCount(track) end,
+    guid = function(i) return r.TrackFX_GetFXGUID(track, i) end,
+    cfg = function(i, key) local _, val = r.TrackFX_GetNamedConfigParm(track, i, key); return val end,
+    add = function(name, pos) return r.TrackFX_AddByName(track, name, false, pos) end
+  }
+end
+
+local function rack_is_container(ch, api)
+  return ch.cfg(api, "fx_type") == "Container"
+end
+
+local function rack_find_container_api(ch, guid)
+  local top = ch.count()
+  local function recurse(container_rel, parent_count, parent_diff)
+    local count = math.floor(tonumber(ch.cfg(RACK_CONTAINER_BASE + container_rel, "container_count")) or 0)
+    if count <= 0 then return nil end
+    local diff = (parent_count + 1) * parent_diff
+    for j = 1, count do
+      local child_rel = container_rel + diff * j
+      local child_api = RACK_CONTAINER_BASE + child_rel
+      if ch.guid(child_api) == guid then return child_api end
+      if rack_is_container(ch, child_api) then
+        local res = recurse(child_rel, count, diff)
+        if res then return res end
+      end
+    end
+    return nil
+  end
+  for i = 0, top - 1 do
+    if ch.guid(i) == guid then return i end
+    if rack_is_container(ch, i) then
+      local res = recurse(i + 1, top, 1)
+      if res then return res end
+    end
+  end
+  return nil
+end
+
+local function rack_container_end_insert(ch, container_api)
+  local top = ch.count()
+  if container_api < RACK_CONTAINER_BASE then
+    local container_rel = container_api + 1
+    local diff = top + 1
+    local cc = math.floor(tonumber(ch.cfg(RACK_CONTAINER_BASE + container_rel, "container_count")) or 0)
+    return RACK_CONTAINER_BASE + container_rel + diff * (cc + 1)
+  end
+  local function recurse(parent_rel, parent_count, parent_diff)
+    local count = math.floor(tonumber(ch.cfg(RACK_CONTAINER_BASE + parent_rel, "container_count")) or 0)
+    if count <= 0 then return nil end
+    local diff = (parent_count + 1) * parent_diff
+    for j = 1, count do
+      local child_rel = parent_rel + diff * j
+      local child_api = RACK_CONTAINER_BASE + child_rel
+      if child_api == container_api then
+        local inner_diff = (count + 1) * diff
+        local cc = math.floor(tonumber(ch.cfg(child_api, "container_count")) or 0)
+        return RACK_CONTAINER_BASE + child_rel + inner_diff * (cc + 1)
+      end
+      if rack_is_container(ch, child_api) then
+        local res = recurse(child_rel, count, diff)
+        if res then return res end
+      end
+    end
+    return nil
+  end
+  for i = 0, top - 1 do
+    if rack_is_container(ch, i) then
+      local res = recurse(i + 1, top, 1)
+      if res then return res end
+    end
+  end
+  return nil
+end
+
+local function try_add_fx_to_rack_container(app, settings, plugin)
+  if not r.HasExtState or not r.HasExtState("TKMIX", "rack_add_container") then return false end
+  local value = r.GetExtState("TKMIX", "rack_add_container")
+  r.DeleteExtState("TKMIX", "rack_add_container", false)
+  local tguid, kind, cguid = value:match("^(.-)|(.-)|(.+)$")
+  if not tguid or tguid == "" or not cguid or cguid == "" then return false end
+  local track
+  local cnt = r.CountTracks(0)
+  for ti = 0, cnt - 1 do
+    local t = r.GetTrack(0, ti)
+    if r.GetTrackGUID(t) == tguid then track = t break end
+  end
+  if not track then return false end
+  local ch = rack_container_chain(kind, track)
+  if not ch then return false end
+  local container_api = rack_find_container_api(ch, cguid)
+  if not container_api then return false end
+  local pos = rack_container_end_insert(ch, container_api)
+  if not pos then return false end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local idx = ch.add(plugin.name, pos)
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Add FX into rack container", -1)
+  if idx and idx >= 0 then
+    add_recent(settings, plugin.name)
+    state.last_filter_key = nil
+    app.status = "Added " .. plugin.display_name .. " into container"
+  end
+  return true
+end
+
 local function clear_external_drag()
   state.potential_drag_plugin = nil
   state.potential_drag_plugins = nil
@@ -1855,6 +1988,46 @@ end
 local function add_fx_to_track(app, settings, plugin)
   local track = get_target_track()
   if not validate_track(track) then app.status = "No target track"; return end
+  if try_add_fx_to_rack_container(app, settings, plugin) then
+    return_to_rack_after_add(app, settings)
+    return
+  end
+  local rack_target = consume_rack_add_target(app)
+  if rack_target == "input" then
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local added = add_fx_to_input_pointer(track, plugin)
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Add FX to Input FX from Workbench", -1)
+    if added then
+      add_recent(settings, plugin.name)
+      state.last_filter_key = nil
+      app.status = "Added " .. plugin.display_name .. " to Input FX on " .. track_label(track)
+      return_to_rack_after_add(app, settings)
+    else
+      app.status = "Could not add " .. plugin.display_name .. " to Input FX"
+    end
+    return
+  end
+  if rack_target == "item" then
+    local item = r.GetSelectedMediaItem(0, 0)
+    if not validate_item(item) then app.status = "No selected item for Item FX"; return end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local added, fx_index, take = add_fx_to_item_pointer(item, plugin)
+    if added and settings.open_floating_after_drag_add and fx_index >= 0 and take and r.TakeFX_Show then r.TakeFX_Show(take, fx_index, 3) end
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Add FX to Item from Workbench", -1)
+    if added then
+      add_recent(settings, plugin.name)
+      state.last_filter_key = nil
+      app.status = "Added " .. plugin.display_name .. " to Item FX on " .. item_label(item)
+      return_to_rack_after_add(app, settings)
+    else
+      app.status = "Could not add " .. plugin.display_name .. " to Item FX"
+    end
+    return
+  end
   r.Undo_BeginBlock()
   r.PreventUIRefresh(1)
   local added = add_fx_to_track_pointer(track, plugin)

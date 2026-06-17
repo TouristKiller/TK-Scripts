@@ -1,8 +1,10 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.1.4
+-- @version 3.1.5
 -- @changelog:
 --[[ 
+    v3.1.5:
+        + Instrument Rack: clicking a container drop zone in the Workbench Instrument Rack now adds the chosen FX directly inside that container instead of at the end of the chain.
     v3.1.4:
         + TK Notes: Typing/pasting is no longer blocked when text exceeds the window height; the editor scrolls instead.
         + TK Notes: Fix: text in Global/Project/Track/Item notes could revert to an older version after restart when tabs were disabled (stale tab text overrode the saved text on load).   
@@ -3303,8 +3305,161 @@ function GetSelectedItemTakeForTrack(track)
     return nil, nil
 end
 
+function ConsumeRackAddChain()
+    if not r.HasExtState("TKMIX", "rack_add_chain") then return nil end
+    local chain = r.GetExtState("TKMIX", "rack_add_chain")
+    r.DeleteExtState("TKMIX", "rack_add_chain", false)
+    if chain == "input" or chain == "item" then return chain end
+    return nil
+end
+
+local RACK_CONTAINER_BASE = 0x2000000
+
+local function RackContainerChain(kind, track)
+    if kind == "item" then
+        local _, take = GetSelectedItemTakeForTrack(track)
+        if not take or not r.TakeFX_AddByName then return nil end
+        return {
+            count = function() return r.TakeFX_GetCount(take) end,
+            guid = function(i) return r.TakeFX_GetFXGUID(take, i) end,
+            cfg = function(i, key) local _, val = r.TakeFX_GetNamedConfigParm(take, i, key); return val end,
+            add = function(name, pos) return r.TakeFX_AddByName(take, name, pos) end
+        }
+    end
+    return {
+        count = function() return r.TrackFX_GetCount(track) end,
+        guid = function(i) return r.TrackFX_GetFXGUID(track, i) end,
+        cfg = function(i, key) local _, val = r.TrackFX_GetNamedConfigParm(track, i, key); return val end,
+        add = function(name, pos) return r.TrackFX_AddByName(track, name, false, pos) end
+    }
+end
+
+local function RackIsContainer(ch, api)
+    return ch.cfg(api, "fx_type") == "Container"
+end
+
+local function RackFindContainerApi(ch, guid)
+    local top = ch.count()
+    local function recurse(container_rel, parent_count, parent_diff)
+        local count = math.floor(tonumber(ch.cfg(RACK_CONTAINER_BASE + container_rel, "container_count")) or 0)
+        if count <= 0 then return nil end
+        local diff = (parent_count + 1) * parent_diff
+        for j = 1, count do
+            local child_rel = container_rel + diff * j
+            local child_api = RACK_CONTAINER_BASE + child_rel
+            if ch.guid(child_api) == guid then return child_api end
+            if RackIsContainer(ch, child_api) then
+                local res = recurse(child_rel, count, diff)
+                if res then return res end
+            end
+        end
+        return nil
+    end
+    for i = 0, top - 1 do
+        if ch.guid(i) == guid then return i end
+        if RackIsContainer(ch, i) then
+            local res = recurse(i + 1, top, 1)
+            if res then return res end
+        end
+    end
+    return nil
+end
+
+local function RackContainerEndInsert(ch, container_api)
+    local top = ch.count()
+    if container_api < RACK_CONTAINER_BASE then
+        local container_rel = container_api + 1
+        local diff = top + 1
+        local cc = math.floor(tonumber(ch.cfg(RACK_CONTAINER_BASE + container_rel, "container_count")) or 0)
+        return RACK_CONTAINER_BASE + container_rel + diff * (cc + 1)
+    end
+    local function recurse(parent_rel, parent_count, parent_diff)
+        local count = math.floor(tonumber(ch.cfg(RACK_CONTAINER_BASE + parent_rel, "container_count")) or 0)
+        if count <= 0 then return nil end
+        local diff = (parent_count + 1) * parent_diff
+        for j = 1, count do
+            local child_rel = parent_rel + diff * j
+            local child_api = RACK_CONTAINER_BASE + child_rel
+            if child_api == container_api then
+                local inner_diff = (count + 1) * diff
+                local cc = math.floor(tonumber(ch.cfg(child_api, "container_count")) or 0)
+                return RACK_CONTAINER_BASE + child_rel + inner_diff * (cc + 1)
+            end
+            if RackIsContainer(ch, child_api) then
+                local res = recurse(child_rel, count, diff)
+                if res then return res end
+            end
+        end
+        return nil
+    end
+    for i = 0, top - 1 do
+        if RackIsContainer(ch, i) then
+            local res = recurse(i + 1, top, 1)
+            if res then return res end
+        end
+    end
+    return nil
+end
+
+function TryAddFXToRackContainer(track, plugin_name)
+    if not r.HasExtState("TKMIX", "rack_add_container") then return false end
+    local value = r.GetExtState("TKMIX", "rack_add_container")
+    r.DeleteExtState("TKMIX", "rack_add_container", false)
+    local tguid, kind, cguid = value:match("^(.-)|(.-)|(.+)$")
+    if not tguid or tguid == "" or not cguid or cguid == "" then return false end
+    if not track or r.GetTrackGUID(track) ~= tguid then
+        local found
+        local cnt = r.CountTracks(0)
+        for ti = 0, cnt - 1 do
+            local t = r.GetTrack(0, ti)
+            if r.GetTrackGUID(t) == tguid then found = t break end
+        end
+        track = found
+    end
+    if not track then return false end
+    local ch = RackContainerChain(kind, track)
+    if not ch then return false end
+    local container_api = RackFindContainerApi(ch, cguid)
+    if not container_api then return false end
+    local pos = RackContainerEndInsert(ch, container_api)
+    if not pos then return false end
+    r.Undo_BeginBlock()
+    local idx = ch.add(plugin_name, pos)
+    r.Undo_EndBlock("Add FX into rack container", -1)
+    if idx and idx >= 0 then
+        if not START and not START_SELECTED and not IS_CAPTURING_SCREENSHOT then
+            if AddToRecent then AddToRecent(plugin_name) end
+            if config and config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
+            if config and config.hide_screenshot_after_insert then SHOULD_HIDE_SCREENSHOT = true end
+        end
+    end
+    return true
+end
+
 function AddFXToTrack(track, plugin_name, preserve_order)
     if not track or not plugin_name or plugin_name == '' then return -1 end
+    if TryAddFXToRackContainer(track, plugin_name) then return -1 end
+    local rack_chain = ConsumeRackAddChain()
+    if rack_chain == "input" then
+        local fx_index = r.TrackFX_AddByName(track, plugin_name, true, -1)
+        if fx_index and fx_index >= 0 and not START and not START_SELECTED and not IS_CAPTURING_SCREENSHOT then
+            if AddToRecent then AddToRecent(plugin_name) end
+            if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
+            if config.hide_screenshot_after_insert then SHOULD_HIDE_SCREENSHOT = true end
+        end
+        return fx_index or -1
+    elseif rack_chain == "item" then
+        local _, take = GetSelectedItemTakeForTrack(track)
+        if take then
+            local fx_index = r.TakeFX_AddByName(take, plugin_name, -1)
+            if fx_index and fx_index >= 0 and not START and not START_SELECTED and not IS_CAPTURING_SCREENSHOT then
+                if AddToRecent then AddToRecent(plugin_name) end
+                if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
+                if config.hide_screenshot_after_insert then SHOULD_HIDE_SCREENSHOT = true end
+            end
+            return fx_index or -1
+        end
+    end
     local dest_index = r.TrackFX_GetCount(track)
     local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - dest_index)
     if not preserve_order and fx_index and fx_index >= 0 and config and config.add_instruments_on_top and IsInstrumentPlugin(plugin_name) then
