@@ -1,8 +1,18 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.3
+-- @version 0.9.4
 -- @changelog:
 --[[
+v0.9.4:
++ Added Spacebar shortcut: Play / Stop the preview (matches REAPER)
++ Enter/Return now toggles Play / Pause the preview (resumes from the pause position, matches REAPER); both are ignored while typing in the search field
++ Folder view search now shows the number of matches behind each folder so you can see where results are without expanding folders; folders without matches are hidden
++ Time text on the progress bar now has a black outline so it stays readable over the green/yellow/red bar
++ Left folder panel is now resizable via a draggable divider (width is saved); minimum width keeps all transport buttons visible
++ Added Refresh all folder caches button next to the refresh button (with confirmation): processes every saved location one by one (queued, incremental scan like the single-folder refresh)
++ Much faster full folder scans: files are no longer opened twice (counting now uses file extensions only, validation moved into the metadata pass), so the progress bar starts almost instantly and keeps moving
++ Scan progress window now shows an animated bar with a live "Found X files..." message during the counting phase instead of a motionless 0/0 bar
+
 v0.9.3:
 + Tempo sync now reads the embedded BPM from the file (ID3/Vorbis/ACID/XMP) first and falls back to REAPER tempo matching
 + Added Tape speed button next to sync (mutually exclusive): playback rate changes also shift pitch, like a tape machine, and the pitch knob/readout follow the rate
@@ -334,6 +344,8 @@ local ui = {
     cover_art_preview_full = false,
     waveform_preview_height = 92,
     is_dragging_waveform_divider = false,
+    left_panel_width = 200,
+    is_dragging_left_divider = false,
 }
 
 -- Available fonts (cross-platform compatible)
@@ -1566,6 +1578,16 @@ local save_fast_cache
 
 local function save_file_cache_progressive(location, files, start_index)
     if start_index > #files then
+        local valid_files = {}
+        for _, file in ipairs(files) do
+            if not file.scan_invalid then
+                valid_files[#valid_files + 1] = file
+            else
+                cached_metadata[file.full_path] = nil
+            end
+        end
+        files = valid_files
+        
         local cache_file = cache_dir .. "file_cache_" .. location:gsub("[^%w]", "_") .. ".json"
         local file_timestamps = {}
         local has_js_api = reaper.JS_Dialog_BrowseForSaveFile ~= nil
@@ -1608,7 +1630,7 @@ local function save_file_cache_progressive(location, files, start_index)
         return
     end
     
-    local batch_size = 5
+    local batch_size = 15
     local end_index = math.min(start_index + batch_size - 1, #files)
     
     for i = start_index, end_index do
@@ -1616,6 +1638,15 @@ local function save_file_cache_progressive(location, files, start_index)
         if file.full_path and not is_video_or_image_file(file.full_path) then
             local meta = get_file_metadata(file.full_path)
             cached_metadata[file.full_path] = meta
+            if file.ext == "mid" or file.ext == "midi" then
+                if not (meta.duration_seconds and meta.duration_seconds > 0) then
+                    file.scan_invalid = true
+                end
+            else
+                if not (meta.sample_rate_hz and meta.sample_rate_hz > 0) then
+                    file.scan_invalid = true
+                end
+            end
             cache_mgmt.processed_files = cache_mgmt.processed_files + 1
         end
     end
@@ -2191,23 +2222,43 @@ local function refresh_file_cache(location)
                 dir_queue = {{path = location, relative = ""}},
                 files = {},
                 file_count = 0,
-                phase = "counting"
+                phase = "counting",
+                active_dir = nil,
+                active_relative = "",
+                active_file_index = 0
             }
             
             local function process_batch()
-                local batch_size = 50
+                local batch_size = 500
                 local processed = 0
                 
                 if scan_state.phase == "counting" then
-                    while processed < batch_size and #scan_state.dir_queue > 0 do
-                        local current = table.remove(scan_state.dir_queue, 1)
-                        local dir_path = current.path
-                        local relative_path = current.relative
+                    while processed < batch_size do
+                        if not scan_state.active_dir then
+                            if #scan_state.dir_queue == 0 then break end
+                            local current = table.remove(scan_state.dir_queue, 1)
+                            scan_state.active_dir = current.path
+                            scan_state.active_relative = current.relative
+                            scan_state.active_file_index = 0
+                        end
                         
-                        local i = 0
-                        while true do
-                            local filename = r.EnumerateFiles(dir_path, i)
-                            if not filename then break end
+                        local dir_path = scan_state.active_dir
+                        local relative_path = scan_state.active_relative
+                        local filename = r.EnumerateFiles(dir_path, scan_state.active_file_index)
+                        
+                        if not filename then
+                            local j = 0
+                            while true do
+                                local subdir = r.EnumerateSubdirectories(dir_path, j)
+                                if not subdir then break end
+                                local new_path = dir_path .. sep .. subdir
+                                local new_relative = relative_path ~= "" and (relative_path .. sep .. subdir) or subdir
+                                table.insert(scan_state.dir_queue, {path = new_path, relative = new_relative})
+                                j = j + 1
+                            end
+                            scan_state.active_dir = nil
+                        else
+                            scan_state.active_file_index = scan_state.active_file_index + 1
                             
                             if has_supported_extension(filename) then
                                 local parent_folder = relative_path:match("([^/\\]+)$") or ""
@@ -2220,61 +2271,23 @@ local function refresh_file_cache(location)
                                 
                                 local ext = string.lower(string.match(filename, "%.([^%.]+)$") or "")
                                 
-                                local is_valid = true
-                                if ext == "mid" or ext == "midi" then
-                                    local source = r.PCM_Source_CreateFromFile(full_path)
-                                    if source then
-                                        local length = r.GetMediaSourceLength(source)
-                                        r.PCM_Source_Destroy(source)
-                                        if not length or length <= 0 then
-                                            is_valid = false
-                                        end
-                                    else
-                                        is_valid = false
-                                    end
-                                elseif not is_video_or_image_file(full_path) then
-                                    local source = r.PCM_Source_CreateFromFile(full_path)
-                                    if source then
-                                        local sample_rate = r.GetMediaSourceSampleRate(source)
-                                        r.PCM_Source_Destroy(source)
-                                        if not sample_rate or sample_rate == 0 then
-                                            is_valid = false
-                                        end
-                                    else
-                                        is_valid = false
-                                    end
-                                end
-                                
-                                if is_valid then
-                                    table.insert(scan_state.files, {
-                                        name = filename,
-                                        is_dir = false,
-                                        full_path = full_path,
-                                        parent_folder = parent_folder,
-                                        ext = ext,
-                                        name_lower = string.lower(filename)
-                                    })
-                                    scan_state.file_count = scan_state.file_count + 1
-                                end
+                                table.insert(scan_state.files, {
+                                    name = filename,
+                                    is_dir = false,
+                                    full_path = full_path,
+                                    parent_folder = parent_folder,
+                                    ext = ext,
+                                    name_lower = string.lower(filename)
+                                })
+                                scan_state.file_count = scan_state.file_count + 1
+                                processed = processed + 1
                             end
-                            i = i + 1
-                            processed = processed + 1
-                        end
-                        
-                        local j = 0
-                        while true do
-                            local subdir = r.EnumerateSubdirectories(dir_path, j)
-                            if not subdir then break end
-                            local new_path = dir_path .. sep .. subdir
-                            local new_relative = relative_path ~= "" and (relative_path .. sep .. subdir) or subdir
-                            table.insert(scan_state.dir_queue, {path = new_path, relative = new_relative})
-                            j = j + 1
                         end
                     end
                     
                     cache_mgmt.scan_message = string.format("Found %d files...", scan_state.file_count)
                     
-                    if #scan_state.dir_queue == 0 then
+                    if not scan_state.active_dir and #scan_state.dir_queue == 0 then
                         table.sort(scan_state.files, function(a, b)
                             return a.name:lower() < b.name:lower()
                         end)
@@ -2332,6 +2345,51 @@ local function clear_all_cache_files()
     cache_mgmt.message_timer = os.time()
     
     return deleted_count
+end
+
+local refresh_all_state = { active = false, queue = {}, total = 0, done = 0 }
+
+local function process_refresh_all_queue()
+    if not refresh_all_state.active then return end
+    if cache_mgmt.loading_files then
+        r.defer(process_refresh_all_queue)
+        return
+    end
+    if #refresh_all_state.queue == 0 then
+        refresh_all_state.active = false
+        cache_mgmt.scan_message = string.format("Refreshed %d folder(s)", refresh_all_state.total)
+        cache_mgmt.message_timer = os.time()
+        return
+    end
+    local loc = table.remove(refresh_all_state.queue, 1)
+    refresh_all_state.done = refresh_all_state.done + 1
+    local progress_msg = string.format("Refreshing folder %d/%d...", refresh_all_state.done, refresh_all_state.total)
+    cache_mgmt.scan_message = progress_msg
+    cache_mgmt.message_timer = os.time()
+    refresh_file_cache(loc)
+    if not cache_mgmt.loading_files then
+        cache_mgmt.scan_message = progress_msg
+        cache_mgmt.message_timer = os.time()
+    end
+    r.defer(process_refresh_all_queue)
+end
+
+local function refresh_all_locations()
+    if refresh_all_state.active then return 0 end
+    if cache_mgmt.loading_files then return 0 end
+    tree_cache.cache = {}
+    refresh_all_state.queue = {}
+    for _, loc in ipairs(file_location.locations or {}) do
+        if loc and loc ~= "" then
+            table.insert(refresh_all_state.queue, loc)
+        end
+    end
+    refresh_all_state.total = #refresh_all_state.queue
+    refresh_all_state.done = 0
+    if refresh_all_state.total == 0 then return 0 end
+    refresh_all_state.active = true
+    process_refresh_all_queue()
+    return refresh_all_state.total
 end
 
 local function is_file_selected(file_path)
@@ -2651,6 +2709,7 @@ local function save_options()
             auto_source_location = ui.auto_source_location,
             auto_source_index = ui.auto_source_index,
             waveform_preview_height = ui.waveform_preview_height,
+            left_panel_width = ui.left_panel_width,
             filter_audio = ui_settings.filter_audio,
             filter_midi = ui_settings.filter_midi,
             filter_video = ui_settings.filter_video,
@@ -2731,6 +2790,7 @@ local function get_settings_table()
         show_spectral_view = waveform.show_spectral_view,
         pitch_detection_enabled = ui.pitch_detection_enabled,
         waveform_preview_height = ui.waveform_preview_height,
+        left_panel_width = ui.left_panel_width,
         filter_audio = ui_settings.filter_audio,
         filter_midi = ui_settings.filter_midi,
         filter_video = ui_settings.filter_video,
@@ -2789,6 +2849,7 @@ local function apply_settings_from_table(settings)
     ui_settings.visible_columns = settings.visible_columns or {name = true, size = true, date = true, duration = true, samplerate = true, bitdepth = true, channels = true}
     ui.pitch_detection_enabled = settings.pitch_detection_enabled ~= nil and settings.pitch_detection_enabled or true
     ui.waveform_preview_height = settings.waveform_preview_height or 92
+    ui.left_panel_width = settings.left_panel_width or 200
     if settings.filter_audio ~= nil then ui_settings.filter_audio = settings.filter_audio end
     if settings.filter_midi  ~= nil then ui_settings.filter_midi  = settings.filter_midi  end
     if settings.filter_video ~= nil then ui_settings.filter_video = settings.filter_video end
@@ -2880,6 +2941,7 @@ local function load_options()
             ui.show_oscilloscope = options.show_oscilloscope
             ui.waveform_grid_overlay = options.waveform_grid_overlay or false
             ui.waveform_preview_height = options.waveform_preview_height or 92
+            ui.left_panel_width = options.left_panel_width or 200
             waveform.show_spectral_view = options.show_spectral_view or false
             if options.filter_audio ~= nil then ui_settings.filter_audio = options.filter_audio end
             if options.filter_midi  ~= nil then ui_settings.filter_midi  = options.filter_midi  end
@@ -3039,6 +3101,7 @@ local function load_options()
                         ui.auto_source_location = options2.auto_source_location or ""
                         ui.auto_source_index = options2.auto_source_index or 0
                         ui.waveform_preview_height = options2.waveform_preview_height or 92
+                        ui.left_panel_width = options2.left_panel_width or 200
                         if file_location.remember_last_location and options2.last_location_index then
                             file_location.selected_location_index = options2.last_location_index
                         end
@@ -7732,32 +7795,49 @@ function draw_file_list()
             if r.ImGui_BeginChild(ctx, "file_list", 0, 0, 1, child_flags) then
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 8)
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 2, 8)
-                local function folder_has_matching_files(items, search_lower)
-                    if search_lower == "" then return true end
+                local function folder_match_count(items, search_lower)
+                    if search_lower == "" then return 1 end
+                    local count = 0
                     for _, item in ipairs(items) do
                         if item.is_dir then
-                            if folder_has_matching_files(item.items or {}, search_lower) then
-                                return true
+                            if item.search_match_term ~= search_lower then
+                                if not item.children_loaded and item.path then
+                                    item.items = read_directory_recursive(item.path, true)
+                                    item.children_loaded = true
+                                end
+                                item.search_match_term = search_lower
+                                item.search_match_count = folder_match_count(item.items or {}, search_lower)
                             end
+                            count = count + (item.search_match_count or 0)
                         else
                             if is_file_visible(item.name) then
                                 local name_lower = item.name_lower or string.lower(item.name)
                                 if string.find(name_lower, search_lower, 1, true) then
-                                    return true
+                                    count = count + 1
                                 end
                             end
                         end
                     end
-                    return false
+                    return count
                 end
                 local function display_tree(items, path)
                     local search_lower = search_filter.search_term ~= "" and string.lower(search_filter.search_term) or ""
                     for _, item in ipairs(items) do
                         local icon = item.is_dir and FOLDER_ICON or FILE_ICON
                         if item.is_dir then
-                            if folder_has_matching_files(item.items or {}, search_lower) then
-                                local tree_open = r.ImGui_TreeNode(ctx, icon .. " " .. item.name)
+                            if search_lower ~= "" and not item.children_loaded and item.path then
+                                item.items = read_directory_recursive(item.path, true)
+                                item.children_loaded = true
+                            end
+                            local match_count = folder_match_count(item.items or {}, search_lower)
+                            if match_count > 0 then
                                 local folder_path = item.path or (path .. sep .. item.name)
+                                local label = icon .. " " .. item.name
+                                if search_lower ~= "" then
+                                    label = label .. "  (" .. match_count .. ")"
+                                end
+                                label = label .. "###tk_tree_" .. folder_path
+                                local tree_open = r.ImGui_TreeNode(ctx, label)
                                 if r.ImGui_BeginPopupContextItem(ctx, "tree_folder_context_" .. folder_path) then
                                     render_lufs_folder_context_menu(folder_path)
                                     if r.ImGui_MenuItem(ctx, "Add this folder to Folders list") then
@@ -9003,6 +9083,22 @@ function handle_keyboard_navigation()
     local key_page_down = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_PageDown())
     local key_home = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Home())
     local key_end = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_End())
+    local key_space = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Space())
+    if key_space then
+        local is_playing = playback.playing_preview or playback.is_midi_playback or playback.is_video_playback or playback.is_paused
+        if is_playing then
+            stop_playback()
+        elseif #ui.visible_files > 0 and ui.visible_files[ui.selected_index] then
+            local file = ui.visible_files[ui.selected_index]
+            local file_path = file.full_path or file.path
+            if file_path then
+                playback.selected_file = file.name
+                playback.current_playing_file = file_path
+                play_media(file_path)
+            end
+        end
+        return true
+    end
     if #ui.visible_files > 0 then
         if key_up and ui.selected_index > 1 then
             ui.selected_index = ui.selected_index - 1
@@ -9188,10 +9284,20 @@ function handle_keyboard_navigation()
             end
             return true
         elseif key_enter and ui.selected_index >= 1 and ui.selected_index <= #ui.visible_files then
-            local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
-            if playback.current_playing_file == file_path and Play then
-                stop_playback(false)
+            local is_active = playback.playing_preview or playback.is_midi_playback or playback.is_video_playback or playback.is_paused
+            if is_active then
+                local was_paused = playback.is_paused
+                pause_playback()
+                if playback.link_transport and not playback.is_video_playback then
+                    local reaper_state = r.GetPlayState()
+                    if playback.is_paused and not was_paused then
+                        if reaper_state & 1 == 1 then r.CSurf_OnPause() end
+                    elseif not playback.is_paused and was_paused then
+                        if reaper_state & 1 == 0 then r.CSurf_OnPlay() end
+                    end
+                end
             else
+                local file_path = ui.visible_files[ui.selected_index].full_path or ui.visible_files[ui.selected_index].path
                 playback.current_playing_file = file_path
                 play_media(file_path)
             end
@@ -9221,11 +9327,17 @@ function draw_progress_window()
         r.ImGui_Text(ctx, "Building file cache and loading metadata...")
         r.ImGui_Spacing(ctx)
         
-        local total = cache_mgmt.total_files > 0 and cache_mgmt.total_files or 1
-        local progress = cache_mgmt.processed_files / total
-        
-        r.ImGui_ProgressBar(ctx, progress, -1, 0, 
-            string.format("%d / %d files", cache_mgmt.processed_files, cache_mgmt.total_files))
+        if cache_mgmt.total_files > 0 then
+            local total = cache_mgmt.total_files
+            local progress = cache_mgmt.processed_files / total
+            r.ImGui_ProgressBar(ctx, progress, -1, 0, 
+                string.format("%d / %d files", cache_mgmt.processed_files, cache_mgmt.total_files))
+        else
+            local t = r.ImGui_GetTime(ctx)
+            local sweep = (t % 1.2) / 1.2
+            local overlay = cache_mgmt.scan_message ~= "" and cache_mgmt.scan_message or "Scanning..."
+            r.ImGui_ProgressBar(ctx, sweep, -1, 0, overlay)
+        end
         
         r.ImGui_Spacing(ctx)
         
@@ -9632,7 +9744,9 @@ function loop()
             end
         end
         local window_width = r.ImGui_GetContentRegionAvail(ctx)
-        local left_panel_width = math.min(200, math.max(50, math.floor(window_width * 0.4)))
+        local min_left_panel = 190
+        local max_left_panel = math.max(min_left_panel, window_width - 200)
+        local left_panel_width = math.max(min_left_panel, math.min(ui.left_panel_width or 200, max_left_panel))
         local right_panel_width = math.max(100, window_width - left_panel_width - 10)
         if r.ImGui_BeginChild(ctx, "LeftControlPanel", left_panel_width, 0, r.ImGui_WindowFlags_None()) then
             local LEFT_FOOTER_H = ui.show_oscilloscope and 260 or 120  
@@ -12616,7 +12730,14 @@ function loop()
             local adjusted_length = source_length / (playback.effective_playrate or 1.0)
             local time_text = string.format("%.2f / %.2f s", pos, adjusted_length)
             local text_w, text_h = r.ImGui_CalcTextSize(ctx, time_text)
-            r.ImGui_DrawList_AddText(draw_list, x + (width - text_w) / 2, y + (height - text_h) / 2, 0xFFFFFFFF, time_text)
+            local text_x = x + (width - text_w) / 2
+            local text_y = y + (height - text_h) / 2
+            local outline_color = 0x000000FF
+            r.ImGui_DrawList_AddText(draw_list, text_x - 1, text_y, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x + 1, text_y, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y - 1, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y + 1, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0xFFFFFFFF, time_text)
         else
             local text = "PROGRESS......"
             local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, text)
@@ -12628,11 +12749,28 @@ function loop()
         end
         r.ImGui_EndChild(ctx)
         r.ImGui_SameLine(ctx)
-        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local div_w = 6
+        local _, div_h = r.ImGui_GetContentRegionAvail(ctx)
         local x, y = r.ImGui_GetCursorScreenPos(ctx)
-        local window_height = r.ImGui_GetWindowHeight(ctx)
-        r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + window_height, 0x606060FF, 1)
-        r.ImGui_Dummy(ctx, 3, 0)
+        r.ImGui_InvisibleButton(ctx, "##left_divider", div_w, div_h)
+        local div_hovered = r.ImGui_IsItemHovered(ctx)
+        local div_active = r.ImGui_IsItemActive(ctx)
+        if div_hovered or div_active then
+            r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeEW())
+        end
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local div_col = div_active and 0xFFFFFFAA or (div_hovered and 0xFFFFFF66 or 0x606060FF)
+        r.ImGui_DrawList_AddLine(draw_list, x + div_w * 0.5, y, x + div_w * 0.5, y + div_h, div_col, 1)
+        if div_active then
+            ui.is_dragging_left_divider = true
+            local dx = r.ImGui_GetMouseDelta(ctx)
+            if dx ~= 0 then
+                ui.left_panel_width = math.max(min_left_panel, math.min((ui.left_panel_width or 200) + dx, max_left_panel))
+            end
+        elseif ui.is_dragging_left_divider then
+            ui.is_dragging_left_divider = false
+            save_options()
+        end
         r.ImGui_SameLine(ctx)
         if r.ImGui_BeginChild(ctx, "RightFileBrowserPanel", right_panel_width - 5, 0) then
             local divider_h = 5
@@ -12883,6 +13021,7 @@ function loop()
             local video_button_size = 20
             local rs5k_button_size = 20
             local refresh_button_size = 20
+            local refresh_all_button_size = 20
             local spacing = 3
             local offset_left = 5
             local offset_up = 3
@@ -12899,8 +13038,8 @@ function loop()
                 button_count = 1
                 used_width = overflow_button_size
             else
-                button_count = refresh_enabled and 6 or 5
-                used_width = (refresh_enabled and refresh_button_size or 0) + rs5k_button_size + video_button_size + settings_button_size + shortcuts_button_size + quit_button_size
+                button_count = refresh_enabled and 7 or 5
+                used_width = (refresh_enabled and (refresh_button_size + refresh_all_button_size) or 0) + rs5k_button_size + video_button_size + settings_button_size + shortcuts_button_size + quit_button_size
             end
             r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail_width - used_width - offset_left - (spacing * button_count) - 1)
             r.ImGui_SetCursorPosY(ctx, buttons_y)
@@ -12939,6 +13078,55 @@ function loop()
                 r.ImGui_DrawList_AddTriangleFilled(drawList, arrow_points[1].x, arrow_points[1].y, arrow_points[2].x, arrow_points[2].y, arrow_points[3].x, arrow_points[3].y, refresh_color)
                 if r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_SetTooltip(ctx, "Refresh folder cache (incremental scan)")
+                end
+                r.ImGui_SameLine(ctx, 0, spacing - 1)
+
+                local refresh_all_pos_x, refresh_all_pos_y = r.ImGui_GetCursorScreenPos(ctx)
+                if r.ImGui_InvisibleButton(ctx, "##refresh_all", refresh_all_button_size, refresh_all_button_size) then
+                    r.ImGui_OpenPopup(ctx, "RefreshAllConfirm")
+                end
+                local refresh_all_color = r.ImGui_IsItemHovered(ctx) and hover_color or base_color
+                local ra_cx = refresh_all_pos_x + refresh_all_button_size / 2
+                local ra_cy = refresh_all_pos_y + refresh_all_button_size / 2 - 1
+                local ra_radius = refresh_all_button_size * 0.30
+                r.ImGui_DrawList_AddCircle(drawList, ra_cx, ra_cy, ra_radius, refresh_all_color, 0, 1.5)
+                local ra_tip = ra_radius * 0.6
+                local ra_half = ra_radius * 0.4
+                r.ImGui_DrawList_AddTriangleFilled(drawList,
+                    ra_cx + ra_tip, ra_cy - ra_radius,
+                    ra_cx, ra_cy - ra_radius - ra_half,
+                    ra_cx, ra_cy - ra_radius + ra_half,
+                    refresh_all_color)
+                r.ImGui_DrawList_AddTriangleFilled(drawList,
+                    ra_cx - ra_tip, ra_cy + ra_radius,
+                    ra_cx, ra_cy + ra_radius + ra_half,
+                    ra_cx, ra_cy + ra_radius - ra_half,
+                    refresh_all_color)
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Refresh all folder caches")
+                end
+                if r.ImGui_BeginPopupModal(ctx, "RefreshAllConfirm", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+                    local loc_count = #(file_location.locations or {})
+                    r.ImGui_Text(ctx, "Refresh the cache of all " .. loc_count .. " folder location(s)?")
+                    r.ImGui_Text(ctx, "This rescans every location for changes and may take a while.")
+                    r.ImGui_Dummy(ctx, 0, 4)
+                    if r.ImGui_Button(ctx, "Refresh all", 120, 0) then
+                        refresh_all_locations()
+                        search_filter.cached_location = ""
+                        search_filter.cached_flat_files = {}
+                        if file_location.current_location ~= "" then
+                            get_flat_file_list(file_location.current_location)
+                            if not file_location.flat_view then
+                                file_location.current_files = read_directory_recursive(file_location.current_location, false)
+                            end
+                        end
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_Button(ctx, "Cancel", 120, 0) then
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                    r.ImGui_EndPopup(ctx)
                 end
                 r.ImGui_SameLine(ctx, 0, spacing - 1)
             end
@@ -13080,6 +13268,17 @@ function loop()
                             get_flat_file_list(file_location.current_location)
                             if not file_location.flat_view then
                                 file_location.current_files = read_directory_recursive(file_location.current_location, false)
+                            end
+                        end
+                        if r.ImGui_MenuItem(ctx, "Refresh all folder caches") then
+                            refresh_all_locations()
+                            search_filter.cached_location = ""
+                            search_filter.cached_flat_files = {}
+                            if file_location.current_location ~= "" then
+                                get_flat_file_list(file_location.current_location)
+                                if not file_location.flat_view then
+                                    file_location.current_files = read_directory_recursive(file_location.current_location, false)
+                                end
                             end
                         end
                         r.ImGui_Separator(ctx)
@@ -13897,7 +14096,8 @@ function loop()
                     r.ImGui_Text(ctx, "PLAYBACK")
                     r.ImGui_PopStyleColor(ctx, 1)
                     r.ImGui_Spacing(ctx)
-                    r.ImGui_BulletText(ctx, "Enter/Return       Play File (no pause)")
+                    r.ImGui_BulletText(ctx, "Spacebar           Play / Stop Preview")
+                    r.ImGui_BulletText(ctx, "Enter/Return       Play / Pause Preview (resumes from pause position)")
                     r.ImGui_BulletText(ctx, "Shift+Click        Insert at Edit Cursor")
                     r.ImGui_BulletText(ctx, "Click Waveform     Seek to Position")
                     r.ImGui_BulletText(ctx, "Drag Waveform      Create Time Selection")
