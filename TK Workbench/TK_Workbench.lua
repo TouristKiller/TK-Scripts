@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.4.3
+-- @version 0.4.4
 -- @changelog:
+-- v0.4.4
+--   + Calculator: Added an option in Delay / Reverb to subtract pre-delay from decay/RT60 values, including selectable pre-delay source
+--   + Instrument Rack: Fixed horizontal section collapse headers so text stays inside the header when tiles are compact or screenshots are hidden
+--   + Instrument Rack: Simplified horizontal section labels to TRACK, INPUT, and TAKE
 -- v0.4.3
 --   + Instrument Rack: Added an option to hide parallel/serial signal flow badges in both vertical and horizontal layouts
 --   + Instrument Rack: Horizontal header now includes a close dot next to the settings (...) button

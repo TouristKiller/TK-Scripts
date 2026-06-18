@@ -15,6 +15,8 @@ local defaults = {
   sync_bpm = true,
   manual_bpm = 120.0,
   delay_unit = "ms",
+  decay_subtract_predelay = false,
+  decay_predelay_index = 3,
   sync_samplerate = true,
   samplerate = 48000,
   a4_ref = 440.0,
@@ -90,6 +92,7 @@ local function ensure_settings(app)
   settings.a4_ref = clamp(settings.a4_ref, 400, 480)
   settings.note_index = clamp(math.floor(settings.note_index or 0), 0, 11)
   settings.note_octave = clamp(math.floor(settings.note_octave or 0), -1, 9)
+  settings.decay_predelay_index = clamp(math.floor(settings.decay_predelay_index or 1), 1, #predelay_options)
   if settings.delay_unit ~= "hz" then settings.delay_unit = "ms" end
   if changed and app.save_settings then app.save_settings() end
   return settings
@@ -387,9 +390,40 @@ local function draw_delay_section(ctx, app, settings)
   chip_grid(ctx, app, "predelay", predelay_items, 4)
 
   section_header(ctx, "Reverb decay / RT60")
+  local changed, value = r.ImGui_Checkbox(ctx, "Subtract pre-delay from decay##calc_decay_subtract_predelay", settings.decay_subtract_predelay == true)
+  if changed then
+    settings.decay_subtract_predelay = value
+    save(app)
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "When enabled, selected pre-delay time is subtracted from each decay value") end
+  if settings.decay_subtract_predelay == true then
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
+    local selected = predelay_options[settings.decay_predelay_index] or predelay_options[1]
+    local selected_ms = note_ms(bpm, selected.d, selected.mult)
+    local preview = string.format("%s (%.1f ms)", selected.label, selected_ms)
+    if r.ImGui_BeginCombo(ctx, "Pre-delay source##calc_decay_predelay_source", preview) then
+      for index, opt in ipairs(predelay_options) do
+        local ms = note_ms(bpm, opt.d, opt.mult)
+        local label = string.format("%s (%.1f ms)", opt.label, ms)
+        local is_selected = settings.decay_predelay_index == index
+        if r.ImGui_Selectable(ctx, label, is_selected) then
+          settings.decay_predelay_index = index
+          save(app)
+        end
+        if is_selected then r.ImGui_SetItemDefaultFocus(ctx) end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+  end
   local decay_items = {}
+  local subtract_ms = 0
+  if settings.decay_subtract_predelay == true then
+    local predelay = predelay_options[settings.decay_predelay_index] or predelay_options[1]
+    subtract_ms = note_ms(bpm, predelay.d, predelay.mult)
+  end
   for _, opt in ipairs(decay_options) do
-    local ms = note_ms(bpm, opt.d, opt.mult)
+    local raw_ms = note_ms(bpm, opt.d, opt.mult)
+    local ms = math.max(0, raw_ms - subtract_ms)
     decay_items[#decay_items + 1] = {
       label = opt.label,
       value = string.format("%.0f", ms),
@@ -397,7 +431,9 @@ local function draw_delay_section(ctx, app, settings)
       accent = Theme.colors.accent,
       copy = string.format("%.2f", ms),
       copy_status = "Decay " .. opt.label .. " copied (" .. string.format("%.2f", ms) .. " ms)",
-      tooltip = string.format("Decay %s\n%.2f ms  |  %.3f s", opt.label, ms, ms / 1000.0)
+      tooltip = settings.decay_subtract_predelay == true
+        and string.format("Decay %s\nBase %.2f ms - Pre-delay %.2f ms = %.2f ms  |  %.3f s", opt.label, raw_ms, subtract_ms, ms, ms / 1000.0)
+        or string.format("Decay %s\n%.2f ms  |  %.3f s", opt.label, ms, ms / 1000.0)
     }
   end
   chip_grid(ctx, app, "decay", decay_items, 4)

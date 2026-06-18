@@ -3575,19 +3575,24 @@ function M.draw(app)
         r.ImGui_DrawList_AddTriangleFilled(sdl, chev_cx + UIScale.round(3), chev_cy - UIScale.round(4), chev_cx - UIScale.round(4), chev_cy, chev_cx + UIScale.round(3), chev_cy + UIScale.round(4), text_color)
       end
       if label and label ~= "" then
-        label = label:upper()
-        local font_size = r.ImGui_GetFontSize(ctx)
-        local scale = size / font_size
-        local line_h = size + UIScale.round(2)
+        local compact = label:upper():gsub("%s+", "")
         local chars = {}
-        for ch in label:gmatch(".") do chars[#chars + 1] = ch end
-        local total_h = #chars * line_h
+        for ch in compact:gmatch(".") do chars[#chars + 1] = ch end
         local top = sy + chev_size + UIScale.round(8)
         local avail_h = sh - (chev_size + UIScale.round(12))
+        local target_size = math.floor((avail_h / math.max(1, #chars)) - 1)
+        if target_size < UIScale.round(7) then target_size = UIScale.round(7) end
+        if target_size > UIScale.round(12) then target_size = UIScale.round(12) end
+        local font_size = r.ImGui_GetFontSize(ctx)
+        local scale = target_size / font_size
+        local line_h = target_size + UIScale.round(1)
+        local max_chars = math.max(1, math.floor(avail_h / line_h))
+        local total_h = math.min(#chars, max_chars) * line_h
         local start_y = top + math.max(0, (avail_h - total_h) * 0.5)
-        for i, ch in ipairs(chars) do
+        for i = 1, math.min(#chars, max_chars) do
+          local ch = chars[i]
           local ch_w = r.ImGui_CalcTextSize(ctx, ch) * scale
-          r.ImGui_DrawList_AddTextEx(sdl, nil, size, bx + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, text_color, ch)
+          r.ImGui_DrawList_AddTextEx(sdl, nil, target_size, bx + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, text_color, ch)
         end
       end
       r.ImGui_SetCursorScreenPos(ctx, bx, sy)
@@ -4206,7 +4211,7 @@ function M.draw(app)
       if not show_track_fx then return end
       local collapsed = false
       if horizontal then
-        collapsed = section_break("track", "Track FX")
+        collapsed = section_break("track", "TRACK")
       else
         new_section()
         collapsed = draw_section_label(ctx, "Track FX", nil, fx_count, section_accent_color(settings, track), "track")
@@ -4231,7 +4236,7 @@ function M.draw(app)
       local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
       local collapsed = false
       if horizontal then
-        collapsed = section_break("input", "Input FX")
+        collapsed = section_break("input", "INPUT")
       else
         new_section()
         collapsed = draw_section_label(ctx, "Track Input FX", nil, input_fx_count, section_accent_color(settings, track), "input")
@@ -4264,7 +4269,7 @@ function M.draw(app)
       else
         local collapsed = false
         if horizontal then
-          collapsed = section_break("take", "Take FX", get_take_label(take))
+          collapsed = section_break("take", "TAKE", get_take_label(take))
         else
           if take_fx_count == 0 then
             r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No item FX on selected item: " .. get_take_label(take))
