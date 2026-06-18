@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.5
+-- @version 0.9.55
 -- @changelog:
 --[[
+v0.9.55:
++ Added small round toggle button on the progress bar to switch time display between decimal seconds and mm:ss clock format
+
 v0.9.5:
 + Added toggle to show/hide folder add (+) buttons in Folder View tree; setting is saved in options and presets
 
@@ -486,6 +489,7 @@ local ui_settings = {
     show_cover_art = true,
     show_waveform_bg = true,
     show_folder_add_buttons = true,
+    time_display_compact = false,
     hide_scrollbar = false,  
     compact_view = false,
     selected_font = "Arial",  
@@ -12745,6 +12749,20 @@ function loop()
         local height = 12
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
         local x, y = r.ImGui_GetCursorScreenPos(ctx)
+        local toggle_size = 11
+        local toggle_gap = 3
+        local toggle_x = x + width - toggle_size
+        local toggle_y = y + (height - toggle_size) * 0.5
+        local text_width = math.max(0, width - toggle_size - toggle_gap)
+        local function format_clock_pair(seconds, pad_minutes)
+            seconds = math.max(0, seconds or 0)
+            local mins = math.floor(seconds / 60)
+            local secs = math.floor(seconds % 60)
+            if pad_minutes then
+                return string.format("%02d:%02d", mins, secs)
+            end
+            return string.format("%d:%02d", mins, secs)
+        end
         if playback.playing_preview and playback.current_playing_file ~= "" and playback.playing_source then
             local retval, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
             local source_length = r.GetMediaSourceLength(playback.playing_source)
@@ -12768,9 +12786,14 @@ function loop()
             local bar_color = r.ImGui_ColorConvertDouble4ToU32(red, green, 0.0, 1.0)
             r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width * progress, y + height, bar_color)
             local adjusted_length = source_length / (playback.effective_playrate or 1.0)
-            local time_text = string.format("%.2f / %.2f s", pos, adjusted_length)
+            local time_text
+            if ui_settings.time_display_compact then
+                time_text = format_clock_pair(pos, true) .. " / " .. format_clock_pair(adjusted_length, false)
+            else
+                time_text = string.format("%.2f / %.2f s", pos, adjusted_length)
+            end
             local text_w, text_h = r.ImGui_CalcTextSize(ctx, time_text)
-            local text_x = x + (width - text_w) / 2
+            local text_x = x + (text_width - text_w) / 2
             local text_y = y + (height - text_h) / 2
             local outline_color = 0x000000FF
             r.ImGui_DrawList_AddText(draw_list, text_x - 1, text_y, outline_color, time_text)
@@ -12781,10 +12804,20 @@ function loop()
         else
             local text = "PROGRESS......"
             local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, text)
-            local text_x = x + (width - text_size_w) / 2
+            local text_x = x + (text_width - text_size_w) / 2
             local text_y = y + (height - text_size_h) / 2
             r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x888888FF, text)
         end
+        r.ImGui_SetCursorScreenPos(ctx, toggle_x, toggle_y)
+        r.ImGui_InvisibleButton(ctx, "##time_display_toggle", toggle_size, toggle_size)
+        if r.ImGui_IsItemClicked(ctx, 0) then
+            ui_settings.time_display_compact = not ui_settings.time_display_compact
+        end
+        local toggle_hovered = r.ImGui_IsItemHovered(ctx)
+        local toggle_color = ui_settings.time_display_compact and 0x8ED26BFF or 0x6A6A6AFF
+        local toggle_border = toggle_hovered and 0xFFFFFFFF or 0xC0C0C0FF
+        r.ImGui_DrawList_AddCircleFilled(draw_list, toggle_x + toggle_size * 0.5, toggle_y + toggle_size * 0.5, toggle_size * 0.5 - 1, toggle_color)
+        r.ImGui_DrawList_AddCircle(draw_list, toggle_x + toggle_size * 0.5, toggle_y + toggle_size * 0.5, toggle_size * 0.5 - 1, toggle_border, 0, 1)
         r.ImGui_Dummy(ctx, width, height)
         end
         r.ImGui_EndChild(ctx)
