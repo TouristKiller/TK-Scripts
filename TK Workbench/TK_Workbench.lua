@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.4.2
+-- @version 0.4.3
 -- @changelog:
+-- v0.4.3
+--   + Instrument Rack: Added an option to hide parallel/serial signal flow badges in both vertical and horizontal layouts
+--   + Instrument Rack: Horizontal header now includes a close dot next to the settings (...) button
+--   + Instrument Rack: Refined vertical and horizontal spacing for section gaps, add zones, and flow badge placement
+--   + Instrument Rack: Input FX section now supports the same flow badges/tree behavior as track FX
+--   + Instrument Rack: Take FX tiles now keep parameter-slot space visible for consistent tile height
+--   + Instrument Rack: Added Wet knob size and alpha controls, capped Wet knob size to 1.0, and adjusted Wet knob colors to a more neutral style
 -- v0.4.2
 --   + Preferences: Reorganized into themed tabs (General, Modules, Theme) so all settings live in one window; clicking the settings dot now opens Preferences directly
 --   + Preferences: Added a Modules tab to show or hide individual modules in both the home tiles and the module dropdown, with Show all / Hide all

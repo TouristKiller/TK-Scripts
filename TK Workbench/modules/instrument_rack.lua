@@ -70,10 +70,13 @@ local defaults = {
   horizontal_tile_width = 240,
   hide_horizontal_scrollbar = false,
   invert_horizontal_scroll = false,
+  hide_parallel_serial_badges = false,
   section_order = "default",
   section_track_color = false,
   show_item_name_overlay = true,
   show_info_bar = true,
+  wet_knob_scale = 1.0,
+  wet_knob_alpha = 1.0,
   auto_apply_default_pins = false,
   restore_default_pin_values = false
 }
@@ -95,6 +98,13 @@ end
 
 local function param_slot_count(settings)
   return settings and tonumber(settings.macro_param_slots) == 8 and 8 or 4
+end
+
+local function param_slots_height(settings)
+  if not settings or settings.show_pinned_params == false then return 0 end
+  local slot_count = param_slot_count(settings)
+  local rows = slot_count > PARAM_SLOT_COLUMNS and 2 or 1
+  return rows == 2 and UIScale.round(96) or UIScale.round(54)
 end
 
 local function validate_track(track)
@@ -424,6 +434,17 @@ local function build_track_fx_tree(chain, top_count, max_depth)
     if is_container then
       node.children, node.child_count = collect_container_nodes(chain, i + 1, top_count, 1, 1, max_depth)
     end
+    nodes[#nodes + 1] = node
+  end
+  return nodes
+end
+
+local function build_input_fx_tree(chain, top_count)
+  chain = as_chain(chain)
+  local nodes = {}
+  for i = 0, top_count - 1 do
+    local api = REC_FX_OFFSET + i
+    local node = { api = api, depth = 0, is_container = false, parallel = c_is_parallel(chain, api) }
     nodes[#nodes + 1] = node
   end
   return nodes
@@ -1438,6 +1459,7 @@ local function draw_header(app, ctx, settings, track)
   local button_h = r.ImGui_GetFrameHeight(ctx)
   local bar_h = math.max(text_h + pad_y * 2, button_h)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local show_header_close = settings.orientation == "horizontal" and app and app.script_name == "TK Instrument Rack (Horizontal)"
   r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, UIScale.px(3))
   r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, cursor_x + avail - pad_x, cursor_y + bar_h)
   r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + (bar_h - text_h) * 0.5, text_color, label)
@@ -1445,7 +1467,7 @@ local function draw_header(app, ctx, settings, track)
   local pin_label = (settings.pinned_track_guid ~= "" and "Unpin" or "Pin")
   local pin_w = UIScale.text_button_w(ctx, pin_label, 0, 8)
   local gap = UIScale.round(4)
-  local buttons_w = pin_w + gap + button_h
+  local buttons_w = pin_w + gap + button_h + (show_header_close and (gap + button_h) or 0)
   r.ImGui_SetCursorPosX(ctx, start_pos_x + math.max(0, avail - buttons_w))
   r.ImGui_SetCursorPosY(ctx, start_pos_y + math.max(0, (bar_h - button_h) * 0.5))
   if r.ImGui_Button(ctx, pin_label .. "##ir_pin", pin_w, button_h) then
@@ -1461,6 +1483,17 @@ local function draw_header(app, ctx, settings, track)
   r.ImGui_SameLine(ctx, nil, gap)
   if r.ImGui_Button(ctx, "...##ir_settings", button_h, button_h) then r.ImGui_OpenPopup(ctx, "Instrument Rack Settings") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Instrument Rack settings") end
+  if show_header_close then
+    r.ImGui_SameLine(ctx, nil, gap)
+    local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
+    local close_dot_d = math.max(UIScale.round(10), button_h - UIScale.round(4))
+    local close_mid_x = close_x + button_h * 0.5
+    local close_mid_y = close_y + button_h * 0.5
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_mid_x, close_mid_y, close_dot_d * 0.5, 0xF7768EFF)
+    r.ImGui_DrawList_AddCircle(draw_list, close_mid_x, close_mid_y, close_dot_d * 0.5, 0x3A1018FF, 16, UIScale.px(1))
+    if r.ImGui_InvisibleButton(ctx, "##ir_horizontal_close_dot", button_h, button_h) then app.close_requested = true end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
+  end
   r.ImGui_SetCursorPosX(ctx, start_pos_x)
   r.ImGui_SetCursorPosY(ctx, start_pos_y + bar_h)
   if r.ImGui_BeginPopup(ctx, "Instrument Rack Settings") then
@@ -1499,6 +1532,13 @@ local function draw_header(app, ctx, settings, track)
       settings.macro_param_slots = slot_count == 4 and 8 or 4
       if app.save_settings then app.save_settings() end
     end
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderDouble(ctx, "Wet knob size", tonumber(settings.wet_knob_scale) or 1.0, 0.7, 1.0, "%.2f x")
+    if changed then settings.wet_knob_scale = value; if app.save_settings then app.save_settings() end end
+    local alpha_pct = math.floor(((tonumber(settings.wet_knob_alpha) or 1.0) * 100) + 0.5)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderInt(ctx, "Wet knob alpha", alpha_pct, 10, 100, "%d%%")
+    if changed then settings.wet_knob_alpha = value / 100; if app.save_settings then app.save_settings() end end
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "FX sources")
     changed, value = r.ImGui_Checkbox(ctx, "Show track FX", settings.show_track_fx)
@@ -1516,6 +1556,8 @@ local function draw_header(app, ctx, settings, track)
     if changed then settings.section_order = value and "signal_flow" or "default"; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Color sections by track color", settings.section_track_color == true)
     if changed then settings.section_track_color = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Hide parallel/serial tiles", settings.hide_parallel_serial_badges == true)
+    if changed then settings.hide_parallel_serial_badges = value; if app.save_settings then app.save_settings() end end
     if settings.orientation == "horizontal" then
       r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
       changed, value = r.ImGui_SliderInt(ctx, "Tile width", settings.horizontal_tile_width or 240, 160, 400, "%d px")
@@ -1606,23 +1648,31 @@ local function set_fx_wet(track, fx_index, value)
 end
 
 local function draw_wet_knob(app, ctx, draw_list, track, fx_index, cx, cy, radius)
+  local settings = ensure_settings(app)
+  local alpha = tonumber(settings.wet_knob_alpha) or 1.0
+  if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local function with_alpha(color)
+    local a = color & 0xFF
+    local out_a = math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
+    return (color & 0xFFFFFF00) | out_a
+  end
   local value = math.max(0, math.min(1, get_fx_wet(track, fx_index)))
   local start_angle = math.pi * 0.75
   local end_angle = math.pi * 2.25
   local value_angle = start_angle + value * (end_angle - start_angle)
   local segments = radius < 8 and 12 or (radius < 14 and 18 or 24)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, 0x00000066, segments)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, 0x555555FF, segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, with_alpha(0x00000066), segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, with_alpha(0x333333CC), segments)
   r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, end_angle, segments)
-  r.ImGui_DrawList_PathStroke(draw_list, 0x2A2A2AFF, 0, UIScale.px(2))
+  r.ImGui_DrawList_PathStroke(draw_list, with_alpha(0x2A2A2AFF), 0, UIScale.px(2))
   if value > 0.01 then
     r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, value_angle, segments)
-    r.ImGui_DrawList_PathStroke(draw_list, 0x4488CCFF, 0, UIScale.px(2.5))
+    r.ImGui_DrawList_PathStroke(draw_list, with_alpha(0x8F8F8FFF), 0, UIScale.px(2.5))
   end
   local ind_x = cx + math.cos(value_angle) * (radius - UIScale.px(3))
   local ind_y = cy + math.sin(value_angle) * (radius - UIScale.px(3))
-  r.ImGui_DrawList_AddLine(draw_list, cx, cy, ind_x, ind_y, 0xFFFFFFFF, UIScale.px(2))
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.42, 0xCCCCCCFF, segments)
+  r.ImGui_DrawList_AddLine(draw_list, cx, cy, ind_x, ind_y, with_alpha(0xFFFFFFFF), UIScale.px(2))
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.42, with_alpha(0xB8B8B8FF), segments)
   r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(3), cy - radius - UIScale.round(3))
   r.ImGui_InvisibleButton(ctx, "##ir_fx_wet_knob", (radius + UIScale.round(3)) * 2, (radius + UIScale.round(3)) * 2)
   local active = r.ImGui_IsItemActive(ctx)
@@ -1639,8 +1689,8 @@ local function draw_wet_knob(app, ctx, draw_list, track, fx_index, cx, cy, radiu
     local tw, th = r.ImGui_CalcTextSize(ctx, label)
     local lx = cx - tw * 0.5
     local ly = cy - th * 0.5
-    r.ImGui_DrawList_AddRectFilled(draw_list, lx - UIScale.px(3), ly - UIScale.px(1), lx + tw + UIScale.px(3), ly + th + UIScale.px(1), 0x000000CC, UIScale.px(3))
-    r.ImGui_DrawList_AddText(draw_list, lx, ly, 0xFFFFFFFF, label)
+    r.ImGui_DrawList_AddRectFilled(draw_list, lx - UIScale.px(3), ly - UIScale.px(1), lx + tw + UIScale.px(3), ly + th + UIScale.px(1), with_alpha(0x000000CC), UIScale.px(3))
+    r.ImGui_DrawList_AddText(draw_list, lx, ly, with_alpha(0xFFFFFFFF), label)
   end
   if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
     set_fx_wet(track, fx_index, 1.0)
@@ -2416,7 +2466,7 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width, active)
   local row_width = math.max(1, item_width - UIScale.round(14))
   local rows = slot_count > PARAM_SLOT_COLUMNS and 2 or 1
   local row_step = UIScale.round(44)
-  local row_height = rows == 2 and UIScale.round(96) or UIScale.round(54)
+  local row_height = param_slots_height(settings)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local pinned = get_pinned_for_fx(track, fx_index)
@@ -2438,11 +2488,12 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width, active)
     local cell_width = row_width / PARAM_SLOT_COLUMNS
     local cx = x + (column - 0.5) * cell_width
     local cy = y + UIScale.round(23) + row * row_step
+    local knob_radius = UIScale.round(12)
     local entry = pinned_by_slot[slot]
     if entry then
-      draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, UIScale.round(12), active)
+      draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, knob_radius, active)
     else
-      draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, cy, UIScale.round(12), slot)
+      draw_empty_param_slot(app, ctx, draw_list, track, fx_index, cx, cy, knob_radius, slot)
     end
   end
   r.ImGui_SetCursorScreenPos(ctx, x, y + row_height)
@@ -2771,7 +2822,7 @@ end
 
 local function expanded_tile_height(settings)
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
-  local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and UIScale.round(100) or UIScale.round(58)) or 0
+  local param_h = param_slots_height(settings)
   local row1_h = UIScale.round(18)
   local toolbar_h = UIScale.round(20)
   return row1_h + toolbar_h + UIScale.round(2) + shot_h + param_h + UIScale.round(4)
@@ -2857,7 +2908,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
   if scale_y < 0.55 then scale_y = 0.55 end
   if scale_y > 1.0 then scale_y = 1.0 end
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
-  local param_h = settings.show_pinned_params and (param_slot_count(settings) == 8 and UIScale.round(100) or UIScale.round(58)) or 0
+  local param_h = param_slots_height(settings)
   local row1_h = UIScale.round(18)
   local toolbar_h = UIScale.round(20)
   if nested_scale then
@@ -2930,7 +2981,9 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
     if r.ImGui_InvisibleButton(ctx, "##ir_fx_collapse", chev_size, chev_size) then state.collapsed[collapse_key] = not is_collapsed end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand" or "Collapse") end
 
-    local knob_radius = UIScale.round(13)
+    local wet_scale = tonumber(settings.wet_knob_scale) or 1.0
+    if wet_scale < 0.7 then wet_scale = 0.7 elseif wet_scale > 1.0 then wet_scale = 1.0 end
+    local knob_radius = math.max(UIScale.round(9), UIScale.round(13 * wet_scale))
     local knob_cx = bx + UIScale.round(5) + knob_radius
     local knob_cy = by + math.floor(title_h * 0.5)
     local content_x = knob_cx + knob_radius + UIScale.round(6)
@@ -3211,6 +3264,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
   r.ImGui_PushID(ctx, "ir_take_fx_" .. tostring(fx_index))
   local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   local shot_h = settings.show_screenshots and not settings.tile_compact and UIScale.round(settings.screenshot_height or 90) or 0
+  local param_h = param_slots_height(settings)
   local row1_h = UIScale.round(18)
   local toolbar_h = UIScale.round(20)
   local take_guid = (r.TakeFX_GetFXGUID and r.TakeFX_GetFXGUID(take, fx_index)) or ("TAKEINDEX:" .. tostring(fx_index))
@@ -3229,7 +3283,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
     r.ImGui_PopID(ctx)
     return
   end
-  local tile_h = is_collapsed and row1_h or (row1_h + toolbar_h + shot_h + UIScale.round(6))
+  local tile_h = is_collapsed and row1_h or (row1_h + toolbar_h + shot_h + param_h + UIScale.round(6))
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
   local tile_visible = r.ImGui_BeginChild(ctx, "##ir_take_fx_tile", item_width, tile_h, 0, flags)
   r.ImGui_PopStyleVar(ctx, 1)
@@ -3312,6 +3366,10 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
           end
         end
         handle_fx_drag(app, ctx, draw_list, track, take, "item", fx_index, short_name, bx, by, item_width, tile_h)
+      end
+      if param_h > 0 then
+        local sep_y = by + row1_h + toolbar_h + shot_h + UIScale.round(4)
+        r.ImGui_DrawList_AddLine(draw_list, bx + UIScale.round(4), sep_y, bx + item_width - UIScale.round(4), sep_y, Theme.colors.separator, UIScale.px(1))
       end
     end
 
@@ -3477,7 +3535,13 @@ function M.draw(app)
     local col = 0
     local function next_tile()
       if horizontal then
-        if col > 0 then r.ImGui_SameLine(ctx) end
+        if col > 0 then
+          if settings.hide_parallel_serial_badges then
+            r.ImGui_SameLine(ctx, nil, 0)
+          else
+            r.ImGui_SameLine(ctx)
+          end
+        end
         col = col + 1
       else
         center_next_item(ctx, width)
@@ -3706,6 +3770,7 @@ function M.draw(app)
     local seam_toggle_pending = nil
     local seam_toggle_chain = nil
     local function draw_parallel_badge(dl, cx, cy, col, is_horizontal)
+      if settings.hide_parallel_serial_badges then return end
       local hs = UIScale.round(11)
       local x0, y0, x1, y1 = cx - hs, cy - hs, cx + hs, cy + hs
       local sym = luminance(col) > 0.55 and 0x000000FF or 0xFFFFFFFF
@@ -3722,6 +3787,7 @@ function M.draw(app)
       end
     end
     local function draw_serial_badge(dl, cx, cy, col, is_horizontal)
+      if settings.hide_parallel_serial_badges then return end
       local hs = UIScale.round(11)
       local x0, y0, x1, y1 = cx - hs, cy - hs, cx + hs, cy + hs
       local sym = luminance(col) > 0.55 and 0x000000FF or 0xFFFFFFFF
@@ -3799,6 +3865,7 @@ function M.draw(app)
     end
     local function render_fx_nodes(nodes, depth)
       local minx, miny, maxx, maxy
+      local V_TILE_GAP = settings.hide_parallel_serial_badges and 0 or UIScale.round(20)
       local function acc(x0, y0, x1, y1)
         if not x0 then return end
         minx = minx and math.min(minx, x0) or x0
@@ -3808,7 +3875,7 @@ function M.draw(app)
       end
       local items = {}
       for _, node in ipairs(nodes) do
-        if #items > 0 then r.ImGui_Dummy(ctx, 1, UIScale.round(20)) end
+        if #items > 0 and V_TILE_GAP > 0 then r.ImGui_Dummy(ctx, 1, V_TILE_GAP) end
         local tile_w = width - depth * INDENT_STEP
         local min_w = UIScale.round(140)
         if tile_w < min_w then tile_w = min_w end
@@ -3960,7 +4027,7 @@ function M.draw(app)
       end
       r.ImGui_PopID(ctx)
     end
-    local H_TILE_GAP = UIScale.round(20)
+    local H_TILE_GAP = settings.hide_parallel_serial_badges and UIScale.round(4) or UIScale.round(20)
     local H_STRIP_W = UIScale.round(26)
     local H_INNER_MARGIN = UIScale.round(8)
     local H_OUTLINE_PAD = UIScale.round(5)
@@ -3976,7 +4043,7 @@ function M.draw(app)
       local active = payload ~= ""
       local color = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
       local cx, cy = x + zone_w * 0.5, y + zone_h * 0.5
-      local radius = math.min(zone_w, zone_h) * 0.5 - UIScale.px(2)
+      local radius = UIScale.round(40) * 0.5 - UIScale.px(2)
       r.ImGui_DrawList_AddCircle(dl, cx, cy, radius, color, 0, active and UIScale.px(2) or UIScale.px(1.5))
       local arm = radius * 0.5
       r.ImGui_DrawList_AddLine(dl, cx - arm, cy, cx + arm, cy, color, UIScale.px(2))
@@ -4035,7 +4102,6 @@ function M.draw(app)
         total_w = total_w + w
         if h > max_h then max_h = h end
       end
-      if #nodes > 0 then total_w = total_w + H_TILE_GAP end
       total_w = total_w + H_DROP_W
       if max_h <= 0 then max_h = expanded_tile_height(settings) end
       return total_w, max_h
@@ -4070,6 +4136,7 @@ function M.draw(app)
           items[#items + 1] = { left = x0, right = x1, top = y0, bottom = y1, parallel = par, api = child.api }
           child_x = child_x + cw + H_TILE_GAP
         end
+        if #node.children > 0 then child_x = child_x - H_TILE_GAP end
         local drop_y = oy + H_OUTLINE_PAD
         r.ImGui_SetCursorScreenPos(ctx, child_x, drop_y)
         draw_container_inner_zone_h(node.api, H_DROP_W, inner_h)
@@ -4112,7 +4179,7 @@ function M.draw(app)
     local function render_fx_nodes_h(nodes)
       local items = {}
       for _, node in ipairs(nodes) do
-        if #items > 0 then
+        if #items > 0 and H_TILE_GAP > 0 then
           r.ImGui_SameLine(ctx)
           r.ImGui_Dummy(ctx, H_TILE_GAP, 1)
         end
@@ -4171,10 +4238,14 @@ function M.draw(app)
         if input_fx_count == 0 and not collapsed then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No input FX on this track.") end
       end
       if not collapsed then
-        for index = 0, input_fx_count - 1 do
-          next_tile()
-          draw_fx_tile(app, ctx, settings, track, REC_FX_OFFSET + index, width, "input", take)
+        local input_chain = make_fx_chain(track, take, "input")
+        render_chain = input_chain
+        if horizontal then
+          render_fx_nodes_h(build_input_fx_tree(input_chain, input_fx_count))
+        else
+          render_fx_nodes(build_input_fx_tree(input_chain, input_fx_count), 0)
         end
+        render_chain = make_fx_chain(track, take, "track")
         next_tile()
         draw_add_zone(app, ctx, settings, track, width, nil, "input", nil, false)
       end
