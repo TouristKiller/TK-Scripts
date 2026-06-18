@@ -1,8 +1,12 @@
 -- @description TK MCP Cables Overlay
 -- @author TouristKiller
--- @version 1.2.3
+-- @version 1.3.0
 -- @about Overlay script that draws send/receive cables over REAPER's native MCP
 -- @changelog:
+--   v1.3.0
+--   + Hover labels now show audio channel routing (e.g. 1-2 -> 3-4) including mono and "none" states
+--   + Hover labels now show MIDI channel routing with All/orig and "none" states
+--   + Added companion action to toggle "Selected tracks only" mode
 --   v1.2.3
 --   + Added optional Natural curve mode using a catenary-style hyperbolic cosine shape
 --   + Manual curve mode remains the default and keeps the existing adjustable Bezier behavior
@@ -393,6 +397,31 @@ local function FormatPan(value)
  return "R" .. amount
 end
 
+local function FormatChan(ch)
+ local base = (ch & 1023) + 1
+ if (ch & 1024) == 1024 then return tostring(base) end
+ return string.format("%d-%d", base, base + 1)
+end
+
+local function FormatAudioRoute(track, send_idx)
+ local src = r.GetTrackSendInfo_Value(track, 0, send_idx, "I_SRCCHAN")
+ if not src or src == -1 then return "Audio: none" end
+ local dst = r.GetTrackSendInfo_Value(track, 0, send_idx, "I_DSTCHAN")
+ return "Audio " .. FormatChan(math.floor(src)) .. " -> " .. FormatChan(math.floor(dst))
+end
+
+local function FormatMidiRoute(track, send_idx)
+ local flags = r.GetTrackSendInfo_Value(track, 0, send_idx, "I_MIDIFLAGS")
+ if not flags then return "MIDI: none" end
+ flags = math.floor(flags)
+ local src = flags & 0x1F
+ if src == 0x1F then return "MIDI: none" end
+ local dst = (flags >> 5) & 0x1F
+ local s = (src == 0) and "All" or tostring(src)
+ local d = (dst == 0) and "orig" or tostring(dst)
+ return "MIDI " .. s .. " -> " .. d
+end
+
 local function BezierPoint(sx, sy, c1x, c1y, c2x, c2y, dx, dy, t)
  local u = 1 - t
  local b0 = u * u * u
@@ -491,6 +520,7 @@ local function BuildCableLabel(src_track, dst_track, send_idx, muted)
   "SEND    " .. src_name .. " -> " .. dst_name,
   "RECEIVE " .. dst_name .. " <- " .. src_name,
   state .. " | " .. FormatDb(vol) .. " | " .. FormatPan(pan),
+  FormatAudioRoute(src_track, send_idx) .. " | " .. FormatMidiRoute(src_track, send_idx),
  }
 end
 
@@ -1212,6 +1242,12 @@ local function Loop()
  if r.GetExtState("TK_MCP_Cables_Overlay", "toggle_settings") ~= "" then
   r.DeleteExtState("TK_MCP_Cables_Overlay", "toggle_settings", false)
   settings_visible = not settings_visible
+ end
+
+ if r.GetExtState("TK_MCP_Cables_Overlay", "toggle_selected_only") ~= "" then
+  r.DeleteExtState("TK_MCP_Cables_Overlay", "toggle_selected_only", false)
+  settings.selected_only = not settings.selected_only
+  MarkDirty()
  end
 
  UpdateExternalToggleState()
