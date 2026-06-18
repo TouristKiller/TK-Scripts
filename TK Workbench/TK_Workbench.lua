@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.4.1
+-- @version 0.4.2
 -- @changelog:
+-- v0.4.2
+--   + Preferences: Reorganized into themed tabs (General, Modules, Theme) so all settings live in one window; clicking the settings dot now opens Preferences directly
+--   + Preferences: Added a Modules tab to show or hide individual modules in both the home tiles and the module dropdown, with Show all / Hide all
 -- v0.4.1
 --   + Home: Fixed module icons drawing outside their shapes at non-100% UI scaling (e.g. Calculator buttons and Arrange BG grid no longer overflow)
 -- v0.4.0
@@ -436,6 +439,27 @@ local function move_module_to_target(source_id, target_id)
   return true
 end
 
+local function is_module_hidden(id)
+  local hidden = app.settings.hidden_modules
+  return type(hidden) == "table" and hidden[id] == true
+end
+
+local function set_module_hidden(id, hidden)
+  local map = type(app.settings.hidden_modules) == "table" and app.settings.hidden_modules or {}
+  if hidden then map[id] = true else map[id] = nil end
+  app.settings.hidden_modules = map
+  save_settings()
+end
+
+local function set_all_modules_hidden(hidden)
+  local map = {}
+  if hidden then
+    for _, module in ipairs(app.modules) do map[module.id] = true end
+  end
+  app.settings.hidden_modules = map
+  save_settings()
+end
+
 local function is_home_active()
   return app.settings.active_module == HOME_MODULE_ID
 end
@@ -827,9 +851,13 @@ local function draw_home_view()
       card_w = math.max(1, math.floor((avail_w - gap * (columns - 1)) / columns))
     end
     local card_h = math.max(UIScale.round(104), math.ceil(r.ImGui_GetTextLineHeight(ctx) * 5.8))
-    for index, module in ipairs(app.modules) do
-      draw_module_card(module, card_w, card_h)
-      if index % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
+    local visible_index = 0
+    for _, module in ipairs(app.modules) do
+      if not is_module_hidden(module.id) then
+        visible_index = visible_index + 1
+        draw_module_card(module, card_w, card_h)
+        if visible_index % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
+      end
     end
     local pending = app.cache.pending_module_reorder
     if pending then
@@ -877,14 +905,9 @@ local function draw_top_bar()
   r.ImGui_DrawList_AddCircleFilled(draw_list, settings_x + dot_size * 0.5, dot_y, dot_size * 0.5, 0xF2F2F2FF)
   r.ImGui_DrawList_AddCircle(draw_list, settings_x + dot_size * 0.5, dot_y, dot_size * 0.5, 0x8F9AA8FF, 16, 1)
   if r.ImGui_InvisibleButton(ctx, "##workbench_settings_dot", dot_size, dot_size) then
-    r.ImGui_OpenPopup(ctx, "##workbench_settings_menu")
+    app.settings_panel = "preferences"
   end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Settings") end
-  if r.ImGui_BeginPopup(ctx, "##workbench_settings_menu") then
-    if r.ImGui_MenuItem(ctx, "Theme") then app.settings_panel = "theme" end
-    if r.ImGui_MenuItem(ctx, "Preferences") then app.settings_panel = "preferences" end
-    r.ImGui_EndPopup(ctx)
-  end
   r.ImGui_SameLine(ctx, 0, dot_gap)
   local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
   local close_y_mid = close_y + dot_size * 0.5
@@ -923,7 +946,7 @@ local function draw_top_bar()
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Secondary")
     for _, candidate in ipairs(app.modules) do
-      if candidate.id ~= app.settings.active_module then
+      if candidate.id ~= app.settings.active_module and not is_module_hidden(candidate.id) then
         local selected = app.settings.split_module == candidate.id
         if r.ImGui_Selectable(ctx, candidate.title or candidate.id, selected) then set_split_module(candidate.id) end
         if selected then r.ImGui_SetItemDefaultFocus(ctx) end
@@ -949,11 +972,13 @@ local function draw_top_bar()
   r.ImGui_PushItemWidth(ctx, -1)
   if r.ImGui_BeginCombo(ctx, "##tk_workbench_module_select", title, combo_flags) then
     for _, candidate in ipairs(app.modules) do
-      local selected = app.settings.active_module == candidate.id
-      if r.ImGui_Selectable(ctx, candidate.title or candidate.id, selected) then
-        set_active_view(candidate.id)
+      if not is_module_hidden(candidate.id) or app.settings.active_module == candidate.id then
+        local selected = app.settings.active_module == candidate.id
+        if r.ImGui_Selectable(ctx, candidate.title or candidate.id, selected) then
+          set_active_view(candidate.id)
+        end
+        if selected then r.ImGui_SetItemDefaultFocus(ctx) end
       end
-      if selected then r.ImGui_SetItemDefaultFocus(ctx) end
     end
     r.ImGui_EndCombo(ctx)
   end
@@ -989,31 +1014,8 @@ local function is_reserved_theme_name(name)
   return false
 end
 
-local function draw_theme_settings()
-  if app.settings_panel == "theme" then
-    app.cache.theme_settings_open = true
-    app.settings_panel = nil
-    if Theme.is_reaper_theme_preset and Theme.is_reaper_theme_preset(app.settings.theme_preset) then
-      Theme.set_preset(app.settings.theme_preset, app.settings.custom_themes)
-    end
-  end
-  if not app.cache.theme_settings_open then return end
-  local settings_w, settings_h = UIScale.window_size(360, 500)
-  r.ImGui_SetNextWindowSize(ctx, settings_w, settings_h, r.ImGui_Cond_Appearing())
-  local visible, open = r.ImGui_Begin(ctx, "Theme Settings##tk_workbench_theme_settings", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
-  app.cache.theme_settings_open = open
-  if visible then
-    r.ImGui_TextColored(ctx, Theme.colors.accent, "Theme Settings")
-    local close_size = UIScale.round(14)
-    r.ImGui_SameLine(ctx, math.max(UIScale.round(180), settings_w - close_size - UIScale.round(16)))
-    local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0xF7768EFF)
-    r.ImGui_DrawList_AddCircle(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0x3A1018FF, 16, UIScale.px(1))
-    if r.ImGui_InvisibleButton(ctx, "##theme_settings_close", close_size, close_size) then app.cache.theme_settings_open = false end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
-    r.ImGui_Separator(ctx)
-    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preset")
+local function draw_theme_settings_body()
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preset")
     local current = app.settings.theme_preset or "Graphite"
     if r.ImGui_BeginCombo(ctx, "##theme_preset", current) then
       for _, name in ipairs(Theme.get_preset_names()) do
@@ -1056,7 +1058,7 @@ local function draw_theme_settings()
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preview")
     draw_theme_preview(Theme.colors)
     r.ImGui_Spacing(ctx)
-    local child_visible = r.ImGui_BeginChild(ctx, "##theme_color_editor", 0, UIScale.round(190), 1)
+    local child_visible = r.ImGui_BeginChild(ctx, "##theme_color_editor", UIScale.round(330), UIScale.round(190), 1)
     if child_visible then
       local color_flags = r.ImGui_ColorEditFlags_NoInputs()
       for _, field in ipairs(theme_color_fields) do
@@ -1120,15 +1122,35 @@ local function draw_theme_settings()
       app.status = "Theme preset reset"
       save_settings()
     end
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Close", UIScale.text_button_w(ctx, "Close", 90, 8), UIScale.button_h(ctx, 24)) then app.cache.theme_settings_open = false end
-  end
-  r.ImGui_End(ctx)
+end
+
+local function draw_preferences_tab(label, tab_id)
+  local current = app.cache.preferences_tab or "general"
+  local active = current == tab_id
+  local pad_x = UIScale.round(10)
+  local pad_y = UIScale.round(4)
+  local h = r.ImGui_GetTextLineHeight(ctx) + pad_y * 2
+  local w = calc_text_width(label) + pad_x * 2
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local clicked = r.ImGui_InvisibleButton(ctx, "##pref_tab_" .. tab_id, w, h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local bg = active and Theme.colors.accent_soft or (hovered and Theme.colors.frame_hover or Theme.colors.frame_bg)
+  local border = active and Theme.colors.accent or Theme.colors.border
+  local text_color = active and Theme.colors.accent or Theme.colors.text
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + w, y + h, bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + w, y + h, border, UIScale.px(4), 0, UIScale.px(1))
+  r.ImGui_DrawList_AddText(draw_list, x + pad_x, y + pad_y, text_color, label)
+  if clicked then app.cache.preferences_tab = tab_id end
 end
 
 local function draw_preferences_settings()
   if app.settings_panel == "preferences" then
     app.cache.preferences_open = true
+    app.settings_panel = nil
+  elseif app.settings_panel == "theme" then
+    app.cache.preferences_open = true
+    app.cache.preferences_tab = "theme"
     app.settings_panel = nil
   end
   if not app.cache.preferences_open then return end
@@ -1145,6 +1167,47 @@ local function draw_preferences_settings()
     if r.ImGui_InvisibleButton(ctx, "##preferences_close", close_size, close_size) then app.cache.preferences_open = false end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
     r.ImGui_Separator(ctx)
+    local pref_tabs = { { id = "general", label = "General" }, { id = "modules", label = "Modules" }, { id = "theme", label = "Theme" } }
+    for index, tab in ipairs(pref_tabs) do
+      draw_preferences_tab(tab.label, tab.id)
+      if index < #pref_tabs then r.ImGui_SameLine(ctx, 0, UIScale.gap(6)) end
+    end
+    r.ImGui_Separator(ctx)
+    local active_tab = app.cache.preferences_tab or "general"
+    if active_tab ~= app.cache.preferences_tab_applied then
+      if active_tab == "theme" and Theme.is_reaper_theme_preset and Theme.is_reaper_theme_preset(app.settings.theme_preset) then
+        Theme.set_preset(app.settings.theme_preset, app.settings.custom_themes)
+      end
+      app.cache.preferences_tab_applied = active_tab
+    end
+    if active_tab == "theme" then
+      draw_theme_settings_body()
+      r.ImGui_End(ctx)
+      return
+    end
+    if active_tab == "modules" then
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Show or hide modules in the tiles and dropdown.")
+      if r.ImGui_SmallButton(ctx, "Show all") then
+        set_all_modules_hidden(false)
+        app.status = "All modules visible"
+      end
+      r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
+      if r.ImGui_SmallButton(ctx, "Hide all") then
+        set_all_modules_hidden(true)
+        app.status = "All modules hidden"
+      end
+      r.ImGui_Separator(ctx)
+      for _, module in ipairs(app.modules) do
+        local module_visible = not is_module_hidden(module.id)
+        local changed, value = r.ImGui_Checkbox(ctx, (module.title or module.id) .. "##pref_module_" .. module.id, module_visible)
+        if changed then
+          set_module_hidden(module.id, not value)
+          app.status = value and ((module.title or module.id) .. " shown") or ((module.title or module.id) .. " hidden")
+        end
+      end
+      r.ImGui_End(ctx)
+      return
+    end
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "UI scale")
     r.ImGui_PushItemWidth(ctx, 140)
     local current_scale = set_ui_scale(app.settings.ui_scale or 1.0)
@@ -1484,7 +1547,7 @@ end
 local function auto_collapse_keep_open()
   if app.settings.auto_collapse_keep_expanded == true then return true end
   if auto_collapse_mouse_on_outer_edge() then return true end
-  if app.cache.preferences_open or app.cache.theme_settings_open or app.settings_panel then return true end
+  if app.cache.preferences_open or app.settings_panel then return true end
   if r.ImGui_IsPopupOpen and r.ImGui_PopupFlags_AnyPopupId then
     local ok, any_popup = pcall(r.ImGui_IsPopupOpen, ctx, "", r.ImGui_PopupFlags_AnyPopupId())
     if ok and any_popup then return true end
@@ -1945,7 +2008,6 @@ local function loop()
     update_auto_collapse_state(workbench_window_hovered(), docked)
     r.ImGui_End(ctx)
   end
-  draw_theme_settings()
   draw_preferences_settings()
   UI.end_tooltip_frame(app)
   pop_auto_collapse_style(auto_collapse_style_vars, auto_collapse_style_colors)
