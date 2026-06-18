@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.4.0
+-- @version 0.4.1
 -- @changelog:
+-- v0.4.1
+--   + Home: Fixed module icons drawing outside their shapes at non-100% UI scaling (e.g. Calculator buttons and Arrange BG grid no longer overflow)
 -- v0.4.0
 --   + Calculator: Added a new module with Delay, Gain, Note, and Samples tabs for studio calculations
 --   + Calculator: Delay tab shows note times (straight/dotted/triplet) with click-to-copy and ms/Hz toggle, plus reverb pre-delay and decay references
@@ -623,130 +625,139 @@ end
 
 local function draw_module_icon(draw_list, module, cx, cy, size, color)
   local id = module and module.id or ""
+  local s = size / 48
   local left = cx - size * 0.5
   local right = cx + size * 0.5
   local top = cy - size * 0.5
   local bottom = cy + size * 0.5
+  local function L(o) return left + o * s end
+  local function R(o) return right - o * s end
+  local function T(o) return top + o * s end
+  local function B(o) return bottom - o * s end
+  local function MX(o) return cx + (o or 0) * s end
+  local function MY(o) return cy + (o or 0) * s end
+  local function W(t) return math.max(1, (t or 1) * s) end
+  local function RD(rd) return (rd or 1) * s end
   if id == "project_overview" then
-    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, 2)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, top + 16, 2.2, color, 12)
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy - 2, cx, bottom - 14, color, 3)
-    r.ImGui_DrawList_AddLine(draw_list, cx - 5, cy - 2, cx, cy - 2, color, 3)
-    r.ImGui_DrawList_AddLine(draw_list, cx - 5, bottom - 14, cx + 5, bottom - 14, color, 3)
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, T(16), RD(2.2), color, 12)
+    r.ImGui_DrawList_AddLine(draw_list, cx, MY(-2), cx, B(14), color, W(3))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-5), MY(-2), cx, MY(-2), color, W(3))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-5), B(14), MX(5), B(14), color, W(3))
   elseif id == "timepiece" then
-    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, 2)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, 2.4, color, 12)
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx, top + 15, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy, right - 16, cy + 7, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx, top + 10, cx, top + 14, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx, bottom - 14, cx, bottom - 10, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 10, cy, left + 14, cy, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 14, cy, right - 10, cy, color, 2)
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, RD(2.4), color, 12)
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx, T(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, R(16), MY(7), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, T(10), cx, T(14), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, B(14), cx, B(10), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(10), cy, L(14), cy, color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(14), cy, R(10), cy, color, W(2))
   elseif id == "action_browser" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 7, top + 9, right - 7, bottom - 9, color, 4, 0, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, top + 18, left + 20, cy - 1, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 20, cy - 1, left + 14, cy + 8, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 25, cy + 8, left + 34, cy + 8, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, bottom - 17, right - 16, bottom - 17, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, bottom - 10, right - 24, bottom - 10, color, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(7), T(9), R(7), B(9), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(14), T(18), L(20), MY(-1), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(20), MY(-1), L(14), MY(8), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(25), MY(8), L(34), MY(8), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(14), B(17), R(16), B(17), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(14), B(10), R(24), B(10), color, W(2))
   elseif id == "action_clipboard" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 9, top + 10, right - 9, bottom - 5, color, 4, 0, 2)
-    r.ImGui_DrawList_AddRect(draw_list, cx - 10, top + 5, cx + 10, top + 15, color, 4, 0, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 17, top + 25, left + 21, top + 29, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 21, top + 29, left + 27, top + 20, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 32, top + 26, right - 16, top + 26, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 17, top + 36, left + 21, top + 40, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 21, top + 40, left + 27, top + 31, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 32, top + 37, right - 16, top + 37, color, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(9), T(10), R(9), B(5), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddRect(draw_list, MX(-10), T(5), MX(10), T(15), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(17), T(25), L(21), T(29), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(21), T(29), L(27), T(20), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(32), T(26), R(16), T(26), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(17), T(36), L(21), T(40), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(21), T(40), L(27), T(31), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(32), T(37), R(16), T(37), color, W(2))
   elseif id == "script_launcher" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 7, top + 8, right - 7, bottom - 8, color, 4, 0, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 17, top + 16, left + 17, bottom - 16, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 17, top + 16, right - 16, cy, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 16, cy, left + 17, bottom - 16, color, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(7), T(8), R(7), B(8), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(17), T(16), L(17), B(16), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(17), T(16), R(16), cy, color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(16), cy, L(17), B(16), color, W(2))
   elseif id == "track_recall" then
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, top + 8, right - 14, top + 8, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, bottom - 8, right - 14, bottom - 8, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 16, top + 10, right - 16, bottom - 10, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 16, top + 10, left + 16, bottom - 10, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 20, top + 15, cx, cy - 2, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 20, top + 15, cx, cy - 2, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy + 3, left + 21, bottom - 14, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy + 3, right - 21, bottom - 14, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, L(14), T(8), R(14), T(8), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(14), B(8), R(14), B(8), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(16), T(10), R(16), B(10), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(16), T(10), L(16), B(10), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(20), T(15), cx, MY(-2), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(20), T(15), cx, MY(-2), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, MY(3), L(21), B(14), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, MY(3), R(21), B(14), color, W(2))
   elseif id == "track_tags" then
-    r.ImGui_DrawList_AddLine(draw_list, left + 10, top + 14, right - 16, top + 14, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 16, top + 14, right - 8, cy, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 8, cy, right - 16, bottom - 14, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 16, bottom - 14, left + 10, bottom - 14, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 10, bottom - 14, left + 10, top + 14, color, 2)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, left + 18, cy, 3, color, 12)
-    r.ImGui_DrawList_AddLine(draw_list, cx - 4, cy - 7, cx + 9, cy + 6, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx + 3, cy - 7, cx - 4, cy, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, L(10), T(14), R(16), T(14), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(16), T(14), R(8), cy, color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(8), cy, R(16), B(14), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(16), B(14), L(10), B(14), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(10), B(14), L(10), T(14), color, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, L(18), cy, RD(3), color, 12)
+    r.ImGui_DrawList_AddLine(draw_list, MX(-4), MY(-7), MX(9), MY(6), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(3), MY(-7), MX(-4), cy, color, W(2))
   elseif id == "automation_item_manager" then
-    r.ImGui_DrawList_AddLine(draw_list, left + 6, bottom - 12, cx - 8, cy + 7, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx - 8, cy + 7, cx + 7, cy - 8, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx + 7, cy - 8, right - 7, top + 14, color, 2)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, left + 6, bottom - 12, 4, color, 12)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, cx - 8, cy + 7, 4, color, 12)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, cx + 7, cy - 8, 4, color, 12)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, right - 7, top + 14, 4, color, 12)
+    r.ImGui_DrawList_AddLine(draw_list, L(6), B(12), MX(-8), MY(7), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-8), MY(7), MX(7), MY(-8), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(7), MY(-8), R(7), T(14), color, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, L(6), B(12), RD(4), color, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, MX(-8), MY(7), RD(4), color, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, MX(7), MY(-8), RD(4), color, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, R(7), T(14), RD(4), color, 12)
   elseif id == "control_room" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 8, top + 8, right - 8, bottom - 8, color, 4, 0, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 17, bottom - 13, left + 17, top + 18, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx, bottom - 13, cx, top + 13, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 17, bottom - 13, right - 17, top + 23, color, 2)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, left + 17, cy + 6, 4, color, 12)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy - 4, 4, color, 12)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, right - 17, cy + 10, 4, color, 12)
+    r.ImGui_DrawList_AddRect(draw_list, L(8), T(8), R(8), B(8), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(17), B(13), L(17), T(18), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, B(13), cx, T(13), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(17), B(13), R(17), T(23), color, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, L(17), MY(6), RD(4), color, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, MY(-4), RD(4), color, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, R(17), MY(10), RD(4), color, 12)
   elseif id == "instrument_rack" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 7, top + 8, right - 7, bottom - 8, color, 3, 0, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(7), T(8), R(7), B(8), color, RD(3), 0, W(2))
     for index = 0, 3 do
-      local key_x = left + 12 + index * 9
-      r.ImGui_DrawList_AddLine(draw_list, key_x, cy, key_x, bottom - 10, color, 2)
+      local key_x = L(12 + index * 9)
+      r.ImGui_DrawList_AddLine(draw_list, key_x, cy, key_x, B(10), color, W(2))
     end
-    r.ImGui_DrawList_AddLine(draw_list, left + 8, cy, right - 8, cy, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, L(8), cy, R(8), cy, color, W(2))
   elseif id == "fx_chain_builder" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 6, cy - 13, right - 6, cy + 13, color, 4, 0, 2)
-    r.ImGui_DrawList_AddRect(draw_list, left + 10, cy - 6, left + 20, cy + 4, color, 2, 0, 2)
-    r.ImGui_DrawList_AddRect(draw_list, left + 23, cy - 6, left + 33, cy + 4, color, 2, 0, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(6), MY(-13), R(6), MY(13), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddRect(draw_list, L(10), MY(-6), L(20), MY(4), color, RD(2), 0, W(2))
+    r.ImGui_DrawList_AddRect(draw_list, L(23), MY(-6), L(33), MY(4), color, RD(2), 0, W(2))
   elseif id == "notes" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 8, top + 5, right - 8, bottom - 5, color, 4, 0, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, top + 15, right - 14, top + 15, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, top + 25, right - 18, top + 25, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, top + 35, right - 22, top + 35, color, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(8), T(5), R(8), B(5), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(14), T(15), R(14), T(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(14), T(25), R(18), T(25), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(14), T(35), R(22), T(35), color, W(2))
   elseif id == "plugin_browser" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 11, cy - 13, right - 13, cy + 13, color, 4, 0, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 13, cy - 6, right - 6, cy - 6, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, right - 13, cy + 6, right - 6, cy + 6, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 6, cy, left + 11, cy, color, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(11), MY(-13), R(13), MY(13), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(13), MY(-6), R(6), MY(-6), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(13), MY(6), R(6), MY(6), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(6), cy, L(11), cy, color, W(2))
   elseif id == "media_browser" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 6, top + 9, right - 6, bottom - 9, color, 4, 0, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(6), T(9), R(6), B(9), color, RD(4), 0, W(2))
     for index = 0, 3 do
-      local film_x = left + 12 + index * 9
-      r.ImGui_DrawList_AddLine(draw_list, film_x, top + 10, film_x, top + 17, color, 2)
-      r.ImGui_DrawList_AddLine(draw_list, film_x, bottom - 17, film_x, bottom - 10, color, 2)
+      local film_x = L(12 + index * 9)
+      r.ImGui_DrawList_AddLine(draw_list, film_x, T(10), film_x, T(17), color, W(2))
+      r.ImGui_DrawList_AddLine(draw_list, film_x, B(17), film_x, B(10), color, W(2))
     end
-    r.ImGui_DrawList_AddLine(draw_list, left + 14, cy, cx - 6, cy - 8, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx - 6, cy - 8, cx + 6, cy + 8, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, cx + 6, cy + 8, right - 14, cy, color, 2)
+    r.ImGui_DrawList_AddLine(draw_list, L(14), cy, MX(-6), MY(-8), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-6), MY(-8), MX(6), MY(8), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(6), MY(8), R(14), cy, color, W(2))
   elseif id == "arrange_bg_presets" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 6, top + 9, right - 6, bottom - 9, color, 3, 0, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 7, cy - 7, right - 7, cy - 7, color, 2)
-    r.ImGui_DrawList_AddLine(draw_list, left + 7, cy + 4, right - 7, cy + 4, color, 2)
+    r.ImGui_DrawList_AddRect(draw_list, L(6), T(9), R(6), B(9), color, RD(3), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(7), MY(-7), R(7), MY(-7), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(7), MY(4), R(7), MY(4), color, W(2))
     for index = 0, 2 do
-      local grid_x = left + 15 + index * 11
-      r.ImGui_DrawList_AddLine(draw_list, grid_x, top + 12, grid_x, bottom - 12, color, 1)
+      local grid_x = L(15 + index * 11)
+      r.ImGui_DrawList_AddLine(draw_list, grid_x, T(12), grid_x, B(12), color, W(1))
     end
   elseif id == "calculator" then
-    r.ImGui_DrawList_AddRect(draw_list, left + 8, top + 6, right - 8, bottom - 6, color, 3, 0, 2)
-    r.ImGui_DrawList_AddRect(draw_list, left + 13, top + 11, right - 13, top + 22, color, 2, 0, 1)
+    r.ImGui_DrawList_AddRect(draw_list, L(8), T(6), R(8), B(6), color, RD(3), 0, W(2))
+    r.ImGui_DrawList_AddRect(draw_list, L(13), T(11), R(13), T(22), color, RD(2), 0, W(1))
     for by = 0, 1 do
       for bx = 0, 2 do
-        r.ImGui_DrawList_AddCircleFilled(draw_list, left + 17 + bx * 8, cy + 7 + by * 9, 2, color, 10)
+        r.ImGui_DrawList_AddCircleFilled(draw_list, L(17 + bx * 8), MY(7 + by * 9), RD(2), color, 10)
       end
     end
   else
     local icon = fallback_icon_text(module)
-    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, 2)
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, W(2))
     local text_w = calc_text_width(icon)
     r.ImGui_DrawList_AddText(draw_list, cx - text_w * 0.5, cy - r.ImGui_GetTextLineHeight(ctx) * 0.5, color, icon)
   end

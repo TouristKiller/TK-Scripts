@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.4.0" author="TouristKiller" time="2026-06-18T04:00:00Z">
+    <version name="0.4.1" author="TouristKiller" time="2026-06-18T04:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -110,13 +110,16 @@
         <source file="reaper_tk_action_capture.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/macos-universal/reaper_tk_action_capture.dylib</source>
         <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
-      <changelog><![CDATA[v0.4.0
-+ Calculator: Added a new module with Delay, Gain, Note, and Samples tabs for studio calculations
-+ Calculator: Delay tab shows note times (straight/dotted/triplet) with click-to-copy and ms/Hz toggle, plus reverb pre-delay and decay references
-+ Calculator: Gain tab converts dB to linear/percent/power and back, with a pan law reference
-+ Calculator: Note tab converts notes to frequency/MIDI and frequency to the nearest note with cents detune, using a configurable A4 reference
-+ Calculator: Samples tab converts milliseconds to samples and back, with note lengths in samples, following project tempo and sample rate (manual override available)
-+ Workbench: Added a mappable module action for opening Calculator
+      <changelog><![CDATA[
+        v0.4.1
+        + Home: Fixed module icons drawing outside their shapes at non-100% UI scaling (e.g. Calculator buttons and Arrange BG grid no longer overflow)
+        v0.4.0
+        + Calculator: Added a new module with Delay, Gain, Note, and Samples tabs for studio calculations
+        + Calculator: Delay tab shows note times (straight/dotted/triplet) with click-to-copy and ms/Hz toggle, plus reverb pre-delay and decay references
+        + Calculator: Gain tab converts dB to linear/percent/power and back, with a pan law reference
+        + Calculator: Note tab converts notes to frequency/MIDI and frequency to the nearest note with cents detune, using a configurable A4 reference
+        + Calculator: Samples tab converts milliseconds to samples and back, with note lengths in samples, following project tempo and sample rate (manual override available)
+        + Workbench: Added a mappable module action for opening Calculator
 ]]></changelog>
      </version>
      </reapack>
