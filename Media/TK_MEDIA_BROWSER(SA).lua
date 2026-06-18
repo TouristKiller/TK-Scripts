@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.41
+-- @version 0.9.5
 -- @changelog:
 --[[
+v0.9.5:
++ Added toggle to show/hide folder add (+) buttons in Folder View tree; setting is saved in options and presets
+
 v0.9.41:
 + Fixed arrow-key navigation following alphabetical order instead of the chosen column sort; up/down now match the visible (sorted) file order
 
@@ -482,6 +485,7 @@ local ui_settings = {
     selection_saturation = 1.0,
     show_cover_art = true,
     show_waveform_bg = true,
+    show_folder_add_buttons = true,
     hide_scrollbar = false,  
     compact_view = false,
     selected_font = "Arial",  
@@ -2694,6 +2698,7 @@ local function save_options()
             selection_saturation = ui_settings.selection_saturation,
             show_cover_art = ui_settings.show_cover_art,
             show_waveform_bg = ui_settings.show_waveform_bg,
+            show_folder_add_buttons = ui_settings.show_folder_add_buttons,
             hide_scrollbar = ui_settings.hide_scrollbar,
             compact_view = ui_settings.compact_view,
             selected_font = ui_settings.selected_font,
@@ -2785,6 +2790,7 @@ local function get_settings_table()
         selection_saturation = ui_settings.selection_saturation,
         show_cover_art = ui_settings.show_cover_art,
         show_waveform_bg = ui_settings.show_waveform_bg,
+        show_folder_add_buttons = ui_settings.show_folder_add_buttons,
         hide_scrollbar = ui_settings.hide_scrollbar,
         compact_view = ui_settings.compact_view,
         selected_font = ui_settings.selected_font,
@@ -2845,6 +2851,7 @@ local function apply_settings_from_table(settings)
     ui_settings.selection_saturation = settings.selection_saturation ~= nil and settings.selection_saturation or 1.0
     if settings.show_cover_art ~= nil then ui_settings.show_cover_art = settings.show_cover_art else ui_settings.show_cover_art = true end
     ui_settings.show_waveform_bg = settings.show_waveform_bg ~= nil and settings.show_waveform_bg or false
+    ui_settings.show_folder_add_buttons = settings.show_folder_add_buttons ~= nil and settings.show_folder_add_buttons or true
     ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
     if settings.compact_view ~= nil then ui_settings.compact_view = settings.compact_view end
     ui_settings.selected_font = settings.selected_font or "Default"
@@ -3004,6 +3011,11 @@ local function load_options()
             else
                 ui_settings.show_waveform_bg = true
             end
+            if options.show_folder_add_buttons ~= nil then
+                ui_settings.show_folder_add_buttons = options.show_folder_add_buttons
+            else
+                ui_settings.show_folder_add_buttons = true
+            end
             if options.hide_scrollbar ~= nil then
                 ui_settings.hide_scrollbar = options.hide_scrollbar
             else
@@ -3089,6 +3101,11 @@ local function load_options()
                             ui_settings.show_waveform_bg = options2.show_waveform_bg
                         else
                             ui_settings.show_waveform_bg = true
+                        end
+                        if options2.show_folder_add_buttons ~= nil then
+                            ui_settings.show_folder_add_buttons = options2.show_folder_add_buttons
+                        else
+                            ui_settings.show_folder_add_buttons = true
                         end
                         if options2.hide_scrollbar ~= nil then
                             ui_settings.hide_scrollbar = options2.hide_scrollbar
@@ -7860,34 +7877,36 @@ function draw_file_list()
                                     ui.selected_index = 0
                                 end
                                 
-                                r.ImGui_SameLine(ctx)
-                                
-                                local button_id = "##add_folder_" .. path .. sep .. item.name
-                                local button_size = 16
-                                local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
-                                
-                                if r.ImGui_InvisibleButton(ctx, button_id, button_size, button_size) then
-                                    if not table.contains(file_location.locations, folder_path) then
-                                        table.insert(file_location.locations, folder_path)
-                                        save_locations()
+                                if ui_settings.show_folder_add_buttons then
+                                    r.ImGui_SameLine(ctx)
+
+                                    local button_id = "##add_folder_" .. path .. sep .. item.name
+                                    local button_size = 16
+                                    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+
+                                    if r.ImGui_InvisibleButton(ctx, button_id, button_size, button_size) then
+                                        if not table.contains(file_location.locations, folder_path) then
+                                            table.insert(file_location.locations, folder_path)
+                                            save_locations()
+                                        end
                                     end
+
+                                    if r.ImGui_IsItemHovered(ctx) then
+                                        r.ImGui_SetTooltip(ctx, "Add this folder to Folders list")
+                                    end
+
+                                    local drawList = r.ImGui_GetWindowDrawList(ctx)
+                                    local accent_color = hsv_to_color(ui_settings.accent_hue, 0.8, 0.9)
+                                    local hover_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
+                                    local plus_color = r.ImGui_IsItemHovered(ctx) and hover_color or accent_color
+
+                                    local center_x = cursor_x + button_size * 0.5
+                                    local center_y = cursor_y + button_size * 0.5
+                                    local plus_size = button_size * 0.4
+
+                                    r.ImGui_DrawList_AddLine(drawList, center_x - plus_size, center_y, center_x + plus_size, center_y, plus_color, 2)
+                                    r.ImGui_DrawList_AddLine(drawList, center_x, center_y - plus_size, center_x, center_y + plus_size, plus_color, 2)
                                 end
-                                
-                                if r.ImGui_IsItemHovered(ctx) then
-                                    r.ImGui_SetTooltip(ctx, "Add this folder to Folders list")
-                                end
-                                
-                                local drawList = r.ImGui_GetWindowDrawList(ctx)
-                                local accent_color = hsv_to_color(ui_settings.accent_hue, 0.8, 0.9)
-                                local hover_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
-                                local plus_color = r.ImGui_IsItemHovered(ctx) and hover_color or accent_color
-                                
-                                local center_x = cursor_x + button_size * 0.5
-                                local center_y = cursor_y + button_size * 0.5
-                                local plus_size = button_size * 0.4
-                                
-                                r.ImGui_DrawList_AddLine(drawList, center_x - plus_size, center_y, center_x + plus_size, center_y, plus_color, 2)
-                                r.ImGui_DrawList_AddLine(drawList, center_x, center_y - plus_size, center_x, center_y + plus_size, plus_color, 2)
                                 
                                 if tree_open then
                                     if not item.children_loaded then
@@ -13681,6 +13700,16 @@ function loop()
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "Show embedded MP3/WAV/FLAC cover art for the selected file, with cover/folder image fallback.")
+                    end
+
+                    r.ImGui_Spacing(ctx)
+                    local folder_add_buttons_changed, new_folder_add_buttons = r.ImGui_Checkbox(ctx, "Show Folder (+) Buttons", ui_settings.show_folder_add_buttons)
+                    if folder_add_buttons_changed then
+                        ui_settings.show_folder_add_buttons = new_folder_add_buttons
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Show or hide the (+) buttons in folder tree view that add folders to the left Folders list.")
                     end
                     
                     r.ImGui_Spacing(ctx)
