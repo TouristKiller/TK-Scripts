@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.3.9
+-- @version 0.4.0
 -- @changelog:
+-- v0.4.0
+--   + Calculator: Added a new module with Delay, Gain, Note, and Samples tabs for studio calculations
+--   + Calculator: Delay tab shows note times (straight/dotted/triplet) with click-to-copy and ms/Hz toggle, plus reverb pre-delay and decay references
+--   + Calculator: Gain tab converts dB to linear/percent/power and back, with a pan law reference
+--   + Calculator: Note tab converts notes to frequency/MIDI and frequency to the nearest note with cents detune, using a configurable A4 reference
+--   + Calculator: Samples tab converts milliseconds to samples and back, with note lengths in samples, following project tempo and sample rate (manual override available)
+--   + Workbench: Added a mappable module action for opening Calculator
 -- v0.3.9
 --   + Media Browser: Spacebar now plays/stops the preview and Enter/Return toggles play/pause (resumes from the pause position), matching REAPER's transport; both are ignored while typing in a field
 -- v0.3.8
@@ -259,7 +266,8 @@ local module_names = {
   "plugin_browser",
   "media_browser",
   "color_studio",
-  "arrange_bg_presets"
+  "arrange_bg_presets",
+  "calculator"
 }
 
 local theme_color_fields = {
@@ -727,6 +735,14 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     for index = 0, 2 do
       local grid_x = left + 15 + index * 11
       r.ImGui_DrawList_AddLine(draw_list, grid_x, top + 12, grid_x, bottom - 12, color, 1)
+    end
+  elseif id == "calculator" then
+    r.ImGui_DrawList_AddRect(draw_list, left + 8, top + 6, right - 8, bottom - 6, color, 3, 0, 2)
+    r.ImGui_DrawList_AddRect(draw_list, left + 13, top + 11, right - 13, top + 22, color, 2, 0, 1)
+    for by = 0, 1 do
+      for bx = 0, 2 do
+        r.ImGui_DrawList_AddCircleFilled(draw_list, left + 17 + bx * 8, cy + 7 + by * 9, 2, color, 10)
+      end
     end
   else
     local icon = fallback_icon_text(module)
@@ -1318,7 +1334,7 @@ local function auto_collapse_edge_offset()
 end
 
 local function expanded_window_min_size()
-  return 260, 240
+  return UIScale.round(260), UIScale.round(240)
 end
 
 local function auto_collapse_height_mode()
@@ -1494,7 +1510,13 @@ local function apply_auto_collapse_window()
   local target_w = collapsed and auto_collapse_width() or expanded_w
   local target_h = expanded_h
   local cond_always = r.ImGui_Cond_Always and r.ImGui_Cond_Always() or 0
-  if collapsed and r.ImGui_SetNextWindowSizeConstraints then r.ImGui_SetNextWindowSizeConstraints(ctx, target_w, target_h, target_w, target_h) end
+  if r.ImGui_SetNextWindowSizeConstraints then
+    if collapsed then
+      r.ImGui_SetNextWindowSizeConstraints(ctx, target_w, target_h, target_w, target_h)
+    else
+      r.ImGui_SetNextWindowSizeConstraints(ctx, min_w, min_h, 100000, 100000)
+    end
+  end
   if (collapsed or force_restore or auto_h) and r.ImGui_SetNextWindowSize then r.ImGui_SetNextWindowSize(ctx, target_w, target_h, cond_always) end
   if r.ImGui_SetNextWindowPos then
     local side = auto_collapse_side()
