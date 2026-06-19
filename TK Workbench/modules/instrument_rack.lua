@@ -16,6 +16,13 @@ local MAX_PARAM_SLOTS = 8
 local PARAM_SLOT_COLUMNS = 4
 local MACRO_COUNT = 8
 local MACRO_MAX = 16
+local FX_ROOT = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/"
+local WORKBENCH_ROOT = r.GetResourcePath() .. "/Scripts/TK Scripts/TK Workbench/"
+local PARSER_PATH = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
+local QUICK_RECENT_PATH = FX_ROOT .. "recent_plugins.txt"
+local QUICK_SHARED_FAVORITES_PATH = FX_ROOT .. "favorite_plugins.txt"
+local QUICK_LOCAL_FAVORITES_PATH = WORKBENCH_ROOT .. "plugin_browser_favorites.txt"
+local QUICK_FXCHAINS_ROOT = r.GetResourcePath() .. "/FXChains"
 
 local state = {
   screenshot_path = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/Screenshots/",
@@ -39,7 +46,22 @@ local state = {
   default_pins = nil,
   default_pins_loaded = false,
   auto_pin_checked = {},
-  fx_value_cache = {}
+  fx_value_cache = {},
+  quick_add_source = "All Plugins",
+  quick_add_group = "",
+  quick_add_search = "",
+  quick_add_popup_open = false,
+  quick_add_context = nil,
+  quick_add_parser_loaded = false,
+  quick_add_load_error = nil,
+  quick_add_plugins = {},
+  quick_add_groups = { all = {}, developer = {}, category = {}, folders = {}, types = {} },
+  quick_add_fxchains = {},
+  quick_add_recent = {},
+  quick_add_favorites = {},
+  quick_add_list_hash = "",
+  quick_add_fxchain_hash = "",
+  quick_add_filter_cache = {}
 }
 
 local function fx_value_bucket(fx_guid)
@@ -71,6 +93,7 @@ local defaults = {
   hide_horizontal_scrollbar = false,
   invert_horizontal_scroll = false,
   hide_parallel_serial_badges = false,
+  quick_add_enabled = true,
   section_order = "default",
   section_track_color = false,
   show_item_name_overlay = true,
@@ -80,7 +103,6 @@ local defaults = {
   auto_apply_default_pins = false,
   restore_default_pin_values = false
 }
-
 local function ensure_settings(app)
   app.settings.instrument_rack = app.settings.instrument_rack or {}
   local settings = app.settings.instrument_rack
@@ -264,6 +286,452 @@ local function file_exists(path)
   local file = io.open(path, "rb")
   if file then file:close(); return true end
   return false
+end
+
+local function read_lines(path)
+  local result = {}
+  local file = io.open(path, "r")
+  if not file then return result end
+  for line in file:lines() do
+    if line and line ~= "" then result[#result + 1] = line end
+  end
+  file:close()
+  return result
+end
+
+local function resolve_quick_favorites_path()
+  if file_exists(QUICK_SHARED_FAVORITES_PATH) then return QUICK_SHARED_FAVORITES_PATH end
+  return QUICK_LOCAL_FAVORITES_PATH
+end
+
+function quick_source_hash()
+  return tostring(#state.quick_add_plugins) .. "|" .. tostring(#state.quick_add_recent) .. "|" .. tostring(#state.quick_add_favorites) .. "|" .. tostring(#state.quick_add_fxchains)
+end
+
+function quick_item_label(item)
+  if type(item) == "table" then
+    return item.label or item.name or item.payload or ""
+  end
+  return item or ""
+end
+
+function quick_item_payload(item)
+  if type(item) == "table" then
+    return tostring(item.payload or item.name or item.label or "")
+  end
+  return tostring(item or "")
+end
+
+function quick_group_kind_for_category(name)
+  local upper = tostring(name or ""):upper()
+  if upper == "ALL PLUGINS" then return "all" end
+  if upper == "DEVELOPER" then return "developer" end
+  if upper == "CATEGORY" then return "category" end
+  if upper == "FOLDERS" then return "folders" end
+  return nil
+end
+
+function quick_build_groups(categories)
+  local groups = { all = {}, developer = {}, category = {}, folders = {} }
+  if type(categories) ~= "table" then return groups end
+  for _, category in ipairs(categories) do
+    local kind = quick_group_kind_for_category(category and category.name)
+    if kind and type(category.list) == "table" then
+      for _, entry in ipairs(category.list) do
+        local label = tostring(entry and entry.name or "")
+        local plugins = type(entry and entry.fx) == "table" and entry.fx or {}
+        if label ~= "" then
+          groups[kind][#groups[kind] + 1] = { label = label, plugins = plugins }
+        end
+      end
+      table.sort(groups[kind], function(left, right)
+        return tostring(left.label):lower() < tostring(right.label):lower()
+      end)
+    end
+  end
+  return groups
+end
+
+function quick_build_type_groups(plugin_list)
+  local order = { "CLAP", "CLAPi", "VST", "VSTi", "VST3", "VST3i", "JS", "Instrument" }
+  local buckets = {}
+  for _, key in ipairs(order) do buckets[key] = {} end
+  for _, name in ipairs(plugin_list or {}) do
+    local text = quick_item_label(name)
+    local prefix = text:match("^(%w+):")
+    if prefix then
+      if buckets[prefix] then
+        buckets[prefix][#buckets[prefix] + 1] = name
+      end
+      if prefix:sub(-1) == "i" then
+        buckets.Instrument[#buckets.Instrument + 1] = name
+      end
+    end
+  end
+  local groups = {}
+  for _, key in ipairs(order) do
+    if #buckets[key] > 0 then
+      groups[#groups + 1] = { label = key, plugins = buckets[key] }
+    end
+  end
+  return groups
+end
+
+function quick_load_user_lists()
+  state.quick_add_recent = read_lines(QUICK_RECENT_PATH)
+  state.quick_add_favorites = read_lines(resolve_quick_favorites_path())
+  state.quick_add_list_hash = quick_source_hash()
+  state.quick_add_filter_cache = {}
+end
+
+function quick_collect_fxchain_entries(folder_path, relative_path, result)
+  result = result or {}
+  local file_index = 0
+  while true do
+    local file_name = r.EnumerateFiles(folder_path, file_index)
+    if not file_name then break end
+    local lower = tostring(file_name):lower()
+    if lower:sub(-9) == ".rfxchain" then
+      local rel = relative_path ~= "" and (relative_path .. "/" .. file_name) or file_name
+      result[#result + 1] = {
+        label = rel:gsub("%.RfxChain$", ""),
+        payload = rel
+      }
+    end
+    file_index = file_index + 1
+  end
+  local dir_index = 0
+  while true do
+    local child_name = r.EnumerateSubdirectories(folder_path, dir_index)
+    if not child_name then break end
+    local child_folder = folder_path .. "/" .. child_name
+    local child_relative = relative_path ~= "" and (relative_path .. "/" .. child_name) or child_name
+    quick_collect_fxchain_entries(child_folder, child_relative, result)
+    dir_index = dir_index + 1
+  end
+  return result
+end
+
+function quick_load_fxchains()
+  local result = {}
+  quick_collect_fxchain_entries(QUICK_FXCHAINS_ROOT, "", result)
+  table.sort(result, function(left, right)
+    return quick_item_label(left):lower() < quick_item_label(right):lower()
+  end)
+  state.quick_add_fxchains = result
+  state.quick_add_fxchain_hash = tostring(#result)
+  state.quick_add_filter_cache = {}
+  return result
+end
+
+function quick_load_parser(force_scan)
+  state.quick_add_load_error = nil
+  if not file_exists(PARSER_PATH) then
+    state.quick_add_parser_loaded = false
+    state.quick_add_load_error = "Sexan parser niet gevonden"
+    state.quick_add_plugins = {}
+    state.quick_add_groups = { all = {}, developer = {}, category = {}, folders = {}, types = {} }
+    return false
+  end
+  if not state.quick_add_parser_loaded then
+    local ok, err = pcall(dofile, PARSER_PATH)
+    if not ok then
+      state.quick_add_parser_loaded = false
+      state.quick_add_load_error = tostring(err)
+      return false
+    end
+    state.quick_add_parser_loaded = true
+  end
+  if type(ReadFXFile) ~= "function" then
+    state.quick_add_load_error = "ReadFXFile is niet beschikbaar"
+    return false
+  end
+  local plugin_list, categories
+  if force_scan and type(MakeFXFiles) == "function" then
+    local ok_scan, scanned, scanned_categories = pcall(MakeFXFiles)
+    if ok_scan then
+      plugin_list = scanned
+      categories = scanned_categories
+    else
+      state.quick_add_load_error = tostring(scanned)
+    end
+  end
+  if not plugin_list then
+    local ok_read, read_plugins, read_categories = pcall(ReadFXFile)
+    if ok_read then
+      plugin_list = read_plugins
+      categories = read_categories
+    else
+      state.quick_add_load_error = tostring(read_plugins)
+    end
+  end
+  if type(plugin_list) ~= "table" then plugin_list = {} end
+  state.quick_add_plugins = plugin_list
+  state.quick_add_groups = quick_build_groups(categories)
+  state.quick_add_groups.types = quick_build_type_groups(state.quick_add_plugins)
+  quick_load_user_lists()
+  return #state.quick_add_plugins > 0
+end
+
+function quick_collect_source_plugins(source, group_label)
+  if source == "Favorites" then return state.quick_add_favorites end
+  if source == "Recent" then return state.quick_add_recent end
+  if source == "All Plugins" then return state.quick_add_plugins end
+  if source == "FXChains" then return state.quick_add_fxchains end
+  if source == "Container" then
+    local result = {}
+    for _, name in ipairs(state.quick_add_plugins) do
+      if tostring(name):lower():find("container", 1, true) then result[#result + 1] = name end
+    end
+    return result
+  end
+  local kind = source == "Category" and "category" or source == "Developer" and "developer" or source == "Folders" and "folders" or nil
+  if not kind then return state.quick_add_plugins end
+  local groups = state.quick_add_groups[kind] or {}
+  local fallback = {}
+  for _, group in ipairs(groups) do
+    if not group_label or group_label == "" then
+      fallback = group.plugins or {}
+      break
+    end
+    if group.label == group_label then return group.plugins or {} end
+  end
+  return fallback
+end
+
+function quick_cached_filtered_list(cache_key, plugins, search_term)
+  local cache = state.quick_add_filter_cache
+  local key = tostring(cache_key or "") .. "\31" .. tostring(search_term or "")
+  local cached = cache[key]
+  if cached ~= nil then return cached end
+  local filtered = quick_filtered_list(plugins, search_term)
+  cache[key] = filtered
+  return filtered
+end
+
+function quick_filter_plugins(source, group_label, search_term)
+  local pool = quick_collect_source_plugins(source, group_label)
+  local term = tostring(search_term or ""):lower()
+  local filtered = {}
+  for _, name in ipairs(pool or {}) do
+    local plugin_name = quick_item_label(name)
+    local payload = quick_item_payload(name)
+    local haystack = (plugin_name .. " " .. payload):lower()
+    if plugin_name ~= "" and (term == "" or haystack:find(term, 1, true)) then
+      filtered[#filtered + 1] = name
+    end
+  end
+  table.sort(filtered, function(left, right)
+    return quick_item_label(left):lower() < quick_item_label(right):lower()
+  end)
+  return filtered
+end
+
+function quick_match_plugin(name, search_term)
+  local plugin_name = quick_item_label(name)
+  if plugin_name == "" then return false end
+  local term = tostring(search_term or ""):lower()
+  if term == "" then return true end
+  local payload = quick_item_payload(name)
+  return (plugin_name .. " " .. payload):lower():find(term, 1, true) ~= nil
+end
+
+function quick_filtered_list(plugins, search_term)
+  local result = {}
+  for _, name in ipairs(plugins or {}) do
+    if quick_match_plugin(name, search_term) then result[#result + 1] = name end
+  end
+  table.sort(result, function(left, right)
+    return quick_item_label(left):lower() < quick_item_label(right):lower()
+  end)
+  return result
+end
+
+function quick_menu_plugin_items(app, ctx, id_prefix, plugins, search_term, max_items)
+  local list = quick_cached_filtered_list(id_prefix, plugins, search_term)
+  local shown = 0
+  local cap = tonumber(max_items) or 280
+  for index, plugin_name in ipairs(list) do
+    if shown >= cap then break end
+    local label = quick_item_label(plugin_name) .. "##" .. tostring(id_prefix) .. "_" .. tostring(index)
+    if r.ImGui_MenuItem(ctx, label) then
+      quick_apply_plugin(app, quick_item_payload(plugin_name))
+      r.ImGui_CloseCurrentPopup(ctx)
+      return true
+    end
+    shown = shown + 1
+  end
+  if #list == 0 then
+    r.ImGui_MenuItem(ctx, "Geen resultaten", nil, false, false)
+  elseif #list > cap then
+    r.ImGui_Separator(ctx)
+    r.ImGui_MenuItem(ctx, "Toon verfijn zoekterm...", nil, false, false)
+  end
+  return false
+end
+
+function quick_menu_group_source(app, ctx, source_label, group_kind, search_term)
+  local groups = state.quick_add_groups[group_kind] or {}
+  if not r.ImGui_BeginMenu(ctx, source_label .. "##ir_quick_src_" .. tostring(group_kind)) then return false end
+  local searching = search_term ~= nil and search_term ~= ""
+  local any = false
+  for group_index, group in ipairs(groups) do
+    local plugins = group.plugins or {}
+    local count = #plugins
+    local group_prefix = group_kind .. "_" .. tostring(group_index)
+    if searching then
+      plugins = quick_cached_filtered_list(group_prefix, group.plugins or {}, search_term)
+      count = #plugins
+    end
+    if count > 0 then
+      any = true
+      local item_search = searching and search_term or ""
+      local sub_label = tostring(group.label or "Group") .. " (" .. tostring(count) .. ")##ir_quick_group_" .. tostring(group_kind) .. "_" .. tostring(group_index)
+      if r.ImGui_BeginMenu(ctx, sub_label) then
+        if quick_menu_plugin_items(app, ctx, group_prefix, group.plugins or {}, item_search, 220) then
+          r.ImGui_EndMenu(ctx)
+          r.ImGui_EndMenu(ctx)
+          return true
+        end
+        r.ImGui_EndMenu(ctx)
+      end
+    end
+  end
+  if not any then r.ImGui_MenuItem(ctx, "Geen resultaten", nil, false, false) end
+  r.ImGui_EndMenu(ctx)
+  return false
+end
+
+function quick_open_popup(track, target_type, take, insert_index, chain, container_api)
+  state.quick_add_context = {
+    track = track,
+    target_type = target_type or "track",
+    take = take,
+    insert_index = insert_index,
+    chain = chain,
+    container_api = container_api
+  }
+  state.quick_add_popup_open = true
+end
+
+function quick_add_recent_plugin(name)
+  if not name or name == "" then return end
+  for index = #state.quick_add_recent, 1, -1 do
+    if state.quick_add_recent[index] == name then table.remove(state.quick_add_recent, index) end
+  end
+  table.insert(state.quick_add_recent, 1, name)
+  while #state.quick_add_recent > 40 do table.remove(state.quick_add_recent) end
+  local file = io.open(QUICK_RECENT_PATH, "w")
+  if file then
+    for _, line in ipairs(state.quick_add_recent) do file:write(line .. "\n") end
+    file:close()
+  end
+end
+
+function quick_apply_plugin(app, plugin_name)
+  local context = state.quick_add_context
+  if not context or not plugin_name or plugin_name == "" then return end
+  if context.container_api ~= nil and context.chain then
+    add_external_fx_into_container(app, context.chain, context.container_api, plugin_name)
+    quick_add_recent_plugin(plugin_name)
+    app.status = "Toegevoegd via Quick Add"
+    return
+  end
+  if context.target_type == "input" then
+    add_external_input_fx(app, context.track, plugin_name)
+  elseif context.target_type == "item" then
+    add_external_take_fx(app, context.take, plugin_name)
+  else
+    add_external_fx(app, context.track, plugin_name, context.insert_index)
+  end
+  quick_add_recent_plugin(plugin_name)
+  app.status = "Toegevoegd via Quick Add"
+end
+
+function draw_quick_add_popup(app, ctx)
+  local popup_id = "##ir_quick_add_popup"
+  if state.quick_add_popup_open then
+    state.quick_add_popup_open = false
+    if state.quick_add_list_hash ~= quick_source_hash() then quick_load_user_lists() end
+    r.ImGui_OpenPopup(ctx, popup_id)
+  end
+  if not r.ImGui_BeginPopup(ctx, popup_id) then return end
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(110))
+  local changed, value = r.ImGui_InputTextWithHint(ctx, "##ir_quick_add_search", "Zoek plugin...", state.quick_add_search or "")
+  if changed then state.quick_add_search = value or "" end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "X##ir_quick_add_clear") then state.quick_add_search = "" end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "Rescan##ir_quick_add_rescan") then quick_load_parser(true) end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "FXChains##ir_quick_add_fxchains_refresh") then quick_load_fxchains() end
+  if state.quick_add_load_error and state.quick_add_load_error ~= "" then
+    r.ImGui_TextColored(ctx, Theme.colors.warning, state.quick_add_load_error)
+  end
+  r.ImGui_Separator(ctx)
+  local search_term = state.quick_add_search or ""
+  if search_term ~= "" then
+    local search_list = quick_cached_filtered_list("search", state.quick_add_plugins, search_term)
+    local search_label = "Search (" .. tostring(#search_list) .. ")##ir_quick_search"
+    if r.ImGui_BeginMenu(ctx, search_label) then
+      if quick_menu_plugin_items(app, ctx, "search", state.quick_add_plugins, search_term, 320) then
+        r.ImGui_EndMenu(ctx)
+        r.ImGui_EndPopup(ctx)
+        return
+      end
+      r.ImGui_EndMenu(ctx)
+    end
+    r.ImGui_Separator(ctx)
+  end
+  if r.ImGui_BeginMenu(ctx, "Favorites##ir_quick_favorites") then
+    if quick_menu_plugin_items(app, ctx, "favorites", state.quick_add_favorites, search_term, 220) then
+      r.ImGui_EndMenu(ctx)
+      r.ImGui_EndPopup(ctx)
+      return
+    end
+    r.ImGui_EndMenu(ctx)
+  end
+  if r.ImGui_BeginMenu(ctx, "Recent##ir_quick_recent") then
+    if quick_menu_plugin_items(app, ctx, "recent", state.quick_add_recent, search_term, 220) then
+      r.ImGui_EndMenu(ctx)
+      r.ImGui_EndPopup(ctx)
+      return
+    end
+    r.ImGui_EndMenu(ctx)
+  end
+  if quick_menu_group_source(app, ctx, "All Plugins", "types", search_term) then
+    r.ImGui_EndPopup(ctx)
+    return
+  end
+  if quick_menu_group_source(app, ctx, "Category", "category", search_term) then
+    r.ImGui_EndPopup(ctx)
+    return
+  end
+  if quick_menu_group_source(app, ctx, "Developer", "developer", search_term) then
+    r.ImGui_EndPopup(ctx)
+    return
+  end
+  if quick_menu_group_source(app, ctx, "Folders", "folders", search_term) then
+    r.ImGui_EndPopup(ctx)
+    return
+  end
+  if r.ImGui_BeginMenu(ctx, "FXChains##ir_quick_fxchains") then
+    if quick_menu_plugin_items(app, ctx, "fxchains", state.quick_add_fxchains, search_term, 180) then
+      r.ImGui_EndMenu(ctx)
+      r.ImGui_EndPopup(ctx)
+      return
+    end
+    r.ImGui_EndMenu(ctx)
+  end
+  if r.ImGui_BeginMenu(ctx, "Container##ir_quick_container") then
+    if quick_menu_plugin_items(app, ctx, "container", quick_collect_source_plugins("Container"), search_term, 220) then
+      r.ImGui_EndMenu(ctx)
+      r.ImGui_EndPopup(ctx)
+      return
+    end
+    r.ImGui_EndMenu(ctx)
+  end
+  r.ImGui_EndPopup(ctx)
 end
 
 local function current_project()
@@ -1601,6 +2069,11 @@ local function draw_header(app, ctx, settings, track)
         if app.save_settings then app.save_settings() end
       end
     end
+    changed, value = r.ImGui_Checkbox(ctx, "Show Quick Add (cascading menu)", settings.quick_add_enabled ~= false)
+    if changed then
+      settings.quick_add_enabled = value
+      if app.save_settings then app.save_settings() end
+    end
     r.ImGui_Separator(ctx)
     if r.ImGui_Button(ctx, "Refresh screenshots##ir_refresh_screenshots") then
       state.screenshot_index = nil
@@ -1883,7 +2356,7 @@ local function add_container_inside(app, chain, container_api)
   return new_index
 end
 
-local function add_external_fx(app, track, payload, insert_index)
+function add_external_fx(app, track, payload, insert_index)
   if not validate_track(track) or not payload or payload == "" then return end
   local names = {}
   for name in payload:gmatch("[^\n]+") do
@@ -1894,7 +2367,11 @@ local function add_external_fx(app, track, payload, insert_index)
   r.PreventUIRefresh(1)
   for offset, name in ipairs(names) do
     local target_index = insert_index and (-1000 - (insert_index + offset - 1)) or -1
-    r.TrackFX_AddByName(track, name, false, target_index)
+    local fx_index = r.TrackFX_AddByName(track, name, false, target_index)
+    if fx_index < 0 and name:lower():sub(-9) == ".rfxchain" then
+      local basename = name:match("([^/\\]+)$") or name
+      if basename ~= name then r.TrackFX_AddByName(track, basename, false, target_index) end
+    end
   end
   r.PreventUIRefresh(-1)
   r.Undo_EndBlock("Add FX to instrument rack", -1)
@@ -1913,7 +2390,7 @@ local function payload_to_names(payload)
   return names
 end
 
-local function add_external_input_fx(app, track, payload)
+function add_external_input_fx(app, track, payload)
   if not validate_track(track) then return end
   local names = payload_to_names(payload)
   if #names == 0 then return end
@@ -1921,7 +2398,11 @@ local function add_external_input_fx(app, track, payload)
   r.PreventUIRefresh(1)
   for _, name in ipairs(names) do
     local dest = r.TrackFX_GetRecCount and r.TrackFX_GetRecCount(track) or 0
-    r.TrackFX_AddByName(track, name, true, -1000 - dest)
+    local fx_index = r.TrackFX_AddByName(track, name, true, -1000 - dest)
+    if fx_index < 0 and name:lower():sub(-9) == ".rfxchain" then
+      local basename = name:match("([^/\\]+)$") or name
+      if basename ~= name then r.TrackFX_AddByName(track, basename, true, -1000 - dest) end
+    end
   end
   r.PreventUIRefresh(-1)
   r.Undo_EndBlock("Add input FX to instrument rack", -1)
@@ -1931,7 +2412,7 @@ local function add_external_input_fx(app, track, payload)
   app.status = "Added " .. tostring(#names) .. " input FX"
 end
 
-local function add_external_take_fx(app, take, payload)
+function add_external_take_fx(app, take, payload)
   if not validate_take(take) or not r.TakeFX_AddByName then return end
   local names = payload_to_names(payload)
   if #names == 0 then return end
@@ -1939,7 +2420,11 @@ local function add_external_take_fx(app, take, payload)
   r.PreventUIRefresh(1)
   for _, name in ipairs(names) do
     local dest = r.TakeFX_GetCount and r.TakeFX_GetCount(take) or 0
-    r.TakeFX_AddByName(take, name, -1000 - dest)
+    local fx_index = r.TakeFX_AddByName(take, name, -1000 - dest)
+    if fx_index < 0 and name:lower():sub(-9) == ".rfxchain" then
+      local basename = name:match("([^/\\]+)$") or name
+      if basename ~= name then r.TakeFX_AddByName(take, basename, -1000 - dest) end
+    end
   end
   r.PreventUIRefresh(-1)
   r.Undo_EndBlock("Add item FX to instrument rack", -1)
@@ -2624,7 +3109,7 @@ local function move_fx_into_container(app, chain, src_chain, src_index, containe
   app.status = ok and ("Moved " .. (short_name or "FX") .. " into container") or "FX could not be moved"
 end
 
-local function add_external_fx_into_container(app, chain, container_api, payload)
+function add_external_fx_into_container(app, chain, container_api, payload)
   chain = as_chain(chain)
   if not chain_valid(chain) or not c_add_capable(chain) then return end
   if not c_is_container(chain, container_api) then return end
@@ -3113,6 +3598,7 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local horizontal = settings.orientation == "horizontal"
+  local quick_enabled = settings.quick_add_enabled ~= false
   local picker_name = settings.add_fx_target == "native" and "native FX browser"
     or settings.add_fx_target == "plugin_browser" and "Plugin Browser"
     or settings.add_fx_target == "tk_fx_browser_mini" and "TK FX Browser Mini"
@@ -3127,6 +3613,10 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     if drop_only then return end
     open_add_fx_browser(app, track, target_type, take)
   end
+  local function do_quick_open()
+    if drop_only or not quick_enabled then return end
+    quick_open_popup(track, target_type, take, insert_index, nil, nil)
+  end
   local function do_drop(p)
     if target_type == "input" then add_external_input_fx(app, track, p)
     elseif target_type == "item" then add_external_take_fx(app, take, p)
@@ -3138,33 +3628,56 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, add_menu_id) end
     if r.ImGui_BeginPopup(ctx, add_menu_id) then
       if r.ImGui_MenuItem(ctx, "Add FX...") then do_open() end
+      if quick_enabled and r.ImGui_MenuItem(ctx, "Quick Add...") then do_quick_open() end
       if r.ImGui_MenuItem(ctx, "Add empty container") then add_empty_container(app, track, insert_index) end
       r.ImGui_EndPopup(ctx)
     end
   end
   if horizontal then
-    local size = UIScale.round(40)
+    local size = UIScale.round(30)
+    local gap = UIScale.round(6)
+    local stack_h = quick_enabled and (size * 2 + gap) or size
     local tile_h = expanded_tile_height(settings)
     x, y = r.ImGui_GetCursorScreenPos(ctx)
     r.ImGui_InvisibleButton(ctx, "##ir_add_zone_" .. target_type, size, tile_h)
     local hovered = r.ImGui_IsItemHovered(ctx)
     local clicked = r.ImGui_IsItemClicked(ctx, 0)
+    local mx, my = r.ImGui_GetMousePos(ctx)
     local accent = payload ~= ""
     local color = accent and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
     local cx = x + size * 0.5
-    local cy = y + tile_h * 0.5
+    local cy = y + (tile_h - stack_h) * 0.5 + size * 0.5
     local radius = size * 0.5 - UIScale.px(2)
-    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, radius, color, 0, accent and UIScale.px(2) or UIScale.px(1.5))
+    local quick_cx, quick_cy = cx, cy + size + gap
+    local quick_r = radius
+    local add_hovered = (mx >= cx - radius and mx <= cx + radius and my >= cy - radius and my <= cy + radius)
+    local quick_hovered = quick_enabled and (mx >= quick_cx - quick_r and mx <= quick_cx + quick_r and my >= quick_cy - quick_r and my <= quick_cy + quick_r)
+    local add_col = add_hovered and Theme.colors.accent or color
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, hovered and Theme.colors.frame_bg or Theme.colors.child_bg, 0)
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, radius, add_col, 0, accent and UIScale.px(2) or UIScale.px(1.5))
     local arm = radius * 0.5
-    r.ImGui_DrawList_AddLine(draw_list, cx - arm, cy, cx + arm, cy, color, UIScale.px(2))
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy - arm, cx, cy + arm, color, UIScale.px(2))
-    if clicked then do_open() end
+    r.ImGui_DrawList_AddLine(draw_list, cx - arm, cy, cx + arm, cy, add_col, UIScale.px(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy - arm, cx, cy + arm, add_col, UIScale.px(2))
+    if quick_enabled then
+      local quick_col = quick_hovered and Theme.colors.accent or color
+      r.ImGui_DrawList_AddCircleFilled(draw_list, quick_cx, quick_cy, quick_r, hovered and Theme.colors.frame_bg or Theme.colors.child_bg, 0)
+      r.ImGui_DrawList_AddCircle(draw_list, quick_cx, quick_cy, quick_r, quick_col, 0, UIScale.px(1.5))
+      local q_w = r.ImGui_CalcTextSize(ctx, "Q")
+      r.ImGui_DrawList_AddText(draw_list, quick_cx - q_w * 0.5, quick_cy - r.ImGui_GetTextLineHeight(ctx) * 0.5, quick_col, "Q")
+    end
+    if clicked then
+      if quick_hovered then do_quick_open() else do_open() end
+    end
     add_zone_menu()
     if hovered then
       local guid = track_guid(track)
       if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
       if payload ~= "" and state.mouse_released then do_drop(payload) end
-      r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or add_tip)
+      if quick_hovered then
+        r.ImGui_SetTooltip(ctx, "Quick Add (cascading menu)")
+      else
+        r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or add_tip)
+      end
     end
     if r.ImGui_BeginDragDropTarget(ctx) then
       local ok_payload, workbench_payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
@@ -3178,22 +3691,49 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     end
     return
   end
-  local label = payload ~= "" and "+ Drop to add FX" or (target_type == "input" and "+ Add input FX" or target_type == "item" and "+ Add item FX" or "+ Add FX")
-  local add_h = UIScale.round(36)
+  local label = payload ~= "" and "+ Drop" or (target_type == "input" and "+ Input" or target_type == "item" and "+ Item" or "+ Add")
+  local add_h = UIScale.round(32)
   r.ImGui_InvisibleButton(ctx, "##ir_add_zone_" .. target_type, item_width, add_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local clicked = r.ImGui_IsItemClicked(ctx, 0)
+  local mx, my = r.ImGui_GetMousePos(ctx)
   local border = payload ~= "" and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
-  r.ImGui_DrawList_AddRect(draw_list, x, y, x + item_width, y + add_h, border, UIScale.px(4), 0, payload ~= "" and UIScale.px(2) or UIScale.px(1))
+  local btn_bg = hovered and Theme.colors.frame_bg or Theme.colors.child_bg
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + item_width, y + add_h, btn_bg, UIScale.px(4))
+  local quick_w = quick_enabled and UIScale.round(64) or 0
+  local quick_gap = quick_enabled and UIScale.round(6) or 0
+  local main_w = item_width - quick_w - quick_gap
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + main_w, y + add_h, border, UIScale.px(4), 0, payload ~= "" and UIScale.px(2) or UIScale.px(1))
   local text_w = r.ImGui_CalcTextSize(ctx, label)
-  r.ImGui_DrawList_AddText(draw_list, x + (item_width - text_w) * 0.5, y + UIScale.round(12), payload ~= "" and Theme.colors.accent or Theme.colors.text_dim, label)
-  if clicked then do_open() end
+  r.ImGui_DrawList_AddText(draw_list, x + (main_w - text_w) * 0.5, y + UIScale.round(10), payload ~= "" and Theme.colors.accent or Theme.colors.text_dim, label)
+  local quick_hovered = false
+  if quick_enabled then
+    local qx0 = x + main_w + quick_gap
+    local qx1 = qx0 + quick_w
+    local qy0 = y
+    local qy1 = y + add_h
+    quick_hovered = mx >= qx0 and mx <= qx1 and my >= qy0 and my <= qy1
+    local q_border = quick_hovered and Theme.colors.accent or Theme.colors.border
+    local q_bg = quick_hovered and Theme.colors.frame_bg or Theme.colors.child_bg
+    r.ImGui_DrawList_AddRectFilled(draw_list, qx0, qy0, qx1, qy1, q_bg, UIScale.px(4))
+    r.ImGui_DrawList_AddRect(draw_list, qx0, qy0, qx1, qy1, q_border, UIScale.px(4), 0, UIScale.px(1))
+    local q_w = r.ImGui_CalcTextSize(ctx, "Quick")
+    local q_col = quick_hovered and Theme.colors.accent or Theme.colors.text_dim
+    r.ImGui_DrawList_AddText(draw_list, qx0 + (quick_w - q_w) * 0.5, y + UIScale.round(10), q_col, "Quick")
+  end
+  if clicked then
+    if quick_hovered then do_quick_open() else do_open() end
+  end
   add_zone_menu()
   if hovered then
     local guid = track_guid(track)
     if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
     if payload ~= "" and state.mouse_released then do_drop(payload) end
-    r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or add_tip)
+    if quick_hovered then
+      r.ImGui_SetTooltip(ctx, "Quick Add (cascading menu)")
+    else
+      r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here" or add_tip)
+    end
   end
   if r.ImGui_BeginDragDropTarget(ctx) then
     local ok_payload, workbench_payload = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
@@ -3475,6 +4015,9 @@ end
 function M.init(app)
   ensure_settings(app)
   build_screenshot_index(false)
+  quick_load_user_lists()
+  quick_load_parser(false)
+  quick_load_fxchains()
   if r.MIDI_GetRecentInputEvent then state.midi_last_retval = r.MIDI_GetRecentInputEvent(0) or 0 end
   load_macros()
 end
@@ -3848,6 +4391,9 @@ function M.draw(app)
       if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, inner_menu_id) end
       if r.ImGui_BeginPopup(ctx, inner_menu_id) then
         if r.ImGui_MenuItem(ctx, "Add FX...") then open_container_add_browser(app, render_chain, container_api) end
+        if settings.quick_add_enabled ~= false and r.ImGui_MenuItem(ctx, "Quick Add...") then
+          quick_open_popup(render_chain.track, render_chain.kind == "item" and "item" or "track", render_chain.take, nil, render_chain, container_api)
+        end
         if r.ImGui_MenuItem(ctx, "Add empty container inside") then add_container_inside(app, render_chain, container_api) end
         r.ImGui_EndPopup(ctx)
       end
@@ -4058,6 +4604,9 @@ function M.draw(app)
       if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, inner_menu_id) end
       if r.ImGui_BeginPopup(ctx, inner_menu_id) then
         if r.ImGui_MenuItem(ctx, "Add FX...") then open_container_add_browser(app, render_chain, container_api) end
+        if settings.quick_add_enabled ~= false and r.ImGui_MenuItem(ctx, "Quick Add...") then
+          quick_open_popup(render_chain.track, render_chain.kind == "item" and "item" or "track", render_chain.take, nil, render_chain, container_api)
+        end
         if r.ImGui_MenuItem(ctx, "Add empty container inside") then add_container_inside(app, render_chain, container_api) end
         r.ImGui_EndPopup(ctx)
       end
@@ -4307,6 +4856,7 @@ function M.draw(app)
       seam_toggle_pending = nil
       seam_toggle_chain = nil
     end
+    draw_quick_add_popup(app, ctx)
     r.ImGui_EndChild(ctx)
   end
   if settings.show_macros ~= false then draw_macro_bar(app, ctx, settings, track) end

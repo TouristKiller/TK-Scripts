@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.4.4
+-- @version 0.4.5
 -- @changelog:
+-- v0.4.5
+--   + Instrument Rack: Added a Quick Add cascading FX menu with Favorites, Recent, All Plugins (grouped by type), Category, Developer, Folders, FXChains and Container
 -- v0.4.4
 --   + Calculator: Added an option in Delay / Reverb to subtract pre-delay from decay/RT60 values, including selectable pre-delay source
 --   + Instrument Rack: Fixed horizontal section collapse headers so text stays inside the header when tiles are compact or screenshots are hidden
