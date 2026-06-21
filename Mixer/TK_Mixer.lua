@@ -1,7 +1,10 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.3.4
+-- @version 1.3.5
 --[[
+v1.3.5
+    + Fixed: dock/undock button could silently fail when an invalid dock position was stored — the mixer now only remembers valid REAPER docker positions and always falls back to a real docker
+
 v1.3.3
     + Sidebar: dock/undock toggle button (above the close button) — remembers last dock position, defaults to bottom dock
 
@@ -12357,7 +12360,7 @@ function DrawSimpleMixerWindow()
   local main_window_dock_id = 0
   if r.ImGui_GetWindowDockID then
    main_window_dock_id = r.ImGui_GetWindowDockID(mixer_ctx) or 0
-   if main_window_dock_id ~= 0 and main_window_dock_id ~= settings.simple_mixer_last_dock_id then
+   if main_window_dock_id < 0 and main_window_dock_id ~= settings.simple_mixer_last_dock_id then
     settings.simple_mixer_last_dock_id = main_window_dock_id
     SaveMixerSettings()
    end
@@ -12469,8 +12472,8 @@ function DrawSimpleMixerWindow()
     if is_docked then
      mixer_state.pending_dock_id = 0
     else
-     local target = settings.simple_mixer_last_dock_id or -1
-     if not target or target == 0 then target = -1 end
+     local target = settings.simple_mixer_last_dock_id
+     if type(target) ~= "number" or target >= 0 then target = -1 end
      mixer_state.pending_dock_id = target
     end
    end
