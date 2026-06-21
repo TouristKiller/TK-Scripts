@@ -1,7 +1,24 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.4.5
+-- @version 0.5.0
 -- @changelog:
+-- v0.5.0
+--   + FX Groups: Added a new module to link FX parameters across multiple tracks with a live, per-FX sync engine
+--   + FX Groups: Manage groups in a compact, collapsible list with inline rename (double-click), color swatch, active toggle, and track management
+--   + FX Groups: Link or unlink individual FX and parameters, with a per-FX SYNC button and selectable source track
+--   + FX Groups: Add an FX to every track in a group at once via the cascading Quick Add menu
+--   + Instrument Rack: Added response curves to macro parameter mappings with Power, S-Curve, Quantize, and Bipolar curve types
+--   + Instrument Rack: Added a draggable graphical curve preview per mapping that reflects the selected curve type and invert state live
+--   + Instrument Rack: Drag the curve pad up or down to change the curve amount and double-click to reset it to linear
+--   + Instrument Rack: Curve type and amount are stored per mapping and persist with the project, defaulting to a linear Power curve for older projects
+--   + Instrument Rack: Added a Highlight instruments option to visually distinguish instrument plugins in the rack
+--   + Instrument Rack: Added a Plugin type badge on screenshot option showing a color-coded VST3, VST, CLAP, JS, AU, or LV2 badge per FX tile
+--   + Instrument Rack: Added a Wet knob on FX containers (including nested containers) in both the vertical and horizontal rack, with drag to adjust and double/right-click to reset
+--   + Instrument Rack: Container add zones now show the same Add FX and Quick Add buttons as the regular add zone, in both the vertical and horizontal rack
+--   + Instrument Rack: Matched the container add and Quick Add button sizing to the regular add zone for a consistent look
+--   + Home: Added an Instrument Rack (H) tile and module dropdown entry to quickly open the horizontal Instrument Rack
+--   + Instrument Rack: Added an optional vertical title bar on the left of the horizontal rack, with the track number in a darker box on top, the truncated track name stacked below, and the pin, settings, and close buttons
+--   + Instrument Rack: Tightened the spacing between collapsed section headers in the horizontal rack
 -- v0.4.5
 --   + Instrument Rack: Added a Quick Add cascading FX menu with Favorites, Recent, All Plugins (grouped by type), Category, Developer, Folders, FXChains and Container
 -- v0.4.4
@@ -279,6 +296,7 @@ local module_names = {
   "automation_item_manager",
   "control_room",
   "instrument_rack",
+  "fx_groups",
   "fx_chain_builder",
   "notes",
   "plugin_browser",
@@ -489,6 +507,27 @@ local function set_active_view(id)
 end
 
 app.set_active_view = set_active_view
+
+local function open_horizontal_rack()
+  local module = app.modules_by_id and app.modules_by_id.instrument_rack
+  if module and module.launch_horizontal_rack then
+    module.launch_horizontal_rack(app)
+  else
+    app.status = "Instrument Rack module not available"
+  end
+end
+
+local HORIZONTAL_RACK_ENTRY = {
+  id = "instrument_rack_horizontal",
+  title = "Instrument Rack (H)",
+  icon = "FX",
+  synthetic = true,
+  on_click = open_horizontal_rack,
+}
+
+local function horizontal_rack_entry_visible()
+  return app.modules_by_id and app.modules_by_id.instrument_rack ~= nil and not is_module_hidden("instrument_rack")
+end
 
 local function process_module_action_commands()
   local command = r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY) or ""
@@ -752,10 +791,23 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
       r.ImGui_DrawList_AddLine(draw_list, key_x, cy, key_x, B(10), color, W(2))
     end
     r.ImGui_DrawList_AddLine(draw_list, L(8), cy, R(8), cy, color, W(2))
+  elseif id == "instrument_rack_horizontal" then
+    r.ImGui_DrawList_AddRect(draw_list, L(8), T(7), R(8), B(7), color, RD(3), 0, W(2))
+    for index = 0, 3 do
+      local key_y = T(12 + index * 9)
+      r.ImGui_DrawList_AddLine(draw_list, cx, key_y, R(10), key_y, color, W(2))
+    end
+    r.ImGui_DrawList_AddLine(draw_list, cx, T(8), cx, B(8), color, W(2))
   elseif id == "fx_chain_builder" then
     r.ImGui_DrawList_AddRect(draw_list, L(6), MY(-13), R(6), MY(13), color, RD(4), 0, W(2))
     r.ImGui_DrawList_AddRect(draw_list, L(10), MY(-6), L(20), MY(4), color, RD(2), 0, W(2))
     r.ImGui_DrawList_AddRect(draw_list, L(23), MY(-6), L(33), MY(4), color, RD(2), 0, W(2))
+  elseif id == "fx_groups" then
+    r.ImGui_DrawList_AddRect(draw_list, L(7), MY(-13), L(19), MY(-1), color, RD(3), 0, W(2))
+    r.ImGui_DrawList_AddRect(draw_list, R(7), MY(1), R(19), MY(13), color, RD(3), 0, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(19), MY(-7), R(19), MY(7), color, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, L(19), MY(-7), RD(3), color, 12)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, R(19), MY(7), RD(3), color, 12)
   elseif id == "notes" then
     r.ImGui_DrawList_AddRect(draw_list, L(8), T(5), R(8), B(5), color, RD(4), 0, W(2))
     r.ImGui_DrawList_AddLine(draw_list, L(14), T(15), R(14), T(15), color, W(2))
@@ -829,7 +881,7 @@ local function draw_module_card(module, card_width, card_height)
     end
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
-  if r.ImGui_BeginDragDropSource and r.ImGui_SetDragDropPayload then
+  if not module.synthetic and r.ImGui_BeginDragDropSource and r.ImGui_SetDragDropPayload then
     local source_flags = r.ImGui_DragDropFlags_SourceNoPreviewTooltip and r.ImGui_DragDropFlags_SourceNoPreviewTooltip() or 0
     if r.ImGui_BeginDragDropSource(ctx, source_flags) then
       r.ImGui_SetDragDropPayload(ctx, MODULE_REORDER_PAYLOAD, module.id)
@@ -837,14 +889,16 @@ local function draw_module_card(module, card_width, card_height)
       r.ImGui_EndDragDropSource(ctx)
     end
   end
-  if r.ImGui_BeginDragDropTarget and r.ImGui_AcceptDragDropPayload and r.ImGui_BeginDragDropTarget(ctx) then
+  if not module.synthetic and r.ImGui_BeginDragDropTarget and r.ImGui_AcceptDragDropPayload and r.ImGui_BeginDragDropTarget(ctx) then
     r.ImGui_DrawList_AddRect(draw_list, x1 + 2, y1 + 2, x2 - 2, y2 - 2, Theme.colors.accent, 6, 0, 2)
     local ok, payload = r.ImGui_AcceptDragDropPayload(ctx, MODULE_REORDER_PAYLOAD)
     if ok and payload and payload ~= module.id then app.cache.pending_module_reorder = { source = payload, target = module.id } end
     r.ImGui_EndDragDropTarget(ctx)
   end
-  if clicked then set_active_view(module.id) end
-  if hovered then r.ImGui_SetTooltip(ctx, title .. "\nDrag to reorder") end
+  if clicked then
+    if module.on_click then module.on_click() else set_active_view(module.id) end
+  end
+  if hovered then r.ImGui_SetTooltip(ctx, title .. (module.synthetic and "" or "\nDrag to reorder")) end
   r.ImGui_PopID(ctx)
 end
 
@@ -871,6 +925,11 @@ local function draw_home_view()
         draw_module_card(module, card_w, card_h)
         if visible_index % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
       end
+    end
+    if horizontal_rack_entry_visible() then
+      visible_index = visible_index + 1
+      draw_module_card(HORIZONTAL_RACK_ENTRY, card_w, card_h)
+      if visible_index % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
     end
     local pending = app.cache.pending_module_reorder
     if pending then
@@ -991,6 +1050,11 @@ local function draw_top_bar()
           set_active_view(candidate.id)
         end
         if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+      end
+    end
+    if horizontal_rack_entry_visible() then
+      if r.ImGui_Selectable(ctx, HORIZONTAL_RACK_ENTRY.title, false) then
+        open_horizontal_rack()
       end
     end
     r.ImGui_EndCombo(ctx)

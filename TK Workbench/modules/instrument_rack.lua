@@ -90,9 +90,12 @@ local defaults = {
   show_macros = true,
   orientation = "vertical",
   horizontal_tile_width = 240,
+  horizontal_titlebar_left = false,
   hide_horizontal_scrollbar = false,
   invert_horizontal_scroll = false,
   hide_parallel_serial_badges = false,
+  distinguish_instruments = true,
+  show_type_badge = false,
   quick_add_enabled = true,
   section_order = "default",
   section_track_color = false,
@@ -1021,9 +1024,10 @@ local function load_macros()
   local _, assignments = r.GetProjExtState(project, EXT_SECTION, "macro_assignments")
   if assignments and assignments ~= "" then
     for line in assignments:gmatch("[^\r\n]+") do
-      local track_id, slot, fx_guid, param_idx, param_name, fx_name, range_min, range_max, inverted = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
-      slot = tonumber(slot)
-      param_idx = tonumber(param_idx)
+      local fields = split_storage_fields(line)
+      local track_id, fx_guid = fields[1], fields[3]
+      local slot = tonumber(fields[2])
+      local param_idx = tonumber(fields[4])
       if track_id and track_id ~= "" and slot and slot >= 1 and slot <= MACRO_MAX and fx_guid and fx_guid ~= "" and param_idx then
         state.macro_assignments[track_id] = state.macro_assignments[track_id] or {}
         state.macro_assignments[track_id][slot] = state.macro_assignments[track_id][slot] or {}
@@ -1031,11 +1035,13 @@ local function load_macros()
           track_guid = track_id,
           fx_guid = fx_guid,
           param_idx = param_idx,
-          param_name = param_name or "",
-          fx_name = fx_name or "",
-          range_min = math.max(0, math.min(1, tonumber(range_min) or 0)),
-          range_max = math.max(0, math.min(1, tonumber(range_max) or 1)),
-          inverted = inverted == "1"
+          param_name = fields[5] or "",
+          fx_name = fields[6] or "",
+          range_min = math.max(0, math.min(1, tonumber(fields[7]) or 0)),
+          range_max = math.max(0, math.min(1, tonumber(fields[8]) or 1)),
+          inverted = fields[9] == "1",
+          curve = math.max(0.1, math.min(10, tonumber(fields[10]) or 1)),
+          curve_type = (fields[11] == "scurve" or fields[11] == "quant" or fields[11] == "bipolar") and fields[11] or "power"
         }
       end
     end
@@ -1084,7 +1090,9 @@ local function save_macros()
           clean_storage_field(assignment.fx_name),
           tostring(tonumber(assignment.range_min) or 0),
           tostring(tonumber(assignment.range_max) or 1),
-          assignment.inverted and "1" or "0"
+          assignment.inverted and "1" or "0",
+          tostring(tonumber(assignment.curve) or 1),
+          clean_storage_field(assignment.curve_type or "power")
         }, "\t")
       end
     end
@@ -1123,7 +1131,9 @@ local function assign_param_to_macro(app, track, fx_index, param_idx, slot)
     fx_name = fx_name or "",
     range_min = 0,
     range_max = 1,
-    inverted = false
+    inverted = false,
+    curve = 1,
+    curve_type = "power"
   }
   save_macros()
   app.status = "Assigned " .. (param_name ~= "" and param_name or ("Param " .. tostring(param_idx))) .. " to " .. default_macro_name(slot)
@@ -1914,56 +1924,9 @@ local function launch_horizontal_rack(app)
   app.status = "Start the horizontal Instrument Rack once from the Actions list"
 end
 
-local function draw_header(app, ctx, settings, track)
-  local label = get_track_label(track)
-  local header_color = get_track_header_color(track)
-  local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
-  local avail = get_available_width(ctx)
-  local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
-  local start_pos_x = r.ImGui_GetCursorPosX(ctx)
-  local start_pos_y = r.ImGui_GetCursorPosY(ctx)
-  local pad_x, pad_y = UIScale.round(6), UIScale.round(3)
-  local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
-  local button_h = r.ImGui_GetFrameHeight(ctx)
-  local bar_h = math.max(text_h + pad_y * 2, button_h)
-  local draw_list = r.ImGui_GetWindowDrawList(ctx)
-  local show_header_close = settings.orientation == "horizontal" and app and app.script_name == "TK Instrument Rack (Horizontal)"
-  r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, UIScale.px(3))
-  r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, cursor_x + avail - pad_x, cursor_y + bar_h)
-  r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + (bar_h - text_h) * 0.5, text_color, label)
-  r.ImGui_DrawList_PopClipRect(draw_list)
-  local pin_label = (settings.pinned_track_guid ~= "" and "Unpin" or "Pin")
-  local pin_w = UIScale.text_button_w(ctx, pin_label, 0, 8)
-  local gap = UIScale.round(4)
-  local buttons_w = pin_w + gap + button_h + (show_header_close and (gap + button_h) or 0)
-  r.ImGui_SetCursorPosX(ctx, start_pos_x + math.max(0, avail - buttons_w))
-  r.ImGui_SetCursorPosY(ctx, start_pos_y + math.max(0, (bar_h - button_h) * 0.5))
-  if r.ImGui_Button(ctx, pin_label .. "##ir_pin", pin_w, button_h) then
-    if settings.pinned_track_guid ~= "" then
-      settings.pinned_track_guid = ""
-      app.status = "Instrument Rack follows selected track"
-    elseif track then
-      settings.pinned_track_guid = track_guid(track)
-      app.status = "Instrument Rack pinned to " .. label
-    end
-    if app.save_settings then app.save_settings() end
-  end
-  r.ImGui_SameLine(ctx, nil, gap)
-  if r.ImGui_Button(ctx, "...##ir_settings", button_h, button_h) then r.ImGui_OpenPopup(ctx, "Instrument Rack Settings") end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Instrument Rack settings") end
-  if show_header_close then
-    r.ImGui_SameLine(ctx, nil, gap)
-    local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
-    local close_dot_d = math.max(UIScale.round(10), button_h - UIScale.round(4))
-    local close_mid_x = close_x + button_h * 0.5
-    local close_mid_y = close_y + button_h * 0.5
-    r.ImGui_DrawList_AddCircleFilled(draw_list, close_mid_x, close_mid_y, close_dot_d * 0.5, 0xF7768EFF)
-    r.ImGui_DrawList_AddCircle(draw_list, close_mid_x, close_mid_y, close_dot_d * 0.5, 0x3A1018FF, 16, UIScale.px(1))
-    if r.ImGui_InvisibleButton(ctx, "##ir_horizontal_close_dot", button_h, button_h) then app.close_requested = true end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
-  end
-  r.ImGui_SetCursorPosX(ctx, start_pos_x)
-  r.ImGui_SetCursorPosY(ctx, start_pos_y + bar_h)
+M.launch_horizontal_rack = launch_horizontal_rack
+
+local function draw_rack_settings_popup(app, ctx, settings, track)
   if r.ImGui_BeginPopup(ctx, "Instrument Rack Settings") then
     local changed, value
     if settings.orientation ~= "horizontal" then
@@ -2026,10 +1989,19 @@ local function draw_header(app, ctx, settings, track)
     if changed then settings.section_track_color = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Hide parallel/serial tiles", settings.hide_parallel_serial_badges == true)
     if changed then settings.hide_parallel_serial_badges = value; if app.save_settings then app.save_settings() end end
+    changed, value = r.ImGui_Checkbox(ctx, "Highlight instruments", settings.distinguish_instruments ~= false)
+    if changed then settings.distinguish_instruments = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Give instrument plugins (VSTi, VST3i, CLAPi, ...) an accent-colored border to set them apart from effects") end
+    changed, value = r.ImGui_Checkbox(ctx, "Plugin type badge on screenshot", settings.show_type_badge == true)
+    if changed then settings.show_type_badge = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show a small plugin-type label (VST3i, CLAP, JS, ...) in the top-right corner of each screenshot, like the Plugin Browser") end
     if settings.orientation == "horizontal" then
       r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
       changed, value = r.ImGui_SliderInt(ctx, "Tile width", settings.horizontal_tile_width or 240, 160, 400, "%d px")
       if changed then settings.horizontal_tile_width = value; if app.save_settings then app.save_settings() end end
+      changed, value = r.ImGui_Checkbox(ctx, "Vertical title bar (left)", settings.horizontal_titlebar_left == true)
+      if changed then settings.horizontal_titlebar_left = value; if app.save_settings then app.save_settings() end end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move the title bar to a narrow vertical strip on the left side of the rack") end
       changed, value = r.ImGui_Checkbox(ctx, "Hide horizontal scrollbar", settings.hide_horizontal_scrollbar)
       if changed then settings.hide_horizontal_scrollbar = value; if app.save_settings then app.save_settings() end end
       changed, value = r.ImGui_Checkbox(ctx, "Invert wheel scroll direction", settings.invert_horizontal_scroll)
@@ -2085,10 +2057,219 @@ local function draw_header(app, ctx, settings, track)
   end
 end
 
+local function shade_color(col, f)
+  local rr = math.floor(((col >> 24) & 0xFF) * f)
+  local gg = math.floor(((col >> 16) & 0xFF) * f)
+  local bb = math.floor(((col >> 8) & 0xFF) * f)
+  return (rr << 24) | (gg << 16) | (bb << 8) | (col & 0xFF)
+end
+
+local function draw_header_vertical(app, ctx, settings, track, bar_h)
+  local label = get_track_label(track)
+  local num_str = "-"
+  local name_str = label
+  if validate_track(track) then
+    if track == r.GetMasterTrack(0) then
+      num_str = "M"
+      name_str = "MASTER"
+    else
+      num_str = tostring(math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 0))
+      local stripped = label:match("^%d+%s*%-%s*(.+)$")
+      if stripped and stripped ~= "" then name_str = stripped end
+    end
+  end
+  local header_color = get_track_header_color(track)
+  local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
+  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local bw = button_h
+  local bar_w = bw + UIScale.round(8)
+  local pad = UIScale.round(4)
+  local gap = UIScale.round(5)
+  local oy = UIScale.round(4)
+  local flags = 0
+  if r.ImGui_WindowFlags_NoScrollbar then flags = flags | r.ImGui_WindowFlags_NoScrollbar() end
+  if r.ImGui_WindowFlags_NoScrollWithMouse then flags = flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
+  if r.ImGui_BeginChild(ctx, "##ir_vbar", bar_w, bar_h + oy, 0, flags) then
+    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+    local base_y = cursor_y + oy
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local show_header_close = app and app.script_name == "TK Instrument Rack (Horizontal)"
+    local n_buttons = 2 + (show_header_close and 1 or 0)
+    local buttons_h = n_buttons * bw + (n_buttons - 1) * gap
+    local buttons_top = base_y + bar_h - pad - buttons_h
+    r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, base_y, cursor_x + bar_w, base_y + bar_h, header_color, UIScale.px(3))
+    local num_h = UIScale.round(16)
+    local num_col = shade_color(header_color, 0.62)
+    local num_text_color = luminance(num_col) > 0.55 and 0x000000FF or 0xFFFFFFFF
+    local top_corner = r.ImGui_DrawFlags_RoundCornersTop and r.ImGui_DrawFlags_RoundCornersTop() or 0
+    r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, base_y, cursor_x + bar_w, base_y + num_h, num_col, UIScale.px(3), top_corner)
+    if num_str and num_str ~= "" then
+      local nw, nh = r.ImGui_CalcTextSize(ctx, num_str)
+      r.ImGui_DrawList_AddText(draw_list, cursor_x + (bar_w - nw) * 0.5, base_y + (num_h - nh) * 0.5, num_text_color, num_str)
+    end
+    if name_str and name_str ~= "" then
+      local target_size = UIScale.round(12)
+      local font_size = r.ImGui_GetFontSize(ctx)
+      local scale = target_size / font_size
+      local line_h = target_size + UIScale.round(1)
+      local top = base_y + num_h + pad
+      local avail_h = (buttons_top - gap) - top
+      if avail_h > line_h then
+        local chars = {}
+        for ch in name_str:gmatch(".") do chars[#chars + 1] = ch end
+        local max_chars = math.max(1, math.floor(avail_h / line_h))
+        local truncated = #chars > max_chars
+        local shown = math.min(#chars, max_chars)
+        if truncated then chars[shown] = "\u{2026}" end
+        local total_h = shown * line_h
+        local start_y = top + math.max(0, (avail_h - total_h) * 0.5)
+        for i = 1, shown do
+          local ch = chars[i]
+          local ch_w = r.ImGui_CalcTextSize(ctx, ch) * scale
+          r.ImGui_DrawList_AddTextEx(draw_list, nil, target_size, cursor_x + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, text_color, ch)
+        end
+      end
+    end
+    local bx_screen = cursor_x + (bar_w - bw) * 0.5
+    local cur_by = buttons_top
+    local pinned = settings.pinned_track_guid ~= ""
+    r.ImGui_SetCursorScreenPos(ctx, bx_screen, cur_by)
+    if r.ImGui_InvisibleButton(ctx, "##ir_vpin", bw, bw) then
+      if pinned then
+        settings.pinned_track_guid = ""
+        app.status = "Instrument Rack follows selected track"
+      elseif track then
+        settings.pinned_track_guid = track_guid(track)
+        app.status = "Instrument Rack pinned to " .. label
+      end
+      if app.save_settings then app.save_settings() end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, pinned and "Unpin track" or "Pin track") end
+    local pcx, pcy = bx_screen + bw * 0.5, cur_by + bw * 0.5
+    local pin_col = pinned and 0x7AA2F7FF or text_color
+    r.ImGui_DrawList_AddCircleFilled(draw_list, pcx, pcy - UIScale.px(3), bw * 0.2, pin_col)
+    r.ImGui_DrawList_AddLine(draw_list, pcx, pcy - UIScale.px(1), pcx, pcy + bw * 0.3, pin_col, UIScale.px(1.5))
+    cur_by = cur_by + bw + gap
+    r.ImGui_SetCursorScreenPos(ctx, bx_screen, cur_by)
+    if r.ImGui_InvisibleButton(ctx, "##ir_vsettings", bw, bw) then r.ImGui_OpenPopup(ctx, "Instrument Rack Settings") end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Instrument Rack settings") end
+    local scx, scy = bx_screen + bw * 0.5, cur_by + bw * 0.5
+    local dotr = UIScale.px(1.4)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, scx - bw * 0.22, scy, dotr, text_color)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, scx, scy, dotr, text_color)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, scx + bw * 0.22, scy, dotr, text_color)
+    cur_by = cur_by + bw + gap
+    if show_header_close then
+      r.ImGui_SetCursorScreenPos(ctx, bx_screen, cur_by)
+      local close_dot_d = math.max(UIScale.round(10), bw - UIScale.round(4))
+      local cmx, cmy = bx_screen + bw * 0.5, cur_by + bw * 0.5
+      r.ImGui_DrawList_AddCircleFilled(draw_list, cmx, cmy, close_dot_d * 0.5, 0xF7768EFF)
+      r.ImGui_DrawList_AddCircle(draw_list, cmx, cmy, close_dot_d * 0.5, 0x3A1018FF, 16, UIScale.px(1))
+      if r.ImGui_InvisibleButton(ctx, "##ir_vclose", bw, bw) then app.close_requested = true end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
+    end
+    draw_rack_settings_popup(app, ctx, settings, track)
+  end
+  r.ImGui_EndChild(ctx)
+  return bar_w
+end
+
+local function draw_header(app, ctx, settings, track)
+  local label = get_track_label(track)
+  local header_color = get_track_header_color(track)
+  local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
+  local avail = get_available_width(ctx)
+  local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+  local start_pos_x = r.ImGui_GetCursorPosX(ctx)
+  local start_pos_y = r.ImGui_GetCursorPosY(ctx)
+  local pad_x, pad_y = UIScale.round(6), UIScale.round(3)
+  local text_w, text_h = r.ImGui_CalcTextSize(ctx, label)
+  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local bar_h = math.max(text_h + pad_y * 2, button_h)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local show_header_close = settings.orientation == "horizontal" and app and app.script_name == "TK Instrument Rack (Horizontal)"
+  r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, UIScale.px(3))
+  r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, cursor_x + avail - pad_x, cursor_y + bar_h)
+  r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + (bar_h - text_h) * 0.5, text_color, label)
+  r.ImGui_DrawList_PopClipRect(draw_list)
+  local pin_label = (settings.pinned_track_guid ~= "" and "Unpin" or "Pin")
+  local pin_w = UIScale.text_button_w(ctx, pin_label, 0, 8)
+  local gap = UIScale.round(4)
+  local buttons_w = pin_w + gap + button_h + (show_header_close and (gap + button_h) or 0)
+  r.ImGui_SetCursorPosX(ctx, start_pos_x + math.max(0, avail - buttons_w))
+  r.ImGui_SetCursorPosY(ctx, start_pos_y + math.max(0, (bar_h - button_h) * 0.5))
+  if r.ImGui_Button(ctx, pin_label .. "##ir_pin", pin_w, button_h) then
+    if settings.pinned_track_guid ~= "" then
+      settings.pinned_track_guid = ""
+      app.status = "Instrument Rack follows selected track"
+    elseif track then
+      settings.pinned_track_guid = track_guid(track)
+      app.status = "Instrument Rack pinned to " .. label
+    end
+    if app.save_settings then app.save_settings() end
+  end
+  r.ImGui_SameLine(ctx, nil, gap)
+  if r.ImGui_Button(ctx, "...##ir_settings", button_h, button_h) then r.ImGui_OpenPopup(ctx, "Instrument Rack Settings") end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Instrument Rack settings") end
+  if show_header_close then
+    r.ImGui_SameLine(ctx, nil, gap)
+    local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
+    local close_dot_d = math.max(UIScale.round(10), button_h - UIScale.round(4))
+    local close_mid_x = close_x + button_h * 0.5
+    local close_mid_y = close_y + button_h * 0.5
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_mid_x, close_mid_y, close_dot_d * 0.5, 0xF7768EFF)
+    r.ImGui_DrawList_AddCircle(draw_list, close_mid_x, close_mid_y, close_dot_d * 0.5, 0x3A1018FF, 16, UIScale.px(1))
+    if r.ImGui_InvisibleButton(ctx, "##ir_horizontal_close_dot", button_h, button_h) then app.close_requested = true end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
+  end
+  r.ImGui_SetCursorPosX(ctx, start_pos_x)
+  r.ImGui_SetCursorPosY(ctx, start_pos_y + bar_h)
+  draw_rack_settings_popup(app, ctx, settings, track)
+end
+
 local function get_fx_short_name(fx_name)
   local name = clean_fx_name(fx_name or "")
   if name == "" then name = fx_name or "FX" end
   return name
+end
+
+local function fx_name_is_instrument(fx_name)
+  local prefix = tostring(fx_name or ""):match("^([%w%d]+):")
+  return prefix ~= nil and prefix:sub(-1) == "i"
+end
+
+local FX_TYPE_BADGE_COLORS = {
+  VST3 = 0x4FC1E9FF,
+  VST = 0x48CFADFF,
+  CLAP = 0xAC92ECFF,
+  JS = 0xFFCE54FF,
+  AU = 0xED5565FF,
+  LV2 = 0xA0D568FF,
+  OTHER = 0x888888FF
+}
+
+local function fx_type_prefix(fx_name)
+  local prefix = tostring(fx_name or ""):match("^([%w%d]+):")
+  if not prefix then return nil, nil end
+  local base = prefix:gsub("[iI]$", ""):upper()
+  if base == "JSFX" then base = "JS" end
+  if not FX_TYPE_BADGE_COLORS[base] then base = "OTHER" end
+  return prefix, base
+end
+
+local function draw_fx_type_badge(ctx, draw_list, fx_name, right_x, top_y)
+  local label, base = fx_type_prefix(fx_name)
+  if not label then return end
+  local text_w = r.ImGui_CalcTextSize(ctx, label)
+  local px = UIScale.round(4)
+  local py = UIScale.round(2)
+  local pad = UIScale.round(8)
+  local line_h = r.ImGui_GetTextLineHeight(ctx)
+  local badge_w = text_w + px * 2
+  local bx = right_x - badge_w - pad
+  local by = top_y + pad
+  r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + badge_w, by + line_h + py * 2, FX_TYPE_BADGE_COLORS[base], UIScale.round(4))
+  r.ImGui_DrawList_AddText(draw_list, bx + px, by + py, Theme.colors.badge_text or 0x101010FF, label)
 end
 
 local function get_wet_param_index(track, fx_index)
@@ -2176,6 +2357,92 @@ local function draw_wet_knob(app, ctx, draw_list, track, fx_index, cx, cy, radiu
   if r.ImGui_IsItemHovered(ctx) or active then
     r.ImGui_SetTooltip(ctx, string.format("Wet: %d%%\nDrag to adjust - double/right-click to reset", math.floor(value * 100 + 0.5)))
   end
+end
+
+local function chain_wet_param(chain, api)
+  if chain.kind == "item" then
+    if not r.TakeFX_GetParamFromIdent then return nil end
+    local idx = r.TakeFX_GetParamFromIdent(chain.take, api, ":wet")
+    if idx and idx >= 0 then return idx end
+    return nil
+  end
+  if not r.TrackFX_GetParamFromIdent then return nil end
+  local idx = r.TrackFX_GetParamFromIdent(chain.track, api, ":wet")
+  if idx and idx >= 0 then return idx end
+  return nil
+end
+
+local function chain_get_wet(chain, api, idx)
+  if chain.kind == "item" then return r.TakeFX_GetParamNormalized(chain.take, api, idx) or 1.0 end
+  return r.TrackFX_GetParamNormalized(chain.track, api, idx) or 1.0
+end
+
+local function chain_set_wet(chain, api, idx, value)
+  if value < 0 then value = 0 elseif value > 1 then value = 1 end
+  if chain.kind == "item" then
+    if r.TakeFX_SetParamNormalized then r.TakeFX_SetParamNormalized(chain.take, api, idx, value) end
+    return
+  end
+  r.TrackFX_SetParamNormalized(chain.track, api, idx, value)
+end
+
+local function draw_container_wet_knob(app, ctx, draw_list, chain, api, wet_idx, cx, cy, radius, id)
+  local settings = ensure_settings(app)
+  local alpha = tonumber(settings.wet_knob_alpha) or 1.0
+  if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local function with_alpha(color)
+    local a = color & 0xFF
+    local out_a = math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
+    return (color & 0xFFFFFF00) | out_a
+  end
+  local value = math.max(0, math.min(1, chain_get_wet(chain, api, wet_idx)))
+  local start_angle = math.pi * 0.75
+  local end_angle = math.pi * 2.25
+  local value_angle = start_angle + value * (end_angle - start_angle)
+  local segments = radius < 8 and 12 or (radius < 14 and 18 or 24)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, with_alpha(0x00000066), segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, with_alpha(0x333333CC), segments)
+  r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, end_angle, segments)
+  r.ImGui_DrawList_PathStroke(draw_list, with_alpha(0x2A2A2AFF), 0, UIScale.px(2))
+  if value > 0.01 then
+    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, value_angle, segments)
+    r.ImGui_DrawList_PathStroke(draw_list, with_alpha(0x8F8F8FFF), 0, UIScale.px(2.5))
+  end
+  local ind_x = cx + math.cos(value_angle) * (radius - UIScale.px(3))
+  local ind_y = cy + math.sin(value_angle) * (radius - UIScale.px(3))
+  r.ImGui_DrawList_AddLine(draw_list, cx, cy, ind_x, ind_y, with_alpha(0xFFFFFFFF), UIScale.px(2))
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.42, with_alpha(0xB8B8B8FF), segments)
+  r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(3), cy - radius - UIScale.round(3))
+  r.ImGui_InvisibleButton(ctx, id or "##ir_cont_wet", (radius + UIScale.round(3)) * 2, (radius + UIScale.round(3)) * 2)
+  local active = r.ImGui_IsItemActive(ctx)
+  if active then
+    local _, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
+    if math.abs(dy) > 0 then
+      value = math.max(0, math.min(1, value - dy * 0.005))
+      chain_set_wet(chain, api, wet_idx, value)
+      r.ImGui_ResetMouseDragDelta(ctx, 0)
+    end
+  end
+  if active then
+    local label = string.format("%d%%", math.floor(value * 100 + 0.5))
+    local tw, th = r.ImGui_CalcTextSize(ctx, label)
+    local lx = cx - tw * 0.5
+    local ly = cy - th * 0.5
+    r.ImGui_DrawList_AddRectFilled(draw_list, lx - UIScale.px(3), ly - UIScale.px(1), lx + tw + UIScale.px(3), ly + th + UIScale.px(1), with_alpha(0x000000CC), UIScale.px(3))
+    r.ImGui_DrawList_AddText(draw_list, lx, ly, with_alpha(0xFFFFFFFF), label)
+  end
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    chain_set_wet(chain, api, wet_idx, 1.0)
+    if app then app.status = "Container wet reset to 100%" end
+  end
+  if r.ImGui_IsItemClicked(ctx, 1) then
+    chain_set_wet(chain, api, wet_idx, 1.0)
+    if app then app.status = "Container wet reset to 100%" end
+  end
+  if r.ImGui_IsItemHovered(ctx) or active then
+    r.ImGui_SetTooltip(ctx, string.format("Container wet: %d%%\nDrag to adjust - double/right-click to reset", math.floor(value * 100 + 0.5)))
+  end
+  return active
 end
 
 local function draw_preset_popup(ctx, track, fx_index)
@@ -2549,6 +2816,30 @@ local function set_rack_param_value(track, fx_index, param_idx, value, uses_base
   end
 end
 
+local function curve_quant_steps(amount)
+  local t = math.log(math.max(0.1, math.min(10, tonumber(amount) or 1))) / math.log(10)
+  local steps = math.floor(2 + (t + 1) * 0.5 * 14 + 0.5)
+  return steps < 2 and 2 or (steps > 16 and 16 or steps)
+end
+
+local function shape_macro_value(value, curve_type, amount)
+  value = value < 0 and 0 or (value > 1 and 1 or value)
+  amount = tonumber(amount) or 1
+  if curve_type == "scurve" then
+    if amount == 1 then return value end
+    if value < 0.5 then return 0.5 * (2 * value) ^ amount end
+    return 1 - 0.5 * (2 * (1 - value)) ^ amount
+  elseif curve_type == "quant" then
+    local steps = curve_quant_steps(amount)
+    if steps < 2 then return value end
+    return math.floor(value * (steps - 1) + 0.5) / (steps - 1)
+  elseif curve_type == "bipolar" then
+    local d = math.abs(2 * value - 1)
+    return amount == 1 and d or d ^ amount
+  end
+  return amount == 1 and value or value ^ amount
+end
+
 local function apply_macro_value(track, slot, value)
   if not validate_track(track) then return end
   ensure_macros_loaded()
@@ -2564,7 +2855,9 @@ local function apply_macro_value(track, slot, value)
     if validate_track(target_track) and fx_index then
       local param_count = r.TrackFX_GetNumParams(target_track, fx_index)
       if assignment.param_idx >= 0 and assignment.param_idx < param_count then
-        local macro_value = assignment.inverted and (1 - value) or value
+        local curve = tonumber(assignment.curve) or 1
+        local shaped = shape_macro_value(value, assignment.curve_type, curve)
+        local macro_value = assignment.inverted and (1 - shaped) or shaped
         local range_min = math.max(0, math.min(1, tonumber(assignment.range_min) or 0))
         local range_max = math.max(0, math.min(1, tonumber(assignment.range_max) or 1))
         local target_value = range_min + (range_max - range_min) * macro_value
@@ -2760,6 +3053,72 @@ local function draw_macro_context_menu(app, ctx, track, slot)
         if r.ImGui_MenuItem(ctx, "Set Current As Max", nil, false, can_read) then
           assignment.range_max = r.TrackFX_GetParamNormalized(target_track, fx_index, assignment.param_idx)
           save_macros()
+        end
+        r.ImGui_Separator(ctx)
+        local curve = math.max(0.1, math.min(10, tonumber(assignment.curve) or 1))
+        local curve_t = math.max(-1, math.min(1, math.log(curve) / math.log(10)))
+        local ctype = assignment.curve_type or "power"
+        local type_labels = { power = "Power", scurve = "S-Curve", quant = "Quantize", bipolar = "Bipolar" }
+        local type_order = { "power", "scurve", "quant", "bipolar" }
+        for ti, tname in ipairs(type_order) do
+          if ti > 1 then r.ImGui_SameLine(ctx) end
+          local selected = ctype == tname
+          if selected then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent) end
+          if r.ImGui_SmallButton(ctx, type_labels[tname] .. "##ir_curvetype_" .. tostring(slot) .. "_" .. tostring(assignment_index) .. "_" .. tname) then
+            assignment.curve_type = tname
+            ctype = tname
+            save_macros()
+          end
+          if selected then r.ImGui_PopStyleColor(ctx) end
+        end
+        local info
+        if ctype == "quant" then
+          info = string.format("Quantize: %d steps", curve_quant_steps(curve))
+        elseif ctype == "scurve" then
+          info = string.format("S-Curve: %.2f", curve)
+        elseif ctype == "bipolar" then
+          info = string.format("Bipolar: %.2f", curve)
+        else
+          info = string.format("Power: %.2f", curve)
+        end
+        r.ImGui_Text(ctx, info)
+        local pad = UIScale.round(112)
+        local curve_draw = r.ImGui_GetWindowDrawList(ctx)
+        local pad_x, pad_y = r.ImGui_GetCursorScreenPos(ctx)
+        r.ImGui_InvisibleButton(ctx, "##ir_curvepad_" .. tostring(slot) .. "_" .. tostring(assignment_index), pad, pad)
+        if r.ImGui_IsItemActive(ctx) then
+          local _, drag_y = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
+          if math.abs(drag_y) > 0 then
+            curve_t = math.max(-1, math.min(1, curve_t + drag_y * 0.01))
+            assignment.curve = 10 ^ curve_t
+            curve = assignment.curve
+            save_macros()
+            r.ImGui_ResetMouseDragDelta(ctx, 0)
+          end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+            assignment.curve = 1
+            curve = 1
+            save_macros()
+          end
+          r.ImGui_SetTooltip(ctx, "Drag up/down to change the curve amount.\nDouble-click to reset.")
+        end
+        r.ImGui_DrawList_AddRectFilled(curve_draw, pad_x, pad_y, pad_x + pad, pad_y + pad, 0x1E222BFF, UIScale.round(4))
+        r.ImGui_DrawList_AddRect(curve_draw, pad_x, pad_y, pad_x + pad, pad_y + pad, Theme.colors.border, UIScale.round(4))
+        r.ImGui_DrawList_AddLine(curve_draw, pad_x, pad_y + pad, pad_x + pad, pad_y, 0x39414FFF, UIScale.px(1))
+        local curve_steps = 64
+        local prev_sx, prev_sy
+        for s = 0, curve_steps do
+          local xa = s / curve_steps
+          local ya = shape_macro_value(xa, ctype, curve)
+          if assignment.inverted then ya = 1 - ya end
+          local sx = pad_x + xa * pad
+          local sy = pad_y + (1 - ya) * pad
+          if prev_sx then
+            r.ImGui_DrawList_AddLine(curve_draw, prev_sx, prev_sy, sx, sy, Theme.colors.accent, UIScale.px(1.6))
+          end
+          prev_sx, prev_sy = sx, sy
         end
         if r.ImGui_MenuItem(ctx, "Remove") then
           remove_macro_assignment(track_id, slot, assignment_index)
@@ -3335,7 +3694,10 @@ local function draw_collapsed_tile_strip(app, ctx, settings, opts)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local bx, by = r.ImGui_GetCursorScreenPos(ctx)
     r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + strip_w, by + th, Theme.colors.frame_bg, UIScale.px(3))
-    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + strip_w, by + th, opts.enabled and Theme.colors.border or Theme.colors.danger, UIScale.px(3), 0, UIScale.px(1))
+    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + strip_w, by + th, opts.enabled and (opts.is_instrument and Theme.colors.accent or Theme.colors.border) or Theme.colors.danger, UIScale.px(3), 0, opts.is_instrument and UIScale.px(2) or UIScale.px(1))
+    if opts.is_instrument then
+      r.ImGui_DrawList_AddRectFilled(draw_list, bx + UIScale.px(1), by + UIScale.px(1), bx + UIScale.px(4), by + th - UIScale.px(1), Theme.colors.accent, UIScale.px(2))
+    end
     local chev_cx = bx + strip_w * 0.5
     local chev_cy = by + UIScale.round(8)
     r.ImGui_DrawList_AddTriangleFilled(draw_list, chev_cx - UIScale.round(3), chev_cy - UIScale.round(4), chev_cx + UIScale.round(4), chev_cy, chev_cx - UIScale.round(3), chev_cy + UIScale.round(4), 0xAAAAAAFF)
@@ -3369,6 +3731,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
   local enabled = r.TrackFX_GetEnabled(track, fx_index)
   local offline = r.TrackFX_GetOffline(track, fx_index)
   local short_name = get_fx_short_name(fx_name)
+  local is_instrument = settings.distinguish_instruments ~= false and fx_name_is_instrument(fx_name)
   chain = chain or "track"
   local local_index = chain == "input" and (fx_index - REC_FX_OFFSET) or fx_index
   local function apply_tile_mod()
@@ -3414,6 +3777,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       id = "##ir_fx_tile",
       label = short_name,
       enabled = enabled,
+      is_instrument = is_instrument,
       collapse_key = collapse_key,
       height = collapsed_h,
       drag = { track = track, take = take, chain = chain, local_index = local_index },
@@ -3431,7 +3795,10 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local bx, by = r.ImGui_GetCursorScreenPos(ctx)
     r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + item_width, by + tile_h, Theme.colors.frame_bg, UIScale.px(3))
-    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and Theme.colors.border or Theme.colors.danger, UIScale.px(3), 0, UIScale.px(1))
+    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and (is_instrument and Theme.colors.accent or Theme.colors.border) or Theme.colors.danger, UIScale.px(3), 0, is_instrument and UIScale.px(2) or UIScale.px(1))
+    if is_instrument then
+      r.ImGui_DrawList_AddRectFilled(draw_list, bx + UIScale.px(1), by + UIScale.px(1), bx + UIScale.px(4), by + tile_h - UIScale.px(1), Theme.colors.accent, UIScale.px(2))
+    end
 
     local delete_x = bx + item_width - UIScale.round(10)
     local delete_y = by + row1_h * 0.5
@@ -3508,6 +3875,9 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
             local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
             r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
           end
+        end
+        if settings.show_type_badge then
+          draw_fx_type_badge(ctx, draw_list, fx_name, bx + item_width - UIScale.round(2), by + title_h)
         end
         handle_fx_drag(app, ctx, draw_list, track, take, chain, local_index, short_name, bx, by, item_width, tile_h)
       end
@@ -3786,6 +4156,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
   local enabled = take_fx_enabled(take, fx_index)
   local offline = take_fx_offline(take, fx_index)
   local short_name = get_fx_short_name(fx_name)
+  local is_instrument = settings.distinguish_instruments ~= false and fx_name_is_instrument(fx_name)
   local function apply_tile_mod()
     local action = tile_mod_action(ctx)
     if action == "delete" then
@@ -3815,6 +4186,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
       id = "##ir_take_fx_tile",
       label = short_name,
       enabled = enabled,
+      is_instrument = is_instrument,
       collapse_key = collapse_key,
       height = row1_h + toolbar_h + shot_h + UIScale.round(6),
       drag = { track = track, take = take, chain = "item", local_index = fx_index },
@@ -3831,7 +4203,10 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local bx, by = r.ImGui_GetCursorScreenPos(ctx)
     r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + item_width, by + tile_h, Theme.colors.frame_bg, UIScale.px(3))
-    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and Theme.colors.border or Theme.colors.danger, UIScale.px(3), 0, UIScale.px(1))
+    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + item_width, by + tile_h, enabled and (is_instrument and Theme.colors.accent or Theme.colors.border) or Theme.colors.danger, UIScale.px(3), 0, is_instrument and UIScale.px(2) or UIScale.px(1))
+    if is_instrument then
+      r.ImGui_DrawList_AddRectFilled(draw_list, bx + UIScale.px(1), by + UIScale.px(1), bx + UIScale.px(4), by + tile_h - UIScale.px(1), Theme.colors.accent, UIScale.px(2))
+    end
 
     local delete_x = bx + item_width - UIScale.round(10)
     local delete_y = by + row1_h * 0.5
@@ -3887,6 +4262,9 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
         draw_fx_screenshot(ctx, settings, fx_name, item_width - UIScale.round(4), shot_h, enabled and not offline)
         if r.ImGui_IsItemClicked(ctx, 0) then
           if not apply_tile_mod() then show_take_fx(take, fx_index) end
+        end
+        if settings.show_type_badge then
+          draw_fx_type_badge(ctx, draw_list, fx_name, bx + item_width - UIScale.round(2), by + row1_h + toolbar_h + UIScale.round(4))
         end
         if settings.show_item_name_overlay ~= false then
           local item_name = get_take_label(take)
@@ -4030,11 +4408,27 @@ function M.draw(app)
   run_pending_param_action(app)
   local track = get_target_track(settings)
   if settings.show_macros ~= false then process_macro_cc_input(app, track) end
-  draw_header(app, ctx, settings, track)
-  r.ImGui_Separator(ctx)
+  local vertical_titlebar = settings.orientation == "horizontal" and settings.horizontal_titlebar_left == true
+  local vbar_open = false
+  local function finish_vbar()
+    if vbar_open then
+      r.ImGui_EndGroup(ctx)
+      vbar_open = false
+    end
+  end
+  if vertical_titlebar then
+    draw_header_vertical(app, ctx, settings, track, expanded_tile_height(settings))
+    r.ImGui_SameLine(ctx, nil, UIScale.gap(4))
+    r.ImGui_BeginGroup(ctx)
+    vbar_open = true
+  else
+    draw_header(app, ctx, settings, track)
+    r.ImGui_Separator(ctx)
+  end
   if not validate_track(track) then
     r.ImGui_TextColored(ctx, Theme.colors.warning, "Select a track to show its FX chain.")
     if settings.show_info_bar ~= false then UI.draw_info_line(ctx, info_line_text(app, track, 0, 0, 0, nil, nil)) end
+    finish_vbar()
     return
   end
   if settings.body_collapsed then
@@ -4043,6 +4437,7 @@ function M.draw(app)
       if app.save_settings then app.save_settings() end
     end
     if settings.show_info_bar ~= false then UI.draw_info_line(ctx, info_line_text(app, track, r.TrackFX_GetCount(track), 0, 0, nil, nil)) end
+    finish_vbar()
     return
   end
   local fx_count = r.TrackFX_GetCount(track)
@@ -4099,10 +4494,10 @@ function M.draw(app)
       local sh = expanded_tile_height(settings)
       local size = UIScale.round(14)
       local has_line = col > 0
-      if has_line then r.ImGui_SameLine(ctx) end
+      if has_line then r.ImGui_SameLine(ctx, nil, 0) end
       local sx, sy = r.ImGui_GetCursorScreenPos(ctx)
       local bar_w = UIScale.round(20)
-      local pad = has_line and UIScale.round(6) or 0
+      local pad = has_line and UIScale.round(4) or 0
       local bx = sx + pad
       local collapse_key = "SECTION|" .. tostring(section_id)
       local is_collapsed = state.collapsed[collapse_key] == true
@@ -4245,6 +4640,10 @@ function M.draw(app)
       local enabled = rc_enabled(node.api)
       local offline = rc_offline(node.api)
       local header_h = UIScale.round(24)
+      local wet_idx = chain_wet_param(render_chain, node.api)
+      local has_wet = wet_idx ~= nil
+      local wet_radius = UIScale.round(8)
+      local wet_zone_w = has_wet and (wet_radius * 2 + UIScale.round(10)) or 0
       r.ImGui_PushID(ctx, "ir_cont_" .. tostring(node.api))
       local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
       r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
@@ -4277,10 +4676,10 @@ function M.draw(app)
         r.ImGui_DrawList_AddText(dl, bx + UIScale.round(42), by + (header_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, col_text, label)
         if node.parallel then
           local pw = r.ImGui_CalcTextSize(ctx, "||")
-          r.ImGui_DrawList_AddText(dl, bx + tile_w - pw - UIScale.round(8), by + (header_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, accent, "||")
+          r.ImGui_DrawList_AddText(dl, bx + tile_w - wet_zone_w - pw - UIScale.round(8), by + (header_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, accent, "||")
         end
         r.ImGui_SetCursorScreenPos(ctx, bx, by)
-        if r.ImGui_InvisibleButton(ctx, "##ir_container_btn", tile_w, header_h) then
+        if r.ImGui_InvisibleButton(ctx, "##ir_container_btn", tile_w - wet_zone_w, header_h) then
           local action = tile_mod_action(ctx)
           if action == "delete" then
             rc_delete(node.api, name)
@@ -4309,6 +4708,11 @@ function M.draw(app)
         local hpayload = state.last_external_drag or ""
         if hpayload ~= "" and state.mouse_released and r.ImGui_IsItemHovered(ctx) then
           add_external_fx_into_container(app, render_chain, node.api, hpayload)
+        end
+        if has_wet then
+          local kcx = bx + tile_w - wet_radius - UIScale.round(6)
+          local kcy = by + header_h * 0.5
+          draw_container_wet_knob(app, ctx, dl, render_chain, node.api, wet_idx, kcx, kcy, wet_radius, "##ir_cont_wet_v")
         end
         draw_container_menu(node, name, is_collapsed, collapse_key)
         r.ImGui_EndChild(ctx)
@@ -4371,22 +4775,44 @@ function M.draw(app)
     local function draw_container_inner_zone(container_api, zone_w, depth)
       indent_cursor(depth)
       local payload = state.last_external_drag or ""
+      local quick_enabled = settings.quick_add_enabled ~= false
       local dl = r.ImGui_GetWindowDrawList(ctx)
       local x, y = r.ImGui_GetCursorScreenPos(ctx)
-      local zone_h = UIScale.round(36)
+      local zone_h = UIScale.round(32)
       r.ImGui_PushID(ctx, "ir_cdrop_" .. tostring(container_api))
       r.ImGui_InvisibleButton(ctx, "##ir_container_drop", zone_w, zone_h)
       local hovered = r.ImGui_IsItemHovered(ctx)
       local clicked = r.ImGui_IsItemClicked(ctx, 0)
+      local mx, my = r.ImGui_GetMousePos(ctx)
       local zx0, zy0 = r.ImGui_GetItemRectMin(ctx)
       local zx1, zy1 = r.ImGui_GetItemRectMax(ctx)
       local active = payload ~= ""
       local border = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
-      r.ImGui_DrawList_AddRect(dl, x, y, x + zone_w, y + zone_h, border, UIScale.px(4), 0, active and UIScale.px(2) or UIScale.px(1))
-      local label = active and "+ Drop FX into container" or "+ Add FX"
+      local quick_w = quick_enabled and UIScale.round(64) or 0
+      local quick_gap = quick_enabled and UIScale.round(6) or 0
+      local main_w = zone_w - quick_w - quick_gap
+      r.ImGui_DrawList_AddRect(dl, x, y, x + main_w, y + zone_h, border, UIScale.px(4), 0, active and UIScale.px(2) or UIScale.px(1))
+      local label = active and "+ Drop" or "+ Add FX"
       local tw = r.ImGui_CalcTextSize(ctx, label)
-      r.ImGui_DrawList_AddText(dl, x + (zone_w - tw) * 0.5, y + (zone_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, active and Theme.colors.accent or Theme.colors.text_dim, label)
-      if clicked and payload == "" then open_container_add_browser(app, render_chain, container_api) end
+      r.ImGui_DrawList_AddText(dl, x + (main_w - tw) * 0.5, y + (zone_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, active and Theme.colors.accent or Theme.colors.text_dim, label)
+      local quick_hovered = false
+      if quick_enabled then
+        local qx0 = x + main_w + quick_gap
+        local qx1 = qx0 + quick_w
+        quick_hovered = mx >= qx0 and mx <= qx1 and my >= y and my <= y + zone_h
+        local q_border = quick_hovered and Theme.colors.accent or Theme.colors.border
+        r.ImGui_DrawList_AddRect(dl, qx0, y, qx1, y + zone_h, q_border, UIScale.px(4), 0, UIScale.px(1))
+        local q_w = r.ImGui_CalcTextSize(ctx, "Quick")
+        local q_col = quick_hovered and Theme.colors.accent or Theme.colors.text_dim
+        r.ImGui_DrawList_AddText(dl, qx0 + (quick_w - q_w) * 0.5, y + (zone_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, q_col, "Quick")
+      end
+      if clicked and payload == "" then
+        if quick_hovered then
+          quick_open_popup(render_chain.track, render_chain.kind == "item" and "item" or "track", render_chain.take, nil, render_chain, container_api)
+        else
+          open_container_add_browser(app, render_chain, container_api)
+        end
+      end
       local inner_menu_id = "##ir_cinner_menu_" .. tostring(container_api)
       if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, inner_menu_id) end
       if r.ImGui_BeginPopup(ctx, inner_menu_id) then
@@ -4399,7 +4825,11 @@ function M.draw(app)
       end
       if hovered then
         if payload ~= "" and state.mouse_released then add_external_fx_into_container(app, render_chain, container_api, payload) end
-        r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here to add it inside this container" or "Add FX into this container (click) or drop FX here")
+        if quick_hovered and payload == "" then
+          r.ImGui_SetTooltip(ctx, "Quick Add (cascading menu)")
+        else
+          r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here to add it inside this container" or "Add FX into this container (click) or drop FX here")
+        end
       end
       if r.ImGui_BeginDragDropTarget(ctx) then
         local ok_payload, wp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
@@ -4495,6 +4925,10 @@ function M.draw(app)
       if short == nil or short == "" then short = "Container" end
       local enabled = rc_enabled(node.api)
       local offline = rc_offline(node.api)
+      local wet_idx = chain_wet_param(render_chain, node.api)
+      local has_wet = wet_idx ~= nil
+      local wet_radius = UIScale.round(8)
+      local wet_zone_h = has_wet and (wet_radius * 2 + UIScale.round(10)) or 0
       r.ImGui_PushID(ctx, "ir_conth_" .. tostring(node.api))
       local flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
       r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
@@ -4534,7 +4968,7 @@ function M.draw(app)
         local scale = size / r.ImGui_GetFontSize(ctx)
         local line_h = size + UIScale.round(1)
         local top = name_top
-        local avail_h = th - (top - by) - UIScale.round(4)
+        local avail_h = th - (top - by) - UIScale.round(4) - wet_zone_h
         local max_chars = math.max(1, math.floor(avail_h / line_h))
         local chars = {}
         for ch in short:gmatch(".") do chars[#chars + 1] = ch; if #chars >= max_chars then break end end
@@ -4543,7 +4977,7 @@ function M.draw(app)
           r.ImGui_DrawList_AddTextEx(dl, nil, size, bx + (strip_w - ch_w) * 0.5, top + (i - 1) * line_h, text_color, ch)
         end
         r.ImGui_SetCursorScreenPos(ctx, bx, by)
-        if r.ImGui_InvisibleButton(ctx, "##ir_container_btnh", strip_w, th) then
+        if r.ImGui_InvisibleButton(ctx, "##ir_container_btnh", strip_w, th - wet_zone_h) then
           local action = tile_mod_action(ctx)
           if action == "delete" then
             rc_delete(node.api, name)
@@ -4573,6 +5007,11 @@ function M.draw(app)
         if hpayload ~= "" and state.mouse_released and r.ImGui_IsItemHovered(ctx) then
           add_external_fx_into_container(app, render_chain, node.api, hpayload)
         end
+        if has_wet then
+          local kcx = bx + strip_w * 0.5
+          local kcy = by + th - wet_radius - UIScale.round(6)
+          draw_container_wet_knob(app, ctx, dl, render_chain, node.api, wet_idx, kcx, kcy, wet_radius, "##ir_cont_wet_h")
+        end
         draw_container_menu(node, name, is_collapsed, collapse_key)
         r.ImGui_EndChild(ctx)
       end
@@ -4585,21 +5024,44 @@ function M.draw(app)
     local H_DROP_W = UIScale.round(46)
     local function draw_container_inner_zone_h(container_api, zone_w, zone_h)
       local payload = state.last_external_drag or ""
+      local quick_enabled = settings.quick_add_enabled ~= false
       local dl = r.ImGui_GetWindowDrawList(ctx)
       local x, y = r.ImGui_GetCursorScreenPos(ctx)
       r.ImGui_PushID(ctx, "ir_cdroph_" .. tostring(container_api))
       r.ImGui_InvisibleButton(ctx, "##ir_container_droph", zone_w, zone_h)
       local hovered = r.ImGui_IsItemHovered(ctx)
       local clicked = r.ImGui_IsItemClicked(ctx, 0)
+      local mx, my = r.ImGui_GetMousePos(ctx)
       local active = payload ~= ""
       local color = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
-      local cx, cy = x + zone_w * 0.5, y + zone_h * 0.5
-      local radius = UIScale.round(40) * 0.5 - UIScale.px(2)
-      r.ImGui_DrawList_AddCircle(dl, cx, cy, radius, color, 0, active and UIScale.px(2) or UIScale.px(1.5))
+      local circle_d = UIScale.round(30)
+      local gap = UIScale.round(6)
+      local radius = circle_d * 0.5 - UIScale.px(2)
+      local quick_r = radius
+      local stack_h = quick_enabled and (circle_d * 2 + gap) or circle_d
+      local cx = x + zone_w * 0.5
+      local cy = y + (zone_h - stack_h) * 0.5 + radius + UIScale.px(2)
+      local quick_cx, quick_cy = cx, cy + circle_d + gap
+      local add_hovered = (mx >= cx - radius and mx <= cx + radius and my >= cy - radius and my <= cy + radius)
+      local quick_hovered = quick_enabled and (mx >= quick_cx - quick_r and mx <= quick_cx + quick_r and my >= quick_cy - quick_r and my <= quick_cy + quick_r)
+      local add_col = (add_hovered and not active) and Theme.colors.accent or color
+      r.ImGui_DrawList_AddCircle(dl, cx, cy, radius, add_col, 0, active and UIScale.px(2) or UIScale.px(1.5))
       local arm = radius * 0.5
-      r.ImGui_DrawList_AddLine(dl, cx - arm, cy, cx + arm, cy, color, UIScale.px(2))
-      r.ImGui_DrawList_AddLine(dl, cx, cy - arm, cx, cy + arm, color, UIScale.px(2))
-      if clicked and payload == "" then open_container_add_browser(app, render_chain, container_api) end
+      r.ImGui_DrawList_AddLine(dl, cx - arm, cy, cx + arm, cy, add_col, UIScale.px(2))
+      r.ImGui_DrawList_AddLine(dl, cx, cy - arm, cx, cy + arm, add_col, UIScale.px(2))
+      if quick_enabled then
+        local quick_col = (quick_hovered and not active) and Theme.colors.accent or color
+        r.ImGui_DrawList_AddCircle(dl, quick_cx, quick_cy, quick_r, quick_col, 0, UIScale.px(1.5))
+        local q_w = r.ImGui_CalcTextSize(ctx, "Q")
+        r.ImGui_DrawList_AddText(dl, quick_cx - q_w * 0.5, quick_cy - r.ImGui_GetTextLineHeight(ctx) * 0.5, quick_col, "Q")
+      end
+      if clicked and payload == "" then
+        if quick_hovered then
+          quick_open_popup(render_chain.track, render_chain.kind == "item" and "item" or "track", render_chain.take, nil, render_chain, container_api)
+        else
+          open_container_add_browser(app, render_chain, container_api)
+        end
+      end
       local inner_menu_id = "##ir_cinnerh_menu_" .. tostring(container_api)
       if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, inner_menu_id) end
       if r.ImGui_BeginPopup(ctx, inner_menu_id) then
@@ -4612,7 +5074,11 @@ function M.draw(app)
       end
       if hovered then
         if payload ~= "" and state.mouse_released then add_external_fx_into_container(app, render_chain, container_api, payload) end
-        r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here to add it inside this container" or "Add FX into this container (click) or drop FX here")
+        if quick_hovered and payload == "" then
+          r.ImGui_SetTooltip(ctx, "Quick Add (cascading menu)")
+        else
+          r.ImGui_SetTooltip(ctx, payload ~= "" and "Drop FX here to add it inside this container" or "Add FX into this container (click) or drop FX here")
+        end
       end
       if r.ImGui_BeginDragDropTarget(ctx) then
         local ok_payload, wp = r.ImGui_AcceptDragDropPayload(ctx, "TK_WORKBENCH_FX_PLUGIN")
@@ -4861,6 +5327,7 @@ function M.draw(app)
   end
   if settings.show_macros ~= false then draw_macro_bar(app, ctx, settings, track) end
   if settings.show_info_bar ~= false then UI.draw_info_line(ctx, info_line_text(app, track, fx_count, input_fx_count, take_fx_count, item_on_track, take)) end
+  finish_vbar()
 end
 
 return M
