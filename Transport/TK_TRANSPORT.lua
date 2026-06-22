@@ -1,8 +1,14 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.0
+-- @version 2.0.1
 -- @changelog 
 --[[
+    v2.0.1:
+    + Added: Quick FX now also adds plugins to the Master track when it is selected
+    + Added: Color Picker option "Use custom colors" - use your own 16 colors instead of REAPER's native custom colors
+    + Added: Edit custom colors from the settings panel or by right-clicking a swatch in the Color Picker
+    + Fixed: Custom color swatches showed wrong colors (red appeared as blue) due to incorrect color format handling
+
     v2.0.0:
     + Fixed: Custom transport button images reverted to graphic mode after toggling Show Transport off and on again (images are now restored when the transport becomes visible)
     + Fixed: Transport mode (Text/Graphic/Custom) and custom image settings are now saved immediately so they persist after a restart
@@ -806,6 +812,13 @@ local default_settings = {
  color_picker_bg_color = 0x000000AA,
  color_picker_show_border = true,
  color_picker_border_color = 0x888888FF,
+ color_picker_use_custom_colors = false,
+ color_picker_custom_colors = {
+ 0xFF0000FF, 0x00FF00FF, 0x0000FFFF, 0xFFFF00FF,
+ 0xFF00FFFF, 0x00FFFFFF, 0xFF8000FF, 0x8000FFFF,
+ 0x008000FF, 0x000080FF, 0x800000FF, 0x008080FF,
+ 0x808000FF, 0x800080FF, 0xC0C0C0FF, 0x808080FF,
+ },
  
  -- Visibility settings
  use_graphic_buttons = false,
@@ -2520,6 +2533,52 @@ function ShowColorPickerSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Text(ctx, "Color:")
  r.ImGui_SameLine(ctx)
  rv, settings.color_picker_border_color = r.ImGui_ColorEdit4(ctx, "##BorderColor", settings.color_picker_border_color or 0xFFFFFFFF, color_flags)
+ end
+ end
+ 
+ r.ImGui_Separator(ctx)
+ r.ImGui_Spacing(ctx)
+ 
+ rv, settings.color_picker_use_custom_colors = r.ImGui_Checkbox(ctx, "Use custom colors", settings.color_picker_use_custom_colors == true)
+ if rv then
+ if settings.color_picker_use_custom_colors and type(settings.color_picker_custom_colors) ~= "table" then
+ settings.color_picker_custom_colors = {}
+ for i, v in ipairs(default_settings.color_picker_custom_colors) do
+ settings.color_picker_custom_colors[i] = v
+ end
+ end
+ SaveSettings()
+ end
+ r.ImGui_SameLine(ctx)
+ r.ImGui_TextDisabled(ctx, "(?)")
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, "Off: use REAPER's native custom colors.\nOn: use your own colors (edit below or right-click a swatch in the color picker).")
+ end
+ 
+ if settings.color_picker_use_custom_colors then
+ if type(settings.color_picker_custom_colors) ~= "table" then
+ settings.color_picker_custom_colors = {}
+ end
+ r.ImGui_Spacing(ctx)
+ local swatch_flags = r.ImGui_ColorEditFlags_NoInputs()
+ for i = 1, 16 do
+ local cur = settings.color_picker_custom_colors[i] or 0x808080FF
+ local chg, newc = r.ImGui_ColorEdit4(ctx, "##custom_color_" .. i, cur, swatch_flags)
+ if chg then
+ settings.color_picker_custom_colors[i] = (newc | 0xFF)
+ SaveSettings()
+ end
+ if i % 8 ~= 0 and i < 16 then
+ r.ImGui_SameLine(ctx)
+ end
+ end
+ r.ImGui_Spacing(ctx)
+ if r.ImGui_Button(ctx, "Reset to REAPER defaults") then
+ settings.color_picker_custom_colors = {}
+ for i, v in ipairs(default_settings.color_picker_custom_colors) do
+ settings.color_picker_custom_colors[i] = v
+ end
+ SaveSettings()
  end
  end
  end
@@ -5529,6 +5588,22 @@ end
 
 function GetReaperCustomColors()
  local colors = {}
+ 
+ if settings.color_picker_use_custom_colors then
+ local custom = settings.color_picker_custom_colors
+ if type(custom) ~= "table" then
+ custom = {}
+ end
+ for i = 1, 16 do
+ local imgui_c = custom[i] or 0x808080FF
+ local rr = (imgui_c >> 24) & 0xFF
+ local gg = (imgui_c >> 16) & 0xFF
+ local bb = (imgui_c >> 8) & 0xFF
+ local colorNative = (bb << 16) | (gg << 8) | rr
+ colors[i] = {native = colorNative, imgui = (imgui_c | 0xFF)}
+ end
+ return colors
+ end
  
  local ini_file = r.get_ini_file()
  
@@ -11557,6 +11632,12 @@ end
 local function AddFXToSelectedTrack(fx_name)
  local track = r.GetSelectedTrack(0, 0)
  if not track then
+ local master = r.GetMasterTrack(0)
+ if master and r.IsTrackSelected(master) then
+ track = master
+ end
+ end
+ if not track then
  return false
  end
  
@@ -11904,6 +11985,7 @@ function ShowColorPicker(main_window_width, main_window_height)
  r.ImGui_PopStyleVar(ctx, 1)
  
  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+ color_picker_rightclick_index = i
  r.ImGui_OpenPopup(ctx, "ColorPickerTargetMenu")
  end
  
@@ -11921,6 +12003,19 @@ function ShowColorPicker(main_window_width, main_window_height)
  StoreElementRectUnion("color_picker", screen_x, screen_y, screen_x + total_width, screen_y + total_height)
  
  if r.ImGui_BeginPopup(ctx, "ColorPickerTargetMenu") then
+ if settings.color_picker_use_custom_colors and color_picker_rightclick_index then
+ if type(settings.color_picker_custom_colors) ~= "table" then settings.color_picker_custom_colors = {} end
+ local idx = color_picker_rightclick_index
+ r.ImGui_Text(ctx, "Edit color " .. idx .. ":")
+ local cur = settings.color_picker_custom_colors[idx] or 0x808080FF
+ local edit_flags = r.ImGui_ColorEditFlags_NoInputs()
+ local chg, newc = r.ImGui_ColorEdit4(ctx, "##cp_edit_color", cur, edit_flags)
+ if chg then
+ settings.color_picker_custom_colors[idx] = (newc | 0xFF)
+ SaveSettings()
+ end
+ r.ImGui_Separator(ctx)
+ end
  r.ImGui_Text(ctx, "Apply color to:")
  r.ImGui_Separator(ctx)
  if r.ImGui_MenuItem(ctx, "Track", nil, settings.color_picker_target == 0) then

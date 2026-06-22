@@ -332,7 +332,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="2.0.0" author="TouristKiller" time="2026-06-13T18:30:00Z">
+        <version name="2.0.1" author="TouristKiller" time="2026-06-22T22:35:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -341,9 +341,11 @@
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
             <changelog><![CDATA[
-    v2.0.0:
-    + Fixed: Custom transport button images reverted to graphic mode after toggling Show Transport off and on again (images are now restored when the transport becomes visible)
-    + Fixed: Transport mode (Text/Graphic/Custom) and custom image settings are now saved immediately so they persist after a restart
+    v2.0.1:
+    + Added: Quick FX now also adds plugins to the Master track when it is selected
+    + Added: Color Picker option "Use custom colors" - use your own 16 colors instead of REAPER's native custom colors
+    + Added: Edit custom colors from the settings panel or by right-clicking a swatch in the Color Picker
+    + Fixed: Custom color swatches showed wrong colors (red appeared as blue) due to incorrect color format handling
 ]]></changelog>
         </version>
     </reapack>
