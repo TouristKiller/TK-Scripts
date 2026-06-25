@@ -12,8 +12,48 @@ local M = {
 
 local EXT_SECTION = "TK_WORKBENCH_INSTRUMENT_RACK"
 local REC_FX_OFFSET = 0x1000000
-local MAX_PARAM_SLOTS = 8
-local PARAM_SLOT_COLUMNS = 4
+local MAX_PARAM_SLOTS = 18
+local PARAM_LAYOUTS = {
+  vertical = {
+    { count = 4, cols = 4, rows = 1 },
+    { count = 8, cols = 4, rows = 2 },
+    { count = 12, cols = 4, rows = 3 },
+    { count = 16, cols = 4, rows = 4 },
+  },
+  horizontal = {
+    { count = 4, cols = 4, rows = 1 },
+    { count = 8, cols = 4, rows = 2 },
+    { count = 12, cols = 6, rows = 2 },
+    { count = 18, cols = 6, rows = 3 },
+  },
+}
+function param_orientation(settings)
+  return (settings and settings.orientation == "horizontal") and "horizontal" or "vertical"
+end
+function param_slots_key(settings)
+  return param_orientation(settings) == "horizontal" and "param_slots_horizontal" or "param_slots_vertical"
+end
+function param_layout(settings)
+  local list = PARAM_LAYOUTS[param_orientation(settings)]
+  local count = tonumber(settings and settings[param_slots_key(settings)]) or list[1].count
+  for _, e in ipairs(list) do if e.count == count then return e end end
+  return list[1]
+end
+function param_slot_count(settings)
+  return param_layout(settings).count
+end
+function param_slot_columns(settings)
+  return param_layout(settings).cols
+end
+function param_slot_rows(settings)
+  return param_layout(settings).rows
+end
+function clamp_param_slots(orient, count)
+  local list = PARAM_LAYOUTS[orient] or PARAM_LAYOUTS.vertical
+  count = tonumber(count)
+  if count then for _, e in ipairs(list) do if e.count == count then return count end end end
+  return list[1].count
+end
 local MACRO_COUNT = 8
 local MACRO_MAX = 16
 local FX_ROOT = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/"
@@ -85,12 +125,14 @@ local defaults = {
   show_ab = false,
   tile_compact = false,
   body_collapsed = false,
-  macro_param_slots = 4,
   macro_count = 8,
   show_macros = true,
   orientation = "vertical",
   horizontal_tile_width = 240,
   horizontal_titlebar_left = false,
+  header_center_name = false,
+  header_name_badge = false,
+  fx_name_center = false,
   hide_horizontal_scrollbar = false,
   invert_horizontal_scroll = false,
   hide_parallel_serial_badges = false,
@@ -99,10 +141,17 @@ local defaults = {
   quick_add_enabled = true,
   section_order = "default",
   section_track_color = false,
+  track_color_saturation = 1.0,
   show_item_name_overlay = true,
   show_info_bar = true,
   wet_knob_scale = 1.0,
   wet_knob_alpha = 1.0,
+  pinned_param_label_size = 8,
+  pinned_param_scale = 1.0,
+  pinned_param_alpha = 1.0,
+  pinned_param_display = "name",
+  pinned_param_style = "knob",
+  pinned_param_under_label = true,
   auto_apply_default_pins = false,
   restore_default_pin_values = false
 }
@@ -116,20 +165,34 @@ local function ensure_settings(app)
       changed = true
     end
   end
-  if settings.macro_param_slots ~= 8 then settings.macro_param_slots = 4 end
+  local legacy_slots = tonumber(settings.macro_param_slots)
+  if settings.param_slots_vertical == nil then settings.param_slots_vertical = legacy_slots or 4; changed = true end
+  if settings.param_slots_horizontal == nil then settings.param_slots_horizontal = legacy_slots or 4; changed = true end
+  settings.macro_param_slots = nil
+  settings.param_slots_vertical = clamp_param_slots("vertical", settings.param_slots_vertical)
+  settings.param_slots_horizontal = clamp_param_slots("horizontal", settings.param_slots_horizontal)
   if changed and app.save_settings then app.save_settings() end
   return settings
 end
 
-local function param_slot_count(settings)
-  return settings and tonumber(settings.macro_param_slots) == 8 and 8 or 4
-end
-
 local function param_slots_height(settings)
   if not settings or settings.show_pinned_params == false then return 0 end
-  local slot_count = param_slot_count(settings)
-  local rows = slot_count > PARAM_SLOT_COLUMNS and 2 or 1
-  return rows == 2 and UIScale.round(96) or UIScale.round(54)
+  local rows = param_slot_rows(settings)
+  local extra = math.max(0, UIScale.round(tonumber(settings.pinned_param_label_size) or 8) - UIScale.round(8))
+  local row_step = UIScale.round(44) + extra
+  return UIScale.round(54) + (rows - 1) * row_step
+end
+
+function horizontal_tile_pixels(settings)
+  local base = UIScale.round(tonumber(settings and settings.horizontal_tile_width) or 240)
+  if settings and settings.show_pinned_params ~= false then
+    local cols = param_slot_columns(settings)
+    if cols > 4 then
+      local inset = UIScale.round(14)
+      base = math.floor((base - inset) * cols / 4 + inset + 0.5)
+    end
+  end
+  return base
 end
 
 local function validate_track(track)
@@ -334,6 +397,29 @@ function quick_group_kind_for_category(name)
   return nil
 end
 
+function quick_natural_less(left, right)
+  local a = tostring(left or ""):lower()
+  local b = tostring(right or ""):lower()
+  local ai, bi = 1, 1
+  while ai <= #a and bi <= #b do
+    local a_num = a:match("^%d+", ai)
+    local b_num = b:match("^%d+", bi)
+    if a_num and b_num then
+      local an, bn = tonumber(a_num), tonumber(b_num)
+      if an ~= bn then return an < bn end
+      if #a_num ~= #b_num then return #a_num < #b_num end
+      ai = ai + #a_num
+      bi = bi + #b_num
+    else
+      local ac, bc = a:sub(ai, ai), b:sub(bi, bi)
+      if ac ~= bc then return ac < bc end
+      ai = ai + 1
+      bi = bi + 1
+    end
+  end
+  return #a < #b
+end
+
 function quick_build_groups(categories)
   local groups = { all = {}, developer = {}, category = {}, folders = {} }
   if type(categories) ~= "table" then return groups end
@@ -348,7 +434,7 @@ function quick_build_groups(categories)
         end
       end
       table.sort(groups[kind], function(left, right)
-        return tostring(left.label):lower() < tostring(right.label):lower()
+        return quick_natural_less(left.label, right.label)
       end)
     end
   end
@@ -356,7 +442,7 @@ function quick_build_groups(categories)
 end
 
 function quick_build_type_groups(plugin_list)
-  local order = { "CLAP", "CLAPi", "VST", "VSTi", "VST3", "VST3i", "JS", "Instrument" }
+  local order = { "CLAP", "CLAPi", "VST", "VSTi", "VST3", "VST3i", "AU", "AUi", "LV2", "LV2i", "JS", "Instrument" }
   local buckets = {}
   for _, key in ipairs(order) do buckets[key] = {} end
   for _, name in ipairs(plugin_list or {}) do
@@ -933,21 +1019,30 @@ local function load_pinned_params()
   local _, content = r.GetProjExtState(project, EXT_SECTION, "pinned_params")
   if not content or content == "" then return end
   for line in content:gmatch("[^\r\n]+") do
-    local track_id, fx_guid, param_idx, param_name, fx_name, slot = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
-    if not track_id then
-      track_id, fx_guid, param_idx, param_name, fx_name = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
-    end
-    param_idx = tonumber(param_idx)
-    slot = tonumber(slot)
+    local fields = split_storage_fields(line)
+    local track_id = fields[1]
+    local fx_guid = fields[2]
+    local param_idx = tonumber(fields[3])
+    local param_name = fields[4] or ""
+    local fx_name = fields[5] or ""
+    local slot = tonumber(fields[6])
+    local custom_name = fields[7] or ""
+    local style = fields[8] or ""
+    local display = fields[9] or ""
+    local under_label_raw = fields[10] or ""
     if track_id and track_id ~= "" and fx_guid and fx_guid ~= "" and param_idx then
       state.pinned_params[track_id] = state.pinned_params[track_id] or {}
       state.pinned_params[track_id][param_key(fx_guid, param_idx)] = {
         track_guid = track_id,
         fx_guid = fx_guid,
         param_idx = param_idx,
-        param_name = param_name or "",
-        fx_name = fx_name or "",
-        slot = slot
+        param_name = param_name,
+        fx_name = fx_name,
+        slot = slot,
+        custom_name = custom_name,
+        style = style,
+        display = (display == "name" or display == "value") and display or nil,
+        under_label = (under_label_raw == "1" and true) or (under_label_raw == "0" and false) or nil
       }
     end
   end
@@ -970,7 +1065,11 @@ local function save_pinned_params()
         tostring(entry.param_idx),
         clean_storage_field(entry.param_name),
         clean_storage_field(entry.fx_name),
-        tostring(tonumber(entry.slot) or "")
+        tostring(tonumber(entry.slot) or ""),
+        clean_storage_field(entry.custom_name),
+        clean_storage_field(entry.style),
+        clean_storage_field((entry.display == "name" or entry.display == "value") and entry.display or ""),
+        (entry.under_label == true and "1") or (entry.under_label == false and "0") or ""
       }, "\t")
     end
   end
@@ -1657,7 +1756,22 @@ local function run_pending_param_action(app)
   r.defer(function() defer_param_action(app, pending, pending.defer_frames or 1) end)
 end
 
-local function draw_param_context_menu(app, ctx, track, fx_index, param_idx)
+local function pinned_display_name(entry)
+  if entry and entry.custom_name and entry.custom_name ~= "" then return entry.custom_name end
+  return (entry and entry.param_name) or ""
+end
+
+local function pinned_display_mode(settings, entry)
+  if entry and (entry.display == "name" or entry.display == "value") then return entry.display end
+  return settings.pinned_param_display or "name"
+end
+
+local function pinned_show_under_label(settings, entry)
+  if entry and (entry.under_label == true or entry.under_label == false) then return entry.under_label end
+  return settings.pinned_param_under_label ~= false
+end
+
+local function draw_param_context_menu(app, ctx, track, fx_index, param_idx, entry)
   local request_unpin = false
   local current_value = r.TrackFX_GetParam(track, fx_index, param_idx)
   if r.ImGui_MenuItem(ctx, "Reset") then
@@ -1689,6 +1803,54 @@ local function draw_param_context_menu(app, ctx, track, fx_index, param_idx)
       end
     end
     r.ImGui_EndMenu(ctx)
+  end
+  r.ImGui_Separator(ctx)
+  if entry then
+    r.ImGui_Text(ctx, "Name")
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+    local rename_changed, rename_value = r.ImGui_InputTextWithHint(ctx, "##ir_rename_pin_" .. tostring(param_idx), entry.param_name ~= "" and entry.param_name or "Name", entry.custom_name or "")
+    if rename_changed then entry.custom_name = rename_value end
+    if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+      save_pinned_params()
+      app.status = "Renamed pinned parameter"
+    end
+    if entry.custom_name and entry.custom_name ~= "" then
+      if r.ImGui_MenuItem(ctx, "Reset name") then
+        entry.custom_name = ""
+        save_pinned_params()
+        app.status = "Reset parameter name"
+      end
+    end
+    local is_button = (entry.style or "") == "button"
+    if r.ImGui_MenuItem(ctx, "Button layout", nil, is_button) then
+      entry.style = is_button and "knob" or "button"
+      save_pinned_params()
+      app.status = is_button and "Parameter shown as knob" or "Parameter shown as button"
+    end
+    if r.ImGui_BeginMenu(ctx, "Show") then
+      if r.ImGui_MenuItem(ctx, "Default", nil, entry.display == nil) then
+        entry.display = nil; save_pinned_params(); app.status = "Label: default"
+      end
+      if r.ImGui_MenuItem(ctx, "Name", nil, entry.display == "name") then
+        entry.display = "name"; save_pinned_params(); app.status = "Label: name"
+      end
+      if r.ImGui_MenuItem(ctx, "Value", nil, entry.display == "value") then
+        entry.display = "value"; save_pinned_params(); app.status = "Label: value"
+      end
+      r.ImGui_EndMenu(ctx)
+    end
+    if r.ImGui_BeginMenu(ctx, "Label under") then
+      if r.ImGui_MenuItem(ctx, "Default", nil, entry.under_label == nil) then
+        entry.under_label = nil; save_pinned_params(); app.status = "Under label: default"
+      end
+      if r.ImGui_MenuItem(ctx, "Show", nil, entry.under_label == true) then
+        entry.under_label = true; save_pinned_params(); app.status = "Under label: shown"
+      end
+      if r.ImGui_MenuItem(ctx, "Hide", nil, entry.under_label == false) then
+        entry.under_label = false; save_pinned_params(); app.status = "Under label: hidden"
+      end
+      r.ImGui_EndMenu(ctx)
+    end
   end
   r.ImGui_Separator(ctx)
   if r.ImGui_MenuItem(ctx, "Unpin") then request_unpin = true end
@@ -1878,12 +2040,31 @@ local function open_container_add_browser(app, chain, container_api)
   r.SetExtState("TKMIX", "rack_add_container", tguid .. "|" .. kind .. "|" .. cguid, false)
 end
 
-local function get_track_header_color(track)
+function ir_apply_saturation(rgba, sat)
+  sat = tonumber(sat)
+  if not sat or sat >= 1 then return rgba end
+  if sat < 0 then sat = 0 end
+  local a = rgba & 0xFF
+  local rr = ((rgba >> 24) & 0xFF) / 255
+  local gg = ((rgba >> 16) & 0xFF) / 255
+  local bb = ((rgba >> 8) & 0xFF) / 255
+  local gray = 0.299 * rr + 0.587 * gg + 0.114 * bb
+  rr = gray + (rr - gray) * sat
+  gg = gray + (gg - gray) * sat
+  bb = gray + (bb - gray) * sat
+  local R = math.floor(math.max(0, math.min(1, rr)) * 255 + 0.5)
+  local G = math.floor(math.max(0, math.min(1, gg)) * 255 + 0.5)
+  local B = math.floor(math.max(0, math.min(1, bb)) * 255 + 0.5)
+  return ((R & 0xFF) << 24) | ((G & 0xFF) << 16) | ((B & 0xFF) << 8) | a
+end
+
+local function get_track_header_color(settings, track)
   if not validate_track(track) then return 0x44444488 end
   local native = r.GetTrackColor(track) or 0
   if native == 0 then return 0x44444488 end
   local cr, cg, cb = r.ColorFromNative(native)
-  return ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xCC
+  local col = ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xCC
+  return ir_apply_saturation(col, settings and settings.track_color_saturation)
 end
 
 local function luminance(rgba)
@@ -1893,12 +2074,18 @@ local function luminance(rgba)
   return (0.299 * cr + 0.587 * cg + 0.114 * cb) / 255
 end
 
+local function add_zone_visible_color()
+  local bg = Theme.colors.child_bg or 0x1E1E1EFF
+  return luminance(bg) > 0.5 and 0x2A2A2AFF or 0xD2D2D2FF
+end
+
 local function section_accent_color(settings, track)
   if settings and settings.section_track_color and validate_track(track) then
     local native = r.GetTrackColor(track) or 0
     if native ~= 0 then
       local cr, cg, cb = r.ColorFromNative(native)
-      return ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xCC
+      local col = ((cr & 0xFF) << 24) | ((cg & 0xFF) << 16) | ((cb & 0xFF) << 8) | 0xCC
+      return ir_apply_saturation(col, settings.track_color_saturation)
     end
   end
   return Theme.colors.accent
@@ -1936,6 +2123,16 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
       end
       r.ImGui_Separator(ctx)
     end
+    local two_col = true
+    local table_open = false
+    if two_col and r.ImGui_BeginTable then
+      local tflags = (r.ImGui_TableFlags_SizingStretchSame and r.ImGui_TableFlags_SizingStretchSame() or 0)
+      if r.ImGui_BeginTable(ctx, "##ir_settings_cols", 2, tflags) then
+        table_open = true
+        r.ImGui_TableNextRow(ctx)
+        r.ImGui_TableNextColumn(ctx)
+      end
+    end
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Display")
     changed, value = r.ImGui_Checkbox(ctx, "Show screenshots", settings.show_screenshots)
     if changed then settings.show_screenshots = value; if app.save_settings then app.save_settings() end end
@@ -1956,13 +2153,18 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
       settings.macro_count = macro_total == 8 and 16 or 8
       if app.save_settings then app.save_settings() end
     end
-    local slot_count = param_slot_count(settings)
+    local slot_layout = param_layout(settings)
+    local slot_list = PARAM_LAYOUTS[param_orientation(settings)]
+    local slot_label = string.format("%d (%dx%d)", slot_layout.count, slot_layout.rows, slot_layout.cols)
     r.ImGui_Text(ctx, "Parameter buttons")
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, tostring(slot_count) .. "##ir_macro_param_slots", UIScale.text_button_w(ctx, tostring(slot_count), 60, 8), 0) then
-      settings.macro_param_slots = slot_count == 4 and 8 or 4
+    if r.ImGui_Button(ctx, slot_label .. "##ir_macro_param_slots", UIScale.text_button_w(ctx, slot_label, 96, 8), 0) then
+      local slot_idx = 1
+      for i, e in ipairs(slot_list) do if e.count == slot_layout.count then slot_idx = i break end end
+      settings[param_slots_key(settings)] = slot_list[(slot_idx % #slot_list) + 1].count
       if app.save_settings then app.save_settings() end
     end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Number of pinned parameter slots for the current orientation (cycles through presets)") end
     r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
     changed, value = r.ImGui_SliderDouble(ctx, "Wet knob size", tonumber(settings.wet_knob_scale) or 1.0, 0.7, 1.0, "%.2f x")
     if changed then settings.wet_knob_scale = value; if app.save_settings then app.save_settings() end end
@@ -1970,6 +2172,30 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
     r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
     changed, value = r.ImGui_SliderInt(ctx, "Wet knob alpha", alpha_pct, 10, 100, "%d%%")
     if changed then settings.wet_knob_alpha = value / 100; if app.save_settings then app.save_settings() end end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Pinned parameters")
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderInt(ctx, "Label size", tonumber(settings.pinned_param_label_size) or 8, 6, 16, "%d px")
+    if changed then settings.pinned_param_label_size = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Font size of the pinned parameter label (does not change the knob size)") end
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderDouble(ctx, "Knob size", tonumber(settings.pinned_param_scale) or 1.0, 0.7, 1.0, "%.2f x")
+    if changed then settings.pinned_param_scale = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Scale of the pinned parameter knob / button (does not change the label size)") end
+    local pinned_alpha_pct = math.floor(((tonumber(settings.pinned_param_alpha) or 1.0) * 100) + 0.5)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderInt(ctx, "Knob alpha", pinned_alpha_pct, 10, 100, "%d%%")
+    if changed then settings.pinned_param_alpha = value / 100; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Transparency of the pinned parameter knob / button") end
+    changed, value = r.ImGui_Checkbox(ctx, "Show value instead of name", settings.pinned_param_display == "value")
+    if changed then settings.pinned_param_display = value and "value" or "name"; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show the parameter value as the label instead of the name") end
+    changed, value = r.ImGui_Checkbox(ctx, "Button layout by default", settings.pinned_param_style == "button")
+    if changed then settings.pinned_param_style = value and "button" or "knob"; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Draw pinned parameters as on/off buttons instead of knobs. Right-click a parameter to override per parameter") end
+    changed, value = r.ImGui_Checkbox(ctx, "Show label under knob/button", settings.pinned_param_under_label ~= false)
+    if changed then settings.pinned_param_under_label = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show the parameter name label below the knob / button") end
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "FX sources")
     changed, value = r.ImGui_Checkbox(ctx, "Show track FX", settings.show_track_fx)
@@ -1979,7 +2205,7 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
     changed, value = r.ImGui_Checkbox(ctx, "Show take FX (selected item)", settings.show_selected_item_fx)
     if changed then settings.show_selected_item_fx = value; if app.save_settings then app.save_settings() end end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Shows the take FX chain of the selected item on the track") end
-    r.ImGui_Separator(ctx)
+    if table_open then r.ImGui_TableNextColumn(ctx) else r.ImGui_Separator(ctx) end
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Layout")
     changed, value = r.ImGui_Checkbox(ctx, "Compact tiles", settings.tile_compact)
     if changed then settings.tile_compact = value; if app.save_settings then app.save_settings() end end
@@ -1987,6 +2213,10 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
     if changed then settings.section_order = value and "signal_flow" or "default"; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Color sections by track color", settings.section_track_color == true)
     if changed then settings.section_track_color = value; if app.save_settings then app.save_settings() end end
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderInt(ctx, "Track color saturation", math.floor((tonumber(settings.track_color_saturation) or 1.0) * 100 + 0.5), 0, 100, "%d%%")
+    if changed then settings.track_color_saturation = value / 100; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Lower the saturation of inherited track colors in the header and sections to better match the real track color") end
     changed, value = r.ImGui_Checkbox(ctx, "Hide parallel/serial tiles", settings.hide_parallel_serial_badges == true)
     if changed then settings.hide_parallel_serial_badges = value; if app.save_settings then app.save_settings() end end
     changed, value = r.ImGui_Checkbox(ctx, "Highlight instruments", settings.distinguish_instruments ~= false)
@@ -1995,6 +2225,15 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
     changed, value = r.ImGui_Checkbox(ctx, "Plugin type badge on screenshot", settings.show_type_badge == true)
     if changed then settings.show_type_badge = value; if app.save_settings then app.save_settings() end end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show a small plugin-type label (VST3i, CLAP, JS, ...) in the top-right corner of each screenshot, like the Plugin Browser") end
+    changed, value = r.ImGui_Checkbox(ctx, "Center plugin name", settings.fx_name_center == true)
+    if changed then settings.fx_name_center = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Center the plugin name in the FX tile title instead of left-aligning it") end
+    changed, value = r.ImGui_Checkbox(ctx, "Center track name", settings.header_center_name == true)
+    if changed then settings.header_center_name = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Center the track name in the rack header") end
+    changed, value = r.ImGui_Checkbox(ctx, "Track name badge", settings.header_name_badge == true)
+    if changed then settings.header_name_badge = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Draw a rounded background badge behind the track name to make it stand out") end
     if settings.orientation == "horizontal" then
       r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
       changed, value = r.ImGui_SliderInt(ctx, "Tile width", settings.horizontal_tile_width or 240, 160, 400, "%d px")
@@ -2053,6 +2292,7 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
       state.screenshot_missing = {}
       app.status = "Screenshot index refreshed"
     end
+    if table_open then r.ImGui_EndTable(ctx) end
     r.ImGui_EndPopup(ctx)
   end
 end
@@ -2078,7 +2318,7 @@ local function draw_header_vertical(app, ctx, settings, track, bar_h)
       if stripped and stripped ~= "" then name_str = stripped end
     end
   end
-  local header_color = get_track_header_color(track)
+  local header_color = get_track_header_color(settings, track)
   local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
   local button_h = r.ImGui_GetFrameHeight(ctx)
   local bw = button_h
@@ -2176,7 +2416,7 @@ end
 
 local function draw_header(app, ctx, settings, track)
   local label = get_track_label(track)
-  local header_color = get_track_header_color(track)
+  local header_color = get_track_header_color(settings, track)
   local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
   local avail = get_available_width(ctx)
   local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -2188,14 +2428,33 @@ local function draw_header(app, ctx, settings, track)
   local bar_h = math.max(text_h + pad_y * 2, button_h)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local show_header_close = settings.orientation == "horizontal" and app and app.script_name == "TK Instrument Rack (Horizontal)"
-  r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, UIScale.px(3))
-  r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, cursor_x + avail - pad_x, cursor_y + bar_h)
-  r.ImGui_DrawList_AddText(draw_list, cursor_x + pad_x, cursor_y + (bar_h - text_h) * 0.5, text_color, label)
-  r.ImGui_DrawList_PopClipRect(draw_list)
   local pin_label = (settings.pinned_track_guid ~= "" and "Unpin" or "Pin")
   local pin_w = UIScale.text_button_w(ctx, pin_label, 0, 8)
   local gap = UIScale.round(4)
   local buttons_w = pin_w + gap + button_h + (show_header_close and (gap + button_h) or 0)
+  r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + avail, cursor_y + bar_h, header_color, UIScale.px(3))
+  local name_left = cursor_x + pad_x
+  local name_right = cursor_x + avail - buttons_w - gap * 2
+  local name_x = name_left
+  if settings.header_center_name then
+    name_x = name_left + math.max(0, ((name_right - name_left) - text_w) * 0.5)
+  end
+  r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, math.max(cursor_x + pad_x, name_right), cursor_y + bar_h, true)
+  if settings.header_name_badge and label ~= "" then
+    local bpx, bpy = UIScale.round(7), UIScale.round(2)
+    local badge_col = shade_color(header_color, 0.5)
+    local badge_text_color = luminance(badge_col) > 0.55 and 0x000000FF or 0xFFFFFFFF
+    local bx0 = name_x - bpx
+    local by0 = cursor_y + (bar_h - text_h) * 0.5 - bpy
+    local bx1 = name_x + text_w + bpx
+    local by1 = cursor_y + (bar_h - text_h) * 0.5 + text_h + bpy
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx0, by0, bx1, by1, badge_col, UIScale.px(4))
+    r.ImGui_DrawList_AddRect(draw_list, bx0, by0, bx1, by1, (badge_text_color & 0xFFFFFF00) | 0x33, UIScale.px(4), 0, UIScale.px(1))
+    r.ImGui_DrawList_AddText(draw_list, name_x, cursor_y + (bar_h - text_h) * 0.5, badge_text_color, label)
+  else
+    r.ImGui_DrawList_AddText(draw_list, name_x, cursor_y + (bar_h - text_h) * 0.5, text_color, label)
+  end
+  r.ImGui_DrawList_PopClipRect(draw_list)
   r.ImGui_SetCursorPosX(ctx, start_pos_x + math.max(0, avail - buttons_w))
   r.ImGui_SetCursorPosY(ctx, start_pos_y + math.max(0, (bar_h - button_h) * 0.5))
   if r.ImGui_Button(ctx, pin_label .. "##ir_pin", pin_w, button_h) then
@@ -2772,6 +3031,20 @@ local function short_param_label(value)
   return label
 end
 
+local function truncate_to_width(ctx, text, max_w, size)
+  text = tostring(text or "")
+  if text == "" then return text end
+  local font_size = r.ImGui_GetFontSize(ctx)
+  if not font_size or font_size <= 0 then return text end
+  local scale = size / font_size
+  if r.ImGui_CalcTextSize(ctx, text) * scale <= max_w then return text end
+  for n = #text - 1, 1, -1 do
+    local cand = text:sub(1, n) .. "."
+    if r.ImGui_CalcTextSize(ctx, cand) * scale <= max_w then return cand end
+  end
+  return text:sub(1, 1)
+end
+
 local function param_config_key(param_idx, name)
   return "param." .. tostring(param_idx) .. "." .. name
 end
@@ -3219,27 +3492,294 @@ local function draw_macro_bar(app, ctx, settings, track)
   flush_macro_changes(ctx)
 end
 
+function draw_pinned_label(draw_list, size, x, y, text, text_col, outline_col)
+  local o = UIScale.px(1)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, size, x - o, y, outline_col, text)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, size, x + o, y, outline_col, text)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, size, x, y - o, outline_col, text)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, size, x, y + o, outline_col, text)
+  r.ImGui_DrawList_AddTextEx(draw_list, nil, size, x, y, text_col, text)
+end
+
+function param_enum_stops(track, fx_index, param_idx, entry)
+  if entry and entry._enum_stops ~= nil then
+    return entry._enum_stops or nil
+  end
+  if not track then return nil end
+  if r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, fx_index) then return nil end
+  local stops = nil
+  if r.TrackFX_FormatParamValueNormalized then
+    local N = 128
+    local list, last_label, run_start = {}, nil, 0
+    for i = 0, N do
+      local norm = i / N
+      local ok, label = r.TrackFX_FormatParamValueNormalized(track, fx_index, param_idx, norm, "")
+      if not ok then list = nil break end
+      label = label or ""
+      if last_label == nil then
+        last_label, run_start = label, norm
+      elseif label ~= last_label then
+        list[#list + 1] = { label = last_label, norm = (run_start + (i - 1) / N) * 0.5 }
+        last_label, run_start = label, norm
+        if #list > 64 then list = nil break end
+      end
+    end
+    if list and last_label ~= nil then
+      list[#list + 1] = { label = last_label, norm = (run_start + 1) * 0.5 }
+    end
+    if list and #list >= 2 and #list <= 64 then stops = list end
+  end
+  if not stops and r.TrackFX_GetParameterStepSizes then
+    local ok, step = r.TrackFX_GetParameterStepSizes(track, fx_index, param_idx)
+    local _, minv, maxv = r.TrackFX_GetParamEx(track, fx_index, param_idx)
+    if ok and step and step > 0 and minv and maxv and maxv > minv then
+      local count = math.floor((maxv - minv) / step + 0.5) + 1
+      if count >= 2 and count <= 64 then
+        stops = {}
+        for i = 0, count - 1 do
+          stops[i + 1] = { norm = (count > 1) and (i / (count - 1)) or 0 }
+        end
+      end
+    end
+  end
+  if not stops and r.TrackFX_GetParamNormalized and r.TrackFX_SetParamNormalized and r.TrackFX_GetFormattedParamValue then
+    local orig = r.TrackFX_GetParamNormalized(track, fx_index, param_idx)
+    if orig and orig >= 0 then
+      if r.PreventUIRefresh then r.PreventUIRefresh(1) end
+      local N = 100
+      local list, last_label, run_start = {}, nil, 0
+      for i = 0, N do
+        local norm = i / N
+        r.TrackFX_SetParamNormalized(track, fx_index, param_idx, norm)
+        local ok, label = r.TrackFX_GetFormattedParamValue(track, fx_index, param_idx, "")
+        label = (ok and label) and label or ""
+        if last_label == nil then
+          last_label, run_start = label, norm
+        elseif label ~= last_label then
+          list[#list + 1] = { label = last_label, norm = (run_start + (i - 1) / N) * 0.5 }
+          last_label, run_start = label, norm
+          if #list > 64 then break end
+        end
+      end
+      if #list <= 64 and last_label ~= nil then
+        list[#list + 1] = { label = last_label, norm = (run_start + 1) * 0.5 }
+      end
+      r.TrackFX_SetParamNormalized(track, fx_index, param_idx, orig)
+      if r.PreventUIRefresh then r.PreventUIRefresh(-1) end
+      if #list >= 2 and #list <= 64 then stops = list end
+    end
+  end
+  local result = (stops and #stops >= 2 and #stops <= 64) and stops or false
+  if entry then entry._enum_stops = result end
+  return result or nil
+end
+
+function draw_param_cycle(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius, active, stops)
+  local settings = ensure_settings(app)
+  local count = #stops
+  local alpha = tonumber(settings.pinned_param_alpha) or 1.0
+  if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local function with_alpha(color)
+    local a = color & 0xFF
+    return (color & 0xFFFFFF00) | math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
+  end
+  local norm, uses_baseline = get_rack_param_value(track, fx_index, entry.param_idx)
+  norm = math.max(0, math.min(1, norm or 0))
+  local _, cur_label = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
+  cur_label = cur_label or ""
+  local idx
+  for i = 1, count do
+    if cur_label ~= "" and stops[i].label == cur_label then idx = i - 1 break end
+  end
+  if idx == nil then
+    local bestd = math.huge
+    for i = 1, count do
+      local d = math.abs(stops[i].norm - norm)
+      if d < bestd then bestd = d; idx = i - 1 end
+    end
+  end
+  idx = idx or 0
+  local function apply_idx(new_idx)
+    set_rack_param_value(track, fx_index, entry.param_idx, stops[(new_idx % count) + 1].norm, uses_baseline)
+  end
+  local accent = 0x7AA2F7FF
+  local bw = radius * 3.4
+  local bh = radius * 1.7
+  local x0, y0 = cx - bw * 0.5, cy - bh * 0.5
+  local x1, y1 = cx + bw * 0.5, cy + bh * 0.5
+  local base = active and 0x4A4A4AFF or 0x363636FF
+  r.ImGui_DrawList_AddRectFilled(draw_list, x0, y0, x1, y1, with_alpha(base), UIScale.px(3))
+  local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
+  local mode_size = UIScale.round(math.max(tonumber(settings.pinned_param_label_size) or 8, 9))
+  local mode_text = truncate_to_width(ctx, (formatted and formatted ~= "") and formatted or tostring(idx + 1), bw - UIScale.px(5), mode_size)
+  local show_dots = count <= 8
+  local dots_h = show_dots and UIScale.px(4) or 0
+  local mode_w = r.ImGui_CalcTextSize(ctx, mode_text) * (mode_size / r.ImGui_GetFontSize(ctx))
+  draw_pinned_label(draw_list, mode_size, cx - mode_w * 0.5, cy - mode_size * 0.5 - dots_h * 0.5, mode_text, 0xF5F5F5FF, 0x000000DC)
+  if show_dots then
+    local dot_r = UIScale.px(1.5)
+    local spacing = dot_r * 3.2
+    local dx = cx - spacing * (count - 1) * 0.5
+    local dy = y1 - UIScale.px(4)
+    for i = 0, count - 1 do
+      r.ImGui_DrawList_AddCircleFilled(draw_list, dx + i * spacing, dy, dot_r, with_alpha(i == idx and accent or 0x666666FF), 8)
+    end
+  end
+  local param_label_size = UIScale.round(tonumber(settings.pinned_param_label_size) or 8)
+  if pinned_show_under_label(settings, entry) then
+    local label = short_param_label(pinned_display_name(entry))
+    local lbl_color = active and Theme.colors.text or Theme.colors.text_dim
+    local lbl_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
+    local lbl_outline = (luminance(lbl_color) > 0.5) and 0x000000DC or 0xFFFFFFDC
+    draw_pinned_label(draw_list, param_label_size, cx - lbl_w * 0.5, y1 + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5, label, lbl_color, lbl_outline)
+  end
+  r.ImGui_SetCursorScreenPos(ctx, x0, y0)
+  r.ImGui_InvisibleButton(ctx, "##ir_param_cycle_" .. tostring(entry.param_idx), bw, bh)
+  if r.ImGui_IsItemActivated(ctx) then entry._cyc_dragged = false end
+  if r.ImGui_IsItemActive(ctx) then
+    local _, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
+    if math.abs(dy) >= UIScale.round(10) then
+      entry._cyc_dragged = true
+      apply_idx(idx + (dy < 0 and 1 or -1))
+      r.ImGui_ResetMouseDragDelta(ctx, 0)
+    end
+  end
+  if r.ImGui_IsItemDeactivated(ctx) and not entry._cyc_dragged then
+    apply_idx(idx + 1)
+  end
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    local _, default_value = r.TrackFX_GetParamEx(track, fx_index, entry.param_idx)
+    r.TrackFX_SetParam(track, fx_index, entry.param_idx, default_value or 0)
+    app.status = "Parameter reset"
+  end
+  if r.ImGui_IsItemClicked(ctx, 1) then
+    nudge_param_as_last_touched(track, fx_index, entry.param_idx)
+    r.ImGui_OpenPopup(ctx, "##ir_param_menu_" .. tostring(entry.param_idx))
+  end
+  if r.ImGui_BeginPopup(ctx, "##ir_param_menu_" .. tostring(entry.param_idx)) then
+    if draw_param_context_menu(app, ctx, track, fx_index, entry.param_idx, entry) then unpin_parameter(app, track, fx_index, entry.param_idx) end
+    r.ImGui_EndPopup(ctx)
+  end
+  if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
+    local disp = pinned_display_name(entry)
+    local vtext = (formatted and formatted ~= "") and formatted or tostring(idx + 1)
+    r.ImGui_SetTooltip(ctx, (disp ~= "" and disp or "Param") .. ": " .. vtext .. string.format(" (%d/%d)", idx + 1, count) .. "\nClick to cycle - drag up/down to scrub - double-click resets - right-click menu")
+  end
+end
+
+local function draw_param_button(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius, active)
+  local settings = ensure_settings(app)
+  local alpha = tonumber(settings.pinned_param_alpha) or 1.0
+  if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local function with_alpha(color)
+    local a = color & 0xFF
+    return (color & 0xFFFFFF00) | math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
+  end
+  local value, uses_baseline = get_rack_param_value(track, fx_index, entry.param_idx)
+  value = math.max(0, math.min(1, value or 0))
+  local on = value >= 0.5
+  local accent = 0x7AA2F7FF
+  local bw = radius * 3.4
+  local bh = radius * 1.7
+  local x0, y0 = cx - bw * 0.5, cy - bh * 0.5
+  local x1, y1 = cx + bw * 0.5, cy + bh * 0.5
+  local base_off = active and 0x4A4A4AFF or 0x363636FF
+  r.ImGui_DrawList_AddRectFilled(draw_list, x0, y0, x1, y1, with_alpha(base_off), UIScale.px(3))
+  if value > 0.001 then
+    local meter = (accent & 0xFFFFFF00) | (active and 0xFF or 0xDD)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x0, y0, x0 + bw * value, y1, with_alpha(meter), UIScale.px(3))
+  end
+  local display_mode = pinned_display_mode(settings, entry)
+  local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
+  local mode_size = UIScale.round(math.max(tonumber(settings.pinned_param_label_size) or 8, 9))
+  local mode_text = truncate_to_width(ctx, (formatted and formatted ~= "") and formatted or (on and "On" or "Off"), bw - UIScale.px(5), mode_size)
+  local mode_w = r.ImGui_CalcTextSize(ctx, mode_text) * (mode_size / r.ImGui_GetFontSize(ctx))
+  draw_pinned_label(draw_list, mode_size, cx - mode_w * 0.5, cy - mode_size * 0.5, mode_text, 0xF5F5F5FF, 0x000000DC)
+  if pinned_show_under_label(settings, entry) then
+    local label = (display_mode == "value") and mode_text or short_param_label(pinned_display_name(entry))
+    local param_label_size = UIScale.round(tonumber(settings.pinned_param_label_size) or 8)
+    local lbl_color = active and Theme.colors.text or Theme.colors.text_dim
+    local lbl_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
+    local lbl_outline = (luminance(lbl_color) > 0.5) and 0x000000DC or 0xFFFFFFDC
+    draw_pinned_label(draw_list, param_label_size, cx - lbl_w * 0.5, y1 + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5, label, lbl_color, lbl_outline)
+  end
+  r.ImGui_SetCursorScreenPos(ctx, x0, y0)
+  r.ImGui_InvisibleButton(ctx, "##ir_param_btn_" .. tostring(entry.param_idx), bw, bh)
+  if r.ImGui_IsItemActivated(ctx) then entry._btn_dragged = false end
+  if r.ImGui_IsItemActive(ctx) then
+    local _, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
+    if math.abs(dy) > 0 then
+      entry._btn_dragged = true
+      local next_value = math.max(0, math.min(1, value - dy * 0.005))
+      set_rack_param_value(track, fx_index, entry.param_idx, next_value, uses_baseline)
+      r.ImGui_ResetMouseDragDelta(ctx, 0)
+    end
+  end
+  if r.ImGui_IsItemDeactivated(ctx) and not entry._btn_dragged then
+    set_rack_param_value(track, fx_index, entry.param_idx, on and 0 or 1, uses_baseline)
+  end
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    local _, default_value = r.TrackFX_GetParamEx(track, fx_index, entry.param_idx)
+    r.TrackFX_SetParam(track, fx_index, entry.param_idx, default_value or 0)
+    app.status = "Parameter reset"
+  end
+  if r.ImGui_IsItemClicked(ctx, 1) then
+    nudge_param_as_last_touched(track, fx_index, entry.param_idx)
+    r.ImGui_OpenPopup(ctx, "##ir_param_menu_" .. tostring(entry.param_idx))
+  end
+  if r.ImGui_BeginPopup(ctx, "##ir_param_menu_" .. tostring(entry.param_idx)) then
+    if draw_param_context_menu(app, ctx, track, fx_index, entry.param_idx, entry) then unpin_parameter(app, track, fx_index, entry.param_idx) end
+    r.ImGui_EndPopup(ctx)
+  end
+  if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
+    local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
+    local disp = pinned_display_name(entry)
+    r.ImGui_SetTooltip(ctx, (disp ~= "" and disp or "Param") .. ": " .. (formatted or string.format("%.0f%%", value * 100)) .. "\nDrag to change - click to toggle - double/right-click to reset")
+  end
+end
+
 local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius, active)
   if active == nil then active = true end
+  local settings = ensure_settings(app)
+  local pscale = tonumber(settings.pinned_param_scale) or 1.0
+  if pscale < 0.7 then pscale = 0.7 elseif pscale > 1.0 then pscale = 1.0 end
+  local top = cy - radius
+  radius = radius * pscale
+  cy = top + radius
+  local style = (entry.style and entry.style ~= "") and entry.style or (settings.pinned_param_style or "knob")
+  if style == "button" then
+    local stops = param_enum_stops(track, fx_index, entry.param_idx, entry)
+    if stops and #stops >= 3 and #stops <= 32 then
+      return draw_param_cycle(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius, active, stops)
+    end
+    return draw_param_button(app, ctx, draw_list, track, fx_index, entry, cx, cy, radius, active)
+  end
+  local alpha = tonumber(settings.pinned_param_alpha) or 1.0
+  if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local function with_alpha(color)
+    local a = color & 0xFF
+    return (color & 0xFFFFFF00) | math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
+  end
+  local accent_color = nil
   local value, uses_baseline = get_rack_param_value(track, fx_index, entry.param_idx)
   local start_angle = math.pi * 0.75
   local end_angle = math.pi * 2.25
   local value_angle = start_angle + value * (end_angle - start_angle)
   local segments = radius < 8 and 12 or (radius < 14 and 18 or 24)
   local body_color = active and 0x555555FF or 0x3C3C3CFF
-  local arc_color = active and 0xCCCCCCFF or 0x808080FF
-  local cap_color = active and 0xCCCCCCFF or 0x808080FF
-  local label_color = active and 0xAAAAAAFF or 0x808080FF
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, 0x00000066, segments)
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, body_color, segments)
+  local arc_color = active and (accent_color or 0xCCCCCCFF) or 0x808080FF
+  local cap_color = active and (accent_color or 0xCCCCCCFF) or 0x808080FF
+  local label_color = active and Theme.colors.text or Theme.colors.text_dim
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx + UIScale.px(1), cy + UIScale.px(1), radius, with_alpha(0x00000066), segments)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, with_alpha(body_color), segments)
   if value > 0.01 then
     r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius - UIScale.px(2), start_angle, value_angle, segments)
-    r.ImGui_DrawList_PathStroke(draw_list, arc_color, 0, UIScale.px(2.5))
+    r.ImGui_DrawList_PathStroke(draw_list, with_alpha(arc_color), 0, UIScale.px(2.5))
   end
   if value < 0.02 then
     local line_x = cx + math.cos(value_angle) * radius * 0.85
     local line_y = cy + math.sin(value_angle) * radius * 0.85
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, arc_color, UIScale.px(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, line_x, line_y, with_alpha(arc_color), UIScale.px(2))
   end
   if active and uses_baseline then
     local mod_value = r.TrackFX_GetParamNormalized(track, fx_index, entry.param_idx)
@@ -3247,17 +3787,29 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
     local mod_angle = start_angle + mod_value * (end_angle - start_angle)
     local outer_r = radius + UIScale.px(2)
     r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, outer_r, start_angle, end_angle, segments)
-    r.ImGui_DrawList_PathStroke(draw_list, 0x7AA2F744, 0, UIScale.px(1.5))
+    r.ImGui_DrawList_PathStroke(draw_list, with_alpha(0x7AA2F744), 0, UIScale.px(1.5))
     if mod_value > 0.001 then
       r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, outer_r, start_angle, mod_angle, segments)
-      r.ImGui_DrawList_PathStroke(draw_list, 0x7AA2F7FF, 0, UIScale.px(1.8))
+      r.ImGui_DrawList_PathStroke(draw_list, with_alpha(0x7AA2F7FF), 0, UIScale.px(1.8))
     end
   end
-  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.45, cap_color, segments)
-  local label = short_param_label(entry.param_name)
-  local param_label_size = UIScale.round(8)
-  local text_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
-  r.ImGui_DrawList_AddTextEx(draw_list, nil, param_label_size, cx - text_w * 0.5, cy + radius + UIScale.round(1), label_color, label)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius * 0.45, with_alpha(cap_color), segments)
+  if pinned_show_under_label(settings, entry) then
+    local display_mode = pinned_display_mode(settings, entry)
+    local label
+    if display_mode == "value" then
+      local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
+      label = short_param_label((formatted and formatted ~= "") and formatted or string.format("%.0f%%", value * 100))
+    else
+      label = short_param_label(pinned_display_name(entry))
+    end
+    local param_label_size = UIScale.round(tonumber(settings.pinned_param_label_size) or 8)
+    local text_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
+    local label_x = cx - text_w * 0.5
+    local label_y = cy + radius + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5
+    local label_outline = (luminance(label_color) > 0.5) and 0x000000DC or 0xFFFFFFDC
+    draw_pinned_label(draw_list, param_label_size, label_x, label_y, label, label_color, label_outline)
+  end
   r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(4), cy - radius - UIScale.round(4))
   r.ImGui_InvisibleButton(ctx, "##ir_param_knob_" .. tostring(entry.param_idx), (radius + UIScale.round(4)) * 2, (radius + UIScale.round(4)) * 2)
   if r.ImGui_IsItemActive(ctx) then
@@ -3278,13 +3830,14 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
     r.ImGui_OpenPopup(ctx, "##ir_param_menu_" .. tostring(entry.param_idx))
   end
   if r.ImGui_BeginPopup(ctx, "##ir_param_menu_" .. tostring(entry.param_idx)) then
-    if draw_param_context_menu(app, ctx, track, fx_index, entry.param_idx) then unpin_parameter(app, track, fx_index, entry.param_idx) end
+    if draw_param_context_menu(app, ctx, track, fx_index, entry.param_idx, entry) then unpin_parameter(app, track, fx_index, entry.param_idx) end
     r.ImGui_EndPopup(ctx)
   end
   if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
     local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
     local prefix = uses_baseline and "Baseline: " or ""
-    r.ImGui_SetTooltip(ctx, (entry.param_name or "Param") .. ": " .. prefix .. (formatted or string.format("%.0f%%", value * 100)))
+    local disp = pinned_display_name(entry)
+    r.ImGui_SetTooltip(ctx, (disp ~= "" and disp or "Param") .. ": " .. prefix .. (formatted or string.format("%.0f%%", value * 100)))
   end
 end
 
@@ -3307,9 +3860,11 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width, active)
   if active == nil then active = true end
   local settings = ensure_settings(app)
   local slot_count = param_slot_count(settings)
+  local cols = param_slot_columns(settings)
+  local rows = param_slot_rows(settings)
   local row_width = math.max(1, item_width - UIScale.round(14))
-  local rows = slot_count > PARAM_SLOT_COLUMNS and 2 or 1
-  local row_step = UIScale.round(44)
+  local label_extra = math.max(0, UIScale.round(tonumber(settings.pinned_param_label_size) or 8) - UIScale.round(8))
+  local row_step = UIScale.round(44) + label_extra
   local row_height = param_slots_height(settings)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -3323,13 +3878,14 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width, active)
   end
   r.ImGui_Dummy(ctx, row_width, row_height)
   r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(4), y + UIScale.round(3), x + row_width - UIScale.round(4), y + UIScale.round(3), 0x3D4450AA, UIScale.px(1))
-  if rows == 2 then
-    r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(4), y + row_step + UIScale.round(3), x + row_width - UIScale.round(4), y + row_step + UIScale.round(3), 0x3D4450AA, UIScale.px(1))
+  for divider = 1, rows - 1 do
+    local dy = y + divider * row_step + UIScale.round(3)
+    r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(4), dy, x + row_width - UIScale.round(4), dy, 0x3D4450AA, UIScale.px(1))
   end
   for slot = 1, slot_count do
-    local row = math.floor((slot - 1) / PARAM_SLOT_COLUMNS)
-    local column = ((slot - 1) % PARAM_SLOT_COLUMNS) + 1
-    local cell_width = row_width / PARAM_SLOT_COLUMNS
+    local row = math.floor((slot - 1) / cols)
+    local column = ((slot - 1) % cols) + 1
+    local cell_width = row_width / cols
     local cx = x + (column - 0.5) * cell_width
     local cy = y + UIScale.round(23) + row * row_step
     local knob_radius = UIScale.round(12)
@@ -3842,8 +4398,13 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
     draw_wet_knob(app, ctx, draw_list, track, fx_index, knob_cx, knob_cy, knob_radius)
 
     local name_max_w = math.max(UIScale.round(20), chev_x - content_x - UIScale.round(4))
+    local name_tx = content_x
+    if settings.fx_name_center then
+      local nw = r.ImGui_CalcTextSize(ctx, short_name)
+      name_tx = content_x + math.max(0, (name_max_w - nw) * 0.5)
+    end
     r.ImGui_DrawList_PushClipRect(draw_list, content_x, by, content_x + name_max_w, by + row1_h, true)
-    r.ImGui_DrawList_AddText(draw_list, content_x, by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
+    r.ImGui_DrawList_AddText(draw_list, name_tx, by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
     r.ImGui_DrawList_PopClipRect(draw_list)
 
     local button_y = by + row1_h + UIScale.round(2)
@@ -4014,7 +4575,7 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     local clicked = r.ImGui_IsItemClicked(ctx, 0)
     local mx, my = r.ImGui_GetMousePos(ctx)
     local accent = payload ~= ""
-    local color = accent and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
+    local color = accent and Theme.colors.accent or (hovered and Theme.colors.frame_hover or add_zone_visible_color())
     local cx = x + size * 0.5
     local cy = y + (tile_h - stack_h) * 0.5 + size * 0.5
     local radius = size * 0.5 - UIScale.px(2)
@@ -4067,7 +4628,7 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
   local hovered = r.ImGui_IsItemHovered(ctx)
   local clicked = r.ImGui_IsItemClicked(ctx, 0)
   local mx, my = r.ImGui_GetMousePos(ctx)
-  local border = payload ~= "" and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
+  local border = payload ~= "" and Theme.colors.accent or (hovered and Theme.colors.frame_hover or add_zone_visible_color())
   local btn_bg = hovered and Theme.colors.frame_bg or Theme.colors.child_bg
   r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + item_width, y + add_h, btn_bg, UIScale.px(4))
   local quick_w = quick_enabled and UIScale.round(64) or 0
@@ -4075,7 +4636,7 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
   local main_w = item_width - quick_w - quick_gap
   r.ImGui_DrawList_AddRect(draw_list, x, y, x + main_w, y + add_h, border, UIScale.px(4), 0, payload ~= "" and UIScale.px(2) or UIScale.px(1))
   local text_w = r.ImGui_CalcTextSize(ctx, label)
-  r.ImGui_DrawList_AddText(draw_list, x + (main_w - text_w) * 0.5, y + UIScale.round(10), payload ~= "" and Theme.colors.accent or Theme.colors.text_dim, label)
+  r.ImGui_DrawList_AddText(draw_list, x + (main_w - text_w) * 0.5, y + UIScale.round(10), payload ~= "" and Theme.colors.accent or add_zone_visible_color(), label)
   local quick_hovered = false
   if quick_enabled then
     local qx0 = x + main_w + quick_gap
@@ -4083,12 +4644,12 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     local qy0 = y
     local qy1 = y + add_h
     quick_hovered = mx >= qx0 and mx <= qx1 and my >= qy0 and my <= qy1
-    local q_border = quick_hovered and Theme.colors.accent or Theme.colors.border
+    local q_border = quick_hovered and Theme.colors.accent or add_zone_visible_color()
     local q_bg = quick_hovered and Theme.colors.frame_bg or Theme.colors.child_bg
     r.ImGui_DrawList_AddRectFilled(draw_list, qx0, qy0, qx1, qy1, q_bg, UIScale.px(4))
     r.ImGui_DrawList_AddRect(draw_list, qx0, qy0, qx1, qy1, q_border, UIScale.px(4), 0, UIScale.px(1))
     local q_w = r.ImGui_CalcTextSize(ctx, "Quick")
-    local q_col = quick_hovered and Theme.colors.accent or Theme.colors.text_dim
+    local q_col = quick_hovered and Theme.colors.accent or add_zone_visible_color()
     r.ImGui_DrawList_AddText(draw_list, qx0 + (quick_w - q_w) * 0.5, y + UIScale.round(10), q_col, "Quick")
   end
   if clicked then
@@ -4117,31 +4678,31 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
   end
 end
 
-local function take_fx_enabled(take, fx_index)
+function take_fx_enabled(take, fx_index)
   if r.TakeFX_GetEnabled then return r.TakeFX_GetEnabled(take, fx_index) end
   return true
 end
 
-local function take_fx_offline(take, fx_index)
+function take_fx_offline(take, fx_index)
   if r.TakeFX_GetOffline then return r.TakeFX_GetOffline(take, fx_index) end
   return false
 end
 
-local function set_take_fx_enabled(take, fx_index, enabled)
+function set_take_fx_enabled(take, fx_index, enabled)
   if r.TakeFX_SetEnabled then r.TakeFX_SetEnabled(take, fx_index, enabled) end
 end
 
-local function set_take_fx_offline(take, fx_index, offline)
+function set_take_fx_offline(take, fx_index, offline)
   if r.TakeFX_SetOffline then r.TakeFX_SetOffline(take, fx_index, offline) end
 end
 
-local function show_take_fx(take, fx_index)
+function show_take_fx(take, fx_index)
   if not r.TakeFX_Show then return end
   local hwnd = r.TakeFX_GetFloatingWindow and r.TakeFX_GetFloatingWindow(take, fx_index) or nil
   r.TakeFX_Show(take, fx_index, hwnd and 2 or 3)
 end
 
-local function delete_take_fx(app, take, fx_index, fx_name)
+function delete_take_fx(app, take, fx_index, fx_name)
   if not validate_take(take) or not r.TakeFX_Delete then return end
   r.Undo_BeginBlock()
   r.PreventUIRefresh(1)
@@ -4242,8 +4803,14 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, is_collapsed and "Expand" or "Collapse") end
 
     local name_max_w = math.max(UIScale.round(20), chev_x - (bx + UIScale.round(6)) - UIScale.round(4))
-    r.ImGui_DrawList_PushClipRect(draw_list, bx + UIScale.round(6), by, bx + UIScale.round(6) + name_max_w, by + row1_h, true)
-    r.ImGui_DrawList_AddText(draw_list, bx + UIScale.round(6), by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
+    local name_base = bx + UIScale.round(6)
+    local name_tx = name_base
+    if settings.fx_name_center then
+      local nw = r.ImGui_CalcTextSize(ctx, short_name)
+      name_tx = name_base + math.max(0, (name_max_w - nw) * 0.5)
+    end
+    r.ImGui_DrawList_PushClipRect(draw_list, name_base, by, name_base + name_max_w, by + row1_h, true)
+    r.ImGui_DrawList_AddText(draw_list, name_tx, by + UIScale.round(2), enabled and Theme.colors.text or Theme.colors.text_dim, short_name)
     r.ImGui_DrawList_PopClipRect(draw_list)
 
     if not is_collapsed then
@@ -4460,16 +5027,18 @@ function M.draw(app)
   if r.ImGui_BeginChild(ctx, "##instrument_rack_scroll", 0, -(info_h + macros_h), 0, flags) then
     local hover_flags = r.ImGui_HoveredFlags_ChildWindows and r.ImGui_HoveredFlags_ChildWindows() or 0
     if horizontal and r.ImGui_IsWindowHovered(ctx, hover_flags) and r.ImGui_SetScrollX and r.ImGui_GetScrollX then
-      local wheel_v = r.ImGui_GetMouseWheel and (r.ImGui_GetMouseWheel(ctx) or 0) or 0
-      local wheel_h = r.ImGui_GetMouseWheelH and (r.ImGui_GetMouseWheelH(ctx) or 0) or 0
+      local wheel_v, wheel_h = 0, 0
+      if r.ImGui_GetMouseWheel then wheel_v, wheel_h = r.ImGui_GetMouseWheel(ctx) end
+      wheel_v = wheel_v or 0
+      wheel_h = wheel_h or 0
       local delta = wheel_h - wheel_v
       if settings.invert_horizontal_scroll then delta = -delta end
       if delta ~= 0 then
-        local step = UIScale.round(settings.horizontal_tile_width or 240) * 0.5
+        local step = horizontal_tile_pixels(settings) * 0.5
         r.ImGui_SetScrollX(ctx, r.ImGui_GetScrollX(ctx) + delta * step)
       end
     end
-    local width = horizontal and UIScale.round(settings.horizontal_tile_width or 240) or get_centered_item_width(ctx)
+    local width = horizontal and horizontal_tile_pixels(settings) or get_centered_item_width(ctx)
     local col = 0
     local function next_tile()
       if horizontal then
@@ -4787,23 +5356,23 @@ function M.draw(app)
       local zx0, zy0 = r.ImGui_GetItemRectMin(ctx)
       local zx1, zy1 = r.ImGui_GetItemRectMax(ctx)
       local active = payload ~= ""
-      local border = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
+      local border = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or add_zone_visible_color())
       local quick_w = quick_enabled and UIScale.round(64) or 0
       local quick_gap = quick_enabled and UIScale.round(6) or 0
       local main_w = zone_w - quick_w - quick_gap
       r.ImGui_DrawList_AddRect(dl, x, y, x + main_w, y + zone_h, border, UIScale.px(4), 0, active and UIScale.px(2) or UIScale.px(1))
       local label = active and "+ Drop" or "+ Add FX"
       local tw = r.ImGui_CalcTextSize(ctx, label)
-      r.ImGui_DrawList_AddText(dl, x + (main_w - tw) * 0.5, y + (zone_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, active and Theme.colors.accent or Theme.colors.text_dim, label)
+      r.ImGui_DrawList_AddText(dl, x + (main_w - tw) * 0.5, y + (zone_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, active and Theme.colors.accent or add_zone_visible_color(), label)
       local quick_hovered = false
       if quick_enabled then
         local qx0 = x + main_w + quick_gap
         local qx1 = qx0 + quick_w
         quick_hovered = mx >= qx0 and mx <= qx1 and my >= y and my <= y + zone_h
-        local q_border = quick_hovered and Theme.colors.accent or Theme.colors.border
+        local q_border = quick_hovered and Theme.colors.accent or add_zone_visible_color()
         r.ImGui_DrawList_AddRect(dl, qx0, y, qx1, y + zone_h, q_border, UIScale.px(4), 0, UIScale.px(1))
         local q_w = r.ImGui_CalcTextSize(ctx, "Quick")
-        local q_col = quick_hovered and Theme.colors.accent or Theme.colors.text_dim
+        local q_col = quick_hovered and Theme.colors.accent or add_zone_visible_color()
         r.ImGui_DrawList_AddText(dl, qx0 + (quick_w - q_w) * 0.5, y + (zone_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5, q_col, "Quick")
       end
       if clicked and payload == "" then
@@ -5033,7 +5602,7 @@ function M.draw(app)
       local clicked = r.ImGui_IsItemClicked(ctx, 0)
       local mx, my = r.ImGui_GetMousePos(ctx)
       local active = payload ~= ""
-      local color = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or Theme.colors.border)
+      local color = active and Theme.colors.accent or (hovered and Theme.colors.frame_hover or add_zone_visible_color())
       local circle_d = UIScale.round(30)
       local gap = UIScale.round(6)
       local radius = circle_d * 0.5 - UIScale.px(2)

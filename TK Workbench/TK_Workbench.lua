@@ -1,7 +1,25 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.0
+-- @version 0.5.1
 -- @changelog:
+-- v0.5.1
+--   + Instrument Rack: Pinned parameters with discrete steps (e.g. modes) can now be shown as a click-to-cycle button that steps through each value, with drag to scrub and double-click to reset
+--   + Instrument Rack: Stepped values are detected even when a plugin does not report step sizes, by briefly scanning the parameter's value labels
+--   + Instrument Rack: Button-style pinned parameters automatically pick a stepped value cycle or an on/off button, and the cycle only appears when Button layout is selected
+--   + Instrument Rack: Removed the border around pinned parameter buttons and made them slightly wider for easier reading
+--   + Instrument Rack: Long values inside pinned parameter buttons are now truncated to fit the button width
+--   + Instrument Rack: Added a per-parameter right-click option to show the name or value, and to show or hide the label under the knob/button, with a matching global default
+--   + Instrument Rack: Added options to center the track name with an optional badge background, and to center the plugin name in FX tiles
+--   + Instrument Rack: Horizontal FX tiles now widen automatically for 6-column parameter layouts so parameter spacing stays even
+--   + Instrument Rack: Settings window now uses a two-column layout in horizontal orientation for a more compact view
+--   + Instrument Rack: Removed the "Show value overlay while dragging" option
+--   + Instrument Rack: Fixed per-parameter name/value and label-under choices not being saved with the project
+--   + Instrument Rack: Add FX and Quick Add buttons now stay clearly visible in every theme, even when not hovered
+--   + Instrument Rack: Quick Add now shows AU and AU instrument plugins under All Plugins
+--   + Instrument Rack: Quick Add folders are now sorted naturally so numbered folders appear in order (1, 2, 3, ... 15) instead of scrambled
+--   + Instrument Rack: Added a track color saturation slider to tone down inherited track colors
+--   + Instrument Rack: Settings window now uses a two-column layout in vertical orientation as well, for a more compact view
+--   + Instrument Rack: Fixed the horizontal (tilt) scroll wheel not scrolling the horizontal rack
 -- v0.5.0
 --   + FX Groups: Added a new module to link FX parameters across multiple tracks with a live, per-FX sync engine
 --   + FX Groups: Manage groups in a compact, collapsible list with inline rename (double-click), color swatch, active toggle, and track management
