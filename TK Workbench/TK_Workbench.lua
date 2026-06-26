@@ -1,7 +1,22 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.1
+-- @version 0.5.2
 -- @changelog:
+-- v0.5.2
+--   + Lyrics: Added a new module that shows a playback timer and synced lyrics for the playing audio item
+--   + Lyrics: Reads embedded lyrics straight from the MP3 ID3 tag (USLT and synced SYLT), with .lrc file and track notes as fallback
+--   + Lyrics: foobar2000-style centered layout with the timestamp above each line, word wrap, and an enlarged active line
+--   + Lyrics: Synced highlight and autoscroll follow playback, with the active line scrolled into view
+--   + Lyrics: Click a line to seek to that moment, with an adjustable sync offset (ms) and active line scale
+--   + Lyrics: Settings for source mode, font size, and toggles for name, timer, progress bar, timestamps, autoscroll, and click-to-seek
+--   + Workbench: Added a mappable module action for opening Lyrics
+--   + Workbench: Fixed an "ImGui_End: Calling End() too many times!" crash that could occur on startup or with docked/small windows by only ending child panels when they are visible
+--   + FX Groups: Fixed the module failing to load ("fx_groups load error") for ReaPack users by including the missing core/quick_fx_menu.lua dependency in the package
+--   + Media Browser: Audio files now show embedded cover art (MP3 ID3v2 APIC, FLAC PICTURE, M4A/MP4 covr) as a thumbnail, with folder art and the type badge as fallback
+--   + Instrument Rack: Added a "Show border around Add buttons" option to remove the outline/circle around the Add FX and Quick Add buttons (border still shown on hover and while dragging)
+--   + Instrument Rack: Added a "Hide button value until used" option that hides the value on button / cycle parameters until you click or drag them (like the knob layout)
+--   + Instrument Rack: Hold Shift while dragging a knob or button parameter for fine adjustment
+--   + Instrument Rack: Default pinned parameters now also apply to offline FX, reliably persist across REAPER restarts, and keep their custom parameter names
 -- v0.5.1
 --   + Instrument Rack: Pinned parameters with discrete steps (e.g. modes) can now be shown as a click-to-cycle button that steps through each value, with drag to scrub and double-click to reset
 --   + Instrument Rack: Stepped values are detected even when a plugin does not report step sizes, by briefly scanning the parameter's value labels
@@ -321,7 +336,8 @@ local module_names = {
   "media_browser",
   "color_studio",
   "arrange_bg_presets",
-  "calculator"
+  "calculator",
+  "lyrics"
 }
 
 local theme_color_fields = {
@@ -954,8 +970,8 @@ local function draw_home_view()
       app.cache.pending_module_reorder = nil
       move_module_to_target(pending.source, pending.target)
     end
+    r.ImGui_EndChild(ctx)
   end
-  r.ImGui_EndChild(ctx)
 end
 
 local function draw_top_bar()
@@ -1164,8 +1180,8 @@ local function draw_theme_settings_body()
           Theme.set_colors(Theme.colors, app.settings.theme_preset)
         end
       end
+      r.ImGui_EndChild(ctx)
     end
-    r.ImGui_EndChild(ctx)
     r.ImGui_TextWrapped(ctx, "Theme changes are applied immediately. Custom themes load from the preset dropdown.")
     local name_changed, new_name = r.ImGui_InputTextWithHint(ctx, "##custom_theme_name", "Custom theme name", app.settings.custom_theme_name or "My Theme")
     if name_changed then app.settings.custom_theme_name = new_name end
@@ -1927,14 +1943,18 @@ local function draw_module_canvas()
     local left_w = clamp(math.floor(content_w * ratio), min_w, math.max(min_w, content_w - min_w))
     local right_w = math.max(20, content_w - left_w)
     local left_visible = r.ImGui_BeginChild(ctx, "##workbench_split_primary", left_w, 0, 0, pane_flags)
-    if left_visible then draw_module_instance(module, "primary") end
-    r.ImGui_EndChild(ctx)
+    if left_visible then
+      draw_module_instance(module, "primary")
+      r.ImGui_EndChild(ctx)
+    end
     r.ImGui_SameLine(ctx, 0, 0)
     draw_splitter(content_w, "horizontal")
     r.ImGui_SameLine(ctx, 0, 0)
     local right_visible = r.ImGui_BeginChild(ctx, "##workbench_split_secondary", right_w, 0, 0, pane_flags)
-    if right_visible then draw_module_instance(split_module, "secondary") end
-    r.ImGui_EndChild(ctx)
+    if right_visible then
+      draw_module_instance(split_module, "secondary")
+      r.ImGui_EndChild(ctx)
+    end
     return
   end
   local total_h = math.max(40, available_h or 240)
@@ -1949,12 +1969,16 @@ local function draw_module_canvas()
   top_h = clamp(top_h, min_h, math.max(min_h, content_h - min_h))
   local bottom_h = math.max(20, content_h - top_h)
   local primary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_primary", 0, top_h, 0, pane_flags)
-  if primary_visible then draw_module_instance(module, "primary") end
-  r.ImGui_EndChild(ctx)
+  if primary_visible then
+    draw_module_instance(module, "primary")
+    r.ImGui_EndChild(ctx)
+  end
   draw_splitter(content_h, "vertical")
   local secondary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_secondary", 0, bottom_h, 0, pane_flags)
-  if secondary_visible then draw_module_instance(split_module, "secondary") end
-  r.ImGui_EndChild(ctx)
+  if secondary_visible then
+    draw_module_instance(split_module, "secondary")
+    r.ImGui_EndChild(ctx)
+  end
 end
 
 local function visible_module_error_ids()
@@ -2048,8 +2072,8 @@ local function draw_shell()
     draw_module_canvas()
     UI.end_info_line_capture(app)
     r.ImGui_Dummy(ctx, 1, 1)
+    r.ImGui_EndChild(ctx)
   end
-  r.ImGui_EndChild(ctx)
   if app.settings.show_status then draw_status_bar() end
 end
 

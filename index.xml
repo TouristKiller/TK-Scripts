@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.5.1" author="TouristKiller" time="2026-06-25T21:40:00Z">
+    <version name="0.5.2" author="TouristKiller" time="2026-06-26T21:35:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -68,6 +68,7 @@
      <source file="core/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/theme.lua</source>
      <source file="core/ui.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui.lua</source>
     <source file="core/ui_scale.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui_scale.lua</source>
+    <source file="core/quick_fx_menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/quick_fx_menu.lua</source>
     <source file="core/workbench_module_action_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/workbench_module_action_runner.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Action_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Action_Browser.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Action_Clipboard.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Action_Clipboard.lua</source>
@@ -89,9 +90,11 @@
     <source main="main" file="Module Actions/TK_Workbench_Open_Timepiece.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Timepiece.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Track_Tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Track_Tags.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Calculator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Calculator.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Lyrics.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Lyrics.lua</source>
      <source file="modules/action_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_browser.lua</source>
     <source file="modules/arrange_bg_presets.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/arrange_bg_presets.lua</source>
     <source file="modules/calculator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/calculator.lua</source>
+    <source file="modules/lyrics.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/lyrics.lua</source>
     <source file="modules/action_clipboard.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_clipboard.lua</source>
      <source file="modules/automation_item_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/automation_item_manager.lua</source>
      <source file="modules/color_studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/color_studio.lua</source>
@@ -113,42 +116,21 @@
         <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
-                v0.5.1
-                + Instrument Rack: Pinned parameters with discrete steps (e.g. modes) can now be shown as a click-to-cycle button that steps through each value, with drag to scrub and double-click to reset
-                + Instrument Rack: Stepped values are detected even when a plugin does not report step sizes, by briefly scanning the parameter's value labels
-                + Instrument Rack: Button-style pinned parameters automatically pick a stepped value cycle or an on/off button, and the cycle only appears when Button layout is selected
-                + Instrument Rack: Removed the border around pinned parameter buttons and made them slightly wider for easier reading
-                + Instrument Rack: Long values inside pinned parameter buttons are now truncated to fit the button width
-                + Instrument Rack: Added a per-parameter right-click option to show the name or value, and to show or hide the label under the knob/button, with a matching global default
-                + Instrument Rack: Added options to center the track name with an optional badge background, and to center the plugin name in FX tiles
-                + Instrument Rack: Horizontal FX tiles now widen automatically for 6-column parameter layouts so parameter spacing stays even
-                + Instrument Rack: Settings window now uses a two-column layout in horizontal orientation for a more compact view
-                + Instrument Rack: Removed the "Show value overlay while dragging" option
-                + Instrument Rack: Fixed per-parameter name/value and label-under choices not being saved with the project
-                + Instrument Rack: Add FX and Quick Add buttons now stay clearly visible in every theme, even when not hovered
-                + Instrument Rack: Quick Add now shows AU and AU instrument plugins under All Plugins
-                + Instrument Rack: Quick Add folders are now sorted naturally so numbered folders appear in order (1, 2, 3, ... 15) instead of scrambled
-                + Instrument Rack: Added a track color saturation slider to tone down inherited track colors
-                + Instrument Rack: Settings window now uses a two-column layout in vertical orientation as well, for a more compact view
-                + Instrument Rack: Fixed the horizontal (tilt) scroll wheel not scrolling the horizontal rack
-
-                v0.5.0
-                + FX Groups: Added a new module to link FX parameters across multiple tracks with a live, per-FX sync engine
-                + FX Groups: Manage groups in a compact, collapsible list with inline rename (double-click), color swatch, active toggle, and track management
-                + FX Groups: Link or unlink individual FX and parameters, with a per-FX SYNC button and selectable source track
-                + FX Groups: Add an FX to every track in a group at once via the cascading Quick Add menu
-                + Instrument Rack: Added response curves to macro parameter mappings with Power, S-Curve, Quantize, and Bipolar curve types
-                + Instrument Rack: Added a draggable graphical curve preview per mapping that reflects the selected curve type and invert state live
-                + Instrument Rack: Drag the curve pad up or down to change the curve amount and double-click to reset it to linear
-                + Instrument Rack: Curve type and amount are stored per mapping and persist with the project, defaulting to a linear Power curve for older projects
-                + Instrument Rack: Added a Highlight instruments option to visually distinguish instrument plugins in the rack
-                + Instrument Rack: Added a Plugin type badge on screenshot option showing a color-coded VST3, VST, CLAP, JS, AU, or LV2 badge per FX tile
-                + Instrument Rack: Added a Wet knob on FX containers (including nested containers) in both the vertical and horizontal rack, with drag to adjust and double/right-click to reset
-                + Instrument Rack: Container add zones now show the same Add FX and Quick Add buttons as the regular add zone, in both the vertical and horizontal rack
-                + Instrument Rack: Matched the container add and Quick Add button sizing to the regular add zone for a consistent look
-                + Instrument Rack: Added an optional vertical title bar on the left of the horizontal rack, with the track number in a darker box on top, the truncated track name stacked below, and the pin, settings, and close buttons
-                + Instrument Rack: Tightened the spacing between collapsed section headers in the horizontal rack
-                + Home: Added an Instrument Rack (H) tile and module dropdown entry to quickly open the horizontal Instrument Rack
+                v0.5.2
+                + Lyrics: Added a new module that shows a playback timer and synced lyrics for the playing audio item
+                + Lyrics: Reads embedded lyrics straight from the MP3 ID3 tag (USLT and synced SYLT), with .lrc file and track notes as fallback
+                + Lyrics: foobar2000-style centered layout with the timestamp above each line, word wrap, and an enlarged active line
+                + Lyrics: Synced highlight and autoscroll follow playback, with the active line scrolled into view
+                + Lyrics: Click a line to seek to that moment, with an adjustable sync offset (ms) and active line scale
+                + Lyrics: Settings for source mode, font size, and toggles for name, timer, progress bar, timestamps, autoscroll, and click-to-seek
+                + Workbench: Added a mappable module action for opening Lyrics
+                + Workbench: Fixed an "ImGui_End: Calling End() too many times!" crash that could occur on startup or with docked/small windows by only ending child panels when they are visible
+                + FX Groups: Fixed the module failing to load ("fx_groups load error") for ReaPack users by including the missing core/quick_fx_menu.lua dependency in the package
+                + Media Browser: Audio files now show embedded cover art (MP3 ID3v2 APIC, FLAC PICTURE, M4A/MP4 covr) as a thumbnail, with folder art and the type badge as fallback
+                + Instrument Rack: Added a "Show border around Add buttons" option to remove the outline/circle around the Add FX and Quick Add buttons (border still shown on hover and while dragging)
+                + Instrument Rack: Added a "Hide button value until used" option that hides the value on button / cycle parameters until you click or drag them (like the knob layout)
+                + Instrument Rack: Hold Shift while dragging a knob or button parameter for fine adjustment
+                + Instrument Rack: Default pinned parameters now also apply to offline FX, reliably persist across REAPER restarts, and keep their custom parameter names
 
 ]]></changelog>
      </version>

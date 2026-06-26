@@ -89,6 +89,8 @@ local state = {
   image_cache = {},
   folder_art_path_cache = {},
   folder_art_image_cache = {},
+  embedded_art_path_cache = {},
+  embedded_art_image_cache = {},
   waveform_cache = {},
   midi_note_cache = {},
   waveform_pending = {},
@@ -438,6 +440,259 @@ end
 
 local function cache_path(location)
   return cache_dir .. "/media_" .. cache_key(location) .. ".idx"
+end
+
+function mb_be_int(s, pos, n)
+  local value = 0
+  for i = 0, n - 1 do value = value * 256 + (s:byte(pos + i) or 0) end
+  return value
+end
+
+function mb_synchsafe(s, pos)
+  local value = 0
+  for i = 0, 3 do value = value * 128 + ((s:byte(pos + i) or 0) % 128) end
+  return value
+end
+
+function mb_detect_image_ext(mime, data)
+  mime = tostring(mime or ""):lower()
+  if mime:find("png") then return "png" end
+  if mime:find("jpe?g") then return "jpg" end
+  if mime:find("gif") then return "gif" end
+  if mime:find("bmp") then return "bmp" end
+  if mime:find("webp") then return "webp" end
+  if data then
+    if data:sub(1, 8) == "\137PNG\r\n\26\10" then return "png" end
+    if data:byte(1) == 0xFF and data:byte(2) == 0xD8 then return "jpg" end
+    if data:sub(1, 3) == "GIF" then return "gif" end
+    if data:sub(1, 2) == "BM" then return "bmp" end
+    if data:sub(1, 4) == "RIFF" and data:sub(9, 12) == "WEBP" then return "webp" end
+  end
+  return "jpg"
+end
+
+function mb_parse_apic(data, mime_is_format)
+  local enc = data:byte(1) or 0
+  local p = 2
+  local mime = ""
+  if mime_is_format then
+    mime = data:sub(p, p + 2)
+    p = p + 3
+  else
+    local mime_end = data:find("\0", p, true)
+    if not mime_end then return nil end
+    mime = data:sub(p, mime_end - 1)
+    p = mime_end + 1
+  end
+  p = p + 1
+  if enc == 1 or enc == 2 then
+    while p < #data do
+      if (data:byte(p) or 0) == 0 and (data:byte(p + 1) or 0) == 0 then p = p + 2; break end
+      p = p + 2
+    end
+  else
+    local desc_end = data:find("\0", p, true)
+    if not desc_end then return nil end
+    p = desc_end + 1
+  end
+  local img = data:sub(p)
+  if #img < 100 then return nil end
+  return img, mb_detect_image_ext(mime, img)
+end
+
+function mb_extract_id3(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local header = file:read(10)
+  if not header or #header < 10 or header:sub(1, 3) ~= "ID3" then file:close(); return nil end
+  local ver = header:byte(4) or 0
+  local flags = header:byte(6) or 0
+  local tag_size = mb_synchsafe(header, 7)
+  if tag_size <= 0 or tag_size > 50 * 1024 * 1024 then file:close(); return nil end
+  local body = file:read(tag_size)
+  file:close()
+  if not body then return nil end
+  local len = #body
+  local pos = 1
+  if flags % 128 >= 64 then
+    if ver == 4 then
+      pos = pos + mb_synchsafe(body, pos)
+    else
+      pos = pos + 4 + mb_be_int(body, pos, 4)
+    end
+  end
+  if ver == 2 then
+    while pos + 6 <= len + 1 do
+      local fid = body:sub(pos, pos + 2)
+      if not fid:match("^[A-Z0-9][A-Z0-9][A-Z0-9]$") then break end
+      local fsize = mb_be_int(body, pos + 3, 3)
+      local frame_start = pos + 6
+      if fsize <= 0 or frame_start + fsize - 1 > len then break end
+      if fid == "PIC" then return mb_parse_apic(body:sub(frame_start, frame_start + fsize - 1), true) end
+      pos = frame_start + fsize
+    end
+    return nil
+  end
+  while pos + 10 <= len + 1 do
+    local fid = body:sub(pos, pos + 3)
+    if not fid:match("^[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]$") then break end
+    local fsize = ver == 4 and mb_synchsafe(body, pos + 4) or mb_be_int(body, pos + 4, 4)
+    local frame_start = pos + 10
+    if fsize <= 0 or frame_start + fsize - 1 > len then break end
+    if fid == "APIC" then return mb_parse_apic(body:sub(frame_start, frame_start + fsize - 1), false) end
+    pos = frame_start + fsize
+  end
+  return nil
+end
+
+function mb_extract_flac(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  if file:read(4) ~= "fLaC" then file:close(); return nil end
+  while true do
+    local bh = file:read(4)
+    if not bh or #bh < 4 then break end
+    local first = bh:byte(1)
+    local is_last = first >= 128
+    local btype = first % 128
+    local blen = mb_be_int(bh, 2, 3)
+    if btype == 6 then
+      local block = file:read(blen)
+      file:close()
+      if not block or #block < 32 then return nil end
+      local p = 1 + 4
+      local mlen = mb_be_int(block, p, 4); p = p + 4
+      local mime = block:sub(p, p + mlen - 1); p = p + mlen
+      local dlen = mb_be_int(block, p, 4); p = p + 4 + dlen
+      p = p + 16
+      local imglen = mb_be_int(block, p, 4); p = p + 4
+      local img = block:sub(p, p + imglen - 1)
+      if #img < 100 then return nil end
+      return img, mb_detect_image_ext(mime, img)
+    elseif blen > 0 then
+      file:seek("cur", blen)
+    end
+    if is_last then break end
+  end
+  file:close()
+  return nil
+end
+
+function mb_mp4_find_child(file, start_off, end_off, want)
+  local pos = start_off
+  while pos + 8 <= end_off do
+    file:seek("set", pos)
+    local hdr = file:read(8)
+    if not hdr or #hdr < 8 then return nil end
+    local size = mb_be_int(hdr, 1, 4)
+    local atype = hdr:sub(5, 8)
+    local hlen = 8
+    if size == 1 then
+      local ext = file:read(8)
+      if not ext or #ext < 8 then return nil end
+      size = mb_be_int(ext, 5, 4)
+      hlen = 16
+    elseif size == 0 then
+      size = end_off - pos
+    end
+    if size < hlen then return nil end
+    local content_end = math.min(pos + size, end_off)
+    if atype == want then return pos + hlen, content_end end
+    pos = pos + size
+  end
+  return nil
+end
+
+function mb_extract_mp4(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local fsize = file:seek("end", 0)
+  local ms, me = mb_mp4_find_child(file, 0, fsize, "moov")
+  if not ms then file:close(); return nil end
+  local us, ue = mb_mp4_find_child(file, ms, me, "udta")
+  if not us then file:close(); return nil end
+  local ts, te = mb_mp4_find_child(file, us, ue, "meta")
+  if not ts then file:close(); return nil end
+  local is, ie = mb_mp4_find_child(file, ts + 4, te, "ilst")
+  if not is then file:close(); return nil end
+  local cs, ce = mb_mp4_find_child(file, is, ie, "covr")
+  if not cs then file:close(); return nil end
+  local ds, de = mb_mp4_find_child(file, cs, ce, "data")
+  if not ds then file:close(); return nil end
+  file:seek("set", ds)
+  local head = file:read(8)
+  if not head or #head < 8 then file:close(); return nil end
+  local dtype = mb_be_int(head, 1, 4)
+  local imglen = de - (ds + 8)
+  if imglen <= 0 then file:close(); return nil end
+  local img = file:read(imglen)
+  file:close()
+  if not img or #img < 100 then return nil end
+  local ext = dtype == 14 and "png" or (dtype == 27 and "bmp" or mb_detect_image_ext(nil, img))
+  return img, ext
+end
+
+function embedded_art_path(file_path)
+  local key = normalize_path(file_path)
+  local cached = state.embedded_art_path_cache[key]
+  if cached ~= nil then return cached or nil end
+  local ext = extension(file_path)
+  local img, img_ext
+  local ok = pcall(function()
+    if ext == "mp3" then
+      img, img_ext = mb_extract_id3(file_path)
+    elseif ext == "flac" then
+      img, img_ext = mb_extract_flac(file_path)
+    elseif ext == "m4a" or ext == "mp4" then
+      img, img_ext = mb_extract_mp4(file_path)
+    end
+  end)
+  if not ok or not img or not img_ext then state.embedded_art_path_cache[key] = false; return nil end
+  ensure_cache_dir()
+  local out_path = cache_dir .. "/art_" .. cache_key(file_path) .. "." .. img_ext
+  if not file_exists(out_path) then
+    local wf = io.open(out_path, "wb")
+    if not wf then state.embedded_art_path_cache[key] = false; return nil end
+    wf:write(img)
+    wf:close()
+  end
+  state.embedded_art_path_cache[key] = out_path
+  return out_path
+end
+
+function destroy_embedded_art(ctx, path)
+  local entry = state.embedded_art_image_cache[path]
+  if entry and entry.image and r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
+  state.embedded_art_image_cache[path] = nil
+end
+
+function clear_embedded_art_cache(ctx)
+  for _, entry in pairs(state.embedded_art_image_cache) do
+    if entry and entry.image and r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
+  end
+  state.embedded_art_image_cache = {}
+end
+
+function load_embedded_art(ctx, file_path)
+  if not r.ImGui_CreateImage then return nil end
+  local path = embedded_art_path(file_path)
+  if not path then return nil end
+  local cached = state.embedded_art_image_cache[path]
+  if cached ~= nil then return cached or nil end
+  local cache_count = 0
+  for _ in pairs(state.embedded_art_image_cache) do cache_count = cache_count + 1 end
+  if cache_count > 80 then clear_embedded_art_cache(ctx) end
+  local ok, image = pcall(r.ImGui_CreateImage, path)
+  if not ok or not image then state.embedded_art_image_cache[path] = false; return nil end
+  if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, image) end
+  local img_w, img_h = 0, 0
+  if r.ImGui_Image_GetSize then
+    local size_ok, w, h = pcall(r.ImGui_Image_GetSize, image)
+    if size_ok then img_w, img_h = w or 0, h or 0 end
+  end
+  local entry = { image = image, width = img_w, height = img_h, path = path }
+  state.embedded_art_image_cache[path] = entry
+  return entry
 end
 
 local function legacy_cache_path(location)
@@ -3849,9 +4104,27 @@ local function draw_file_row(app, settings, file, index, width)
   r.ImGui_DrawList_AddRect(draw_list, x, row_top, x + width, row_bottom, (selected or previewing) and Theme.colors.accent or Theme.colors.border, row_radius, 0, (selected or previewing) and UIScale.px(1.4) or UIScale.px(0.7))
   local text_x = compact and x + UIScale.round(10) or x + UIScale.round(30)
   if not compact then
-    local kind_color = file.kind == "audio" and 0x48CFADFF or file.kind == "midi" and 0xFFCE54FF or file.kind == "video" and 0xED5565FF or 0x8F9AA8FF
-    r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(7), y + UIScale.round(10), x + UIScale.round(23), y + UIScale.round(26), kind_color, UIScale.px(3))
-    r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(12), y + UIScale.round(11), 0x111111FF, file.kind:sub(1, 1):upper())
+    local drew_art = false
+    if file.kind == "audio" then
+      local art = load_embedded_art(ctx, file.path)
+      if art and art.image and r.ImGui_DrawList_AddImage then
+        local box_x, box_y, box_size = x + UIScale.round(7), y + UIScale.round(8), UIScale.round(32)
+        r.ImGui_DrawList_AddRectFilled(draw_list, box_x, box_y, box_x + box_size, box_y + box_size, Theme.colors.frame_bg, UIScale.px(4))
+        local image_ok = pcall(r.ImGui_DrawList_AddImage, draw_list, art.image, box_x + UIScale.round(2), box_y + UIScale.round(2), box_x + box_size - UIScale.round(2), box_y + box_size - UIScale.round(2), 0, 0, 1, 1, 0xFFFFFFFF)
+        if image_ok then
+          r.ImGui_DrawList_AddRect(draw_list, box_x, box_y, box_x + box_size, box_y + box_size, Theme.colors.border, UIScale.px(4), 0, UIScale.px(1))
+          text_x = x + UIScale.round(48)
+          drew_art = true
+        elseif art.path then
+          destroy_embedded_art(ctx, art.path)
+        end
+      end
+    end
+    if not drew_art then
+      local kind_color = file.kind == "audio" and 0x48CFADFF or file.kind == "midi" and 0xFFCE54FF or file.kind == "video" and 0xED5565FF or 0x8F9AA8FF
+      r.ImGui_DrawList_AddRectFilled(draw_list, x + UIScale.round(7), y + UIScale.round(10), x + UIScale.round(23), y + UIScale.round(26), kind_color, UIScale.px(3))
+      r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(12), y + UIScale.round(11), 0x111111FF, file.kind:sub(1, 1):upper())
+    end
   end
   r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + UIScale.round(4), x + width - UIScale.round(8), y + row_h - UIScale.round(4), true)
   r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + UIScale.round(4) or y + UIScale.round(7), Theme.colors.text, file.name)
