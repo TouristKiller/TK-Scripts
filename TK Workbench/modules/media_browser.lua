@@ -8,7 +8,7 @@ local M = {
   id = "media_browser",
   title = "Media Browser",
   icon = "MED",
-  version = "0.1.4"
+  version = "0.1.5"
 }
 
 local resource_path = r.GetResourcePath()
@@ -53,13 +53,16 @@ local defaults = {
   folder_double_click_open = false,
   trim_silence_enabled = false,
   trim_silence_threshold_db = -48,
-  trim_silence_padding_ms = 8
+  trim_silence_padding_ms = 8,
+  cover_viewer_size = 320
 }
 
-local audio_ext = { wav = true, wave = true, aif = true, aiff = true, flac = true, mp3 = true, ogg = true, opus = true, m4a = true, wv = true }
-local midi_ext = { mid = true, midi = true, rpp = false }
-local video_ext = { mp4 = true, mov = true, mkv = true, avi = true, webm = true, mpg = true, mpeg = true, wmv = true, flv = true, m4v = true, gif = true }
-local image_ext = { png = true, jpg = true, jpeg = true, webp = true, bmp = true }
+local EXT = {
+  audio = { wav = true, wave = true, aif = true, aiff = true, flac = true, mp3 = true, ogg = true, opus = true, m4a = true, wv = true },
+  midi = { mid = true, midi = true, rpp = false },
+  video = { mp4 = true, mov = true, mkv = true, avi = true, webm = true, mpg = true, mpeg = true, wmv = true, flv = true, m4v = true, gif = true },
+  image = { png = true, jpg = true, jpeg = true, webp = true, bmp = true }
+}
 
 local state = {
   locations = {},
@@ -139,6 +142,7 @@ local state = {
   potential_drag_file = nil,
   potential_drag_x = 0,
   potential_drag_y = 0,
+  cover_viewer_open = false,
   dragging_file = nil,
   drag_target_track = nil,
   drag_target_lane = nil,
@@ -184,6 +188,7 @@ local function ensure_settings(app)
   settings.stop_preview_on_insert = settings.stop_preview_on_insert ~= false
   settings.trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(settings.trim_silence_threshold_db) or defaults.trim_silence_threshold_db))
   settings.trim_silence_padding_ms = math.max(0, math.min(250, tonumber(settings.trim_silence_padding_ms) or defaults.trim_silence_padding_ms))
+  settings.cover_viewer_size = math.max(140, math.min(720, math.floor(tonumber(settings.cover_viewer_size) or defaults.cover_viewer_size)))
   if settings.location_view_mode ~= "auto" then settings.location_view_mode = "folders" end
   settings.folder_browse = settings.folder_browse == true
   settings.compact_list = settings.compact_list == true
@@ -240,10 +245,10 @@ end
 
 local function file_kind(path)
   local ext = extension(path)
-  if audio_ext[ext] then return "audio" end
-  if midi_ext[ext] then return "midi" end
-  if video_ext[ext] then return "video" end
-  if image_ext[ext] then return "image" end
+  if EXT.audio[ext] then return "audio" end
+  if EXT.midi[ext] then return "midi" end
+  if EXT.video[ext] then return "video" end
+  if EXT.image[ext] then return "image" end
   return "other"
 end
 
@@ -632,6 +637,101 @@ function mb_extract_mp4(path)
   return img, ext
 end
 
+function mb_le4(s, pos)
+  return (s:byte(pos) or 0) + (s:byte(pos+1) or 0)*256 + (s:byte(pos+2) or 0)*65536 + (s:byte(pos+3) or 0)*16777216
+end
+
+function mb_base64_decode(s)
+  local b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  local dec = {}
+  for i = 1, #b64 do dec[b64:sub(i,i)] = i - 1 end
+  local out, acc, bits = {}, 0, 0
+  for c in s:gmatch(".") do
+    local v = dec[c]
+    if v then
+      acc = acc * 64 + v
+      bits = bits + 6
+      if bits >= 8 then
+        bits = bits - 8
+        out[#out+1] = string.char(math.floor(acc / (2^bits)) % 256)
+      end
+    end
+  end
+  return table.concat(out)
+end
+
+function mb_extract_ogg(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  if file:read(4) ~= "OggS" then file:close(); return nil end
+  file:seek("set", 0)
+  local target_serial = nil
+  local packet_chunks = {}
+  local comment_data = nil
+  local bytes_read = 0
+  while bytes_read < 10 * 1024 * 1024 do
+    local capture = file:read(4)
+    if not capture or capture ~= "OggS" then break end
+    bytes_read = bytes_read + 4
+    local hdr = file:read(23)
+    if not hdr or #hdr < 23 then break end
+    bytes_read = bytes_read + 23
+    local serial = mb_le4(hdr, 11)
+    local nseg = hdr:byte(23) or 0
+    if target_serial == nil then target_serial = serial end
+    local segtab = file:read(nseg) or ""
+    bytes_read = bytes_read + nseg
+    local dsize = 0
+    for i = 1, nseg do dsize = dsize + (segtab:byte(i) or 0) end
+    local data = dsize > 0 and file:read(dsize) or ""
+    bytes_read = bytes_read + dsize
+    if serial == target_serial then
+      local sp = 1
+      for i = 1, nseg do
+        local sl = segtab:byte(i) or 0
+        packet_chunks[#packet_chunks+1] = data:sub(sp, sp + sl - 1)
+        sp = sp + sl
+        if sl < 255 then
+          local pkt = table.concat(packet_chunks)
+          packet_chunks = {}
+          if pkt:sub(1,8) == "OpusTags" then
+            comment_data = pkt:sub(9); break
+          elseif pkt:sub(1,7) == "\x03vorbis" then
+            comment_data = pkt:sub(8); break
+          end
+        end
+      end
+    end
+    if comment_data then break end
+  end
+  file:close()
+  if not comment_data or #comment_data < 8 then return nil end
+  local pos = 1
+  local vlen = mb_le4(comment_data, pos); pos = pos + 4 + vlen
+  if #comment_data < pos + 3 then return nil end
+  local count = mb_le4(comment_data, pos); pos = pos + 4
+  for _ = 1, count do
+    if #comment_data < pos + 3 then break end
+    local tlen = mb_le4(comment_data, pos); pos = pos + 4
+    if tlen < 1 or pos + tlen - 1 > #comment_data then break end
+    local tag = comment_data:sub(pos, pos + tlen - 1); pos = pos + tlen
+    local eq = tag:find("=", 1, true)
+    if eq and tag:sub(1, eq-1):upper() == "METADATA_BLOCK_PICTURE" then
+      local decoded = mb_base64_decode(tag:sub(eq+1))
+      if decoded and #decoded > 32 then
+        local p = 5
+        local ml = mb_be_int(decoded, p, 4); p = p + 4
+        local mime = decoded:sub(p, p + ml - 1); p = p + ml
+        local dl = mb_be_int(decoded, p, 4); p = p + 4 + dl + 16
+        local il = mb_be_int(decoded, p, 4); p = p + 4
+        local img = decoded:sub(p, p + il - 1)
+        if #img >= 100 then return img, mb_detect_image_ext(mime, img) end
+      end
+    end
+  end
+  return nil
+end
+
 function embedded_art_path(file_path)
   local key = normalize_path(file_path)
   local cached = state.embedded_art_path_cache[key]
@@ -645,6 +745,8 @@ function embedded_art_path(file_path)
       img, img_ext = mb_extract_flac(file_path)
     elseif ext == "m4a" or ext == "mp4" then
       img, img_ext = mb_extract_mp4(file_path)
+    elseif ext == "opus" or ext == "ogg" then
+      img, img_ext = mb_extract_ogg(file_path)
     end
   end)
   if not ok or not img or not img_ext then state.embedded_art_path_cache[key] = false; return nil end
@@ -4107,6 +4209,8 @@ local function draw_file_row(app, settings, file, index, width)
     local drew_art = false
     if file.kind == "audio" then
       local art = load_embedded_art(ctx, file.path)
+      local from_embedded = (art and art.image) and true or false
+      if not from_embedded then art = load_folder_art(ctx, parent_folder(file.path)) end
       if art and art.image and r.ImGui_DrawList_AddImage then
         local box_x, box_y, box_size = x + UIScale.round(7), y + UIScale.round(8), UIScale.round(32)
         r.ImGui_DrawList_AddRectFilled(draw_list, box_x, box_y, box_x + box_size, box_y + box_size, Theme.colors.frame_bg, UIScale.px(4))
@@ -4116,7 +4220,7 @@ local function draw_file_row(app, settings, file, index, width)
           text_x = x + UIScale.round(48)
           drew_art = true
         elseif art.path then
-          destroy_embedded_art(ctx, art.path)
+          if from_embedded then destroy_embedded_art(ctx, art.path) else destroy_folder_art(ctx, art.path) end
         end
       end
     end
@@ -4154,6 +4258,10 @@ local function draw_file_row(app, settings, file, index, width)
   if r.ImGui_BeginPopupContextItem(ctx, "##media_context") then
     if r.ImGui_MenuItem(ctx, "Insert on selected track") then insert_file(app, file) end
     if can_preview_file(file) and r.ImGui_MenuItem(ctx, "Preview") then start_preview(ensure_settings(app), file) end
+    if r.ImGui_MenuItem(ctx, "Show cover art") then
+      select_file(app, file, index, false)
+      state.cover_viewer_open = true
+    end
     Sampler.draw_context_menu(ctx, app, file)
     r.ImGui_EndPopup(ctx)
   end
@@ -4201,6 +4309,94 @@ local function draw_file_list(app, settings, width, height)
     r.ImGui_EndChild(ctx)
   end
   return shown
+end
+
+function cover_art_for_file(ctx, file)
+  if not file then return nil end
+  if file.kind == "audio" then
+    local art = load_embedded_art(ctx, file.path)
+    if art and art.image then return art, "embedded" end
+  end
+  local folder = load_folder_art(ctx, parent_folder(file.path))
+  if folder and folder.image then return folder, "folder" end
+  return nil
+end
+
+function draw_cover_viewer(app, settings)
+  if not state.cover_viewer_open then return end
+  local ctx = app.ctx
+  if not r.ImGui_Begin or not r.ImGui_DrawList_AddImage then state.cover_viewer_open = false; return end
+  local logical = math.max(140, math.min(720, math.floor(tonumber(settings.cover_viewer_size) or 320)))
+  local size = UIScale.round(logical)
+  local saved = type(settings.cover_window) == "table" and settings.cover_window or {}
+  if r.ImGui_SetNextWindowPos and r.ImGui_Cond_Appearing then
+    local saved_x, saved_y = tonumber(saved.x), tonumber(saved.y)
+    if saved_x and saved_y then
+      r.ImGui_SetNextWindowPos(ctx, saved_x, saved_y, r.ImGui_Cond_Appearing())
+    else
+      local wx, wy = r.ImGui_GetWindowPos(ctx)
+      local ww, wh = r.ImGui_GetWindowSize(ctx)
+      r.ImGui_SetNextWindowPos(ctx, wx + math.max(0, (ww - size) * 0.5), wy + math.max(0, (wh - size) * 0.5), r.ImGui_Cond_Appearing())
+    end
+  end
+  local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize()
+  if r.ImGui_WindowFlags_AlwaysAutoResize then flags = flags | r.ImGui_WindowFlags_AlwaysAutoResize() end
+  local visible, open = r.ImGui_Begin(ctx, "Cover art##media_cover_viewer", true, flags)
+  if not open then state.cover_viewer_open = false end
+  if not visible then return end
+  if r.ImGui_GetWindowPos then
+    local current_x, current_y = r.ImGui_GetWindowPos(ctx)
+    settings.cover_window = type(settings.cover_window) == "table" and settings.cover_window or {}
+    local win = settings.cover_window
+    if math.abs((tonumber(win.x) or -99999) - current_x) > 0.5 or math.abs((tonumber(win.y) or -99999) - current_y) > 0.5 then
+      win.x, win.y = current_x, current_y
+      if app.save_settings and (not r.ImGui_IsMouseDown or not r.ImGui_IsMouseDown(ctx, 0)) then app.save_settings() end
+    end
+  end
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local header_x, header_y = r.ImGui_GetCursorScreenPos(ctx)
+  local close_size = UIScale.round(14)
+  r.ImGui_TextColored(ctx, Theme.colors.accent, "Cover art")
+  r.ImGui_SetCursorScreenPos(ctx, header_x + size - close_size - UIScale.round(2), header_y + UIScale.round(2))
+  if r.ImGui_InvisibleButton(ctx, "##media_cover_close", close_size, close_size) then state.cover_viewer_open = false end
+  local close_hovered = r.ImGui_IsItemHovered(ctx)
+  local cx = header_x + size - close_size * 0.5 - UIScale.round(2)
+  local cy = header_y + close_size * 0.5 + UIScale.round(2)
+  r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, close_size * 0.5, close_hovered and (Theme.colors.danger or 0xF7768EFF) or 0xF7768EFF, 16)
+  r.ImGui_DrawList_AddCircle(draw_list, cx, cy, close_size * 0.5, 0x3A1018FF, 16, UIScale.px(1))
+  if close_hovered then r.ImGui_SetTooltip(ctx, "Close") end
+  r.ImGui_SetCursorScreenPos(ctx, header_x, header_y + r.ImGui_GetFrameHeight(ctx) + UIScale.round(4))
+  local box_x, box_y = r.ImGui_GetCursorScreenPos(ctx)
+  r.ImGui_InvisibleButton(ctx, "##media_cover_box", size, size)
+  local box_hovered = r.ImGui_IsItemHovered(ctx)
+  r.ImGui_DrawList_AddRectFilled(draw_list, box_x, box_y, box_x + size, box_y + size, Theme.colors.frame_bg, UIScale.px(6))
+  local art = cover_art_for_file(ctx, state.selected_file)
+  if art and art.image then
+    local iw, ih = art.width or 0, art.height or 0
+    if iw <= 0 or ih <= 0 then iw, ih = size, size end
+    local scale = math.min(size / iw, size / ih)
+    local dw, dh = iw * scale, ih * scale
+    local ix = box_x + (size - dw) * 0.5
+    local iy = box_y + (size - dh) * 0.5
+    pcall(r.ImGui_DrawList_AddImage, draw_list, art.image, ix, iy, ix + dw, iy + dh, 0, 0, 1, 1, 0xFFFFFFFF)
+  else
+    local label = state.selected_file and "No image" or "No file selected"
+    local tw, th = r.ImGui_CalcTextSize(ctx, label)
+    r.ImGui_DrawList_AddText(draw_list, box_x + (size - tw) * 0.5, box_y + (size - th) * 0.5, Theme.colors.text_dim, label)
+  end
+  r.ImGui_DrawList_AddRect(draw_list, box_x, box_y, box_x + size, box_y + size, Theme.colors.border, UIScale.px(6), 0, UIScale.px(1))
+  if (box_hovered or close_hovered or (r.ImGui_IsWindowHovered and r.ImGui_IsWindowHovered(ctx))) then
+    local wheel = mouse_wheel_delta(ctx)
+    if wheel ~= 0 then
+      local new_logical = math.max(140, math.min(720, logical + (wheel > 0 and 32 or -32)))
+      if new_logical ~= logical then
+        settings.cover_viewer_size = new_logical
+        if app.save_settings then app.save_settings() end
+      end
+    end
+    if box_hovered then r.ImGui_SetTooltip(ctx, "Scroll to resize") end
+  end
+  r.ImGui_End(ctx)
 end
 
 function M.init(app)
@@ -4370,6 +4566,7 @@ function M.draw(app)
   if state.selected_file then info = info .. " | " .. state.selected_file.name end
   if state.last_error then info = state.last_error end
   app.status = info
+  draw_cover_viewer(app, settings)
 end
 
 function M.shutdown(app)

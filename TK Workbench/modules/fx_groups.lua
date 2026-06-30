@@ -99,21 +99,74 @@ local function fx_name(track, idx)
   return name or ""
 end
 
+local FXG_CONTAINER_BASE = 0x2000000
+local FXG_MAX_CONTAINER_DEPTH = 8
+
+local function fx_is_container(track, fx)
+  if not r.TrackFX_GetNamedConfigParm then return false end
+  local ok, v = r.TrackFX_GetNamedConfigParm(track, fx, "fx_type")
+  return ok and tostring(v or "") == "Container"
+end
+
+local function container_child_count(track, container_api)
+  if not r.TrackFX_GetNamedConfigParm then return 0 end
+  local ok, v = r.TrackFX_GetNamedConfigParm(track, container_api, "container_count")
+  if not ok then return 0 end
+  return math.floor(tonumber(v) or 0)
+end
+
+local function enumerate_container_fx(track, list, container_rel, parent_count, parent_diff, depth)
+  local count = container_child_count(track, FXG_CONTAINER_BASE + container_rel)
+  if count <= 0 then return end
+  local diff = (parent_count + 1) * parent_diff
+  for j = 1, count do
+    local child_rel = container_rel + diff * j
+    local api = FXG_CONTAINER_BASE + child_rel
+    if fx_is_container(track, api) then
+      list[#list + 1] = { api = api, name = fx_name(track, api) }
+      if depth < FXG_MAX_CONTAINER_DEPTH then
+        enumerate_container_fx(track, list, child_rel, count, diff, depth + 1)
+      end
+    else
+      list[#list + 1] = { api = api, name = fx_name(track, api) }
+    end
+  end
+end
+
+local function enumerate_track_fx(track)
+  local list = {}
+  if not track then return list end
+  local top = r.TrackFX_GetCount(track) or 0
+  for i = 0, top - 1 do
+    if fx_is_container(track, i) then
+      list[#list + 1] = { api = i, name = fx_name(track, i) }
+      enumerate_container_fx(track, list, i + 1, top, 1, 1)
+    else
+      list[#list + 1] = { api = i, name = fx_name(track, i) }
+    end
+  end
+  return list
+end
+
 local function occurrence_index(track, fxidx, name)
   local occ = 0
-  for i = 0, fxidx do
-    if fx_name(track, i) == name then occ = occ + 1 end
+  local list = enumerate_track_fx(track)
+  for _, entry in ipairs(list) do
+    if entry.name == name then
+      occ = occ + 1
+      if entry.api == fxidx then return occ end
+    end
   end
   return occ
 end
 
 local function find_nth_named_fx(track, name, occ)
   local seen = 0
-  local count = r.TrackFX_GetCount(track) or 0
-  for i = 0, count - 1 do
-    if fx_name(track, i) == name then
+  local list = enumerate_track_fx(track)
+  for _, entry in ipairs(list) do
+    if entry.name == name then
       seen = seen + 1
-      if seen == occ then return i end
+      if seen == occ then return entry.api end
     end
   end
   return nil
@@ -388,9 +441,9 @@ local function group_linked_fx(group)
     if track then
       total = total + 1
       local seen = {}
-      local count = r.TrackFX_GetCount(track) or 0
-      for i = 0, count - 1 do
-        local name = fx_name(track, i)
+      local list = enumerate_track_fx(track)
+      for _, fx in ipairs(list) do
+        local name = fx.name
         if name ~= "" then
           seen[name] = (seen[name] or 0) + 1
           local occ = seen[name]
@@ -495,31 +548,47 @@ function M.update(app)
   local settings = app.settings and app.settings.fx_groups
   if not settings or settings.sync_paused then return end
   if #state.groups == 0 then return end
-  if not r.GetLastTouchedFX then return end
-  local ok, tracknumber, fxnumber, paramnumber = r.GetLastTouchedFX()
-  if not ok then return end
-  if not tracknumber or tracknumber < 1 then return end
-  if not fxnumber or fxnumber < 0 then return end
-  if (fxnumber & 0xFFFFFF) ~= fxnumber then return end
-  local track = r.GetTrack(0, tracknumber - 1)
+  local track, fxnumber, paramnumber
+  if r.GetTouchedOrFocusedFX then
+    local ok, trackidx, itemidx, takeidx, fxidx, parm = r.GetTouchedOrFocusedFX(0)
+    if not ok then return end
+    if itemidx and itemidx >= 0 then return end
+    if not trackidx or trackidx < 0 then return end
+    track = r.GetTrack(0, trackidx)
+    fxnumber = fxidx
+    paramnumber = parm
+  else
+    if not r.GetLastTouchedFX then return end
+    local ok, tracknumber, fxn, parm = r.GetLastTouchedFX()
+    if not ok then return end
+    if not tracknumber or tracknumber < 1 then return end
+    if not fxn or fxn < 0 then return end
+    track = r.GetTrack(0, tracknumber - 1)
+    fxnumber = fxn
+    paramnumber = parm
+  end
   if not track then return end
-  local fx_count = r.TrackFX_GetCount(track) or 0
-  if fxnumber >= fx_count then return end
+  if not fxnumber or fxnumber < 0 then return end
+  if fxnumber >= 0x1000000 and fxnumber < FXG_CONTAINER_BASE then return end
+  if fxnumber < FXG_CONTAINER_BASE then
+    local fx_count = r.TrackFX_GetCount(track) or 0
+    if fxnumber >= fx_count then return end
+  end
   local num_params = r.TrackFX_GetNumParams(track, fxnumber) or 0
   if not paramnumber or paramnumber < 0 or paramnumber >= num_params then return end
   local src_guid = track_guid(track)
   if src_guid == "" then return end
   local active_groups = groups_with_member(src_guid, true)
   if #active_groups == 0 then return end
-  local name = fx_name(track, fxnumber)
-  if name == "" then return end
-  local occ = occurrence_index(track, fxnumber, name)
   local value = r.TrackFX_GetParamNormalized(track, fxnumber, paramnumber)
   if not value then return end
-  local sig = src_guid .. "|" .. name .. "|" .. tostring(occ) .. "|" .. tostring(paramnumber)
+  local sig = src_guid .. "|" .. tostring(fxnumber) .. "|" .. tostring(paramnumber)
   if state.last_sig == sig and state.last_value == value then return end
   state.last_sig = sig
   state.last_value = value
+  local name = fx_name(track, fxnumber)
+  if name == "" then return end
+  local occ = occurrence_index(track, fxnumber, name)
   for _, group in ipairs(active_groups) do
     if not is_fx_excluded(group, fx_key(name, occ)) and not is_param_excluded(group, name, occ, paramnumber) then
       for _, guid in ipairs(group.members) do

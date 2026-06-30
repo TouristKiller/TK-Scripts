@@ -133,6 +133,9 @@ local defaults = {
   horizontal_titlebar_left = false,
   header_center_name = false,
   header_name_badge = false,
+  hide_track_number = false,
+  track_name_alpha = 100,
+  panel_name_alpha = 100,
   fx_name_center = false,
   hide_horizontal_scrollbar = false,
   invert_horizontal_scroll = false,
@@ -151,10 +154,12 @@ local defaults = {
   pinned_param_label_size = 8,
   pinned_param_scale = 1.0,
   pinned_param_alpha = 1.0,
+  pinned_param_text_alpha = 1.0,
   pinned_param_display = "name",
   pinned_param_style = "knob",
   pinned_param_under_label = true,
   pinned_param_hide_value = false,
+  pinned_param_tooltip_hints = true,
   auto_apply_default_pins = false,
   restore_default_pin_values = false
 }
@@ -832,7 +837,7 @@ local function current_project()
 end
 
 local function clean_storage_field(value)
-  return tostring(value or ""):gsub("[\t\r\n]", " ")
+  return tostring(value or ""):gsub("[\t\r\n\30]", " ")
 end
 
 local function split_storage_fields(line)
@@ -1033,6 +1038,8 @@ local function load_pinned_params()
     local style = fields[8] or ""
     local display = fields[9] or ""
     local under_label_raw = fields[10] or ""
+    local under_label = nil
+    if under_label_raw == "1" then under_label = true elseif under_label_raw == "0" then under_label = false end
     if track_id and track_id ~= "" and fx_guid and fx_guid ~= "" and param_idx then
       state.pinned_params[track_id] = state.pinned_params[track_id] or {}
       state.pinned_params[track_id][param_key(fx_guid, param_idx)] = {
@@ -1045,7 +1052,8 @@ local function load_pinned_params()
         custom_name = custom_name,
         style = style,
         display = (display == "name" or display == "value") and display or nil,
-        under_label = (under_label_raw == "1" and true) or (under_label_raw == "0" and false) or nil
+        under_label = under_label,
+        reset_value = tonumber(fields[11])
       }
     end
   end
@@ -1072,7 +1080,8 @@ local function save_pinned_params()
         clean_storage_field(entry.custom_name),
         clean_storage_field(entry.style),
         clean_storage_field((entry.display == "name" or entry.display == "value") and entry.display or ""),
-        (entry.under_label == true and "1") or (entry.under_label == false and "0") or ""
+        (entry.under_label == true and "1") or (entry.under_label == false and "0") or "",
+        (type(entry.reset_value) == "number" and tostring(entry.reset_value)) or ""
       }, "\t")
     end
   end
@@ -1567,7 +1576,7 @@ local function load_default_pins()
   if not r.GetExtState then return end
   local content = r.GetExtState(EXT_SECTION, "default_pins")
   if not content or content == "" then return end
-  for line in content:gmatch("[^\r\n]+") do
+  for line in content:gmatch("[^\30\r\n]+") do
     local fields = split_storage_fields(line)
     local key, slot, param_idx, param_name, value = fields[1], tonumber(fields[2]), tonumber(fields[3]), fields[4], tonumber(fields[5])
     local name_key = fields[6] or ""
@@ -1575,6 +1584,8 @@ local function load_default_pins()
     local style = fields[8] or ""
     local display = fields[9] or ""
     local under_label_raw = fields[10] or ""
+    local under_label = nil
+    if under_label_raw == "1" then under_label = true elseif under_label_raw == "0" then under_label = false end
     if key and key ~= "" and param_idx then
       state.default_pins[key] = state.default_pins[key] or {}
       state.default_pins[key][#state.default_pins[key] + 1] = {
@@ -1586,7 +1597,8 @@ local function load_default_pins()
         custom_name = custom_name,
         style = style,
         display = (display == "name" or display == "value") and display or nil,
-        under_label = (under_label_raw == "1" and true) or (under_label_raw == "0" and false) or nil
+        under_label = under_label,
+        reset_value = tonumber(fields[11])
       }
       if name_key ~= "" then state.default_pins_name_index[name_key] = key end
     end
@@ -1612,12 +1624,13 @@ local function save_default_pins()
         clean_storage_field(entry.custom_name or ""),
         clean_storage_field(entry.style or ""),
         clean_storage_field((entry.display == "name" or entry.display == "value") and entry.display or ""),
-        (entry.under_label == true and "1") or (entry.under_label == false and "0") or ""
+        (entry.under_label == true and "1") or (entry.under_label == false and "0") or "",
+        (type(entry.reset_value) == "number" and tostring(entry.reset_value)) or ""
       }, "\t")
     end
   end
   table.sort(lines)
-  r.SetExtState(EXT_SECTION, "default_pins", table.concat(lines, "\n"), true)
+  r.SetExtState(EXT_SECTION, "default_pins", table.concat(lines, "\30"), true)
 end
 
 function resolve_default_pins_list(track, fx_index)
@@ -1658,7 +1671,8 @@ local function save_current_pins_as_default(app, track, fx_index)
       custom_name = entry.custom_name or "",
       style = entry.style or "",
       display = (entry.display == "name" or entry.display == "value") and entry.display or nil,
-      under_label = entry.under_label
+      under_label = entry.under_label,
+      reset_value = entry.reset_value
     }
   end
   state.default_pins[primary] = list
@@ -1729,7 +1743,8 @@ local function apply_default_pins(app, track, fx_index, silent)
           custom_name = def.custom_name or "",
           style = def.style or "",
           display = def.display,
-          under_label = def.under_label
+          under_label = def.under_label,
+          reset_value = def.reset_value
         }
         applied = applied + 1
       end
@@ -1825,12 +1840,22 @@ local function pinned_show_under_label(settings, entry)
   return settings.pinned_param_under_label ~= false
 end
 
+function reset_pinned_param(track, fx_index, entry, param_idx)
+  param_idx = param_idx or (entry and entry.param_idx)
+  if not param_idx then return end
+  if entry and type(entry.reset_value) == "number" then
+    r.TrackFX_SetParamNormalized(track, fx_index, param_idx, math.max(0, math.min(1, entry.reset_value)))
+  else
+    local _, minval = r.TrackFX_GetParamEx(track, fx_index, param_idx)
+    r.TrackFX_SetParam(track, fx_index, param_idx, minval or 0)
+  end
+end
+
 local function draw_param_context_menu(app, ctx, track, fx_index, param_idx, entry)
   local request_unpin = false
   local current_value = r.TrackFX_GetParam(track, fx_index, param_idx)
   if r.ImGui_MenuItem(ctx, "Reset") then
-    local _, default_value = r.TrackFX_GetParamEx(track, fx_index, param_idx)
-    r.TrackFX_SetParam(track, fx_index, param_idx, default_value or 0)
+    reset_pinned_param(track, fx_index, entry, param_idx)
     app.status = "Parameter reset"
   end
   r.ImGui_Separator(ctx)
@@ -1904,6 +1929,19 @@ local function draw_param_context_menu(app, ctx, track, fx_index, param_idx, ent
         entry.under_label = false; save_pinned_params(); app.status = "Under label: hidden"
       end
       r.ImGui_EndMenu(ctx)
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Save current value as reset default") then
+      entry.reset_value = r.TrackFX_GetParamNormalized(track, fx_index, param_idx)
+      save_pinned_params()
+      app.status = "Saved reset default value"
+    end
+    if type(entry.reset_value) == "number" then
+      if r.ImGui_MenuItem(ctx, "Clear reset default value") then
+        entry.reset_value = nil
+        save_pinned_params()
+        app.status = "Cleared reset default value"
+      end
     end
   end
   r.ImGui_Separator(ctx)
@@ -2241,6 +2279,11 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
     changed, value = r.ImGui_SliderInt(ctx, "Knob alpha", pinned_alpha_pct, 10, 100, "%d%%")
     if changed then settings.pinned_param_alpha = value / 100; if app.save_settings then app.save_settings() end end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Transparency of the pinned parameter knob / button") end
+    local pinned_text_alpha_pct = math.floor(((tonumber(settings.pinned_param_text_alpha) or 1.0) * 100) + 0.5)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderInt(ctx, "Text alpha", pinned_text_alpha_pct, 10, 100, "%d%%")
+    if changed then settings.pinned_param_text_alpha = value / 100; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Transparency of the pinned parameter value and label text") end
     changed, value = r.ImGui_Checkbox(ctx, "Show value instead of name", settings.pinned_param_display == "value")
     if changed then settings.pinned_param_display = value and "value" or "name"; if app.save_settings then app.save_settings() end end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show the parameter value as the label instead of the name") end
@@ -2252,7 +2295,10 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show the parameter name label below the knob / button") end
     changed, value = r.ImGui_Checkbox(ctx, "Hide button value until used", settings.pinned_param_hide_value == true)
     if changed then settings.pinned_param_hide_value = value; if app.save_settings then app.save_settings() end end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Hide the value shown on button / cycle parameters until you click or drag them (like the knob layout)") end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Hide the value shown on button / cycle parameters until you click, drag or hover them (like the knob layout)") end
+    changed, value = r.ImGui_Checkbox(ctx, "Show shortcut hints in tooltips", settings.pinned_param_tooltip_hints ~= false)
+    if changed then settings.pinned_param_tooltip_hints = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show the extra control hints (drag, click, reset, ...) in the parameter tooltips. The parameter name and value are always shown") end
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "FX sources")
     changed, value = r.ImGui_Checkbox(ctx, "Show track FX", settings.show_track_fx)
@@ -2291,6 +2337,17 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
     changed, value = r.ImGui_Checkbox(ctx, "Track name badge", settings.header_name_badge == true)
     if changed then settings.header_name_badge = value; if app.save_settings then app.save_settings() end end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Draw a rounded background badge behind the track name to make it stand out") end
+    changed, value = r.ImGui_Checkbox(ctx, "Hide track number", settings.hide_track_number == true)
+    if changed then settings.hide_track_number = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Hide the track number (and separator) in the rack header, showing only the track name") end
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderInt(ctx, "Track name opacity", math.floor(tonumber(settings.track_name_alpha) or 100), 10, 100, "%d%%")
+    if changed then settings.track_name_alpha = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Opacity of the track name in the rack header") end
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
+    changed, value = r.ImGui_SliderInt(ctx, "Panel name opacity", math.floor(tonumber(settings.panel_name_alpha) or 100), 10, 100, "%d%%")
+    if changed then settings.panel_name_alpha = value; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Opacity of the section/panel names (Track FX, Track Input FX, Selected Track Item FX)") end
     if settings.orientation == "horizontal" then
       r.ImGui_SetNextItemWidth(ctx, UIScale.round(160))
       changed, value = r.ImGui_SliderInt(ctx, "Tile width", settings.horizontal_tile_width or 240, 160, 400, "%d px")
@@ -2367,6 +2424,12 @@ local function shade_color(col, f)
   return (rr << 24) | (gg << 16) | (bb << 8) | (col & 0xFF)
 end
 
+function apply_text_alpha(col, factor)
+  local a = math.floor((col & 0xFF) * (factor or 1) + 0.5)
+  if a < 0 then a = 0 elseif a > 255 then a = 255 end
+  return (col & 0xFFFFFF00) | a
+end
+
 local function draw_header_vertical(app, ctx, settings, track, bar_h)
   local label = get_track_label(track)
   local num_str = "-"
@@ -2401,14 +2464,17 @@ local function draw_header_vertical(app, ctx, settings, track, bar_h)
     local buttons_h = n_buttons * bw + (n_buttons - 1) * gap
     local buttons_top = base_y + bar_h - pad - buttons_h
     r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, base_y, cursor_x + bar_w, base_y + bar_h, header_color, UIScale.px(3))
-    local num_h = UIScale.round(16)
-    local num_col = shade_color(header_color, 0.62)
-    local num_text_color = luminance(num_col) > 0.55 and 0x000000FF or 0xFFFFFFFF
-    local top_corner = r.ImGui_DrawFlags_RoundCornersTop and r.ImGui_DrawFlags_RoundCornersTop() or 0
-    r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, base_y, cursor_x + bar_w, base_y + num_h, num_col, UIScale.px(3), top_corner)
-    if num_str and num_str ~= "" then
-      local nw, nh = r.ImGui_CalcTextSize(ctx, num_str)
-      r.ImGui_DrawList_AddText(draw_list, cursor_x + (bar_w - nw) * 0.5, base_y + (num_h - nh) * 0.5, num_text_color, num_str)
+    local show_number = not settings.hide_track_number
+    local num_h = show_number and UIScale.round(16) or 0
+    if show_number then
+      local num_col = shade_color(header_color, 0.62)
+      local num_text_color = luminance(num_col) > 0.55 and 0x000000FF or 0xFFFFFFFF
+      local top_corner = r.ImGui_DrawFlags_RoundCornersTop and r.ImGui_DrawFlags_RoundCornersTop() or 0
+      r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, base_y, cursor_x + bar_w, base_y + num_h, num_col, UIScale.px(3), top_corner)
+      if num_str and num_str ~= "" then
+        local nw, nh = r.ImGui_CalcTextSize(ctx, num_str)
+        r.ImGui_DrawList_AddText(draw_list, cursor_x + (bar_w - nw) * 0.5, base_y + (num_h - nh) * 0.5, num_text_color, num_str)
+      end
     end
     if name_str and name_str ~= "" then
       local target_size = UIScale.round(12)
@@ -2417,6 +2483,7 @@ local function draw_header_vertical(app, ctx, settings, track, bar_h)
       local line_h = target_size + UIScale.round(1)
       local top = base_y + num_h + pad
       local avail_h = (buttons_top - gap) - top
+      local name_color = apply_text_alpha(text_color, (math.floor(tonumber(settings.track_name_alpha) or 100)) / 100)
       if avail_h > line_h then
         local chars = {}
         for ch in name_str:gmatch(".") do chars[#chars + 1] = ch end
@@ -2429,7 +2496,7 @@ local function draw_header_vertical(app, ctx, settings, track, bar_h)
         for i = 1, shown do
           local ch = chars[i]
           local ch_w = r.ImGui_CalcTextSize(ctx, ch) * scale
-          r.ImGui_DrawList_AddTextEx(draw_list, nil, target_size, cursor_x + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, text_color, ch)
+          r.ImGui_DrawList_AddTextEx(draw_list, nil, target_size, cursor_x + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, name_color, ch)
         end
       end
     end
@@ -2472,13 +2539,17 @@ local function draw_header_vertical(app, ctx, settings, track, bar_h)
       if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
     end
     draw_rack_settings_popup(app, ctx, settings, track)
+    r.ImGui_EndChild(ctx)
   end
-  r.ImGui_EndChild(ctx)
   return bar_w
 end
 
 local function draw_header(app, ctx, settings, track)
   local label = get_track_label(track)
+  if settings.hide_track_number and validate_track(track) and track ~= r.GetMasterTrack(0) then
+    local stripped = label:match("^%d+%s*%-%s*(.+)$")
+    if stripped and stripped ~= "" then label = stripped end
+  end
   local header_color = get_track_header_color(settings, track)
   local text_color = luminance(header_color) > 0.55 and 0x000000FF or 0xFFFFFFFF
   local avail = get_available_width(ctx)
@@ -2503,6 +2574,7 @@ local function draw_header(app, ctx, settings, track)
     name_x = name_left + math.max(0, ((name_right - name_left) - text_w) * 0.5)
   end
   r.ImGui_DrawList_PushClipRect(draw_list, cursor_x + pad_x, cursor_y, math.max(cursor_x + pad_x, name_right), cursor_y + bar_h, true)
+  local name_alpha = (math.floor(tonumber(settings.track_name_alpha) or 100)) / 100
   if settings.header_name_badge and label ~= "" then
     local bpx, bpy = UIScale.round(7), UIScale.round(2)
     local badge_col = shade_color(header_color, 0.5)
@@ -2513,9 +2585,9 @@ local function draw_header(app, ctx, settings, track)
     local by1 = cursor_y + (bar_h - text_h) * 0.5 + text_h + bpy
     r.ImGui_DrawList_AddRectFilled(draw_list, bx0, by0, bx1, by1, badge_col, UIScale.px(4))
     r.ImGui_DrawList_AddRect(draw_list, bx0, by0, bx1, by1, (badge_text_color & 0xFFFFFF00) | 0x33, UIScale.px(4), 0, UIScale.px(1))
-    r.ImGui_DrawList_AddText(draw_list, name_x, cursor_y + (bar_h - text_h) * 0.5, badge_text_color, label)
+    r.ImGui_DrawList_AddText(draw_list, name_x, cursor_y + (bar_h - text_h) * 0.5, apply_text_alpha(badge_text_color, name_alpha), label)
   else
-    r.ImGui_DrawList_AddText(draw_list, name_x, cursor_y + (bar_h - text_h) * 0.5, text_color, label)
+    r.ImGui_DrawList_AddText(draw_list, name_x, cursor_y + (bar_h - text_h) * 0.5, apply_text_alpha(text_color, name_alpha), label)
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
   r.ImGui_SetCursorPosX(ctx, start_pos_x + math.max(0, avail - buttons_w))
@@ -3059,11 +3131,24 @@ local function draw_small_button(ctx, draw_list, id, x, y, width, height, label,
 end
 
 local function draw_pin_menu(app, ctx, track, fx_index, target_slot)
-  if r.GetLastTouchedFX then
-    local ok, track_index, touched_fx, param_idx = r.GetLastTouchedFX()
-    local touched_track = nil
-    if ok then
-      if track_index == 0 then touched_track = r.GetMasterTrack(0) else touched_track = r.GetTrack(0, track_index - 1) end
+  if r.GetTouchedOrFocusedFX or r.GetLastTouchedFX then
+    local ok, touched_track, touched_fx, param_idx
+    if r.GetTouchedOrFocusedFX then
+      local got, track_index, item_index, _, fx_idx, parm = r.GetTouchedOrFocusedFX(0)
+      ok = got
+      if got and (not item_index or item_index < 0) then
+        if track_index < 0 then touched_track = r.GetMasterTrack(0) else touched_track = r.GetTrack(0, track_index) end
+        touched_fx = fx_idx
+        param_idx = parm
+      end
+    else
+      local got, track_index, fx_idx, parm = r.GetLastTouchedFX()
+      ok = got
+      if got then
+        if track_index == 0 then touched_track = r.GetMasterTrack(0) else touched_track = r.GetTrack(0, track_index - 1) end
+        touched_fx = fx_idx
+        param_idx = parm
+      end
     end
     local matches = ok and touched_track == track and touched_fx == fx_index and param_idx and param_idx >= 0
     local label = "Pin last touched parameter"
@@ -3555,7 +3640,15 @@ local function draw_macro_bar(app, ctx, settings, track)
   flush_macro_changes(ctx)
 end
 
-function draw_pinned_label(draw_list, size, x, y, text, text_col, outline_col)
+function draw_pinned_label(draw_list, size, x, y, text, text_col, outline_col, alpha)
+  if alpha and alpha < 1.0 then
+    local function ap(c)
+      local a = c & 0xFF
+      return (c & 0xFFFFFF00) | math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
+    end
+    text_col = ap(text_col)
+    outline_col = ap(outline_col)
+  end
   local o = UIScale.px(1)
   r.ImGui_DrawList_AddTextEx(draw_list, nil, size, x - o, y, outline_col, text)
   r.ImGui_DrawList_AddTextEx(draw_list, nil, size, x + o, y, outline_col, text)
@@ -3642,8 +3735,11 @@ function draw_param_cycle(app, ctx, draw_list, track, fx_index, entry, cx, cy, r
   local count = #stops
   local hide_value = settings.pinned_param_hide_value == true
   local prev_active = entry._cyc_active
+  local prev_hover = entry._cyc_hover
   local alpha = tonumber(settings.pinned_param_alpha) or 1.0
   if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local text_alpha = tonumber(settings.pinned_param_text_alpha) or 1.0
+  if text_alpha < 0.1 then text_alpha = 0.1 elseif text_alpha > 1.0 then text_alpha = 1.0 end
   local function with_alpha(color)
     local a = color & 0xFF
     return (color & 0xFFFFFF00) | math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
@@ -3674,14 +3770,17 @@ function draw_param_cycle(app, ctx, draw_list, track, fx_index, entry, cx, cy, r
   local x1, y1 = cx + bw * 0.5, cy + bh * 0.5
   local base = active and 0x4A4A4AFF or 0x363636FF
   r.ImGui_DrawList_AddRectFilled(draw_list, x0, y0, x1, y1, with_alpha(base), UIScale.px(3))
+  local frac = count > 1 and ((idx + 1) / count) or 1
+  local meter = (accent & 0xFFFFFF00) | (active and 0xFF or 0xDD)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x0, y0, x0 + bw * frac, y1, with_alpha(meter), UIScale.px(3))
   local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
   local mode_size = UIScale.round(math.max(tonumber(settings.pinned_param_label_size) or 8, 9))
   local mode_text = truncate_to_width(ctx, (formatted and formatted ~= "") and formatted or tostring(idx + 1), bw - UIScale.px(5), mode_size)
   local show_dots = count <= 8
   local dots_h = show_dots and UIScale.px(4) or 0
   local mode_w = r.ImGui_CalcTextSize(ctx, mode_text) * (mode_size / r.ImGui_GetFontSize(ctx))
-  if (not hide_value) or prev_active then
-    draw_pinned_label(draw_list, mode_size, cx - mode_w * 0.5, cy - mode_size * 0.5 - dots_h * 0.5, mode_text, 0xF5F5F5FF, 0x000000DC)
+  if (not hide_value) or prev_active or prev_hover then
+    draw_pinned_label(draw_list, mode_size, cx - mode_w * 0.5, cy - mode_size * 0.5 - dots_h * 0.5, mode_text, 0xF5F5F5FF, 0x000000DC, text_alpha)
   end
   if show_dots then
     local dot_r = UIScale.px(1.5)
@@ -3698,11 +3797,12 @@ function draw_param_cycle(app, ctx, draw_list, track, fx_index, entry, cx, cy, r
     local lbl_color = active and Theme.colors.text or Theme.colors.text_dim
     local lbl_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
     local lbl_outline = (luminance(lbl_color) > 0.5) and 0x000000DC or 0xFFFFFFDC
-    draw_pinned_label(draw_list, param_label_size, cx - lbl_w * 0.5, y1 + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5, label, lbl_color, lbl_outline)
+    draw_pinned_label(draw_list, param_label_size, cx - lbl_w * 0.5, y1 + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5, label, lbl_color, lbl_outline, text_alpha)
   end
   r.ImGui_SetCursorScreenPos(ctx, x0, y0)
   r.ImGui_InvisibleButton(ctx, "##ir_param_cycle_" .. tostring(entry.param_idx), bw, bh)
   entry._cyc_active = r.ImGui_IsItemActive(ctx)
+  entry._cyc_hover = r.ImGui_IsItemHovered(ctx)
   if r.ImGui_IsItemActivated(ctx) then entry._cyc_dragged = false end
   if r.ImGui_IsItemActive(ctx) then
     local _, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
@@ -3712,13 +3812,15 @@ function draw_param_cycle(app, ctx, draw_list, track, fx_index, entry, cx, cy, r
       r.ImGui_ResetMouseDragDelta(ctx, 0)
     end
   end
-  if r.ImGui_IsItemDeactivated(ctx) and not entry._cyc_dragged then
-    apply_idx(idx + 1)
-  end
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-    local _, default_value = r.TrackFX_GetParamEx(track, fx_index, entry.param_idx)
-    r.TrackFX_SetParam(track, fx_index, entry.param_idx, default_value or 0)
-    app.status = "Parameter reset"
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then entry._cyc_dbl = true end
+  if r.ImGui_IsItemDeactivated(ctx) then
+    if entry._cyc_dbl then
+      entry._cyc_dbl = false
+      reset_pinned_param(track, fx_index, entry, entry.param_idx)
+      app.status = "Parameter reset"
+    elseif not entry._cyc_dragged then
+      apply_idx(idx + 1)
+    end
   end
   if r.ImGui_IsItemClicked(ctx, 1) then
     nudge_param_as_last_touched(track, fx_index, entry.param_idx)
@@ -3731,7 +3833,11 @@ function draw_param_cycle(app, ctx, draw_list, track, fx_index, entry, cx, cy, r
   if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
     local disp = pinned_display_name(entry)
     local vtext = (formatted and formatted ~= "") and formatted or tostring(idx + 1)
-    r.ImGui_SetTooltip(ctx, (disp ~= "" and disp or "Param") .. ": " .. vtext .. string.format(" (%d/%d)", idx + 1, count) .. "\nClick to cycle - drag up/down to scrub - double-click resets - right-click menu")
+    local tip = (disp ~= "" and disp or "Param") .. ": " .. vtext .. string.format(" (%d/%d)", idx + 1, count)
+    if settings.pinned_param_tooltip_hints ~= false then
+      tip = tip .. "\nClick to cycle - drag up/down to scrub - double-click resets - right-click menu"
+    end
+    r.ImGui_SetTooltip(ctx, tip)
   end
 end
 
@@ -3739,8 +3845,11 @@ local function draw_param_button(app, ctx, draw_list, track, fx_index, entry, cx
   local settings = ensure_settings(app)
   local hide_value = settings.pinned_param_hide_value == true
   local prev_active = entry._btn_active
+  local prev_hover = entry._btn_hover
   local alpha = tonumber(settings.pinned_param_alpha) or 1.0
   if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local text_alpha = tonumber(settings.pinned_param_text_alpha) or 1.0
+  if text_alpha < 0.1 then text_alpha = 0.1 elseif text_alpha > 1.0 then text_alpha = 1.0 end
   local function with_alpha(color)
     local a = color & 0xFF
     return (color & 0xFFFFFF00) | math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
@@ -3764,8 +3873,8 @@ local function draw_param_button(app, ctx, draw_list, track, fx_index, entry, cx
   local mode_size = UIScale.round(math.max(tonumber(settings.pinned_param_label_size) or 8, 9))
   local mode_text = truncate_to_width(ctx, (formatted and formatted ~= "") and formatted or (on and "On" or "Off"), bw - UIScale.px(5), mode_size)
   local mode_w = r.ImGui_CalcTextSize(ctx, mode_text) * (mode_size / r.ImGui_GetFontSize(ctx))
-  if (not hide_value) or prev_active then
-    draw_pinned_label(draw_list, mode_size, cx - mode_w * 0.5, cy - mode_size * 0.5, mode_text, 0xF5F5F5FF, 0x000000DC)
+  if (not hide_value) or prev_active or prev_hover then
+    draw_pinned_label(draw_list, mode_size, cx - mode_w * 0.5, cy - mode_size * 0.5, mode_text, 0xF5F5F5FF, 0x000000DC, text_alpha)
   end
   if pinned_show_under_label(settings, entry) then
     local label = (display_mode == "value") and mode_text or short_param_label(pinned_display_name(entry))
@@ -3773,11 +3882,12 @@ local function draw_param_button(app, ctx, draw_list, track, fx_index, entry, cx
     local lbl_color = active and Theme.colors.text or Theme.colors.text_dim
     local lbl_w = r.ImGui_CalcTextSize(ctx, label) * (param_label_size / r.ImGui_GetFontSize(ctx))
     local lbl_outline = (luminance(lbl_color) > 0.5) and 0x000000DC or 0xFFFFFFDC
-    draw_pinned_label(draw_list, param_label_size, cx - lbl_w * 0.5, y1 + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5, label, lbl_color, lbl_outline)
+    draw_pinned_label(draw_list, param_label_size, cx - lbl_w * 0.5, y1 + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5, label, lbl_color, lbl_outline, text_alpha)
   end
   r.ImGui_SetCursorScreenPos(ctx, x0, y0)
   r.ImGui_InvisibleButton(ctx, "##ir_param_btn_" .. tostring(entry.param_idx), bw, bh)
   entry._btn_active = r.ImGui_IsItemActive(ctx)
+  entry._btn_hover = r.ImGui_IsItemHovered(ctx)
   if r.ImGui_IsItemActivated(ctx) then entry._btn_dragged = false end
   if r.ImGui_IsItemActive(ctx) then
     local _, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0.0)
@@ -3789,13 +3899,15 @@ local function draw_param_button(app, ctx, draw_list, track, fx_index, entry, cx
       r.ImGui_ResetMouseDragDelta(ctx, 0)
     end
   end
-  if r.ImGui_IsItemDeactivated(ctx) and not entry._btn_dragged then
-    set_rack_param_value(track, fx_index, entry.param_idx, on and 0 or 1, uses_baseline)
-  end
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-    local _, default_value = r.TrackFX_GetParamEx(track, fx_index, entry.param_idx)
-    r.TrackFX_SetParam(track, fx_index, entry.param_idx, default_value or 0)
-    app.status = "Parameter reset"
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then entry._btn_dbl = true end
+  if r.ImGui_IsItemDeactivated(ctx) then
+    if entry._btn_dbl then
+      entry._btn_dbl = false
+      reset_pinned_param(track, fx_index, entry, entry.param_idx)
+      app.status = "Parameter reset"
+    elseif not entry._btn_dragged then
+      set_rack_param_value(track, fx_index, entry.param_idx, on and 0 or 1, uses_baseline)
+    end
   end
   if r.ImGui_IsItemClicked(ctx, 1) then
     nudge_param_as_last_touched(track, fx_index, entry.param_idx)
@@ -3808,7 +3920,11 @@ local function draw_param_button(app, ctx, draw_list, track, fx_index, entry, cx
   if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
     local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
     local disp = pinned_display_name(entry)
-    r.ImGui_SetTooltip(ctx, (disp ~= "" and disp or "Param") .. ": " .. (formatted or string.format("%.0f%%", value * 100)) .. "\nDrag to change (Shift = fine) - click to toggle - double/right-click to reset")
+    local tip = (disp ~= "" and disp or "Param") .. ": " .. (formatted or string.format("%.0f%%", value * 100))
+    if settings.pinned_param_tooltip_hints ~= false then
+      tip = tip .. "\nDrag to change (Shift = fine) - click to toggle - double/right-click to reset"
+    end
+    r.ImGui_SetTooltip(ctx, tip)
   end
 end
 
@@ -3830,6 +3946,8 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
   end
   local alpha = tonumber(settings.pinned_param_alpha) or 1.0
   if alpha < 0.1 then alpha = 0.1 elseif alpha > 1.0 then alpha = 1.0 end
+  local text_alpha = tonumber(settings.pinned_param_text_alpha) or 1.0
+  if text_alpha < 0.1 then text_alpha = 0.1 elseif text_alpha > 1.0 then text_alpha = 1.0 end
   local function with_alpha(color)
     local a = color & 0xFF
     return (color & 0xFFFFFF00) | math.max(0, math.min(255, math.floor(a * alpha + 0.5)))
@@ -3882,7 +4000,7 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
     local label_x = cx - text_w * 0.5
     local label_y = cy + radius + UIScale.round(1) - (param_label_size - UIScale.round(8)) * 0.5
     local label_outline = (luminance(label_color) > 0.5) and 0x000000DC or 0xFFFFFFDC
-    draw_pinned_label(draw_list, param_label_size, label_x, label_y, label, label_color, label_outline)
+    draw_pinned_label(draw_list, param_label_size, label_x, label_y, label, label_color, label_outline, text_alpha)
   end
   r.ImGui_SetCursorScreenPos(ctx, cx - radius - UIScale.round(4), cy - radius - UIScale.round(4))
   r.ImGui_InvisibleButton(ctx, "##ir_param_knob_" .. tostring(entry.param_idx), (radius + UIScale.round(4)) * 2, (radius + UIScale.round(4)) * 2)
@@ -3896,8 +4014,7 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
     end
   end
   if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
-    local _, default_value = r.TrackFX_GetParamEx(track, fx_index, entry.param_idx)
-    r.TrackFX_SetParam(track, fx_index, entry.param_idx, default_value or 0)
+    reset_pinned_param(track, fx_index, entry, entry.param_idx)
     app.status = "Parameter reset"
   end
   if r.ImGui_IsItemClicked(ctx, 1) then
@@ -3912,7 +4029,11 @@ local function draw_param_knob(app, ctx, draw_list, track, fx_index, entry, cx, 
     local _, formatted = r.TrackFX_GetFormattedParamValue(track, fx_index, entry.param_idx, "")
     local prefix = uses_baseline and "Baseline: " or ""
     local disp = pinned_display_name(entry)
-    r.ImGui_SetTooltip(ctx, (disp ~= "" and disp or "Param") .. ": " .. prefix .. (formatted or string.format("%.0f%%", value * 100)) .. "\nDrag to change (Shift = fine)")
+    local tip = (disp ~= "" and disp or "Param") .. ": " .. prefix .. (formatted or string.format("%.0f%%", value * 100))
+    if settings.pinned_param_tooltip_hints ~= false then
+      tip = tip .. "\nDrag to change (Shift = fine)"
+    end
+    r.ImGui_SetTooltip(ctx, tip)
   end
 end
 
@@ -3937,7 +4058,7 @@ local function draw_param_slots(app, ctx, track, fx_index, item_width, active)
   local slot_count = param_slot_count(settings)
   local cols = param_slot_columns(settings)
   local rows = param_slot_rows(settings)
-  local row_width = math.max(1, item_width - UIScale.round(14))
+  local row_width = math.max(1, item_width)
   local label_extra = math.max(0, UIScale.round(tonumber(settings.pinned_param_label_size) or 8) - UIScale.round(8))
   local row_step = UIScale.round(44) + label_extra
   local row_height = param_slots_height(settings)
@@ -4353,8 +4474,8 @@ local function draw_collapsed_tile_strip(app, ctx, settings, opts)
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, label .. " — click to expand (Alt-click delete, Shift bypass, Ctrl+Shift offline)") end
     local d = opts.drag
     handle_fx_drag(app, ctx, draw_list, d.track, d.take, d.chain, d.local_index, label, bx, by, strip_w, th)
+    r.ImGui_EndChild(ctx)
   end
-  r.ImGui_EndChild(ctx)
 end
 
 local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, chain, take, opts)
@@ -4988,7 +5109,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
   r.ImGui_PopID(ctx)
 end
 
-local function draw_section_label(ctx, label, detail, count, accent, section_id)
+local function draw_section_label(ctx, label, detail, count, accent, section_id, text_alpha)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local width = math.max(UIScale.round(120), get_available_width(ctx))
@@ -5017,7 +5138,7 @@ local function draw_section_label(ctx, label, detail, count, accent, section_id)
     end
     text_x = x + UIScale.round(26)
   end
-  r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(5), Theme.colors.text, label)
+  r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(5), apply_text_alpha(Theme.colors.text, text_alpha or 1), label)
   if count then
     local count_text = tostring(count) .. " FX"
     local count_w = r.ImGui_CalcTextSize(ctx, count_text)
@@ -5181,10 +5302,11 @@ function M.draw(app)
         local max_chars = math.max(1, math.floor(avail_h / line_h))
         local total_h = math.min(#chars, max_chars) * line_h
         local start_y = top + math.max(0, (avail_h - total_h) * 0.5)
+        local name_color = apply_text_alpha(text_color, (math.floor(tonumber(settings.panel_name_alpha) or 100)) / 100)
         for i = 1, math.min(#chars, max_chars) do
           local ch = chars[i]
           local ch_w = r.ImGui_CalcTextSize(ctx, ch) * scale
-          r.ImGui_DrawList_AddTextEx(sdl, nil, target_size, bx + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, text_color, ch)
+          r.ImGui_DrawList_AddTextEx(sdl, nil, target_size, bx + (bar_w - ch_w) * 0.5, start_y + (i - 1) * line_h, name_color, ch)
         end
       end
       r.ImGui_SetCursorScreenPos(ctx, bx, sy)
@@ -5893,7 +6015,7 @@ function M.draw(app)
         collapsed = section_break("track", "TRACK")
       else
         new_section()
-        collapsed = draw_section_label(ctx, "Track FX", nil, fx_count, section_accent_color(settings, track), "track")
+        collapsed = draw_section_label(ctx, "Track FX", nil, fx_count, section_accent_color(settings, track), "track", (math.floor(tonumber(settings.panel_name_alpha) or 100)) / 100)
         if fx_count == 0 and not collapsed then
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No FX on this track.")
         end
@@ -5918,7 +6040,7 @@ function M.draw(app)
         collapsed = section_break("input", "INPUT")
       else
         new_section()
-        collapsed = draw_section_label(ctx, "Track Input FX", nil, input_fx_count, section_accent_color(settings, track), "input")
+        collapsed = draw_section_label(ctx, "Track Input FX", nil, input_fx_count, section_accent_color(settings, track), "input", (math.floor(tonumber(settings.panel_name_alpha) or 100)) / 100)
         if input_fx_count == 0 and not collapsed then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No input FX on this track.") end
       end
       if not collapsed then
@@ -5939,7 +6061,7 @@ function M.draw(app)
       local dragging = (state.last_external_drag ~= nil and state.last_external_drag ~= "") or internal_fx_drag_active(ctx)
       if not horizontal then
         new_section()
-        if draw_section_label(ctx, "Selected Track Item FX", nil, take_fx_count, section_accent_color(settings, track), "take") then return end
+        if draw_section_label(ctx, "Selected Track Item FX", nil, take_fx_count, section_accent_color(settings, track), "take", (math.floor(tonumber(settings.panel_name_alpha) or 100)) / 100) then return end
       end
       if selected_item and item_on_track == false then
         if not horizontal then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Selected item is on another track.") end

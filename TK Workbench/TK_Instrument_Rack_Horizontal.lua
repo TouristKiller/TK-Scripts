@@ -113,6 +113,19 @@ if InstrumentRack.init then
   if not ok then r.ShowConsoleMsg("Instrument Rack init error: " .. tostring(err) .. "\n") end
 end
 
+local function ctx_is_valid()
+  if not r.ImGui_ValidatePtr then return true end
+  return r.ImGui_ValidatePtr(ctx, "ImGui_Context*")
+end
+
+local last_reported_error = nil
+local function report_draw_error(err)
+  err = tostring(err)
+  if err == last_reported_error then return end
+  last_reported_error = err
+  r.ShowConsoleMsg("[" .. SCRIPT_NAME .. "] draw error:\n" .. err .. "\n")
+end
+
 local function loop()
   if r.ImGui_ValidatePtr and not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
     ctx = r.ImGui_CreateContext(SCRIPT_NAME)
@@ -136,10 +149,16 @@ local function loop()
   local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
   if visible then
     local ok, err = pcall(InstrumentRack.draw, app)
-    if not ok then r.ImGui_TextColored(ctx, Theme.colors.danger, "Draw error: " .. tostring(err)) end
-    r.ImGui_End(ctx)
+    if not ok then
+      report_draw_error(err)
+      if ctx_is_valid() then
+        r.ImGui_TextColored(ctx, Theme.colors.danger, "Draw error (see ReaScript console):")
+        r.ImGui_TextColored(ctx, Theme.colors.danger, tostring(err))
+      end
+    end
+    if ctx_is_valid() then r.ImGui_End(ctx) end
   end
-  Theme.pop(ctx, theme_stack)
+  if ctx_is_valid() then Theme.pop(ctx, theme_stack) end
   pop_scaled_font(scaled_font_pushed)
   if open and not app.close_requested then
     r.defer(loop)

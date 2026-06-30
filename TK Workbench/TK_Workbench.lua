@@ -1,7 +1,28 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.2
+-- @version 0.5.3
 -- @changelog:
+-- v0.5.3
+--   + Instrument Rack: Added a "Text alpha" slider to fade the pinned parameter value/label text independently of the knob/button transparency
+--   + Instrument Rack: Fixed pinned parameters not being horizontally centered in the FX tile (they leaned slightly to the left)
+--   + Instrument Rack: Fixed the per-parameter "Label under: Hide" setting not surviving a restart
+--   + Instrument Rack: Fixed double-click reset on button/cycle parameters cycling the value instead of resetting; added a right-click "Save current value as reset default" so double-click can restore a chosen value
+--   + Instrument Rack: Pinned parameters with a multi-value cycle button now show a progress bar that advances per step, so the button stays lit and indicates its position
+--   + Instrument Rack: Fixed pinning the last touched parameter when the plugin lives inside a container (now uses GetTouchedOrFocusedFX)
+--   + Instrument Rack: Pinned parameters with a hidden value now reveal the value while you hover over them
+--   + Instrument Rack: Added a "Show shortcut hints in tooltips" option to hide the extra control hints in parameter tooltips while always keeping the name and value
+--   + Instrument Rack: Fixed default plugin pins being lost after restarting REAPER (only the first plugin's pins survived); saved pins now persist reliably and existing saves are migrated automatically
+--   + FX Groups: Parameters of FX nested inside containers can now be linked across group members (containers are traversed depth-first, including nested containers)
+--   + Instrument Rack: Added a "Hide track number" option that hides the track number and separator in the rack header, showing only the track name (both orientations)
+--   + Instrument Rack: Added "Track name opacity" and "Panel name opacity" sliders to fade the track name and the section/panel names (Track FX, Input FX, Item FX)
+--   + Media Browser: Added embedded cover art support for Opus and OGG files (reads METADATA_BLOCK_PICTURE from VorbisComment tags)
+--   + Media Browser: Audio files without embedded cover art now fall back to the folder cover (cover/folder/front image) before the type badge
+--   + Media Browser: Added a "Show cover art" right-click option that opens a resizable square viewer window (embedded art, folder cover fallback, else no image); the image follows the selected file and the window has a themed red close button and scroll-to-resize
+--   + Media Browser: The cover art viewer now remembers its last position and size between sessions
+--   + Instrument Rack: Fixed a crash ("ImGui_EndChild: Missing PopID()") in the horizontal rack when a collapsed FX tile or the vertical title bar was scrolled off-screen (EndChild is now only called when BeginChild succeeded)
+--   + Instrument Rack (Horizontal): The standalone launcher now logs draw errors to the ReaScript console and keeps running instead of dying on a secondary invalid-context error
+--   + Lyrics: Added a "Line spacing" setting to control the vertical space between lyric lines
+--   + Lyrics: Right-click the lyrics area to copy the full lyrics text to the clipboard
 -- v0.5.2
 --   + Lyrics: Added a new module that shows a playback timer and synced lyrics for the playing audio item
 --   + Lyrics: Reads embedded lyrics straight from the MP3 ID3 tag (USLT and synced SYLT), with .lrc file and track notes as fallback

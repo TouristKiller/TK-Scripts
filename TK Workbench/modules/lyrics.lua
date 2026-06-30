@@ -7,7 +7,7 @@ local M = {
   id = "lyrics",
   title = "Lyrics",
   icon = "LYR",
-  version = "0.1.0"
+  version = "0.1.1"
 }
 
 local defaults = {
@@ -20,7 +20,8 @@ local defaults = {
   click_to_seek = true,
   sync_offset_ms = 0,
   active_line_scale = 1.25,
-  lyrics_font_size = 20
+  lyrics_font_size = 20,
+  line_spacing = 6
 }
 
 local SOURCE_MODES = {
@@ -59,6 +60,7 @@ local function ensure_settings(app)
   settings.lyrics_font_size = clamp(settings.lyrics_font_size, 10, 64)
   settings.sync_offset_ms = clamp(settings.sync_offset_ms, -5000, 5000)
   settings.active_line_scale = clamp(settings.active_line_scale, 1.0, 2.0)
+  settings.line_spacing = clamp(settings.line_spacing, 0, 40)
   if changed and app.save_settings then app.save_settings() end
   return settings
 end
@@ -484,6 +486,13 @@ local function draw_settings_button(ctx, app, settings, x, y, width)
       settings.lyrics_font_size = clamp(value, 10, 64)
       if app.save_settings then app.save_settings() end
     end
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Line spacing")
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
+    local sp_changed, sp_value = r.ImGui_SliderInt(ctx, "##lyrics_line_spacing", math.floor(settings.line_spacing or 6), 0, 40, "%d px")
+    if sp_changed then
+      settings.line_spacing = clamp(sp_value, 0, 40)
+      if app.save_settings then app.save_settings() end
+    end
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Active line scale")
     r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
     local scale_changed, scale_value = r.ImGui_SliderDouble(ctx, "##lyrics_active_scale", settings.active_line_scale or 1.0, 1.0, 2.0, "%.2fx")
@@ -575,6 +584,9 @@ local function draw_lyrics(ctx, settings, model, source_pos, fraction, lyrics_w,
         local show_ts = settings.show_timestamps ~= false
         local can_seek = settings.click_to_seek ~= false and context and context.item
         local seek_rects = {}
+        local sp_pushed = r.ImGui_StyleVar_ItemSpacing and r.ImGui_PushStyleVar and
+          pcall(r.ImGui_PushStyleVar, ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
+        local gap = math.max(0, UIScale.round(settings.line_spacing or 6))
         for i, entry in ipairs(timed) do
           local is_active = i == active
           local color = is_active and Theme.colors.accent or (i < active and Theme.colors.text_dim or Theme.colors.text)
@@ -587,12 +599,13 @@ local function draw_lyrics(ctx, settings, model, source_pos, fraction, lyrics_w,
           if is_active and settings.autoscroll ~= false and active ~= state.last_active then
             r.ImGui_SetScrollHereY(ctx, 0.4)
           end
-          r.ImGui_Dummy(ctx, 0, UIScale.round(4))
+          if i < #timed and gap > 0 then r.ImGui_Dummy(ctx, 0, gap) end
           if can_seek and entry.t then
             local _, ny = r.ImGui_GetCursorScreenPos(ctx)
             seek_rects[#seek_rects + 1] = { t = entry.t, y0 = sy, y1 = ny }
           end
         end
+        if sp_pushed and r.ImGui_PopStyleVar then r.ImGui_PopStyleVar(ctx) end
         if active ~= state.last_active then state.last_active = active end
         if can_seek and #seek_rects > 0 and r.ImGui_IsWindowHovered(ctx) then
           local _, my = r.ImGui_GetMousePos(ctx)
@@ -609,15 +622,34 @@ local function draw_lyrics(ctx, settings, model, source_pos, fraction, lyrics_w,
         end
       end
     elseif lines and #lines > 0 then
+      local sp_pushed = r.ImGui_StyleVar_ItemSpacing and r.ImGui_PushStyleVar and
+        pcall(r.ImGui_PushStyleVar, ctx, r.ImGui_StyleVar_ItemSpacing(), 0, math.max(0, UIScale.round(settings.line_spacing or 6)))
       for _, line in ipairs(lines) do
-        draw_centered_text(ctx, settings.lyrics_font_size, line ~= "" and line or " ", Theme.colors.text)
+        if line ~= "" then
+          draw_centered_text(ctx, settings.lyrics_font_size, line, Theme.colors.text)
+        end
       end
+      if sp_pushed and r.ImGui_PopStyleVar then r.ImGui_PopStyleVar(ctx) end
       if settings.autoscroll ~= false then
         local max_scroll = r.ImGui_GetScrollMaxY(ctx)
         r.ImGui_SetScrollY(ctx, max_scroll * clamp(fraction, 0, 1))
       end
     else
       draw_centered_text(ctx, settings.lyrics_font_size, "No lyrics found in this audio file", Theme.colors.text_dim)
+    end
+    if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then
+      local out = {}
+      if timed then
+        for _, entry in ipairs(timed) do
+          if entry.line ~= "" then out[#out+1] = entry.line end
+        end
+      elseif lines then
+        for _, line in ipairs(lines) do out[#out+1] = line end
+      end
+      local clip = table.concat(out, "\n")
+      if clip ~= "" and r.ImGui_SetClipboardText then
+        pcall(r.ImGui_SetClipboardText, ctx, clip)
+      end
     end
     r.ImGui_EndChild(ctx)
   end
