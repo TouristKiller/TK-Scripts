@@ -1,8 +1,11 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.2
+-- @version 2.0.3
 -- @changelog 
 --[[
+    v2.0.3:
+    + Fixed: Script failed to load ("'end' expected") due to two missing 'end' statements in GetReaperCustomColors
+
     v2.0.2:
     + Fixed: Custom Color Picker colors were applied wrong on macOS (red applied as blue) due to platform-specific native color byte order - now uses ColorToNative for cross-platform correctness
 
@@ -221,7 +224,7 @@ local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
 
-local script_version = "2.0.2"
+local script_version = "2.0.3"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -5603,6 +5606,11 @@ function GetReaperCustomColors()
  local gg = (imgui_c >> 16) & 0xFF
  local bb = (imgui_c >> 8) & 0xFF
  local colorNative = r.ColorToNative(rr, gg, bb)
+ colors[i] = {native = colorNative, imgui = (imgui_c | 0xFF)}
+ end
+ return colors
+ end
+
  local ini_file = r.get_ini_file()
  
  local default_colors = {
