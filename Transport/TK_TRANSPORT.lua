@@ -1,8 +1,11 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.1
+-- @version 2.0.2
 -- @changelog 
 --[[
+    v2.0.2:
+    + Fixed: Custom Color Picker colors were applied wrong on macOS (red applied as blue) due to platform-specific native color byte order - now uses ColorToNative for cross-platform correctness
+
     v2.0.1:
     + Added: Quick FX now also adds plugins to the Master track when it is selected
     + Added: Color Picker option "Use custom colors" - use your own 16 colors instead of REAPER's native custom colors
@@ -218,7 +221,7 @@ local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
 
-local script_version = "1.9.8"
+local script_version = "2.0.2"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -5599,12 +5602,7 @@ function GetReaperCustomColors()
  local rr = (imgui_c >> 24) & 0xFF
  local gg = (imgui_c >> 16) & 0xFF
  local bb = (imgui_c >> 8) & 0xFF
- local colorNative = (bb << 16) | (gg << 8) | rr
- colors[i] = {native = colorNative, imgui = (imgui_c | 0xFF)}
- end
- return colors
- end
- 
+ local colorNative = r.ColorToNative(rr, gg, bb)
  local ini_file = r.get_ini_file()
  
  local default_colors = {
