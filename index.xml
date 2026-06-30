@@ -697,6 +697,16 @@
         </version>
     </reapack>
 
+    <reapack name="TK_Trackname_Debug_Visibility.lua" type="script" desc="TK_Trackname_Debug_Visibility">
+        <version name="1.0" author="TouristKiller" time="2026-06-30T23:10:00Z">
+            <changelog><![CDATA[
+            v1.0:
+            + Standalone diagnostic overlay to debug labels/values disappearing below mid-screen (Mac/Retina)
+            ]]></changelog>
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Debug_Visibility.lua</source>
+        </version>
+    </reapack>
+
     <reapack name="TK_Set selected MIDI item shape and view.lua" type="script" desc="TK_Set selected MIDI item shape and view">
         <version name="0.3.1" author="TouristKiller" time="2025-09-08T12:00:00Z">
             <changelog><![CDATA[           
