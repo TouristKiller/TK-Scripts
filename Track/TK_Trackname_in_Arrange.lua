@@ -1,8 +1,16 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.0
+-- @version 1.9.2
 -- @changelog 
 --[[
+v1.9.2:
++ Fixed: on macOS/Retina track names and envelope values disappeared for tracks below the middle of the arrange (visible range is now derived from the overlay geometry instead of the unreliable client-rect height)
+
+v1.9.1:
++ Added per-tracktype toggles: Parent, Child, Normal (independent, combinable)
++ Added combo toggles: Parent/Child, Child/Normal, Parent/Normal
++ Toggles work independently from settings checkboxes and from the Labels Toggle
+
 v1.8.9:
 + Labels Toggle: Excluded overlay grid from toggle
 
@@ -4611,7 +4619,8 @@ function loop()
         local pinned_override = r.GetToggleCommandState(42595) == 1
         
         local _, view_height = GetArrangeViewBounds()
-        local view_bottom = view_height / screen_scale
+        local overlay_view_height = BOT - TOP
+        local view_bottom = (overlay_view_height > 0) and overlay_view_height or (view_height / screen_scale)
         local first_visible_idx = FindFirstVisibleTrack(track_count, 0, view_bottom)
         local last_visible_idx = FindLastVisibleTrack(track_count, 0, view_bottom)
         if first_visible_idx < 0 then first_visible_idx = 0 end

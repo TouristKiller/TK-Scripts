@@ -672,8 +672,11 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.9.1" author="TouristKiller" time="2026-06-13T17:00:00Z">
+        <version name="1.9.2" author="TouristKiller" time="2026-07-01T10:00:00Z">
             <changelog><![CDATA[
+            v1.9.2:
+            + Fixed: on macOS/Retina track names and envelope values disappeared for tracks below the middle of the arrange (visible range is now derived from the overlay geometry instead of the unreliable client-rect height)
+
             v1.9.1:
             + Added per-tracktype toggles: Parent, Child, Normal (independent, combinable)
             + Added combo toggles: Parent/Child, Child/Normal, Parent/Normal
