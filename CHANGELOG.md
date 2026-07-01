@@ -2,6 +2,13 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Trackname in Arrange 1.9.3] - 2026-07-01
+
+### TK Trackname in Arrange
+#### Bugfixes
+- **macOS/Retina zichtbaarheid**: Tracknamen en envelope-waardes verdwenen voor tracks onder het midden van de arrange. Het zichtbare bereik wordt nu afgeleid uit de overlay-geometrie in plaats van de onbetrouwbare client-rect hoogte.
+- **Volume envelope waardes**: Waarde-labels van volume-envelopes dreven bij hogere lanes weg van hun punten. De positionering gebruikt nu het fader-geschaalde domein, zodat de labels op de punten blijven plakken.
+
 ## [TK Transport 1.9.9] - 2026-06-11
 
 ### TK Transport

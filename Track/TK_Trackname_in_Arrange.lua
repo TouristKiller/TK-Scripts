@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.2
+-- @version 1.9.3
 -- @changelog 
 --[[
+v1.9.3:
++ Fixed: volume envelope value labels drifted away from their points on taller lanes (positioning now uses the fader-scaled domain so labels stay glued to the points)
+
 v1.9.2:
 + Fixed: on macOS/Retina track names and envelope values disappeared for tracks below the middle of the arrange (visible range is now derived from the overlay geometry instead of the unreliable client-rect height)
 
@@ -3452,11 +3455,15 @@ function GetEnvelopePointLabelY(value, env_height, min_value, max_value, scaling
     local text_size = settings.envelope_point_text_size or settings.text_size
     local normalized = 0.5
     if min_value and max_value and max_value ~= min_value then
-        local display_value = value
+        local lo_value = min_value
+        local hi_value = max_value
         if scaling_mode then
-            display_value = r.ScaleFromEnvelopeMode(scaling_mode, value)
+            lo_value = r.ScaleToEnvelopeMode(scaling_mode, min_value)
+            hi_value = r.ScaleToEnvelopeMode(scaling_mode, max_value)
         end
-        normalized = 1 - ((display_value - min_value) / (max_value - min_value))
+        if hi_value ~= lo_value then
+            normalized = 1 - ((value - lo_value) / (hi_value - lo_value))
+        end
     end
     normalized = math.max(0, math.min(1, normalized))
     local point_y = env_height * normalized
