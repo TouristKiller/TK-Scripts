@@ -111,12 +111,6 @@
     <source file="modules/timepiece.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/timepiece.lua</source>
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
-        <source file="reaper_tk_action_capture.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/windows-x64/reaper_tk_action_capture.dll</source>
-        <source file="reaper_tk_action_capture.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/macos-universal/reaper_tk_action_capture.dylib</source>
-        <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
-        <source file="reaper_tk_native_helper.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/windows-x64/reaper_tk_native_helper.dll</source>
-        <source file="reaper_tk_native_helper.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/macos-universal/reaper_tk_native_helper.dylib</source>
-        <source file="reaper_tk_native_helper.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/linux-x64/reaper_tk_native_helper.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
                 v0.5.4
@@ -167,6 +161,30 @@
 ]]></changelog>
      </version>
      </reapack>
+ </category>
+
+ <category name="Extensions">
+    <reapack name="reaper_tk_native_helper" type="extension" desc="TK Native Helper">
+    <version name="1.0.0" author="TouristKiller" time="2026-07-05T12:00:00Z">
+    <source platform="win64" file="reaper_tk_native_helper.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/windows-x64/reaper_tk_native_helper.dll</source>
+    <source platform="darwin" file="reaper_tk_native_helper.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/macos-universal/reaper_tk_native_helper.dylib</source>
+    <source platform="linux64" file="reaper_tk_native_helper.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/linux-x64/reaper_tk_native_helper.so</source>
+    <changelog><![CDATA[
++ Initial release - native drag-and-drop helper that lets TK Media Browser and TK Workbench drop samples straight onto external plugin windows. Restart REAPER after install.
+]]></changelog>
+    </version>
+    </reapack>
+
+    <reapack name="reaper_tk_action_capture" type="extension" desc="TK Action Capture">
+    <version name="1.0.0" author="TouristKiller" time="2026-07-05T12:00:00Z">
+    <source platform="win64" file="reaper_tk_action_capture.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/windows-x64/reaper_tk_action_capture.dll</source>
+    <source platform="darwin" file="reaper_tk_action_capture.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/macos-universal/reaper_tk_action_capture.dylib</source>
+    <source platform="linux64" file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
+    <changelog><![CDATA[
++ Initial release - native action capture extension used by TK Workbench. Restart REAPER after install.
+]]></changelog>
+    </version>
+    </reapack>
  </category>
 
  <category name="FX">
