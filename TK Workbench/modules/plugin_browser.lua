@@ -4,6 +4,8 @@ local UI = require("core.ui")
 local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
 
+local DRAG_OWNER = (r.genGuid and r.genGuid("")) or tostring(r.time_precise())
+
 local M = {
   id = "plugin_browser",
   title = "Plugin Browser",
@@ -1592,7 +1594,13 @@ local function clear_external_drag()
   state.drag_target_track = nil
   state.drag_target_item = nil
   state.drag_target_mode = "track"
-  if r.HasExtState and r.HasExtState("TKFXB", "drag_fx") then r.DeleteExtState("TKFXB", "drag_fx", false) end
+  if r.HasExtState and r.HasExtState("TKFXB", "drag_fx") then
+    local owner = r.GetExtState("TKFXB", "drag_owner")
+    if owner == "" or owner == DRAG_OWNER then
+      r.DeleteExtState("TKFXB", "drag_fx", false)
+      r.DeleteExtState("TKFXB", "drag_owner", false)
+    end
+  end
 end
 
 local function mouse_screen_position()
@@ -1903,6 +1911,7 @@ local function update_external_drag(app, settings)
     state.drag_target_track = track
     state.drag_target_item = item
     if r.SetExtState then r.SetExtState("TKFXB", "drag_fx", plugin.name, false) end
+    if r.SetExtState then r.SetExtState("TKFXB", "drag_owner", DRAG_OWNER, false) end
     if mode == "item" and item then
       app.status = "Drop " .. label .. " on " .. item_label(item)
     elseif mode == "item" then
@@ -1917,7 +1926,37 @@ local function update_external_drag(app, settings)
       app.status = "Drop " .. label .. " on a track"
     end
     if released or not mouse_down then
-      if mode == "item" and item then
+      local consumed = r.HasExtState and r.HasExtState("TKFXB", "drag_consumed") and r.GetExtState("TKFXB", "drag_consumed") == "1"
+      local mix_target = (r.HasExtState and r.HasExtState("TKMIX", "rack_target")) and r.GetExtState("TKMIX", "rack_target") or ""
+      if consumed then
+        r.DeleteExtState("TKFXB", "drag_consumed", false)
+      elseif mode ~= "item" and mix_target ~= "" then
+        local guid, idx_str = mix_target:match("^(.-)|(%-?%d+)$")
+        local insert_idx = tonumber(idx_str or "")
+        local target_track = nil
+        if guid and guid ~= "" then
+          local cnt = r.CountTracks(0)
+          for ti = 0, cnt - 1 do
+            local t = r.GetTrack(0, ti)
+            if r.GetTrackGUID(t) == guid then target_track = t break end
+          end
+        end
+        if target_track and insert_idx then
+          r.Undo_BeginBlock()
+          r.PreventUIRefresh(1)
+          for k, plugin in ipairs(plugins) do
+            local pos = insert_idx < 0 and -1 or (-1000 - (insert_idx + k - 1))
+            r.TrackFX_AddByName(target_track, plugin.name, false, pos)
+            add_recent(settings, plugin.name)
+          end
+          r.PreventUIRefresh(-1)
+          r.Undo_EndBlock("Add FX to Mixer Rack", -1)
+          state.last_filter_key = nil
+          app.status = "Dropped " .. label .. " on " .. track_label(target_track)
+          return_to_rack_after_add(app, settings)
+        end
+        r.DeleteExtState("TKMIX", "rack_target", false)
+      elseif mode == "item" and item then
         add_plugins_to_item_target(app, settings, plugins, item)
       elseif mode == "input" and track then
         add_plugins_to_input_target(app, settings, plugins, track)

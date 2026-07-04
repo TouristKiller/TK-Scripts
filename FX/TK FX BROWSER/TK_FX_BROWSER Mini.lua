@@ -1,8 +1,11 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.1.2
+-- @version 1.1.3
 -- @changelog:
 --[[ 
+    v1.1.3:
+        + Drag & drop: added a per-browser owner tag so multiple FX browsers can be open at once and dragged from independently without restarting the Mixer or Instrument Rack.
+        + Drag & drop: dropping onto Mixer FX slots and the Instrument Rack now works regardless of window open order (opening the browser after the Mixer/Workbench no longer breaks it).
     v1.1.2:
         + Instrument Rack: clicking a container drop zone in the Workbench Instrument Rack now adds the chosen FX directly inside that container instead of at the end of the chain.
     v1.1.1:
@@ -27197,12 +27200,18 @@ end
 
 -- Centralized drag & drop handling function
 function HandleDragAndDrop()
+    if not TKFXB_DRAG_OWNER then TKFXB_DRAG_OWNER = (r.genGuid and r.genGuid("")) or tostring(r.time_precise()) end
     if config.enable_drag_add_fx and dragging_fx_name then
         local pubs = GetDraggedPluginNames() or { dragging_fx_name }
         if #pubs == 0 then pubs = { dragging_fx_name } end
         r.SetExtState("TKFXB", "drag_fx", table.concat(pubs, "\n"), false)
+        r.SetExtState("TKFXB", "drag_owner", TKFXB_DRAG_OWNER, false)
     elseif r.HasExtState("TKFXB", "drag_fx") then
-        r.DeleteExtState("TKFXB", "drag_fx", false)
+        local owner = r.GetExtState("TKFXB", "drag_owner")
+        if owner == "" or owner == TKFXB_DRAG_OWNER then
+            r.DeleteExtState("TKFXB", "drag_fx", false)
+            r.DeleteExtState("TKFXB", "drag_owner", false)
+        end
     end
     if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
         dragging_fx_name = nil

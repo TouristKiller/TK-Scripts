@@ -71,6 +71,9 @@ local state = {
   screenshot_missing = {},
   pinned_params = {},
   pinned_project = nil,
+  fx_ab = {},
+  fx_ab_current = {},
+  fx_ab_project = nil,
   collapsed = {},
   drop_mouse_was_down = false,
   last_external_drag = nil,
@@ -161,7 +164,8 @@ local defaults = {
   pinned_param_hide_value = false,
   pinned_param_tooltip_hints = true,
   auto_apply_default_pins = false,
-  restore_default_pin_values = false
+  restore_default_pin_values = false,
+  add_pins_to_tcp = false
 }
 local function ensure_settings(app)
   app.settings.instrument_rack = app.settings.instrument_rack or {}
@@ -1493,6 +1497,29 @@ local function get_pinned_for_fx(track, fx_index)
   return result
 end
 
+function tcp_add_fx_parm(track, fx_index, param_idx)
+  if not r.SNM_AddTCPFXParm then return false end
+  if fx_index >= CONTAINER_BASE then return false end
+  r.SNM_AddTCPFXParm(track, fx_index, param_idx)
+  r.TrackList_AdjustWindows(false)
+  return true
+end
+
+function tcp_remove_fx_parm(track, fx_index, param_idx)
+  local _, _, minv, maxv = r.TrackFX_GetParamEx(track, fx_index, param_idx)
+  local cur = r.TrackFX_GetParam(track, fx_index, param_idx)
+  local range = (maxv or 1) - (minv or 0)
+  if range == 0 then range = 1 end
+  local eps = range * 1e-6
+  local nudged = cur + eps
+  if maxv and nudged > maxv then nudged = cur - eps end
+  r.TrackFX_SetParam(track, fx_index, param_idx, nudged)
+  r.TrackFX_SetParam(track, fx_index, param_idx, cur)
+  r.Main_OnCommand(41141, 0)
+  r.TrackList_AdjustWindows(false)
+  return true
+end
+
 local function pin_parameter(app, track, fx_index, param_idx, preferred_slot)
   if not validate_track(track) or not param_idx or param_idx < 0 then return end
   ensure_pinned_params_loaded()
@@ -1544,6 +1571,7 @@ local function pin_parameter(app, track, fx_index, param_idx, preferred_slot)
     slot = assigned_slot
   }
   save_pinned_params()
+  if settings.add_pins_to_tcp then tcp_add_fx_parm(track, fx_index, param_idx) end
   app.status = "Pinned " .. (param_name ~= "" and param_name or ("Param " .. tostring(param_idx)))
 end
 
@@ -1554,7 +1582,179 @@ local function unpin_parameter(app, track, fx_index, param_idx)
   if not entries then return end
   entries[param_key(get_fx_guid(track, fx_index), param_idx)] = nil
   save_pinned_params()
+  local settings = ensure_settings(app)
+  if settings.add_pins_to_tcp then tcp_remove_fx_parm(track, fx_index, param_idx) end
   app.status = "Parameter unpinned"
+end
+
+function sync_tcp_params(app, track, fx_filter)
+  if not validate_track(track) or not r.CountTCPFXParms then return 0 end
+  ensure_pinned_params_loaded()
+  local track_id = track_guid(track)
+  local added = 0
+  local count = r.CountTCPFXParms(0, track)
+  for i = 0, count - 1 do
+    local ok, fx_idx, param_idx = r.GetTCPFXParm(0, track, i)
+    if ok and (fx_filter == nil or fx_idx == fx_filter) then
+      local key = param_key(get_fx_guid(track, fx_idx), param_idx)
+      if not (state.pinned_params[track_id] and state.pinned_params[track_id][key]) then
+        pin_parameter(app, track, fx_idx, param_idx)
+        added = added + 1
+      end
+    end
+  end
+  app.status = "Synced " .. tostring(added) .. " TCP params"
+  return added
+end
+
+function fx_ab_key(track, fx_index)
+  return track_guid(track) .. "|" .. tostring(get_fx_guid(track, fx_index) or "")
+end
+
+function load_fx_ab()
+  local project = current_project()
+  state.fx_ab_project = project
+  state.fx_ab = {}
+  state.fx_ab_current = {}
+  if not r.GetProjExtState then return end
+  local _, content = r.GetProjExtState(project, EXT_SECTION, "fx_ab")
+  if content and content ~= "" then
+    for line in content:gmatch("[^\r\n]+") do
+      local f = split_storage_fields(line)
+      local track_id, fx_guid, side = f[1], f[2], f[3]
+      local param_idx = tonumber(f[4])
+      local value = tonumber(f[5])
+      if track_id and track_id ~= "" and (side == "a" or side == "b") and param_idx and value then
+        local key = track_id .. "|" .. (fx_guid or "")
+        state.fx_ab[key] = state.fx_ab[key] or { a = {}, b = {} }
+        state.fx_ab[key][side][param_idx] = value
+      end
+    end
+  end
+  local _, cur = r.GetProjExtState(project, EXT_SECTION, "fx_ab_current")
+  if cur and cur ~= "" then
+    for line in cur:gmatch("[^\r\n]+") do
+      local f = split_storage_fields(line)
+      if f[1] and f[1] ~= "" and (f[3] == "a" or f[3] == "b") then
+        state.fx_ab_current[f[1] .. "|" .. (f[2] or "")] = f[3]
+      end
+    end
+  end
+end
+
+function ensure_fx_ab_loaded()
+  local project = current_project()
+  if state.fx_ab_project ~= project then load_fx_ab() end
+end
+
+function save_fx_ab()
+  if not r.SetProjExtState then return end
+  ensure_fx_ab_loaded()
+  local lines = {}
+  for key, sides in pairs(state.fx_ab) do
+    local track_id, fx_guid = key:match("^(.-)|(.*)$")
+    for _, side in ipairs({ "a", "b" }) do
+      local snap = sides[side]
+      if snap then
+        for param_idx, value in pairs(snap) do
+          lines[#lines + 1] = table.concat({
+            clean_storage_field(track_id),
+            clean_storage_field(fx_guid),
+            side,
+            tostring(param_idx),
+            tostring(value)
+          }, "\t")
+        end
+      end
+    end
+  end
+  table.sort(lines)
+  r.SetProjExtState(current_project(), EXT_SECTION, "fx_ab", table.concat(lines, "\n"))
+  local cur_lines = {}
+  for key, side in pairs(state.fx_ab_current) do
+    local track_id, fx_guid = key:match("^(.-)|(.*)$")
+    cur_lines[#cur_lines + 1] = table.concat({
+      clean_storage_field(track_id),
+      clean_storage_field(fx_guid),
+      side
+    }, "\t")
+  end
+  table.sort(cur_lines)
+  r.SetProjExtState(current_project(), EXT_SECTION, "fx_ab_current", table.concat(cur_lines, "\n"))
+end
+
+function fx_ab_capture(track, fx_index)
+  local snap = {}
+  local n = r.TrackFX_GetNumParams(track, fx_index) or 0
+  for p = 0, n - 1 do
+    snap[p] = r.TrackFX_GetParamNormalized(track, fx_index, p)
+  end
+  return snap
+end
+
+function fx_ab_apply(track, fx_index, snap)
+  if not snap then return end
+  local n = r.TrackFX_GetNumParams(track, fx_index) or 0
+  for p = 0, n - 1 do
+    local v = snap[p]
+    if v then r.TrackFX_SetParamNormalized(track, fx_index, p, v) end
+  end
+end
+
+function fx_ab_has_side(sides, side)
+  return sides and sides[side] and next(sides[side]) ~= nil
+end
+
+function fx_ab_has_data(track, fx_index)
+  ensure_fx_ab_loaded()
+  local sides = state.fx_ab[fx_ab_key(track, fx_index)]
+  return sides ~= nil and (fx_ab_has_side(sides, "a") or fx_ab_has_side(sides, "b"))
+end
+
+function fx_ab_toggle(app, track, fx_index)
+  if not validate_track(track) then return end
+  ensure_fx_ab_loaded()
+  local key = fx_ab_key(track, fx_index)
+  local sides = state.fx_ab[key]
+  if not sides or (not fx_ab_has_side(sides, "a") and not fx_ab_has_side(sides, "b")) then
+    local snap = fx_ab_capture(track, fx_index)
+    state.fx_ab[key] = { a = snap, b = {} }
+    for p, v in pairs(snap) do state.fx_ab[key].b[p] = v end
+    state.fx_ab_current[key] = "a"
+    save_fx_ab()
+    app.status = "Captured A/B"
+    return
+  end
+  local cur = state.fx_ab_current[key] or "a"
+  local other = (cur == "a") and "b" or "a"
+  if fx_ab_has_side(sides, other) then
+    r.Undo_BeginBlock()
+    fx_ab_apply(track, fx_index, sides[other])
+    r.Undo_EndBlock("Toggle FX A/B", -1)
+    state.fx_ab_current[key] = other
+    save_fx_ab()
+    app.status = "A/B: " .. string.upper(other)
+  end
+end
+
+function fx_ab_copy_to(app, track, fx_index, side)
+  if not validate_track(track) then return end
+  ensure_fx_ab_loaded()
+  local key = fx_ab_key(track, fx_index)
+  state.fx_ab[key] = state.fx_ab[key] or { a = {}, b = {} }
+  state.fx_ab[key][side] = fx_ab_capture(track, fx_index)
+  state.fx_ab_current[key] = side
+  save_fx_ab()
+  app.status = "Copied current to " .. string.upper(side)
+end
+
+function fx_ab_reset(app, track, fx_index)
+  ensure_fx_ab_loaded()
+  local key = fx_ab_key(track, fx_index)
+  state.fx_ab[key] = nil
+  state.fx_ab_current[key] = nil
+  save_fx_ab()
+  app.status = "Reset A/B"
 end
 
 local function fx_plugin_key(track, fx_index)
@@ -1945,6 +2145,22 @@ local function draw_param_context_menu(app, ctx, track, fx_index, param_idx, ent
     end
   end
   r.ImGui_Separator(ctx)
+  if r.SNM_AddTCPFXParm then
+    local in_container = fx_index >= CONTAINER_BASE
+    if r.ImGui_MenuItem(ctx, "Add to TCP/MCP", nil, false, not in_container) then
+      tcp_add_fx_parm(track, fx_index, param_idx)
+      app.status = "Added to TCP/MCP"
+    end
+    if in_container then
+      local flags = r.ImGui_HoveredFlags_AllowWhenDisabled and r.ImGui_HoveredFlags_AllowWhenDisabled() or nil
+      if r.ImGui_IsItemHovered(ctx, flags) then r.ImGui_SetTooltip(ctx, "Not available for FX inside a container") end
+    end
+    if r.ImGui_MenuItem(ctx, "Remove from TCP/MCP") then
+      tcp_remove_fx_parm(track, fx_index, param_idx)
+      app.status = "Removed from TCP/MCP"
+    end
+    r.ImGui_Separator(ctx)
+  end
   if r.ImGui_MenuItem(ctx, "Unpin") then request_unpin = true end
   r.ImGui_Separator(ctx)
   if r.ImGui_MenuItem(ctx, "Open FX Chain") then r.TrackFX_Show(track, fx_index, 1) end
@@ -2379,6 +2595,14 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
       if app.save_settings then app.save_settings() end
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "When applying default pins, also set each parameter to the value stored when you saved the default pins") end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "TCP / MCP")
+    changed, value = r.ImGui_Checkbox(ctx, "Also add pins to TCP/MCP", settings.add_pins_to_tcp == true)
+    if changed then
+      settings.add_pins_to_tcp = value
+      if app.save_settings then app.save_settings() end
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "When pinning a parameter, also add it to the REAPER track control panel (TCP/MCP). Removing the pin removes it again") end
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Add FX target")
     local targets = {
@@ -4605,6 +4829,24 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
 
     local button_y = by + row1_h + UIScale.round(2)
     local tx = content_x
+    do
+      local ab_key = fx_ab_key(track, fx_index)
+      local ab_side = state.fx_ab_current[ab_key]
+      local ab_has = fx_ab_has_data(track, fx_index)
+      local ab_bg = ab_has and ((ab_side == "b") and 0x4488CCFF or 0x44CC44FF) or 0x33333388
+      local ab_label = ab_has and (ab_side == "b" and "a|B" or "A|b") or "A|B"
+      local ab_tip = ab_has and "A/B: click to recall other side (right-click to capture/reset)" or "A/B: click to capture initial snapshot (right-click for menu)"
+      local ab_clicked, ab_right = draw_small_button(ctx, draw_list, "##ir_fx_ab", tx, button_y, UIScale.round(20), UIScale.round(14), ab_label, ab_bg, 0xFFFFFFFF, ab_tip)
+      if ab_clicked then fx_ab_toggle(app, track, fx_index) end
+      if ab_right then r.ImGui_OpenPopup(ctx, "##ir_fx_ab_pop") end
+      if r.ImGui_BeginPopup(ctx, "##ir_fx_ab_pop") then
+        if r.ImGui_MenuItem(ctx, "Copy current to A") then fx_ab_copy_to(app, track, fx_index, "a") end
+        if r.ImGui_MenuItem(ctx, "Copy current to B") then fx_ab_copy_to(app, track, fx_index, "b") end
+        if r.ImGui_MenuItem(ctx, "Reset A/B", nil, false, fx_ab_has_data(track, fx_index)) then fx_ab_reset(app, track, fx_index) end
+        r.ImGui_EndPopup(ctx)
+      end
+    end
+    tx = tx + UIScale.round(24)
     if draw_small_button(ctx, draw_list, "##ir_fx_float", tx, button_y, UIScale.round(14), UIScale.round(14), "F", 0x33333388, 0xFFFFFFFF, "Open floating") then
       local hwnd = r.TrackFX_GetFloatingWindow(track, fx_index)
       r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
@@ -4676,6 +4918,10 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       if r.ImGui_MenuItem(ctx, "Save current pins as plugin default") then save_current_pins_as_default(app, track, fx_index) end
       if r.ImGui_MenuItem(ctx, "Apply plugin default pins", nil, false, has_default_pins(track, fx_index)) then apply_default_pins(app, track, fx_index) end
       if r.ImGui_MenuItem(ctx, "Clear plugin default pins", nil, false, has_default_pins(track, fx_index)) then clear_default_pins(app, track, fx_index) end
+      if r.SNM_AddTCPFXParm and r.CountTCPFXParms then
+        r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Sync this FX's TCP/MCP params to pins") then sync_tcp_params(app, track, fx_index) end
+      end
       r.ImGui_Separator(ctx)
       local fx_parallel = (fx_config_value(track, fx_index, "parallel") or "0") ~= "0"
       if r.ImGui_MenuItem(ctx, "Parallel", nil, fx_parallel) then toggle_fx_parallel(app, track, fx_index) end
@@ -4707,12 +4953,25 @@ local function mouse_release_state(ctx)
   return mouse_down, released
 end
 
+local function global_mouse_pos(ctx)
+  if r.GetMousePosition and r.ImGui_PointConvertNative then
+    local sx, sy = r.GetMousePosition()
+    return r.ImGui_PointConvertNative(ctx, sx, sy)
+  end
+  return r.ImGui_GetMousePos(ctx)
+end
+
 local function update_external_drag(ctx)
   local external_drag = r.GetExtState("TKFXB", "drag_fx")
   local mouse_down, mouse_released = mouse_release_state(ctx)
   if external_drag ~= "" then
+    if not state.last_external_drag then
+      if r.GetExtState("TKFXB", "drag_consumed") == "1" then r.DeleteExtState("TKFXB", "drag_consumed", false) end
+      if r.HasExtState("TKMIX", "rack_target") then r.DeleteExtState("TKMIX", "rack_target", false) end
+    end
     state.last_external_drag = external_drag
   elseif not mouse_down and not mouse_released then
+    if state.last_external_drag and r.HasExtState("TKMIX", "rack_target") then r.DeleteExtState("TKMIX", "rack_target", false) end
     state.last_external_drag = nil
   end
   state.mouse_released = mouse_released
@@ -4801,10 +5060,20 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
       if quick_hovered then do_quick_open() else do_open() end
     end
     add_zone_menu()
-    if hovered then
+    local zone_hovered = hovered
+    if payload ~= "" then
+      local gmx, gmy = global_mouse_pos(ctx)
+      zone_hovered = (gmx >= x and gmx <= x + size and gmy >= y and gmy <= y + tile_h)
+    end
+    if zone_hovered and payload ~= "" then
       local guid = track_guid(track)
-      if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
-      if payload ~= "" and state.mouse_released then do_drop(payload) end
+      if state.mouse_released then
+        if r.HasExtState("TKFXB", "drag_fx") and (target_type ~= "track" or r.HasExtState("TKMIX", "rack_target")) then do_drop(payload) end
+      elseif target_type == "track" and guid ~= "" then
+        r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false)
+      end
+    end
+    if hovered then
       if quick_hovered then
         r.ImGui_SetTooltip(ctx, "Quick Add (cascading menu)")
       else
@@ -4862,10 +5131,20 @@ local function draw_add_zone(app, ctx, settings, track, item_width, insert_index
     if quick_hovered then do_quick_open() else do_open() end
   end
   add_zone_menu()
-  if hovered then
+  local zone_hovered = hovered
+  if payload ~= "" then
+    local gmx, gmy = global_mouse_pos(ctx)
+    zone_hovered = (gmx >= x and gmx <= x + item_width and gmy >= y and gmy <= y + add_h)
+  end
+  if zone_hovered and payload ~= "" then
     local guid = track_guid(track)
-    if target_type == "track" and payload ~= "" and guid ~= "" then r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false) end
-    if payload ~= "" and state.mouse_released then do_drop(payload) end
+    if state.mouse_released then
+      if r.HasExtState("TKFXB", "drag_fx") and (target_type ~= "track" or r.HasExtState("TKMIX", "rack_target")) then do_drop(payload) end
+    elseif target_type == "track" and guid ~= "" then
+      r.SetExtState("TKMIX", "rack_target", guid .. "|" .. tostring(insert_index or -1), false)
+    end
+  end
+  if hovered then
     if quick_hovered then
       r.ImGui_SetTooltip(ctx, "Quick Add (cascading menu)")
     else
@@ -5173,13 +5452,38 @@ function M.init(app)
   load_macros()
 end
 
+local function handle_rack_window_external_drop(app, ctx, track)
+  local payload = state.last_external_drag
+  if not payload or payload == "" then return end
+  if not validate_track(track) then return end
+  local wx, wy = r.ImGui_GetWindowPos(ctx)
+  local ww, wh = r.ImGui_GetWindowSize(ctx)
+  local mx, my = global_mouse_pos(ctx)
+  if mx < wx or mx > wx + ww or my < wy or my > wy + wh then return end
+  if state.mouse_released then
+    if r.HasExtState("TKFXB", "drag_fx") then
+      add_external_fx(app, track, payload, nil)
+    end
+  else
+    local guid = track_guid(track)
+    if guid ~= "" and not r.HasExtState("TKMIX", "rack_target") then
+      r.SetExtState("TKMIX", "rack_target", guid .. "|-1", false)
+    end
+  end
+end
+
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  if state.request_open_settings then
+    r.ImGui_OpenPopup(ctx, "Instrument Rack Settings")
+    state.request_open_settings = false
+  end
   state.macro_count = settings.macro_count == 16 and 16 or 8
   update_external_drag(ctx)
   run_pending_param_action(app)
   local track = get_target_track(settings)
+  app.current_rack_track = track
   if settings.show_macros ~= false then process_macro_cc_input(app, track) end
   local vertical_titlebar = settings.orientation == "horizontal" and settings.horizontal_titlebar_left == true
   local vbar_open = false
@@ -6113,7 +6417,12 @@ function M.draw(app)
   end
   if settings.show_macros ~= false then draw_macro_bar(app, ctx, settings, track) end
   if settings.show_info_bar ~= false then UI.draw_info_line(ctx, info_line_text(app, track, fx_count, input_fx_count, take_fx_count, item_on_track, take)) end
+  handle_rack_window_external_drop(app, ctx, track)
   finish_vbar()
+end
+
+function M.request_settings()
+  state.request_open_settings = true
 end
 
 return M

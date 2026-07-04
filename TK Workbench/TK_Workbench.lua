@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.3
+-- @version 0.5.4
 -- @changelog:
+-- v0.5.4
+--   + Instrument Rack: Dropping plugins from a TK FX Browser now works regardless of window open order, and multiple browsers can be open at once
+--   + Instrument Rack: Added TCP/MCP support for pinned parameters - right-click a pinned parameter to "Add to TCP/MCP" or "Remove from TCP/MCP", plus a settings option to automatically add every new pin to the TCP/MCP
+--   + Instrument Rack: Add to TCP/MCP is disabled for parameters of plugins inside a container (the native API does not support this), with a tooltip explaining why
+--   + Instrument Rack: Added a per-FX "Sync this FX's TCP/MCP params to pins" option in the FX tile menu that pins any parameter already visible in the TCP/MCP
+--   + Instrument Rack: Added FX A/B - a per-FX A/B button at the front of the FX tile toolbar to capture and toggle between two parameter snapshots (right-click to copy the current state to A or B, or reset)
 -- v0.5.3
 --   + Instrument Rack: Added a "Text alpha" slider to fade the pinned parameter value/label text independently of the knob/button transparency
 --   + Instrument Rack: Fixed pinned parameters not being horizontally centered in the FX tile (they leaned slightly to the left)
