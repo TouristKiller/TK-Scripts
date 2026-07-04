@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.4
+-- @version 0.5.5
 -- @changelog:
+-- v0.5.5
+--   + Media Browser: Added drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) via the new TK Native Helper extension; dragging onto a track still inserts as before
 -- v0.5.4
 --   + Instrument Rack: Dropping plugins from a TK FX Browser now works regardless of window open order, and multiple browsers can be open at once
 --   + Instrument Rack: Added TCP/MCP support for pinned parameters - right-click a pinned parameter to "Add to TCP/MCP" or "Remove from TCP/MCP", plus a settings option to automatically add every new pin to the TCP/MCP

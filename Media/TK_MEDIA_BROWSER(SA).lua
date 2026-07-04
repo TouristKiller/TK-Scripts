@@ -1,8 +1,12 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.55
+-- @version 0.9.6
 -- @changelog:
 --[[
+v0.9.6:
++ Added embedded cover art support for Opus and OGG files (reads METADATA_BLOCK_PICTURE from VorbisComment tags)
++ Added drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) via the new TK Native Helper extension; dragging onto a track still inserts as before
+
 v0.9.55:
 + Added small round toggle button on the progress bar to switch time display between decimal seconds and mm:ss clock format
 
@@ -434,7 +438,9 @@ local insert_state = {
     drop_track = nil,
     drop_lane = nil,
     drop_new_lane = false,
-    is_midi = false
+    is_midi = false,
+    native_drag_started = false,
+    win_rect = nil
 }
 
 -- Plugin/Tool State
@@ -774,6 +780,122 @@ function extract_flac_cover(file_path)
     return nil, nil
 end
 
+function read_le32_str(data, pos)
+    if not data or pos + 3 > #data then return nil end
+    local b1, b2, b3, b4 = data:byte(pos, pos + 3)
+    return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+end
+
+function base64_decode(s)
+    local b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local dec = {}
+    for i = 1, #b64 do dec[b64:sub(i, i)] = i - 1 end
+    local out, acc, bits = {}, 0, 0
+    for c in s:gmatch(".") do
+        local v = dec[c]
+        if v then
+            acc = acc * 64 + v
+            bits = bits + 6
+            if bits >= 8 then
+                bits = bits - 8
+                out[#out + 1] = string.char(math.floor(acc / (2 ^ bits)) % 256)
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+function extract_ogg_cover(file_path)
+    local file = io.open(file_path, "rb")
+    if not file then return nil, nil end
+    if file:read(4) ~= "OggS" then file:close() return nil, nil end
+    file:seek("set", 0)
+    local target_serial = nil
+    local packet_chunks = {}
+    local comment_data = nil
+    local bytes_read = 0
+    while bytes_read < 10 * 1024 * 1024 do
+        local capture = file:read(4)
+        if not capture or capture ~= "OggS" then break end
+        bytes_read = bytes_read + 4
+        local hdr = file:read(23)
+        if not hdr or #hdr < 23 then break end
+        bytes_read = bytes_read + 23
+        local serial = read_le32_str(hdr, 11)
+        local nseg = hdr:byte(23) or 0
+        if target_serial == nil then target_serial = serial end
+        local segtab = file:read(nseg) or ""
+        bytes_read = bytes_read + nseg
+        local dsize = 0
+        for i = 1, nseg do dsize = dsize + (segtab:byte(i) or 0) end
+        local data = dsize > 0 and file:read(dsize) or ""
+        bytes_read = bytes_read + dsize
+        if serial == target_serial then
+            local sp = 1
+            for i = 1, nseg do
+                local sl = segtab:byte(i) or 0
+                packet_chunks[#packet_chunks + 1] = data:sub(sp, sp + sl - 1)
+                sp = sp + sl
+                if sl < 255 then
+                    local pkt = table.concat(packet_chunks)
+                    packet_chunks = {}
+                    if pkt:sub(1, 8) == "OpusTags" then
+                        comment_data = pkt:sub(9) break
+                    elseif pkt:sub(1, 7) == "\x03vorbis" then
+                        comment_data = pkt:sub(8) break
+                    end
+                end
+            end
+        end
+        if comment_data then break end
+    end
+    file:close()
+    if not comment_data or #comment_data < 8 then return nil, nil end
+    local pos = 1
+    local vlen = read_le32_str(comment_data, pos)
+    if not vlen then return nil, nil end
+    pos = pos + 4 + vlen
+    if #comment_data < pos + 3 then return nil, nil end
+    local count = read_le32_str(comment_data, pos)
+    if not count then return nil, nil end
+    pos = pos + 4
+    for _ = 1, count do
+        if #comment_data < pos + 3 then break end
+        local tlen = read_le32_str(comment_data, pos)
+        if not tlen then break end
+        pos = pos + 4
+        if tlen < 1 or pos + tlen - 1 > #comment_data then break end
+        local tag = comment_data:sub(pos, pos + tlen - 1)
+        pos = pos + tlen
+        local eq = tag:find("=", 1, true)
+        if eq and tag:sub(1, eq - 1):upper() == "METADATA_BLOCK_PICTURE" then
+            local decoded = base64_decode(tag:sub(eq + 1))
+            if decoded and #decoded > 32 then
+                local p = 5
+                local ml = read_be32_str(decoded, p)
+                if ml then
+                    p = p + 4
+                    local mime = decoded:sub(p, p + ml - 1)
+                    p = p + ml
+                    local dl = read_be32_str(decoded, p)
+                    if dl then
+                        p = p + 4 + dl + 16
+                        local il = read_be32_str(decoded, p)
+                        if il then
+                            p = p + 4
+                            local image_data = decoded:sub(p, p + il - 1)
+                            if cover_image_ext(mime, image_data) then
+                                return mime, image_data
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
 function save_cover_data_to_cache(file_path, mime, data)
     local ext = cover_image_ext(mime, data)
     if not ext then return nil end
@@ -819,6 +941,7 @@ function get_cover_image_path(file_path)
     end
     local mime, data = extract_id3_cover(file_path)
     if not data then mime, data = extract_flac_cover(file_path) end
+    if not data then mime, data = extract_ogg_cover(file_path) end
     if data then
         cover_data_cache[file_path] = {mime = mime, data = data}
         local cached_path = save_cover_data_to_cache(file_path, mime, data)
@@ -6799,6 +6922,51 @@ function render_lufs_folder_context_menu(folder_path)
     r.ImGui_Separator(ctx)
 end
 
+local function tkmb_native_drag_available()
+    return r.TK_StartFileDrag ~= nil
+end
+
+local function tkmb_point_over_arrange(mx, my)
+    if not (r.JS_Window_FromPoint and r.GetMainHwnd and r.JS_Window_FindChildByID) then return true end
+    local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
+    if not arrange then return true end
+    local w = r.JS_Window_FromPoint(mx, my)
+    if not w then return false end
+    local guard = 0
+    while w and guard < 64 do
+        if w == arrange then return true end
+        w = r.JS_Window_GetParent(w)
+        guard = guard + 1
+    end
+    return false
+end
+
+local function tkmb_try_native_drag(mx, my)
+    if not tkmb_native_drag_available() then return false end
+    if insert_state.native_drag_started then return false end
+    local file_path = insert_state.drop_file
+    if not file_path then return false end
+    local rect = insert_state.win_rect
+    if rect then
+        local inside_browser = mx >= rect.x and mx <= rect.x + rect.w and my >= rect.y and my <= rect.y + rect.h
+        if inside_browser then return false end
+    end
+    if tkmb_point_over_arrange(mx, my) then return false end
+    insert_state.native_drag_started = true
+    if insert_state.saved_cursor_pos then
+        r.SetEditCurPos(insert_state.saved_cursor_pos, false, false)
+    end
+    r.TK_StartFileDrag(file_path)
+    insert_state.is_dragging = false
+    insert_state.drop_file = nil
+    insert_state.drop_track = nil
+    insert_state.drop_lane = nil
+    insert_state.drop_new_lane = false
+    insert_state.saved_cursor_pos = nil
+    insert_state.native_drag_started = false
+    return true
+end
+
 local function handle_reaper_drop()
     local mouse_state = r.JS_Mouse_GetState(1)
     if mouse_state == 1 and insert_state.drop_file then
@@ -6808,6 +6976,9 @@ local function handle_reaper_drop()
         insert_state.is_dragging = true
         insert_state.drop_new_lane = r.JS_Mouse_GetState(8) == 8
         local mx, my = r.GetMousePosition()
+        if tkmb_try_native_drag(mx, my) then
+            return
+        end
         local track, info = r.GetTrackFromPoint(mx, my)
         insert_state.drop_track = track
         insert_state.drop_lane = nil
@@ -9768,6 +9939,10 @@ function loop()
     
     if visible then
         ui.was_docked = r.ImGui_IsWindowDocked(ctx)
+        
+        local _wrx, _wry = r.ImGui_GetWindowPos(ctx)
+        local _wrw, _wrh = r.ImGui_GetWindowSize(ctx)
+        insert_state.win_rect = { x = _wrx, y = _wry, w = _wrw, h = _wrh }
         
         if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
             open = false
@@ -15550,6 +15725,10 @@ function exit_script()
 end
 r.atexit(exit_script)
 load_locations()
+
+if not r.TK_StartFileDrag then
+    r.ShowConsoleMsg("[TK Media Browser] TK Native Helper NIET gevonden: drag-naar-plugin uit (installeer reaper_tk_native_helper en herstart REAPER).\n")
+end
 
 local startup_deferred_load = false
 

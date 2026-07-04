@@ -3538,6 +3538,44 @@ local function register_drag_source(ctx, file, hovered)
   end
 end
 
+local function native_drag_available()
+  return r.TK_StartFileDrag ~= nil
+end
+
+local function point_over_arrange(mx, my)
+  if not (r.JS_Window_FromPoint and r.GetMainHwnd and r.JS_Window_FindChildByID) then return true end
+  local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
+  if not arrange then return true end
+  local w = r.JS_Window_FromPoint(mx, my)
+  if not w then return false end
+  local guard = 0
+  while w and guard < 64 do
+    if w == arrange then return true end
+    w = r.JS_Window_GetParent(w)
+    guard = guard + 1
+  end
+  return false
+end
+
+local function point_inside_browser(mx, my)
+  local rect = state.win_rect
+  if not rect then return false end
+  return mx >= rect.x and mx <= rect.x + rect.w and my >= rect.y and my <= rect.y + rect.h
+end
+
+local function try_native_drag(file, mx, my)
+  if not native_drag_available() then return false end
+  if not file or not file.path then return false end
+  if not mx or not my then return false end
+  if point_inside_browser(mx, my) then return false end
+  if point_over_arrange(mx, my) then return false end
+  if state.drag_saved_cursor then
+    r.SetEditCurPos(state.drag_saved_cursor, false, false)
+  end
+  r.TK_StartFileDrag(file.path)
+  return true
+end
+
 local function update_drag(app)
   local ctx = app.ctx
   if not r.ImGui_IsMouseDown or not r.ImGui_IsMouseReleased or not r.GetTrackFromPoint then return end
@@ -3560,6 +3598,13 @@ local function update_drag(app)
     end
   end
   if state.dragging_file then
+    if mouse_down then
+      local mx, my = mouse_screen_position()
+      if try_native_drag(state.dragging_file, mx, my) then
+        clear_drag()
+        return
+      end
+    end
     local track, lane = track_under_mouse()
     state.drag_target_track = track
     state.drag_target_lane = lane
@@ -4426,6 +4471,11 @@ function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
   state.activated = true
+  if r.ImGui_GetWindowPos and r.ImGui_GetWindowSize then
+    local wx, wy = r.ImGui_GetWindowPos(ctx)
+    local ww, wh = r.ImGui_GetWindowSize(ctx)
+    state.win_rect = { x = wx, y = wy, w = ww, h = wh }
+  end
   load_or_scan_location(settings, false)
   update_drag(app)
   refresh_filter(settings)
