@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.5
+-- @version 0.5.6
 -- @changelog:
+-- v0.5.6
+--   + Media Browser / Action Clipboard: TK Workbench now shows an in-app warning window listing any missing native extensions (TK Native Helper, TK Action Capture) instead of only printing to the console
 -- v0.5.5
 --   + Media Browser: Added drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) via the new TK Native Helper extension; dragging onto a track still inserts as before
 -- v0.5.4
@@ -2106,6 +2108,67 @@ local function draw_shell()
   if app.settings.show_status then draw_status_bar() end
 end
 
+local MISSING_EXT_DISMISS_SECTION = "TK_WORKBENCH"
+local MISSING_EXT_DISMISS_KEY = "missing_ext_dismissed"
+
+local function collect_missing_extensions()
+  local list = {}
+  if not r.TK_StartFileDrag then
+    list[#list + 1] = {
+      title = "TK Native Helper",
+      package = "reaper_tk_native_helper",
+      desc = "Lets the Media Browser drop samples straight onto external plugin windows.",
+    }
+  end
+  if r.GetExtState("TK_WORKBENCH_ACTION_CAPTURE", "available") ~= "true" then
+    list[#list + 1] = {
+      title = "TK Action Capture",
+      package = "reaper_tk_action_capture",
+      desc = "Captures REAPER actions so the Action Clipboard can record them.",
+    }
+  end
+  return list
+end
+
+local function missing_ext_signature(list)
+  local names = {}
+  for _, entry in ipairs(list) do names[#names + 1] = entry.package end
+  table.sort(names)
+  return table.concat(names, "|")
+end
+
+local function draw_missing_extensions_popup()
+  if not app.cache.missing_ext_open then return end
+  local list = app.missing_extensions
+  if not list or #list == 0 then app.cache.missing_ext_open = false return end
+  r.ImGui_SetNextWindowSize(ctx, UIScale.round(440), 0, r.ImGui_Cond_Appearing())
+  local visible, open = r.ImGui_Begin(ctx, "Missing extensions##tk_workbench_missing_ext", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize())
+  app.cache.missing_ext_open = open
+  if visible then
+    r.ImGui_TextColored(ctx, Theme.colors.warning, "Some native extensions are not installed")
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextWrapped(ctx, "Install the packages below via ReaPack (Extensions category) and restart REAPER to enable the related features.")
+    r.ImGui_Dummy(ctx, 1, UIScale.round(6))
+    for _, entry in ipairs(list) do
+      r.ImGui_TextColored(ctx, Theme.colors.accent, entry.title)
+      r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "(" .. entry.package .. ")")
+      r.ImGui_TextWrapped(ctx, entry.desc)
+      r.ImGui_Dummy(ctx, 1, UIScale.round(6))
+    end
+    r.ImGui_Separator(ctx)
+    local changed, dont_show = r.ImGui_Checkbox(ctx, "Don't show this again", app.cache.missing_ext_dismiss == true)
+    if changed then app.cache.missing_ext_dismiss = dont_show end
+    if r.ImGui_Button(ctx, "Close", UIScale.round(120), 0) then
+      if app.cache.missing_ext_dismiss then
+        r.SetExtState(MISSING_EXT_DISMISS_SECTION, MISSING_EXT_DISMISS_KEY, missing_ext_signature(list), true)
+      end
+      app.cache.missing_ext_open = false
+    end
+    r.ImGui_End(ctx)
+  end
+end
+
 local function loop()
   if r.ImGui_ValidatePtr and not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
     ctx = r.ImGui_CreateContext(SCRIPT_NAME)
@@ -2157,6 +2220,7 @@ local function loop()
     r.ImGui_End(ctx)
   end
   draw_preferences_settings()
+  draw_missing_extensions_popup()
   UI.end_tooltip_frame(app)
   pop_auto_collapse_style(auto_collapse_style_vars, auto_collapse_style_colors)
   pop_workspace_style(workspace_style_vars)
@@ -2175,6 +2239,11 @@ apply_module_order()
 if app.settings.active_module ~= HOME_MODULE_ID and not app.modules_by_id[app.settings.active_module] and app.modules[1] then
   app.settings.active_module = app.modules[1].id
   save_settings()
+end
+
+app.missing_extensions = collect_missing_extensions()
+if #app.missing_extensions > 0 and r.GetExtState(MISSING_EXT_DISMISS_SECTION, MISSING_EXT_DISMISS_KEY) ~= missing_ext_signature(app.missing_extensions) then
+  app.cache.missing_ext_open = true
 end
 
 r.defer(loop)

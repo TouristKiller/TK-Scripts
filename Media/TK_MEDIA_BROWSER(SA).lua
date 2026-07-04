@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.6
+-- @version 0.9.7
 -- @changelog:
 --[[
+v0.9.7:
++ Replaced the console message about the missing TK Native Helper extension with an in-app warning window (with a "Don't show this again" option)
+
 v0.9.6:
 + Added embedded cover art support for Opus and OGG files (reads METADATA_BLOCK_PICTURE from VorbisComment tags)
 + Added drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) via the new TK Native Helper extension; dragging onto a track still inserts as before
@@ -15709,104 +15712,4 @@ function loop()
         end
     end
 
-    r.ImGui_PopFont(ctx)
-    handle_reaper_drop()
-    r.ImGui_SetNextFrameWantCaptureKeyboard(ctx, true)
-    if open then
-        r.defer(loop)
-    else
-        on_exit()
-    end
-end
-function exit_script()
-    save_options()
-    save_browser_position()
-    on_exit()
-end
-r.atexit(exit_script)
-load_locations()
-
-if not r.TK_StartFileDrag then
-    r.ShowConsoleMsg("[TK Media Browser] TK Native Helper NIET gevonden: drag-naar-plugin uit (installeer reaper_tk_native_helper en herstart REAPER).\n")
-end
-
-local startup_deferred_load = false
-
-if ui.current_view_mode ~= "collections" and file_location.remember_last_location and file_location.selected_location_index > 0 then
-    if ui.current_view_mode == "auto" and ui.auto_source_location ~= "" then
-        file_location.current_location = ui.auto_source_location
-        file_location.selected_location_index = ui.auto_source_index
-    end
-    if file_location.selected_location_index >= 1 and file_location.selected_location_index <= #file_location.locations then
-        file_location.current_location = file_location.locations[file_location.selected_location_index]
-    else
-        file_location.selected_location_index = 1
-        file_location.current_location = file_location.locations[1] or ""
-    end
-    startup_deferred_load = true
-end
-
-if startup_deferred_load and file_location.current_location ~= "" then
-    if file_location.flat_view or ui.current_view_mode == "auto" then
-        if ui.current_view_mode == "auto" then
-            file_location.flat_view = true
-        end
-        local flat = get_flat_file_list(file_location.current_location)
-        presort_flat_files(flat)
-        search_filter.cached_flat_files = flat
-        search_filter.cached_location = file_location.current_location
-    else
-        local success, files = pcall(read_directory_recursive, file_location.current_location)
-        if success and files then
-            file_location.current_files = files
-        else
-            file_location.selected_location_index = 1
-            file_location.current_location = file_location.locations[1] or ""
-            if file_location.current_location ~= "" then
-                file_location.current_files = read_directory_recursive(file_location.current_location, false)
-            end
-        end
-    end
-end
-
-check_numa_player_installed()
-load_browser_position()
-
-r.defer(loop)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    

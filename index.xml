@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.5.5" author="TouristKiller" time="2026-07-05T12:00:00Z">
+    <version name="0.5.6" author="TouristKiller" time="2026-07-05T12:10:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -113,6 +113,8 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+                v0.5.6
+                + Media Browser / Action Clipboard: TK Workbench now shows an in-app warning window listing any missing native extensions (TK Native Helper, TK Action Capture) instead of only printing to the console
                 v0.5.5
                 + Media Browser: Added drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) via the new TK Native Helper extension; dragging onto a track still inserts as before
                 + Native extensions (TK Action Capture, TK Native Helper) are now delivered as separate "extension" packages that install straight into UserPlugins - install them via ReaPack (Extensions category) and restart REAPER
@@ -522,12 +524,14 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.9.6" author="TouristKiller" time="2026-07-05T12:00:00Z">
+        <version name="0.9.7" author="TouristKiller" time="2026-07-05T12:10:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
+                v0.9.7
+                + Replaced the console message about the missing TK Native Helper extension with an in-app warning window (with a "Don't show this again" option)
                 v0.9.6
                 + Added embedded cover art support for Opus and OGG files (reads METADATA_BLOCK_PICTURE from VorbisComment tags)
                 + Added drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) via the new TK Native Helper extension; dragging onto a track still inserts as before. Requires the separate "TK Native Helper" extension package - install it via ReaPack (Extensions category) and restart REAPER.
