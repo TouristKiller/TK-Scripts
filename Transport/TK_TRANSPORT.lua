@@ -1,8 +1,11 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.3
+-- @version 2.0.4
 -- @changelog 
 --[[
+    v2.0.4:
+    + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
+
     v2.0.3:
     + Fixed: Script failed to load ("'end' expected") due to two missing 'end' statements in GetReaperCustomColors
 

@@ -1,7 +1,10 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.3.6
+-- @version 1.3.7
 --[[
+v1.3.7
+    + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
+
 v1.3.6
     + Instrument Rack: the mixer's rack panel is now powered by the shared TK Workbench Instrument Rack module (shim) instead of the mixer's own implementation — same features and theming as the standalone rack; requires TK Workbench (shows a message when it is not installed)
     + Drag & drop: plugins from a TK FX Browser can be dropped onto Mixer FX slots and the Instrument Rack, regardless of window open order, and multiple browsers can be open at once

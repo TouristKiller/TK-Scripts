@@ -363,7 +363,7 @@
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="2.0.3" author="TouristKiller" time="2026-06-30T22:30:00Z">
+        <version name="2.0.4" author="TouristKiller" time="2026-07-04T12:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -372,17 +372,12 @@
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
             <changelog><![CDATA[
+    v2.0.4:
+    + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
+
     v2.0.3:
     + Fixed: Script failed to load ("'end' expected") due to two missing 'end' statements in GetReaperCustomColors
 
-    v2.0.2:
-    + Fixed: Custom Color Picker colors were applied wrong on macOS (red applied as blue) due to platform-specific native color byte order - now uses ColorToNative for cross-platform correctness
-
-    v2.0.1:
-    + Added: Quick FX now also adds plugins to the Master track when it is selected
-    + Added: Color Picker option "Use custom colors" - use your own 16 colors instead of REAPER's native custom colors
-    + Added: Edit custom colors from the settings panel or by right-clicking a swatch in the Color Picker
-    + Fixed: Custom color swatches showed wrong colors (red appeared as blue) due to incorrect color format handling
 ]]></changelog>
         </version>
     </reapack>
@@ -390,7 +385,7 @@
 
 <category name="Mixer">
     <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
-        <version name="1.3.6" author="TouristKiller" time="2026-07-04T12:00:00Z">
+        <version name="1.3.7" author="TouristKiller" time="2026-07-04T13:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/icon_browser.lua</source>
@@ -399,6 +394,9 @@
             <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_VU_Meter.jsfx</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
             <changelog><![CDATA[
+            v1.3.7
+            + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
+
             v1.3.6
             + Instrument Rack: the mixer's rack panel is now powered by the shared TK Workbench Instrument Rack module (shim) instead of the mixer's own implementation - same features and theming as the standalone rack; requires TK Workbench (shows a message when it is not installed)
             + Drag & drop: plugins from a TK FX Browser can be dropped onto Mixer FX slots and the Instrument Rack, regardless of window open order, and multiple browsers can be open at once
