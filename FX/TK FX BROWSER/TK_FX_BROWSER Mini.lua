@@ -1,8 +1,10 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.1.3
+-- @version 1.1.4
 -- @changelog:
 --[[ 
+    v1.1.4:
+        + Fixed: Screenshot browser could crash ("ImGui_Attach: exceeded maximum object attachment limit") when scrolling quickly through plugins - the texture cache now enforces a proper LRU limit so textures are detached fast enough.
     v1.1.3:
         + Drag & drop: added a per-browser owner tag so multiple FX browsers can be open at once and dragged from independently without restarting the Mixer or Instrument Rack.
         + Drag & drop: dropping onto Mixer FX slots and the Instrument Rack now works regardless of window open order (opening the browser after the Mixer/Workbench no longer breaks it).
@@ -8030,10 +8032,16 @@ end
     local cache_size = 0
     for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
     if cache_size > config.max_cached_search_textures then
-        local textures_to_remove = {}
+        local sorted_keys = {}
         for key, last_used in pairs(texture_last_used) do
-            if current_time - last_used > config.texture_reload_delay and cache_size > config.min_cached_textures then
-                table.insert(textures_to_remove, key)
+            table.insert(sorted_keys, { key = key, last_used = last_used })
+        end
+        table.sort(sorted_keys, function(a, b) return a.last_used < b.last_used end)
+        local textures_to_remove = {}
+        for _, entry in ipairs(sorted_keys) do
+            if cache_size <= config.min_cached_textures then break end
+            if current_time - entry.last_used > config.texture_reload_delay or cache_size > config.max_cached_search_textures then
+                table.insert(textures_to_remove, entry.key)
                 cache_size = cache_size - 1
             end
         end
