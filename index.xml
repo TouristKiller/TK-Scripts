@@ -114,6 +114,9 @@
         <source file="reaper_tk_action_capture.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/windows-x64/reaper_tk_action_capture.dll</source>
         <source file="reaper_tk_action_capture.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/macos-universal/reaper_tk_action_capture.dylib</source>
         <source file="reaper_tk_action_capture.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Native/TKActionCapture/bin/linux-x64/reaper_tk_action_capture.so</source>
+        <source file="reaper_tk_native_helper.dll">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/windows-x64/reaper_tk_native_helper.dll</source>
+        <source file="reaper_tk_native_helper.dylib">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/macos-universal/reaper_tk_native_helper.dylib</source>
+        <source file="reaper_tk_native_helper.so">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Native/TKNativeHelper/bin/linux-x64/reaper_tk_native_helper.so</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
                 v0.5.4
