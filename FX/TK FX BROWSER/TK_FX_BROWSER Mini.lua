@@ -1,8 +1,11 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.1.4
+-- @version 1.1.5
 -- @changelog:
 --[[ 
+    v1.1.5:
+        + Fixed: Screenshot browser could throw "ImGui_CreateImage: excessive creation of short-lived resources" and show many "No Image" placeholders while scrolling - freshly loaded and visible textures are no longer evicted, and new texture creation is capped by a hard limit.
+        + Added: viewport culling in the fixed-size screenshot layouts (Uniform, Showcase, Polaroid, Neon, Vinyl) so only visible thumbnails load textures, keeping the cache small and stable during fast scrolling.
     v1.1.4:
         + Fixed: Screenshot browser could crash ("ImGui_Attach: exceeded maximum object attachment limit") when scrolling quickly through plugins - the texture cache now enforces a proper LRU limit so textures are detached fast enough.
     v1.1.3:
@@ -8005,8 +8008,11 @@ end
 
     local textures_loaded = 0
     local current_time = r.time_precise()
+    local cache_size = 0
+    for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
     for unique_key, info in pairs(texture_load_queue) do
         if textures_loaded >= config.max_textures_per_frame then break end
+        if cache_size >= config.max_cached_search_textures then break end
         local file = info.file
         
         -- OPTIMALISATIE: Extra check op missing cache voor het geval hij er later in is gekomen
@@ -8018,6 +8024,7 @@ end
                     search_texture_cache[unique_key] = texture
                     texture_last_used[unique_key] = current_time
                     textures_loaded = textures_loaded + 1
+                    cache_size = cache_size + 1
                     tex_log("Texture loaded (deferred): " .. file .. " for plugin: " .. (info.plugin or "unknown"))
                 else
                     tex_log("Error loading texture: " .. file)
@@ -8029,9 +8036,9 @@ end
         texture_load_queue[unique_key] = nil
     end
   
-    local cache_size = 0
+    cache_size = 0
     for _ in pairs(search_texture_cache) do cache_size = cache_size + 1 end
-    if cache_size > config.max_cached_search_textures then
+    if cache_size > config.min_cached_textures then
         local sorted_keys = {}
         for key, last_used in pairs(texture_last_used) do
             table.insert(sorted_keys, { key = key, last_used = last_used })
@@ -8040,7 +8047,7 @@ end
         local textures_to_remove = {}
         for _, entry in ipairs(sorted_keys) do
             if cache_size <= config.min_cached_textures then break end
-            if current_time - entry.last_used > config.texture_reload_delay or cache_size > config.max_cached_search_textures then
+            if current_time - entry.last_used > config.texture_reload_delay then
                 table.insert(textures_to_remove, entry.key)
                 cache_size = cache_size - 1
             end
@@ -18618,6 +18625,12 @@ function HandleScreenshotNavigation(screenshots)
     end
 end
 
+function ScreenshotItemVisible(item_top_sy, item_h)
+    local _wx, wtop = r.ImGui_GetWindowPos(ctx)
+    local wh = r.ImGui_GetWindowHeight(ctx)
+    return (item_top_sy + item_h) >= (wtop - item_h) and item_top_sy <= (wtop + wh + item_h)
+end
+
 function DrawMasonryLayout(screenshots, top_offset)
     top_offset = top_offset or 0
     
@@ -18915,7 +18928,8 @@ function DrawShowcaseLayout(screenshots, top_offset)
 
         do
             local plugin_name = fx.name
-            local screenshot_file = HasScreenshot(plugin_name)
+            local _sc_sx, _sc_sy = r.ImGui_GetCursorScreenPos(ctx)
+            local screenshot_file = ScreenshotItemVisible(_sc_sy, card_h) and HasScreenshot(plugin_name)
             local texture = nil
             local tex_w, tex_h = 0, 0
             local has_tex = false
@@ -19179,7 +19193,7 @@ function DrawPolaroidLayout(screenshots, top_offset)
             local sy_card = base_sy + cy
             ScreenshotNavRegister(i, shortest_col, cx, base_cy + cy, plugin_name)
 
-            local screenshot_file = HasScreenshot(plugin_name)
+            local screenshot_file = ScreenshotItemVisible(sy_card, card_h) and HasScreenshot(plugin_name)
             local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
             if screenshot_file then
                 texture = LoadSearchTexture(screenshot_file, plugin_name)
@@ -19448,7 +19462,7 @@ function DrawUniformLayout(screenshots, top_offset)
 
             r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, u_bg, 4)
 
-            local screenshot_file = HasScreenshot(plugin_name)
+            local screenshot_file = ScreenshotItemVisible(sy_cell, cell_h) and HasScreenshot(plugin_name)
             local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
             if screenshot_file then
                 texture = LoadSearchTexture(screenshot_file, plugin_name)
@@ -19695,7 +19709,7 @@ function DrawNeonLayout(screenshots, top_offset)
             r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, colors.bg, 4)
             r.ImGui_DrawList_AddRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, colors.border, 4, 0, 1.5)
 
-            local screenshot_file = HasScreenshot(plugin_name)
+            local screenshot_file = ScreenshotItemVisible(sy_cell, cell_h) and HasScreenshot(plugin_name)
             local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
             if screenshot_file then
                 texture = LoadSearchTexture(screenshot_file, plugin_name)
@@ -19905,7 +19919,7 @@ function DrawVinylLayout(screenshots, top_offset)
             r.ImGui_DrawList_AddRectFilled(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, 0x1A1A1AFF, corner_r)
             r.ImGui_DrawList_AddRect(dl, sx_cell, sy_cell, sx_cell + cell_w, sy_cell + cell_h, 0x404040FF, corner_r, 0, 1)
 
-            local screenshot_file = HasScreenshot(plugin_name)
+            local screenshot_file = ScreenshotItemVisible(sy_cell, cell_h) and HasScreenshot(plugin_name)
             local texture, tex_w, tex_h, has_tex = nil, 0, 0, false
             if screenshot_file then
                 texture = LoadSearchTexture(screenshot_file, plugin_name)
