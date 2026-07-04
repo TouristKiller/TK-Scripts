@@ -114,6 +114,7 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
                 v0.5.4
+                + Native extensions (TK Action Capture, TK Native Helper) are now delivered as separate "extension" packages that install straight into UserPlugins - install them via ReaPack (Extensions category) and restart REAPER; TK Native Helper enables Media Browser drag-and-drop onto external plugin windows
                 + Instrument Rack: Dropping plugins from a TK FX Browser now works regardless of window open order, and multiple browsers can be open at once
                 + Instrument Rack: Added TCP/MCP support for pinned parameters - right-click a pinned parameter to "Add to TCP/MCP" or "Remove from TCP/MCP", plus a settings option to automatically add every new pin to the TCP/MCP
                 + Instrument Rack: Add to TCP/MCP is disabled for parameters of plugins inside a container (the native API does not support this), with a tooltip explaining why
@@ -525,7 +526,7 @@
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-
+                + Drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) requires the separate "TK Native Helper" extension package - install it via ReaPack (Extensions category) and restart REAPER.
 ]]></changelog>
         </version>
     </reapack>
