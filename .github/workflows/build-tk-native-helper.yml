@@ -1,0 +1,116 @@
+name: Build TK Native Helper
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "TK Native/TKNativeHelper/**"
+      - ".github/workflows/build-tk-native-helper.yml"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            build_dir: windows-x64
+            extension: dll
+            artifact: tk-native-helper-windows-x64
+          - name: macOS Universal
+            os: macos-latest
+            build_dir: macos-universal
+            extension: dylib
+            artifact: tk-native-helper-macos-universal
+          - name: Linux x64
+            os: ubuntu-latest
+            build_dir: linux-x64
+            extension: so
+            artifact: tk-native-helper-linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev
+
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $source = "TK Native/TKNativeHelper"
+          $build = Join-Path $source "build/${{ matrix.build_dir }}"
+          cmake -S $source -B $build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          source="TK Native/TKNativeHelper"
+          build="$source/build/${{ matrix.build_dir }}"
+          cmake -S "$source" -B "$build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+      - name: Configure Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          source="TK Native/TKNativeHelper"
+          build="$source/build/${{ matrix.build_dir }}"
+          cmake -S "$source" -B "$build" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $source = "TK Native/TKNativeHelper"
+          $build = Join-Path $source "build/${{ matrix.build_dir }}"
+          cmake --build $build --config Release
+
+      - name: Build Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          source="TK Native/TKNativeHelper"
+          build="$source/build/${{ matrix.build_dir }}"
+          cmake --build "$build" --config Release
+
+      - name: Stage artifact Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $artifact = "artifacts/${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Force -Path $artifact | Out-Null
+          $file = Get-ChildItem -Path "TK Native/TKNativeHelper/build/${{ matrix.build_dir }}" -Filter "reaper_tk_native_helper.${{ matrix.extension }}" -Recurse | Select-Object -First 1
+          if (-not $file) { throw "Artifact not found: reaper_tk_native_helper.${{ matrix.extension }}" }
+          Copy-Item $file.FullName $artifact
+
+      - name: Stage artifact Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          artifact="artifacts/${{ matrix.artifact }}"
+          mkdir -p "$artifact"
+          file=$(find "TK Native/TKNativeHelper/build/${{ matrix.build_dir }}" -name "reaper_tk_native_helper.${{ matrix.extension }}" -type f | head -n 1)
+          if [ -z "$file" ]; then
+            echo "Artifact not found: reaper_tk_native_helper.${{ matrix.extension }}"
+            find "TK Native/TKNativeHelper/build/${{ matrix.build_dir }}" -maxdepth 4 -type f
+            exit 1
+          fi
+          cp "$file" "$artifact/"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
