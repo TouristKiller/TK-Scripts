@@ -1,8 +1,18 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.7
+-- @version 0.9.8
 -- @changelog:
 --[[
+v0.9.8:
++ Added selectable sync-start grid (right-click the sync button): the preview can now wait for the next Bar, 1/2, Beat (1/4), 1/8 or 1/16 instead of only the next measure
++ Fixed dragging media onto a track sometimes triggering REAPER's own import/tempo prompt and bypassing sync: drops anywhere on the main window (arrange, track panel, ruler, mixer) now always use the script's own insert; native drag stays reserved for external plugin windows
++ Fixed empty take names when inserting/dropping media onto a track: takes now get the file name (matching REAPER's default)
++ Added "Flatten Search Results" option (Settings): while in folder/tree view, search results are shown as a flat list of all matches; the tree view returns when the search field is cleared
++ Fixed search term not being applied after switching folders while a search was active: results are now filtered immediately instead of requiring you to retype
++ Added "All" button next to the search field: searches across all saved locations at once (uses each folder's existing cache; switches to flat view while active and restores your previous view afterwards)
++ Added "Auto-stretch to project tempo" option (right-click the sync button): inserted audio/MIDI items get a beat-based timebase so they keep following later project tempo changes, regardless of the project's default item timebase
++ Fixed heavy lag while typing in the search field on large folders: filtered results are now cached and only rebuilt when the search term, location or list changes instead of every frame
+
 v0.9.7:
 + Replaced the console message about the missing TK Native Helper extension with an in-app warning window (with a "Don't show this again" option)
 
@@ -218,6 +228,8 @@ local playback = {
     saved_solo_states = {},
     use_exclusive_solo = true,
     sync_wait_for_next_measure = false,
+    sync_start_division = "bar",
+    force_beat_timebase = false,
     skip_first_silence = false,
     skip_first_silence_threshold_db = -60,
     skip_first_silence_max_scan_seconds = 10.0,
@@ -249,6 +261,7 @@ local file_location = {
     selected_files = {},
     last_selected_index = nil,
     flat_view = false,
+    search_all = false,
     saved_folder_flat_view = false,
     custom_folder_names = {},  
     custom_folder_colors = {},
@@ -404,6 +417,8 @@ local function clear_sort_cache()
     search_filter.last_sort_column = -1
     search_filter.last_sort_direction = 0
     search_filter._presorted = false
+    search_filter._search_render_key = nil
+    search_filter._search_render_cache = nil
 end
 
 local saved_searches = {
@@ -498,6 +513,7 @@ local ui_settings = {
     show_cover_art = true,
     show_waveform_bg = true,
     show_folder_add_buttons = true,
+    flatten_search_results = false,
     time_display_compact = false,
     hide_scrollbar = false,  
     compact_view = false,
@@ -2793,6 +2809,8 @@ local function save_options()
             use_exclusive_solo = playback.use_exclusive_solo,
             preview_volume = playback.preview_volume,
             sync_wait_for_next_measure = playback.sync_wait_for_next_measure,
+            sync_start_division = playback.sync_start_division,
+            force_beat_timebase = playback.force_beat_timebase,
             skip_first_silence = playback.skip_first_silence,
             skip_first_silence_threshold_db = playback.skip_first_silence_threshold_db,
             skip_first_silence_max_scan_seconds = playback.skip_first_silence_max_scan_seconds,
@@ -2809,6 +2827,7 @@ local function save_options()
             last_folder_location = file_location.last_folder_location,
             last_folder_index = file_location.last_folder_index,
             flat_view = file_location.flat_view,
+            search_all = file_location.search_all,
             remember_window_position = ui.remember_window_position,
             window_x = ui.window_x,
             window_y = ui.window_y,
@@ -2829,6 +2848,7 @@ local function save_options()
             show_cover_art = ui_settings.show_cover_art,
             show_waveform_bg = ui_settings.show_waveform_bg,
             show_folder_add_buttons = ui_settings.show_folder_add_buttons,
+            flatten_search_results = ui_settings.flatten_search_results,
             hide_scrollbar = ui_settings.hide_scrollbar,
             compact_view = ui_settings.compact_view,
             selected_font = ui_settings.selected_font,
@@ -2894,6 +2914,8 @@ local function get_settings_table()
         use_exclusive_solo = playback.use_exclusive_solo,
         preview_volume = playback.preview_volume,
         sync_wait_for_next_measure = playback.sync_wait_for_next_measure,
+        sync_start_division = playback.sync_start_division,
+        force_beat_timebase = playback.force_beat_timebase,
         skip_first_silence = playback.skip_first_silence,
         skip_first_silence_threshold_db = playback.skip_first_silence_threshold_db,
         skip_first_silence_max_scan_seconds = playback.skip_first_silence_max_scan_seconds,
@@ -2921,6 +2943,7 @@ local function get_settings_table()
         show_cover_art = ui_settings.show_cover_art,
         show_waveform_bg = ui_settings.show_waveform_bg,
         show_folder_add_buttons = ui_settings.show_folder_add_buttons,
+        flatten_search_results = ui_settings.flatten_search_results,
         hide_scrollbar = ui_settings.hide_scrollbar,
         compact_view = ui_settings.compact_view,
         selected_font = ui_settings.selected_font,
@@ -2953,6 +2976,8 @@ local function apply_settings_from_table(settings)
     playback.use_exclusive_solo = settings.use_exclusive_solo ~= nil and settings.use_exclusive_solo or true
     playback.preview_volume = settings.preview_volume
     playback.sync_wait_for_next_measure = settings.sync_wait_for_next_measure or false
+    playback.sync_start_division = settings.sync_start_division or "bar"
+    playback.force_beat_timebase = settings.force_beat_timebase or false
     playback.skip_first_silence = settings.skip_first_silence or false
     playback.skip_first_silence_threshold_db = settings.skip_first_silence_threshold_db or -60
     playback.skip_first_silence_max_scan_seconds = settings.skip_first_silence_max_scan_seconds or 10.0
@@ -2982,6 +3007,7 @@ local function apply_settings_from_table(settings)
     if settings.show_cover_art ~= nil then ui_settings.show_cover_art = settings.show_cover_art else ui_settings.show_cover_art = true end
     ui_settings.show_waveform_bg = settings.show_waveform_bg ~= nil and settings.show_waveform_bg or false
     ui_settings.show_folder_add_buttons = settings.show_folder_add_buttons ~= nil and settings.show_folder_add_buttons or true
+    ui_settings.flatten_search_results = settings.flatten_search_results ~= nil and settings.flatten_search_results or false
     ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
     if settings.compact_view ~= nil then ui_settings.compact_view = settings.compact_view end
     ui_settings.selected_font = settings.selected_font or "Default"
@@ -3109,6 +3135,9 @@ local function load_options()
             playback.link_start_from_editcursor = options.link_start_from_editcursor or false
             playback.use_exclusive_solo = options.use_exclusive_solo ~= nil and options.use_exclusive_solo or true
             playback.preview_volume = options.preview_volume
+            playback.sync_wait_for_next_measure = options.sync_wait_for_next_measure or false
+            playback.sync_start_division = options.sync_start_division or "bar"
+            playback.force_beat_timebase = options.force_beat_timebase or false
             playback.skip_first_silence = options.skip_first_silence or false
             playback.skip_first_silence_threshold_db = options.skip_first_silence_threshold_db or -60
             playback.skip_first_silence_max_scan_seconds = options.skip_first_silence_max_scan_seconds or 10.0
@@ -3118,6 +3147,7 @@ local function load_options()
             playback.lufs_normalize_target = options.lufs_normalize_target or -18.0
             current_db = options.current_db
             file_location.remember_last_location = options.remember_last_location ~= nil and options.remember_last_location or true
+            file_location.search_all = options.search_all or false
             ui.remember_window_position = options.remember_window_position ~= nil and options.remember_window_position or true
             ui.window_x = options.window_x ~= nil and options.window_x or 100
             ui.window_y = options.window_y ~= nil and options.window_y or 100
@@ -3146,6 +3176,7 @@ local function load_options()
             else
                 ui_settings.show_folder_add_buttons = true
             end
+            ui_settings.flatten_search_results = options.flatten_search_results == true
             if options.hide_scrollbar ~= nil then
                 ui_settings.hide_scrollbar = options.hide_scrollbar
             else
@@ -3237,6 +3268,7 @@ local function load_options()
                         else
                             ui_settings.show_folder_add_buttons = true
                         end
+                        ui_settings.flatten_search_results = options2.flatten_search_results == true
                         if options2.hide_scrollbar ~= nil then
                             ui_settings.hide_scrollbar = options2.hide_scrollbar
                         else
@@ -5655,6 +5687,26 @@ local function get_flat_file_list(location)
     end
 end
 
+local function build_all_locations_flat_list()
+    local combined = {}
+    local seen = {}
+    for _, loc in ipairs(file_location.locations or {}) do
+        local entries = load_fast_cache(loc)
+        if not entries then
+            entries = (load_file_cache(loc))
+        end
+        if type(entries) == "table" then
+            for _, e in ipairs(entries) do
+                if type(e) == "table" and e.full_path and not e.is_dir and not seen[e.full_path] then
+                    seen[e.full_path] = true
+                    combined[#combined + 1] = e
+                end
+            end
+        end
+    end
+    return filter_visible_files(combined)
+end
+
 local function sort_files_by_column(files, col_name, sort_direction)
     if not files or #files == 0 then return files end
     local sorted = {}
@@ -5894,6 +5946,25 @@ local function get_next_measure_position()
     local measure_start = current_pos - (current_pos % measure_length)
     local next_measure = measure_start + measure_length
     return next_measure
+end
+
+local function get_next_sync_position()
+    local div = playback.sync_start_division
+    if not div or div == "bar" then
+        return get_next_measure_position()
+    end
+    local step_qn = tonumber(div)
+    if not step_qn or step_qn <= 0 then
+        return get_next_measure_position()
+    end
+    if not (r.TimeMap2_timeToQN and r.TimeMap2_QNToTime) then
+        return get_next_measure_position()
+    end
+    local current_pos = r.GetPlayPosition()
+    if not current_pos or current_pos < 0 then current_pos = 0 end
+    local cur_qn = r.TimeMap2_timeToQN(0, current_pos)
+    local steps = math.floor(cur_qn / step_qn + 1e-6) + 1
+    return r.TimeMap2_QNToTime(0, steps * step_qn)
 end
 
 local function tkmb_embedded_bpm_rate(source)
@@ -6359,7 +6430,7 @@ local function start_playback(file_path)
     if not is_video and not is_midi and playback.sync_wait_for_next_measure and not playback.use_original_speed then
         local reaper_state = r.GetPlayState()
         if reaper_state & 1 == 1 or playback.link_transport then
-            next_measure_pos = get_next_measure_position()
+            next_measure_pos = get_next_sync_position()
         end
     end
     
@@ -6848,9 +6919,14 @@ function insert_media_on_track(file_path, track, use_original_speed, custom_play
         r.SetMediaItemInfo_Value(item, "C_FADEINSHAPE", 0)
         r.SetMediaItemInfo_Value(item, "C_FADEOUTSHAPE", 0)
     end
+    if playback.force_beat_timebase and file_type == "REAPER_MEDIAFOLDER" then
+        r.SetMediaItemInfo_Value(item, "C_BEATATTACHMODE", 1)
+    end
     r.UpdateItemInProject(item)
     local take = r.GetActiveTake(item)
     if take then
+        local take_name = file_path:match("([^/\\]+)$") or file_path
+        r.GetSetMediaItemTakeInfo_String(take, "P_NAME", take_name, true)
         r.SetMediaItemTakeInfo_Value(take, "D_VOL", (playback.preview_volume or 1.0) * (lufs_gain or 1.0))
         local src = r.GetMediaItemTake_Source(take)
         if src then r.PCM_Source_BuildPeaks(src, 0) end
@@ -6944,6 +7020,21 @@ local function tkmb_point_over_arrange(mx, my)
     return false
 end
 
+local function tkmb_point_over_main_window(mx, my)
+    if not (r.JS_Window_FromPoint and r.GetMainHwnd) then return true end
+    local main = r.GetMainHwnd()
+    if not main then return true end
+    local w = r.JS_Window_FromPoint(mx, my)
+    if not w then return false end
+    local guard = 0
+    while w and guard < 64 do
+        if w == main then return true end
+        w = r.JS_Window_GetParent(w)
+        guard = guard + 1
+    end
+    return false
+end
+
 local function tkmb_try_native_drag(mx, my)
     if not tkmb_native_drag_available() then return false end
     if insert_state.native_drag_started then return false end
@@ -6954,7 +7045,7 @@ local function tkmb_try_native_drag(mx, my)
         local inside_browser = mx >= rect.x and mx <= rect.x + rect.w and my >= rect.y and my <= rect.y + rect.h
         if inside_browser then return false end
     end
-    if tkmb_point_over_arrange(mx, my) then return false end
+    if tkmb_point_over_main_window(mx, my) then return false end
     insert_state.native_drag_started = true
     if insert_state.saved_cursor_pos then
         r.SetEditCurPos(insert_state.saved_cursor_pos, false, false)
@@ -8299,7 +8390,7 @@ function draw_file_list()
                         end
                     end
                 end
-                if file_location.flat_view then
+                if file_location.flat_view or (ui_settings.flatten_search_results and search_filter.search_term ~= "" and ui.current_view_mode ~= "collections" and ui.current_view_mode ~= "auto") then
                     local flat_files
                     if ui.current_view_mode == "collections" then
                         flat_files = search_filter.filtered_files
@@ -8335,20 +8426,37 @@ function draw_file_list()
                             flat_files = base
                         end
                         if search_filter.search_term ~= "" then
-                            local search_lower = string.lower(search_filter.search_term)
-                            local searched = {}
-                            for _, file in ipairs(flat_files) do
-                                local name_lower = file.name_lower or string.lower(file.name)
-                                local parent_lower = string.lower(file.parent_folder or "")
-                                if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
-                                    table.insert(searched, file)
+                            local search_key = "a\0" .. tostring(search_filter.cached_location) .. "\0" .. tostring(ui.auto_selected_category) .. "\0" .. string.lower(search_filter.search_term) .. "\0" .. tostring(#flat_files)
+                            if search_filter._search_render_key == search_key and search_filter._search_render_cache then
+                                flat_files = search_filter._search_render_cache
+                            else
+                                local search_lower = string.lower(search_filter.search_term)
+                                local searched = {}
+                                for _, file in ipairs(flat_files) do
+                                    local name_lower = file.name_lower or string.lower(file.name)
+                                    local parent_lower = string.lower(file.parent_folder or "")
+                                    if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
+                                        table.insert(searched, file)
+                                    end
                                 end
+                                flat_files = searched
+                                search_filter._search_render_key = search_key
+                                search_filter._search_render_cache = searched
+                                search_filter.sorted_files = {}
                             end
-                            flat_files = searched
                         end
                         search_filter.filtered_files = flat_files
                     else
-                        if file_location.current_location ~= search_filter.cached_location or #search_filter.cached_flat_files == 0 then
+                        if file_location.search_all then
+                            if search_filter.cached_location ~= "\0ALL_LOCATIONS\0" then
+                                flat_files = build_all_locations_flat_list()
+                                presort_flat_files(flat_files)
+                                search_filter.cached_flat_files = flat_files
+                                search_filter.cached_location = "\0ALL_LOCATIONS\0"
+                            else
+                                flat_files = search_filter.cached_flat_files
+                            end
+                        elseif file_location.current_location ~= search_filter.cached_location or #search_filter.cached_flat_files == 0 then
                             flat_files = get_flat_file_list(file_location.current_location)
                             presort_flat_files(flat_files)
                             search_filter.cached_flat_files = flat_files
@@ -8357,16 +8465,24 @@ function draw_file_list()
                             flat_files = search_filter.cached_flat_files
                         end
                         if search_filter.search_term ~= "" then
-                            local search_lower = string.lower(search_filter.search_term)
-                            local searched = {}
-                            for _, file in ipairs(flat_files) do
-                                local name_lower = file.name_lower or string.lower(file.name)
-                                local parent_lower = string.lower(file.parent_folder or "")
-                                if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
-                                    table.insert(searched, file)
+                            local search_key = "n\0" .. tostring(search_filter.cached_location) .. "\0" .. string.lower(search_filter.search_term) .. "\0" .. tostring(#flat_files)
+                            if search_filter._search_render_key == search_key and search_filter._search_render_cache then
+                                flat_files = search_filter._search_render_cache
+                            else
+                                local search_lower = string.lower(search_filter.search_term)
+                                local searched = {}
+                                for _, file in ipairs(flat_files) do
+                                    local name_lower = file.name_lower or string.lower(file.name)
+                                    local parent_lower = string.lower(file.parent_folder or "")
+                                    if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
+                                        table.insert(searched, file)
+                                    end
                                 end
+                                flat_files = searched
+                                search_filter._search_render_key = search_key
+                                search_filter._search_render_cache = searched
+                                search_filter.sorted_files = {}
                             end
-                            flat_files = searched
                         end
                         search_filter.filtered_files = flat_files
                     end
@@ -10223,6 +10339,13 @@ function loop()
                     if r.ImGui_Button(ctx, folder_name, total_width, ui_settings.button_height) then
                     file_location.selected_location_index = i
                     file_location.current_location = location
+                    if file_location.search_all then
+                        file_location.search_all = false
+                        if file_location.prev_flat_view ~= nil then
+                            file_location.flat_view = file_location.prev_flat_view
+                            file_location.prev_flat_view = nil
+                        end
+                    end
                     clear_file_selection()
                     
                     if search_filter.last_sort_column >= 0 then
@@ -12659,12 +12782,41 @@ function loop()
         end
         
         if r.ImGui_BeginPopupContextItem(ctx, "##SyncOptions") then
-            if r.ImGui_Checkbox(ctx, "Start at next measure", playback.sync_wait_for_next_measure) then
+            if r.ImGui_Checkbox(ctx, "Start at next grid", playback.sync_wait_for_next_measure) then
                 playback.sync_wait_for_next_measure = not playback.sync_wait_for_next_measure
                 save_options()
             end
             if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "When enabled: Audio playback waits for the next measure when project is playing and sync is enabled")
+                r.ImGui_SetTooltip(ctx, "When enabled: Audio playback waits for the next grid position (see below) when project is playing and sync is enabled")
+            end
+            if playback.sync_wait_for_next_measure then
+                local div_values = {"bar", "2", "1", "0.5", "0.25"}
+                local div_labels = {"Bar", "1/2", "Beat (1/4)", "1/8", "1/16"}
+                local cur_div = tostring(playback.sync_start_division or "bar")
+                local cur_label = "Bar"
+                for i, v in ipairs(div_values) do
+                    if v == cur_div then cur_label = div_labels[i] break end
+                end
+                r.ImGui_SetNextItemWidth(ctx, 120)
+                if r.ImGui_BeginCombo(ctx, "Grid", cur_label) then
+                    for i, lbl in ipairs(div_labels) do
+                        if r.ImGui_Selectable(ctx, lbl, div_values[i] == cur_div) then
+                            playback.sync_start_division = div_values[i]
+                            save_options()
+                        end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Grid the preview snaps to before starting:\nBar = next measure, Beat = next quarter note, etc.")
+                end
+            end
+            if r.ImGui_Checkbox(ctx, "Auto-stretch to project tempo", playback.force_beat_timebase) then
+                playback.force_beat_timebase = not playback.force_beat_timebase
+                save_options()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled: inserted audio/MIDI items use a beat-based timebase so they keep following later project tempo changes")
             end
             r.ImGui_EndPopup(ctx)
         end
@@ -13113,7 +13265,8 @@ function loop()
                 end
                 
                 local dropdown_button_width = 20
-                local search_width = (available_width - view_buttons_width) * 0.85 + dropdown_button_width - 5
+                local all_btn_reserve = (ui.current_view_mode ~= "collections" and ui.current_view_mode ~= "auto") and (ui_settings.button_height + 8 + spacing) or 0
+                local search_width = (available_width - view_buttons_width - all_btn_reserve) * 0.85 + dropdown_button_width - 5
                 if search_width < 80 then search_width = 80 end
                 
                 local search_bg_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
@@ -13219,6 +13372,35 @@ function loop()
             end
             r.ImGui_PopStyleColor(ctx, 4)
             r.ImGui_PopStyleVar(ctx, 1)
+            if ui.current_view_mode ~= "collections" and ui.current_view_mode ~= "auto" then
+                r.ImGui_SameLine(ctx, 0, 0)
+                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_color)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_color)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_color)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), file_location.search_all and hsv_to_color(ui_settings.selection_hue, 1.0, 1.0) or accent_color)
+                if r.ImGui_Button(ctx, "All##SearchAllLocations", ui_settings.button_height + 8, ui_settings.button_height) then
+                    file_location.search_all = not file_location.search_all
+                    if file_location.search_all then
+                        file_location.prev_flat_view = file_location.flat_view
+                        file_location.flat_view = true
+                    else
+                        if file_location.prev_flat_view ~= nil then
+                            file_location.flat_view = file_location.prev_flat_view
+                            file_location.prev_flat_view = nil
+                        end
+                    end
+                    search_filter.cached_location = ""
+                    search_filter.cached_flat_files = {}
+                    clear_sort_cache()
+                    save_options()
+                end
+                r.ImGui_PopStyleColor(ctx, 4)
+                r.ImGui_PopStyleVar(ctx, 1)
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, "Search across all saved locations (cached folders only)\nForces flat view while active")
+                end
+            end
             if r.ImGui_BeginPopup(ctx, "SearchHistoryPopup") then
                 if #search_filter.search_history > 0 then
                     r.ImGui_Text(ctx, "search history:")
@@ -13921,6 +14103,16 @@ function loop()
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "Show or hide the (+) buttons in folder tree view that add folders to the left Folders list.")
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    local flatten_search_changed, new_flatten_search = r.ImGui_Checkbox(ctx, "Flatten Search Results", ui_settings.flatten_search_results)
+                    if flatten_search_changed then
+                        ui_settings.flatten_search_results = new_flatten_search
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "While in folder (tree) view, show search results as a flat list of all matches.\nWhen the search field is empty the tree view returns.")
                     end
                     
                     r.ImGui_Spacing(ctx)
@@ -15712,4 +15904,128 @@ function loop()
         end
     end
 
-    
+    if ui.missing_ext_open then
+        r.ImGui_SetNextWindowSize(ctx, 440, 0, r.ImGui_Cond_Appearing())
+        local me_visible, me_open = r.ImGui_Begin(ctx, "Missing extension###tk_mb_missing_ext", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_AlwaysAutoResize())
+        if me_visible then
+            r.ImGui_TextColored(ctx, 0xFFB454FF, "TK Native Helper is not installed")
+            r.ImGui_Separator(ctx)
+            r.ImGui_TextWrapped(ctx, "Drag-and-drop of samples straight onto external plugin windows is disabled.")
+            r.ImGui_Dummy(ctx, 1, 6)
+            r.ImGui_TextWrapped(ctx, "Install 'reaper_tk_native_helper' via ReaPack (Extensions category) and restart REAPER to enable it.")
+            r.ImGui_Dummy(ctx, 1, 6)
+            r.ImGui_Separator(ctx)
+            local me_changed, me_dont = r.ImGui_Checkbox(ctx, "Don't show this again", ui.missing_ext_dismiss == true)
+            if me_changed then ui.missing_ext_dismiss = me_dont end
+            if r.ImGui_Button(ctx, "Close", 120, 0) then
+                if ui.missing_ext_dismiss then
+                    r.SetExtState("TK_MEDIA_BROWSER", "missing_ext_dismissed", "1", true)
+                end
+                ui.missing_ext_open = false
+            end
+            r.ImGui_End(ctx)
+        end
+        if not me_open then ui.missing_ext_open = false end
+    end
+
+    r.ImGui_PopFont(ctx)
+    handle_reaper_drop()
+    r.ImGui_SetNextFrameWantCaptureKeyboard(ctx, true)
+    if open then
+        r.defer(loop)
+    else
+        on_exit()
+    end
+end
+function exit_script()
+    save_options()
+    save_browser_position()
+    on_exit()
+end
+r.atexit(exit_script)
+load_locations()
+
+if not r.TK_StartFileDrag and r.GetExtState("TK_MEDIA_BROWSER", "missing_ext_dismissed") ~= "1" then
+    ui.missing_ext_open = true
+end
+
+local startup_deferred_load = false
+
+if ui.current_view_mode ~= "collections" and file_location.remember_last_location and file_location.selected_location_index > 0 then
+    if ui.current_view_mode == "auto" and ui.auto_source_location ~= "" then
+        file_location.current_location = ui.auto_source_location
+        file_location.selected_location_index = ui.auto_source_index
+    end
+    if file_location.selected_location_index >= 1 and file_location.selected_location_index <= #file_location.locations then
+        file_location.current_location = file_location.locations[file_location.selected_location_index]
+    else
+        file_location.selected_location_index = 1
+        file_location.current_location = file_location.locations[1] or ""
+    end
+    startup_deferred_load = true
+end
+
+if startup_deferred_load and file_location.current_location ~= "" then
+    if file_location.flat_view or ui.current_view_mode == "auto" then
+        if ui.current_view_mode == "auto" then
+            file_location.flat_view = true
+        end
+        local flat = get_flat_file_list(file_location.current_location)
+        presort_flat_files(flat)
+        search_filter.cached_flat_files = flat
+        search_filter.cached_location = file_location.current_location
+    else
+        local success, files = pcall(read_directory_recursive, file_location.current_location)
+        if success and files then
+            file_location.current_files = files
+        else
+            file_location.selected_location_index = 1
+            file_location.current_location = file_location.locations[1] or ""
+            if file_location.current_location ~= "" then
+                file_location.current_files = read_directory_recursive(file_location.current_location, false)
+            end
+        end
+    end
+end
+
+check_numa_player_installed()
+load_browser_position()
+
+r.defer(loop)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

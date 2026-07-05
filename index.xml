@@ -524,12 +524,21 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.9.7" author="TouristKiller" time="2026-07-05T12:10:00Z">
+        <version name="0.9.8" author="TouristKiller" time="2026-07-05T15:20:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
+                v0.9.8
+                + Added selectable sync-start grid (right-click the sync button): the preview can now wait for the next Bar, 1/2, Beat (1/4), 1/8 or 1/16 instead of only the next measure
+                + Fixed dragging media onto a track sometimes triggering REAPER's own import/tempo prompt and bypassing sync: drops anywhere on the main window (arrange, track panel, ruler, mixer) now always use the script's own insert; native drag stays reserved for external plugin windows
+                + Fixed empty take names when inserting/dropping media onto a track: takes now get the file name (matching REAPER's default)
+                + Added "Flatten Search Results" option (Settings): while in folder/tree view, search results are shown as a flat list of all matches; the tree view returns when the search field is cleared
+                + Fixed search term not being applied after switching folders while a search was active: results are now filtered immediately instead of requiring you to retype
+                + Added "All" button next to the search field: searches across all saved locations at once (uses each folder's existing cache; switches to flat view while active and restores your previous view afterwards)
+                + Added "Auto-stretch to project tempo" option (right-click the sync button): inserted audio/MIDI items get a beat-based timebase so they keep following later project tempo changes, regardless of the project's default item timebase
+                + Fixed heavy lag while typing in the search field on large folders: filtered results are now cached and only rebuilt when the search term, location or list changes instead of every frame
                 v0.9.7
                 + Replaced the console message about the missing TK Native Helper extension with an in-app warning window (with a "Don't show this again" option)
                 v0.9.6
