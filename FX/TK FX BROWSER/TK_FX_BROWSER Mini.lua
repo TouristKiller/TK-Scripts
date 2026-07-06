@@ -1,8 +1,13 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.1.5
+-- @version 1.1.6
 -- @changelog:
 --[[ 
+    v1.1.6:
+        + Added: plugin right-click "Add to slot..." to insert a plugin on a fixed/empty FX slot (REAPER 7 empty-slots feature), so e.g. a limiter always sits on the same visible slot across tracks.
+        + Add to slot popup: choose the target slot (1-based) and apply to This track / Selected tracks / All tracks; occupied slots shift existing FX down while preserving gaps.
+        + FX Chain Builder: added an "Empty" button to insert empty slots into the chain; empty slots show as dashed placeholders and can be dragged/reordered/removed like plugins.
+        + FX Chain Builder: Commit / Replace / Save now reserve the empty slots as visible gaps on the target track via slot_hint.
     v1.1.5:
         + Fixed: Screenshot browser could throw "ImGui_CreateImage: excessive creation of short-lived resources" and show many "No Image" placeholders while scrolling - freshly loaded and visible textures are no longer evicted, and new texture creation is capped by a hard limit.
         + Added: viewport culling in the fixed-size screenshot layouts (Uniform, Showcase, Polaroid, Neon, Vinyl) so only visible thumbnails load textures, keeping the cache small and stable during fast scrolling.
@@ -3526,6 +3531,59 @@ function AddFXToTrack(track, plugin_name, preserve_order)
     return fx_index or -1
 end
 
+function AddFXAtFixedSlot(track, plugin_name, target_slot)
+    if not track or not plugin_name or plugin_name == '' then return -1 end
+    target_slot = tonumber(target_slot)
+    if not target_slot or target_slot < 0 then return -1 end
+
+    local function GetHint(i)
+        local _, v = r.TrackFX_GetNamedConfigParm(track, i, "slot_hint")
+        return tonumber(v) or -1
+    end
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+
+    local count = r.TrackFX_GetCount(track)
+
+    local insert_pos = count
+    local visual = -1
+    for i = 0, count - 1 do
+        local hint = GetHint(i)
+        if hint >= 0 then visual = hint else visual = visual + 1 end
+        if visual >= target_slot then insert_pos = i; break end
+    end
+
+    local occupied = {}
+    for i = 0, count - 1 do
+        local hint = GetHint(i)
+        if hint >= 0 then occupied[hint] = i end
+    end
+    if occupied[target_slot] then
+        local free_slot = target_slot
+        while occupied[free_slot] do free_slot = free_slot + 1 end
+        for slot = free_slot - 1, target_slot, -1 do
+            local idx = occupied[slot]
+            if idx then
+                r.TrackFX_SetNamedConfigParm(track, idx, "slot_hint", tostring(slot + 1))
+            end
+        end
+    end
+
+    local new_idx = r.TrackFX_AddByName(track, plugin_name, false, -1000 - insert_pos)
+    if new_idx and new_idx >= 0 then
+        r.TrackFX_SetNamedConfigParm(track, new_idx, "slot_hint", tostring(target_slot))
+        if not START and not START_SELECTED and not IS_CAPTURING_SCREENSHOT then
+            if AddToRecent then AddToRecent(plugin_name) end
+        end
+    end
+
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Add " .. plugin_name .. " at slot " .. tostring(target_slot), -1)
+    r.TrackList_AdjustWindows(false)
+    return new_idx or -1
+end
+
 _layout_fx_click_override = _layout_fx_click_override or nil
 
 function _LayoutPerformAddOrAction(plugin_name)
@@ -3567,6 +3625,35 @@ function GrabChainBuilderChunks(track)
         end
     end
     return chunks
+end
+
+CHAIN_EMPTY_SLOT = "__EMPTY_SLOT__"
+
+function ChainBuilderHasEmptySlots()
+    for _, p in ipairs(chain_builder_plugins) do
+        if p == CHAIN_EMPTY_SLOT then return true end
+    end
+    return false
+end
+
+function ApplyChainBuilderToTrack(track)
+    if not track then return end
+    local use_slots = ChainBuilderHasEmptySlots()
+    local visual = -1
+    for ci, pname in ipairs(chain_builder_plugins) do
+        visual = visual + 1
+        if pname ~= CHAIN_EMPTY_SLOT then
+            local fx_idx = AddFXToTrack(track, pname, true)
+            if fx_idx and fx_idx >= 0 then
+                if chain_builder_chunks[ci] then
+                    RestoreChainBuilderChunk(track, fx_idx, chain_builder_chunks[ci])
+                end
+                if use_slots then
+                    r.TrackFX_SetNamedConfigParm(track, fx_idx, "slot_hint", tostring(visual))
+                end
+            end
+        end
+    end
 end
 
 function CreateInstrumentTrack(plugin_name, midi_input_value)
@@ -12309,6 +12396,11 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 LAST_USED_FX = plugin_name
                 r.Undo_EndBlock("Add " .. plugin_name .. " to Input FX", -1)
                 if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+            end
+            if r.ImGui_MenuItem(ctx, "Add to slot...") then
+                add_to_slot_plugin = plugin_name
+                add_to_slot_value = tostring((add_to_slot_last_value or 6))
+                add_to_slot_open = true
             end
         end
         
@@ -22144,8 +22236,11 @@ function ShowScreenshotWindow()
                 r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 4)
                 for ci = 1, #chain_builder_plugins do
                     local cp = chain_builder_plugins[ci]
+                    local is_empty = (cp == CHAIN_EMPTY_SLOT)
                     local display_name = cp
-                    if config.clean_plugin_names or config.remove_manufacturer_names then
+                    if is_empty then
+                        display_name = "empty"
+                    elseif config.clean_plugin_names or config.remove_manufacturer_names then
                         display_name = GetDisplayPluginName(cp)
                     end
                     r.ImGui_PushID(ctx, ci)
@@ -22153,27 +22248,53 @@ function ShowScreenshotWindow()
                     r.ImGui_BeginGroup(ctx)
                     local num_label = tostring(ci)
                     local grp_sx, grp_sy = r.ImGui_GetCursorScreenPos(ctx)
-                    local tex = LoadChainFxScreenshot(cp)
                     local clicked = false
-                    if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
-                        local iw, ih = r.ImGui_Image_GetSize(tex)
-                        if iw and ih then
-                            local dw = thumb_w
-                            local dh = dw * (ih / iw)
-                            if dh > thumb_h then
-                                dh = thumb_h
-                                dw = dh * (iw / ih)
-                            end
-                            clicked = r.ImGui_ImageButton(ctx, "cb_" .. ci, tex, dw, dh)
-                        else
-                            clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
+                    if is_empty then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFFFFFF10)
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFFFFFF20)
+                        clicked = r.ImGui_Button(ctx, "##cbempty", thumb_w, thumb_h)
+                        r.ImGui_PopStyleColor(ctx, 3)
+                        local dl = r.ImGui_GetWindowDrawList(ctx)
+                        local ex2, ey2 = grp_sx + thumb_w, grp_sy + thumb_h
+                        local dash = 6
+                        local dcol = 0xFFFFFF40
+                        local xx = grp_sx
+                        while xx < ex2 do
+                            local xe = math.min(xx + dash, ex2)
+                            r.ImGui_DrawList_AddLine(dl, xx, grp_sy, xe, grp_sy, dcol, 1)
+                            r.ImGui_DrawList_AddLine(dl, xx, ey2, xe, ey2, dcol, 1)
+                            xx = xx + dash * 2
+                        end
+                        local yy = grp_sy
+                        while yy < ey2 do
+                            local ye = math.min(yy + dash, ey2)
+                            r.ImGui_DrawList_AddLine(dl, grp_sx, yy, grp_sx, ye, dcol, 1)
+                            r.ImGui_DrawList_AddLine(dl, ex2, yy, ex2, ye, dcol, 1)
+                            yy = yy + dash * 2
                         end
                     else
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), cb_btn)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), cb_btn_hover)
-                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), cb_btn_active)
-                        clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
-                        r.ImGui_PopStyleColor(ctx, 3)
+                        local tex = LoadChainFxScreenshot(cp)
+                        if tex and r.ImGui_ValidatePtr(tex, 'ImGui_Image*') then
+                            local iw, ih = r.ImGui_Image_GetSize(tex)
+                            if iw and ih then
+                                local dw = thumb_w
+                                local dh = dw * (ih / iw)
+                                if dh > thumb_h then
+                                    dh = thumb_h
+                                    dw = dh * (iw / ih)
+                                end
+                                clicked = r.ImGui_ImageButton(ctx, "cb_" .. ci, tex, dw, dh)
+                            else
+                                clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
+                            end
+                        else
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), cb_btn)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), cb_btn_hover)
+                            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), cb_btn_active)
+                            clicked = r.ImGui_Button(ctx, display_name .. "##cb", thumb_w, thumb_h)
+                            r.ImGui_PopStyleColor(ctx, 3)
+                        end
                     end
 
                     local cdl = r.ImGui_GetWindowDrawList(ctx)
@@ -22190,11 +22311,14 @@ function ShowScreenshotWindow()
                         local rv, payload = r.ImGui_AcceptDragDropPayload(ctx, "CHAIN_REORDER")
                         if rv then
                             local src = tonumber(payload)
-                            if src and src ~= ci then
+                            local n = #chain_builder_plugins
+                            if src and src ~= ci and src >= 1 and src <= n then
+                                for k = 1, n do
+                                    if chain_builder_chunks[k] == nil then chain_builder_chunks[k] = false end
+                                end
                                 local item = table.remove(chain_builder_plugins, src)
-                                local chunk_item = table.remove(chain_builder_chunks, src) or nil
+                                local chunk_item = table.remove(chain_builder_chunks, src)
                                 local dst = ci
-                                if src < ci then dst = dst end
                                 table.insert(chain_builder_plugins, dst, item)
                                 table.insert(chain_builder_chunks, dst, chunk_item)
                                 config.chain_builder_plugins = chain_builder_plugins
@@ -22218,7 +22342,7 @@ function ShowScreenshotWindow()
                     local name_w = r.ImGui_CalcTextSize(ctx, trunc_name)
                     local name_offset = (thumb_w - name_w) * 0.5
                     if name_offset > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + name_offset) end
-                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xCCCCCCFF)
+                    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), is_empty and 0x888888FF or 0xCCCCCCFF)
                     r.ImGui_Text(ctx, trunc_name)
                     r.ImGui_PopStyleColor(ctx)
                     r.ImGui_EndGroup(ctx)
@@ -22232,7 +22356,7 @@ function ShowScreenshotWindow()
                         break
                     end
                     if btn_hovered then
-                        r.ImGui_SetTooltip(ctx, cp .. "\nRight-click to remove | Drag to reorder")
+                        r.ImGui_SetTooltip(ctx, (is_empty and "Empty slot" or cp) .. "\nRight-click to remove | Drag to reorder")
                     end
                     r.ImGui_SameLine(ctx)
                     r.ImGui_PopID(ctx)
@@ -22251,7 +22375,7 @@ function ShowScreenshotWindow()
         local btn_spacing = 4
         local count_text = string.format("(%d)", #chain_builder_plugins)
         local count_w = r.ImGui_CalcTextSize(ctx, count_text) + 10
-        local total_btns = 6
+        local total_btns = 7
         local usable = avail_w - pad * 2 - dice_w - count_w - btn_spacing * (total_btns + 1)
         local btn_w = math.max(38, math.floor(usable / total_btns))
         r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + pad)
@@ -22265,12 +22389,7 @@ function ShowScreenshotWindow()
                     for ti = 0, sel_count - 1 do
                         local track = r.GetSelectedTrack(0, ti)
                         if track then
-                            for ci, pname in ipairs(chain_builder_plugins) do
-                                local fx_idx = AddFXToTrack(track, pname, true)
-                                if fx_idx >= 0 and chain_builder_chunks[ci] then
-                                    RestoreChainBuilderChunk(track, fx_idx, chain_builder_chunks[ci])
-                                end
-                            end
+                            ApplyChainBuilderToTrack(track)
                         end
                     end
                     r.PreventUIRefresh(-1)
@@ -22296,12 +22415,7 @@ function ShowScreenshotWindow()
                             for fi = existing - 1, 0, -1 do
                                 r.TrackFX_Delete(track, fi)
                             end
-                            for ci, pname in ipairs(chain_builder_plugins) do
-                                local fx_idx = AddFXToTrack(track, pname, true)
-                                if fx_idx >= 0 and chain_builder_chunks[ci] then
-                                    RestoreChainBuilderChunk(track, fx_idx, chain_builder_chunks[ci])
-                                end
-                            end
+                            ApplyChainBuilderToTrack(track)
                         end
                     end
                     r.PreventUIRefresh(-1)
@@ -22329,12 +22443,7 @@ function ShowScreenshotWindow()
                 r.InsertTrackAtIndex(track_count, false)
                 local temp_track = r.GetTrack(0, track_count)
                 if temp_track then
-                    for ci, pname in ipairs(chain_builder_plugins) do
-                        local fx_idx = AddFXToTrack(temp_track, pname, true)
-                        if fx_idx >= 0 and chain_builder_chunks[ci] then
-                            RestoreChainBuilderChunk(temp_track, fx_idx, chain_builder_chunks[ci])
-                        end
-                    end
+                    ApplyChainBuilderToTrack(temp_track)
                     local _, chunk = r.GetTrackStateChunk(temp_track, "", false)
                     local fxchain_block = nil
                     local fxchain_start = chunk:find("<FXCHAIN")
@@ -22428,6 +22537,16 @@ function ShowScreenshotWindow()
                 tip = tip .. "\n(no track selected)"
             end
             r.ImGui_SetTooltip(ctx, tip)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Empty##cb", btn_w, btn_row_h) then
+            chain_builder_plugins[#chain_builder_plugins + 1] = CHAIN_EMPTY_SLOT
+            chain_builder_chunks[#chain_builder_plugins] = false
+            config.chain_builder_plugins = chain_builder_plugins
+            SaveConfig()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Add empty slot\nReserves a visible gap in the FX chain")
         end
         r.ImGui_SameLine(ctx)
 
@@ -27755,6 +27874,106 @@ if not should_show_main_window then
         end
         r.ImGui_EndPopup(ctx)
     end
+
+    if add_to_slot_open then
+        r.ImGui_OpenPopup(ctx, "Add to slot")
+    end
+
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 14, 12)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 8, 8)
+    local slot_popup_flags = r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoSavedSettings() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize()
+    if r.ImGui_BeginPopupModal(ctx, "Add to slot", false, slot_popup_flags) then
+        local slot_header_font_pushed = false
+        if LargeFont then
+            local ok = pcall(r.ImGui_PushFont, ctx, LargeFont, (config.font_size or 11) + 4)
+            if not ok then ok = pcall(r.ImGui_PushFont, ctx, LargeFont) end
+            slot_header_font_pushed = ok
+        end
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x7AA2F7FF)
+        r.ImGui_Text(ctx, "Add to fixed slot")
+        r.ImGui_PopStyleColor(ctx)
+        if slot_header_font_pushed then r.ImGui_PopFont(ctx) end
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+
+        r.ImGui_TextColored(ctx, 0xAAAAAAFF, "Plugin")
+        r.ImGui_Text(ctx, tostring(GetDisplayPluginName and GetDisplayPluginName(add_to_slot_plugin) or add_to_slot_plugin))
+        r.ImGui_Dummy(ctx, 0, 4)
+
+        r.ImGui_TextColored(ctx, 0xAAAAAAFF, "Slot (1 = first visible position)")
+        r.ImGui_SetNextItemWidth(ctx, 100)
+        local changed, new_val = r.ImGui_InputText(ctx, "##add_to_slot", add_to_slot_value or "", 8)
+        if changed then add_to_slot_value = new_val end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "-##slot_dec") then
+            local n = tonumber(add_to_slot_value) or 1
+            add_to_slot_value = tostring(math.max(1, n - 1))
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "+##slot_inc") then
+            local n = tonumber(add_to_slot_value) or 0
+            add_to_slot_value = tostring(n + 1)
+        end
+        r.ImGui_Dummy(ctx, 0, 4)
+
+        add_to_slot_scope = add_to_slot_scope or "this"
+        r.ImGui_TextColored(ctx, 0xAAAAAAFF, "Apply to")
+        if r.ImGui_RadioButton(ctx, "This track", add_to_slot_scope == "this") then add_to_slot_scope = "this" end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, "Selected tracks", add_to_slot_scope == "selected") then add_to_slot_scope = "selected" end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_RadioButton(ctx, "All tracks", add_to_slot_scope == "all") then add_to_slot_scope = "all" end
+
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+
+        local slot_num = tonumber(add_to_slot_value)
+        local valid = slot_num and slot_num >= 1
+
+        local confirm = r.ImGui_Button(ctx, "Add", 130, 26)
+        confirm = confirm or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter()) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_KeypadEnter())
+        if confirm and valid and add_to_slot_plugin then
+            local targets = {}
+            if add_to_slot_scope == "all" then
+                for i = 0, r.CountTracks(0) - 1 do
+                    targets[#targets + 1] = r.GetTrack(0, i)
+                end
+            elseif add_to_slot_scope == "selected" then
+                for i = 0, r.CountSelectedTracks(0) - 1 do
+                    targets[#targets + 1] = r.GetSelectedTrack(0, i)
+                end
+                if #targets == 0 then
+                    local t = GetTargetTrack()
+                    if t then targets[1] = t end
+                end
+            else
+                local t = GetTargetTrack()
+                if t then targets[1] = t end
+            end
+            for _, t in ipairs(targets) do
+                if t and r.ValidatePtr(t, "MediaTrack*") then
+                    AddFXAtFixedSlot(t, add_to_slot_plugin, slot_num - 1)
+                end
+            end
+            LAST_USED_FX = add_to_slot_plugin
+            add_to_slot_last_value = slot_num
+            if selected_folder == "Current Track FX" or selected_folder == "Current Project FX" then
+                if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+            end
+            if config.close_after_adding_fx then SHOULD_CLOSE_SCRIPT = true end
+            add_to_slot_open = false
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 130, 26) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+            add_to_slot_open = false
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    r.ImGui_PopStyleVar(ctx, 3)
     
     if config.enable_drag_add_fx then
         DrawDragOverlay()
