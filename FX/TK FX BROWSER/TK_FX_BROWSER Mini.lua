@@ -1,8 +1,13 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.1.6
+-- @version 1.2.0
 -- @changelog:
 --[[ 
+    v1.2.0:
+        + Auto slot assign: new SLOTS settings tab with rules that automatically insert plugins on a fixed slot (REAPER 7 empty-slots) based on a keyword or FX category.
+        + Auto slot rules: per rule pick a match mode (contains / starts / exact / category), a keyword or category, an optional type filter (any / FX / instrument), the target slot and enable/disable; first matching rule wins and occupied slots shift down.
+        + Category matching classifies plugins into granular types (compressor, limiter, gate, eq, saturation, reverb, delay, chorus, phaser, pitch, imager, analyzer, instrument, ...) plus broad groups (dynamics / tone / timebased), so e.g. a compressor and a limiter can land on separate slots even without those words in the name.
+        + Quick toggle: added "Auto slot assign" to the gear menu and the plugin right-click menu to switch it on/off on the fly.
     v1.1.6:
         + Added: plugin right-click "Add to slot..." to insert a plugin on a fixed/empty FX slot (REAPER 7 empty-slots feature), so e.g. a limiter always sits on the same visible slot across tracks.
         + Add to slot popup: choose the target slot (1-based) and apply to This track / Selected tracks / All tracks; occupied slots shift existing FX down while preserving gaps.
@@ -1366,6 +1371,8 @@ function SetDefaultConfig()
         chain_builder_plugins = {},
         chain_builder_color = 0x00FF88FF,
         chain_builder_darkness = 0.10,
+        auto_slot_enabled = false,
+        auto_slot_rules = {},
         bulk_screenshot_vst = true,
         bulk_screenshot_vst3 = true,
         bulk_screenshot_js = true,
@@ -3513,6 +3520,21 @@ function AddFXToTrack(track, plugin_name, preserve_order)
             return fx_index or -1
         end
     end
+
+    if not preserve_order and config and config.auto_slot_enabled then
+        local slot1 = MatchAutoSlot(plugin_name)
+        if slot1 then
+            local idx = AddFXAtFixedSlot(track, plugin_name, slot1 - 1)
+            if idx and idx >= 0 and not START and not START_SELECTED and not IS_CAPTURING_SCREENSHOT then
+                if selected_folder == "Current Track FX" or selected_folder == "Current Project FX" then
+                    if RefreshCurrentScreenshotView then RefreshCurrentScreenshotView() end
+                end
+                if config.hide_after_insert then SHOULD_HIDE_BROWSER = true end
+            end
+            return idx or -1
+        end
+    end
+
     local dest_index = r.TrackFX_GetCount(track)
     local fx_index = r.TrackFX_AddByName(track, plugin_name, false, -1000 - dest_index)
     if not preserve_order and fx_index and fx_index >= 0 and config and config.add_instruments_on_top and IsInstrumentPlugin(plugin_name) then
@@ -3582,6 +3604,105 @@ function AddFXAtFixedSlot(track, plugin_name, target_slot)
     r.Undo_EndBlock("Add " .. plugin_name .. " at slot " .. tostring(target_slot), -1)
     r.TrackList_AdjustWindows(false)
     return new_idx or -1
+end
+
+AUTO_SLOT_KEYWORD_PRESETS = {
+    "EQ", "Filter", "Compressor", "Limiter", "Gate", "De-esser", "Expander",
+    "Saturator", "Distortion", "Clipper", "Maximizer", "Transient",
+    "Reverb", "Delay", "Chorus", "Flanger", "Phaser", "Tremolo",
+    "Pitch", "Vocoder", "Imager", "Analyzer", "Meter", "Tuner", "Utility"
+}
+AUTO_SLOT_MATCH_MODES = { "contains", "starts", "exact", "category" }
+AUTO_SLOT_TYPE_MODES = { "any", "fx", "instrument" }
+AUTO_SLOT_CATEGORIES = {
+    "instrument", "dynamics", "tone", "timebased",
+    "compressor", "limiter", "gate", "transient", "deesser", "clipper",
+    "eq", "saturation", "reverb", "delay", "chorus", "flanger", "phaser",
+    "pitch", "imager", "modulation", "analyzer", "other"
+}
+
+local AUTO_SLOT_CLASSIFY_ORDER = {
+    "deesser", "limiter", "clipper", "gate", "transient", "compressor",
+    "eq", "saturation", "reverb", "delay", "chorus", "flanger", "phaser",
+    "pitch", "imager", "analyzer", "modulation"
+}
+
+local AUTO_SLOT_SPEC_KW = {
+    deesser    = {"de%-ess", "deess", "de ess", "esser"},
+    limiter    = {"limiter", "limit", "maximizer", "brickwall", "brick%-wall", "pro%-l", "elephant", "adaptive limiter"},
+    clipper    = {"clipper", "clip"},
+    gate       = {"gate", "expander", "noise gate"},
+    transient  = {"transient", "transg", "punch", "attack"},
+    compressor = {"compressor", "compress", "1176", "la%-2a", "la2a", "cla%-76", "cla76", "opto", "vari%-mu", "varimu", "distressor", "mjuc", "bus comp", "tube%-tech", "glue"},
+    eq         = {"eq", "equaliz", "equalis", "parametric", "filter", "hi%-pass", "lo%-pass", "highpass", "lowpass", "pultec"},
+    saturation = {"saturat", "distort", "overdrive", "drive", "tube", "tape", "exciter", "fuzz", "preamp", "console", "warmth", "waveshap", "bitcrush", "decapitator"},
+    reverb     = {"reverb", "verb", "room", "hall", "plate", "spring", "convol", "shimmer", "ambien", "space"},
+    delay      = {"delay", "echo"},
+    chorus     = {"chorus"},
+    flanger    = {"flanger", "flange"},
+    phaser     = {"phaser", "phase"},
+    pitch      = {"pitch", "harmoniz", "harmonis", "autotune", "auto%-tune", "auto tune", "vocoder", "detune", "octaver", "formant"},
+    imager     = {"imager", "stereo", "widen", "width", "mid%-side", "mid/side"},
+    analyzer   = {"analyz", "analys", "spectrum", "meter", "tuner", "oscilloscope", "loudness", "lufs", "vu meter", "goniometer", "correlat"},
+    modulation = {"tremolo", "vibrato", "rotary", "leslie", "ensemble", "unison", "ring mod", "ringmod", "auto%-pan", "autopan"},
+}
+
+-- broad group -> set of specific categories it covers
+local AUTO_SLOT_BROAD = {
+    dynamics  = { compressor = true, limiter = true, gate = true, transient = true, deesser = true, clipper = true },
+    tone      = { eq = true, saturation = true },
+    timebased = { reverb = true, delay = true },
+}
+
+function ClassifyFXCategory(plugin_name)
+    if not plugin_name or plugin_name == '' then return "other" end
+    if IsInstrumentPlugin(plugin_name) then return "instrument" end
+    local low = (GetDisplayPluginName and GetDisplayPluginName(plugin_name) or plugin_name):lower()
+    for _, cat in ipairs(AUTO_SLOT_CLASSIFY_ORDER) do
+        for _, kw in ipairs(AUTO_SLOT_SPEC_KW[cat]) do
+            if low:find(kw) then return cat end
+        end
+    end
+    return "other"
+end
+
+function MatchAutoSlot(plugin_name)
+    if not plugin_name or plugin_name == '' then return nil end
+    if not config or not config.auto_slot_enabled then return nil end
+    local rules = config.auto_slot_rules
+    if type(rules) ~= "table" then return nil end
+    local raw = plugin_name:lower()
+    local disp = (GetDisplayPluginName and GetDisplayPluginName(plugin_name) or plugin_name):lower()
+    local is_inst = IsInstrumentPlugin(plugin_name) and true or false
+    for _, rule in ipairs(rules) do
+        if rule and rule.enabled ~= false and type(rule.keyword) == "string" and rule.keyword ~= "" and tonumber(rule.slot) then
+            local kw = rule.keyword:lower()
+            local tf = rule.type or "any"
+            local type_ok = (tf == "any") or (tf == "instrument" and is_inst) or (tf == "fx" and not is_inst)
+            if type_ok then
+                local mode = rule.match or "contains"
+                local hit
+                if mode == "category" then
+                    local plugcat = ClassifyFXCategory(plugin_name)
+                    if AUTO_SLOT_BROAD[kw] then
+                        hit = AUTO_SLOT_BROAD[kw][plugcat] == true
+                    else
+                        hit = (plugcat == kw)
+                    end
+                elseif mode == "exact" then
+                    hit = (raw == kw) or (disp == kw)
+                elseif mode == "starts" then
+                    hit = (raw:sub(1, #kw) == kw) or (disp:sub(1, #kw) == kw)
+                else
+                    hit = (raw:find(kw, 1, true) ~= nil) or (disp:find(kw, 1, true) ~= nil)
+                end
+                if hit then
+                    return math.max(1, math.floor(tonumber(rule.slot)))
+                end
+            end
+        end
+    end
+    return nil
 end
 
 _layout_fx_click_override = _layout_fx_click_override or nil
@@ -6529,7 +6650,7 @@ function ShowConfigWindow()
         
         r.ImGui_Separator(ctx)
         do
-            local _tabs = {"GUI","VIEW","SCREENSHOTS","PLUGIN MGR","ROUTING","PATHS"}
+            local _tabs = {"GUI","VIEW","SCREENSHOTS","PLUGIN MGR","ROUTING","SLOTS","PATHS"}
             _G.settings_active_tab = _G.settings_active_tab or "GUI"
             local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
             local spacing = 4
@@ -7729,6 +7850,127 @@ function ShowConfigWindow()
             if r.ImGui_Button(ctx, "Reset", button_width, 20) then
                 ResetConfig()
             end
+        elseif _G.settings_active_tab == "SLOTS" then
+            NewSection("AUTO SLOT ASSIGN:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local ch_en, v_en = r.ImGui_Checkbox(ctx, "Enable auto slot assign", config.auto_slot_enabled)
+            if ch_en then config.auto_slot_enabled = v_en; SaveConfig() end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "When enabled, plugins whose name matches a rule below are inserted on a fixed slot\n(REAPER 7 empty-slots) instead of at the end of the chain.")
+            end
+
+            r.ImGui_Dummy(ctx, 0, 4)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_TextColored(ctx, 0xAAAAAAFF, "Rules (first matching rule wins)")
+            r.ImGui_Dummy(ctx, 0, 2)
+
+            config.auto_slot_rules = config.auto_slot_rules or {}
+            local rules = config.auto_slot_rules
+            local delete_idx = nil
+            for i, rule in ipairs(rules) do
+                r.ImGui_PushID(ctx, "auto_slot_rule_" .. i)
+                r.ImGui_SetCursorPosX(ctx, column1_width)
+
+                local ce, ve = r.ImGui_Checkbox(ctx, "##en", rule.enabled ~= false)
+                if ce then rule.enabled = ve; SaveConfig() end
+                r.ImGui_SameLine(ctx)
+
+                if (rule.match or "contains") == "category" then
+                    r.ImGui_SetNextItemWidth(ctx, 170)
+                    if r.ImGui_BeginCombo(ctx, "##catkw", rule.keyword or "tone") then
+                        for _, c in ipairs(AUTO_SLOT_CATEGORIES) do
+                            if r.ImGui_Selectable(ctx, c, rule.keyword == c) then
+                                rule.keyword = c; SaveConfig()
+                            end
+                        end
+                        r.ImGui_EndCombo(ctx)
+                    end
+                    r.ImGui_SameLine(ctx)
+                else
+                    r.ImGui_SetNextItemWidth(ctx, 140)
+                    local ck, vk = r.ImGui_InputTextWithHint(ctx, "##kw", "keyword", rule.keyword or "")
+                    if ck then rule.keyword = vk end
+                    if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then SaveConfig() end
+                    r.ImGui_SameLine(ctx)
+
+                    r.ImGui_SetNextItemWidth(ctx, 24)
+                    if r.ImGui_BeginCombo(ctx, "##preset", "", r.ImGui_ComboFlags_NoPreview()) then
+                        for _, kw in ipairs(AUTO_SLOT_KEYWORD_PRESETS) do
+                            if r.ImGui_Selectable(ctx, kw, rule.keyword == kw) then
+                                rule.keyword = kw; SaveConfig()
+                            end
+                        end
+                        r.ImGui_EndCombo(ctx)
+                    end
+                    r.ImGui_SameLine(ctx)
+                end
+
+                r.ImGui_SetNextItemWidth(ctx, 82)
+                if r.ImGui_BeginCombo(ctx, "##match", rule.match or "contains") then
+                    for _, m in ipairs(AUTO_SLOT_MATCH_MODES) do
+                        if r.ImGui_Selectable(ctx, m, (rule.match or "contains") == m) then
+                            rule.match = m
+                            if m == "category" then
+                                local valid = false
+                                for _, c in ipairs(AUTO_SLOT_CATEGORIES) do if rule.keyword == c then valid = true break end end
+                                if not valid then rule.keyword = "tone" end
+                            end
+                            SaveConfig()
+                        end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                r.ImGui_SameLine(ctx)
+
+                r.ImGui_SetNextItemWidth(ctx, 82)
+                if r.ImGui_BeginCombo(ctx, "##type", rule.type or "any") then
+                    for _, t in ipairs(AUTO_SLOT_TYPE_MODES) do
+                        if r.ImGui_Selectable(ctx, t, (rule.type or "any") == t) then
+                            rule.type = t; SaveConfig()
+                        end
+                    end
+                    r.ImGui_EndCombo(ctx)
+                end
+                r.ImGui_SameLine(ctx)
+
+                r.ImGui_Text(ctx, "slot")
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetNextItemWidth(ctx, 68)
+                local cs, vs = r.ImGui_InputInt(ctx, "##slot", math.floor(tonumber(rule.slot) or 1))
+                if cs then rule.slot = math.max(1, vs); SaveConfig() end
+                r.ImGui_SameLine(ctx)
+
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x8B2E2EFF)
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xA53E3EFF)
+                if r.ImGui_Button(ctx, "X##del") then delete_idx = i end
+                r.ImGui_PopStyleColor(ctx, 2)
+
+                r.ImGui_PopID(ctx)
+            end
+
+            if delete_idx then
+                table.remove(rules, delete_idx)
+                SaveConfig()
+            end
+
+            r.ImGui_Dummy(ctx, 0, 4)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            if r.ImGui_Button(ctx, "+ Add rule", 120, 22) then
+                rules[#rules + 1] = { keyword = "", match = "contains", slot = (#rules + 1), type = "any", enabled = true }
+                SaveConfig()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Add a new keyword -> slot rule")
+            end
+
+            r.ImGui_SetCursorPosY(ctx, window_height - 30)
+            r.ImGui_Separator(ctx)
+            local button_width = (window_width - 20) / 3
+            if r.ImGui_Button(ctx, "Save", button_width, 20) then SaveConfig() end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Close", button_width, 20) then config_open = false end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Reset", button_width, 20) then ResetConfig() end
         elseif _G.settings_active_tab == "PATHS" then
             NewSection("FX CHAINS:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
@@ -12402,6 +12644,13 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 add_to_slot_value = tostring((add_to_slot_last_value or 6))
                 add_to_slot_open = true
             end
+            if r.ImGui_MenuItem(ctx, "Auto slot assign", nil, config.auto_slot_enabled) then
+                config.auto_slot_enabled = not config.auto_slot_enabled
+                SaveConfig()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Toggle auto slot assign (rules in Settings > SLOTS)")
+            end
         end
         
         -- Add to Selected Items option
@@ -14351,6 +14600,13 @@ function ShowScreenshotControls()
         end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Open Main Settings") then show_settings = true end
+        if r.ImGui_MenuItem(ctx, "Auto slot assign", nil, config.auto_slot_enabled) then
+            config.auto_slot_enabled = not config.auto_slot_enabled
+            SaveConfig()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Insert plugins on a fixed slot based on the rules in Settings > SLOTS")
+        end
         if r.ImGui_MenuItem(ctx, "Shortcuts") then show_shortcuts_window = true end
         if r.ImGui_MenuItem(ctx, "Notes") then LaunchTKNotes() end
         if r.ImGui_MenuItem(ctx, "Close Script") then SHOULD_CLOSE_SCRIPT = true end
