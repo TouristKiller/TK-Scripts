@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.9
+-- @version 0.9.91
 -- @changelog:
 --[[
+v0.9.91:
++ Fixed a vertical scrollbar appearing in the left panel when the oscilloscope was hidden, and the transport section jumping up/down when toggling the oscilloscope: the transport is now anchored to a fixed position and the oscilloscope fills the space above it
+
 v0.9.9:
 + Added "Match Folder Pane Colour to Results" option (Settings): unselected folder buttons use the same less-bright grey as the results list so both panels match; disable it for the brighter folder colour
 
@@ -10096,7 +10099,7 @@ function loop()
         local left_panel_width = math.max(min_left_panel, math.min(ui.left_panel_width or 200, max_left_panel))
         local right_panel_width = math.max(100, window_width - left_panel_width - 10)
         if r.ImGui_BeginChild(ctx, "LeftControlPanel", left_panel_width, 0, r.ImGui_WindowFlags_None()) then
-            local LEFT_FOOTER_H = ui.show_oscilloscope and 260 or 120  
+            local LEFT_FOOTER_H = ui.show_oscilloscope and 260 or 140  
             local LEFT_HEADER_H = 0  
             local header_button_width = (left_panel_width - 2) / 2
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
@@ -11966,7 +11969,8 @@ function loop()
             local pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
             local width = r.ImGui_GetContentRegionAvail(ctx)
             local _, item_sp_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
-            local height = 120 - bar_h - item_sp_y
+            local _, avail_after_bar = r.ImGui_GetContentRegionAvail(ctx)
+            local height = math.max(40, avail_after_bar - item_sp_y - 140)
             
             if ui.current_view_mode == "settings" then
                 local texture = LoadTexture(settings_image_path)
@@ -12526,6 +12530,12 @@ function loop()
             end
             draw_cover_art_for_preview(draw_list, pos_x, pos_y, width, height)
             r.ImGui_Dummy(ctx, width, height)
+        end
+        do
+            local _cur_y = r.ImGui_GetCursorPosY(ctx)
+            local _, _avail_y = r.ImGui_GetContentRegionAvail(ctx)
+            local _target_y = _cur_y + _avail_y - 140
+            r.ImGui_SetCursorPosY(ctx, _target_y)
         end
         r.ImGui_Separator(ctx)
         local total_available_width = r.ImGui_GetContentRegionAvail(ctx)

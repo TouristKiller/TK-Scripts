@@ -535,12 +535,14 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.9.9" author="TouristKiller" time="2026-07-08T21:00:00Z">
+        <version name="0.9.91" author="TouristKiller" time="2026-07-08T21:30:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
+                v0.9.91
+                + Fixed a vertical scrollbar appearing in the left panel when the oscilloscope was hidden, and the transport section jumping up/down when toggling the oscilloscope: the transport is now anchored to a fixed position and the oscilloscope fills the space above it
                 v0.9.9
                 + Added "Match Folder Pane Colour to Results" option (Settings): unselected folder buttons use the same less-bright grey as the results list so both panels match; disable it for the brighter folder colour
                 v0.9.8
