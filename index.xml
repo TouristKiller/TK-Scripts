@@ -394,6 +394,15 @@
     </version>
     </reapack>
 
+    <reapack name="TK_Paranormal_Bridge.lua" type="script" desc="TK Paranormal FX Bridge">
+    <version name="1.0.0" author="TouristKiller" time="2026-07-08T20:00:00Z">
+    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Paranormal_Bridge.lua</source>
+                <changelog><![CDATA[
++ Initial release - Launches Sexan's Paranormal FX and lets you drop plugins from TK FX Browser / Mini or the TK Workbench Plugin Browser straight onto serial "+" and parallel "||" insert points (including inside containers and on empty chains). Requires 'Sexan Paranormal FX Router' (ReaPack).
+]]></changelog>
+    </version>
+    </reapack>
+
 </category>
 
 <category name="Transport">
