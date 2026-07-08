@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.6
+-- @version 0.5.7
 -- @changelog:
+-- v0.5.7
+--   + Notes: Track notes are now stored on the track itself, so they travel with track templates and copied tracks and reappear automatically when such a track is loaded into another project (multi-block notes and formatting included)
+--   + Notes: Added an optional Track note indicator (Notes settings, off by default) that appends a small configurable marker (default bullet) after the name of every track that has a note, so you can spot them at a glance in the TCP/MCP; the marker travels with templates too and is placed after the name so scripts that parse the start of the track name keep working
+--   + Notes: Added a Marker/Region scope alongside Global/Project/Track/Item - in Auto mode a selected (clicked) region or marker now takes priority over Project notes (after Item and Track), and the dedicated Region scope also follows the region/last marker at the edit cursor (or the play cursor during playback); notes are stored per region/marker number and inherit the region/marker color
+--   + Instrument Rack: Right-clicking an FX tile screenshot now opens the same menu as the three-dots (...) button (Bypass, Parallel, Wrap in container, Remove, etc.), in both orientations and for track, input and item FX
+--   + Workbench: The main floating window no longer steals keyboard focus from REAPER when it (re)appears, so transport and other shortcuts keep working; the window only takes focus when you click in it
 -- v0.5.6
 --   + Media Browser / Action Clipboard: TK Workbench now shows an in-app warning window listing any missing native extensions (TK Native Helper, TK Action Capture) instead of only printing to the console
 -- v0.5.5
@@ -2194,6 +2200,9 @@ local function loop()
   local workspace_style_vars = push_workspace_style()
   local auto_collapse_style_vars, auto_collapse_style_colors = push_auto_collapse_style()
   local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+  if r.ImGui_WindowFlags_NoFocusOnAppearing then
+    window_flags = window_flags | r.ImGui_WindowFlags_NoFocusOnAppearing()
+  end
   if app.settings.auto_collapse == true and app.cache.window_docked == false and r.ImGui_WindowFlags_NoMove then
     window_flags = window_flags | r.ImGui_WindowFlags_NoMove()
   end

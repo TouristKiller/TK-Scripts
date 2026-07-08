@@ -4875,6 +4875,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
             r.TrackFX_Show(track, fx_index, hwnd and 2 or 3)
           end
         end
+        if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##ir_fx_menu_pop") end
         if settings.show_type_badge then
           draw_fx_type_badge(ctx, draw_list, fx_name, bx + item_width - UIScale.round(2), by + title_h)
         end
@@ -5315,6 +5316,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
         if r.ImGui_IsItemClicked(ctx, 0) then
           if not apply_tile_mod() then show_take_fx(take, fx_index) end
         end
+        if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##ir_take_fx_menu_pop") end
         if settings.show_type_badge then
           draw_fx_type_badge(ctx, draw_list, fx_name, bx + item_width - UIScale.round(2), by + row1_h + toolbar_h + UIScale.round(4))
         end

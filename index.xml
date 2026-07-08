@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.5.6" author="TouristKiller" time="2026-07-05T12:10:00Z">
+    <version name="0.5.7" author="TouristKiller" time="2026-07-09T01:10:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -113,55 +113,14 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+                v0.5.7
+                + Notes: Track notes are now stored on the track itself, so they travel with track templates and copied tracks and reappear automatically when such a track is loaded into another project (multi-block notes and formatting included)
+                + Notes: Added an optional Track note indicator (Notes settings, off by default) that appends a small configurable marker after the name of every track that has a note, so you can spot them at a glance in the TCP/MCP; placed after the name so scripts that parse the start of the track name keep working
+                + Notes: Added a Marker/Region scope alongside Global/Project/Track/Item - in Auto mode a selected (clicked) region or marker takes priority over Project notes (after Item and Track), and the dedicated Region scope follows the region/last marker at the edit cursor (or the play cursor during playback); notes are stored per region/marker number and inherit the region/marker color
+                + Instrument Rack: Right-clicking an FX tile screenshot now opens the same menu as the three-dots (...) button (Bypass, Parallel, Wrap in container, Remove, etc.)
+                + Workbench: The main floating window no longer steals keyboard focus from REAPER when it (re)appears, so transport and other shortcuts keep working; the window only takes focus when you click in it
                 v0.5.6
                 + Media Browser / Action Clipboard: TK Workbench now shows an in-app warning window listing any missing native extensions (TK Native Helper, TK Action Capture) instead of only printing to the console
-                v0.5.5
-                + Media Browser: Added drag-and-drop of samples straight onto external plugin windows (ReaSamplOmatic5000, Cartridge, Speedrum, etc.) via the new TK Native Helper extension; dragging onto a track still inserts as before
-                + Native extensions (TK Action Capture, TK Native Helper) are now delivered as separate "extension" packages that install straight into UserPlugins - install them via ReaPack (Extensions category) and restart REAPER
-                v0.5.4
-                + Instrument Rack: Dropping plugins from a TK FX Browser now works regardless of window open order, and multiple browsers can be open at once
-                + Instrument Rack: Added TCP/MCP support for pinned parameters - right-click a pinned parameter to "Add to TCP/MCP" or "Remove from TCP/MCP", plus a settings option to automatically add every new pin to the TCP/MCP
-                + Instrument Rack: Add to TCP/MCP is disabled for parameters of plugins inside a container (the native API does not support this), with a tooltip explaining why
-                + Instrument Rack: Added a per-FX "Sync this FX's TCP/MCP params to pins" option in the FX tile menu that pins any parameter already visible in the TCP/MCP
-                + Instrument Rack: Added FX A/B - a per-FX A/B button at the front of the FX tile toolbar to capture and toggle between two parameter snapshots (right-click to copy the current state to A or B, or reset)
-
-                v0.5.3
-                + Instrument Rack: Added a "Text alpha" slider to fade the pinned parameter value/label text independently of the knob/button transparency
-                + Instrument Rack: Fixed pinned parameters not being horizontally centered in the FX tile (they leaned slightly to the left)
-                + Instrument Rack: Fixed the per-parameter "Label under: Hide" setting not surviving a restart
-                + Instrument Rack: Fixed double-click reset on button/cycle parameters cycling the value instead of resetting; added a right-click "Save current value as reset default" so double-click can restore a chosen value
-                + Instrument Rack: Pinned parameters with a multi-value cycle button now show a progress bar that advances per step, so the button stays lit and indicates its position
-                + Instrument Rack: Fixed pinning the last touched parameter when the plugin lives inside a container (now uses GetTouchedOrFocusedFX)
-                + Instrument Rack: Pinned parameters with a hidden value now reveal the value while you hover over them
-                + Instrument Rack: Added a "Show shortcut hints in tooltips" option to hide the extra control hints in parameter tooltips while always keeping the name and value
-                + Instrument Rack: Fixed default plugin pins being lost after restarting REAPER (only the first plugin's pins survived); saved pins now persist reliably and existing saves are migrated automatically
-                + FX Groups: Parameters of FX nested inside containers can now be linked across group members (containers are traversed depth-first, including nested containers)
-                + Instrument Rack: Added a "Hide track number" option that hides the track number and separator in the rack header, showing only the track name (both orientations)
-                + Instrument Rack: Added "Track name opacity" and "Panel name opacity" sliders to fade the track name and the section/panel names (Track FX, Input FX, Item FX)
-                + Media Browser: Added embedded cover art support for Opus and OGG files (reads METADATA_BLOCK_PICTURE from VorbisComment tags)
-                + Media Browser: Audio files without embedded cover art now fall back to the folder cover (cover/folder/front image) before the type badge
-                + Media Browser: Added a "Show cover art" right-click option that opens a resizable square viewer window (embedded art, folder cover fallback, else no image); the image follows the selected file and the window has a themed red close button and scroll-to-resize
-                + Media Browser: The cover art viewer now remembers its last position and size between sessions
-                + Instrument Rack: Fixed a crash ("ImGui_EndChild: Missing PopID()") in the horizontal rack when a collapsed FX tile or the vertical title bar was scrolled off-screen (EndChild is now only called when BeginChild succeeded)
-                + Instrument Rack (Horizontal): The standalone launcher now logs draw errors to the ReaScript console and keeps running instead of dying on a secondary invalid-context error
-                + Lyrics: Added a "Line spacing" setting to control the vertical space between lyric lines
-                + Lyrics: Right-click the lyrics area to copy the full lyrics text to the clipboard
-
-                v0.5.2
-                + Lyrics: Added a new module that shows a playback timer and synced lyrics for the playing audio item
-                + Lyrics: Reads embedded lyrics straight from the MP3 ID3 tag (USLT and synced SYLT), with .lrc file and track notes as fallback
-                + Lyrics: foobar2000-style centered layout with the timestamp above each line, word wrap, and an enlarged active line
-                + Lyrics: Synced highlight and autoscroll follow playback, with the active line scrolled into view
-                + Lyrics: Click a line to seek to that moment, with an adjustable sync offset (ms) and active line scale
-                + Lyrics: Settings for source mode, font size, and toggles for name, timer, progress bar, timestamps, autoscroll, and click-to-seek
-                + Workbench: Added a mappable module action for opening Lyrics
-                + Workbench: Fixed an "ImGui_End: Calling End() too many times!" crash that could occur on startup or with docked/small windows by only ending child panels when they are visible
-                + FX Groups: Fixed the module failing to load ("fx_groups load error") for ReaPack users by including the missing core/quick_fx_menu.lua dependency in the package
-                + Media Browser: Audio files now show embedded cover art (MP3 ID3v2 APIC, FLAC PICTURE, M4A/MP4 covr) as a thumbnail, with folder art and the type badge as fallback
-                + Instrument Rack: Added a "Show border around Add buttons" option to remove the outline/circle around the Add FX and Quick Add buttons (border still shown on hover and while dragging)
-                + Instrument Rack: Added a "Hide button value until used" option that hides the value on button / cycle parameters until you click or drag them (like the knob layout)
-                + Instrument Rack: Hold Shift while dragging a knob or button parameter for fine adjustment
-                + Instrument Rack: Default pinned parameters now also apply to offline FX, reliably persist across REAPER restarts, and keep their custom parameter names
 
 ]]></changelog>
      </version>

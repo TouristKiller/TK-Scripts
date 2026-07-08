@@ -50,7 +50,9 @@ local defaults = {
   auto_context = true,
   auto_save_interval = 1.0,
   show_empty_contexts = true,
-  block_height = 120
+  block_height = 120,
+  track_note_indicator = "off",
+  track_note_char = "\xE2\x80\xA2"
 }
 
 local MIN_BLOCK_HEIGHT = 70
@@ -95,9 +97,12 @@ local function ensure_settings(app)
       changed = true
     end
   end
-  if settings.active_context ~= "global" and settings.active_context ~= "project" and settings.active_context ~= "track" and settings.active_context ~= "item" then settings.active_context = "project" end
+  if settings.active_context ~= "global" and settings.active_context ~= "project" and settings.active_context ~= "track" and settings.active_context ~= "item" and settings.active_context ~= "region" then settings.active_context = "project" end
   settings.auto_save_interval = math.max(0.2, math.min(10, tonumber(settings.auto_save_interval) or defaults.auto_save_interval))
   settings.block_height = math.max(70, math.min(260, tonumber(settings.block_height) or defaults.block_height))
+  if settings.track_note_indicator ~= "suffix" then settings.track_note_indicator = "off" end
+  settings.track_note_char = tostring(settings.track_note_char or defaults.track_note_char)
+  if settings.track_note_char:match("^%s*$") then settings.track_note_char = defaults.track_note_char end
   if changed and app.save_settings then app.save_settings() end
   return settings
 end
@@ -186,15 +191,87 @@ local function item_label(selection)
   return item.take_name or "Item"
 end
 
+local function marker_region_color(color)
+  color = tonumber(color) or 0
+  if color == 0 then return nil end
+  return native_color_to_u32(color & 0xFFFFFF, 0x66)
+end
+
+local function notes_cursor_position(project)
+  local proj = project or 0
+  local playing = false
+  if r.GetPlayStateEx then playing = (r.GetPlayStateEx(proj) & 1) == 1
+  elseif r.GetPlayState then playing = (r.GetPlayState() & 1) == 1 end
+  if playing then
+    if r.GetPlayPositionEx then return r.GetPlayPositionEx(proj) end
+    if r.GetPlayPosition then return r.GetPlayPosition() end
+  end
+  if r.GetCursorPositionEx then return r.GetCursorPositionEx(proj) end
+  if r.GetCursorPosition then return r.GetCursorPosition() end
+  return 0
+end
+
+local function marker_region_ui_selected(proj, enum_index)
+  if not r.GetRegionOrMarker or not r.GetRegionOrMarkerInfo_Value then return false end
+  local marker = r.GetRegionOrMarker(proj, enum_index, "")
+  if not marker then return false end
+  local ok, selected = pcall(r.GetRegionOrMarkerInfo_Value, proj, marker, "B_UISEL")
+  return ok and selected == 1
+end
+
+local function selected_marker_region(proj)
+  if not r.GetRegionOrMarker or not r.GetRegionOrMarkerInfo_Value or not r.CountProjectMarkers then return nil end
+  local _, marker_count, region_count = r.CountProjectMarkers(proj)
+  local total = (marker_count or 0) + (region_count or 0)
+  local marker_hit
+  for index = 0, total - 1 do
+    local retval, isrgn, pos, _, name, num, color = r.EnumProjectMarkers3(proj, index)
+    if retval and retval ~= 0 and marker_region_ui_selected(proj, index) then
+      local hit = { type = isrgn and "region" or "marker", number = num, name = name or "", color = color, pos = pos }
+      if isrgn then return hit end
+      marker_hit = marker_hit or hit
+    end
+  end
+  return marker_hit
+end
+
+local function marker_region_at_cursor(proj)
+  if not r.GetLastMarkerAndCurRegion or not r.EnumProjectMarkers3 then return nil end
+  local cursor = notes_cursor_position(proj)
+  local mark_idx, rgn_idx = r.GetLastMarkerAndCurRegion(proj, cursor)
+  if rgn_idx and rgn_idx >= 0 then
+    local retval, isrgn, pos, _, name, num, color = r.EnumProjectMarkers3(proj, rgn_idx)
+    if retval and retval ~= 0 and isrgn then
+      return { type = "region", number = num, name = name or "", color = color, pos = pos }
+    end
+  end
+  if mark_idx and mark_idx >= 0 then
+    local retval, isrgn, pos, _, name, num, color = r.EnumProjectMarkers3(proj, mark_idx)
+    if retval and retval ~= 0 and not isrgn then
+      return { type = "marker", number = num, name = name or "", color = color, pos = pos }
+    end
+  end
+  return nil
+end
+
+local function current_marker_region(project)
+  if not r.EnumProjectMarkers3 then return nil end
+  local proj = project or 0
+  return selected_marker_region(proj) or marker_region_at_cursor(proj)
+end
+
 local function resolve_context(app, settings)
   local selection = app.selection or {}
   local project = selection.project and selection.project.pointer or 0
+  local proj_tag = tostring(project)
   local context = settings.active_context or "project"
   if settings.auto_context then
     if selection.item and selection.item.pointer and r.BR_GetMediaItemGUID then
       context = "item"
     elseif selection.track and selection.track.pointer then
       context = "track"
+    elseif selected_marker_region(project) then
+      context = "region"
     else
       context = "project"
     end
@@ -203,28 +280,37 @@ local function resolve_context(app, settings)
     return { id = "global|GLOBAL", storage = "global", key = "GLOBAL::blocks", label = "Global Notes", can_edit = true, kind = "global" }
   end
   if context == "project" then
-    return { id = "project|PROJECT", storage = "project", project = project, key = "PROJECT::blocks", label = project_label(selection), can_edit = true, kind = "project" }
+    return { id = "project|" .. proj_tag .. "|PROJECT", storage = "project", project = project, key = "PROJECT::blocks", label = project_label(selection), can_edit = true, kind = "project" }
   end
   if context == "track" then
     local track = selection.track and selection.track.pointer or nil
     local guid = track and r.GetTrackGUID and r.GetTrackGUID(track) or nil
     if not guid or guid == "" then return { id = "track|none", storage = "project", project = project, key = "", label = "No track selected", can_edit = false, kind = "track" } end
-    return { id = "track|" .. guid, storage = "project", project = project, key = guid .. "::blocks", label = track_label(selection), can_edit = true, kind = "track", track = track, context_color = track_color(track) }
+    return { id = "track|" .. proj_tag .. "|" .. guid, storage = "track", project = project, key = guid .. "::blocks", label = track_label(selection), can_edit = true, kind = "track", track = track, context_color = track_color(track) }
   end
   if context == "item" then
     if not r.BR_GetMediaItemGUID then return { id = "item|nosws", storage = "project", project = project, key = "", label = "SWS required for item notes", can_edit = false, kind = "item" } end
     local item = selection.item and selection.item.pointer or nil
     local guid = item and r.BR_GetMediaItemGUID(item) or nil
     if not guid or guid == "" then return { id = "item|none", storage = "project", project = project, key = "", label = "No item selected", can_edit = false, kind = "item" } end
-    return { id = "item|" .. guid, storage = "project", project = project, key = "ITEM::" .. guid .. "::blocks", label = item_label(selection), can_edit = true, kind = "item", item = item, context_color = item_color(item) }
+    return { id = "item|" .. proj_tag .. "|" .. guid, storage = "project", project = project, key = "ITEM::" .. guid .. "::blocks", label = item_label(selection), can_edit = true, kind = "item", item = item, context_color = item_color(item) }
   end
-  return { id = "project|PROJECT", storage = "project", project = project, key = "PROJECT::blocks", label = project_label(selection), can_edit = true, kind = "project" }
+  if context == "region" then
+    if not r.GetLastMarkerAndCurRegion or not r.EnumProjectMarkers3 then return { id = "region|unsupported", storage = "project", project = project, key = "", label = "Marker/Region notes not supported", can_edit = false, kind = "region" } end
+    local mr = current_marker_region(project)
+    if not mr then return { id = "region|none", storage = "project", project = project, key = "", label = "No region/marker at cursor", can_edit = false, kind = "region" } end
+    local prefix = mr.type == "region" and "RGN" or "MARK"
+    local short = mr.type == "region" and "R" or "M"
+    local name_suffix = (mr.name ~= "") and (" - " .. mr.name) or ""
+    return { id = "region|" .. proj_tag .. "|" .. prefix .. "|" .. tostring(mr.number), storage = "project", project = project, key = prefix .. "::" .. tostring(mr.number) .. "::blocks", label = short .. tostring(mr.number) .. name_suffix, can_edit = true, kind = "region", context_color = marker_region_color(mr.color) }
+  end
+  return { id = "project|" .. proj_tag .. "|PROJECT", storage = "project", project = project, key = "PROJECT::blocks", label = project_label(selection), can_edit = true, kind = "project" }
 end
 
 local function new_block(title, body)
   local id = "block_" .. tostring(state.next_id)
   state.next_id = state.next_id + 1
-  local use_context_color = state.context_info and (state.context_info.kind == "track" or state.context_info.kind == "item") or false
+  local use_context_color = state.context_info and (state.context_info.kind == "track" or state.context_info.kind == "item" or state.context_info.kind == "region") or false
   return { id = id, title = title or "Notes", body = body or "", collapsed = false, use_context_color = use_context_color, note_color = DEFAULT_NOTE_COLOR, text_color = DEFAULT_TEXT_COLOR, line_colors = {}, font_size = DEFAULT_FONT_SIZE, font_family = DEFAULT_FONT_FAMILY, list_mode = "none", checkbox_lines = {}, images = {}, height = defaults.block_height, created_at = os.time(), updated_at = os.time() }
 end
 
@@ -413,17 +499,128 @@ local function normalize_blocks(blocks)
   return result
 end
 
+local TRACK_PEXT_KEY = "TK_WB_NOTE"
+local B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function base64_encode(s)
+  if not s or s == "" then return "" end
+  local out, acc, bits = {}, 0, 0
+  for i = 1, #s do
+    acc = acc * 256 + s:byte(i)
+    bits = bits + 8
+    while bits >= 6 do
+      bits = bits - 6
+      local idx = math.floor(acc / (2 ^ bits)) % 64
+      out[#out + 1] = B64_ALPHABET:sub(idx + 1, idx + 1)
+      acc = acc % (2 ^ bits)
+    end
+  end
+  if bits > 0 then
+    local idx = math.floor((acc * (2 ^ (6 - bits))) % 64)
+    out[#out + 1] = B64_ALPHABET:sub(idx + 1, idx + 1)
+  end
+  while #out % 4 ~= 0 do out[#out + 1] = "=" end
+  return table.concat(out)
+end
+
+local function base64_decode(s)
+  if not s or s == "" then return "" end
+  local dec = {}
+  for i = 1, #B64_ALPHABET do dec[B64_ALPHABET:sub(i, i)] = i - 1 end
+  local out, acc, bits = {}, 0, 0
+  for c in s:gmatch(".") do
+    local v = dec[c]
+    if v then
+      acc = acc * 64 + v
+      bits = bits + 6
+      if bits >= 8 then
+        bits = bits - 8
+        out[#out + 1] = string.char(math.floor(acc / (2 ^ bits)) % 256)
+        acc = acc % (2 ^ bits)
+      end
+    end
+  end
+  return table.concat(out)
+end
+
+local function get_track_pext_note(track)
+  if not track or not r.GetSetMediaTrackInfo_String then return "" end
+  local ok, value = r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TRACK_PEXT_KEY, "", false)
+  if not ok or not value or value == "" then return "" end
+  local first = value:sub(1, 1)
+  if first == "[" or first == "{" then return value end
+  local decoded = base64_decode(value)
+  return decoded or ""
+end
+
+local function set_track_pext_note(track, value)
+  if not track or not r.GetSetMediaTrackInfo_String then return end
+  local stored = (value and value ~= "") and base64_encode(value) or ""
+  r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TRACK_PEXT_KEY, stored, true)
+end
+
+local function blocks_have_content(blocks)
+  if type(blocks) ~= "table" then return false end
+  for _, block in ipairs(blocks) do
+    if type(block) == "table" then
+      if type(block.body) == "string" and block.body:match("%S") then return true end
+      if type(block.images) == "table" and #block.images > 0 then return true end
+      if type(block.title) == "string" and block.title ~= "" and block.title ~= "Notes" then return true end
+    end
+  end
+  return false
+end
+
+local function strip_track_marker(name, char)
+  local base = tostring(name or "")
+  if char == nil or char == "" then return (base:gsub("%s+$", "")) end
+  while true do
+    local trimmed = base:gsub("%s+$", "")
+    if #char > 0 and trimmed:sub(-#char) == char then
+      base = trimmed:sub(1, #trimmed - #char)
+    else
+      return trimmed
+    end
+  end
+end
+
+local function apply_track_marker(track, has_note, want_suffix, char)
+  if not track or not r.GetSetMediaTrackInfo_String then return end
+  local ok, name = r.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+  if not ok then return end
+  name = name or ""
+  local base = strip_track_marker(name, char)
+  local desired = base
+  if want_suffix and has_note and char ~= "" then
+    desired = (base == "") and char or (base .. " " .. char)
+  end
+  if desired ~= name then r.GetSetMediaTrackInfo_String(track, "P_NAME", desired, true) end
+end
+
 local function read_blocks(info)
-  if not info or not info.can_edit or info.key == "" then return { new_block("Notes", "") } end
-  local raw = info.storage == "global" and read_ext_state(info.key) or read_proj_ext_state(info.project, info.key)
+  if not info or not info.can_edit then return { new_block("Notes", "") } end
+  local raw
+  if info.storage == "track" then
+    if not info.track then return { new_block("Notes", "") } end
+    raw = get_track_pext_note(info.track)
+    if raw == "" and info.key and info.key ~= "" then
+      local legacy = read_proj_ext_state(info.project, info.key)
+      if legacy ~= "" then set_track_pext_note(info.track, legacy); raw = legacy end
+    end
+  elseif not info.key or info.key == "" then
+    return { new_block("Notes", "") }
+  elseif info.storage == "global" then
+    raw = read_ext_state(info.key)
+  else
+    raw = read_proj_ext_state(info.project, info.key)
+  end
   if raw == "" then return { new_block("Notes", "") } end
   local ok, decoded = pcall(json.decode, raw)
   if not ok then return { new_block("Notes", "") } end
   return normalize_blocks(decoded)
 end
 
-local function write_blocks(info, blocks)
-  if not info or not info.can_edit or info.key == "" then return false end
+local function encode_blocks(blocks)
   local clean = {}
   for _, block in ipairs(blocks or {}) do
     clean[#clean + 1] = {
@@ -446,14 +643,42 @@ local function write_blocks(info, blocks)
     }
   end
   local ok, encoded = pcall(json.encode, clean)
-  if not ok or not encoded then return false end
+  if not ok or not encoded then return nil end
+  return encoded
+end
+
+local function write_blocks(info, blocks)
+  if not info or not info.can_edit then return false end
+  if info.storage == "track" then
+    if not info.track then return false end
+    if blocks_have_content(blocks) then
+      local encoded = encode_blocks(blocks)
+      if not encoded then return false end
+      set_track_pext_note(info.track, encoded)
+    else
+      set_track_pext_note(info.track, "")
+    end
+    return true
+  end
+  if not info.key or info.key == "" then return false end
+  local encoded = encode_blocks(blocks)
+  if not encoded then return false end
   if info.storage == "global" then return write_ext_state(info.key, encoded) end
   return write_proj_ext_state(info.project, info.key, encoded)
+end
+
+local function update_active_track_marker(app)
+  local info = state.context_info
+  if not info or info.kind ~= "track" or not info.track then return end
+  local settings = app and app.settings and app.settings.notes
+  if not settings or settings.track_note_indicator ~= "suffix" then return end
+  apply_track_marker(info.track, blocks_have_content(state.blocks), true, settings.track_note_char or defaults.track_note_char)
 end
 
 local function save_current(app)
   if not state.dirty then clear_note_status(app); return true end
   if not write_blocks(state.context_info, state.blocks) then return false end
+  update_active_track_marker(app)
   state.dirty = false
   clear_note_status(app)
   return true
@@ -478,7 +703,11 @@ end
 local function ensure_context(app)
   local settings = ensure_settings(app)
   local info = resolve_context(app, settings)
-  if not state.loaded or state.context_id ~= info.id then load_context(app, info) else state.context_info = info end
+  local reload = (not state.loaded) or (state.context_id ~= info.id)
+  if not reload and info.kind == "track" and info.track and state.context_info and state.context_info.track ~= info.track then
+    reload = true
+  end
+  if reload then load_context(app, info) else state.context_info = info end
   return settings, info
 end
 
@@ -550,7 +779,7 @@ end
 local function draw_context_bar(app, settings, info, width)
   local ctx = app.ctx
   local gap = UIScale.gap(4)
-  local button_w = math.max(UIScale.round(48), ((width or UIScale.round(320)) - gap * 4) / 5)
+  local button_w = math.max(UIScale.round(48), ((width or UIScale.round(320)) - gap * 5) / 6)
   context_button(ctx, app, settings, "auto", "Auto", settings.auto_context == true, true, button_w)
   r.ImGui_SameLine(ctx, 0, gap)
   context_button(ctx, app, settings, "global", "Global", settings.auto_context ~= true and settings.active_context == "global", true, button_w)
@@ -560,6 +789,8 @@ local function draw_context_bar(app, settings, info, width)
   context_button(ctx, app, settings, "track", "Track", info.kind == "track", true, button_w)
   r.ImGui_SameLine(ctx, 0, gap)
   context_button(ctx, app, settings, "item", "Item", info.kind == "item", r.BR_GetMediaItemGUID ~= nil, button_w)
+  r.ImGui_SameLine(ctx, 0, gap)
+  context_button(ctx, app, settings, "region", "Region", info.kind == "region", r.GetLastMarkerAndCurRegion ~= nil, button_w)
 end
 
 local function info_text(settings, info)
@@ -1902,9 +2133,84 @@ function M.init(app)
   ensure_settings(app)
 end
 
+local last_track_marker_sync = 0
+local TRACK_NOTE_MARKERS = { "\xE2\x80\xA2", "\xE2\x97\x8F", "*", "[note]", "\xE2\x99\xAA" }
+
+local function clear_all_track_markers(app, char)
+  if not r.CountTracks or not r.GetTrack then return end
+  local proj = (app.selection and app.selection.project and app.selection.project.pointer) or 0
+  for i = 0, r.CountTracks(proj) - 1 do
+    local track = r.GetTrack(proj, i)
+    if track then apply_track_marker(track, false, false, char) end
+  end
+end
+
+local function sync_track_note_indicators(app, settings)
+  if settings.track_note_indicator ~= "suffix" then return end
+  if not r.CountTracks or not r.GetTrack then return end
+  local t = now()
+  if t - last_track_marker_sync < 1.5 then return end
+  last_track_marker_sync = t
+  local proj = (app.selection and app.selection.project and app.selection.project.pointer) or 0
+  local char = settings.track_note_char or defaults.track_note_char
+  for i = 0, r.CountTracks(proj) - 1 do
+    local track = r.GetTrack(proj, i)
+    if track then
+      local raw = get_track_pext_note(track)
+      if raw == "" then
+        local guid = r.GetTrackGUID and r.GetTrackGUID(track)
+        if guid and guid ~= "" then
+          local legacy = read_proj_ext_state(proj, guid .. "::blocks")
+          if legacy ~= "" then set_track_pext_note(track, legacy); raw = legacy end
+        end
+      end
+      if raw ~= "" then
+        local ok, decoded = pcall(json.decode, raw)
+        if ok and blocks_have_content(decoded) then
+          apply_track_marker(track, true, true, char)
+        end
+      end
+    end
+  end
+end
+
+local function draw_notes_settings_popup(app, settings)
+  local ctx = app.ctx
+  if not r.ImGui_BeginPopup(ctx, "##notes_settings") then return end
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Track note indicator")
+  local enabled = settings.track_note_indicator == "suffix"
+  local changed, value = r.ImGui_Checkbox(ctx, "Mark tracks that have a note", enabled)
+  if changed then
+    if value then
+      settings.track_note_indicator = "suffix"
+      last_track_marker_sync = 0
+    else
+      settings.track_note_indicator = "off"
+      clear_all_track_markers(app, settings.track_note_char or defaults.track_note_char)
+    end
+    if app.save_settings then app.save_settings() end
+  end
+  r.ImGui_PushItemWidth(ctx, UIScale.round(90))
+  if r.ImGui_BeginCombo(ctx, "Marker", settings.track_note_char or defaults.track_note_char) then
+    for _, marker in ipairs(TRACK_NOTE_MARKERS) do
+      if r.ImGui_Selectable(ctx, marker, marker == settings.track_note_char) and marker ~= settings.track_note_char then
+        clear_all_track_markers(app, settings.track_note_char or defaults.track_note_char)
+        settings.track_note_char = marker
+        last_track_marker_sync = 0
+        if app.save_settings then app.save_settings() end
+      end
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+  r.ImGui_PopItemWidth(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Shown after the track name. Travels with track templates and copies.")
+  r.ImGui_EndPopup(ctx)
+end
+
 function M.update(app)
   local settings, info = ensure_context(app)
   if state.dirty and now() - (state.last_edit_time or 0) >= settings.auto_save_interval then save_current(app) end
+  sync_track_note_indicators(app, settings)
 end
 
 function M.draw(app)
@@ -1912,13 +2218,20 @@ function M.draw(app)
   local settings, info = ensure_context(app)
   local width = r.ImGui_GetContentRegionAvail(ctx)
   draw_context_bar(app, settings, info, width)
+  local settings_btn_w = UIScale.round(30)
+  local add_gap = UIScale.gap(4)
+  local add_w = math.max(UIScale.round(80), (width or UIScale.round(320)) - settings_btn_w - add_gap)
   if info.can_edit then
-    if r.ImGui_Button(ctx, "+ Note", math.max(UIScale.round(80), width or UIScale.round(320)), 0) then add_block() end
+    if r.ImGui_Button(ctx, "+ Note", add_w, 0) then add_block() end
   else
     r.ImGui_BeginDisabled(ctx, true)
-    r.ImGui_Button(ctx, "+ Note", math.max(UIScale.round(80), width or UIScale.round(320)), 0)
+    r.ImGui_Button(ctx, "+ Note", add_w, 0)
     r.ImGui_EndDisabled(ctx)
   end
+  r.ImGui_SameLine(ctx, 0, add_gap)
+  if r.ImGui_Button(ctx, "...##notes_settings_btn", settings_btn_w, 0) then r.ImGui_OpenPopup(ctx, "##notes_settings") end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Notes settings") end
+  draw_notes_settings_popup(app, settings)
   r.ImGui_Separator(ctx)
   local _, remaining_h = r.ImGui_GetContentRegionAvail(ctx)
   local list_h = math.max(UIScale.round(40), (remaining_h or UIScale.round(200)) - UI.info_line_height(ctx))
