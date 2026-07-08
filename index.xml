@@ -535,12 +535,14 @@
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.9.8" author="TouristKiller" time="2026-07-05T15:20:00Z">
+        <version name="0.9.9" author="TouristKiller" time="2026-07-08T21:00:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
+                v0.9.9
+                + Added "Match Folder Pane Colour to Results" option (Settings): unselected folder buttons use the same less-bright grey as the results list so both panels match; disable it for the brighter folder colour
                 v0.9.8
                 + Added selectable sync-start grid (right-click the sync button): the preview can now wait for the next Bar, 1/2, Beat (1/4), 1/8 or 1/16 instead of only the next measure
                 + Fixed dragging media onto a track sometimes triggering REAPER's own import/tempo prompt and bypassing sync: drops anywhere on the main window (arrange, track panel, ruler, mixer) now always use the script's own insert; native drag stays reserved for external plugin windows

@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.8
+-- @version 0.9.9
 -- @changelog:
 --[[
+v0.9.9:
++ Added "Match Folder Pane Colour to Results" option (Settings): unselected folder buttons use the same less-bright grey as the results list so both panels match; disable it for the brighter folder colour
+
 v0.9.8:
 + Added selectable sync-start grid (right-click the sync button): the preview can now wait for the next Bar, 1/2, Beat (1/4), 1/8 or 1/16 instead of only the next measure
 + Fixed dragging media onto a track sometimes triggering REAPER's own import/tempo prompt and bypassing sync: drops anywhere on the main window (arrange, track panel, ruler, mixer) now always use the script's own insert; native drag stays reserved for external plugin windows
@@ -514,6 +517,7 @@ local ui_settings = {
     show_waveform_bg = true,
     show_folder_add_buttons = true,
     flatten_search_results = false,
+    folder_pane_match_results = true,
     time_display_compact = false,
     hide_scrollbar = false,  
     compact_view = false,
@@ -2849,6 +2853,7 @@ local function save_options()
             show_waveform_bg = ui_settings.show_waveform_bg,
             show_folder_add_buttons = ui_settings.show_folder_add_buttons,
             flatten_search_results = ui_settings.flatten_search_results,
+            folder_pane_match_results = ui_settings.folder_pane_match_results,
             hide_scrollbar = ui_settings.hide_scrollbar,
             compact_view = ui_settings.compact_view,
             selected_font = ui_settings.selected_font,
@@ -2944,6 +2949,7 @@ local function get_settings_table()
         show_waveform_bg = ui_settings.show_waveform_bg,
         show_folder_add_buttons = ui_settings.show_folder_add_buttons,
         flatten_search_results = ui_settings.flatten_search_results,
+        folder_pane_match_results = ui_settings.folder_pane_match_results,
         hide_scrollbar = ui_settings.hide_scrollbar,
         compact_view = ui_settings.compact_view,
         selected_font = ui_settings.selected_font,
@@ -3008,6 +3014,7 @@ local function apply_settings_from_table(settings)
     ui_settings.show_waveform_bg = settings.show_waveform_bg ~= nil and settings.show_waveform_bg or false
     ui_settings.show_folder_add_buttons = settings.show_folder_add_buttons ~= nil and settings.show_folder_add_buttons or true
     ui_settings.flatten_search_results = settings.flatten_search_results ~= nil and settings.flatten_search_results or false
+    ui_settings.folder_pane_match_results = settings.folder_pane_match_results ~= false
     ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
     if settings.compact_view ~= nil then ui_settings.compact_view = settings.compact_view end
     ui_settings.selected_font = settings.selected_font or "Default"
@@ -3177,6 +3184,7 @@ local function load_options()
                 ui_settings.show_folder_add_buttons = true
             end
             ui_settings.flatten_search_results = options.flatten_search_results == true
+            ui_settings.folder_pane_match_results = options.folder_pane_match_results ~= false
             if options.hide_scrollbar ~= nil then
                 ui_settings.hide_scrollbar = options.hide_scrollbar
             else
@@ -3269,6 +3277,7 @@ local function load_options()
                             ui_settings.show_folder_add_buttons = true
                         end
                         ui_settings.flatten_search_results = options2.flatten_search_results == true
+                        ui_settings.folder_pane_match_results = options2.folder_pane_match_results ~= false
                         if options2.hide_scrollbar ~= nil then
                             ui_settings.hide_scrollbar = options2.hide_scrollbar
                         else
@@ -10276,6 +10285,7 @@ function loop()
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
             
             local unselected_button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
+            local folder_button_color = ui_settings.folder_pane_match_results and r.ImGui_ColorConvertDouble4ToU32(ui_settings.window_bg_brightness, ui_settings.window_bg_brightness, ui_settings.window_bg_brightness, 1.0) or unselected_button_color
             local button_text_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_text_brightness, ui_settings.button_text_brightness, ui_settings.button_text_brightness, 1.0)
             local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
             local accent_hover_color = hsv_to_color(ui_settings.accent_hue, 0.8, 1.0)
@@ -10296,7 +10306,7 @@ function loop()
                     local c = file_location.custom_folder_colors[location]
                     base_color = hsv_to_color(c.h, c.s, c.v)
                 else
-                    base_color = unselected_button_color
+                    base_color = folder_button_color
                 end
                 
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), base_color)
@@ -14113,6 +14123,16 @@ function loop()
                     end
                     if r.ImGui_IsItemHovered(ctx) then
                         r.ImGui_SetTooltip(ctx, "While in folder (tree) view, show search results as a flat list of all matches.\nWhen the search field is empty the tree view returns.")
+                    end
+                    
+                    r.ImGui_Spacing(ctx)
+                    local folder_match_changed, new_folder_match = r.ImGui_Checkbox(ctx, "Match Folder Pane Colour to Results", ui_settings.folder_pane_match_results)
+                    if folder_match_changed then
+                        ui_settings.folder_pane_match_results = new_folder_match
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "When enabled: unselected folder buttons use the same (less bright) grey as the results list.\nWhen disabled: folders use the brighter button colour.")
                     end
                     
                     r.ImGui_Spacing(ctx)
