@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.3
+-- @version 1.9.4
 -- @changelog 
 --[[
+v1.9.4:
++ Fixed: in very large templates (1000+ tracks) some tracks consistently showed no label/color while scrolling; the visible-range detection no longer relies on a binary search over I_TCPY (which broke on hidden/zero-height tracks) but uses a robust linear scan
+
 v1.9.3:
 + Fixed: volume envelope value labels drifted away from their points on taller lanes (positioning now uses the fader-scaled domain so labels stay glued to the points)
 
@@ -439,57 +442,25 @@ local function GetArrangeViewBounds()
     return scroll_y, view_height
 end
 
-local function FindFirstVisibleTrack(track_count, view_top, view_bottom)
-    if track_count == 0 then return -1 end
-    
-    local low, high = 0, track_count - 1
-    local result = -1
-    
-    while low <= high do
-        local mid = math.floor((low + high) / 2)
-        local track = r.GetTrack(0, mid)
-        local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
-        local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
-        local track_bottom = track_y + track_height
-        
-        if track_bottom >= 0 and track_y < view_bottom then
-            result = mid
-            high = mid - 1
-        elseif track_bottom < 0 then
-            low = mid + 1
-        else
-            high = mid - 1
+local function FindVisibleTrackRange(track_count, view_bottom)
+    local first_idx, last_idx = -1, -1
+    for i = 0, track_count - 1 do
+        local track = r.GetTrack(0, i)
+        if track and r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1 then
+            local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
+            if track_height > 0 then
+                local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
+                local track_bottom = track_y + track_height
+                if track_bottom >= 0 and track_y < view_bottom then
+                    if first_idx < 0 then first_idx = i end
+                    last_idx = i
+                elseif first_idx >= 0 and track_y >= view_bottom then
+                    break
+                end
+            end
         end
     end
-    
-    if result > 0 then result = result - 1 end
-    
-    return result
-end
-
-local function FindLastVisibleTrack(track_count, view_top, view_bottom)
-    if track_count == 0 then return -1 end
-    
-    local low, high = 0, track_count - 1
-    local result = -1
-    
-    while low <= high do
-        local mid = math.floor((low + high) / 2)
-        local track = r.GetTrack(0, mid)
-        local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
-        local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
-        
-        if track_y <= view_bottom then
-            result = mid
-            low = mid + 1
-        else
-            high = mid - 1
-        end
-    end
-    
-    if result >= 0 and result < track_count - 1 then result = result + 1 end
-    
-    return result
+    return first_idx, last_idx
 end
 
 local function ensureOverlayBehindWindows()
@@ -4628,8 +4599,7 @@ function loop()
         local _, view_height = GetArrangeViewBounds()
         local overlay_view_height = BOT - TOP
         local view_bottom = (overlay_view_height > 0) and overlay_view_height or (view_height / screen_scale)
-        local first_visible_idx = FindFirstVisibleTrack(track_count, 0, view_bottom)
-        local last_visible_idx = FindLastVisibleTrack(track_count, 0, view_bottom)
+        local first_visible_idx, last_visible_idx = FindVisibleTrackRange(track_count, view_bottom)
         if first_visible_idx < 0 then first_visible_idx = 0 end
         if last_visible_idx < 0 then last_visible_idx = track_count - 1 end
 

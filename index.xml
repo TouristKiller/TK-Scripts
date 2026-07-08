@@ -738,18 +738,14 @@
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.9.3" author="TouristKiller" time="2026-07-01T12:00:00Z">
+        <version name="1.9.4" author="TouristKiller" time="2026-07-08T20:30:00Z">
             <changelog><![CDATA[
+            v1.9.4:
+            + Fixed: in very large templates (1000+ tracks) some tracks consistently showed no label/color while scrolling; the visible-range detection no longer relies on a binary search over I_TCPY (which broke on hidden/zero-height tracks) but uses a robust linear scan
+
             v1.9.3:
             + Fixed: volume envelope value labels drifted away from their points on taller lanes (positioning now uses the fader-scaled domain so labels stay glued to the points)
 
-            v1.9.2:
-            + Fixed: on macOS/Retina track names and envelope values disappeared for tracks below the middle of the arrange (visible range is now derived from the overlay geometry instead of the unreliable client-rect height)
-
-            v1.9.1:
-            + Added per-tracktype toggles: Parent, Child, Normal (independent, combinable)
-            + Added combo toggles: Parent/Child, Child/Normal, Parent/Normal
-            + Toggles work independently from settings checkboxes and from the Labels Toggle
             ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Overlay_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Overlay_Toggle.lua</source>
