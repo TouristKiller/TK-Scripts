@@ -1,10 +1,10 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.1.1
+-- @version 1.1.2
 -- @changelog:
---   v1.1.1
+--   v1.1.2
 --   # Offline/bypassed FX now respect the 'Center FX' setting (kept in place and draggable when centering is off, instead of always snapping to center)
---   # 'Center FX' is greyed out while Follow FX window is active
+--   # Enabling Follow FX window now automatically turns off 'Center FX' (which stays greyed out while follow is active)
 --   v1.1.0
 --   + Follow FX window mode: tab bar follows the plugin window instead of moving it
 --   + Option to hide track numbers on tabs
@@ -137,6 +137,11 @@ local settings = {
   theme_topbar_border = ext_get_bool("theme_topbar_border", true),
   scan_interval = 0.75,
 }
+
+if settings.follow_fx_position and settings.center_fx_in_reaper_window then
+  settings.center_fx_in_reaper_window = false
+  ext_set_bool("center_fx_in_reaper_window", false)
+end
 
 local function imgui_flag(name)
   local flag_function = r[name]
@@ -2039,7 +2044,16 @@ local function draw_settings_popup()
     if center_disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
     if center_disabled and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "No effect while Follow FX window is on.") end
     local changed_follow, next_follow = r.ImGui_Checkbox(ctx, "Follow FX window (tab follows plugin)", settings.follow_fx_position)
-    if changed_follow then settings.follow_fx_position = next_follow; ext_set_bool("follow_fx_position", next_follow); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+    if changed_follow then
+      settings.follow_fx_position = next_follow
+      ext_set_bool("follow_fx_position", next_follow)
+      if next_follow and settings.center_fx_in_reaper_window then
+        settings.center_fx_in_reaper_window = false
+        ext_set_bool("center_fx_in_reaper_window", false)
+      end
+      pending_place_until = r.time_precise() + 0.5
+      last_place_time = 0
+    end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The tab bar follows the plugin window instead of moving it.\nDisables centering while active.") end
     local changed_numbers, next_numbers = r.ImGui_Checkbox(ctx, "Show track numbers", settings.show_track_numbers ~= false)
     if changed_numbers then settings.show_track_numbers = next_numbers; ext_set_bool("show_track_numbers", next_numbers); tab_width_cache = {} end
