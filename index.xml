@@ -346,9 +346,14 @@
     </reapack>
 
     <reapack name="TK_FX_Tabs.lua" type="script" desc="TK FX Tabs">
-    <version name="1.0.3" author="TouristKiller" time="2026-06-14T12:30:00Z">
+    <version name="1.1.0" author="TouristKiller" time="2026-07-09T90:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20Tabs/TK_FX_Tabs.lua</source>
                 <changelog><![CDATA[
++ v1.1.0: Follow FX window mode: tab bar follows the plugin window instead of moving it
++ Option to hide track numbers on tabs
++ Ctrl-click a tab to bypass, Alt-click to set offline
++ Follow mode no longer steals focus from REAPER (menus/shortcuts keep working)
++ Follow mode keeps the tab bar reliably above the plugin (cross-platform)
 ]]></changelog>
     </version>
     </reapack>
