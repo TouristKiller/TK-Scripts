@@ -1,7 +1,11 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.1.1
 -- @changelog:
+--   v1.1.1
+--   # Offline/bypassed FX now respect the 'Center FX' setting (kept in place and draggable when centering is off, instead of always snapping to center)
+--   # 'Center FX' is greyed out while Follow FX window is active
+--   v1.1.0
 --   + Follow FX window mode: tab bar follows the plugin window instead of moving it
 --   + Option to hide track numbers on tabs
 --   + Ctrl-click a tab to bypass, Alt-click to set offline
@@ -704,8 +708,10 @@ function entry_window_size(entry)
 end
 
 local function centered_topbar_position()
-  if settings.follow_fx_position then return nil end
-  if not settings.center_fx_in_reaper_window or active_key == "" or topbar_dragging then return nil end
+  if active_key == "" or topbar_dragging then return nil end
+  if not settings.center_fx_in_reaper_window then return nil end
+  local blocked = entry_blocked_state(find_entry_by_key(active_key)) ~= nil
+  if not blocked and settings.follow_fx_position then return nil end
   local size = entry_window_size(find_entry_by_key(active_key))
   local reaper_left, reaper_top, reaper_width, reaper_height = reaper_window_rect()
   local overlap = clamp(settings.plugin_overlap_y, 0, 80)
