@@ -1,7 +1,9 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.6.1
+-- @version 2.6.2
 -- @changelog
+-- 2.6.2
+--   + Per-selection text size: select text and use the new A- / A+ toolbar buttons to make just that part larger or smaller, independent from the whole-text font slider (works together with bold; mixed sizes on the same line are supported)
 -- 2.6.1
 --   + Typing/pasting is no longer blocked when text exceeds the window height; the editor scrolls instead
 --   + Fix: text in Global/Project/Track/Item notes could revert to an older version after restart when tabs were disabled (stale tab text overrode the saved text on load)
@@ -2398,6 +2400,17 @@ local StatusBarConstants = {
     height = 26,
 }
 
+local FONT_SIZE_MIN = 6
+local FONT_SIZE_MAX = 96
+local FONT_SIZE_STEP = 2
+
+local function ClampFontSize(size)
+    size = tonumber(size) or 14
+    if size < FONT_SIZE_MIN then return FONT_SIZE_MIN end
+    if size > FONT_SIZE_MAX then return FONT_SIZE_MAX end
+    return math.floor(size + 0.5)
+end
+
 local function ResolveColorU32(color_idx)
     if has_get_color_u32 then
         return r.ImGui_GetColorU32(ctx, color_idx)
@@ -2598,15 +2611,27 @@ local function ReadClipboardText()
     return text
 end
 
-local function DrawTextFragment(draw_list, x, y, color, text, bold)
+local function DrawTextFragment(draw_list, x, y, color, text, bold, size)
     if not text or text == "" then return end
-    
+
+    local base_size = state.font_size or 14
+    size = size or base_size
+    local use_ex = size ~= base_size and font ~= nil and type(r.ImGui_DrawList_AddTextEx) == "function"
+
+    local function draw(px, py)
+        if use_ex then
+            r.ImGui_DrawList_AddTextEx(draw_list, font, size, px, py, color, text)
+        else
+            r.ImGui_DrawList_AddText(draw_list, px, py, color, text)
+        end
+    end
+
     if not bold then
-        r.ImGui_DrawList_AddText(draw_list, x, y, color, text)
+        draw(x, y)
         return
     end
 
-    local thickness = math.max(0.9, state.font_size * 0.065)
+    local thickness = math.max(0.9, size * 0.065)
     local offsets = {
         {0, 0},
         {thickness, 0},
@@ -2615,7 +2640,7 @@ local function DrawTextFragment(draw_list, x, y, color, text, bold)
         {0, -thickness},
     }
     for _, offset in ipairs(offsets) do
-        r.ImGui_DrawList_AddText(draw_list, x + offset[1], y + offset[2], color, text)
+        draw(x + offset[1], y + offset[2])
     end
 end
 
@@ -2651,8 +2676,9 @@ local function DrawSelectionHighlights(draw_list, editor, layout, area_x, area_y
     for idx, line in ipairs(layout.lines) do
         local line_offset = CalculateLineOffset(line, wrap_width, alignment)
         local base_x = area_x + padding_x + line_offset
-        local line_top = area_y + EditorConstants.padding_y - scroll_y + (idx - 1) * line_height
-        local line_bottom = line_top + line_height
+        local lh = line.height or line_height
+        local line_top = area_y + EditorConstants.padding_y - scroll_y + (line.y or (idx - 1) * line_height)
+        local line_bottom = line_top + lh
 
         local segment_active = false
         local segment_start_x = 0
@@ -2873,6 +2899,61 @@ local function ToggleBoldFormatting(editor)
     NormalizeSelection(editor)
 end
 
+local function ApplySizeToSelection(editor, delta)
+    if not state.can_edit then return end
+    if not editor then return end
+    if not HasSelection(editor) then return end
+
+    local sel_start, sel_end = GetSelectionRange(editor)
+    if not sel_start or not sel_end or sel_end <= sel_start then return end
+
+    local base = state.font_size or 14
+    local text = state.text
+
+    local region_start = sel_start
+    local region_end = sel_end
+    local current = base
+
+    local pre = text:sub(1, sel_start)
+    local open_size = pre:match("{s=(%d+)}$")
+    local has_close = text:sub(sel_end + 1):match("^{/s}")
+    if open_size and has_close then
+        current = tonumber(open_size)
+        region_start = sel_start - #("{s=" .. open_size .. "}")
+        region_end = sel_end + 4
+    end
+
+    local inner = text:sub(sel_start + 1, sel_end)
+
+    local new_size = ClampFontSize(current + delta)
+
+    local replacement, inner_offset
+    if new_size == base then
+        replacement = inner
+        inner_offset = 0
+    else
+        local open_tag = "{s=" .. new_size .. "}"
+        replacement = open_tag .. inner .. "{/s}"
+        inner_offset = #open_tag
+    end
+
+    PushUndoState(true)
+    state.text = text:sub(1, region_start) .. replacement .. text:sub(region_end + 1)
+
+    local new_sel_start = region_start + inner_offset
+    local new_sel_end = new_sel_start + #inner
+    editor.selection_anchor = new_sel_start
+    editor.selection_start = new_sel_start
+    editor.selection_end = new_sel_end
+    editor.caret = new_sel_end
+    NormalizeSelection(editor)
+
+    state.dirty = true
+    state.last_edit_time = r.time_precise()
+    editor.scroll_to_caret = true
+    editor.request_focus = true
+end
+
 local function MoveCaretLeft(text, caret)
     if caret <= 0 then return 0 end
     local start = utf8.offset(text, -1, caret + 1)
@@ -2896,6 +2977,10 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
     local last_break_idx = nil
     local line_start_byte = 1
     local bold_active = false
+    local base_size = state.font_size or 14
+    local base_line_height = line_height
+    local current_size = base_size
+    local size_stack = {}
 
     local function recalc_width()
         current_width = 0
@@ -2920,6 +3005,7 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
         local fragments = {}
         local current_fragment = nil
         local x = 0
+        local max_size = base_size
         for idx, info in ipairs(chars) do
             local entry = {
                 byte_start = info.byte_start,
@@ -2931,12 +3017,15 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
                 index = info.index,
                 bold = info.bold,
                 is_format = info.is_format,
+                size = info.size,
             }
             line.chars[idx] = entry
             if not info.is_format and info.char ~= "" then
-                if not current_fragment or current_fragment.bold ~= info.bold then
+                if (info.size or base_size) > max_size then max_size = info.size end
+                if not current_fragment or current_fragment.bold ~= info.bold or current_fragment.size ~= info.size then
                     current_fragment = {
                         bold = info.bold,
+                        size = info.size,
                         text_parts = {},
                         x = entry.x0,
                         last_x = entry.x0,
@@ -2958,6 +3047,8 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
         end
         line.fragments = fragments
         line.width = x
+        line.max_size = max_size
+        line.height = base_line_height * (max_size / base_size)
         if #chars > 0 then
             line.end_byte = chars[#chars].byte_end
         else
@@ -2979,7 +3070,43 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
             line_start_byte = i + 1
             i = i + 1
         else
-            if byte == 42 and i < len and text:byte(i + 1) == 42 then
+            local size_open = (byte == 123) and text:match("^{s=(%d+)}", i) or nil
+            local size_close = (byte == 123) and text:match("^{/s}", i) or nil
+            if size_open then
+                local taglen = #("{s=" .. size_open .. "}")
+                size_stack[#size_stack + 1] = current_size
+                current_size = ClampFontSize(tonumber(size_open))
+                char_index = char_index + 1
+                table.insert(current_chars, {
+                    char = "",
+                    width = 0,
+                    byte_start = i,
+                    byte_end = i + taglen - 1,
+                    index = char_index,
+                    is_format = true,
+                    bold = bold_active,
+                    size = current_size,
+                })
+                i = i + taglen
+            elseif size_close then
+                if #size_stack > 0 then
+                    current_size = table.remove(size_stack)
+                else
+                    current_size = base_size
+                end
+                char_index = char_index + 1
+                table.insert(current_chars, {
+                    char = "",
+                    width = 0,
+                    byte_start = i,
+                    byte_end = i + 3,
+                    index = char_index,
+                    is_format = true,
+                    bold = bold_active,
+                    size = current_size,
+                })
+                i = i + 4
+            elseif byte == 42 and i < len and text:byte(i + 1) == 42 then
                 bold_active = not bold_active
                 for offset = 0, 1 do
                     local start_idx = i + offset
@@ -2994,6 +3121,7 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
                         index = char_index,
                         is_format = true,
                         bold = bold_active,
+                        size = current_size,
                     }
                     table.insert(current_chars, info)
                 end
@@ -3005,7 +3133,11 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
             local char = text:sub(i, next_i - 1)
             char_index = char_index + 1
             local width = select(1, r.ImGui_CalcTextSize(ctx, char))
-            if not width or width <= 0 then width = state.font_size * 0.55 end
+            if not width or width <= 0 then
+                width = current_size * 0.55
+            else
+                width = width * (current_size / base_size)
+            end
             local info = {
                 char = char,
                 width = width,
@@ -3014,6 +3146,7 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
                 index = char_index,
                 is_format = false,
                 bold = bold_active,
+                size = current_size,
             }
             table.insert(current_chars, info)
             current_width = current_width + width
@@ -3056,7 +3189,12 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
         char_count = char_index,
         line_height = line_height,
     }
-    layout.total_height = math.max(line_height, #lines * line_height)
+    local acc_y = 0
+    for _, line in ipairs(lines) do
+        line.y = acc_y
+        acc_y = acc_y + (line.height or line_height)
+    end
+    layout.total_height = math.max(line_height, acc_y)
     return layout
 end
 
@@ -3094,7 +3232,7 @@ local function LocateCaret(layout, caret)
     end
     for idx, line in ipairs(lines) do
         if caret < line.start_byte then
-            local y = (idx - 1) * layout.line_height
+            local y = line.y or (idx - 1) * layout.line_height
             return idx, 0.0, y, line
         end
         if line.end_byte >= line.start_byte and caret <= line.end_byte then
@@ -3113,18 +3251,18 @@ local function LocateCaret(layout, caret)
                     x = ch.x1
                 end
             end
-            local y = (idx - 1) * layout.line_height
+            local y = line.y or (idx - 1) * layout.line_height
             return idx, x, y, line
         end
         if line.newline_byte and caret == line.newline_byte then
         elseif not line.newline_byte and idx == #lines and caret > line.end_byte then
-            local y = (idx - 1) * layout.line_height
+            local y = line.y or (idx - 1) * layout.line_height
             return idx, line.width, y, line
         end
     end
     local last_idx = #lines
     local last_line = lines[last_idx]
-    local y = (last_idx - 1) * layout.line_height
+    local y = (last_line and last_line.y) or (last_idx - 1) * layout.line_height
     local x = last_line and last_line.width or 0.0
     return last_idx, x, y, last_line
 end
@@ -3135,7 +3273,12 @@ local function CaretFromMouse(layout, local_x, local_y, wrap_width, alignment)
         return 0, 0
     end
     local line_height = layout.line_height
-    local idx = math.floor(local_y / line_height) + 1
+    local idx = #lines
+    for li, ln in ipairs(lines) do
+        local top = ln.y or ((li - 1) * line_height)
+        local bot = top + (ln.height or line_height)
+        if local_y < bot then idx = li; break end
+    end
     if idx < 1 then idx = 1 end
     if idx > #lines then idx = #lines end
     local line = lines[idx]
@@ -4067,6 +4210,40 @@ local function DrawMenuBar()
         table.insert(overflow_items, "bold")
     end
 
+    if CheckToolbarFit((button_width + 4) * 2) then
+        local size_specs = {
+            {icon = "A-", delta = -FONT_SIZE_STEP, tooltip = "Decrease size of selected text"},
+            {icon = "A+", delta = FONT_SIZE_STEP, tooltip = "Increase size of selected text"},
+        }
+        for si, spec in ipairs(size_specs) do
+            SameLineToolbar()
+            local ed = EnsureEditorState()
+            local has_sel = HasSelection(ed)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_button)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_button)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_button)
+            if not has_sel then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x808080FF)
+            end
+            local size_label = spec.icon .. "##text_size_" .. si
+            if r.ImGui_Button(ctx, size_label, button_width, button_height) then
+                if has_sel then
+                    ApplySizeToSelection(ed, spec.delta)
+                end
+                ed.request_focus = true
+            end
+            if not has_sel then
+                r.ImGui_PopStyleColor(ctx, 1)
+            end
+            r.ImGui_PopStyleColor(ctx, 3)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, spec.tooltip .. "\n(select text first)")
+            end
+        end
+    else
+        table.insert(overflow_items, "textsize")
+    end
+
     if CheckToolbarFit((button_width + 4) * 3) then
         SameLineToolbar()
         local alignments = {
@@ -4484,6 +4661,17 @@ local function DrawMenuBar()
             if overflow_set["bold"] then
                 if r.ImGui_MenuItem(ctx, "𝗕 Bold", nil, state.bold_input_active) then
                     ToggleBoldFormatting(EnsureEditorState())
+                end
+            end
+            
+            if overflow_set["textsize"] then
+                local ed_sz = EnsureEditorState()
+                local has_sel_sz = HasSelection(ed_sz)
+                if r.ImGui_MenuItem(ctx, "A+ Increase selected text size", nil, false, has_sel_sz) then
+                    ApplySizeToSelection(ed_sz, FONT_SIZE_STEP)
+                end
+                if r.ImGui_MenuItem(ctx, "A- Decrease selected text size", nil, false, has_sel_sz) then
+                    ApplySizeToSelection(ed_sz, -FONT_SIZE_STEP)
                 end
             end
             
@@ -5399,7 +5587,8 @@ local function DrawEditor()
         for idx, line in ipairs(layout.lines) do
             local line_offset = CalculateLineOffset(line, wrap_width, state.text_align)
             local base_x = area_x + EditorConstants.padding_x + line_offset
-            local line_y = area_y + EditorConstants.padding_y - scroll_y + (idx - 1) * line_height
+            local line_y = area_y + EditorConstants.padding_y - scroll_y + (line.y or (idx - 1) * line_height)
+            local lh = line.height or line_height
             
             local line_color = text_color
             if has_line_colors and line.start_byte then
@@ -5415,7 +5604,10 @@ local function DrawEditor()
                     local fragment_text = fragment.text
                     if fragment_text and fragment_text ~= "" then
                         local fragment_x = base_x + (fragment.x or 0)
-                        DrawTextFragment(draw_list, fragment_x, line_y, line_color, fragment_text, fragment.bold)
+                        local frag_size = fragment.size or state.font_size
+                        local frag_h = line_height * (frag_size / (state.font_size or 14))
+                        local frag_y = line_y + (lh - frag_h)
+                        DrawTextFragment(draw_list, fragment_x, frag_y, line_color, fragment_text, fragment.bold, frag_size)
                     end
                 end
             elseif line.text and line.text ~= "" then
@@ -5425,6 +5617,8 @@ local function DrawEditor()
 
         local caret_line_idx, caret_x, caret_y = LocateCaret(layout, editor.caret)
         if caret_line_idx then
+            local caret_line = layout.lines[caret_line_idx]
+            local caret_h = (caret_line and caret_line.height) or line_height
             local now = r.time_precise()
             if editor.active then
                 if now - (editor.blink_time or now) >= EditorConstants.blink_interval then
@@ -5437,7 +5631,7 @@ local function DrawEditor()
 
             if editor.scroll_to_caret then
                 local caret_top = caret_y + EditorConstants.padding_y
-                local caret_bottom = caret_top + line_height
+                local caret_bottom = caret_top + caret_h
                 local visible_top = scroll_y
                 local visible_bottom = scroll_y + editor_h
                 if caret_top < visible_top then
@@ -5454,12 +5648,11 @@ local function DrawEditor()
             end
 
             if editor.active and editor.blink_visible then
-                local caret_line = layout.lines[caret_line_idx]
                 local caret_offset = CalculateLineOffset(caret_line, wrap_width, state.text_align)
                 local caret_screen_x = area_x + EditorConstants.padding_x + caret_offset + caret_x
                 local caret_screen_y = area_y + EditorConstants.padding_y - scroll_y + caret_y
                 local caret_color = text_color
-                r.ImGui_DrawList_AddLine(draw_list, caret_screen_x, caret_screen_y, caret_screen_x, caret_screen_y + line_height, caret_color, EditorConstants.caret_width)
+                r.ImGui_DrawList_AddLine(draw_list, caret_screen_x, caret_screen_y, caret_screen_x, caret_screen_y + caret_h, caret_color, EditorConstants.caret_width)
             end
         end
 

@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.0
+-- @version 3.2.1
 -- @changelog:
 --[[ 
+    v3.2.1:
+        + Bulk screenshots: added crash recovery. If a plugin hard-crashes REAPER during capture, a pending marker is written; on the next start a popup asks whether to skip that plugin (sets its Bulk checkbox off in the Plugin Manager, re-enable anytime).
+        + Fixed: "Open Folder" for Track Template thumbnails could show "Could not create or open TrackTemplateThumbnails folder" - directory existence is now checked correctly (reaper.file_exists only detects files) and the trailing separator no longer breaks the Windows folder-open command.
+        + TK Notes: added per-selection text sizing (A- / A+ toolbar buttons) to resize just the selected part of the text, independent from the whole-text font slider (works together with bold; mixed sizes on the same line are supported).
     v3.2.0:
         + Auto slot assign: new SLOTS settings tab with rules that automatically insert plugins on a fixed slot (REAPER 7 empty-slots) based on a keyword or FX category.
         + Auto slot rules: per rule pick a match mode (contains / starts / exact / category), a keyword or category, an optional type filter (any / FX / instrument), the target slot and enable/disable; first matching rule wins and occupied slots shift down.
@@ -1262,6 +1266,29 @@ function CheckPluginCrashHistory(plugin_name)
     end
     return false
 end
+
+local pending_capture_path = script_path .. "pending_capture.txt"
+function WritePendingCapture(plugin_name)
+    if not plugin_name or plugin_name == "" then return end
+    local file = io.open(pending_capture_path, "w")
+    if file then
+        file:write(plugin_name)
+        file:close()
+    end
+end
+function ClearPendingCapture()
+    if r.file_exists(pending_capture_path) then
+        os.remove(pending_capture_path)
+    end
+end
+function ReadPendingCapture()
+    local file = io.open(pending_capture_path, "r")
+    if not file then return nil end
+    local name = file:read("*l")
+    file:close()
+    if name and name ~= "" then return name end
+    return nil
+end
 --------------------------------------------------------------------------
 -- DEBUG LOGGING
 local function DebugLog(message)
@@ -2352,6 +2379,22 @@ function LoadConfig()
     end
 end
 LoadConfig()
+
+do
+    local crashed_plugin = ReadPendingCapture()
+    if crashed_plugin then
+        ClearPendingCapture()
+        local msg = "The plugin below caused REAPER to crash during screenshot capture:\n\n" ..
+            crashed_plugin .. "\n\n" ..
+            "Skip it from now on? (You can re-enable it later in Settings > Plugin Manager.)"
+        local answer = r.ShowMessageBox(msg, "TK FX BROWSER - Plugin crashed", 4)
+        if answer == 6 then
+            config.plugin_visibility = config.plugin_visibility or {}
+            config.plugin_visibility[crashed_plugin] = false
+            SaveConfig()
+        end
+    end
+end
 
 view_mode = config.view_mode or "screenshots"
 
@@ -5207,6 +5250,7 @@ end
 
 function exit()
     pcall(function() r.SetExtState("TK_FX_BROWSER", "running", "false", true) end)
+    pcall(ClearPendingCapture)
     if projects and #projects > 0 then
         pcall(save_projects_info, projects)
     end
@@ -9530,6 +9574,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
         end
 
         if not IsX86Bridged(plugin_name) or config.include_x86_bridged then
+            WritePendingCapture(plugin_name)
             local fx_index = AddFXToTrack(TRACK, plugin_name)
             r.TrackFX_Show(TRACK, fx_index, 3)
            
@@ -9549,6 +9594,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
                 if RequestClearScreenshotCache then RequestClearScreenshotCache() end
                 r.TrackFX_Show(TRACK, fx_index, 2)
                 r.TrackFX_Delete(TRACK, fx_index)
+                ClearPendingCapture()
                 EnsurePluginRemoved(fx_index, callback)
             end)
         else
@@ -9558,6 +9604,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
 
     if not success then
         log_to_file("CRASH: " .. plugin_name .. " at " .. os.date("%Y-%m-%d %H:%M:%S"))
+        ClearPendingCapture()
         if callback then callback() end
         return false
     end
@@ -15571,10 +15618,11 @@ end
 
 function EnsureTrackTemplateThumbnailsFolderExists()
     if not track_template_thumbs_folder_ready then
-        if not r.file_exists(track_template_thumbs_path) then
+        local check_path = track_template_thumbs_path:gsub("[/\\]+$", "")
+        if not PathExists(check_path) then
             r.RecursiveCreateDirectory(track_template_thumbs_path, 0)
         end
-        track_template_thumbs_folder_ready = r.file_exists(track_template_thumbs_path)
+        track_template_thumbs_folder_ready = PathExists(check_path)
     end
     return track_template_thumbs_folder_ready and track_template_thumbs_path or nil
 end
@@ -15585,13 +15633,14 @@ function OpenTrackTemplateThumbnailsFolder()
         r.ShowMessageBox("Could not create or open TrackTemplateThumbnails folder:\n" .. tostring(track_template_thumbs_path), "TK FX BROWSER", 0)
         return
     end
+    local open_path = path:gsub("[/\\]+$", "")
     local os_name = r.GetOS()
     if os_name:match("Win") then
-        os.execute('start "" "' .. path .. '"')
+        os.execute('start "" "' .. open_path .. '"')
     elseif os_name:match("OSX") then
-        os.execute('open "' .. path .. '"')
+        os.execute('open "' .. open_path .. '"')
     else
-        os.execute('xdg-open "' .. path .. '" &')
+        os.execute('xdg-open "' .. open_path .. '" &')
     end
 end
 
