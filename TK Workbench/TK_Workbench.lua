@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.8
+-- @version 0.5.9
 -- @changelog:
+-- v0.5.9
+--   + Timepiece: Added a Recording alert that makes the panel unmistakable while REAPER is recording - a thick red border, a blinking REC dot and a red clock, plus a pulsing red background, so you can tell from across the room that it is definitely recording (on by default)
+--   + Timepiece: Added a separate "pulse background" toggle so you can keep the red border, REC dot and red clock while turning off the pulsing red panel for a calmer alert
 -- v0.5.8
 --   + Notes: per-selection text sizing - select text and use Increase/Decrease Text Size (right-click menu or Ctrl+Shift+. / Ctrl+Shift+,) to resize just the selected part, independent from the block font size; larger text is baseline-aligned and works together with bold
 --   + Notes: In Auto mode a clicked region/marker now takes priority when it is the most recently changed selection, so clicking a region shows its note even while a track or item stays selected; when the region is not the freshest pick it falls back to Item > Track > Region > Project, and deselecting the item (which REAPER does when you click a region) no longer briefly snaps to the track note first

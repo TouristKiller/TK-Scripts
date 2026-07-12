@@ -30,7 +30,9 @@ local defaults = {
   timer_duration_text = "00:05:00",
   timer_target_epoch = 0,
   timer_ringing = false,
-  compact_controls = true
+  compact_controls = true,
+  record_alert = true,
+  record_alert_pulse = true
 }
 
 local state = {
@@ -589,6 +591,8 @@ local function draw_settings_button(ctx, app, settings, x, y, width)
     draw_toggle(ctx, app, settings, "show_next_marker", "Next marker")
     draw_toggle(ctx, app, settings, "show_region_progress", "Region progress")
     draw_toggle(ctx, app, settings, "clock_at_top", "Clock at top")
+    draw_toggle(ctx, app, settings, "record_alert", "Recording alert")
+    draw_toggle(ctx, app, settings, "record_alert_pulse", "Recording alert: pulse background")
     r.ImGui_Separator(ctx)
     draw_display_mode_combo(ctx, app, settings)
     r.ImGui_Separator(ctx)
@@ -609,7 +613,10 @@ function M.draw(app)
   local status_text, status_color, play_state = play_state_info()
   local source_time, source_label = clock_position(play_state)
   local time_text = format_clock_position(source_time, settings)
+  local recording = ((tonumber(play_state) or 0) & 4) == 4
+  local record_alert = recording and settings.record_alert ~= false
   local clock_color = (settings.alarm_ringing == true or settings.timer_ringing == true) and Theme.colors.danger or Theme.colors.text
+  if record_alert then clock_color = 0xFF3B3BFF end
   local bpm, numerator, denominator = project_signature()
   local mode = display_mode_def(settings.display_mode)
   local needs_region = settings.show_region_progress ~= false or settings.show_context_info ~= false
@@ -637,7 +644,29 @@ function M.draw(app)
     local x, y = r.ImGui_GetCursorScreenPos(ctx)
     local panel_h = math.max(UIScale.round(74), height)
     r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + panel_h, Theme.colors.child_bg, UIScale.px(6))
-    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + panel_h, Theme.colors.border, UIScale.px(6), 0, UIScale.px(1))
+    local panel_border = Theme.colors.border
+    local panel_border_thickness = UIScale.px(1)
+    if record_alert then
+      local rec_red = 0xFF2323FF
+      if settings.record_alert_pulse ~= false then
+        local now = r.time_precise and r.time_precise() or os.clock()
+        local pulse = 0.5 + 0.5 * math.sin(now * 6.2831853 / 0.85)
+        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + panel_h, color_with_alpha(rec_red, math.floor(45 + pulse * 120 + 0.5)), UIScale.px(6))
+      end
+      panel_border = rec_red
+      panel_border_thickness = UIScale.px(3)
+    end
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + panel_h, panel_border, UIScale.px(6), 0, panel_border_thickness)
+    if record_alert then
+      local blink = ((r.time_precise and r.time_precise() or os.clock()) % 1.0) < 0.6
+      if blink then
+        local dot_r = UIScale.round(6)
+        local dot_cx = x + UIScale.round(18)
+        local dot_cy = y + UIScale.round(18)
+        r.ImGui_DrawList_AddCircleFilled(draw_list, dot_cx, dot_cy, dot_r, 0xFF2323FF, 16)
+        r.ImGui_DrawList_AddText(draw_list, dot_cx + dot_r + UIScale.round(4), dot_cy - UIScale.round(7), 0xFF6060FF, "REC")
+      end
+    end
     draw_settings_button(ctx, app, settings, x, y, width)
     r.ImGui_SetCursorScreenPos(ctx, x + UIScale.round(12), y + UIScale.round(12))
     if show_top_text then draw_centered_text(ctx, top_text, settings.show_status ~= false and status_color or Theme.colors.text_dim, width - UIScale.round(24)) end
