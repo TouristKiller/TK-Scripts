@@ -1,7 +1,11 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.1.2
+-- @version 1.1.3
 -- @changelog:
+--   v1.1.3
+--   + Tab bar below plugin (flip): place the tab bar on the opposite side of the plugin, works in all modes
+--   + Also fixes macOS setups where the tab bar appeared at the bottom of the plugin instead of the top
+--   + Tab bar vertical offset slider to fine-tune the bar position
 --   v1.1.2
 --   # Offline/bypassed FX now respect the 'Center FX' setting (kept in place and draggable when centering is off, instead of always snapping to center)
 --   # Enabling Follow FX window now automatically turns off 'Center FX' (which stays greyed out while follow is active)
@@ -131,6 +135,8 @@ local settings = {
   content_mode = ext_get_number("content_mode", CONTENT_MODE_ALL_FX),
   tab_filter_mode = ext_get_number("tab_filter_mode", TAB_FILTER_ALL),
   plugin_overlap_y = ext_get_number("plugin_overlap_y", 80),
+  vertical_flip = ext_get_bool("vertical_flip", false),
+  vertical_offset = ext_get_number("vertical_offset", 0),
   topbar_left_overhang = ext_get_number("topbar_left_overhang", topbar_side_overhang),
   topbar_right_overhang = ext_get_number("topbar_right_overhang", topbar_side_overhang),
   theme_preset = ext_get_string("theme_preset", "REAPER Theme"),
@@ -166,6 +172,10 @@ end
 
 local function topbar_right_overhang()
   return clamp(settings.topbar_right_overhang, -24, 48)
+end
+
+local function topbar_vertical_offset()
+  return clamp(settings.vertical_offset, -120, 120)
 end
 
 local function topbar_window_width(width)
@@ -737,13 +747,24 @@ local function apply_centered_host_rect()
   local centered_left, centered_top, centered_host_left = centered_topbar_position()
   if not centered_left or not centered_top then return false end
   host_rect.left = centered_host_left or centered_left + topbar_side_overhang
-  host_rect.top = centered_top + topbar_height - clamp(settings.plugin_overlap_y, 0, 80)
+  if settings.vertical_flip then
+    host_rect.top = centered_top
+  else
+    host_rect.top = centered_top + topbar_height - clamp(settings.plugin_overlap_y, 0, 80)
+  end
   return true
 end
 
 local function topbar_position_from_host_rect()
   if host_rect.width < 120 or host_rect.height < 90 then return nil end
-  return host_rect.left - topbar_left_overhang(), host_rect.top - topbar_height + clamp(settings.plugin_overlap_y, 0, 80)
+  local overlap = clamp(settings.plugin_overlap_y, 0, 80)
+  local bar_top
+  if settings.vertical_flip then
+    bar_top = host_rect.top + host_rect.height - overlap + topbar_vertical_offset()
+  else
+    bar_top = host_rect.top - topbar_height + overlap + topbar_vertical_offset()
+  end
+  return host_rect.left - topbar_left_overhang(), bar_top
 end
 
 local function update_topbar_width_from_size(width)
@@ -767,8 +788,8 @@ local function measure_fx_window(entry, hwnd)
   if not ok then return false end
   local imgui_left, imgui_top = native_to_imgui(left or 0, top or 0)
   local imgui_right, imgui_bottom = native_to_imgui(right or 0, bottom or 0)
-  local width = math.max(180, imgui_right - imgui_left)
-  local height = math.max(140, imgui_bottom - imgui_top)
+  local width = math.max(180, math.abs(imgui_right - imgui_left))
+  local height = math.max(140, math.abs(imgui_bottom - imgui_top))
   if width <= 180 or height <= 140 then return false end
   local previous = fx_size_cache[entry.key]
   fx_size_cache[entry.key] = { width = width, height = height }
@@ -802,9 +823,12 @@ function sync_topbar_window_to_blocked_entry(entry)
   local hwnd = topbar_hwnd()
   if not hwnd then return end
   local left, top = r.ImGui_GetWindowPos(ctx)
-  local native_left, native_top = imgui_to_native(left, top)
-  local native_right, native_bottom = imgui_to_native(left + width, top + topbar_height)
-  native_left, native_top, native_right, native_bottom = js_int(native_left), js_int(native_top), js_int(native_right), js_int(native_bottom)
+  local native_x1, native_y1 = imgui_to_native(left, top)
+  local native_x2, native_y2 = imgui_to_native(left + width, top + topbar_height)
+  local native_left = js_int(math.min(native_x1, native_x2))
+  local native_top = js_int(math.min(native_y1, native_y2))
+  local native_right = js_int(math.max(native_x1, native_x2))
+  local native_bottom = js_int(math.max(native_y1, native_y2))
   r.JS_Window_SetPosition(hwnd, native_left, native_top, native_right - native_left, native_bottom - native_top)
 end
 
@@ -1019,10 +1043,14 @@ function follow_fx_window_update()
   measure_fx_window(entry, hwnd)
   local imgui_left, imgui_top = native_to_imgui(left, top)
   local imgui_right, imgui_bottom = native_to_imgui(right, bottom)
-  host_rect.left = imgui_left
-  host_rect.top = imgui_top
-  host_rect.width = math.max(180, imgui_right - imgui_left)
-  host_rect.height = math.max(140, imgui_bottom - imgui_top)
+  local x_min = math.min(imgui_left, imgui_right)
+  local x_max = math.max(imgui_left, imgui_right)
+  local y_min = math.min(imgui_top, imgui_bottom)
+  local y_max = math.max(imgui_top, imgui_bottom)
+  host_rect.left = x_min
+  host_rect.top = y_min
+  host_rect.width = math.max(180, x_max - x_min)
+  host_rect.height = math.max(140, y_max - y_min)
   follow_pair_on_top = foreground_is_topbar_pair(hwnd)
   return true
 end
@@ -1051,9 +1079,12 @@ local function place_active_window()
   host_rect.width = size.width
   host_rect.height = size.height
   if not dragging_topbar then apply_centered_host_rect() end
-  local native_left, native_top = imgui_to_native(host_rect.left, host_rect.top)
-  local native_right, native_bottom = imgui_to_native(host_rect.left + host_rect.width, host_rect.top + host_rect.height)
-  native_left, native_top, native_right, native_bottom = js_int(native_left), js_int(native_top), js_int(native_right), js_int(native_bottom)
+  local native_x1, native_y1 = imgui_to_native(host_rect.left, host_rect.top)
+  local native_x2, native_y2 = imgui_to_native(host_rect.left + host_rect.width, host_rect.top + host_rect.height)
+  local native_left = js_int(math.min(native_x1, native_x2))
+  local native_top = js_int(math.min(native_y1, native_y2))
+  local native_right = js_int(math.max(native_x1, native_x2))
+  local native_bottom = js_int(math.max(native_y1, native_y2))
   local moved_window = false
   if window_rect_needs_update(hwnd, native_left, native_top, native_right, native_bottom) then
     r.JS_Window_SetPosition(hwnd, native_left, native_top, native_right - native_left, native_bottom - native_top)
@@ -2032,6 +2063,9 @@ local function draw_settings_popup()
       if changed_left_overhang then settings.topbar_left_overhang = next_left_overhang; ext_set_number("topbar_left_overhang", next_left_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
       local changed_right_overhang, next_right_overhang = r.ImGui_SliderInt(ctx, "Tab bar right edge", topbar_right_overhang(), -24, 48, "%d px")
       if changed_right_overhang then settings.topbar_right_overhang = next_right_overhang; ext_set_number("topbar_right_overhang", next_right_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+      local changed_voffset, next_voffset = r.ImGui_SliderInt(ctx, "Tab bar vertical offset", topbar_vertical_offset(), -120, 120, "%d px")
+      if changed_voffset then settings.vertical_offset = next_voffset; ext_set_number("vertical_offset", next_voffset); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Fine-tune the vertical position of the tab bar.") end
     end
     local changed_start, next_start = r.ImGui_Checkbox(ctx, "Open FX on start", settings.auto_open_on_start)
     if changed_start then settings.auto_open_on_start = next_start; ext_set_bool("auto_open_on_start", next_start); if next_start and active_key == "" then startup_open_done = false; open_startup_instrument() end end
@@ -2055,6 +2089,9 @@ local function draw_settings_popup()
       last_place_time = 0
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The tab bar follows the plugin window instead of moving it.\nDisables centering while active.") end
+    local changed_flip, next_flip = r.ImGui_Checkbox(ctx, "Tab bar below plugin (flip)", settings.vertical_flip == true)
+    if changed_flip then settings.vertical_flip = next_flip; ext_set_bool("vertical_flip", next_flip); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Place the tab bar on the opposite (bottom) side of the plugin.\nWorks in all modes. Also fixes macOS setups where the bar\nappears at the bottom instead of the top.") end
     local changed_numbers, next_numbers = r.ImGui_Checkbox(ctx, "Show track numbers", settings.show_track_numbers ~= false)
     if changed_numbers then settings.show_track_numbers = next_numbers; ext_set_bool("show_track_numbers", next_numbers); tab_width_cache = {} end
     if r.ImGui_BeginCombo then
@@ -2266,10 +2303,11 @@ local function update_plugin_rect_from_topbar()
   local window_left, window_top = r.ImGui_GetWindowPos(ctx)
   local _, window_height = r.ImGui_GetWindowSize(ctx)
   local _, viewport_top, _, viewport_height = main_viewport_rect()
-  local plugin_top = window_top + window_height - clamp(settings.plugin_overlap_y, 0, 80)
+  local overlap = clamp(settings.plugin_overlap_y, 0, 80)
   local viewport_bottom = viewport_top + viewport_height - 12
   local active_entry = find_entry_by_key(active_key)
   local size = entry_window_size(active_entry)
+  local plugin_top = settings.vertical_flip and (window_top - size.height + overlap) or (window_top + window_height - overlap)
   if topbar_dragging or (not settings.center_fx_in_reaper_window and not settings.follow_fx_position) then
     host_rect.left = math.floor(window_left + topbar_left_overhang() + 0.5)
     host_rect.top = math.floor(plugin_top + 0.5)
@@ -2283,7 +2321,7 @@ local function draw_blocked_state_window()
   local state = entry_blocked_state(entry)
   if not state or host_rect.width < 120 or host_rect.height < 90 then return end
   local top_offset = clamp(settings.plugin_overlap_y, 0, 80)
-  local state_top = host_rect.top + top_offset
+  local state_top = settings.vertical_flip and host_rect.top or (host_rect.top + top_offset)
   local state_height = math.max(120, host_rect.height - top_offset)
   r.ImGui_SetNextWindowPos(ctx, host_rect.left, state_top, imgui_flag("ImGui_Cond_Always"))
   r.ImGui_SetNextWindowSize(ctx, host_rect.width, state_height, imgui_flag("ImGui_Cond_Always"))
