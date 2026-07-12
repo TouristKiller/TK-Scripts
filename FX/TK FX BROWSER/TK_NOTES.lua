@@ -1,7 +1,10 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.6.2
+-- @version 2.6.3
 -- @changelog
+-- 2.6.3
+--   + Per-selection text size: larger text now sits on the same baseline as the rest of the line (baseline-aligned) instead of floating higher
+--   + Per-selection text size: fixed erratic A- / A+ behaviour (increase/decrease could do nothing or jump); the current size is now read reliably and the selection stays active for repeated presses
 -- 2.6.2
 --   + Per-selection text size: select text and use the new A- / A+ toolbar buttons to make just that part larger or smaller, independent from the whole-text font slider (works together with bold; mixed sizes on the same line are supported)
 -- 2.6.1
@@ -2403,6 +2406,7 @@ local StatusBarConstants = {
 local FONT_SIZE_MIN = 6
 local FONT_SIZE_MAX = 96
 local FONT_SIZE_STEP = 2
+local EDITOR_BASELINE_RATIO = 0.8
 
 local function ClampFontSize(size)
     size = tonumber(size) or 14
@@ -2616,7 +2620,7 @@ local function DrawTextFragment(draw_list, x, y, color, text, bold, size)
 
     local base_size = state.font_size or 14
     size = size or base_size
-    local use_ex = size ~= base_size and font ~= nil and type(r.ImGui_DrawList_AddTextEx) == "function"
+    local use_ex = font ~= nil and type(r.ImGui_DrawList_AddTextEx) == "function"
 
     local function draw(px, py)
         if use_ex then
@@ -2899,6 +2903,26 @@ local function ToggleBoldFormatting(editor)
     NormalizeSelection(editor)
 end
 
+local function SizeStackAt(text, pos)
+    local stack = {}
+    local sub = text:sub(1, pos)
+    local i = 1
+    local len = #sub
+    while i <= len do
+        local o = sub:match("^{s=(%d+)}", i)
+        if o then
+            stack[#stack + 1] = ClampFontSize(tonumber(o))
+            i = i + #o + 4
+        elseif sub:match("^{/s}", i) then
+            if #stack > 0 then table.remove(stack) end
+            i = i + 4
+        else
+            i = i + 1
+        end
+    end
+    return stack
+end
+
 local function ApplySizeToSelection(editor, delta)
     if not state.can_edit then return end
     if not editor then return end
@@ -2912,36 +2936,55 @@ local function ApplySizeToSelection(editor, delta)
 
     local region_start = sel_start
     local region_end = sel_end
-    local current = base
 
-    local pre = text:sub(1, sel_start)
-    local open_size = pre:match("{s=(%d+)}$")
-    local has_close = text:sub(sel_end + 1):match("^{/s}")
-    if open_size and has_close then
-        current = tonumber(open_size)
-        region_start = sel_start - #("{s=" .. open_size .. "}")
-        region_end = sel_end + 4
+    local before_open = text:sub(1, region_start):match("({s=%d+})$")
+    local after_close = text:sub(region_end + 1):match("^({/s})")
+    if before_open and after_close then
+        region_start = region_start - #before_open
+        region_end = region_end + #after_close
     end
 
-    local inner = text:sub(sel_start + 1, sel_end)
+    local sel = text:sub(region_start + 1, region_end)
 
+    local stack_start = SizeStackAt(text, region_start)
+    local stack_end = SizeStackAt(text, region_end)
+    local context_size = stack_start[#stack_start] or base
+
+    local wrapped_size = nil
+    local lead = sel:match("^{s=(%d+)}")
+    if lead and sel:match("{/s}$") then
+        wrapped_size = ClampFontSize(tonumber(lead))
+    end
+
+    local current = wrapped_size or context_size
     local new_size = ClampFontSize(current + delta)
 
+    local visible = sel:gsub("{s=%d+}", ""):gsub("{/s}", "")
+
     local replacement, inner_offset
-    if new_size == base then
-        replacement = inner
+    if new_size == context_size then
+        replacement = visible
         inner_offset = 0
     else
         local open_tag = "{s=" .. new_size .. "}"
-        replacement = open_tag .. inner .. "{/s}"
+        replacement = open_tag .. visible .. "{/s}"
         inner_offset = #open_tag
     end
 
+    local common = 0
+    while common < #stack_start and common < #stack_end and stack_start[common + 1] == stack_end[common + 1] do
+        common = common + 1
+    end
+    local comp = string.rep("{/s}", #stack_start - common)
+    for k = common + 1, #stack_end do
+        comp = comp .. "{s=" .. stack_end[k] .. "}"
+    end
+
     PushUndoState(true)
-    state.text = text:sub(1, region_start) .. replacement .. text:sub(region_end + 1)
+    state.text = text:sub(1, region_start) .. replacement .. comp .. text:sub(region_end + 1)
 
     local new_sel_start = region_start + inner_offset
-    local new_sel_end = new_sel_start + #inner
+    local new_sel_end = new_sel_start + #visible
     editor.selection_anchor = new_sel_start
     editor.selection_start = new_sel_start
     editor.selection_end = new_sel_end
@@ -2951,7 +2994,6 @@ local function ApplySizeToSelection(editor, delta)
     state.dirty = true
     state.last_edit_time = r.time_precise()
     editor.scroll_to_caret = true
-    editor.request_focus = true
 end
 
 local function MoveCaretLeft(text, caret)
@@ -4230,7 +4272,6 @@ local function DrawMenuBar()
                 if has_sel then
                     ApplySizeToSelection(ed, spec.delta)
                 end
-                ed.request_focus = true
             end
             if not has_sel then
                 r.ImGui_PopStyleColor(ctx, 1)
@@ -5606,7 +5647,7 @@ local function DrawEditor()
                         local fragment_x = base_x + (fragment.x or 0)
                         local frag_size = fragment.size or state.font_size
                         local frag_h = line_height * (frag_size / (state.font_size or 14))
-                        local frag_y = line_y + (lh - frag_h)
+                        local frag_y = line_y + EDITOR_BASELINE_RATIO * (lh - frag_h)
                         DrawTextFragment(draw_list, fragment_x, frag_y, line_color, fragment_text, fragment.bold, frag_size)
                     end
                 end

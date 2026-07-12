@@ -1,8 +1,10 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.1
+-- @version 1.2.11
 -- @changelog:
 --[[ 
+    v1.2.11:
+        + TK Notes: fixed per-selection text sizing - larger text now sits on the same baseline as the rest of the line, and the A- / A+ buttons no longer behave erratically (reliable increase/decrease with the selection kept active).
     v1.2.1:
         + Bulk screenshots: added crash recovery. If a plugin hard-crashes REAPER during capture, a pending marker is written; on the next start a popup asks whether to skip that plugin (sets its Bulk checkbox off in the Plugin Manager, re-enable anytime).
         + Fixed: "Open Folder" for Track Template thumbnails could show "Could not create or open TrackTemplateThumbnails folder" - directory existence is now checked correctly (reaper.file_exists only detects files) and the trailing separator no longer breaks the Windows folder-open command.
