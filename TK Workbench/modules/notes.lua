@@ -59,6 +59,8 @@ local MIN_BLOCK_HEIGHT = 70
 local MAX_BLOCK_HEIGHT = 1200
 local MIN_FONT_SIZE = 10
 local MAX_FONT_SIZE = 32
+local FONT_SIZE_STEP = 2
+local EDITOR_BASELINE_RATIO = 0.8
 
 local LIST_MODES = { none = true, bullet = true, numbered = true, checkbox = true }
 local NOTE_STATUS_MESSAGES = { ["Could not save notes"] = true, ["Notes saved"] = true }
@@ -73,6 +75,25 @@ local state = {
   loaded = false,
   font_cache = {}
 }
+
+local selection_recency = {
+  seq = 0,
+  item_seq = 0,
+  track_seq = 0,
+  region_seq = 0,
+  item_sig = nil,
+  track_sig = nil,
+  region_sig = nil
+}
+
+local function bump_recency(kind, sig)
+  local sig_key = kind .. "_sig"
+  if selection_recency[sig_key] == sig then return end
+  selection_recency[sig_key] = sig
+  if sig == nil then return end
+  selection_recency.seq = selection_recency.seq + 1
+  selection_recency[kind .. "_seq"] = selection_recency.seq
+end
 
 local function request_keyboard_capture(ctx)
   if not r.ImGui_SetNextFrameWantCaptureKeyboard then return end
@@ -211,6 +232,13 @@ local function notes_cursor_position(project)
   return 0
 end
 
+local function project_is_playing(project)
+  local proj = project or 0
+  if r.GetPlayStateEx then return (r.GetPlayStateEx(proj) & 1) == 1 end
+  if r.GetPlayState then return (r.GetPlayState() & 1) == 1 end
+  return false
+end
+
 local function marker_region_ui_selected(proj, enum_index)
   if not r.GetRegionOrMarker or not r.GetRegionOrMarkerInfo_Value then return false end
   local marker = r.GetRegionOrMarker(proj, enum_index, "")
@@ -254,10 +282,50 @@ local function marker_region_at_cursor(proj)
   return nil
 end
 
+local function region_at_cursor(proj)
+  if not r.GetLastMarkerAndCurRegion or not r.EnumProjectMarkers3 then return nil end
+  local cursor = notes_cursor_position(proj)
+  local _, rgn_idx = r.GetLastMarkerAndCurRegion(proj, cursor)
+  if rgn_idx and rgn_idx >= 0 then
+    local retval, isrgn, pos, _, name, num, color = r.EnumProjectMarkers3(proj, rgn_idx)
+    if retval and retval ~= 0 and isrgn then
+      return { type = "region", number = num, name = name or "", color = color, pos = pos }
+    end
+  end
+  return nil
+end
+
+local function selected_marker(proj)
+  if not r.EnumProjectMarkers3 or not r.CountProjectMarkers then return nil end
+  local _, marker_count, region_count = r.CountProjectMarkers(proj)
+  local total = (marker_count or 0) + (region_count or 0)
+  for index = 0, total - 1 do
+    local retval, isrgn, pos, _, name, num, color = r.EnumProjectMarkers3(proj, index)
+    if retval and retval ~= 0 and not isrgn and marker_region_ui_selected(proj, index) then
+      return { type = "marker", number = num, name = name or "", color = color, pos = pos }
+    end
+  end
+  return nil
+end
+
 local function current_marker_region(project)
   if not r.EnumProjectMarkers3 then return nil end
   local proj = project or 0
-  return selected_marker_region(proj) or marker_region_at_cursor(proj)
+  -- During playback regions follow the play cursor first: a region has duration, a marker is only a point
+  if project_is_playing(proj) then
+    local play_region = region_at_cursor(proj)
+    if play_region then return play_region end
+  end
+  -- Markers are a point in time and stay click-only: a selected (clicked) marker wins so its notes stay visible
+  local marker = selected_marker(proj)
+  if marker then return marker end
+  -- Regions follow the edit/play cursor - no click needed, even if another region is still selected
+  local at_cursor = region_at_cursor(proj)
+  if at_cursor then return at_cursor end
+  -- Fallback: a selected region when the cursor is outside every region
+  local sel = selected_marker_region(proj)
+  if sel and sel.type == "region" then return sel end
+  return nil
 end
 
 local function resolve_context(app, settings)
@@ -265,12 +333,29 @@ local function resolve_context(app, settings)
   local project = selection.project and selection.project.pointer or 0
   local proj_tag = tostring(project)
   local context = settings.active_context or "project"
+  local sel_item = selection.item and selection.item.pointer or nil
+  local sel_track = selection.track and selection.track.pointer or nil
+  local region_hit = selected_marker_region(project)
+  local item_sig = (sel_item and r.BR_GetMediaItemGUID) and r.BR_GetMediaItemGUID(sel_item) or nil
+  local track_sig = (sel_track and r.GetTrackGUID) and r.GetTrackGUID(sel_track) or (sel_track and tostring(sel_track)) or nil
+  local region_sig = region_hit and (region_hit.type .. "::" .. tostring(region_hit.number)) or nil
+  bump_recency("item", item_sig)
+  bump_recency("track", track_sig)
+  bump_recency("region", region_sig)
   if settings.auto_context then
-    if selection.item and selection.item.pointer and r.BR_GetMediaItemGUID then
+    local play_region = project_is_playing(project) and region_at_cursor(project) or nil
+    local region_fresh = region_sig ~= nil
+      and selection_recency.region_seq > selection_recency.item_seq
+      and selection_recency.region_seq > selection_recency.track_seq
+    if play_region then
+      context = "region"
+    elseif region_fresh then
+      context = "region"
+    elseif sel_item and r.BR_GetMediaItemGUID then
       context = "item"
-    elseif selection.track and selection.track.pointer then
+    elseif sel_track then
       context = "track"
-    elseif selected_marker_region(project) then
+    elseif region_sig ~= nil then
       context = "region"
     else
       context = "project"
@@ -983,13 +1068,53 @@ local function trim_blank_tail_for_input(text, caret, value)
   return prefix .. suffix, caret
 end
 
+local function size_tag_len_at(text, pos)
+  if pos < 1 or pos > #text or text:byte(pos) ~= 123 then return nil end
+  local open = text:match("^{s=%d+}", pos)
+  if open then return #open end
+  if text:sub(pos, pos + 3) == "{/s}" then return 4 end
+  return nil
+end
+
+local function size_tag_ending_at(text, caret)
+  for start = math.max(1, caret - 10), caret do
+    local len = size_tag_len_at(text, start)
+    if len and start + len - 1 == caret then return start, len end
+  end
+  return nil
+end
+
+local function size_stack_at(text, pos)
+  local stack = {}
+  local sub = text:sub(1, pos)
+  local i = 1
+  local len = #sub
+  while i <= len do
+    local o = sub:match("^{s=(%d+)}", i)
+    if o then
+      stack[#stack + 1] = normalize_font_size(tonumber(o))
+      i = i + #o + 4
+    elseif sub:sub(i, i + 3) == "{/s}" then
+      if #stack > 0 then table.remove(stack) end
+      i = i + 4
+    else
+      i = i + 1
+    end
+  end
+  return stack
+end
+
 local function delete_previous(text, caret)
   if caret <= 0 then return text, caret end
+  local tag_start = size_tag_ending_at(text, caret)
+  if tag_start then return text:sub(1, tag_start - 1) .. text:sub(caret + 1), tag_start - 1 end
   local start_pos = utf8.offset(text, -1, caret + 1) or caret
   return text:sub(1, start_pos - 1) .. text:sub(caret + 1), math.max(0, start_pos - 1)
 end
 
 local function delete_next(text, caret)
+  local tag_len = size_tag_len_at(text, caret + 1)
+  if tag_len then return text:sub(1, caret) .. text:sub(caret + tag_len + 1), caret end
   local start_pos = utf8.offset(text, 1, caret + 1)
   if not start_pos then return text, caret end
   local end_pos = utf8.offset(text, 2, caret + 1) or (#text + 1)
@@ -998,12 +1123,16 @@ end
 
 local function move_left(text, caret)
   if caret <= 0 then return 0 end
+  local tag_start = size_tag_ending_at(text, caret)
+  if tag_start then return tag_start - 1 end
   local start_pos = utf8.offset(text, -1, caret + 1)
   return start_pos and (start_pos - 1) or math.max(0, caret - 1)
 end
 
 local function move_right(text, caret)
   if caret >= #text then return #text end
+  local tag_len = size_tag_len_at(text, caret + 1)
+  if tag_len then return caret + tag_len end
   local end_pos = utf8.offset(text, 2, caret + 1)
   return end_pos and (end_pos - 1) or #text
 end
@@ -1450,6 +1579,8 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
   local line_start_byte = 1
   local index = 1
   local checkbox_checked = nil
+  local current_size = font_size
+  local size_stack = {}
   text = tostring(text or "")
 
   local function recalc_width()
@@ -1465,15 +1596,21 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
     local line = { start_byte = start_byte, newline_byte = newline_byte, source_line = get_source_line_from_byte(text, start_byte - 1), checkbox = checkbox_checked ~= nil, checked = checkbox_checked == true, chars = {}, width = 0, text = "" }
     local parts = {}
     local x = 0
+    local max_size = font_size
     for idx, info in ipairs(chars) do
-      local entry = { byte_start = info.byte_start, byte_end = info.byte_end, char = info.char, width = info.width, x0 = x, x1 = x + info.width }
+      local entry = { byte_start = info.byte_start, byte_end = info.byte_end, char = info.char, width = info.width, x0 = x, x1 = x + info.width, size = info.size, is_format = info.is_format }
       line.chars[idx] = entry
-      parts[#parts + 1] = info.char
+      if not info.is_format then
+        parts[#parts + 1] = info.char
+        if (info.size or font_size) > max_size then max_size = info.size end
+      end
       x = x + info.width
     end
     line.width = x
     line.end_byte = #chars > 0 and chars[#chars].byte_end or start_byte - 1
     line.text = table.concat(parts)
+    line.max_size = max_size
+    line.height = line_height * (max_size / math.max(1, font_size))
     lines[#lines + 1] = line
     checkbox_checked = nil
   end
@@ -1489,6 +1626,17 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
       last_break_idx = nil
       line_start_byte = index + 1
       index = index + 1
+    elseif byte == 123 and text:match("^{s=%d+}", index) then
+      local open = text:match("^{s=(%d+)}", index)
+      local taglen = #("{s=" .. open .. "}")
+      size_stack[#size_stack + 1] = current_size
+      current_size = UIScale.round(normalize_font_size(tonumber(open)))
+      current_chars[#current_chars + 1] = { char = "", width = 0, byte_start = index, byte_end = index + taglen - 1, is_format = true, size = current_size }
+      index = index + taglen
+    elseif byte == 123 and text:sub(index, index + 3) == "{/s}" then
+      if #size_stack > 0 then current_size = table.remove(size_stack) else current_size = font_size end
+      current_chars[#current_chars + 1] = { char = "", width = 0, byte_start = index, byte_end = index + 3, is_format = true, size = current_size }
+      index = index + 4
     elseif index == line_start_byte and index + 3 <= #text and text:sub(index, index + 3):match("^%[[ xX]%]%s") then
       local mark = text:sub(index + 1, index + 1)
       checkbox_checked = mark == "x" or mark == "X"
@@ -1499,8 +1647,8 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
     else
       local next_index = utf8.offset(text, 2, index) or (#text + 1)
       local char = text:sub(index, next_index - 1)
-      local char_width = scaled_text_width(ctx, char, font_size)
-      current_chars[#current_chars + 1] = { char = char, width = char_width, byte_start = index, byte_end = next_index - 1 }
+      local char_width = scaled_text_width(ctx, char, current_size)
+      current_chars[#current_chars + 1] = { char = char, width = char_width, byte_start = index, byte_end = next_index - 1, size = current_size }
       current_width = current_width + char_width
       if char == " " or char == "\t" then last_break_idx = #current_chars end
       if wrap_width > 0 and current_width > wrap_width and #current_chars > 1 then
@@ -1520,15 +1668,22 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
   end
 
   finalize_line(line_start_byte, current_chars, nil)
-  return { lines = lines, line_height = line_height, total_height = math.max(line_height, #lines * line_height) }
+  local acc_y = 0
+  for _, line in ipairs(lines) do
+    line.y = acc_y
+    acc_y = acc_y + (line.height or line_height)
+  end
+  return { lines = lines, line_height = line_height, total_height = math.max(line_height, acc_y) }
 end
 
 local function caret_at_line_position(line, target_x)
   if not line then return 0 end
   local caret = (line.start_byte or 1) - 1
   for _, char in ipairs(line.chars or {}) do
-    local middle = char.x0 + (char.width * 0.5)
-    if target_x < middle then return caret end
+    if not char.is_format then
+      local middle = char.x0 + (char.width * 0.5)
+      if target_x < middle then return caret end
+    end
     caret = char.byte_end
   end
   if line.newline_byte then return line.newline_byte - 1 end
@@ -1538,23 +1693,24 @@ end
 local function locate_caret(layout, text, caret)
   caret = clamp_caret(text, caret)
   for idx, line in ipairs(layout.lines) do
-    if caret < line.start_byte then return idx, 0, (idx - 1) * layout.line_height, line end
+    local line_y = line.y or ((idx - 1) * layout.line_height)
+    if caret < line.start_byte then return idx, 0, line_y, line end
     if line.end_byte >= line.start_byte and caret <= line.end_byte then
       for _, char in ipairs(line.chars or {}) do
-        if caret < char.byte_start then return idx, char.x0, (idx - 1) * layout.line_height, line end
-        if caret <= char.byte_end then return idx, char.x1, (idx - 1) * layout.line_height, line end
+        if caret < char.byte_start then return idx, char.x0, line_y, line end
+        if caret <= char.byte_end then return idx, char.x1, line_y, line end
       end
-      return idx, line.width, (idx - 1) * layout.line_height, line
+      return idx, line.width, line_y, line
     end
     if line.newline_byte and caret == line.newline_byte then
       local next_line = layout.lines[idx + 1]
-      if next_line then return idx + 1, 0, idx * layout.line_height, next_line end
-      return idx, line.width, (idx - 1) * layout.line_height, line
+      if next_line then return idx + 1, 0, next_line.y or (idx * layout.line_height), next_line end
+      return idx, line.width, line_y, line
     end
   end
   local last_idx = math.max(1, #layout.lines)
   local line = layout.lines[last_idx]
-  return last_idx, line and line.width or 0, (last_idx - 1) * layout.line_height, line
+  return last_idx, line and line.width or 0, (line and line.y) or ((last_idx - 1) * layout.line_height), line
 end
 
 local function draw_body_editor(ctx, block, width, height, note_color, text_color)
@@ -1601,10 +1757,15 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     local function caret_from_mouse()
       local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
       local local_y = mouse_y - origin_y - padding_y + editor.scroll_y
-      local line_idx = math.max(1, math.min(#layout.lines, math.floor(local_y / line_height) + 1))
+      local line_idx = #layout.lines
+      for idx, line in ipairs(layout.lines) do
+        local top = line.y or ((idx - 1) * line_height)
+        if local_y < top + (line.height or line_height) then line_idx = idx break end
+      end
+      line_idx = math.max(1, math.min(#layout.lines, line_idx))
       local line = layout.lines[line_idx]
       local local_x = mouse_x - origin_x - padding_x - line_indent(line)
-      return caret_at_line_position(layout.lines[line_idx], local_x)
+      return caret_at_line_position(line, local_x)
     end
     local function checkbox_line_from_mouse()
       local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
@@ -1612,8 +1773,8 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local size = math.max(10, math.min(16, font_size * 0.85))
       for idx, line in ipairs(layout.lines) do
         if line.checkbox and is_first_visual_line(idx) then
-          local line_y = origin_y + padding_y + (idx - 1) * line_height - editor.scroll_y
-          local box_y = line_y + (line_height - size) * 0.5
+          local line_y = origin_y + padding_y + (line.y or (idx - 1) * line_height) - editor.scroll_y
+          local box_y = line_y + ((line.height or line_height) - size) * 0.5
           if mouse_x >= marker_x and mouse_x <= marker_x + size and mouse_y >= box_y and mouse_y <= box_y + size then return line.source_line end
         end
       end
@@ -1805,10 +1966,62 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local new_text, new_caret, selection_start, selection_end = bold_candidate(text, editor)
       return apply_candidate(new_text, new_caret, selection_start, selection_end)
     end
+    local function try_size(delta)
+      local sel_start, sel_end = selection_range(editor)
+      if not sel_start or not sel_end or sel_end <= sel_start then return false end
+      local base = normalize_font_size(block.font_size)
+      local region_start, region_end = sel_start, sel_end
+
+      local before_open = text:sub(1, region_start):match("({s=%d+})$")
+      local after_close = text:sub(region_end + 1):match("^({/s})")
+      if before_open and after_close then
+        region_start = region_start - #before_open
+        region_end = region_end + #after_close
+      end
+
+      local sel = text:sub(region_start + 1, region_end)
+      local stack_start = size_stack_at(text, region_start)
+      local stack_end = size_stack_at(text, region_end)
+      local context_size = stack_start[#stack_start] or base
+
+      local wrapped_size = nil
+      local lead = sel:match("^{s=(%d+)}")
+      if lead and sel:match("{/s}$") then wrapped_size = normalize_font_size(tonumber(lead)) end
+
+      local current = wrapped_size or context_size
+      local new_size = normalize_font_size(current + delta)
+      local visible = sel:gsub("{s=%d+}", ""):gsub("{/s}", "")
+
+      local replacement, inner_offset
+      if new_size == context_size then
+        replacement = visible
+        inner_offset = 0
+      else
+        local open_tag = "{s=" .. new_size .. "}"
+        replacement = open_tag .. visible .. "{/s}"
+        inner_offset = #open_tag
+      end
+
+      local common = 0
+      while common < #stack_start and common < #stack_end and stack_start[common + 1] == stack_end[common + 1] do
+        common = common + 1
+      end
+      local comp = string.rep("{/s}", #stack_start - common)
+      for k = common + 1, #stack_end do
+        comp = comp .. "{s=" .. stack_end[k] .. "}"
+      end
+
+      local new_text = text:sub(1, region_start) .. replacement .. comp .. text:sub(region_end + 1)
+      local new_sel_start = region_start + inner_offset
+      local new_sel_end = new_sel_start + #visible
+      return apply_candidate(new_text, new_sel_end, new_sel_start, new_sel_end)
+    end
     if editor.active then
       request_keyboard_capture(ctx)
       local ctrl_down = false
       if r.ImGui_IsKeyDown and r.ImGui_Key_LeftCtrl and r.ImGui_Key_RightCtrl then ctrl_down = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftCtrl()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightCtrl()) end
+      local shift_down = false
+      if r.ImGui_IsKeyDown and r.ImGui_Key_LeftShift and r.ImGui_Key_RightShift then shift_down = r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift()) end
       if ctrl_down and r.ImGui_Key_A and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_A(), false) then
         editor.selection_start = 0
         editor.selection_end = #text
@@ -1816,6 +2029,8 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
         editor.caret = #text
       end
       if ctrl_down and r.ImGui_Key_B and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_B(), false) then try_bold() end
+      if ctrl_down and shift_down and r.ImGui_Key_Period and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Period(), false) then try_size(FONT_SIZE_STEP) end
+      if ctrl_down and shift_down and r.ImGui_Key_Comma and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Comma(), false) then try_size(-FONT_SIZE_STEP) end
       if ctrl_down and r.ImGui_Key_C and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_C(), false) then set_clipboard(ctx, selected_text(text, editor)) end
       if ctrl_down and r.ImGui_Key_X and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_X(), false) then
         set_clipboard(ctx, selected_text(text, editor))
@@ -1871,6 +2086,8 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     if r.ImGui_BeginPopup(ctx, "##body_context") then
       local has_selection = selection_range(editor) ~= nil
       if r.ImGui_MenuItem(ctx, "Bold", "Ctrl+B", false, true) then try_bold() end
+      if r.ImGui_MenuItem(ctx, "Increase Text Size", "Ctrl+Shift+.", false, has_selection) then try_size(FONT_SIZE_STEP) end
+      if r.ImGui_MenuItem(ctx, "Decrease Text Size", "Ctrl+Shift+,", false, has_selection) then try_size(-FONT_SIZE_STEP) end
       if r.ImGui_MenuItem(ctx, "Add Image") then
         local path = choose_image_file()
         if path and add_note_image(ctx, block, path) then mark_dirty(block); image_rects = collect_image_rects(ctx, block) end
@@ -1973,9 +2190,9 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       editor.last_caret = editor.caret
     end
     if editor.scroll_to_caret then
-      local _, _, caret_y = locate_caret(layout, text, editor.caret)
+      local _, _, caret_y, caret_line = locate_caret(layout, text, editor.caret)
       local caret_top = caret_y + padding_y
-      local caret_bottom = caret_top + line_height
+      local caret_bottom = caret_top + ((caret_line and caret_line.height) or line_height)
       if caret_top < editor.scroll_y then editor.scroll_y = caret_top end
       if caret_bottom > editor.scroll_y + avail_h then editor.scroll_y = caret_bottom - avail_h end
       editor.scroll_to_caret = false
@@ -1992,8 +2209,9 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local highlight = Theme.colors.accent_soft or 0x2B4B78FF
       highlight = (highlight & 0xFFFFFF00) | 0x99
       for idx, line in ipairs(layout.lines) do
-        local line_y = origin_y + padding_y + (idx - 1) * line_height - scroll_y
-        if line_y > origin_y - line_height and line_y < origin_y + avail_h then
+        local line_y = origin_y + padding_y + (line.y or (idx - 1) * line_height) - scroll_y
+        local lh = line.height or line_height
+        if line_y > origin_y - lh and line_y < origin_y + avail_h then
           local indent = line_indent(line)
           local active = false
           local start_x = 0
@@ -2006,25 +2224,26 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
               end
               end_x = char.x1
             elseif active then
-              r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + start_x, line_y, origin_x + padding_x + indent + end_x, line_y + line_height, highlight)
+              r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + start_x, line_y, origin_x + padding_x + indent + end_x, line_y + lh, highlight)
               active = false
             end
           end
-          if active then r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + start_x, line_y, origin_x + padding_x + indent + end_x, line_y + line_height, highlight) end
+          if active then r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + start_x, line_y, origin_x + padding_x + indent + end_x, line_y + lh, highlight) end
           if line.newline_byte and line.newline_byte >= sel_start + 1 and line.newline_byte <= sel_end then
-            r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + line.width, line_y, origin_x + padding_x + indent + line.width + math.max(UIScale.round(6), line_height * 0.4), line_y + line_height, highlight)
+            r.ImGui_DrawList_AddRectFilled(draw_list, origin_x + padding_x + indent + line.width, line_y, origin_x + padding_x + indent + line.width + math.max(UIScale.round(6), line_height * 0.4), line_y + lh, highlight)
           end
         end
       end
     end
     for idx, line in ipairs(layout.lines) do
-      local line_y = origin_y + padding_y + (idx - 1) * line_height - scroll_y
-      if line_y > origin_y - line_height and line_y < origin_y + avail_h then
+      local line_y = origin_y + padding_y + (line.y or (idx - 1) * line_height) - scroll_y
+      local lh = line.height or line_height
+      if line_y > origin_y - lh and line_y < origin_y + avail_h then
         local draw_color = (block.line_colors and line.source_line and block.line_colors[line.source_line]) or text_color
         if line.checkbox and is_first_visual_line(idx) then
           local size = math.max(UIScale.round(10), math.min(UIScale.round(16), font_size * 0.85))
           local box_x = origin_x + padding_x
-          local box_y = line_y + (line_height - size) * 0.5
+          local box_y = line_y + (lh - size) * 0.5
           r.ImGui_DrawList_AddRect(draw_list, box_x, box_y, box_x + size, box_y + size, draw_color, UIScale.px(2), 0, UIScale.px(1.2))
           if line.checked then
             r.ImGui_DrawList_AddLine(draw_list, box_x + size * 0.22, box_y + size * 0.52, box_x + size * 0.42, box_y + size * 0.74, draw_color, UIScale.px(1.8))
@@ -2033,9 +2252,14 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
         end
         local indent = line_indent(line)
         for _, char in ipairs(line.chars or {}) do
-          local char_x = origin_x + padding_x + indent + char.x0
-          draw_text_sized(ctx, draw_list, char_x, line_y, draw_color, char.char or "", font_size, font)
-              if bold_lookup[char.byte_start] then draw_text_sized(ctx, draw_list, char_x + math.max(UIScale.px(0.7), font_size * 0.05), line_y, draw_color, char.char or "", font_size, font) end
+          if not char.is_format and char.char ~= "" then
+            local csize = char.size or font_size
+            local char_x = origin_x + padding_x + indent + char.x0
+            local frag_h = line_height * (csize / math.max(1, font_size))
+            local cy = line_y + EDITOR_BASELINE_RATIO * (lh - frag_h)
+            draw_text_sized(ctx, draw_list, char_x, cy, draw_color, char.char, csize, font)
+            if bold_lookup[char.byte_start] then draw_text_sized(ctx, draw_list, char_x + math.max(UIScale.px(0.7), csize * 0.05), cy, draw_color, char.char, csize, font) end
+          end
         end
       end
     end
@@ -2044,7 +2268,8 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local _, caret_x, caret_y, caret_line = locate_caret(layout, text, editor.caret)
       local x = origin_x + padding_x + line_indent(caret_line) + caret_x
       local y = origin_y + padding_y + caret_y - scroll_y
-      if y >= origin_y - line_height and y <= origin_y + avail_h then r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + line_height, text_color, UIScale.px(1.4)) end
+      local ch = (caret_line and caret_line.height) or line_height
+      if y >= origin_y - ch and y <= origin_y + avail_h then r.ImGui_DrawList_AddLine(draw_list, x, y, x, y + ch, text_color, UIScale.px(1.4)) end
     end
     r.ImGui_DrawList_PopClipRect(draw_list)
     if scrollbar then

@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.5.7" author="TouristKiller" time="2026-07-09T01:10:00Z">
+    <version name="0.5.8" author="TouristKiller" time="2026-07-12T14:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -113,6 +113,11 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+                v0.5.8
+                + Notes: per-selection text sizing - select text and use Increase/Decrease Text Size (right-click menu or Ctrl+Shift+. / Ctrl+Shift+,) to resize just the selected part, independent from the block font size; larger text is baseline-aligned and works together with bold
+                + Notes: In Auto mode a clicked region/marker now takes priority when it is the most recently changed selection, so clicking a region shows its note even while a track or item stays selected; when the region is not the freshest pick it falls back to Item > Track > Region > Project, and deselecting the item (which REAPER does when you click a region) no longer briefly snaps to the track note first
+                + Notes: In the dedicated Marker/Region scope markers are now click-only (click a marker to view its note) while regions follow the edit cursor automatically - move the cursor into a region and its note shows without clicking, even when another region is still selected
+                + Notes: During playback the note now follows the region under the play cursor automatically, in both Auto mode and the dedicated Region scope, so region notes advance with the playhead; when playback stops everything falls back to the selection-driven behavior
                 v0.5.7
                 + Notes: Track notes are now stored on the track itself, so they travel with track templates and copied tracks and reappear automatically when such a track is loaded into another project (multi-block notes and formatting included)
                 + Notes: Added an optional Track note indicator (Notes settings, off by default) that appends a small configurable marker after the name of every track that has a note, so you can spot them at a glance in the TCP/MCP; placed after the name so scripts that parse the start of the track name keep working
