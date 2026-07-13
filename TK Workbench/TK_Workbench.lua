@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.9
+-- @version 0.5.10
 -- @changelog:
+-- v0.5.10
+--   + Media Browser: Fixed the ReaScript console being spammed with "Corrupt JPEG data: N extraneous bytes before marker" warnings when opening folders with Opus/OGG (or other) files whose embedded JPEG cover art is slightly non-standard; the artwork is now sanitized (stray bytes between JPEG header segments are stripped, image data kept untouched) before it is cached, and already-cached covers are cleaned up automatically on first view, so the thumbnails still show without the console noise
 -- v0.5.9
 --   + Timepiece: Added a Recording alert that makes the panel unmistakable while REAPER is recording - a thick red border, a blinking REC dot and a red clock, plus a pulsing red background, so you can tell from across the room that it is definitely recording (on by default)
 --   + Timepiece: Added a separate "pulse background" toggle so you can keep the red border, REC dot and red clock while turning off the pulsing red panel for a calmer alert
