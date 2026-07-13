@@ -1,7 +1,9 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.1.3
+-- @version 1.1.4
 -- @changelog:
+--   v1.1.4
+--   + ESC closes the script
 --   v1.1.3
 --   + Tab bar below plugin (flip): place the tab bar on the opposite side of the plugin, works in all modes
 --   + Also fixes macOS setups where the tab bar appeared at the bottom of the plugin instead of the top
@@ -2458,6 +2460,16 @@ local function cleanup()
   if r.ImGui_DestroyContext and ctx then r.ImGui_DestroyContext(ctx) end
 end
 
+local function esc_requested_close()
+  if not r.ImGui_IsKeyPressed or not r.ImGui_Key_Escape then return false end
+  local key = r.ImGui_Key_Escape()
+  local ok, pressed = pcall(r.ImGui_IsKeyPressed, ctx, key, false)
+  if ok then return pressed == true end
+  ok, pressed = pcall(r.ImGui_IsKeyPressed, ctx, key)
+  if ok then return pressed == true end
+  return false
+end
+
 local function loop()
   topbar_popup_active = false
   update_window_touch_pause()
@@ -2498,6 +2510,7 @@ local function loop()
     if not r.JS_Window_SetPosition or not r.TrackFX_GetFloatingWindow then r.ImGui_TextColored(ctx, theme.text_dim, "js_ReaScriptAPI is not available") end
     update_topbar_focus_click()
     update_plugin_rect_from_topbar()
+    if esc_requested_close() and not topbar_popup_active then close_requested = true end
   end
   r.ImGui_End(ctx)
   pop_theme(theme_stack)
