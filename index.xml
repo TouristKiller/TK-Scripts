@@ -389,7 +389,7 @@
 
 <category name="TK Kit Maker">
     <reapack name="TK_Kit_Maker.lua" type="script" desc="TK Kit Maker">
-        <version name="0.1.0" author="TouristKiller" time="2026-07-17T16:00:00Z">
+        <version name="0.1.1" author="TouristKiller" time="2026-07-17T21:45:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/TK_Kit_Maker.lua</source>
             <source file="core/browser_store.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/browser_store.lua</source>
             <source file="core/categories.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/categories.lua</source>
@@ -420,6 +420,13 @@
             <source file="ui/sequencer_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/sequencer_view.lua</source>
             <source file="USER_GUIDE.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/USER_GUIDE.pdf</source>
             <changelog><![CDATA[
+v0.1.1
++ Sequencer UI polish: lane row order aangepast (1x, RS5k, Copy, Paste, Clear)
++ Sequencer UI polish: full-width separator met extra spacing boven Auto Name
++ Sequencer UI polish: huidige racknaam zichtbaar naast Auto Name
++ Fix: Auto Name separator drawing (geldige kleur en drawlist)
+
+v0.1.0
 + Initial ReaPack package for TK Kit Maker
 + Includes the browser, builder, explosion, RS5K manager, sequencer, export dialog, shared core modules, sequencer engine data and user guide
 ]]></changelog>

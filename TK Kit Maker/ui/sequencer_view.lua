@@ -712,6 +712,7 @@ local function new_sequence()
     host_transport = false,
     repeat_enabled = true,
     lane_auto_name_enabled = false,
+    selected_pattern_index = 0,
     pattern = {},
     lane_settings = {},
     song_slots = {},
@@ -775,6 +776,7 @@ local function sanitize_sequence(data)
   out.host_transport = data.host_transport == true
   out.repeat_enabled = data.repeat_enabled ~= false
   out.lane_auto_name_enabled = data.lane_auto_name_enabled == true
+  out.selected_pattern_index = math.max(0, math.floor(tonumber(data.selected_pattern_index) or 0))
   local total = STEPS_PER_BAR
   if type(data.pattern) == "table" then
     for lane = 1, GRID_SLOTS do
@@ -929,6 +931,7 @@ local function sequence_snapshot(seq)
     host_transport = seq.host_transport,
     repeat_enabled = seq.repeat_enabled,
     lane_auto_name_enabled = seq.lane_auto_name_enabled,
+    selected_pattern_index = seq.selected_pattern_index,
     pattern = seq.pattern,
     lane_settings = seq.lane_settings,
     song_slots = seq.song_slots,
@@ -938,6 +941,7 @@ local function sequence_snapshot(seq)
     host_transport = clean.host_transport,
     repeat_enabled = clean.repeat_enabled,
     lane_auto_name_enabled = clean.lane_auto_name_enabled,
+    selected_pattern_index = clean.selected_pattern_index,
     pattern = clean.pattern,
     lane_settings = clean.lane_settings,
     song_slots = clean.song_slots,
@@ -1033,11 +1037,12 @@ local function save_global_patterns(patterns)
   return true
 end
 
-local function save_pattern_to_library(patterns, selected_idx, seq, as_new, slot_idx)
+local resolve_pattern_slot_for_save
+
+local function save_pattern_to_library(patterns, selected_idx, seq, as_new, slot_idx, state, guid)
   local lib = normalize_global_patterns(patterns)
-  local snap = sequence_snapshot(seq)
   local idx = math.floor(tonumber(selected_idx) or 0)
-  local slot = clamp(math.floor(tonumber(slot_idx) or 1), 1, PATTERN_SLOTS)
+  local current_slot = clamp(math.floor(tonumber(slot_idx) or 1), 1, PATTERN_SLOTS)
   if as_new or idx < 1 or idx > #lib then
     idx = next_preset_number(lib)
     lib[idx] = {
@@ -1048,10 +1053,10 @@ local function save_pattern_to_library(patterns, selected_idx, seq, as_new, slot
   lib[idx] = lib[idx] or { name = "Preset " .. tostring(idx), patterns = {} }
   lib[idx].name = normalize_pattern_name(lib[idx].name, idx)
   lib[idx].patterns = type(lib[idx].patterns) == "table" and lib[idx].patterns or {}
-  for i = 1, PATTERN_SLOTS do
-    lib[idx].patterns[i] = lib[idx].patterns[i] or blank_pattern_snapshot()
+  for slot = 1, PATTERN_SLOTS do
+    local slot_seq = resolve_pattern_slot_for_save(state, guid, lib, idx, slot, current_slot, seq)
+    lib[idx].patterns[slot] = sequence_snapshot(slot_seq)
   end
-  lib[idx].patterns[slot] = snap
   return lib, idx
 end
 
@@ -1067,8 +1072,11 @@ local function load_pattern_from_library(patterns, selected_idx, seq, slot_idx)
   local clean = sanitize_sequence(src)
   seq.steps = clean.steps
   seq.host_transport = clean.host_transport == true
+  seq.repeat_enabled = clean.repeat_enabled ~= false
+  seq.lane_auto_name_enabled = clean.lane_auto_name_enabled == true
   seq.pattern = clone_table(clean.pattern)
   seq.lane_settings = clone_table(clean.lane_settings)
+  seq.song_slots = clone_table(clean.song_slots)
   return true
 end
 
@@ -1093,9 +1101,31 @@ local function load_working_pattern(state, guid, selected_idx, seq, slot_idx)
   local clean = sanitize_sequence(snap)
   seq.steps = clean.steps
   seq.host_transport = clean.host_transport == true
+  seq.repeat_enabled = clean.repeat_enabled ~= false
+  seq.lane_auto_name_enabled = clean.lane_auto_name_enabled == true
   seq.pattern = clone_table(clean.pattern)
   seq.lane_settings = clone_table(clean.lane_settings)
+  seq.song_slots = clone_table(clean.song_slots)
   return true
+end
+
+local function clear_working_preset(state, guid, selected_idx)
+  local idx = math.floor(tonumber(selected_idx) or 0)
+  if idx < 1 then return end
+  local by_guid = state.working_patterns_by_guid and state.working_patterns_by_guid[guid]
+  if not by_guid then return end
+  by_guid[idx] = nil
+end
+
+local function clear_working_preset_everywhere(state, selected_idx)
+  local idx = math.floor(tonumber(selected_idx) or 0)
+  if idx < 1 then return end
+  local all = state.working_patterns_by_guid or {}
+  for _, by_guid in pairs(all) do
+    if type(by_guid) == "table" then
+      by_guid[idx] = nil
+    end
+  end
 end
 
 local function load_pattern_for_editing(state, guid, patterns, selected_idx, seq, slot_idx)
@@ -1103,6 +1133,31 @@ local function load_pattern_for_editing(state, guid, patterns, selected_idx, seq
     return true
   end
   return load_pattern_from_library(patterns, selected_idx, seq, slot_idx)
+end
+
+resolve_pattern_slot_for_save = function(state, guid, patterns, selected_idx, slot_idx, current_slot, current_seq)
+  local slot = clamp(math.floor(tonumber(slot_idx) or 1), 1, PATTERN_SLOTS)
+  local current = clamp(math.floor(tonumber(current_slot) or 1), 1, PATTERN_SLOTS)
+  if current_seq and slot == current then
+    return sanitize_sequence(current_seq)
+  end
+
+  local idx = math.floor(tonumber(selected_idx) or 0)
+  local by_guid = state and state.working_patterns_by_guid and state.working_patterns_by_guid[guid]
+  local by_idx = by_guid and by_guid[idx]
+  local snap = by_idx and by_idx[slot]
+  if type(snap) == "table" then
+    return sanitize_sequence(snap)
+  end
+
+  local lib = normalize_global_patterns(patterns)
+  local item = idx >= 1 and idx <= #lib and lib[idx] or nil
+  local src = item and type(item.patterns) == "table" and item.patterns[slot] or nil
+  if type(src) == "table" then
+    return sanitize_sequence(src)
+  end
+
+  return blank_pattern_snapshot()
 end
 
 local function resolve_slot_sequence_for_export(state, guid, patterns, selected_idx, slot_idx, fallback_seq, current_slot, current_seq)
@@ -2026,6 +2081,16 @@ collect_lane_tracks = function(parent)
   return out
 end
 
+local function lane_index_for_track(lane_tracks, track)
+  if not lane_tracks or not track then return nil end
+  for lane = 1, #lane_tracks do
+    if lane_tracks[lane] == track then
+      return lane
+    end
+  end
+  return nil
+end
+
 local function rs5k_note_for_track(track, fallback_note)
   local fallback = clamp(math.floor(tonumber(fallback_note) or BASE_NOTE), 0, 127)
   local fx = find_rs5k_fx(track)
@@ -2476,12 +2541,13 @@ function M.draw(app)
     state.pattern_library = load_global_patterns()
   end
   state.pattern_library = normalize_global_patterns(state.pattern_library)
-  local selected_pattern_index = math.floor(tonumber(state.selected_pattern_index) or 0)
+  local selected_pattern_index = math.floor(tonumber(seq.selected_pattern_index) or 0)
   if #state.pattern_library == 0 then
     selected_pattern_index = 0
   else
     selected_pattern_index = clamp(selected_pattern_index, 1, #state.pattern_library)
   end
+  seq.selected_pattern_index = selected_pattern_index
   state.selected_pattern_index = selected_pattern_index
   if state.pattern_name_target ~= selected_pattern_index then
     local selected_name = selected_pattern_index > 0 and normalize_pattern_name(state.pattern_library[selected_pattern_index] and state.pattern_library[selected_pattern_index].name, selected_pattern_index) or ""
@@ -2498,6 +2564,12 @@ function M.draw(app)
   local total_steps = STEPS_PER_BAR
   local host_enabled = seq.host_transport == true
   local lane_tracks = collect_lane_tracks(parent)
+  local selected_track = r.GetSelectedTrack(0, 0)
+  local selected_track_lane = lane_index_for_track(lane_tracks, selected_track)
+  if selected_track_lane and selected_track_lane ~= selected_lane then
+    selected_lane = selected_track_lane
+    state.selected_lane_by_guid[guid] = selected_lane
+  end
   if lane_auto_mode and not next(lane_auto_names) then
     lane_auto_names = build_lane_auto_names(lane_tracks)
     state.lane_auto_names_by_guid[guid] = lane_auto_names
@@ -2633,6 +2705,31 @@ function M.draw(app)
     r.ImGui_Text(ctx, lane_label)
     r.ImGui_SetCursorPosX(ctx, top_controls_x)
     r.ImGui_SetCursorPosY(ctx, lane_row_y)
+    if transport_text_button(ctx, "tk_seq_lane_speed", lane_speed_label(seq.lane_settings[selected_lane] and seq.lane_settings[selected_lane].speed), lane_action_w, top_button_h) then
+      local lane_cfg = seq.lane_settings[selected_lane] or new_sequence().lane_settings[selected_lane]
+      seq.lane_settings[selected_lane] = lane_cfg
+      lane_cfg.speed = next_lane_speed(lane_cfg.speed)
+      ensure_lane_step_params(lane_cfg, total_steps, 100)
+      save_sequence(parent, seq)
+      if state.playing then
+        restart_playback_synced(state, guid)
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Lane speed: 1x -> 0.5x -> 2x")
+    end
+    r.ImGui_SameLine(ctx, 0, pattern_btn_gap)
+    if transport_text_button(ctx, "tk_seq_lane_rs5k", "RS5k", lane_action_w, top_button_h) then
+      local lane_track = lane_tracks[selected_lane]
+      local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+      if lane_track and lane_fx >= 0 and r.TrackFX_Show then
+        r.TrackFX_Show(lane_track, lane_fx, 3)
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Open RS5k for selected lane")
+    end
+    r.ImGui_SameLine(ctx, 0, pattern_btn_gap)
     if transport_text_button(ctx, "tk_seq_lane_copy", "Copy", lane_action_w, top_button_h) then
       local clip_pattern = clone_table(seq.pattern and seq.pattern[selected_lane] or {})
       local clip_settings = clone_table(seq.lane_settings and seq.lane_settings[selected_lane] or {})
@@ -2669,31 +2766,6 @@ function M.draw(app)
     end
     if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "Clear selected lane")
-    end
-    r.ImGui_SameLine(ctx, 0, pattern_btn_gap)
-    if transport_text_button(ctx, "tk_seq_lane_speed", lane_speed_label(seq.lane_settings[selected_lane] and seq.lane_settings[selected_lane].speed), lane_action_w, top_button_h) then
-      local lane_cfg = seq.lane_settings[selected_lane] or new_sequence().lane_settings[selected_lane]
-      seq.lane_settings[selected_lane] = lane_cfg
-      lane_cfg.speed = next_lane_speed(lane_cfg.speed)
-      ensure_lane_step_params(lane_cfg, total_steps, 100)
-      save_sequence(parent, seq)
-      if state.playing then
-        restart_playback_synced(state, guid)
-      end
-    end
-    if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Lane speed: 1x -> 0.5x -> 2x")
-    end
-    r.ImGui_SameLine(ctx, 0, pattern_btn_gap)
-    if transport_text_button(ctx, "tk_seq_lane_rs5k", "RS5k", lane_action_w, top_button_h) then
-      local lane_track = lane_tracks[selected_lane]
-      local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
-      if lane_track and lane_fx >= 0 and r.TrackFX_Show then
-        r.TrackFX_Show(lane_track, lane_fx, 3)
-      end
-    end
-    if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Open RS5k for selected lane")
     end
     r.ImGui_EndChild(ctx)
   end
@@ -2754,6 +2826,9 @@ function M.draw(app)
       elseif left_clicked then
         selected_lane = lane
         state.selected_lane_by_guid[guid] = lane
+        if lane_track then
+          r.SetOnlyTrackSelected(lane_track)
+        end
       end
       if r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, "Left click: select lane | Right click: lane parameters")
@@ -3149,6 +3224,16 @@ function M.draw(app)
       r.ImGui_SetCursorPosY(ctx, row_y + cell_h + row_gap + extra_h)
     end
 
+    local auto_sep_x, auto_sep_y = r.ImGui_GetCursorScreenPos(ctx)
+    local auto_sep_col = blend_rgb(Theme.colors.border, 0xFFFFFFFF, 0.18)
+    local auto_dl = r.ImGui_GetWindowDrawList(ctx)
+    if auto_dl then
+      local auto_sep_left = auto_sep_x
+      local auto_sep_right = auto_sep_x + math.max(0, avail_w - 2)
+      r.ImGui_DrawList_AddLine(auto_dl, auto_sep_left, auto_sep_y - 1, auto_sep_right, auto_sep_y - 1, auto_sep_col, 1)
+    end
+    r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + 6)
+
     if lane_toggle_button(ctx, "tk_seq_lane_auto_name", "Auto Name", label_w, 20, lane_auto_mode) then
       lane_auto_mode = not lane_auto_mode
       seq.lane_auto_name_enabled = lane_auto_mode
@@ -3161,6 +3246,9 @@ function M.draw(app)
     if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "Klik: Auto Name aan/uit")
     end
+    local rack_label = "Rack: " .. track_name(parent)
+    r.ImGui_SameLine(ctx, 0, 10)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, rack_label)
 
     r.ImGui_EndChild(ctx)
   end
@@ -3440,8 +3528,10 @@ function M.draw(app)
         if r.ImGui_Selectable(ctx, n .. "##tk_seq_preset_slot_" .. tostring(i), selected_pattern_index == i) then
           stash_working_pattern(state, guid, selected_pattern_index, current_slot, seq)
           selected_pattern_index = i
+          seq.selected_pattern_index = i
           state.selected_pattern_index = i
-          if load_pattern_for_editing(state, guid, patterns, i, seq, current_slot) then
+          clear_working_preset(state, guid, i)
+          if load_pattern_from_library(patterns, i, seq, current_slot) then
             save_sequence(parent, seq)
             restart_playback_synced(state, guid)
           end
@@ -3453,14 +3543,16 @@ function M.draw(app)
 
     r.ImGui_SameLine(ctx, 0, preset_gap)
     if transport_text_button(ctx, "tk_seq_pattern_save", "Save", preset_w, button_h) then
-      local updated, saved_idx = save_pattern_to_library(patterns, selected_pattern_index, seq, false, current_slot)
+      local updated, saved_idx = save_pattern_to_library(patterns, selected_pattern_index, seq, false, current_slot, state, guid)
       state.pattern_library = updated
+      seq.selected_pattern_index = saved_idx
       state.selected_pattern_index = saved_idx
-      stash_working_pattern(state, guid, saved_idx, current_slot, seq)
+      clear_working_preset_everywhere(state, saved_idx)
+      save_sequence(parent, seq)
       save_global_patterns(updated)
     end
     if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Save current pattern slot to selected preset")
+      r.ImGui_SetTooltip(ctx, "Save alle pattern pages naar de geselecteerde preset")
     end
 
     r.ImGui_SameLine(ctx, 0, preset_gap)
@@ -3476,6 +3568,7 @@ function M.draw(app)
         updated[new_idx].patterns[slot] = blank_pattern_snapshot()
       end
       state.pattern_library = updated
+      seq.selected_pattern_index = new_idx
       state.selected_pattern_index = new_idx
       state.pattern_slot_by_guid[guid] = 1
       current_slot = 1
@@ -3532,7 +3625,9 @@ function M.draw(app)
         if idx >= 1 and idx <= #updated then
           updated[idx].name = normalize_pattern_name(state.pattern_name_edit, idx)
           state.pattern_library = updated
+          seq.selected_pattern_index = idx
           state.selected_pattern_index = idx
+          save_sequence(parent, seq)
           save_global_patterns(updated)
         end
         r.ImGui_CloseCurrentPopup(ctx)
@@ -3561,15 +3656,18 @@ function M.draw(app)
           table.remove(updated, idx)
           state.pattern_library = updated
           if #updated == 0 then
+            seq.selected_pattern_index = 0
             state.selected_pattern_index = 0
             state.pattern_name_edit = ""
             state.pattern_name_target = 0
           else
             local next_idx = clamp(idx, 1, #updated)
+            seq.selected_pattern_index = next_idx
             state.selected_pattern_index = next_idx
             state.pattern_name_edit = normalize_pattern_name(updated[next_idx] and updated[next_idx].name, next_idx)
             state.pattern_name_target = next_idx
           end
+          save_sequence(parent, seq)
           save_global_patterns(updated)
         end
         r.ImGui_CloseCurrentPopup(ctx)

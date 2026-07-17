@@ -210,11 +210,16 @@ end
 local stop_preview
 local play_preview
 
+local function track_can_live_audition(track)
+  if not track then return false end
+  local armed = math.floor(r.GetMediaTrackInfo_Value(track, "I_RECARM") or 0) == 1
+  local monitored = math.floor(r.GetMediaTrackInfo_Value(track, "I_RECMON") or 0) > 0
+  return armed and monitored
+end
+
 local function play_track_audition(current, manager, note)
   if not current or not current.track or not r.StuffMIDIMessage then return false end
-  r.SetMediaTrackInfo_Value(current.track, "I_RECARM", 1)
-  r.SetMediaTrackInfo_Value(current.track, "I_RECMON", 1)
-  r.SetMediaTrackInfo_Value(current.track, "I_RECMODE", 0)
+  if not track_can_live_audition(current.track) then return false end
   if manager and manager.track_audition_note then
     pcall(r.StuffMIDIMessage, 0, 0x80, manager.track_audition_note, 0)
     manager.track_audition_note = nil
@@ -1308,7 +1313,7 @@ function M.draw(app)
 
     if r.ImGui_BeginPopup(ctx, "##kit_manager_settings_popup") then
       local track_mode = (state.manager_audition_mode == "track")
-      local changed, value = r.ImGui_Checkbox(ctx, "Play samples via track MIDI", track_mode)
+      local changed, value = r.ImGui_Checkbox(ctx, "Play samples via track MIDI (armed rack)", track_mode)
       if changed then
         state.manager_audition_mode = value and "track" or "preview"
         if value then
@@ -1319,6 +1324,7 @@ function M.draw(app)
         end
         save(app)
       end
+      Theme.label(ctx, track_mode and "Track mode is active: audition follows the armed/monitored rack." or "Preview mode is active: audition does not depend on track arm.")
       local release_note_off = release_note_off_on_mouse_up_enabled(state)
       local release_changed, release_value = r.ImGui_Checkbox(ctx, "Releasing mouse on pad sends note off", release_note_off)
       if release_changed then
@@ -1356,7 +1362,7 @@ function M.draw(app)
           end
         end
       end
-      Theme.label(ctx, "Track mode needs the kit rack to be armed and monitoring.")
+      Theme.label(ctx, "Track mode needs the kit rack to be armed and monitoring. Preview mode is the safe default.")
       if Theme.ghost_button(ctx, "Close##kit_manager_settings_close", 70, 0) then
         r.ImGui_CloseCurrentPopup(ctx)
       end

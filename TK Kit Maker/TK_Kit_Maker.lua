@@ -1,12 +1,11 @@
 -- @description TK Kit Maker
 -- @author TouristKiller
--- @version 0.1.0
+-- @version 0.1.1
 -- @changelog:
---   + Initial release
---   + Folder Explosion (milestone 1): source folder -> N consecutive slots, Detonate
---   + Kit Builder (milestone 2): pools with alias, slot table editor, save/load presets
---   + Sample lock, use-up + reshuffle, Quick Preview 128-slot layout, used-samples log (milestone 3)
---   + Sequencer: sample-accurate JSFX audio-thread timing engine (rock-solid drum timing)
+--   + Sequencer UI polish: lane row order aangepast (1x, RS5k, Copy, Paste, Clear)
+--   + Sequencer UI polish: full-width separator met extra spacing boven Auto Name
+--   + Sequencer UI polish: huidige racknaam zichtbaar naast Auto Name
+--   + Fix: Auto Name separator drawing (geldige kleur en drawlist)
 
 local r = reaper
 
