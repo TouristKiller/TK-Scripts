@@ -387,6 +387,46 @@
 
 </category>
 
+<category name="TK Kit Maker">
+    <reapack name="TK_Kit_Maker.lua" type="script" desc="TK Kit Maker">
+        <version name="0.1.0" author="TouristKiller" time="2026-07-17T16:00:00Z">
+            <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/TK_Kit_Maker.lua</source>
+            <source file="core/browser_store.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/browser_store.lua</source>
+            <source file="core/categories.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/categories.lua</source>
+            <source file="core/dialogs.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/dialogs.lua</source>
+            <source file="core/duration.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/duration.lua</source>
+            <source file="core/engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/engine.lua</source>
+            <source file="core/exporter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/exporter.lua</source>
+            <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/json.lua</source>
+            <source file="core/naming.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/naming.lua</source>
+            <source file="core/picker.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/picker.lua</source>
+            <source file="core/scanner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/scanner.lua</source>
+            <source file="core/stitcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/stitcher.lua</source>
+            <source file="core/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/theme.lua</source>
+            <source file="core/used_log.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/used_log.lua</source>
+            <source file="core/wordlist.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/wordlist.lua</source>
+            <source file="data/presets.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/presets.lua</source>
+            <source file="data/seq_engine_jsfx.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/seq_engine_jsfx.lua</source>
+            <source file="data/words.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/words.txt</source>
+            <source file="data/words_first.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/words_first.txt</source>
+            <source file="data/words_second.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/words_second.txt</source>
+            <source file="data/words_third.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/words_third.txt</source>
+            <source file="ui/browser_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/browser_view.lua</source>
+            <source file="ui/builder_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/builder_view.lua</source>
+            <source file="ui/export_dialog.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/export_dialog.lua</source>
+            <source file="ui/explosion_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/explosion_view.lua</source>
+            <source file="ui/main_window.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/main_window.lua</source>
+            <source file="ui/rs5k_manager_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/rs5k_manager_view.lua</source>
+            <source file="ui/sequencer_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/sequencer_view.lua</source>
+            <source file="USER_GUIDE.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/USER_GUIDE.pdf</source>
+            <changelog><![CDATA[
++ Initial ReaPack package for TK Kit Maker
++ Includes the browser, builder, explosion, RS5K manager, sequencer, export dialog, shared core modules, sequencer engine data and user guide
+]]></changelog>
+        </version>
+    </reapack>
+</category>
+
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
         <version name="2.0.4" author="TouristKiller" time="2026-07-04T12:00:00Z">
