@@ -33,6 +33,7 @@ local function default_state()
     split_w = 240,
     split_h = 240,
     view = "browser",
+    relink_prefixes = {},
   }
 end
 
@@ -60,10 +61,22 @@ local function sanitize(state)
   end
   out.split_w = math.max(120, math.min(1600, tonumber(state.split_w) or 240))
   out.split_h = math.max(100, math.min(1600, tonumber(state.split_h) or 240))
-  if state.view == "browser" or state.view == "explosion" or state.view == "builder" or state.view == "sequencer" then
+  if state.view == "sequencer" then
+    out.view = "step"
+  elseif state.view == "browser" or state.view == "explosion" or state.view == "builder" or state.view == "step" or state.view == "euclid" then
     out.view = state.view
   else
     out.view = "browser"
+  end
+
+  if type(state.relink_prefixes) == "table" then
+    for _, e in ipairs(state.relink_prefixes) do
+      local old_prefix = normalize(type(e.old) == "string" and e.old or "")
+      local new_prefix = normalize(type(e.new) == "string" and e.new or "")
+      if old_prefix ~= "" and new_prefix ~= "" and #out.relink_prefixes < 24 then
+        out.relink_prefixes[#out.relink_prefixes + 1] = { old = old_prefix, new = new_prefix }
+      end
+    end
   end
 
   if type(state.collections) == "table" then

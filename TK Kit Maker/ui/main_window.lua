@@ -102,21 +102,25 @@ local function draw_header(app)
 
   local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
   local spacing = 8
-  local fourth = (avail_w - spacing * 3) / 4
-  if tab_button(ctx, "Browser", "Manage folders and send them to Explosion/Builder", app.view == "browser", fourth) then
+  local fifth = (avail_w - spacing * 4) / 5
+  if tab_button(ctx, "Browser", "Manage folders and send them to Explosion/Builder", app.view == "browser", fifth) then
     set_view(app, "browser")
   end
   r.ImGui_SameLine(ctx, 0, spacing)
-  if tab_button(ctx, "Folder Explosion", "Surprise me with a folder", app.view == "explosion", fourth) then
+  if tab_button(ctx, "Explosion", "Surprise me with a folder", app.view == "explosion", fifth) then
     set_view(app, "explosion")
   end
   r.ImGui_SameLine(ctx, 0, spacing)
-  if tab_button(ctx, "Kit Builder", "I define the structure, surprise me with the contents", app.view == "builder", fourth) then
+  if tab_button(ctx, "Builder", "I define the structure, surprise me with the contents", app.view == "builder", fifth) then
     set_view(app, "builder")
   end
   r.ImGui_SameLine(ctx, 0, spacing)
-  if tab_button(ctx, "Sequencer", "Step sequencer linked to kit slots 1-16", app.view == "sequencer", fourth) then
-    set_view(app, "sequencer")
+  if tab_button(ctx, "Step", "Step sequencer linked to kit slots 1-16", app.view == "step", fifth) then
+    set_view(app, "step")
+  end
+  r.ImGui_SameLine(ctx, 0, spacing)
+  if tab_button(ctx, "Euclid", "Euclidean sequencer linked to kit slots 1-16", app.view == "euclid", fifth) then
+    set_view(app, "euclid")
   end
 
   -- r.ImGui_Dummy(ctx, 0, 2)
@@ -144,7 +148,7 @@ function M.frame(app)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x00000000)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
     local body_flags = 0
-    if app.view == "browser" then
+    if app.view == "browser" or app.view == "step" or app.view == "euclid" then
       if r.ImGui_WindowFlags_NoScrollbar then
         body_flags = body_flags | r.ImGui_WindowFlags_NoScrollbar()
       end
@@ -158,7 +162,7 @@ function M.frame(app)
       if app.view ~= "browser" then
         BrowserView.ensure_stopped(app)
       end
-      if app.view ~= "sequencer" then
+      if app.view ~= "step" and app.view ~= "euclid" then
         SequencerView.ensure_stopped(app)
       end
       if app.view == "explosion" then
@@ -168,7 +172,7 @@ function M.frame(app)
         if app.kitdef then
           ExportDialog.draw(app)
         end
-      elseif app.view == "sequencer" then
+      elseif app.view == "step" or app.view == "euclid" then
         SequencerView.draw(app)
       else
         BrowserView.draw(app)

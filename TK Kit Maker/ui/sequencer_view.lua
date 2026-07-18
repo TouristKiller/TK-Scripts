@@ -757,7 +757,7 @@ local function new_sequence()
       step_probability = prob_steps,
     }
   end
-  for slot = 1, 16 do
+  for slot = 1, 8 do
     data.song_slots[slot] = {
       page = slot == 1 and 1 or 0,
       repeats = 1,
@@ -886,7 +886,7 @@ local function sanitize_sequence(data)
 
   out.song_slots = {}
   local source_slots = type(data.song_slots) == "table" and data.song_slots or nil
-  for slot = 1, 16 do
+  for slot = 1, 8 do
     local src = source_slots and source_slots[slot] or nil
     local page = slot == 1 and 1 or 0
     local repeats = 1
@@ -1053,9 +1053,16 @@ local function save_pattern_to_library(patterns, selected_idx, seq, as_new, slot
   lib[idx] = lib[idx] or { name = "Preset " .. tostring(idx), patterns = {} }
   lib[idx].name = normalize_pattern_name(lib[idx].name, idx)
   lib[idx].patterns = type(lib[idx].patterns) == "table" and lib[idx].patterns or {}
+  local shared_song = clone_table(seq.song_slots or {})
+  local shared_auto = seq.lane_auto_name_enabled == true
+  local shared_repeat = seq.repeat_enabled ~= false
   for slot = 1, PATTERN_SLOTS do
     local slot_seq = resolve_pattern_slot_for_save(state, guid, lib, idx, slot, current_slot, seq)
-    lib[idx].patterns[slot] = sequence_snapshot(slot_seq)
+    local snap = sequence_snapshot(slot_seq)
+    snap.song_slots = clone_table(shared_song)
+    snap.lane_auto_name_enabled = shared_auto
+    snap.repeat_enabled = shared_repeat
+    lib[idx].patterns[slot] = snap
   end
   return lib, idx
 end
@@ -1129,10 +1136,19 @@ local function clear_working_preset_everywhere(state, selected_idx)
 end
 
 local function load_pattern_for_editing(state, guid, patterns, selected_idx, seq, slot_idx)
+  local shared_song = seq.song_slots
+  local shared_auto = seq.lane_auto_name_enabled
+  local shared_repeat = seq.repeat_enabled
+  local ok
   if load_working_pattern(state, guid, selected_idx, seq, slot_idx) then
-    return true
+    ok = true
+  else
+    ok = load_pattern_from_library(patterns, selected_idx, seq, slot_idx)
   end
-  return load_pattern_from_library(patterns, selected_idx, seq, slot_idx)
+  seq.song_slots = shared_song
+  seq.lane_auto_name_enabled = shared_auto
+  seq.repeat_enabled = shared_repeat
+  return ok
 end
 
 resolve_pattern_slot_for_save = function(state, guid, patterns, selected_idx, slot_idx, current_slot, current_seq)
@@ -1655,7 +1671,7 @@ local function resolve_song_playhead(state, seq, total_steps)
   if elapsed < 0 then elapsed = 0 end
 
   local total_pages = 0
-  for slot = 1, 16 do
+  for slot = 1, 8 do
     local item = slots[slot]
     local page = type(item) == "table" and clamp(math.floor(tonumber(item.page) or 0), 0, PATTERN_SLOTS) or 0
     local repeats = type(item) == "table" and clamp(math.floor(tonumber(item.repeats) or 1), 1, 8) or 1
@@ -1694,7 +1710,7 @@ local function resolve_song_playhead(state, seq, total_steps)
   end
 
   local remain = page_index
-  for slot = 1, 16 do
+  for slot = 1, 8 do
     local item = slots[slot]
     local page = type(item) == "table" and clamp(math.floor(tonumber(item.page) or 0), 0, PATTERN_SLOTS) or 0
     local repeats = type(item) == "table" and clamp(math.floor(tonumber(item.repeats) or 1), 1, 8) or 1
@@ -2219,7 +2235,7 @@ local function export_sequence_to_midi(track, seq, opts)
 
   if song_mode then
     local slots = type(seq.song_slots) == "table" and seq.song_slots or {}
-    for song_slot = 1, 16 do
+    for song_slot = 1, 8 do
       local entry = slots[song_slot]
       local page = type(entry) == "table" and clamp(math.floor(tonumber(entry.page) or 0), 0, PATTERN_SLOTS) or 0
       local repeats = type(entry) == "table" and clamp(math.floor(tonumber(entry.repeats) or 1), 1, 8) or 1
@@ -2484,10 +2500,21 @@ function M.init(app)
     lane_auto_names_by_guid = {},
     lane_clipboard = nil,
     page_clipboard = nil,
+    euclid_cache = {},
+    euclid_cache_guid = nil,
+    euclid_library = nil,
+    euclid_pattern_name_edit = "",
+    euclid_pattern_name_target = 0,
+    euclid_pattern_name_popup_open = false,
+    euclid_pattern_delete_target = 0,
+    euclid_pattern_delete_name = "",
+    euclid_pattern_delete_popup_open = false,
+    active_mode = nil,
+    knob_drag = nil,
   }
 end
 
-function M.draw(app)
+local function draw_step(app)
   local ctx = app.ctx
   local state = app.sequencer
   process_preview_note_offs(state)
@@ -2577,6 +2604,27 @@ function M.draw(app)
   state.pattern_slot_by_guid = state.pattern_slot_by_guid or {}
   local current_slot = clamp(math.floor(tonumber(state.pattern_slot_by_guid[guid]) or 1), 1, PATTERN_SLOTS)
   state.pattern_slot_by_guid[guid] = current_slot
+
+  state.preset_rev = state.preset_rev or {}
+  state.preset_rev_seen_by_guid = state.preset_rev_seen_by_guid or {}
+  local preset_rev_seen = state.preset_rev_seen_by_guid[guid] or {}
+  state.preset_rev_seen_by_guid[guid] = preset_rev_seen
+  if selected_pattern_index > 0 then
+    local global_rev = state.preset_rev[selected_pattern_index] or 0
+    local seen_rev = preset_rev_seen[selected_pattern_index]
+    if seen_rev == nil then
+      preset_rev_seen[selected_pattern_index] = global_rev
+    elseif seen_rev ~= global_rev then
+      preset_rev_seen[selected_pattern_index] = global_rev
+      if load_pattern_from_library(state.pattern_library or {}, selected_pattern_index, seq, current_slot) then
+        save_sequence(parent, seq)
+        state.cache[guid] = seq
+        if state.playing and state.current_guid == guid then
+          restart_playback_synced(state, guid)
+        end
+      end
+    end
+  end
 
   state.song_playhead = nil
   if state.playing and state.song_mode then
@@ -3265,7 +3313,7 @@ function M.draw(app)
     local song_steps_to_solo_gap = 12
     local song_steps_area_w = math.max(80, song_avail_w - song_label_w - song_solo_w - song_steps_to_solo_gap - 2)
     local song_step_gap = 2
-    local song_visible_count = 16
+    local song_visible_count = 8
     local song_gap_total = (song_visible_count - 1) * song_step_gap
     local song_usable_w = math.max(song_visible_count, song_steps_area_w - song_gap_total)
     local song_base_w = math.floor(song_usable_w / song_visible_count)
@@ -3280,7 +3328,7 @@ function M.draw(app)
     r.ImGui_TextColored(ctx, Theme.colors.accent, "Song")
     r.ImGui_SetCursorPosX(ctx, song_steps_x)
     r.ImGui_SetCursorPosY(ctx, song_cells_y)
-    for song_slot = 1, 16 do
+    for song_slot = 1, 8 do
       local song_cell_w = song_base_w + (((song_slot - 1 + 1) <= song_remainder) and 1 or 0)
       local song_entry = song_slots[song_slot] or { page = 0, repeats = 1 }
       local song_page = clamp(math.floor(tonumber(song_entry.page) or 0), 0, PATTERN_SLOTS)
@@ -3341,7 +3389,7 @@ function M.draw(app)
         r.ImGui_SetTooltip(ctx, "Boven: page | Onder: repeats | Rechtsklik: leegmaken")
       end
       r.ImGui_PopStyleColor(ctx, 3)
-      if song_slot < 16 then
+      if song_slot < 8 then
         r.ImGui_SameLine(ctx, 0, song_step_gap)
       end
     end
@@ -3548,6 +3596,11 @@ function M.draw(app)
       seq.selected_pattern_index = saved_idx
       state.selected_pattern_index = saved_idx
       clear_working_preset_everywhere(state, saved_idx)
+      state.preset_rev = state.preset_rev or {}
+      state.preset_rev[saved_idx] = (state.preset_rev[saved_idx] or 0) + 1
+      state.preset_rev_seen_by_guid = state.preset_rev_seen_by_guid or {}
+      state.preset_rev_seen_by_guid[guid] = state.preset_rev_seen_by_guid[guid] or {}
+      state.preset_rev_seen_by_guid[guid][saved_idx] = state.preset_rev[saved_idx]
       save_sequence(parent, seq)
       save_global_patterns(updated)
     end
@@ -3572,7 +3625,7 @@ function M.draw(app)
       state.selected_pattern_index = new_idx
       state.pattern_slot_by_guid[guid] = 1
       current_slot = 1
-      if load_pattern_for_editing(state, guid, updated, new_idx, seq, current_slot) then
+      if load_pattern_from_library(updated, new_idx, seq, current_slot) then
         save_sequence(parent, seq)
       end
       save_global_patterns(updated)
@@ -3675,6 +3728,929 @@ function M.draw(app)
       r.ImGui_EndPopup(ctx)
     end
     r.ImGui_EndChild(ctx)
+  end
+end
+
+local EUCLID_EXT_KEY = "P_EXT:TK_KIT_MAKER_EUCLID"
+local EUCLID_PRESET_KEY = "EUCLID_PRESETS"
+local EUCLID_SPEEDS = { 0.5, 1, 2 }
+
+local function euclid_pattern(steps, pulses, rotation)
+  steps = clamp(math.floor(tonumber(steps) or STEPS_PER_BAR), 1, STEPS_PER_BAR)
+  pulses = clamp(math.floor(tonumber(pulses) or 0), 0, steps)
+  local pat = {}
+  for i = 1, steps do pat[i] = 0 end
+  if pulses > 0 then
+    local bucket = steps - pulses
+    for i = 1, steps do
+      bucket = bucket + pulses
+      if bucket >= steps then
+        bucket = bucket - steps
+        pat[i] = 1
+      end
+    end
+  end
+  local rot = math.floor(tonumber(rotation) or 0) % steps
+  if rot ~= 0 then
+    local rotated = {}
+    for i = 1, steps do
+      rotated[i] = pat[((i - 1 - rot) % steps) + 1]
+    end
+    pat = rotated
+  end
+  return pat, steps
+end
+
+local function euclid_new()
+  local d = { host_transport = false, repeat_enabled = true, lane_auto_name_enabled = false, selected_lane = 1, selected_preset = 0, lanes = {} }
+  for lane = 1, GRID_SLOTS do
+    d.lanes[lane] = { steps = 16, pulses = lane == 1 and 4 or 0, rotation = 0, speed = 1, substeps = 1, pitch = 0, volume = 0 }
+  end
+  return d
+end
+
+local function euclid_sanitize(data)
+  local out = euclid_new()
+  if type(data) ~= "table" then return out end
+  out.host_transport = data.host_transport == true
+  out.repeat_enabled = data.repeat_enabled ~= false
+  out.lane_auto_name_enabled = data.lane_auto_name_enabled == true
+  out.selected_lane = clamp(math.floor(tonumber(data.selected_lane) or 1), 1, GRID_SLOTS)
+  out.selected_preset = math.max(0, math.floor(tonumber(data.selected_preset) or 0))
+  if type(data.lanes) == "table" then
+    for lane = 1, GRID_SLOTS do
+      local s = data.lanes[lane]
+      if type(s) == "table" then
+        local steps = clamp(math.floor(tonumber(s.steps) or 16), 1, STEPS_PER_BAR)
+        out.lanes[lane] = {
+          steps = steps,
+          pulses = clamp(math.floor(tonumber(s.pulses) or 0), 0, steps),
+          rotation = clamp(math.floor(tonumber(s.rotation) or 0), 0, steps - 1),
+          speed = normalize_lane_speed(s.speed),
+          substeps = clamp(math.floor(tonumber(s.substeps) or 1), 1, 8),
+          pitch = clamp(math.floor(tonumber(s.pitch) or 0), -24, 24),
+          volume = clamp(math.floor(tonumber(s.volume) or 0), -24, 6),
+        }
+      end
+    end
+  end
+  return out
+end
+
+local function euclid_load(track)
+  if not track then return euclid_new() end
+  local ok, raw = r.GetSetMediaTrackInfo_String(track, EUCLID_EXT_KEY, "", false)
+  if not ok or not raw or raw == "" then return euclid_new() end
+  local decoded_ok, decoded = pcall(json.decode, raw)
+  if not decoded_ok then return euclid_new() end
+  return euclid_sanitize(decoded)
+end
+
+local function euclid_save(track, data)
+  if not track then return false end
+  local payload = euclid_sanitize(data)
+  local ok, encoded = pcall(json.encode, payload)
+  if not ok or not encoded then return false end
+  r.GetSetMediaTrackInfo_String(track, EUCLID_EXT_KEY, encoded, true)
+  return true
+end
+
+local function euclid_build_seq(edata)
+  local seq = new_sequence()
+  seq.host_transport = edata.host_transport == true
+  for lane = 1, GRID_SLOTS do
+    local L = edata.lanes[lane] or { steps = 16, pulses = 0, rotation = 0, speed = 1, substeps = 1, pitch = 0, volume = 0 }
+    local steps = clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)
+    local pulses = clamp(math.floor(tonumber(L.pulses) or 0), 0, steps)
+    local substeps = clamp(math.floor(tonumber(L.substeps) or 1), 1, 8)
+    local pitch = clamp(math.floor(tonumber(L.pitch) or 0), -24, 24)
+    local volume = clamp(math.floor(tonumber(L.volume) or 0), -24, 6)
+    local pat = euclid_pattern(steps, pulses, L.rotation)
+    for step = 1, STEPS_PER_BAR do
+      seq.pattern[lane][step] = (step <= steps and pat[step] == 1) and 1 or 0
+      seq.lane_settings[lane].step_substeps[step] = substeps
+      seq.lane_settings[lane].step_pitch[step] = pitch
+      seq.lane_settings[lane].step_volume[step] = volume
+    end
+    seq.lane_settings[lane].cycle_steps = steps
+    seq.lane_settings[lane].speed = normalize_lane_speed(L.speed)
+  end
+  return seq
+end
+
+local function euclid_pattern_snapshot(edata)
+  local clean = euclid_sanitize({ lanes = edata and edata.lanes or nil })
+  return {
+    lanes = clean.lanes,
+  }
+end
+
+local function euclid_normalize_entry(item, idx)
+  local clean = euclid_sanitize({ lanes = type(item) == "table" and item.lanes or nil })
+  return {
+    name = normalize_pattern_name(type(item) == "table" and item.name or nil, idx),
+    lanes = clean.lanes,
+  }
+end
+
+local function euclid_normalize_library(raw)
+  local out = {}
+  if type(raw) ~= "table" then return out end
+  for _, item in ipairs(raw) do
+    if type(item) == "table" then
+      out[#out + 1] = euclid_normalize_entry(item, #out + 1)
+    end
+  end
+  return out
+end
+
+local function euclid_load_library()
+  if not r.GetExtState then return {} end
+  local raw = r.GetExtState(GLOBAL_PATTERN_SECTION, EUCLID_PRESET_KEY)
+  if not raw or raw == "" then return out end
+  local ok, dec = pcall(json.decode, raw)
+  if not ok or type(dec) ~= "table" then return out end
+  local src = type(dec.presets) == "table" and dec.presets or dec
+  return euclid_normalize_library(src)
+end
+
+local function euclid_save_library(patterns)
+  if not r.SetExtState then return false end
+  local payload = { presets = euclid_normalize_library(patterns) }
+  local ok, encoded = pcall(json.encode, payload)
+  if not ok or not encoded then return false end
+  r.SetExtState(GLOBAL_PATTERN_SECTION, EUCLID_PRESET_KEY, encoded, true)
+  return true
+end
+
+local function euclid_speed_index(speed)
+  local s = normalize_lane_speed(speed)
+  if s == 0.5 then return 1 end
+  if s == 2 then return 3 end
+  return 2
+end
+
+local function euclid_ring_radius(lane, outer, inner)
+  if GRID_SLOTS <= 1 then return outer end
+  local stepr = (outer - inner) / (GRID_SLOTS - 1)
+  return outer - (lane - 1) * stepr
+end
+
+local function euclid_knob(ctx, state, id, value, vmin, vmax, size, col, fmt)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local cx, cy = x + size * 0.5, y + size * 0.5
+  local radius = size * 0.5 - 2
+  r.ImGui_InvisibleButton(ctx, "##" .. id, size, size)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local active = r.ImGui_IsItemActive(ctx)
+  local changed, newv = false, value
+  local my = select(2, r.ImGui_GetMousePos(ctx))
+  if r.ImGui_IsItemActivated(ctx) then
+    state.knob_drag = { id = id, y0 = my, v0 = value }
+  end
+  if active and state.knob_drag and state.knob_drag.id == id then
+    local dy = my - state.knob_drag.y0
+    local raw = state.knob_drag.v0 - dy * 0.08
+    newv = clamp(math.floor(raw + 0.5), vmin, vmax)
+    if newv ~= value then changed = true end
+  elseif (not active) and state.knob_drag and state.knob_drag.id == id then
+    state.knob_drag = nil
+  end
+  local a0 = math.pi * 0.75
+  local a1 = math.pi * 2.25
+  local t = (value - vmin) / math.max(1, (vmax - vmin))
+  local av = a0 + t * (a1 - a0)
+  r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, radius, Theme.colors.frame_bg, 32)
+  r.ImGui_DrawList_PathArcTo(dl, cx, cy, radius - 2, a0, a1, 40)
+  r.ImGui_DrawList_PathStroke(dl, blend_rgb(Theme.colors.border, 0xFFFFFFFF, 0.06), 0, 3)
+  if av > a0 then
+    r.ImGui_DrawList_PathArcTo(dl, cx, cy, radius - 2, a0, av, 40)
+    r.ImGui_DrawList_PathStroke(dl, col, 0, 3)
+  end
+  local ix, iy = cx + math.cos(av) * (radius - 2), cy + math.sin(av) * (radius - 2)
+  r.ImGui_DrawList_AddCircleFilled(dl, ix, iy, 3, 0xFFFFFFFF, 16)
+  local text = fmt and fmt(newv) or tostring(newv)
+  local tw, th = r.ImGui_CalcTextSize(ctx, text)
+  local tx = cx - (tw * 0.5)
+  local ty = cy - (th * 0.5)
+  r.ImGui_DrawList_AddText(dl, tx, ty, Theme.colors.text, text)
+  return changed, newv, hovered
+end
+
+local function euclid_lane_button(ctx, id, text, w, h, active)
+  local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, w, h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local held = r.ImGui_IsItemActive(ctx)
+  local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+  local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+
+  local bg = active and Theme.colors.accent or Theme.colors.frame_bg
+  local border = active and Theme.colors.accent_hover or Theme.colors.border
+  if held then
+    bg = active and Theme.colors.accent_hover or Theme.colors.frame_hover
+    border = Theme.colors.accent
+  elseif hovered then
+    bg = active and Theme.colors.accent_hover or Theme.colors.frame_hover
+  end
+
+  local text_col = active and 0x0E1117FF or Theme.colors.text
+  r.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, bg, 5)
+  r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border, 5, 0, 1)
+
+  local _, th = r.ImGui_CalcTextSize(ctx, text)
+  local tx = min_x + 8
+  local ty = min_y + math.floor(((max_y - min_y) - th) * 0.5)
+  r.ImGui_DrawList_AddText(dl, tx, ty, text_col, text)
+
+  return clicked
+end
+
+local function draw_euclid(app)
+  local ctx = app.ctx
+  local state = app.sequencer
+  process_preview_note_offs(state)
+  local parent = get_selected_rack_parent_track()
+  if not parent then
+    if state.playing then stop_playback(state, nil) end
+    r.ImGui_TextColored(ctx, Theme.colors.warning, "Select a kit folder track to use the sequencer.")
+    return
+  end
+
+  local guid = track_guid(parent)
+  if state.euclid_cache_guid ~= guid then
+    state.euclid_cache_guid = guid
+    state.euclid_cache[guid] = euclid_load(parent)
+    if state.playing and state.current_guid ~= guid then
+      stop_playback(state, parent)
+    end
+  end
+  local edata = state.euclid_cache[guid] or euclid_new()
+  state.euclid_cache[guid] = edata
+  if state.euclid_library == nil then
+    state.euclid_library = euclid_load_library()
+  end
+  state.euclid_library = euclid_normalize_library(state.euclid_library)
+  local patterns = state.euclid_library
+  local selected_pattern_index = math.floor(tonumber(edata.selected_preset) or 0)
+  if #patterns == 0 then
+    selected_pattern_index = 0
+  else
+    selected_pattern_index = clamp(selected_pattern_index, 1, #patterns)
+  end
+  edata.selected_preset = selected_pattern_index
+  if state.euclid_pattern_name_target ~= selected_pattern_index then
+    local selected_name = selected_pattern_index > 0 and normalize_pattern_name(patterns[selected_pattern_index] and patterns[selected_pattern_index].name, selected_pattern_index) or ""
+    state.euclid_pattern_name_edit = selected_name
+    state.euclid_pattern_name_target = selected_pattern_index
+  end
+
+  local lane_tracks = collect_lane_tracks(parent)
+  local selected_lane = clamp(math.floor(tonumber(edata.selected_lane) or 1), 1, GRID_SLOTS)
+  edata.selected_lane = selected_lane
+  local selected_track = r.GetSelectedTrack(0, 0)
+  local sel_lane_track = lane_index_for_track(lane_tracks, selected_track)
+  if sel_lane_track and sel_lane_track ~= selected_lane then
+    selected_lane = sel_lane_track
+    edata.selected_lane = selected_lane
+  end
+  state.solo_by_guid = state.solo_by_guid or {}
+  local solo_map = state.solo_by_guid[guid] or {}
+  state.solo_by_guid[guid] = solo_map
+  local any_solo = false
+  for _, v in pairs(solo_map) do
+    if v == true then
+      any_solo = true
+      break
+    end
+  end
+  state.lane_auto_names_by_guid = state.lane_auto_names_by_guid or {}
+  local lane_auto_names = state.lane_auto_names_by_guid[guid]
+  if type(lane_auto_names) ~= "table" then
+    lane_auto_names = {}
+    state.lane_auto_names_by_guid[guid] = lane_auto_names
+  end
+  local lane_auto_mode = true
+  edata.lane_auto_name_enabled = true
+  lane_auto_names = build_lane_auto_names(lane_tracks)
+  state.lane_auto_names_by_guid[guid] = lane_auto_names
+
+  local total_steps = STEPS_PER_BAR
+  local host_enabled = edata.host_transport == true
+  local repeat_enabled = edata.repeat_enabled ~= false
+
+  if state.playing and not host_enabled and not repeat_enabled then
+    local tempo = tonumber(r.Master_GetTempo and r.Master_GetTempo() or 120) or 120
+    local step_duration = (60 / tempo) / 4
+    if step_duration <= 0 then step_duration = 0.125 end
+    local cycle_duration = total_steps * step_duration
+    local elapsed = (r.time_precise and r.time_precise() or os.clock()) - (state.started_at or 0)
+    if elapsed >= cycle_duration then
+      stop_playback(state, parent)
+    end
+  end
+
+  if host_enabled then
+    local play_state = math.floor(tonumber((r.GetPlayState and r.GetPlayState()) or 0) or 0)
+    local host_playing = (play_state & 1) == 1
+    if host_playing then
+      if (not state.playing) or state.current_guid ~= guid then
+        start_playback(state, guid)
+      end
+    elseif state.playing then
+      stop_playback(state, parent)
+    end
+  end
+
+  local seq = euclid_build_seq(edata)
+  if host_enabled or (state.playing and state.current_guid == guid) then
+    engine_sync(state, seq, parent, solo_map, any_solo, total_steps, lane_tracks, host_enabled)
+  end
+
+  local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
+  local transport_h = 70
+  local main_h = math.max(160, avail_h - transport_h - 12)
+  local main_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+
+  if r.ImGui_BeginChild(ctx, "##tk_euclid_main", 0, main_h, 1, main_flags) then
+    local main_x = r.ImGui_GetCursorPosX(ctx)
+    local main_y = r.ImGui_GetCursorPosY(ctx)
+
+    local inner_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local knob_size = 42
+    local knob_gap = 8
+    local knob_count = 7
+    local knobs_total_w = (knob_size * knob_count) + (knob_gap * (knob_count - 1))
+    local frame_pad = 8
+    local clear_h = 22
+    local right_w = knobs_total_w + (frame_pad * 2)
+    local lane_gap = 4
+    local lane_panel_w = knobs_total_w
+    local lane_cols = 8
+    local lane_rows = 2
+    local lane_cell_size = math.floor((lane_panel_w - (lane_gap * (lane_cols - 1))) / lane_cols)
+    local lane_grid_content_h = (lane_cell_size * lane_rows) + (lane_gap * (lane_rows - 1))
+    local lane_panel_h = lane_grid_content_h + 20
+    local right_h = frame_pad + (knob_size + 14) + 3 + (knob_size + 14) + 8 + 1 + 8 + lane_panel_h + 8 + clear_h + frame_pad
+    local ring_gap = 12
+    local ring_bottom_padding = 24
+    local stack_gap = 8
+    local stack_layout = inner_w < (right_w + ring_gap + 160)
+    local ring_h_limit = stack_layout and (main_h - right_h - stack_gap) or (main_h - ring_bottom_padding)
+    local ring_w_limit = stack_layout and (inner_w - (frame_pad * 2)) or (inner_w - right_w - ring_gap)
+    local ring_fit = math.min(ring_h_limit, ring_w_limit)
+    local ring_size = stack_layout and clamp(ring_fit, 96, 2000) or math.max(160, ring_fit)
+    local ring_x = stack_layout and (main_x + math.max(0, (inner_w - ring_size) * 0.5)) or main_x
+    local right_x = stack_layout and (main_x + math.max(0, (inner_w - right_w) * 0.5)) or (main_x + math.max(0, inner_w - right_w))
+
+    r.ImGui_SetCursorPosX(ctx, ring_x)
+    r.ImGui_SetCursorPosY(ctx, main_y)
+
+    local rx, ry = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_InvisibleButton(ctx, "##tk_euclid_ring", ring_size, ring_size)
+    local ring_clicked = r.ImGui_IsItemClicked(ctx, 0)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local cx, cy = rx + ring_size * 0.5, ry + ring_size * 0.5
+    local outer = ring_size * 0.5 - 6
+    local inner = outer * 0.16
+    local is_light_theme = Theme.current == "Light"
+    local ring_border_col = is_light_theme and blend_rgb(Theme.colors.border, 0x000000FF, 0.48) or blend_rgb(Theme.colors.border, 0xFFFFFFFF, 0.20)
+    local dot_outline_col = is_light_theme and blend_rgb(Theme.colors.border, 0x000000FF, 0.55) or nil
+    r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, outer + 4, blend_rgb(Theme.colors.frame_bg, 0x000000FF, 0.25), 48)
+    r.ImGui_DrawList_AddCircle(dl, cx, cy, outer + 4, ring_border_col, 64, 1.5)
+
+    if ring_clicked then
+      local mx, my = r.ImGui_GetMousePos(ctx)
+      local dx, dy = mx - cx, my - cy
+      local dist = math.sqrt(dx * dx + dy * dy)
+      local best, bestd = nil, 1e9
+      for lane = 1, GRID_SLOTS do
+        local d = math.abs(dist - euclid_ring_radius(lane, outer, inner))
+        if d < bestd then bestd = d; best = lane end
+      end
+      local ring_step = (outer - inner) / math.max(1, (GRID_SLOTS - 1))
+      if best and bestd <= ring_step * 0.6 then
+        selected_lane = best
+        edata.selected_lane = best
+        if lane_tracks[best] then r.SetOnlyTrackSelected(lane_tracks[best]) end
+        euclid_save(parent, edata)
+      end
+    end
+
+    for lane = 1, GRID_SLOTS do
+      local L = edata.lanes[lane]
+      local steps = clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)
+      local pulses = clamp(math.floor(tonumber(L.pulses) or 0), 0, steps)
+      local pat = euclid_pattern(steps, pulses, L.rotation)
+      local rr = euclid_ring_radius(lane, outer, inner)
+      local is_sel = lane == selected_lane
+      local lane_col = lane_color(lane)
+      local play_step = (state.playing and state.lane_play_steps) and state.lane_play_steps[lane] or nil
+      if is_sel then
+        r.ImGui_DrawList_AddCircle(dl, cx, cy, rr, blend_rgb(lane_col, 0xFFFFFFFF, 0.15), 64, 1.5)
+      end
+      for i = 1, steps do
+        local ang = -math.pi * 0.5 + (i - 1) / steps * math.pi * 2
+        local px = cx + math.cos(ang) * rr
+        local py = cy + math.sin(ang) * rr
+        local on = pat[i] == 1
+        local active = play_step == i
+        local dot_col, dot_r
+        if on then
+          dot_col = is_sel and blend_rgb(lane_col, 0xFFFFFFFF, 0.10) or blend_rgb(Theme.colors.frame_bg, lane_col, 0.70)
+          dot_r = is_sel and 4.5 or 3.2
+        else
+          dot_col = is_sel and blend_rgb(Theme.colors.border, lane_col, 0.30) or blend_rgb(Theme.colors.frame_bg, 0xFFFFFFFF, 0.06)
+          dot_r = is_sel and 2.2 or 1.5
+        end
+        if active and on then
+          r.ImGui_DrawList_AddCircleFilled(dl, px, py, dot_r + 2.5, blend_rgb(lane_col, 0xFFFFFFFF, 0.50), 16)
+          dot_col = 0xFFFFFFFF
+        end
+        r.ImGui_DrawList_AddCircleFilled(dl, px, py, dot_r, dot_col, 16)
+        if dot_outline_col then
+          r.ImGui_DrawList_AddCircle(dl, px, py, dot_r + 0.15, dot_outline_col, 16, 1.0)
+        end
+      end
+    end
+    if state.playing and state.lane_play_steps then
+      local L = edata.lanes[selected_lane]
+      local steps = clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)
+      local ps = state.lane_play_steps[selected_lane]
+      if ps then
+        local ang = -math.pi * 0.5 + (ps - 1) / steps * math.pi * 2
+        local rr = euclid_ring_radius(selected_lane, outer, inner)
+        r.ImGui_DrawList_AddLine(dl, cx, cy, cx + math.cos(ang) * rr, cy + math.sin(ang) * rr, blend_rgb(Theme.colors.accent, 0xFFFFFFFF, 0.20), 1.5)
+      end
+    end
+
+    local right_y
+    if stack_layout then
+      local right_top_min = main_y + ring_size + stack_gap
+      local right_bottom_safe_pad = 30
+      local right_top_bottom_aligned = main_y + math.max(0, main_h - right_h - right_bottom_safe_pad)
+      right_y = math.max(right_top_min, right_top_bottom_aligned)
+    else
+      right_y = main_y
+    end
+
+    r.ImGui_SetCursorPosX(ctx, right_x)
+    r.ImGui_SetCursorPosY(ctx, right_y)
+    if r.ImGui_BeginChild(ctx, "##tk_euclid_right", right_w, right_h, 1, main_flags) then
+      local L = edata.lanes[selected_lane]
+      local steps = clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)
+      local pulses = clamp(math.floor(tonumber(L.pulses) or 0), 0, steps)
+      local rotation = clamp(math.floor(tonumber(L.rotation) or 0), 0, math.max(0, steps - 1))
+      local substeps = clamp(math.floor(tonumber(L.substeps) or 1), 1, 8)
+      local pitch = clamp(math.floor(tonumber(L.pitch) or 0), -24, 24)
+      local volume = clamp(math.floor(tonumber(L.volume) or 0), -24, 6)
+      local lane_col = lane_color(selected_lane)
+      local changed_any = false
+      local function draw_one(id, label, val, vmin, vmax, disp)
+        r.ImGui_BeginGroup(ctx)
+        local start_x = r.ImGui_GetCursorPosX(ctx)
+        local start_y = r.ImGui_GetCursorPosY(ctx)
+        local ch, nv = euclid_knob(ctx, state, id, val, vmin, vmax, knob_size, lane_col, disp)
+        local label_y = start_y + knob_size - 1
+        local lw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+        r.ImGui_SetCursorPosX(ctx, start_x + math.max(0, (knob_size - lw) * 0.5))
+        r.ImGui_SetCursorPosY(ctx, label_y)
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
+        r.ImGui_EndGroup(ctx)
+        return ch, nv
+      end
+      local int_disp = function(v) return tostring(v) end
+      local speed_disp = function(v) return tostring(EUCLID_SPEEDS[clamp(v, 1, 3)]) .. "x" end
+      local sub_disp = function(v) return tostring(v) .. "x" end
+      local pitch_disp = function(v)
+        if v > 0 then return "+" .. tostring(v) end
+        return tostring(v)
+      end
+      local volume_disp = function(v)
+        if v > 0 then return "+" .. tostring(v) .. "dB" end
+        return tostring(v) .. "dB"
+      end
+      local content_x = math.floor(math.max(0, (right_w - knobs_total_w) * 0.5))
+
+      r.ImGui_SetCursorPosX(ctx, content_x)
+
+      local cs, ns = draw_one("euclid_steps_" .. selected_lane, "Steps", steps, 1, STEPS_PER_BAR, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cp, np = draw_one("euclid_pulse_" .. selected_lane, "Pulse", pulses, 0, steps, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cr, nr = draw_one("euclid_rot_" .. selected_lane, "Rotate", rotation, 0, math.max(0, steps - 1), int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local csp, nsp = draw_one("euclid_speed_" .. selected_lane, "Speed", euclid_speed_index(L.speed), 1, 3, speed_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local csub, nsub = draw_one("euclid_substeps_" .. selected_lane, "Sub", substeps, 1, 8, sub_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cpi, npi = draw_one("euclid_pitch_" .. selected_lane, "Pitch", pitch, -24, 24, pitch_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cvol, nvol = draw_one("euclid_volume_" .. selected_lane, "Vol", volume, -24, 6, volume_disp)
+
+      r.ImGui_Dummy(ctx, 0, 0)
+      r.ImGui_SetCursorPosX(ctx, content_x)
+      draw_one("euclid_dummy_1_" .. selected_lane, "D1", 0, 0, 100, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      draw_one("euclid_dummy_2_" .. selected_lane, "D2", 0, 0, 100, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      draw_one("euclid_dummy_3_" .. selected_lane, "D3", 0, 0, 100, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      draw_one("euclid_dummy_4_" .. selected_lane, "D4", 0, 0, 100, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      draw_one("euclid_dummy_5_" .. selected_lane, "D5", 0, 0, 100, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      draw_one("euclid_dummy_6_" .. selected_lane, "D6", 0, 0, 100, int_disp)
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      draw_one("euclid_dummy_7_" .. selected_lane, "D7", 0, 0, 100, int_disp)
+
+      if cs then
+        L.steps = ns
+        L.pulses = clamp(math.floor(tonumber(L.pulses) or 0), 0, ns)
+        L.rotation = clamp(math.floor(tonumber(L.rotation) or 0), 0, math.max(0, ns - 1))
+        changed_any = true
+      end
+      if cp then L.pulses = clamp(np, 0, clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)); changed_any = true end
+      if cr then L.rotation = clamp(nr, 0, math.max(0, clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR) - 1)); changed_any = true end
+      if csp then L.speed = EUCLID_SPEEDS[clamp(nsp, 1, 3)]; changed_any = true end
+      if csub then L.substeps = clamp(nsub, 1, 8); changed_any = true end
+      if cpi then L.pitch = clamp(npi, -24, 24); changed_any = true end
+      if cvol then L.volume = clamp(nvol, -24, 6); changed_any = true end
+
+      if changed_any then
+        euclid_save(parent, edata)
+        if state.playing and state.current_guid == guid then
+          restart_playback_synced(state, guid)
+        end
+      end
+
+      r.ImGui_Spacing(ctx)
+      r.ImGui_Separator(ctx)
+      r.ImGui_Spacing(ctx)
+      r.ImGui_SetCursorPosX(ctx, content_x)
+      if r.ImGui_BeginChild(ctx, "##tk_euclid_lanegrid", lane_panel_w, lane_panel_h, 0, main_flags) then
+        local cols = lane_cols
+        local rows = lane_rows
+        local gap = lane_gap
+        local cell_size = lane_cell_size
+        for lane = 1, GRID_SLOTS do
+          local is_sel = lane == selected_lane
+          if is_sel then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent_hover)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent_hover)
+          else
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.frame_bg)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.frame_hover)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.border)
+          end
+          if r.ImGui_Button(ctx, string.format("%02d##tk_euclid_lane_grid_%d", lane, lane), cell_size, cell_size) then
+            selected_lane = lane
+            edata.selected_lane = lane
+            if lane_tracks[lane] then r.SetOnlyTrackSelected(lane_tracks[lane]) end
+            euclid_save(parent, edata)
+          end
+          if r.ImGui_IsItemHovered(ctx) then
+            local lane_name = tostring(lane_auto_names[lane] or Naming.note_name(BASE_NOTE + lane - 1))
+            r.ImGui_SetTooltip(ctx, lane_name)
+          end
+          r.ImGui_PopStyleColor(ctx, 3)
+          if (lane % cols) ~= 0 then
+            r.ImGui_SameLine(ctx, 0, gap)
+          end
+        end
+        r.ImGui_Dummy(ctx, 0, math.max(0, lane_panel_h - (rows * cell_size) - ((rows - 1) * gap)))
+        r.ImGui_EndChild(ctx)
+      end
+
+      local clear_w = 56
+      r.ImGui_Dummy(ctx, 0, 8)
+      local clear_x = content_x + math.max(0, knobs_total_w - clear_w)
+      r.ImGui_SetCursorPosX(ctx, clear_x)
+      if transport_text_button(ctx, "tk_euclid_clear", "Clear", clear_w, clear_h) then
+        local blank = euclid_new()
+        edata.lanes = blank.lanes
+        edata.selected_preset = 0
+        selected_pattern_index = 0
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Alle lanes leegmaken")
+      end
+
+      r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_EndChild(ctx)
+  end
+
+  local transport_gap = 6
+  local avail_h_after_main = select(2, r.ImGui_GetContentRegionAvail(ctx)) or 0
+  local euclid_layout_top_y = r.ImGui_GetCursorPosY(ctx)
+  local euclid_transport_y = euclid_layout_top_y + math.max(0, avail_h_after_main - transport_h)
+  r.ImGui_SetCursorPosY(ctx, euclid_transport_y)
+
+  local tflags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+  if r.ImGui_BeginChild(ctx, "##tk_euclid_transport", 0, transport_h, 1, tflags) then
+    local button_h = 24
+    local button_w = 32
+    local host_w = 60
+    local export_w = 60
+    local bar_gap = transport_gap
+    local row_gap_y = 4
+    local row_start_x = r.ImGui_GetCursorPosX(ctx)
+    local child_start_y = r.ImGui_GetCursorPosY(ctx)
+    local preset_pad_y = 2
+    local row2_h = button_h + (preset_pad_y * 2)
+    local transport_content_h = button_h + row_gap_y + row2_h
+    local transport_center_nudge_y = -12
+    local y = child_start_y + math.floor(math.max(0, transport_h - transport_content_h) * 0.5) + transport_center_nudge_y
+    local pattern_y = y + button_h + row_gap_y
+    local preset_gap = 4
+    local transport_gap_x = preset_gap
+    local preset_w = 60
+    local preset_x = row_start_x
+    local preset_combo_w = 100
+    local transport_reserved = (button_w * 2) + host_w + export_w + (transport_gap_x * 4)
+    local slider_w = 120
+
+    r.ImGui_SetCursorPosY(ctx, y)
+    if transport_icon_button(ctx, "tk_euclid_play", "play", button_w, button_h, state.playing) then
+      if not host_enabled and not state.playing then start_playback(state, guid) end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, host_enabled and "Host transport active" or "Play")
+    end
+
+    r.ImGui_SameLine(ctx, 0, transport_gap_x)
+    r.ImGui_SetCursorPosY(ctx, y)
+    if transport_icon_button(ctx, "tk_euclid_repeat", "repeat", button_w, button_h, repeat_enabled) then
+      repeat_enabled = not repeat_enabled
+      edata.repeat_enabled = repeat_enabled
+      euclid_save(parent, edata)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, repeat_enabled and "Repeat on" or "Repeat off")
+    end
+
+    r.ImGui_SameLine(ctx, 0, transport_gap_x)
+    r.ImGui_SetCursorPosY(ctx, y)
+    if transport_icon_button(ctx, "tk_euclid_stop", "stop", button_w, button_h, false) then
+      if not host_enabled then
+        if state.playing then
+          stop_playback(state, parent)
+        else
+          stop_notes(state)
+        end
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, host_enabled and "Host transport active" or "Stop")
+    end
+
+    r.ImGui_SameLine(ctx, 0, transport_gap_x)
+    r.ImGui_SetCursorPosY(ctx, y)
+    local rack_vol = tonumber(r.GetMediaTrackInfo_Value(parent, "D_VOL") or 1) or 1
+    local rack_db = clamp(linear_to_db(rack_vol), -60, 12)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, 2)
+    r.ImGui_SetNextItemWidth(ctx, slider_w)
+    local vol_changed, next_db = r.ImGui_SliderDouble(ctx, "##tk_euclid_rack_volume", rack_db, -60, 12, "Rack %.1f dB")
+    r.ImGui_PopStyleVar(ctx, 1)
+    if vol_changed then
+      r.SetMediaTrackInfo_Value(parent, "D_VOL", db_to_linear(next_db))
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Rack master volume")
+    end
+
+    r.ImGui_SameLine(ctx, 0, transport_gap_x)
+    r.ImGui_SetCursorPosY(ctx, y)
+    if lane_toggle_button(ctx, "tk_euclid_host", "Host", host_w, button_h, host_enabled) then
+      host_enabled = not host_enabled
+      edata.host_transport = host_enabled
+      euclid_save(parent, edata)
+      if host_enabled then
+        local ps = math.floor(tonumber((r.GetPlayState and r.GetPlayState()) or 0) or 0)
+        if (ps & 1) ~= 1 and state.playing then stop_playback(state, parent) end
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Playback follows host transport")
+    end
+
+    local function run_export()
+      local seq_export = euclid_build_seq(edata)
+      r.Undo_BeginBlock()
+      r.PreventUIRefresh(1)
+      local ok = select(1, export_sequence_to_midi(parent, seq_export, {
+        song_mode = false,
+        state = state,
+        guid = guid,
+      }))
+      r.PreventUIRefresh(-1)
+      r.UpdateArrange()
+      if ok then
+        r.Undo_EndBlock("TK Kit Maker: Export Euclid pattern to lane tracks", -1)
+      else
+        r.Undo_EndBlock("TK Kit Maker: Export Euclid pattern to lane tracks (failed)", -1)
+      end
+    end
+
+    r.ImGui_SameLine(ctx, 0, transport_gap_x)
+    r.ImGui_SetCursorPosY(ctx, y)
+    if transport_text_button(ctx, "tk_euclid_export", "Export", export_w, button_h) then
+      run_export()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Export pattern to lane tracks")
+    end
+
+    local preset_label = selected_pattern_index > 0 and normalize_pattern_name(patterns[selected_pattern_index] and patterns[selected_pattern_index].name, selected_pattern_index) or "No preset"
+    r.ImGui_SetCursorPosX(ctx, preset_x)
+    r.ImGui_SetCursorPosY(ctx, pattern_y)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, preset_pad_y)
+    r.ImGui_SetNextItemWidth(ctx, preset_combo_w)
+    if r.ImGui_BeginCombo(ctx, "##tk_euclid_preset_slot", preset_label) then
+      if #patterns == 0 then
+        r.ImGui_Selectable(ctx, "(no presets)", false)
+      end
+      for i = 1, #patterns do
+        local n = normalize_pattern_name(patterns[i] and patterns[i].name, i)
+        if r.ImGui_Selectable(ctx, n .. "##tk_euclid_preset_slot_" .. tostring(i), selected_pattern_index == i) then
+          selected_pattern_index = i
+          edata.selected_preset = i
+          local clean = euclid_sanitize({ lanes = patterns[i].lanes })
+          edata.lanes = clean.lanes
+          euclid_save(parent, edata)
+          if state.playing and state.current_guid == guid then
+            restart_playback_synced(state, guid)
+          end
+        end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+    r.ImGui_PopStyleVar(ctx, 1)
+
+    r.ImGui_SameLine(ctx, 0, preset_gap)
+    if transport_text_button(ctx, "tk_euclid_pattern_save", "Save", preset_w, button_h) then
+      local updated = euclid_normalize_library(patterns)
+      local idx = selected_pattern_index
+      local snap = euclid_pattern_snapshot(edata)
+      if idx <= 0 then
+        idx = #updated + 1
+      end
+      local entry_name = updated[idx] and updated[idx].name or ("Preset " .. tostring(idx))
+      updated[idx] = euclid_normalize_entry({
+        name = entry_name,
+        lanes = snap.lanes,
+      }, idx)
+      state.euclid_library = updated
+      selected_pattern_index = idx
+      edata.selected_preset = idx
+      euclid_save(parent, edata)
+      euclid_save_library(updated)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Save current Euclid pattern to selected preset")
+    end
+
+    r.ImGui_SameLine(ctx, 0, preset_gap)
+    if transport_text_button(ctx, "tk_euclid_pattern_new", "New", preset_w, button_h) then
+      local updated = euclid_normalize_library(patterns)
+      local new_idx = #updated + 1
+      local blank = euclid_new()
+      updated[new_idx] = euclid_normalize_entry({
+        name = "Preset " .. tostring(new_idx),
+        lanes = blank.lanes,
+      }, new_idx)
+      state.euclid_library = updated
+      selected_pattern_index = new_idx
+      edata.selected_preset = new_idx
+      edata.lanes = euclid_sanitize({ lanes = updated[new_idx].lanes }).lanes
+      euclid_save(parent, edata)
+      euclid_save_library(updated)
+      if state.playing and state.current_guid == guid then
+        restart_playback_synced(state, guid)
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Create a new blank Euclid preset")
+    end
+
+    r.ImGui_SameLine(ctx, 0, preset_gap)
+    if transport_text_button(ctx, "tk_euclid_pattern_rename", "Rename", preset_w, button_h) then
+      if selected_pattern_index > 0 and patterns[selected_pattern_index] then
+        state.euclid_pattern_name_edit = normalize_pattern_name(patterns[selected_pattern_index].name, selected_pattern_index)
+        state.euclid_pattern_name_target = selected_pattern_index
+        state.euclid_pattern_name_popup_open = true
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Rename selected preset")
+    end
+
+    r.ImGui_SameLine(ctx, 0, preset_gap)
+    if transport_text_button(ctx, "tk_euclid_pattern_delete", "Delete", preset_w, button_h) then
+      if selected_pattern_index > 0 and patterns[selected_pattern_index] then
+        state.euclid_pattern_delete_target = selected_pattern_index
+        state.euclid_pattern_delete_name = normalize_pattern_name(patterns[selected_pattern_index].name, selected_pattern_index)
+        state.euclid_pattern_delete_popup_open = true
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Delete selected preset")
+    end
+
+    if state.euclid_pattern_name_popup_open then
+      r.ImGui_OpenPopup(ctx, "Rename Euclid preset##tk_euclid_pattern_name_popup")
+      state.euclid_pattern_name_popup_open = false
+    end
+    if r.ImGui_BeginPopupModal(ctx, "Rename Euclid preset##tk_euclid_pattern_name_popup", true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+      r.ImGui_SetNextItemWidth(ctx, 240)
+      local name_changed, next_name = r.ImGui_InputText(ctx, "Name##tk_euclid_pattern_name_input", state.euclid_pattern_name_edit or "")
+      if name_changed then
+        state.euclid_pattern_name_edit = next_name
+      end
+      if r.ImGui_Button(ctx, "Cancel##tk_euclid_pattern_name_cancel", 90, 0) then
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_SameLine(ctx, 0, 6)
+      if r.ImGui_Button(ctx, "Apply##tk_euclid_pattern_name_apply", 90, 0) then
+        local idx = math.floor(tonumber(state.euclid_pattern_name_target) or 0)
+        local updated = euclid_normalize_library(state.euclid_library)
+        if idx >= 1 and idx <= #updated then
+          updated[idx].name = normalize_pattern_name(state.euclid_pattern_name_edit, idx)
+          state.euclid_library = updated
+          selected_pattern_index = idx
+          edata.selected_preset = idx
+          euclid_save(parent, edata)
+          euclid_save_library(updated)
+        end
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_EndPopup(ctx)
+    end
+
+    if state.euclid_pattern_delete_popup_open then
+      r.ImGui_OpenPopup(ctx, "Delete Euclid preset##tk_euclid_pattern_delete_popup")
+      state.euclid_pattern_delete_popup_open = false
+    end
+    if r.ImGui_BeginPopupModal(ctx, "Delete Euclid preset##tk_euclid_pattern_delete_popup", true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+      local delete_name = tostring(state.euclid_pattern_delete_name or "")
+      if delete_name == "" then
+        delete_name = "this preset"
+      end
+      r.ImGui_Text(ctx, "Delete preset: " .. delete_name .. "?")
+      if r.ImGui_Button(ctx, "Cancel##tk_euclid_pattern_delete_cancel", 90, 0) then
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_SameLine(ctx, 0, 6)
+      if r.ImGui_Button(ctx, "Delete##tk_euclid_pattern_delete_apply", 90, 0) then
+        local idx = math.floor(tonumber(state.euclid_pattern_delete_target) or 0)
+        local updated = euclid_normalize_library(state.euclid_library)
+        if idx >= 1 and idx <= #updated then
+          table.remove(updated, idx)
+          state.euclid_library = updated
+          if #updated == 0 then
+            selected_pattern_index = 0
+            edata.selected_preset = 0
+            state.euclid_pattern_name_edit = ""
+            state.euclid_pattern_name_target = 0
+          else
+            local next_idx = clamp(idx, 1, #updated)
+            selected_pattern_index = next_idx
+            edata.selected_preset = next_idx
+            state.euclid_pattern_name_edit = normalize_pattern_name(updated[next_idx] and updated[next_idx].name, next_idx)
+            state.euclid_pattern_name_target = next_idx
+          end
+          euclid_save(parent, edata)
+          euclid_save_library(updated)
+        end
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_EndPopup(ctx)
+    end
+    r.ImGui_EndChild(ctx)
+  end
+end
+
+function M.draw(app)
+  local state = app.sequencer
+  local mode = app.view == "euclid" and "euclid" or "step"
+  if state.active_mode ~= mode then
+    if state.active_mode ~= nil then
+      stop_playback(state, get_selected_rack_parent_track())
+    end
+    state.active_mode = mode
+  end
+  if mode == "euclid" then
+    draw_euclid(app)
+  else
+    draw_step(app)
   end
 end
 

@@ -5,6 +5,7 @@ local Exporter = require("core.exporter")
 local Theme = require("core.theme")
 local Naming = require("core.naming")
 local Store = require("core.browser_store")
+local Relink = require("core.relink")
 
 local M = {}
 
@@ -1228,6 +1229,213 @@ local function load_sample_to_pad(parent, slot, sample_path)
   return ok
 end
 
+local function rack_prefix_map(app)
+  app.browser.relink_prefixes = app.browser.relink_prefixes or {}
+  return app.browser.relink_prefixes
+end
+
+local function relink_set_file(track, fx, new_path)
+  if not track or not fx or fx < 0 then return false end
+  local ok = r.TrackFX_SetNamedConfigParm(track, fx, "FILE0", new_path)
+  if ok then
+    r.TrackFX_SetNamedConfigParm(track, fx, "DONE", "")
+  end
+  return ok == true
+end
+
+local function relink_resolved_count(rl)
+  local n = 0
+  for _, it in ipairs(rl.items) do
+    if it.resolved then n = n + 1 end
+  end
+  return n
+end
+
+-- Collects rack pads whose RS5K sample file no longer exists on disk.
+-- When auto_apply is set, remembered prefix remaps are applied silently first,
+-- so only genuinely lost samples end up in the returned list.
+local function scan_rack_missing(app, parent, auto_apply)
+  local items = {}
+  local auto_fixed = 0
+  if not parent then return items, auto_fixed end
+  local rows = collect_rows(parent)
+  local prefix_map = rack_prefix_map(app)
+  r.PreventUIRefresh(1)
+  for _, row in ipairs(rows) do
+    local path = row.sample_path
+    if row.has_rs5k and row.fx and row.fx >= 0 and path and path ~= "" and not Relink.file_exists(path) then
+      local remapped = auto_apply and Relink.apply_prefix_map(path, prefix_map) or nil
+      if remapped and relink_set_file(row.track, row.fx, remapped) then
+        auto_fixed = auto_fixed + 1
+      else
+        items[#items + 1] = {
+          track = row.track,
+          fx = row.fx,
+          note = row.note,
+          old_path = path,
+          basename = Relink.basename(path),
+          new_path = nil,
+          resolved = false,
+        }
+      end
+    end
+  end
+  r.PreventUIRefresh(-1)
+  if auto_fixed > 0 then
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+  end
+  return items, auto_fixed
+end
+
+local function relink_try_folder(app, folder)
+  local rl = app.rs5k_manager.relink
+  local prefix_map = rack_prefix_map(app)
+  local found = 0
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  for _, it in ipairs(rl.items) do
+    if not it.resolved then
+      local hit = Relink.search_recursive(folder, it.basename, 6000)
+      if hit and relink_set_file(it.track, it.fx, hit) then
+        it.resolved = true
+        it.new_path = hit
+        found = found + 1
+        local pair = Relink.derive_prefix_pair(it.old_path, hit)
+        if pair then Relink.remember_prefix(prefix_map, pair.old, pair.new) end
+      end
+    end
+  end
+  for _, it in ipairs(rl.items) do
+    if not it.resolved then
+      local remapped = Relink.apply_prefix_map(it.old_path, prefix_map)
+      if remapped and relink_set_file(it.track, it.fx, remapped) then
+        it.resolved = true
+        it.new_path = remapped
+        found = found + 1
+      end
+    end
+  end
+  r.PreventUIRefresh(-1)
+  r.TrackList_AdjustWindows(false)
+  r.UpdateArrange()
+  if found > 0 then
+    r.Undo_EndBlock("TK Kit Maker: Relink samples", -1)
+    save(app)
+  else
+    r.Undo_EndBlock("TK Kit Maker: Relink samples (none found)", -1)
+  end
+  rl.last_search_dir = folder
+  rl.status = string.format("%d of %d relinked", relink_resolved_count(rl), #rl.items)
+end
+
+local function relink_item_browse(app, it)
+  local rl = app.rs5k_manager.relink
+  local start = rl.last_search_dir or Relink.dirname(it.old_path)
+  local pick = Dialogs.browse_file("Locate " .. it.basename, start, "")
+  if pick and Relink.file_exists(pick) then
+    if relink_set_file(it.track, it.fx, pick) then
+      it.resolved = true
+      it.new_path = pick
+      rl.last_search_dir = Relink.dirname(pick)
+      local pair = Relink.derive_prefix_pair(it.old_path, pick)
+      if pair then Relink.remember_prefix(rack_prefix_map(app), pair.old, pair.new) end
+      save(app)
+      r.TrackList_AdjustWindows(false)
+      r.UpdateArrange()
+      rl.status = string.format("%d of %d relinked", relink_resolved_count(rl), #rl.items)
+    end
+  end
+end
+
+local function draw_relink_modal(app)
+  local ctx = app.ctx
+  local rl = app.rs5k_manager.relink
+  if rl.request_open then
+    rl.request_open = false
+    r.ImGui_OpenPopup(ctx, "Missing samples##kit_manager_relink")
+  end
+  if r.ImGui_SetNextWindowSize then
+    r.ImGui_SetNextWindowSize(ctx, 560, 420, r.ImGui_Cond_FirstUseEver())
+  end
+  local visible, keep = r.ImGui_BeginPopupModal(ctx, "Missing samples##kit_manager_relink", true, r.ImGui_WindowFlags_AlwaysAutoResize())
+  if not visible then return end
+
+  local total = #rl.items
+  local resolved = relink_resolved_count(rl)
+  if total == 0 then
+    r.ImGui_TextColored(ctx, Theme.colors.accent, "No missing samples")
+    Theme.label(ctx, rl.status or "All RS5K pads in this rack point to existing files.")
+    r.ImGui_Dummy(ctx, 1, 4)
+    if r.ImGui_Button(ctx, "Close##relink_close_empty", 100, 0) then
+      r.ImGui_CloseCurrentPopup(ctx)
+    end
+    r.ImGui_EndPopup(ctx)
+    if keep == false then
+      r.ImGui_CloseCurrentPopup(ctx)
+    end
+    return
+  end
+  r.ImGui_TextColored(ctx, Theme.colors.accent, string.format("%d sample(s) could not be found on disk", total))
+  Theme.label(ctx, "Pick the folder where the samples now live, or locate them one by one. Remembered locations relink future racks automatically.")
+  r.ImGui_Dummy(ctx, 1, 4)
+
+  if r.ImGui_Button(ctx, "Locate folder\226\128\166##relink_folder", 150, 0) then
+    local start = rl.last_search_dir or (total > 0 and Relink.dirname(rl.items[1].old_path)) or ""
+    local folder = Dialogs.browse_folder("Search folder for missing samples", start)
+    if folder then relink_try_folder(app, folder) end
+  end
+  r.ImGui_SameLine(ctx, 0, 8)
+  if r.ImGui_Button(ctx, "Re-scan##relink_rescan", 100, 0) then
+    local parent = get_selected_rack_parent_track()
+    if parent then
+      local items = scan_rack_missing(app, parent, true)
+      rl.items = items
+      rl.status = (#items == 0) and "All samples resolved" or nil
+    end
+  end
+  if rl.status then
+    r.ImGui_SameLine(ctx, 0, 10)
+    Theme.label(ctx, rl.status)
+  end
+
+  r.ImGui_Dummy(ctx, 1, 4)
+  local child_h = math.min(260, 30 + total * 46)
+  if r.ImGui_BeginChild(ctx, "##relink_list", 0, child_h, 1) then
+    for i, it in ipairs(rl.items) do
+      r.ImGui_PushID(ctx, "relink_item_" .. tostring(i))
+      if it.resolved then
+        r.ImGui_TextColored(ctx, 0x66DD88FF, "OK  " .. it.basename)
+      else
+        r.ImGui_TextColored(ctx, 0xFF8866FF, "??  " .. it.basename)
+      end
+      Theme.label(ctx, it.resolved and (it.new_path or "") or it.old_path)
+      if not it.resolved then
+        if r.ImGui_Button(ctx, "Locate\226\128\166##relink_one", 90, 0) then
+          relink_item_browse(app, it)
+        end
+      end
+      r.ImGui_Dummy(ctx, 1, 4)
+      r.ImGui_PopID(ctx)
+    end
+    r.ImGui_EndChild(ctx)
+  end
+
+  r.ImGui_Dummy(ctx, 1, 2)
+  if r.ImGui_Button(ctx, "Close##relink_close", 100, 0) then
+    r.ImGui_CloseCurrentPopup(ctx)
+  end
+  if resolved >= total and total > 0 then
+    r.ImGui_SameLine(ctx, 0, 8)
+    Theme.label(ctx, "All samples relinked - you can close this dialog.")
+  end
+
+  r.ImGui_EndPopup(ctx)
+  if keep == false then
+    r.ImGui_CloseCurrentPopup(ctx)
+  end
+end
+
 function M.init(app)
   app.rs5k_manager = {
     selected_slot = nil,
@@ -1244,6 +1452,14 @@ function M.init(app)
     rename_track_guid = nil,
     rename_popup_open = false,
     save_dir = app.browser and app.browser.manager_save_dir or nil,
+    relink = {
+      items = {},
+      open = false,
+      request_open = false,
+      scanned_guid = nil,
+      status = nil,
+      last_search_dir = nil,
+    },
   }
 end
 
@@ -1261,6 +1477,24 @@ function M.draw(app)
   local visible, open = r.ImGui_Begin(ctx, "Kit Manager", true, window_flags)
   if visible then
     local body_pushed = Theme.push_body(ctx)
+
+    do
+      local parent = get_selected_rack_parent_track()
+      local guid = parent and r.GetTrackGUID and r.GetTrackGUID(parent) or nil
+      local rl = manager.relink
+      if guid ~= rl.scanned_guid then
+        rl.scanned_guid = guid
+        rl.items = {}
+        rl.status = nil
+        if parent then
+          local items = scan_rack_missing(app, parent, true)
+          if #items > 0 then
+            rl.items = items
+            rl.request_open = true
+          end
+        end
+      end
+    end
 
     local header_h = 54
     local settings_size = 16
@@ -1363,6 +1597,26 @@ function M.draw(app)
         end
       end
       Theme.label(ctx, "Track mode needs the kit rack to be armed and monitoring. Preview mode is the safe default.")
+      r.ImGui_Dummy(ctx, 0, 2)
+      r.ImGui_Separator(ctx)
+      r.ImGui_Dummy(ctx, 0, 2)
+      if Theme.ghost_button(ctx, "Scan for missing samples##kit_manager_relink_scan", 0, 0) then
+        local parent_track = get_selected_rack_parent_track()
+        local rl = app.rs5k_manager.relink
+        if parent_track then
+          local items = scan_rack_missing(app, parent_track, true)
+          rl.items = items
+          if #items > 0 then
+            rl.request_open = true
+            rl.status = nil
+          else
+            rl.status = "All samples present"
+            rl.request_open = true
+          end
+        end
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      Theme.label(ctx, "Finds RS5K pads whose sample file was moved or whose drive letter changed.")
       if Theme.ghost_button(ctx, "Close##kit_manager_settings_close", 70, 0) then
         r.ImGui_CloseCurrentPopup(ctx)
       end
@@ -1379,6 +1633,7 @@ function M.draw(app)
     local slot_map, extras = parent and rows_by_slot(rows, grid_base_note) or {}, {}
     sync_rename_state(app, parent)
     draw_rename_popup(app, parent, rows)
+    draw_relink_modal(app)
 
     local cover_path = resolve_cover_path(app, parent, rows)
     local cover_tex = cover_texture(app.rs5k_manager, cover_path)

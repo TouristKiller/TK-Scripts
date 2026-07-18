@@ -5,6 +5,7 @@ local Scanner = require("core.scanner")
 local Store = require("core.browser_store")
 local BuilderView = require("ui.builder_view")
 local Presets = require("data.presets")
+local Relink = require("core.relink")
 
 local M = {}
 
@@ -1286,6 +1287,47 @@ local function draw_samples_list(app)
   local col = selected_collection(app)
 
   if #items == 0 then
+    if col and col.path and col.path ~= "" and not Relink.dir_exists(col.path) then
+      r.ImGui_TextColored(ctx, Theme.colors.danger or 0xFF7A5AFF, "Folder not found")
+      Theme.label(ctx, col.path)
+      local prefix_map = state.relink_prefixes
+      local remapped = nil
+      if type(prefix_map) == "table" then
+        for _, e in ipairs(prefix_map) do
+          local ol = Relink.normalize(e.old):lower()
+          if Relink.normalize(col.path):lower():sub(1, #ol) == ol then
+            local cand = Relink.normalize(e.new) .. Relink.normalize(col.path):sub(#Relink.normalize(e.old) + 1)
+            if Relink.dir_exists(cand) then remapped = cand break end
+          end
+        end
+      end
+      if remapped then
+        if r.ImGui_Button(ctx, "Auto relink##col_relink_auto") then
+          local pair = Relink.derive_prefix_pair(col.path, remapped)
+          if pair then
+            state.relink_prefixes = state.relink_prefixes or {}
+            Relink.remember_prefix(state.relink_prefixes, pair.old, pair.new)
+          end
+          col.path = remapped
+          save(app)
+          refresh_collection(app, true)
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Relink to remembered location:\n" .. remapped) end
+        r.ImGui_SameLine(ctx)
+      end
+      if r.ImGui_Button(ctx, "Relink folder\226\128\166##col_relink") then
+        local pick = Dialogs.browse_folder("Locate folder for " .. (col.name or "collection"), remapped or col.path)
+        if pick and Relink.dir_exists(pick) then
+          state.relink_prefixes = state.relink_prefixes or {}
+          local pair = Relink.derive_prefix_pair(col.path, pick)
+          if pair then Relink.remember_prefix(state.relink_prefixes, pair.old, pair.new) end
+          col.path = pick
+          save(app)
+          refresh_collection(app, true)
+        end
+      end
+      return
+    end
     Theme.label(ctx, "No samples found for this filter.")
     return
   end

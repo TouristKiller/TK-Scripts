@@ -10,6 +10,8 @@ local Dialogs = require("core.dialogs")
 local Presets = require("data.presets")
 local Theme   = require("core.theme")
 local Categories = require("core.categories")
+local Relink  = require("core.relink")
+local Store   = require("core.browser_store")
 
 local M = {}
 
@@ -131,10 +133,58 @@ local function draw_pools(app)
           r.ImGui_TextColored(ctx, c.text_faint, "(no folders yet)")
         end
         for fi, folder in ipairs(pool.folders) do
+          local missing = not Relink.dir_exists(folder)
           r.ImGui_Bullet(ctx)
           r.ImGui_SameLine(ctx)
-          r.ImGui_Text(ctx, folder)
+          if missing then
+            r.ImGui_TextColored(ctx, c.danger, folder)
+          else
+            r.ImGui_Text(ctx, folder)
+          end
           r.ImGui_SameLine(ctx)
+          if missing then
+            local prefix_map = app.browser and app.browser.relink_prefixes or nil
+            local remapped = nil
+            if prefix_map then
+              for _, e in ipairs(prefix_map) do
+                local ol = Relink.normalize(e.old):lower()
+                if Relink.normalize(folder):lower():sub(1, #ol) == ol then
+                  local cand = Relink.normalize(e.new) .. Relink.normalize(folder):sub(#Relink.normalize(e.old) + 1)
+                  if Relink.dir_exists(cand) then remapped = cand break end
+                end
+              end
+            end
+            if remapped and r.ImGui_SmallButton(ctx, "Auto##folder_auto_" .. fi) then
+              if app.browser then
+                local pair = Relink.derive_prefix_pair(folder, remapped)
+                if pair then
+                  Relink.remember_prefix(app.browser.relink_prefixes, pair.old, pair.new)
+                  Store.save(app.browser)
+                end
+              end
+              pool.folders[fi] = remapped
+              pool.files = {}
+            end
+            if remapped and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Relink to remembered location:\n" .. remapped) end
+            if remapped then r.ImGui_SameLine(ctx) end
+            if r.ImGui_SmallButton(ctx, "Relink##folder_relink_" .. fi) then
+              local pick = Dialogs.browse_folder("Locate folder for " .. (pool.alias or pool_id), remapped or folder)
+              if pick and Relink.dir_exists(pick) then
+                if app.browser then
+                  app.browser.relink_prefixes = app.browser.relink_prefixes or {}
+                  local pair = Relink.derive_prefix_pair(folder, pick)
+                  if pair then
+                    Relink.remember_prefix(app.browser.relink_prefixes, pair.old, pair.new)
+                    Store.save(app.browser)
+                  end
+                end
+                pool.folders[fi] = pick
+                pool.files = {}
+              end
+            end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Folder not found - locate its new location") end
+            r.ImGui_SameLine(ctx)
+          end
           if r.ImGui_SmallButton(ctx, "X##folder_" .. fi) then folder_pending_delete = fi end
         end
         if folder_pending_delete then

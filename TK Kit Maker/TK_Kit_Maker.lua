@@ -1,11 +1,10 @@
 -- @description TK Kit Maker
 -- @author TouristKiller
--- @version 0.1.1
+-- @version 0.2.1
 -- @changelog:
---   + Sequencer UI polish: lane row order aangepast (1x, RS5k, Copy, Paste, Clear)
---   + Sequencer UI polish: full-width separator met extra spacing boven Auto Name
---   + Sequencer UI polish: huidige racknaam zichtbaar naast Auto Name
---   + Fix: Auto Name separator drawing (geldige kleur en drawlist)
+--   + Sequencer: Euclidian tab toegevoegd naast Step met uitgebreide lane controls
+--   + Sequencer UI: Song Builder van 16 naar 8 slots (bredere slots)
+--   + Sequencer UI: layout en uitlijning van rechter kader in stack-modus verbeterd
 
 local r = reaper
 
