@@ -25,7 +25,6 @@ local function default_state()
     collection_view = "list",
     auto_audition = true,
     preview_volume = 1.0,
-    manager_audition_mode = "preview",
     manager_rack_color = 0x4DA3FFFF,
     manager_rack_gradient = false,
     manager_save_dir = "",
@@ -48,7 +47,6 @@ local function sanitize(state)
   out.collection_view = (state.collection_view == "tiles") and "tiles" or "list"
   out.auto_audition = state.auto_audition ~= false
   out.preview_volume = math.max(0, math.min(2, tonumber(state.preview_volume) or 1.0))
-  out.manager_audition_mode = state.manager_audition_mode == "track" and "track" or "preview"
   out.manager_rack_color = math.max(0, math.min(0xFFFFFFFF, math.floor(tonumber(state.manager_rack_color) or 0x4DA3FFFF)))
   out.manager_rack_gradient = state.manager_rack_gradient == true
   if type(state.manager_save_dir) == "string" then

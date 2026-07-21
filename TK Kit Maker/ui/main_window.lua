@@ -71,8 +71,14 @@ end
 local function draw_header(app)
   local ctx = app.ctx
   local pushed = Theme.push_h1(ctx)
-  r.ImGui_TextColored(ctx, Theme.colors.accent, "TK Kit Maker")
+  r.ImGui_TextColored(ctx, Theme.colors.accent, "Kit Maker")
+  local title_x, _ = r.ImGui_GetItemRectMin(ctx)
+  local _, title_bottom_y = r.ImGui_GetItemRectMax(ctx)
   Theme.pop_font(ctx, pushed)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local pushed_small = Theme.push_small(ctx)
+  r.ImGui_DrawList_AddText(dl, title_x + 1, title_bottom_y - 2, Theme.colors.text_dim, "by TK & Flurmechanik")
+  Theme.pop_font(ctx, pushed_small)
 
   local theme_w = 108
   local manager_w = 108
@@ -93,7 +99,7 @@ local function draw_header(app)
 
   r.ImGui_SameLine(ctx, 0, gap)
   local fh = r.ImGui_GetFrameHeight(ctx)
-  r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + (fh - close_size) * 0.5)
+  r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + (fh - close_size) * 0.5 - 4)
   if close_button(ctx, close_size) then
     app.request_close = true
   end

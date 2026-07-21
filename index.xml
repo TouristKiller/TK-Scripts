@@ -389,7 +389,7 @@
 
 <category name="TK Kit Maker">
     <reapack name="TK_Kit_Maker.lua" type="script" desc="TK Kit Maker">
-        <version name="0.2.1" author="TouristKiller" time="2026-07-18T10:00:00Z">
+        <version name="2.2" author="TouristKiller" time="2026-07-21T12:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/TK_Kit_Maker.lua</source>
             <source file="core/browser_store.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/browser_store.lua</source>
             <source file="core/categories.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/categories.lua</source>
@@ -402,6 +402,7 @@
             <source file="core/picker.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/picker.lua</source>
             <source file="core/relink.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/relink.lua</source>
             <source file="core/scanner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/scanner.lua</source>
+            <source file="core/seq_bus.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/seq_bus.lua</source>
             <source file="core/stitcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/stitcher.lua</source>
             <source file="core/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/theme.lua</source>
             <source file="core/used_log.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/used_log.lua</source>
@@ -421,17 +422,8 @@
             <source file="ui/sequencer_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/sequencer_view.lua</source>
             <source file="USER_GUIDE.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/USER_GUIDE.pdf</source>
             <changelog><![CDATA[
-v0.2.1
-+ Sequencer: Euclidian tab toegevoegd naast Step met uitgebreide lane controls
-+ Sequencer UI: Song Builder van 16 naar 8 slots (bredere slots)
-+ Sequencer UI: layout en uitlijning van rechter kader in stack-modus verbeterd
-
-v0.2.0
-+ Relink: ontbrekende samples (verplaatste files of gewijzigde driveletter) worden nu gedetecteerd
-+ Kit Manager: scan bij rackwissel + handmatige "Scan for missing samples" opent een relink-dialoog
-+ Relink: zoek een map voor alle missers tegelijk, of lokaliseer per sample handmatig
-+ Relink: onthouden prefix-remaps herstellen toekomstige racks/collections automatisch
-+ Browser + Kit Builder: ontbrekende folders tonen een relink-knop (met auto-relink)
+v2.2
++ A Lot of Changes ;o)
 
 ]]></changelog>
         </version>

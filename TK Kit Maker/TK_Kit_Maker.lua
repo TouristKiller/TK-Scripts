@@ -1,10 +1,8 @@
 -- @description TK Kit Maker
 -- @author TouristKiller
--- @version 0.2.1
+-- @version 2.2
 -- @changelog:
---   + Sequencer: Euclidian tab toegevoegd naast Step met uitgebreide lane controls
---   + Sequencer UI: Song Builder van 16 naar 8 slots (bredere slots)
---   + Sequencer UI: layout en uitlijning van rechter kader in stack-modus verbeterd
+--   + A Lot of changes
 
 local r = reaper
 

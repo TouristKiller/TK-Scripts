@@ -2,6 +2,7 @@ local r = reaper
 local Dialogs = require("core.dialogs")
 local Engine = require("core.engine")
 local Exporter = require("core.exporter")
+local SeqBus = require("core.seq_bus")
 local Theme = require("core.theme")
 local Naming = require("core.naming")
 local Store = require("core.browser_store")
@@ -15,11 +16,36 @@ local GRID_SLOTS = GRID_COLS * GRID_ROWS
 local DEFAULT_BASE_NOTE = 36
 local COVER_EXT_KEY = "P_EXT:TK_KIT_MAKER_COVER"
 local MIDI_INPUT_EXT_KEY = "P_EXT:TK_KIT_MAKER_MIDI_INPUT"
+local PAD_AUTO_NAME_EXT_KEY = "P_EXT:TK_KIT_MAKER_PAD_AUTO_NAME"
+local MAX_COVER_DIMENSION = 4096
+local MAX_COVER_PIXELS = 16777216
+
+local IMAGE_EXT = {
+  png = true,
+  jpg = true,
+  jpeg = true,
+  webp = true,
+  bmp = true,
+  gif = true,
+}
 
 local function save(app)
   if app.browser then
     Store.save(app.browser)
   end
+end
+
+local function linear_to_db(v)
+  local n = tonumber(v) or 1
+  if n <= 0.000001 then
+    return -60
+  end
+  return 20 * (math.log(n) / math.log(10))
+end
+
+local function db_to_linear(db)
+  local n = tonumber(db) or 0
+  return 10 ^ (n / 20)
 end
 
 local function file_leaf(path)
@@ -43,6 +69,47 @@ end
 local function file_ext(path)
   local ext = tostring(path or ""):match("(%.[%w]+)$")
   return ext or ""
+end
+
+local function is_image_file(path)
+  local ext = tostring(path or ""):match("%.([%w]+)$")
+  return ext ~= nil and IMAGE_EXT[ext:lower()] == true
+end
+
+local function validate_cover_image(state, path)
+  if not is_image_file(path) then
+    return false, "Selected file is not a supported image."
+  end
+  if not r.ImGui_CreateImage then
+    return false, "Image loading API is not available."
+  end
+
+  local ok_create, tex = pcall(r.ImGui_CreateImage, path)
+  if not ok_create or not tex then
+    return false, "Image could not be decoded."
+  end
+
+  if r.ImGui_Image_GetSize then
+    local ok_size, w, h = pcall(r.ImGui_Image_GetSize, tex)
+    if not ok_size then
+      return false, "Image metadata could not be read."
+    end
+    w = tonumber(w) or 0
+    h = tonumber(h) or 0
+    if w <= 0 or h <= 0 then
+      return false, "Image has invalid dimensions."
+    end
+    if w > MAX_COVER_DIMENSION or h > MAX_COVER_DIMENSION then
+      return false, "Image is too large (max 4096 px per side)."
+    end
+    if (w * h) > MAX_COVER_PIXELS then
+      return false, "Image is too large (max 16 megapixels)."
+    end
+  end
+
+  state.cover_cache = state.cover_cache or {}
+  state.cover_cache[path] = tex
+  return true, nil
 end
 
 local AUDIO_EXT = {
@@ -208,28 +275,263 @@ local function flash_pads_from_recent_midi(manager, grid_base_note)
   end
 end
 
-local stop_preview
-local play_preview
-
-local function track_can_live_audition(track)
-  if not track then return false end
-  local armed = math.floor(r.GetMediaTrackInfo_Value(track, "I_RECARM") or 0) == 1
-  local monitored = math.floor(r.GetMediaTrackInfo_Value(track, "I_RECMON") or 0) > 0
-  return armed and monitored
+local function lane_allowed_by_solo(solo_map, any_solo, lane)
+  if any_solo ~= true then return true end
+  return type(solo_map) == "table" and solo_map[lane] == true
 end
 
-local function play_track_audition(current, manager, note)
-  if not current or not current.track or not r.StuffMIDIMessage then return false end
-  if not track_can_live_audition(current.track) then return false end
-  if manager and manager.track_audition_note then
-    pcall(r.StuffMIDIMessage, 0, 0x80, manager.track_audition_note, 0)
-    manager.track_audition_note = nil
-    manager.track_audition_track = nil
+local function flash_pads_from_sequencer_triggers(manager, seq_state, parent_guid, solo_map, any_solo)
+  if not manager or not seq_state or not parent_guid then return end
+  local by_guid = seq_state.last_trigger_at_by_guid
+  if type(by_guid) ~= "table" then return end
+  local lane_times = by_guid[parent_guid]
+  if type(lane_times) ~= "table" then return end
+  manager.pad_click_flash = manager.pad_click_flash or {}
+  local now = now_seconds()
+  for lane, at in pairs(lane_times) do
+    local lane_n = math.floor(tonumber(lane) or 0)
+    if lane_n >= 1 and lane_n <= GRID_SLOTS and lane_allowed_by_solo(solo_map, any_solo, lane_n) then
+      local age = now - (tonumber(at) or 0)
+      if age >= 0 and age <= 0.18 then
+        manager.pad_click_flash[lane_n] = math.max(manager.pad_click_flash[lane_n] or 0, now + 0.10)
+      end
+    end
   end
+end
+
+local function flash_pads_from_playing_items(manager, rows, solo_map, any_solo)
+  if not manager or type(rows) ~= "table" then return end
+  local play_state = math.floor(tonumber((r.GetPlayState and r.GetPlayState()) or 0) or 0)
+  if (play_state & 1) ~= 1 then return end
+  if not r.GetPlayPosition or not r.CountTrackMediaItems or not r.GetTrackMediaItem then return end
+  if not r.GetMediaItemInfo_Value or not r.GetActiveTake or not r.TakeIsMIDI then return end
+  if not r.MIDI_GetPPQPosFromProjTime or not r.MIDI_CountEvts or not r.MIDI_GetNote then return end
+
+  local now = now_seconds()
+  local play_pos = tonumber(r.GetPlayPosition()) or 0
+  manager.pad_click_flash = manager.pad_click_flash or {}
+
+  for i = 1, #rows do
+    local row = rows[i]
+    local slot = row and (row.slot or row.grid_slot) or nil
+    local tr = row and row.track or nil
+    if slot and slot >= 1 and slot <= GRID_SLOTS and tr and lane_allowed_by_solo(solo_map, any_solo, slot) then
+      local item_count = r.CountTrackMediaItems(tr)
+      local lane_active = false
+      for item_idx = 0, item_count - 1 do
+        local item = r.GetTrackMediaItem(tr, item_idx)
+        if item then
+          local item_pos = tonumber(r.GetMediaItemInfo_Value(item, "D_POSITION") or 0) or 0
+          local item_len = tonumber(r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0) or 0
+          if play_pos >= item_pos and play_pos < (item_pos + item_len) then
+            local take = r.GetActiveTake(item)
+            if take and r.TakeIsMIDI(take) then
+              local ppq = tonumber(r.MIDI_GetPPQPosFromProjTime(take, play_pos) or 0) or 0
+              local _, note_count = r.MIDI_CountEvts(take)
+              for note_idx = 0, (note_count or 0) - 1 do
+                local ok, _, muted, start_ppq, end_ppq = r.MIDI_GetNote(take, note_idx)
+                if ok then
+                  local st = tonumber(start_ppq or 0) or 0
+                  if st > ppq then
+                    break
+                  end
+                  local en = tonumber(end_ppq or 0) or st
+                  if (not muted) and ppq >= st and ppq < en then
+                    lane_active = true
+                    break
+                  end
+                end
+              end
+            end
+          end
+        end
+        if lane_active then break end
+      end
+
+      if lane_active then
+        manager.pad_click_flash[slot] = math.max(manager.pad_click_flash[slot] or 0, now + 0.08)
+      end
+    end
+  end
+end
+
+local stop_preview
+local play_preview
+local stop_track_audition
+local get_selected_rack_parent_track
+local collect_rows
+local pad_release_note_off_enabled
+local ensure_pad_note_filter
+local find_rs5k_fx
+local remove_all_rs5k_fx
+local sync_manager_bus_routing
+
+local function lane_tracks_from_rows(rows)
+  local ordered = {}
+  for i = 1, #(rows or {}) do
+    local row = rows[i]
+    if row and row.track then
+      ordered[#ordered + 1] = row.track
+    end
+  end
+  table.sort(ordered, function(a, b)
+    local ai = r.GetMediaTrackInfo_Value(a, "IP_TRACKNUMBER") or 0
+    local bi = r.GetMediaTrackInfo_Value(b, "IP_TRACKNUMBER") or 0
+    return ai < bi
+  end)
+  local out = {}
+  for i = 1, #ordered do
+    out[#out + 1] = ordered[i]
+  end
+  return out
+end
+
+local function direct_midi_note_on(note, vel)
+  if not r.StuffMIDIMessage then return false end
+  local n = math.max(0, math.min(127, math.floor(tonumber(note) or 0)))
+  local v = math.max(1, math.min(127, math.floor(tonumber(vel) or 127)))
+  r.StuffMIDIMessage(0, 0x90, n, v)
+  return true
+end
+
+local function direct_midi_note_off(note)
+  if not r.StuffMIDIMessage then return false end
+  local n = math.max(0, math.min(127, math.floor(tonumber(note) or 0)))
+  r.StuffMIDIMessage(0, 0x80, n, 0)
+  return true
+end
+
+local function fx_looks_like_rs5k(track, fx)
+  if not track or fx == nil or fx < 0 then return false end
+  local ok, name = r.TrackFX_GetFXName(track, fx, "")
+  local lower_name = ok and name and name:lower() or ""
+  if lower_name:find("reasamplomatic", 1, true) or lower_name:find("rs5k", 1, true) then
+    return true
+  end
+  if r.TrackFX_GetNamedConfigParm then
+    local parm_ok, path = r.TrackFX_GetNamedConfigParm(track, fx, "FILE0")
+    if parm_ok and path ~= nil then
+      return true
+    end
+  end
+  return false
+end
+
+local function fx_looks_like_instrument(track, fx)
+  if not track or fx == nil or fx < 0 then return false end
+  local ok, name = r.TrackFX_GetFXName(track, fx, "")
+  if not ok or not name then return false end
+  local lower_name = name:lower()
+  if lower_name:find("vsti:", 1, true) then return true end
+  if lower_name:find("vst3i:", 1, true) then return true end
+  if lower_name:find("clapi:", 1, true) then return true end
+  if lower_name:find("aui:", 1, true) then return true end
+  if lower_name:find("dxi:", 1, true) then return true end
+  if lower_name:find("instrument", 1, true) then return true end
+  return false
+end
+
+local function instrument_display_name(raw_name)
+  local s = tostring(raw_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local lower = s:lower()
+  local prefixes = { "vsti:", "vst3i:", "clapi:", "aui:", "dxi:" }
+  for i = 1, #prefixes do
+    local p = prefixes[i]
+    if lower:find(p, 1, true) == 1 then
+      s = s:sub(#p + 1)
+      break
+    end
+  end
+  s = s:gsub("^%s+", ""):gsub("%s+$", "")
+  return s
+end
+
+local function find_non_rs5k_instrument_name(track)
+  if not track or not r.TrackFX_GetCount then return nil end
+  local count = r.TrackFX_GetCount(track)
+  for fx = 0, count - 1 do
+    if fx_looks_like_instrument(track, fx) and not fx_looks_like_rs5k(track, fx) then
+      local ok, name = r.TrackFX_GetFXName(track, fx, "")
+      local display = instrument_display_name(ok and name or "")
+      if display ~= "" then return display end
+    end
+  end
+  if r.TrackFX_GetRecCount then
+    local rec_count = r.TrackFX_GetRecCount(track)
+    for i = 0, rec_count - 1 do
+      local fx = 0x1000000 + i
+      if fx_looks_like_instrument(track, fx) and not fx_looks_like_rs5k(track, fx) then
+        local ok, name = r.TrackFX_GetFXName(track, fx, "")
+        local display = instrument_display_name(ok and name or "")
+        if display ~= "" then return display end
+      end
+    end
+  end
+  return nil
+end
+
+local function maybe_auto_name_pad_track(track, instrument_name)
+  if not track or not instrument_name or instrument_name == "" then return false end
+  if not r.GetSetMediaTrackInfo_String then return false end
+  local _, current_name = r.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+  local _, last_auto_name = r.GetSetMediaTrackInfo_String(track, PAD_AUTO_NAME_EXT_KEY, "", false)
+  current_name = tostring(current_name or "")
+  last_auto_name = tostring(last_auto_name or "")
+  local is_default_pad = current_name:lower():match("^pad%s*%d+$") ~= nil
+  local can_overwrite = current_name == "" or is_default_pad or (last_auto_name ~= "" and current_name == last_auto_name)
+  if not can_overwrite then return false end
+  if current_name ~= instrument_name then
+    r.GetSetMediaTrackInfo_String(track, "P_NAME", instrument_name, true)
+  end
+  r.GetSetMediaTrackInfo_String(track, PAD_AUTO_NAME_EXT_KEY, instrument_name, true)
+  return true
+end
+
+local function apply_synth_pad_setup(track, midi_note)
+  if not track then return false end
+  local synth_name = find_non_rs5k_instrument_name(track)
+  remove_all_rs5k_fx(track)
+  ensure_pad_note_filter(track, midi_note)
+  if synth_name and synth_name ~= "" then
+    maybe_auto_name_pad_track(track, synth_name)
+  end
+  return true
+end
+
+local function track_has_non_rs5k_instrument(track)
+  if not track or not r.TrackFX_GetCount then return false end
+  local count = r.TrackFX_GetCount(track)
+  for fx = 0, count - 1 do
+    if fx_looks_like_instrument(track, fx) and not fx_looks_like_rs5k(track, fx) then
+      return true
+    end
+  end
+  if r.TrackFX_GetRecCount then
+    local rec_count = r.TrackFX_GetRecCount(track)
+    for i = 0, rec_count - 1 do
+      local fx = 0x1000000 + i
+      if fx_looks_like_instrument(track, fx) and not fx_looks_like_rs5k(track, fx) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+local function play_track_audition(current, manager, note, obey_note_off, parent, lane_tracks)
+  if not current or not current.track then return false end
   local midi_note = math.max(0, math.min(127, math.floor(tonumber(note) or 0)))
-  local ok = pcall(r.StuffMIDIMessage, 0, 0x90, midi_note, 100)
+  if track_has_non_rs5k_instrument(current.track) then
+    apply_synth_pad_setup(current.track, midi_note)
+  end
+  local ok = direct_midi_note_on(midi_note, 127)
   if ok then
-    manager.preview_path = current.sample_path
+    manager.direct_audition_note = midi_note
+  end
+  if ok then
+    manager.audition_parent = parent
+    manager.audition_lane_tracks = lane_tracks
+    manager.preview_path = (current.sample_path and current.sample_path ~= "") and current.sample_path or (current.track_name or "")
     manager.track_audition_note = midi_note
     manager.track_audition_track = current.track
     manager.track_audition_slot = current.slot or current.grid_slot
@@ -238,45 +540,34 @@ local function play_track_audition(current, manager, note)
   return false
 end
 
-local function stop_track_audition(manager)
-  if not manager or not r.StuffMIDIMessage then return false end
-  local note = manager.track_audition_note
+stop_track_audition = function(manager, parent, lane_tracks)
   local sent = false
-  if note then
-    local ok1 = pcall(r.StuffMIDIMessage, 0, 0x80, note, 0)
-    local ok2 = pcall(r.StuffMIDIMessage, 0, 0x90, note, 0)
-    sent = ok1 or ok2 or sent
+  if manager and manager.direct_audition_note then
+    sent = direct_midi_note_off(manager.direct_audition_note) == true
   end
-  for ch = 0, 15 do
-    local status = 0xB0 + ch
-    local ok_all_notes = pcall(r.StuffMIDIMessage, 0, status, 123, 0)
-    local ok_all_sound = pcall(r.StuffMIDIMessage, 0, status, 120, 0)
-    sent = ok_all_notes or ok_all_sound or sent
+  if manager then
+    manager.direct_audition_note = nil
+    manager.audition_parent = nil
+    manager.audition_lane_tracks = nil
+    manager.track_audition_note = nil
+    manager.track_audition_track = nil
+    manager.track_audition_slot = nil
+    manager.preview_path = nil
   end
-  manager.track_audition_note = nil
-  manager.track_audition_track = nil
-  manager.track_audition_slot = nil
-  manager.preview_path = nil
   return sent
 end
 
-local function audition_selected_sample(app, current)
-  if not current or not current.sample_path or current.sample_path == "" then return false end
+local function audition_selected_sample(app, current, parent, lane_tracks)
+  if not current or not current.track then return false end
 
   local manager = app.rs5k_manager
-  local mode = app.browser and app.browser.manager_audition_mode or "track"
   local slot = current.slot or current.grid_slot
   local note = current.note or (DEFAULT_BASE_NOTE + ((current.grid_slot or 1) - 1))
-
-  if mode == "track" then
-    stop_preview(manager)
-    if play_track_audition(current, manager, note) then
-      return true
-    end
+  local ok = play_track_audition(current, manager, note, pad_release_note_off_enabled(current), parent, lane_tracks)
+  if ok then
+    manager.track_audition_slot = slot
   end
-
-  stop_track_audition(manager)
-  return play_preview(manager, current.sample_path, slot)
+  return ok
 end
 
 local function open_row_rs5k(row)
@@ -303,7 +594,9 @@ local function draw_pad_cell(ctx, manager, slot, row, grid_base_note, pad_w, pad
   local button_clicked = r.ImGui_InvisibleButton(ctx, button_id, pad_w, pad_h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local clicked = false
-  if r.ImGui_IsItemActivated then
+  if r.ImGui_IsItemClicked then
+    clicked = r.ImGui_IsItemClicked(ctx, 0)
+  elseif r.ImGui_IsItemActivated then
     clicked = r.ImGui_IsItemActivated(ctx)
   else
     clicked = button_clicked
@@ -336,7 +629,7 @@ local function draw_pad_cell(ctx, manager, slot, row, grid_base_note, pad_w, pad
   if is_selected then
     fill = Theme.colors.accent_soft
     border = Theme.colors.accent
-  elseif row and row.has_rs5k then
+  elseif row then
     fill = Theme.colors.frame_bg
     border = Theme.colors.border
   else
@@ -346,10 +639,10 @@ local function draw_pad_cell(ctx, manager, slot, row, grid_base_note, pad_w, pad
 
   if active then
     fill = Theme.colors.accent_soft
-    border = Theme.colors.accent_hover
+    border = Theme.colors.accent
   elseif flash_active then
-    fill = Theme.colors.accent
-    border = Theme.colors.accent_hover
+    fill = Theme.colors.accent_soft
+    border = Theme.colors.accent
   elseif rhythm_active then
     fill = Theme.colors.accent_soft
     border = Theme.colors.accent
@@ -395,7 +688,7 @@ local function draw_pad_cell(ctx, manager, slot, row, grid_base_note, pad_w, pad
       if row.sample_path and row.sample_path ~= "" then
         tip = tip .. "\n" .. row.sample_path
       elseif not row.has_rs5k then
-        tip = tip .. "\nNo RS5K loaded on this track."
+        tip = tip .. "\nNo RS5K loaded on this track (VST-only pad)."
       end
     else
       tip = tip .. "\nEmpty"
@@ -429,6 +722,29 @@ local function selected_kit_collection_cover(app)
     end
   end
   return nil
+end
+
+local function clear_collection_cover_by_path(app, path)
+  local state = app and app.browser
+  local target = normalized_path(path)
+  if not state or target == "" then return false end
+  local changed = false
+  for _, col in ipairs(state.collections or {}) do
+    if normalized_path(col.cover_path) == target then
+      col.cover_path = nil
+      changed = true
+    end
+  end
+  for _, col in ipairs(state.kit_collections or {}) do
+    if normalized_path(col.cover_path) == target then
+      col.cover_path = nil
+      changed = true
+    end
+  end
+  if changed then
+    save(app)
+  end
+  return changed
 end
 
 local function selected_collection_name(app)
@@ -505,7 +821,17 @@ local function choose_cover_path(app, parent, rows)
   local start_folder = current and parent_folder_name(current) or (r.GetResourcePath() .. "/Data")
   local path = Dialogs.browse_file("Select cover image", start_folder, "")
   if not path or path == "" then return nil end
+  local ok_cover, err = validate_cover_image(app and app.rs5k_manager or {}, path)
+  if not ok_cover then
+    if app and app.browser then
+      app.browser.preview_error = err or "Selected file is not a supported image."
+    end
+    return nil
+  end
   set_track_cover_path(parent, path)
+  if app and app.browser then
+    app.browser.preview_error = nil
+  end
   return path
 end
 
@@ -569,52 +895,42 @@ end
 
 local function rack_all_armed(parent, rows)
   if not parent then return false end
-  if math.floor(r.GetMediaTrackInfo_Value(parent, "I_RECARM") or 0) ~= 1 then
-    return false
-  end
-  for _, row in ipairs(rows or {}) do
-    if math.floor(r.GetMediaTrackInfo_Value(row.track, "I_RECARM") or 0) ~= 1 then
-      return false
-    end
-  end
-  return true
+  local target = SeqBus.find_bus(parent) or parent
+  return math.floor(r.GetMediaTrackInfo_Value(target, "I_RECARM") or 0) == 1
 end
 
 local function apply_rack_midi_input(parent, rows, value)
   if not parent then return false end
   local stored = math.floor(tonumber(value) or 6112)
-  set_track_midi_input_value(parent, stored)
-  for _, row in ipairs(rows or {}) do
-    if row.track then
-      set_track_midi_input_value(row.track, stored)
-    end
-  end
+  local target = SeqBus.find_bus(parent) or parent
+  set_track_midi_input_value(target, stored)
   return true
 end
 
 local function set_rack_arm_state(parent, rows, armed, midi_value)
   if not parent then return false end
+  local target = SeqBus.find_bus(parent) or parent
   local arm_value = armed and 1 or 0
   local monitor_value = armed and 2 or 0
-  local input_value = math.floor(tonumber(midi_value) or track_midi_input_value(parent))
+  local input_value = math.floor(tonumber(midi_value) or track_midi_input_value(target))
   if armed then
     apply_rack_midi_input(parent, rows, input_value)
   end
-  r.SetMediaTrackInfo_Value(parent, "I_RECARM", arm_value)
-  r.SetMediaTrackInfo_Value(parent, "I_RECMON", monitor_value)
+  r.SetMediaTrackInfo_Value(parent, "I_RECARM", target == parent and arm_value or 0)
+  r.SetMediaTrackInfo_Value(parent, "I_RECMON", target == parent and monitor_value or 0)
   r.SetMediaTrackInfo_Value(parent, "I_RECMODE", 0)
+  r.SetMediaTrackInfo_Value(target, "I_RECARM", arm_value)
+  r.SetMediaTrackInfo_Value(target, "I_RECMON", monitor_value)
+  r.SetMediaTrackInfo_Value(target, "I_RECMODE", 0)
   for _, row in ipairs(rows or {}) do
     if row.track then
-      r.SetMediaTrackInfo_Value(row.track, "I_RECARM", arm_value)
-      r.SetMediaTrackInfo_Value(row.track, "I_RECMON", monitor_value)
+      r.SetMediaTrackInfo_Value(row.track, "I_RECARM", 0)
+      r.SetMediaTrackInfo_Value(row.track, "I_RECMON", 0)
       r.SetMediaTrackInfo_Value(row.track, "I_RECMODE", 0)
-      if armed then
-        set_track_midi_input_value(row.track, input_value)
-      end
     end
   end
   if armed then
-    set_track_midi_input_value(parent, input_value)
+    set_track_midi_input_value(target, input_value)
   end
   return true
 end
@@ -950,6 +1266,7 @@ local function create_empty_rack(app)
   end
 
   local rows = collect_rows(parent)
+  sync_manager_bus_routing(parent, lane_tracks_from_rows(rows), true)
   apply_rack_midi_input(parent, rows, 6112)
   set_rack_arm_state(parent, rows, false, 6112)
 
@@ -968,25 +1285,11 @@ local function create_empty_rack(app)
   return true
 end
 
-local function find_rs5k_fx(track)
-  local function looks_like_rs5k(fx)
-    local ok, name = r.TrackFX_GetFXName(track, fx, "")
-    local lower_name = ok and name and name:lower() or ""
-    if lower_name:find("reasamplomatic", 1, true) or lower_name:find("rs5k", 1, true) then
-      return true
-    end
-    if r.TrackFX_GetNamedConfigParm then
-      local parm_ok, path = r.TrackFX_GetNamedConfigParm(track, fx, "FILE0")
-      if parm_ok and path ~= nil then
-        return true
-      end
-    end
-    return false
-  end
-
+find_rs5k_fx = function(track)
+  if not track then return -1 end
   local count = r.TrackFX_GetCount(track)
   for i = 0, count - 1 do
-    if looks_like_rs5k(i) then
+    if fx_looks_like_rs5k(track, i) then
       return i
     end
   end
@@ -995,12 +1298,93 @@ local function find_rs5k_fx(track)
     local rec_count = r.TrackFX_GetRecCount(track)
     for i = 0, rec_count - 1 do
       local fx = 0x1000000 + i
-      if looks_like_rs5k(fx) then
+      if fx_looks_like_rs5k(track, fx) then
         return fx
       end
     end
   end
   return -1
+end
+
+remove_all_rs5k_fx = function(track)
+  if not track or not r.TrackFX_Delete then return 0 end
+  local removed = 0
+  local guard = 0
+  local fx = find_rs5k_fx and find_rs5k_fx(track) or -1
+  while fx and fx >= 0 and guard < 64 do
+    if r.TrackFX_Delete(track, fx) then
+      removed = removed + 1
+    else
+      break
+    end
+    guard = guard + 1
+    fx = find_rs5k_fx and find_rs5k_fx(track) or -1
+  end
+  return removed
+end
+
+local function find_note_filter_fx(track)
+  if not track then return -1 end
+  local function normalize_name(name)
+    local lower = (name or ""):lower()
+    return lower:gsub("[^a-z0-9]", "")
+  end
+
+  local function is_note_filter_name(name)
+    local lower = (name or ""):lower()
+    if lower:find("midi_note_filter", 1, true) then return true end
+    if lower:find("midi note filter", 1, true) then return true end
+    local normalized = normalize_name(lower)
+    return normalized:find("midinotefilter", 1, true) ~= nil
+  end
+
+  local count = r.TrackFX_GetCount(track)
+  for i = 0, count - 1 do
+    local ok, name = r.TrackFX_GetFXName(track, i, "")
+    if ok and is_note_filter_name(name) then
+      return i
+    end
+  end
+  return -1
+end
+
+local function get_note_filter_note(track, fx)
+  if not track or fx == nil or fx < 0 or not r.TrackFX_GetParamNormalized then return nil end
+  local value = r.TrackFX_GetParamNormalized(track, fx, 0)
+  if value == nil then return nil end
+  return math.max(0, math.min(127, math.floor((tonumber(value) or 0) * 128 + 0.5)))
+end
+
+ensure_pad_note_filter = function(track, midi_note)
+  if not track then return false end
+  local note = math.max(0, math.min(127, math.floor(tonumber(midi_note) or 0)))
+  local fx = find_note_filter_fx(track)
+  if fx < 0 then
+    local candidates = {
+      "JS: midi/midi_note_filter",
+      "midi_note_filter",
+    }
+    for i = 1, #candidates do
+      fx = r.TrackFX_AddByName(track, candidates[i], false, 0)
+      if fx and fx >= 0 then break end
+    end
+    if not fx or fx < 0 then
+      for i = 1, #candidates do
+        fx = r.TrackFX_AddByName(track, candidates[i], false, -1000)
+        if fx and fx >= 0 then break end
+      end
+    end
+    if (not fx or fx < 0) then
+      fx = find_note_filter_fx(track)
+    elseif find_note_filter_fx(track) >= 0 then
+      fx = find_note_filter_fx(track)
+    end
+  end
+  if not fx or fx < 0 then return false end
+  local normalized = note / 128
+  r.TrackFX_SetParamNormalized(track, fx, 0, normalized)
+  r.TrackFX_SetParamNormalized(track, fx, 1, normalized)
+  return true
 end
 
 local function get_rs5k_note(track, fx)
@@ -1030,9 +1414,11 @@ local function set_row_rs5k_obey_note_off(row, enabled)
   return true
 end
 
-local function release_note_off_on_mouse_up_enabled(state)
-  if not state then return true end
-  return state.manager_release_note_off_on_mouse_up ~= false
+pad_release_note_off_enabled = function(row)
+  if row and row.track and row.fx and row.fx >= 0 then
+    return rs5k_obeys_note_off(row.track, row.fx)
+  end
+  return true
 end
 
 local function clamp_byte(v)
@@ -1110,6 +1496,7 @@ local function each_child_track(parent, fn)
   local parent_depth = r.GetTrackDepth(parent)
   local parent_idx = get_track_index0(parent)
   local track_count = r.CountTracks(0)
+  local child_pos = 0
   for i = parent_idx + 1, track_count - 1 do
     local tr = r.GetTrack(0, i)
     if r.GetTrackDepth(tr) <= parent_depth then
@@ -1121,12 +1508,13 @@ local function each_child_track(parent, fn)
       is_bus = ok and v ~= nil and v ~= ""
     end
     if not is_bus then
-      fn(tr, i)
+      child_pos = child_pos + 1
+      fn(tr, i, child_pos)
     end
   end
 end
 
-local function get_selected_rack_parent_track()
+get_selected_rack_parent_track = function()
   local selected = r.GetSelectedTrack(0, 0)
   if not selected then return nil end
   local current = selected
@@ -1140,17 +1528,22 @@ local function get_selected_rack_parent_track()
   return nil
 end
 
-local function collect_rows(parent)
+collect_rows = function(parent)
   local rows = {}
-  each_child_track(parent, function(tr)
+  each_child_track(parent, function(tr, track_idx, child_pos)
     local fx = find_rs5k_fx(tr)
-    local note = fx >= 0 and get_rs5k_note(tr, fx) or nil
+    local note_filter_fx = find_note_filter_fx(tr)
+    local filter_note = note_filter_fx >= 0 and get_note_filter_note(tr, note_filter_fx) or nil
+    local note = fx >= 0 and get_rs5k_note(tr, fx) or filter_note
     local slot = note and note >= DEFAULT_BASE_NOTE and ((note - DEFAULT_BASE_NOTE) + 1) or nil
     rows[#rows + 1] = {
       track = tr,
       fx = fx,
+      note_filter_fx = note_filter_fx,
       note = note,
       slot = slot,
+      child_pos = child_pos,
+      track_idx = track_idx,
       track_name = track_name(tr),
       sample_path = fx >= 0 and get_rs5k_file(tr, fx) or nil,
       has_rs5k = fx >= 0,
@@ -1187,10 +1580,14 @@ local function rows_by_slot(rows, base_note)
     if row.note then
       slot = (row.note - base_note) + 1
     end
-    if (not slot or slot < 1 or slot > GRID_SLOTS) and i <= GRID_SLOTS then
-      slot = i
+    local fallback_slot = math.floor(tonumber(row.child_pos) or i)
+    if (not slot or slot < 1 or slot > GRID_SLOTS) and fallback_slot >= 1 and fallback_slot <= GRID_SLOTS then
+      slot = fallback_slot
     end
     row.grid_slot = slot
+    if not row.slot and slot and slot >= 1 and slot <= GRID_SLOTS then
+      row.slot = slot
+    end
     if slot and slot >= 1 and slot <= GRID_SLOTS and not map[slot] then
       map[slot] = row
     else
@@ -1200,9 +1597,30 @@ local function rows_by_slot(rows, base_note)
   return map, extras
 end
 
+local function sync_rack_note_filters(rows)
+  for i = 1, #(rows or {}) do
+    local row = rows[i]
+    if row and row.track and row.note and track_has_non_rs5k_instrument(row.track) then
+      apply_synth_pad_setup(row.track, row.note)
+    end
+  end
+  return rows
+end
+
+sync_manager_bus_routing = function(parent, lane_tracks, create_if_missing)
+  if not parent then return nil, 0 end
+  local bus = SeqBus.find_bus(parent)
+  if not bus and create_if_missing == true then
+    bus = SeqBus.create_bus(parent)
+  end
+  if not bus then return nil, 0 end
+  local sends = SeqBus.ensure_bus_sends(bus, lane_tracks or {})
+  return bus, sends
+end
+
 local function selected_row(rows, slot)
   for _, row in ipairs(rows) do
-    if row.slot == slot then return row end
+    if row.slot == slot or row.grid_slot == slot then return row end
   end
   return rows[1]
 end
@@ -1546,25 +1964,6 @@ function M.draw(app)
     end
 
     if r.ImGui_BeginPopup(ctx, "##kit_manager_settings_popup") then
-      local track_mode = (state.manager_audition_mode == "track")
-      local changed, value = r.ImGui_Checkbox(ctx, "Play samples via track MIDI (armed rack)", track_mode)
-      if changed then
-        state.manager_audition_mode = value and "track" or "preview"
-        if value then
-          local parent_track = get_selected_rack_parent_track()
-          if parent_track then
-            apply_rack_midi_input(parent_track, collect_rows(parent_track), 6112)
-          end
-        end
-        save(app)
-      end
-      Theme.label(ctx, track_mode and "Track mode is active: audition follows the armed/monitored rack." or "Preview mode is active: audition does not depend on track arm.")
-      local release_note_off = release_note_off_on_mouse_up_enabled(state)
-      local release_changed, release_value = r.ImGui_Checkbox(ctx, "Releasing mouse on pad sends note off", release_note_off)
-      if release_changed then
-        state.manager_release_note_off_on_mouse_up = release_value and true or false
-        save(app)
-      end
       if r.ImGui_ColorEdit4 then
         local flags = r.ImGui_ColorEditFlags_NoInputs and r.ImGui_ColorEditFlags_NoInputs() or 0
         local current_color = (((math.floor(tonumber(state.manager_rack_color) or 0x4DA3FFFF) >> 8) << 8) | 0xFF)
@@ -1596,7 +1995,6 @@ function M.draw(app)
           end
         end
       end
-      Theme.label(ctx, "Track mode needs the kit rack to be armed and monitoring. Preview mode is the safe default.")
       r.ImGui_Dummy(ctx, 0, 2)
       r.ImGui_Separator(ctx)
       r.ImGui_Dummy(ctx, 0, 2)
@@ -1629,8 +2027,11 @@ function M.draw(app)
 
     local parent = get_selected_rack_parent_track()
     local rows = parent and collect_rows(parent) or {}
+    local lane_tracks = lane_tracks_from_rows(rows)
     local grid_base_note = detect_grid_base_note(rows)
     local slot_map, extras = parent and rows_by_slot(rows, grid_base_note) or {}, {}
+    sync_rack_note_filters(rows)
+    sync_manager_bus_routing(parent, lane_tracks, true)
     sync_rename_state(app, parent)
     draw_rename_popup(app, parent, rows)
     draw_relink_modal(app)
@@ -1647,7 +2048,7 @@ function M.draw(app)
     local header_gap = math.max(0, math.floor((cover_h - (row_h * 3)) / 2))
 
     local midi_options = midi_input_options()
-    local midi_input_value = parent and track_midi_input_value(parent) or 6112
+    local midi_input_value = parent and track_midi_input_value(SeqBus.find_bus(parent) or parent) or 6112
     local midi_label = midi_input_label(midi_input_value, midi_options)
 
     r.ImGui_SetCursorPosY(ctx, cover_y)
@@ -1685,6 +2086,7 @@ function M.draw(app)
     r.ImGui_SetCursorPosY(ctx, midi_y)
     local midi_combo_w = name_button_w
     r.ImGui_SetNextItemWidth(ctx, midi_combo_w)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 9, 5)
     if parent and r.ImGui_BeginCombo(ctx, "##kit_manager_midi_input", midi_label) then
       if r.ImGui_Selectable(ctx, "All MIDI##kit_manager_midi_all", midi_input_value == 6112) then
         apply_rack_midi_input(parent, rows, 6112)
@@ -1701,6 +2103,7 @@ function M.draw(app)
       end
       r.ImGui_EndCombo(ctx)
     end
+    r.ImGui_PopStyleVar(ctx)
 
     r.ImGui_SetCursorPosX(ctx, start_x + math.max(0, avail_w - cover_w))
     r.ImGui_SetCursorPosY(ctx, cover_y)
@@ -1726,6 +2129,7 @@ function M.draw(app)
     if r.ImGui_BeginChild(ctx, "##kit_manager_cover", cover_w, cover_h, 1, cover_flags) then
       local cover_hovered = r.ImGui_IsWindowHovered(ctx)
       local cover_inset = 2
+      local cover_drawn = false
       if cover_tex and r.ImGui_Image then
         local img_w, img_h = image_size(ctx, cover_tex, cover_w, cover_h)
         local inner_w, inner_h = r.ImGui_GetContentRegionAvail(ctx)
@@ -1736,8 +2140,33 @@ function M.draw(app)
         local draw_h = math.max(1, img_h * scale)
         local x0, y0 = r.ImGui_GetCursorPos(ctx)
         r.ImGui_SetCursorPos(ctx, x0 + cover_inset + math.max(0, (inner_w - draw_w) * 0.5), y0 + cover_inset + math.max(0, (inner_h - draw_h) * 0.5))
-        r.ImGui_Image(ctx, cover_tex, draw_w, draw_h)
-      else
+        local ok_draw = pcall(r.ImGui_Image, ctx, cover_tex, draw_w, draw_h)
+        if ok_draw then
+          cover_drawn = true
+        else
+          local manager = app.rs5k_manager
+          if manager and manager.cover_cache and cover_path then
+            manager.cover_cache[cover_path] = false
+          end
+          if parent then
+            local track_cover = track_cover_path(parent)
+            if track_cover and normalized_path(track_cover) == normalized_path(cover_path) then
+              set_track_cover_path(parent, nil)
+            end
+            if manager and manager.cover_fallback_by_track then
+              local guid = track_guid(parent)
+              if guid then
+                manager.cover_fallback_by_track[guid] = nil
+              end
+            end
+          end
+          clear_collection_cover_by_path(app, cover_path)
+          if app.browser then
+            app.browser.preview_error = "Cover image kon niet worden geladen en is verwijderd."
+          end
+        end
+      end
+      if not cover_drawn then
         local text = "No image"
         local text_w = select(1, r.ImGui_CalcTextSize(ctx, text)) or 0
         local inner_w, inner_h = r.ImGui_GetContentRegionAvail(ctx)
@@ -1801,7 +2230,29 @@ function M.draw(app)
     local current = selected_row(rows, app.rs5k_manager.selected_slot)
     if current and current.slot then app.rs5k_manager.selected_slot = current.slot end
 
+    local seq_state = app.sequencer
+    local parent_guid = parent and r.GetTrackGUID and r.GetTrackGUID(parent) or nil
+    local active_solo_map = nil
+    local any_active_solo = false
+    if seq_state and parent_guid then
+      local mode = seq_state.active_mode
+      if mode == "euclid" then
+        active_solo_map = seq_state.euclid_solo_by_guid and seq_state.euclid_solo_by_guid[parent_guid] or nil
+      else
+        active_solo_map = seq_state.step_solo_by_guid and seq_state.step_solo_by_guid[parent_guid] or nil
+      end
+      if type(active_solo_map) == "table" then
+        for _, v in pairs(active_solo_map) do
+          if v == true then
+            any_active_solo = true
+            break
+          end
+        end
+      end
+    end
+
     flash_pads_from_recent_midi(app.rs5k_manager, grid_base_note)
+    flash_pads_from_playing_items(app.rs5k_manager, rows, active_solo_map, any_active_solo)
 
     local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 520
     local pad_gap = avail_w <= 430 and 4 or 8
@@ -1809,10 +2260,25 @@ function M.draw(app)
     local pad_h = math.max(52, math.floor(pad_w * 0.72))
     local grid_h = (pad_h * GRID_ROWS) + (pad_gap * (GRID_ROWS - 1)) + 14
 
-    local seq_state = app.sequencer
-    local parent_guid = parent and r.GetTrackGUID and r.GetTrackGUID(parent) or nil
     local seq_running = seq_state and seq_state.playing and parent_guid and seq_state.current_guid == parent_guid
-    local seq_data = seq_running and seq_state.cache and seq_state.cache[parent_guid] or nil
+    if seq_running then
+      flash_pads_from_sequencer_triggers(app.rs5k_manager, seq_state, parent_guid, active_solo_map, any_active_solo)
+    end
+    local seq_data = nil
+    if seq_running and parent_guid and seq_state then
+      local mode = seq_state.active_mode
+      if mode == "euclid" then
+        seq_data = seq_state.euclid_seq_cache and seq_state.euclid_seq_cache[parent_guid] or nil
+      else
+        seq_data = seq_state.step_cache and seq_state.step_cache[parent_guid] or nil
+      end
+      if not seq_data then
+        seq_data = seq_state.step_cache and seq_state.step_cache[parent_guid] or nil
+      end
+      if not seq_data then
+        seq_data = seq_state.euclid_seq_cache and seq_state.euclid_seq_cache[parent_guid] or nil
+      end
+    end
     if r.ImGui_BeginChild(ctx, "##kit_manager_grid", 0, math.max(230, grid_h), 0) then
       for visual_row = GRID_ROWS, 1, -1 do
         for col = 1, GRID_COLS do
@@ -1822,7 +2288,7 @@ function M.draw(app)
           local lane = row and row.grid_slot or slot
           local lane_step = (seq_running and seq_state.lane_play_steps) and seq_state.lane_play_steps[lane] or nil
           local rhythm_active = false
-          if lane_step and seq_data and seq_data.pattern and seq_data.pattern[lane] then
+          if lane_step and seq_data and seq_data.pattern and seq_data.pattern[lane] and lane_allowed_by_solo(active_solo_map, any_active_solo, lane) then
             rhythm_active = (seq_data.pattern[lane][lane_step] == 1)
           end
           local clicked, open_modifier_clicked, released = draw_pad_cell(ctx, app.rs5k_manager, slot, row, grid_base_note, pad_w, pad_h, is_selected, rhythm_active)
@@ -1835,15 +2301,11 @@ function M.draw(app)
             if open_modifier_clicked then
               open_row_rs5k(row)
             else
-              audition_selected_sample(app, row)
+              audition_selected_sample(app, row, parent, lane_tracks)
             end
           end
-          if released and release_note_off_on_mouse_up_enabled(state) then
-            if state.manager_audition_mode == "track" and row and row.track and row.fx and row.fx >= 0 and app.rs5k_manager.track_audition_slot == slot and rs5k_obeys_note_off(row.track, row.fx) then
-              stop_track_audition(app.rs5k_manager)
-            elseif state.manager_audition_mode ~= "track" and app.rs5k_manager.preview_slot == slot then
-              stop_preview(app.rs5k_manager)
-            end
+          if released and row and app.rs5k_manager.track_audition_slot == slot then
+            stop_track_audition(app.rs5k_manager, parent, lane_tracks)
           end
           local pad_min_x, pad_min_y = r.ImGui_GetItemRectMin(ctx)
           local pad_max_x, pad_max_y = r.ImGui_GetItemRectMax(ctx)
@@ -1885,32 +2347,49 @@ function M.draw(app)
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(#extras) .. " child tracks fall outside the current 4x4 kit range.")
     end
 
-    if r.ImGui_BeginChild(ctx, "##kit_manager_transport", 0, 0, 1) then
+    local transport_h = 112
+    local avail_h_after_grid = select(2, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local transport_y = r.ImGui_GetCursorPosY(ctx) + math.max(0, avail_h_after_grid - transport_h)
+    r.ImGui_SetCursorPosY(ctx, transport_y)
+    local transport_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+    if r.ImGui_BeginChild(ctx, "##kit_manager_transport", 0, transport_h, 1, transport_flags) then
       current = selected_row(rows, app.rs5k_manager.selected_slot)
       r.ImGui_Separator(ctx)
-      if Theme.ghost_button(ctx, "Aud##kit_manager_audition", 58, 0) and current and current.sample_path and current.sample_path ~= "" then
-        audition_selected_sample(app, current)
+      local show_note_toggle = current and current.track and current.fx and current.fx >= 0
+      local row_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+      local gap = 8
+      local stop_w = 58
+      local rs5k_w = 58
+      local note_w = show_note_toggle and 78 or 0
+      local gaps = show_note_toggle and 3 or 2
+      local slider_w = math.max(80, row_w - stop_w - rs5k_w - note_w - (gap * gaps))
+
+      if Theme.ghost_button(ctx, "Stop##kit_manager_stop_preview", stop_w, 0) then
+        stop_track_audition(app.rs5k_manager, parent, lane_tracks)
       end
-      r.ImGui_SameLine(ctx)
-      if Theme.ghost_button(ctx, "Stop##kit_manager_stop_preview", 58, 0) then
-        stop_track_audition(app.rs5k_manager)
-        stop_preview(app.rs5k_manager)
-      end
-      r.ImGui_SameLine(ctx)
-      if Theme.ghost_button(ctx, "RS5K##kit_manager_open_rs5k", 58, 0) and current then
-        if current.track then
-          r.SetOnlyTrackSelected(current.track)
+      if parent and r.ImGui_SliderDouble then
+        r.ImGui_SameLine(ctx, nil, gap)
+        local folder_vol = tonumber(r.GetMediaTrackInfo_Value(parent, "D_VOL") or 1.0) or 1.0
+        local folder_db = math.max(-60, math.min(12, linear_to_db(folder_vol)))
+        r.ImGui_SetNextItemWidth(ctx, slider_w)
+        local vol_changed, new_db = r.ImGui_SliderDouble(ctx, "##kit_manager_transport_volume", folder_db, -60, 12, "Rack %.1f dB")
+        if vol_changed then
+          r.SetMediaTrackInfo_Value(parent, "D_VOL", db_to_linear(new_db))
         end
-        open_row_rs5k(current)
       end
-      if current and current.track and current.fx and current.fx >= 0 then
-        r.ImGui_SameLine(ctx)
+      if show_note_toggle then
+        r.ImGui_SameLine(ctx, nil, gap)
         local obey_note_off = rs5k_obeys_note_off(current.track, current.fx)
-        local obey_changed, obey_value = r.ImGui_Checkbox(ctx, "Note-off##kit_manager_row_obey", obey_note_off)
-        if obey_changed then
+        local toggled = false
+        if obey_note_off then
+          toggled = Theme.primary_button(ctx, "Note-off##kit_manager_row_obey", note_w, 0)
+        else
+          toggled = Theme.ghost_button(ctx, "Note-off##kit_manager_row_obey", note_w, 0)
+        end
+        if toggled then
           r.Undo_BeginBlock()
           r.PreventUIRefresh(1)
-          local ok = set_row_rs5k_obey_note_off(current, obey_value == true)
+          local ok = set_row_rs5k_obey_note_off(current, not obey_note_off)
           r.PreventUIRefresh(-1)
           r.TrackList_AdjustWindows(false)
           r.UpdateArrange()
@@ -1921,20 +2400,16 @@ function M.draw(app)
           end
         end
         if r.ImGui_IsItemHovered(ctx) then
-          r.ImGui_SetTooltip(ctx, "Echte RS5K instelling voor geselecteerd pad")
+          r.ImGui_SetTooltip(ctx, "RS5K note-off instelling voor dit pad, ook gebruikt voor stop op mouse release")
         end
       end
-      r.ImGui_SameLine(ctx)
-      local vol_avail = tonumber((r.ImGui_GetContentRegionAvail(ctx))) or 120
-      r.ImGui_SetNextItemWidth(ctx, math.max(120, vol_avail))
-      local vol_changed, vol_value = r.ImGui_SliderDouble(ctx, "##kit_manager_preview_vol", manager.preview_volume or 1.0, 0, 2.0, "%.2f")
-      if vol_changed then
-        manager.preview_volume = vol_value
-        if manager.preview and r.CF_Preview_SetValue then
-          r.CF_Preview_SetValue(manager.preview, "D_VOLUME", vol_value)
+      r.ImGui_SameLine(ctx, nil, gap)
+      if Theme.ghost_button(ctx, "RS5K##kit_manager_open_rs5k", rs5k_w, 0) and current then
+        if current.track then
+          r.SetOnlyTrackSelected(current.track)
         end
+        open_row_rs5k(current)
       end
-
       local playing_text = "Playing: -"
       if manager.preview_path then
         local leaf = manager.preview_path:match("([^/\\]+)$") or manager.preview_path

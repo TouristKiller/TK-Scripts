@@ -271,6 +271,7 @@ end
 
 function M.theme_combo(ctx, width)
   r.ImGui_SetNextItemWidth(ctx, width or 150)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 9, 5)
   if r.ImGui_BeginCombo(ctx, "##tk_theme_select", M.current) then
     for _, name in ipairs(M.theme_names) do
       if r.ImGui_Selectable(ctx, name, name == M.current) then
@@ -279,6 +280,7 @@ function M.theme_combo(ctx, width)
     end
     r.ImGui_EndCombo(ctx)
   end
+  r.ImGui_PopStyleVar(ctx)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Theme") end
 end
 

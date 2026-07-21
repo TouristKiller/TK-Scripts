@@ -2,7 +2,7 @@ local r = reaper
 local Theme = require("core.theme")
 local Naming = require("core.naming")
 local json = require("core.json")
-local EngineJSFX = require("data.seq_engine_jsfx")
+local SeqBus = require("core.seq_bus")
 
 local M = {}
 
@@ -10,6 +10,7 @@ local GRID_SLOTS = 16
 local BASE_NOTE = 36
 local STEPS_PER_BAR = 16
 local PATTERN_SLOTS = 4
+local DEFAULT_STEP_VELOCITY = 127
 local EXT_KEY = "P_EXT:TK_KIT_MAKER_SEQ"
 local ENGINE_ID_KEY = "P_EXT:TK_KIT_MAKER_SEQ_ENGINE_ID"
 local BUS_MARKER = "P_EXT:TK_KIT_MAKER_SEQ_BUS"
@@ -20,17 +21,22 @@ local SUBSTEP_LOOKAHEAD_MAX = 0.004
 local table_step_value
 local find_param_index
 local collect_lane_tracks
+local find_note_filter_fx
 local rs5k_pitch_param_cache = {}
 local rs5k_pan_param_cache = {}
 local rs5k_volume_param_cache = {}
+local rs5k_attack_param_cache = {}
+local rs5k_release_param_cache = {}
 
 local GMEM_NAME = "TKKitMakerSeq"
 local G_EPOCH, G_RUN, G_SYNC, G_TEMPO, G_TOTAL, G_SOLO, G_RESTART, G_NLANES, G_BASE, G_ACTIVE = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
 local G_ALIVE, G_PH, G_LANEPH = 16, 17, 32
 local G_NOTES = 18
 local LANE_BASE, LANE_STRIDE = 128, 128
-local L_CYCLE, L_SPEED, L_SOLO, L_MODE, L_RETRIG, L_NOTE, L_OBEY = 0, 1, 2, 3, 4, 5, 6
-local L_ON, L_VEL, L_GATE, L_LEN, L_SUB, L_PROB = 16, 32, 48, 64, 80, 96
+local L_CYCLE, L_SPEED, L_SOLO, L_MODE, L_RETRIG, L_NOTE, L_OBEY, L_DIRECTION = 0, 1, 2, 3, 4, 5, 6, 7
+local L_ECHO_ON, L_ECHO_COUNT, L_ECHO_MODE, L_ECHO_STEP, L_ECHO_RATE = 8, 9, 10, 11, 12
+local L_ON, L_VEL, L_GATE, L_LEN, L_SUB, L_PROB, L_PITCH = 16, 32, 48, 64, 80, 96, 112
+local ECHO_MAX_COUNT = 4
 local engine_attached = false
 local engine_installed = false
 local engine_reinstalled = false
@@ -63,6 +69,63 @@ local function normalize_lane_speed(value)
   return 1
 end
 
+function M.normalize_step_mode_mask(value)
+  local raw = tostring(value or "")
+  local out = ""
+  for i = 1, #raw do
+    local ch = raw:sub(i, i)
+    if ch == "x" or ch == "X" then
+      out = out .. "x"
+    elseif ch == "." then
+      out = out .. "."
+    end
+    if #out >= 8 then break end
+  end
+  if out == "" then
+    out = "xxxx"
+  end
+  return out
+end
+
+function M.step_mode_mask_to_bits(mask)
+  local m = M.normalize_step_mode_mask(mask)
+  local bits = 0
+  for i = 1, #m do
+    if m:sub(i, i) == "x" then
+      bits = bits | (1 << (i - 1))
+    end
+  end
+  return #m, bits
+end
+
+function M.step_mode_mask_allows(mask, cycle_index)
+  local m = M.normalize_step_mode_mask(mask)
+  local len = #m
+  if len <= 0 then return true end
+  local idx = (math.max(0, math.floor(tonumber(cycle_index) or 0)) % len) + 1
+  return m:sub(idx, idx) == "x"
+end
+
+function M.next_step_mode_mask(mask, reverse)
+  local presets = { "xxxx", "x...", ".x..", "..x.", "...x", ".x.x", "x.x.", "x..x", "xx..", "..xx" }
+  local current = M.normalize_step_mode_mask(mask)
+  local idx = 1
+  for i = 1, #presets do
+    if presets[i] == current then
+      idx = i
+      break
+    end
+  end
+  if reverse then
+    idx = idx - 1
+    if idx < 1 then idx = #presets end
+  else
+    idx = idx + 1
+    if idx > #presets then idx = 1 end
+  end
+  return presets[idx]
+end
+
 local function next_lane_speed(value)
   local n = normalize_lane_speed(value)
   if n == 1 then
@@ -83,6 +146,240 @@ local function lane_speed_label(value)
     return "2x"
   end
   return "1x"
+end
+
+local function normalize_lane_direction(value)
+  local s = tostring(value or "fw"):lower()
+  if s == "bw" or s == "backward" then
+    return "bw"
+  end
+  if s == "pendulum" or s == "pnd" then
+    return "pendulum"
+  end
+  return "fw"
+end
+
+local function next_lane_direction(value)
+  local dir = normalize_lane_direction(value)
+  if dir == "fw" then
+    return "bw"
+  end
+  if dir == "bw" then
+    return "pendulum"
+  end
+  return "fw"
+end
+
+local function lane_direction_label(value)
+  local dir = normalize_lane_direction(value)
+  if dir == "bw" then
+    return "BW"
+  end
+  if dir == "pendulum" then
+    return "PND"
+  end
+  return "FW"
+end
+
+local function lane_direction_step(cycle_steps, direction, tick_index)
+  local cyc = math.max(1, math.floor(tonumber(cycle_steps) or 1))
+  local tick = math.max(0, math.floor(tonumber(tick_index) or 0))
+  local dir = normalize_lane_direction(direction)
+  if dir == "bw" then
+    return cyc - (tick % cyc)
+  end
+  if dir == "pendulum" and cyc > 1 then
+    local period = (cyc * 2) - 2
+    local pos = tick % period
+    if pos < cyc then
+      return pos + 1
+    end
+    return period - pos + 1
+  end
+  return (tick % cyc) + 1
+end
+
+local function normalize_lane_echo_mode(value)
+  local s = tostring(value or "flat"):lower()
+  if s == "up" then
+    return "up"
+  end
+  if s == "down" then
+    return "down"
+  end
+  return "flat"
+end
+
+local ECHO_MODE_ITEMS = {
+  { value = "flat", label = "FLAT" },
+  { value = "up", label = "UP" },
+  { value = "down", label = "DOWN" },
+}
+
+local ECHO_STEP_ITEMS = { 2, 4, 6, 8, 12, 16, 20, 24, 28, 32 }
+local ECHO_RATE_ITEMS = { "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T" }
+
+local function lane_echo_mode_label(value)
+  local mode = normalize_lane_echo_mode(value)
+  if mode == "up" then
+    return "UP"
+  end
+  if mode == "down" then
+    return "DOWN"
+  end
+  return "FLAT"
+end
+
+local function next_lane_echo_mode(value)
+  local mode = normalize_lane_echo_mode(value)
+  if mode == "flat" then
+    return "up"
+  end
+  if mode == "up" then
+    return "down"
+  end
+  return "flat"
+end
+
+local function normalize_lane_echo_count(value)
+  return clamp(math.floor(tonumber(value) or 2), 1, ECHO_MAX_COUNT)
+end
+
+local function normalize_lane_echo_step(value)
+  return clamp(math.floor(tonumber(value) or 6), 1, 32)
+end
+
+local function next_lane_echo_step(value)
+  local n = normalize_lane_echo_step(value)
+  if n == 2 then
+    return 4
+  end
+  if n == 4 then
+    return 6
+  end
+  if n == 6 then
+    return 8
+  end
+  if n == 8 then
+    return 12
+  end
+  if n == 12 then
+    return 16
+  end
+  if n == 16 then
+    return 20
+  end
+  if n == 20 then
+    return 24
+  end
+  if n == 24 then
+    return 28
+  end
+  if n == 28 then
+    return 32
+  end
+  return 2
+end
+
+local function normalize_lane_echo_rate(value)
+  local s = tostring(value or "1/16")
+  for i = 1, #ECHO_RATE_ITEMS do
+    if s == ECHO_RATE_ITEMS[i] then
+      return s
+    end
+  end
+  return "1/16"
+end
+
+local function lane_echo_rate_label(value)
+  return normalize_lane_echo_rate(value)
+end
+
+local function next_lane_echo_rate(value)
+  local s = normalize_lane_echo_rate(value)
+  if s == "1/4" then
+    return "1/8"
+  end
+  if s == "1/8" then
+    return "1/16"
+  end
+  if s == "1/16" then
+    return "1/32"
+  end
+  return "1/4"
+end
+
+local function lane_echo_interval_steps(value)
+  local s = normalize_lane_echo_rate(value)
+  if s == "1/4" then
+    return 4
+  end
+  if s == "1/4T" then
+    return (8 / 3)
+  end
+  if s == "1/8" then
+    return 2
+  end
+  if s == "1/8T" then
+    return (4 / 3)
+  end
+  if s == "1/16T" then
+    return (2 / 3)
+  end
+  if s == "1/32" then
+    return 0.5
+  end
+  if s == "1/32T" then
+    return (1 / 3)
+  end
+  return 1
+end
+
+local function echo_rate_code(value)
+  local s = normalize_lane_echo_rate(value)
+  if s == "1/4" then return 0 end
+  if s == "1/4T" then return 1 end
+  if s == "1/8" then return 2 end
+  if s == "1/8T" then return 3 end
+  if s == "1/16" then return 4 end
+  if s == "1/16T" then return 5 end
+  if s == "1/32" then return 6 end
+  if s == "1/32T" then return 7 end
+  return 4
+end
+
+local function echo_velocity_for_index(base_vel, echo_index, echo_mode, echo_step)
+  local base = clamp(math.floor(tonumber(base_vel) or DEFAULT_STEP_VELOCITY), 1, 127)
+  local idx = math.max(1, math.floor(tonumber(echo_index) or 1))
+  local step = normalize_lane_echo_step(echo_step)
+  local mode = normalize_lane_echo_mode(echo_mode)
+  if mode == "up" then
+    return clamp(base + (idx * step), 1, 127)
+  end
+  if mode == "down" then
+    return clamp(base - (idx * step), 1, 127)
+  end
+  return base
+end
+
+local function sequence_export_repeat_count(seq)
+  local lane_settings = seq and seq.lane_settings or {}
+  local max_repeat = 1
+  for lane = 1, GRID_SLOTS do
+    local cfg = lane_settings[lane] or { cycle_steps = STEPS_PER_BAR, speed = 1, direction = "fw" }
+    local cycle_steps = clamp(math.floor(tonumber(cfg.cycle_steps) or STEPS_PER_BAR), 1, STEPS_PER_BAR)
+    local lane_speed = normalize_lane_speed(cfg.speed)
+    local direction = normalize_lane_direction(cfg.direction)
+    local direction_factor = 1
+    if direction == "pendulum" and cycle_steps > 1 then
+      direction_factor = 2
+    end
+    local lane_repeat = direction_factor / math.max(0.0001, lane_speed)
+    if lane_repeat > max_repeat then
+      max_repeat = lane_repeat
+    end
+  end
+  return math.max(1, math.ceil(max_repeat))
 end
 
 local function clamp_byte(v)
@@ -359,12 +656,11 @@ local function set_rs5k_obey_note_off(track, fx, enabled)
   return true
 end
 
-local function set_rs5k_pitch_semitones(track, fx, semitones)
-  if not track or fx == nil or fx < 0 then return false end
-  if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
+function M.resolve_rs5k_pitch_param_index(track, fx)
+  if not track or fx == nil or fx < 0 then return -1 end
   local key = (track_guid(track) or tostring(track)) .. "#" .. tostring(fx)
   local pitch_idx = rs5k_pitch_param_cache[key]
-  if pitch_idx == nil then
+  if pitch_idx == nil or pitch_idx < 0 then
     pitch_idx = -1
     if r.TrackFX_GetNumParams and r.TrackFX_GetParamName then
       local pcount = r.TrackFX_GetNumParams(track, fx)
@@ -387,9 +683,21 @@ local function set_rs5k_pitch_semitones(track, fx, semitones)
         end
       end
     end
-    rs5k_pitch_param_cache[key] = pitch_idx
+    if pitch_idx >= 0 then
+      rs5k_pitch_param_cache[key] = pitch_idx
+    else
+      rs5k_pitch_param_cache[key] = nil
+    end
   end
+  return pitch_idx
+end
+
+local function set_rs5k_pitch_semitones(track, fx, semitones)
+  if not track or fx == nil or fx < 0 then return false end
+  if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
+  local pitch_idx = M.resolve_rs5k_pitch_param_index(track, fx)
   if pitch_idx < 0 then return false end
+
   local semis = tonumber(semitones) or 0
 
   local display_min, display_max = nil, nil
@@ -417,6 +725,17 @@ local function set_rs5k_pitch_semitones(track, fx, semitones)
   end
 
   r.TrackFX_SetParamNormalized(track, fx, pitch_idx, clamp(norm, 0, 1))
+  return true
+end
+
+function M.set_rs5k_pitch_envelope_active(track, fx, active)
+  if not track or fx == nil or fx < 0 then return false end
+  if not r.GetFXEnvelope or not r.GetSetEnvelopeInfo_String then return false end
+  local pitch_idx = M.resolve_rs5k_pitch_param_index(track, fx)
+  if pitch_idx < 0 then return false end
+  local env = r.GetFXEnvelope(track, fx, pitch_idx, false)
+  if not env then return false end
+  r.GetSetEnvelopeInfo_String(env, "ACTIVE", active and "1" or "0", true)
   return true
 end
 
@@ -628,6 +947,106 @@ local function set_rs5k_volume_db(track, fx, volume_db)
   return true
 end
 
+local function set_rs5k_attack_ms(track, fx, attack_ms)
+  if not track or fx == nil or fx < 0 then return false end
+  if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
+  local key = (track_guid(track) or tostring(track)) .. "#" .. tostring(fx)
+  local idx = rs5k_attack_param_cache[key]
+  if idx == nil then
+    idx = -1
+    if r.TrackFX_GetNumParams and r.TrackFX_GetParamName then
+      local pcount = r.TrackFX_GetNumParams(track, fx)
+      for pi = 0, (pcount or 0) - 1 do
+        local ok, pname = r.TrackFX_GetParamName(track, fx, pi, "")
+        local lower = ok and pname and tostring(pname):lower() or ""
+        if lower == "attack" or lower:find("attack", 1, true) then
+          idx = pi
+          break
+        end
+      end
+    end
+    rs5k_attack_param_cache[key] = idx
+  end
+  if idx < 0 then return false end
+
+  local value = math.max(0, tonumber(attack_ms) or 0)
+  local display_min, display_max = nil, nil
+  if r.TrackFX_FormatParamValueNormalized then
+    local ok0, txt0 = r.TrackFX_FormatParamValueNormalized(track, fx, idx, 0, "")
+    local ok1, txt1 = r.TrackFX_FormatParamValueNormalized(track, fx, idx, 1, "")
+    local n0 = ok0 and parse_param_display_number(txt0) or nil
+    local n1 = ok1 and parse_param_display_number(txt1) or nil
+    if n0 and n1 and n1 > n0 + 0.000001 then
+      display_min, display_max = n0, n1
+    end
+  end
+
+  local norm
+  if display_min and display_max then
+    local target = clamp(value, display_min, display_max)
+    norm = (target - display_min) / (display_max - display_min)
+  else
+    local _, min_v, max_v = r.TrackFX_GetParamEx(track, fx, idx)
+    local min_num = tonumber(min_v)
+    local max_num = tonumber(max_v)
+    if not min_num or not max_num or max_num <= min_num then return false end
+    local target = clamp(value, min_num, max_num)
+    norm = (target - min_num) / (max_num - min_num)
+  end
+  r.TrackFX_SetParamNormalized(track, fx, idx, clamp(norm, 0, 1))
+  return true
+end
+
+local function set_rs5k_release_ms(track, fx, release_ms)
+  if not track or fx == nil or fx < 0 then return false end
+  if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
+  local key = (track_guid(track) or tostring(track)) .. "#" .. tostring(fx)
+  local idx = rs5k_release_param_cache[key]
+  if idx == nil then
+    idx = -1
+    if r.TrackFX_GetNumParams and r.TrackFX_GetParamName then
+      local pcount = r.TrackFX_GetNumParams(track, fx)
+      for pi = 0, (pcount or 0) - 1 do
+        local ok, pname = r.TrackFX_GetParamName(track, fx, pi, "")
+        local lower = ok and pname and tostring(pname):lower() or ""
+        if lower == "release" or lower:find("release", 1, true) then
+          idx = pi
+          break
+        end
+      end
+    end
+    rs5k_release_param_cache[key] = idx
+  end
+  if idx < 0 then return false end
+
+  local value = math.max(0, tonumber(release_ms) or 0)
+  local display_min, display_max = nil, nil
+  if r.TrackFX_FormatParamValueNormalized then
+    local ok0, txt0 = r.TrackFX_FormatParamValueNormalized(track, fx, idx, 0, "")
+    local ok1, txt1 = r.TrackFX_FormatParamValueNormalized(track, fx, idx, 1, "")
+    local n0 = ok0 and parse_param_display_number(txt0) or nil
+    local n1 = ok1 and parse_param_display_number(txt1) or nil
+    if n0 and n1 and n1 > n0 + 0.000001 then
+      display_min, display_max = n0, n1
+    end
+  end
+
+  local norm
+  if display_min and display_max then
+    local target = clamp(value, display_min, display_max)
+    norm = (target - display_min) / (display_max - display_min)
+  else
+    local _, min_v, max_v = r.TrackFX_GetParamEx(track, fx, idx)
+    local min_num = tonumber(min_v)
+    local max_num = tonumber(max_v)
+    if not min_num or not max_num or max_num <= min_num then return false end
+    local target = clamp(value, min_num, max_num)
+    norm = (target - min_num) / (max_num - min_num)
+  end
+  r.TrackFX_SetParamNormalized(track, fx, idx, clamp(norm, 0, 1))
+  return true
+end
+
 find_param_index = function(track, fx, patterns)
   if not r.TrackFX_GetNumParams or not r.TrackFX_GetParamName then return -1 end
   local pcount = r.TrackFX_GetNumParams(track, fx)
@@ -708,7 +1127,7 @@ end
 local function new_sequence()
   local data = {
     steps = 16,
-    velocity = 100,
+    velocity = DEFAULT_STEP_VELOCITY,
     host_transport = false,
     repeat_enabled = true,
     lane_auto_name_enabled = false,
@@ -729,15 +1148,19 @@ local function new_sequence()
     local pitch_steps = {}
     local pan_steps = {}
     local volume_steps = {}
+    local attack_steps = {}
+    local release_steps = {}
     local prob_steps = {}
     for step = 1, STEPS_PER_BAR do
-      vel_steps[step] = 100
+      vel_steps[step] = DEFAULT_STEP_VELOCITY
       gate_steps[step] = 100
       len_steps[step] = 1
       sub_steps[step] = 1
       pitch_steps[step] = 0
       pan_steps[step] = 0
       volume_steps[step] = 0
+      attack_steps[step] = 0
+      release_steps[step] = 0
       prob_steps[step] = 100
     end
     data.lane_settings[lane] = {
@@ -745,7 +1168,15 @@ local function new_sequence()
       note_off_mode = "follow",
       cycle_steps = 16,
       speed = 1,
+      direction = "fw",
+      muted = false,
       retrigger = true,
+      echo_enabled = false,
+      echo_count = 2,
+      echo_vel_mode = "flat",
+      echo_vel_step = 6,
+      echo_rate = "1/16",
+      step_mode_mask = "xxxx",
       param_mode = "velocity",
       step_velocity = vel_steps,
       step_gate = gate_steps,
@@ -754,6 +1185,8 @@ local function new_sequence()
       step_pitch = pitch_steps,
       step_pan = pan_steps,
       step_volume = volume_steps,
+      step_attack = attack_steps,
+      step_release = release_steps,
       step_probability = prob_steps,
     }
   end
@@ -772,7 +1205,7 @@ local function sanitize_sequence(data)
   end
   local out = new_sequence()
   out.steps = STEPS_PER_BAR
-  out.velocity = 100
+  out.velocity = DEFAULT_STEP_VELOCITY
   out.host_transport = data.host_transport == true
   out.repeat_enabled = data.repeat_enabled ~= false
   out.lane_auto_name_enabled = data.lane_auto_name_enabled == true
@@ -816,7 +1249,15 @@ local function sanitize_sequence(data)
           note_off_mode = (src.note_off_mode == "none" or src.note_off_mode == "length") and src.note_off_mode or "follow",
           cycle_steps = clamp(math.floor(tonumber(src.cycle_steps) or total), 1, total),
           speed = normalize_lane_speed(src.speed),
+          direction = normalize_lane_direction(src.direction),
+          muted = src.muted == true,
           retrigger = src.retrigger ~= false,
+          echo_enabled = src.echo_enabled == true,
+          echo_count = normalize_lane_echo_count(src.echo_count),
+          echo_vel_mode = normalize_lane_echo_mode(src.echo_vel_mode),
+          echo_vel_step = normalize_lane_echo_step(src.echo_vel_step),
+          echo_rate = normalize_lane_echo_rate(src.echo_rate),
+          step_mode_mask = M.normalize_step_mode_mask(src.step_mode_mask),
           param_mode = (src.param_mode == "substeps" or src.param_mode == "gate" or src.param_mode == "length" or src.param_mode == "pitch" or src.param_mode == "pan" or src.param_mode == "volume") and src.param_mode or "velocity",
           step_velocity = {},
           step_gate = {},
@@ -825,24 +1266,30 @@ local function sanitize_sequence(data)
           step_pitch = {},
           step_pan = {},
           step_volume = {},
+          step_attack = {},
+          step_release = {},
           step_probability = {},
         }
         for step = 1, total do
-          local raw_vel = table_step_value(src.step_velocity, step, 100)
+          local raw_vel = table_step_value(src.step_velocity, step, DEFAULT_STEP_VELOCITY)
           local raw_gate = table_step_value(src.step_gate, step, 100)
           local raw_len = table_step_value(src.step_length, step, 1)
           local raw_sub = table_step_value(src.step_substeps, step, 1)
           local raw_pitch = table_step_value(src.step_pitch, step, 0)
           local raw_pan = table_step_value(src.step_pan, step, 0)
           local raw_volume = table_step_value(src.step_volume, step, 0)
+          local raw_attack = table_step_value(src.step_attack, step, 0)
+          local raw_release = table_step_value(src.step_release, step, 0)
           local raw_prob = table_step_value(src.step_probability, step, 100)
-          out.lane_settings[lane].step_velocity[step] = clamp(math.floor(tonumber(raw_vel) or 100), 1, 127)
+          out.lane_settings[lane].step_velocity[step] = clamp(math.floor(tonumber(raw_vel) or DEFAULT_STEP_VELOCITY), 1, 127)
           out.lane_settings[lane].step_gate[step] = clamp(math.floor(tonumber(raw_gate) or 100), 1, 100)
           out.lane_settings[lane].step_length[step] = clamp(math.floor(tonumber(raw_len) or 1), 1, total)
           out.lane_settings[lane].step_substeps[step] = clamp(math.floor(tonumber(raw_sub) or 1), 1, 8)
           out.lane_settings[lane].step_pitch[step] = clamp(math.floor(tonumber(raw_pitch) or 0), -24, 24)
           out.lane_settings[lane].step_pan[step] = clamp(math.floor(tonumber(raw_pan) or 0), -100, 100)
           out.lane_settings[lane].step_volume[step] = clamp(math.floor(tonumber(raw_volume) or 0), -24, 6)
+          out.lane_settings[lane].step_attack[step] = clamp(math.floor(tonumber(raw_attack) or 0), 0, 2000)
+          out.lane_settings[lane].step_release[step] = clamp(math.floor(tonumber(raw_release) or 0), 0, 2000)
           out.lane_settings[lane].step_probability[step] = clamp(math.floor(tonumber(raw_prob) or 100), 0, 100)
         end
       else
@@ -853,15 +1300,19 @@ local function sanitize_sequence(data)
         local pitch_steps = {}
         local pan_steps = {}
         local volume_steps = {}
+        local attack_steps = {}
+        local release_steps = {}
         local prob_steps = {}
         for step = 1, total do
-          vel_steps[step] = 100
+          vel_steps[step] = DEFAULT_STEP_VELOCITY
           gate_steps[step] = 100
           len_steps[step] = 1
           sub_steps[step] = 1
           pitch_steps[step] = 0
           pan_steps[step] = 0
           volume_steps[step] = 0
+          attack_steps[step] = 0
+          release_steps[step] = 0
           prob_steps[step] = 100
         end
         out.lane_settings[lane] = {
@@ -869,7 +1320,14 @@ local function sanitize_sequence(data)
           note_off_mode = "follow",
           cycle_steps = total,
           speed = 1,
+          direction = "fw",
           retrigger = true,
+          echo_enabled = false,
+          echo_count = 2,
+          echo_vel_mode = "flat",
+          echo_vel_step = 6,
+          echo_rate = "1/16",
+          step_mode_mask = "xxxx",
           param_mode = "velocity",
           step_velocity = vel_steps,
           step_gate = gate_steps,
@@ -878,6 +1336,8 @@ local function sanitize_sequence(data)
           step_pitch = pitch_steps,
           step_pan = pan_steps,
           step_volume = volume_steps,
+          step_attack = attack_steps,
+          step_release = release_steps,
           step_probability = prob_steps,
         }
       end
@@ -1230,6 +1690,13 @@ end
 
 local function ensure_lane_step_params(cfg, total_steps, default_vel)
   cfg.speed = normalize_lane_speed(cfg.speed)
+  cfg.direction = normalize_lane_direction(cfg.direction)
+  cfg.echo_enabled = cfg.echo_enabled == true
+  cfg.echo_count = normalize_lane_echo_count(cfg.echo_count)
+  cfg.echo_vel_mode = normalize_lane_echo_mode(cfg.echo_vel_mode)
+  cfg.echo_vel_step = normalize_lane_echo_step(cfg.echo_vel_step)
+  cfg.echo_rate = normalize_lane_echo_rate(cfg.echo_rate)
+  cfg.step_mode_mask = M.normalize_step_mode_mask(cfg.step_mode_mask)
   cfg.step_velocity = type(cfg.step_velocity) == "table" and cfg.step_velocity or {}
   cfg.step_gate = type(cfg.step_gate) == "table" and cfg.step_gate or {}
   cfg.step_length = type(cfg.step_length) == "table" and cfg.step_length or {}
@@ -1237,6 +1704,8 @@ local function ensure_lane_step_params(cfg, total_steps, default_vel)
   cfg.step_pitch = type(cfg.step_pitch) == "table" and cfg.step_pitch or {}
   cfg.step_pan = type(cfg.step_pan) == "table" and cfg.step_pan or {}
   cfg.step_volume = type(cfg.step_volume) == "table" and cfg.step_volume or {}
+  cfg.step_attack = type(cfg.step_attack) == "table" and cfg.step_attack or {}
+  cfg.step_release = type(cfg.step_release) == "table" and cfg.step_release or {}
   cfg.step_probability = type(cfg.step_probability) == "table" and cfg.step_probability or {}
   for step = 1, total_steps do
     local raw_vel = table_step_value(cfg.step_velocity, step, default_vel)
@@ -1246,6 +1715,8 @@ local function ensure_lane_step_params(cfg, total_steps, default_vel)
     local raw_pitch = table_step_value(cfg.step_pitch, step, 0)
     local raw_pan = table_step_value(cfg.step_pan, step, 0)
     local raw_volume = table_step_value(cfg.step_volume, step, 0)
+    local raw_attack = table_step_value(cfg.step_attack, step, 0)
+    local raw_release = table_step_value(cfg.step_release, step, 0)
     local raw_prob = table_step_value(cfg.step_probability, step, 100)
     cfg.step_velocity[step] = clamp(math.floor(tonumber(raw_vel) or default_vel), 1, 127)
     cfg.step_gate[step] = clamp(math.floor(tonumber(raw_gate) or 100), 1, 100)
@@ -1254,6 +1725,8 @@ local function ensure_lane_step_params(cfg, total_steps, default_vel)
     cfg.step_pitch[step] = clamp(math.floor(tonumber(raw_pitch) or 0), -24, 24)
     cfg.step_pan[step] = clamp(math.floor(tonumber(raw_pan) or 0), -100, 100)
     cfg.step_volume[step] = clamp(math.floor(tonumber(raw_volume) or 0), -24, 6)
+    cfg.step_attack[step] = clamp(math.floor(tonumber(raw_attack) or 0), 0, 2000)
+    cfg.step_release[step] = clamp(math.floor(tonumber(raw_release) or 0), 0, 2000)
     cfg.step_probability[step] = clamp(math.floor(tonumber(raw_prob) or 100), 0, 100)
   end
   for step = total_steps + 1, STEPS_PER_BAR * 4 do
@@ -1264,6 +1737,8 @@ local function ensure_lane_step_params(cfg, total_steps, default_vel)
     cfg.step_pitch[step] = nil
     cfg.step_pan[step] = nil
     cfg.step_volume[step] = nil
+    cfg.step_attack[step] = nil
+    cfg.step_release[step] = nil
     cfg.step_probability[step] = nil
   end
   if cfg.param_mode ~= "substeps" and cfg.param_mode ~= "gate" and cfg.param_mode ~= "length" and cfg.param_mode ~= "pitch" and cfg.param_mode ~= "pan" and cfg.param_mode ~= "volume" and cfg.param_mode ~= "probability" then
@@ -1291,6 +1766,12 @@ local function trigger_lane_note(state, lane, note, vel, mode, retrigger, off_at
   if (not active) or retrigger then
     local ok = send_note_on(note, vel)
     if ok then
+      local guid = state.current_guid
+      if guid then
+        state.last_trigger_at_by_guid = state.last_trigger_at_by_guid or {}
+        state.last_trigger_at_by_guid[guid] = state.last_trigger_at_by_guid[guid] or {}
+        state.last_trigger_at_by_guid[guid][lane] = r.time_precise and r.time_precise() or os.clock()
+      end
       local off_time = nil
       if mode == "gate" then
         off_time = off_at_time
@@ -1329,6 +1810,8 @@ local function run_pending_substep_events(state, elapsed)
         set_rs5k_pitch_semitones(ev.track, ev.fx, ev.pitch or 0)
         set_rs5k_pan_percent(ev.track, ev.fx, ev.pan or 0)
         set_rs5k_volume_db(ev.track, ev.fx, ev.volume or 0)
+        set_rs5k_attack_ms(ev.track, ev.fx, ev.attack or 0)
+        set_rs5k_release_ms(ev.track, ev.fx, ev.release or 0)
       end
       trigger_lane_note(state, ev.lane, ev.note, ev.vel, ev.mode, ev.retrigger, ev.off_at_time)
       table.remove(pending, i)
@@ -1340,48 +1823,22 @@ local function run_pending_substep_events(state, elapsed)
 end
 
 local function engine_ensure_installed()
-  if engine_installed then return true end
-  local res = r.GetResourcePath and r.GetResourcePath() or nil
-  if not res then return false end
-  local path = res .. "/Effects/" .. EngineJSFX.filename
-  local marker = "TK_ENGINE_VERSION:" .. tostring(EngineJSFX.version)
-  local up_to_date = false
-  local existing = io.open(path, "rb")
-  if existing then
-    local content = existing:read("*a") or ""
-    existing:close()
-    if content:find(marker, 1, true) then
-      up_to_date = true
-    end
-  end
-  if not up_to_date then
-    local f = io.open(path, "wb")
-    if not f then return false end
-    f:write(EngineJSFX.source)
-    f:close()
+  local ok = SeqBus.ensure_installed()
+  if ok and not engine_installed then
     engine_reinstalled = true
   end
-  engine_installed = true
-  return true
+  engine_installed = ok == true
+  return engine_installed
 end
 
 local function engine_ensure_attached()
   if engine_attached then return true end
-  if not r.gmem_attach then return false end
-  r.gmem_attach(GMEM_NAME)
-  engine_attached = true
-  return true
+  engine_attached = SeqBus.ensure_attached() == true
+  return engine_attached
 end
 
 local function engine_id_for(parent)
-  if not parent then return 0 end
-  local ok, val = r.GetSetMediaTrackInfo_String(parent, ENGINE_ID_KEY, "", false)
-  local id = ok and math.floor(tonumber(val) or 0) or 0
-  if id <= 0 then
-    id = math.random(1, 100000000)
-    r.GetSetMediaTrackInfo_String(parent, ENGINE_ID_KEY, tostring(id), true)
-  end
-  return id
+  return SeqBus.engine_id_for(parent)
 end
 
 local function engine_find_fx(track)
@@ -1425,21 +1882,7 @@ local function engine_cleanup_parent(parent, lane_tracks)
 end
 
 local function engine_add_fx_end(track)
-  if not track or not r.TrackFX_AddByName then return -1 end
-  local candidates = {
-    EngineJSFX.add_name,
-    "JS: TK Kit Maker Sequencer",
-    "TK Kit Maker Sequencer",
-  }
-  local fx = -1
-  for _, name in ipairs(candidates) do
-    fx = r.TrackFX_AddByName(track, name, false, -1)
-    if fx and fx >= 0 then break end
-  end
-  if fx and fx >= 0 and r.TrackFX_Show then
-    r.TrackFX_Show(track, fx, 2)
-  end
-  return fx or -1
+  return SeqBus.add_fx_end(track, 0)
 end
 
 local function engine_cleanup_lane_fx(lane_tracks)
@@ -1459,69 +1902,15 @@ local function engine_cleanup_lane_fx(lane_tracks)
 end
 
 local function engine_find_bus(parent)
-  if not parent then return nil end
-  local parent_depth = r.GetTrackDepth(parent)
-  local parent_idx = get_track_index0(parent)
-  local count = r.CountTracks(0)
-  for i = parent_idx + 1, count - 1 do
-    local tr = r.GetTrack(0, i)
-    if r.GetTrackDepth(tr) <= parent_depth then break end
-    if track_is_seq_bus(tr) then return tr end
-  end
-  return nil
+  return SeqBus.find_bus(parent)
 end
 
 local function engine_create_bus(parent)
-  if not parent or not r.InsertTrackAtIndex then return nil end
-  local parent_idx = get_track_index0(parent)
-  r.InsertTrackAtIndex(parent_idx + 1, false)
-  local bus = r.GetTrack(0, parent_idx + 1)
-  if not bus then return nil end
-  r.GetSetMediaTrackInfo_String(bus, "P_NAME", "TK Seq Engine", true)
-  r.GetSetMediaTrackInfo_String(bus, BUS_MARKER, track_guid(parent) or "1", true)
-  r.SetMediaTrackInfo_Value(bus, "I_FOLDERDEPTH", 0)
-  if (r.GetMediaTrackInfo_Value(parent, "I_FOLDERDEPTH") or 0) < 1 then
-    r.SetMediaTrackInfo_Value(parent, "I_FOLDERDEPTH", 1)
-  end
-  if r.SetMediaTrackInfo_Value then
-    r.SetMediaTrackInfo_Value(bus, "I_MIDIHWOUT", -1)
-    r.SetMediaTrackInfo_Value(bus, "B_MAINSEND", 0)
-  end
-  if r.TrackList_AdjustWindows then r.TrackList_AdjustWindows(false) end
-  return bus
+  return SeqBus.create_bus(parent)
 end
 
 local function engine_ensure_bus_sends(bus, lane_tracks)
-  if not bus or not lane_tracks or not r.GetTrackNumSends then return 0 end
-  local have = {}
-  local num = r.GetTrackNumSends(bus, 0)
-  for i = 0, num - 1 do
-    local dest = r.GetTrackSendInfo_Value(bus, 0, i, "P_DESTTRACK")
-    for lane = 1, #lane_tracks do
-      if lane_tracks[lane] and dest == lane_tracks[lane] then
-        have[lane] = true
-        r.SetTrackSendInfo_Value(bus, 0, i, "I_SRCCHAN", -1)
-        r.SetTrackSendInfo_Value(bus, 0, i, "I_MIDIFLAGS", 0)
-      end
-    end
-  end
-  local count = 0
-  for lane = 1, #lane_tracks do
-    local lt = lane_tracks[lane]
-    if lt then
-      if not have[lane] and r.CreateTrackSend then
-        local idx = r.CreateTrackSend(bus, lt)
-        if idx and idx >= 0 then
-          r.SetTrackSendInfo_Value(bus, 0, idx, "I_SRCCHAN", -1)
-          r.SetTrackSendInfo_Value(bus, 0, idx, "I_MIDIFLAGS", 0)
-          count = count + 1
-        end
-      else
-        count = count + 1
-      end
-    end
-  end
-  return count
+  return SeqBus.ensure_bus_sends(bus, lane_tracks)
 end
 
 local function engine_ensure_bus(parent, lane_tracks)
@@ -1542,7 +1931,9 @@ local function engine_ensure_bus(parent, lane_tracks)
     fx = -1
   end
   if fx < 0 then
-    fx = engine_add_fx_end(bus)
+    fx = SeqBus.add_fx_end(bus, engine_id_for(parent))
+  else
+    SeqBus.set_bus_owner(bus, fx, engine_id_for(parent))
   end
   if fx and fx >= 0 then
     engine_reinstalled = false
@@ -1579,6 +1970,8 @@ local function engine_write_pattern(seq, solo_map, total_steps, lane_tracks, lan
     local cfg = lane_settings[lane] or {}
     local cycle = clamp(math.floor(tonumber(cfg.cycle_steps) or total_steps), 1, total_steps)
     local speed = normalize_lane_speed(cfg.speed)
+    local direction = normalize_lane_direction(cfg.direction)
+    local muted = cfg.muted == true
     local mode = (cfg.mode == "gate") and 1 or 0
     local retrig = (cfg.retrigger ~= false) and 1 or 0
     local note = clamp(BASE_NOTE + (lane - 1), 0, 127)
@@ -1596,15 +1989,25 @@ local function engine_write_pattern(seq, solo_map, total_steps, lane_tracks, lan
     r.gmem_write(LB + L_RETRIG, retrig)
     r.gmem_write(LB + L_NOTE, note)
     r.gmem_write(LB + L_OBEY, obey)
+    r.gmem_write(LB + L_DIRECTION, direction == "bw" and 1 or (direction == "pendulum" and 2 or 0))
+    r.gmem_write(LB + L_ECHO_ON, cfg.echo_enabled == true and 1 or 0)
+    r.gmem_write(LB + L_ECHO_COUNT, normalize_lane_echo_count(cfg.echo_count))
+    r.gmem_write(LB + L_ECHO_MODE, cfg.echo_vel_mode == "up" and 1 or (cfg.echo_vel_mode == "down" and 2 or 0))
+    r.gmem_write(LB + L_ECHO_STEP, normalize_lane_echo_step(cfg.echo_vel_step))
+    r.gmem_write(LB + L_ECHO_RATE, echo_rate_code(cfg.echo_rate))
+    local loop_len, loop_bits = M.step_mode_mask_to_bits(cfg.step_mode_mask)
+    r.gmem_write(LB + 13, loop_len)
+    r.gmem_write(LB + 14, loop_bits)
     local pattern_lane = seq.pattern and seq.pattern[lane] or nil
     for step = 1, STEPS_PER_BAR do
-      local on = (pattern_lane and pattern_lane[step] == 1) and 1 or 0
+      local on = (not muted and pattern_lane and pattern_lane[step] == 1) and 1 or 0
       r.gmem_write(LB + L_ON + (step - 1), on)
       r.gmem_write(LB + L_VEL + (step - 1), clamp(math.floor(tonumber(table_step_value(cfg.step_velocity, step, 100)) or 100), 1, 127))
       r.gmem_write(LB + L_GATE + (step - 1), clamp(math.floor(tonumber(table_step_value(cfg.step_gate, step, 100)) or 100), 1, 100))
       r.gmem_write(LB + L_LEN + (step - 1), clamp(math.floor(tonumber(table_step_value(cfg.step_length, step, 1)) or 1), 1, total_steps))
       r.gmem_write(LB + L_SUB + (step - 1), clamp(math.floor(tonumber(table_step_value(cfg.step_substeps, step, 1)) or 1), 1, 8))
       r.gmem_write(LB + L_PROB + (step - 1), clamp(math.floor(tonumber(table_step_value(cfg.step_probability, step, 100)) or 100), 0, 100))
+      r.gmem_write(LB + L_PITCH + (step - 1), 0)
     end
   end
 end
@@ -1622,17 +2025,32 @@ local function engine_deactivate()
   r.gmem_write(G_ACTIVE, 0)
 end
 
-local function start_playback(state, guid, song_mode)
+local function start_playback(state, guid, song_mode, parent)
   state.playing = true
   state.song_mode = song_mode == true
   state.current_guid = guid
+  state.last_trigger_at_by_guid = state.last_trigger_at_by_guid or {}
+  state.last_trigger_at_by_guid[guid] = {}
   state.last_step = nil
   state.lane_clocks = {}
   state.pending_events = {}
   state.lane_play_steps = {}
   state.lane_applied_step = {}
+  state.lane_applied_step_init = {}
   state.engine_restart_pending = true
-  state.started_at = r.time_precise and r.time_precise() or os.clock()
+  local now = r.time_precise and r.time_precise() or os.clock()
+  state.started_at = now
+  state.song_page_started_at = now
+  if parent then
+    local lane_tracks = collect_lane_tracks(parent)
+    for lane = 1, #lane_tracks do
+      local lane_track = lane_tracks[lane]
+      local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+      if lane_track and lane_fx >= 0 then
+        M.set_rs5k_pitch_envelope_active(lane_track, lane_fx, false)
+      end
+    end
+  end
 end
 
 local function stop_playback(state, parent)
@@ -1640,10 +2058,12 @@ local function stop_playback(state, parent)
   state.song_mode = false
   state.song_playhead = nil
   state.last_step = nil
+  state.song_page_started_at = nil
   state.lane_clocks = {}
   state.pending_events = {}
   state.lane_play_steps = {}
   state.lane_applied_step = {}
+  state.lane_applied_step_init = {}
   engine_deactivate()
   stop_notes(state)
   if parent then
@@ -1652,9 +2072,12 @@ local function stop_playback(state, parent)
       local lane_track = lane_tracks[lane]
       local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
       if lane_track and lane_fx >= 0 then
+        M.set_rs5k_pitch_envelope_active(lane_track, lane_fx, true)
         set_rs5k_pitch_semitones(lane_track, lane_fx, 0)
         set_rs5k_pan_percent(lane_track, lane_fx, 0)
         set_rs5k_volume_db(lane_track, lane_fx, 0)
+        set_rs5k_attack_ms(lane_track, lane_fx, 0)
+        set_rs5k_release_ms(lane_track, lane_fx, 0)
       end
     end
   end
@@ -1740,8 +2163,24 @@ end
 local function restart_playback_synced(state, guid)
   if not state.playing then return end
   stop_notes(state)
+  state.last_step = nil
+  state.lane_clocks = {}
+  state.pending_events = {}
+  state.lane_play_steps = {}
   state.lane_applied_step = {}
+  state.lane_applied_step_init = {}
   state.engine_restart_pending = true
+  if state.song_mode then
+    state.song_page_started_at = r.time_precise and r.time_precise() or os.clock()
+  end
+end
+
+local function playback_elapsed(state)
+  local now = r.time_precise and r.time_precise() or os.clock()
+  local start_at = state and ((state.song_mode and state.song_page_started_at) or state.started_at) or now
+  local elapsed = now - start_at
+  if elapsed < 0 then elapsed = 0 end
+  return elapsed
 end
 
 local function release_scheduled_notes(state, elapsed)
@@ -1772,8 +2211,10 @@ local function trigger_step_preview(state, lane, lane_step, lane_cfg, lane_track
   local step_pitch = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_pitch, lane_step, 0)) or 0), -24, 24)
   local step_pan = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_pan, lane_step, 0)) or 0), -100, 100)
   local step_volume = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_volume, lane_step, 0)) or 0), -24, 24)
+    local step_attack = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_attack, lane_step, 0)) or 0), 0, 2000)
+    local step_release = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_release, lane_step, 0)) or 0), 0, 2000)
   local note = clamp(base_note, 0, 127)
-  local default_vel = 100
+  local default_vel = DEFAULT_STEP_VELOCITY
   local step_vel = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_velocity, lane_step, default_vel)) or default_vel), 1, 127)
   local step_gate = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_gate, lane_step, 100)) or 100), 1, 100)
   local step_len = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_length, lane_step, 1)) or 1), 1, total_steps)
@@ -1788,6 +2229,8 @@ local function trigger_step_preview(state, lane, lane_step, lane_cfg, lane_track
     set_rs5k_pitch_semitones(lane_track, lane_fx, step_pitch)
     set_rs5k_pan_percent(lane_track, lane_fx, step_pan)
     set_rs5k_volume_db(lane_track, lane_fx, step_volume)
+    set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
+    set_rs5k_release_ms(lane_track, lane_fx, step_release)
   end
 
   send_note_off(note)
@@ -1804,15 +2247,13 @@ end
 
 local function process_lane_events(state, seq, total_steps, solo_map, any_solo, lane_tracks)
   if not state.playing or not r.StuffMIDIMessage then return end
-  local now = r.time_precise and r.time_precise() or os.clock()
-  local elapsed = now - (state.started_at or now)
-  if elapsed < 0 then elapsed = 0 end
+  local elapsed = playback_elapsed(state)
 
   local tempo = tonumber(r.Master_GetTempo and r.Master_GetTempo() or 120) or 120
   local step_duration = (60 / tempo) / 4
   if step_duration <= 0 then step_duration = 0.125 end
   local cycle_duration = total_steps * step_duration
-  local default_vel = 100
+  local default_vel = DEFAULT_STEP_VELOCITY
   local lane_settings = seq.lane_settings or {}
 
   run_pending_substep_events(state, elapsed)
@@ -1829,9 +2270,10 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
       goto continue_lane
     end
 
-    local cfg = lane_settings[lane] or { mode = "gate", cycle_steps = total_steps, speed = 1, retrigger = true }
+    local cfg = lane_settings[lane] or { mode = "gate", cycle_steps = total_steps, speed = 1, direction = "fw", retrigger = true }
     ensure_lane_step_params(cfg, total_steps, default_vel)
     lane_settings[lane] = cfg
+    local muted = cfg.muted == true
     local cycle_steps = clamp(math.floor(tonumber(cfg.cycle_steps) or total_steps), 1, total_steps)
     local lane_speed = normalize_lane_speed(cfg.speed)
     local lane_track = lane_tracks and lane_tracks[lane] or nil
@@ -1839,21 +2281,29 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
     local rs5k_note_off = lane_fx >= 0 and rs5k_obeys_note_off(lane_track, lane_fx) or true
     local lane_period = cycle_duration / (cycle_steps * lane_speed)
     if lane_period <= 0 then lane_period = step_duration end
+    local direction = normalize_lane_direction(cfg.direction)
 
     local clock = state.lane_clocks[lane]
     if not clock then
-      clock = { next_time = 0, step_index = 1 }
+      clock = { next_time = 0, tick_index = 0 }
       state.lane_clocks[lane] = clock
     end
+    clock.tick_index = math.max(0, math.floor(tonumber(clock.tick_index) or math.max(0, (tonumber(clock.step_index) or 1) - 1)))
 
     while elapsed + 0.0000001 >= clock.next_time do
       local event_time = clock.next_time
-      local lane_step = clock.step_index
-      if seq.pattern[lane] and seq.pattern[lane][lane_step] == 1 then
+      local lane_step = lane_direction_step(cycle_steps, direction, clock.tick_index)
+      state.lane_play_steps = state.lane_play_steps or {}
+      state.lane_play_steps[lane] = lane_step
+      local cycle_index = math.floor(clock.tick_index / math.max(1, cycle_steps))
+      local step_mode_ok = M.step_mode_mask_allows(cfg.step_mode_mask, cycle_index)
+      if (not muted) and step_mode_ok and seq.pattern[lane] and seq.pattern[lane][lane_step] == 1 then
         local base_note = BASE_NOTE + (lane - 1)
         local step_pitch = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, lane_step, 0)) or 0), -24, 24)
         local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, lane_step, 0)) or 0), -100, 100)
         local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, lane_step, 0)) or 0), -24, 24)
+        local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, lane_step, 0)) or 0), 0, 2000)
+        local step_release = clamp(math.floor(tonumber(table_step_value(cfg.step_release, lane_step, 0)) or 0), 0, 2000)
         local note = clamp(base_note, 0, 127)
         local mode = cfg.mode or "gate"
         local retrigger = cfg.retrigger ~= false
@@ -1861,6 +2311,11 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
         local step_gate = clamp(math.floor(tonumber(table_step_value(cfg.step_gate, lane_step, 100)) or 100), 1, 100)
         local step_len = clamp(math.floor(tonumber(table_step_value(cfg.step_length, lane_step, 1)) or 1), 1, total_steps)
         local step_substeps = clamp(math.floor(tonumber(table_step_value(cfg.step_substeps, lane_step, 1)) or 1), 1, 8)
+        local echo_enabled = cfg.echo_enabled == true
+        local echo_count = normalize_lane_echo_count(cfg.echo_count)
+        local echo_vel_mode = normalize_lane_echo_mode(cfg.echo_vel_mode)
+        local echo_vel_step = normalize_lane_echo_step(cfg.echo_vel_step)
+        local echo_interval_time = step_duration * lane_echo_interval_steps(cfg.echo_rate)
         local step_prob = clamp(math.floor(tonumber(table_step_value(cfg.step_probability, lane_step, 100)) or 100), 0, 100)
         local chance_ok = step_prob >= 100 or (step_prob > 0 and (math.random() * 100) <= step_prob)
         if chance_ok then
@@ -1878,6 +2333,8 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
             set_rs5k_pitch_semitones(lane_track, lane_fx, step_pitch)
             set_rs5k_pan_percent(lane_track, lane_fx, step_pan)
             set_rs5k_volume_db(lane_track, lane_fx, step_volume)
+            set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
+            set_rs5k_release_ms(lane_track, lane_fx, step_release)
           end
           trigger_lane_note(state, lane, note, step_vel, mode, retrigger, off_at_time)
 
@@ -1894,6 +2351,8 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
                   set_rs5k_pitch_semitones(lane_track, lane_fx, step_pitch)
                   set_rs5k_pan_percent(lane_track, lane_fx, step_pan)
                   set_rs5k_volume_db(lane_track, lane_fx, step_volume)
+                  set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
+                  set_rs5k_release_ms(lane_track, lane_fx, step_release)
                 end
                 trigger_lane_note(state, lane, note, step_vel, mode, true, ev_off)
               else
@@ -1906,9 +2365,52 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
                   pitch = step_pitch,
                   pan = step_pan,
                   volume = step_volume,
+                  attack = step_attack,
+                  release = step_release,
                   lane = lane,
                   note = note,
                   vel = step_vel,
+                  mode = mode,
+                  retrigger = true,
+                  off_at_time = ev_off,
+                }
+              end
+            end
+          end
+
+          if echo_enabled then
+            for echo_idx = 1, echo_count do
+              local at_time = event_time + (echo_idx * echo_interval_time)
+              local echo_lookahead = clamp(echo_interval_time * 0.14, SUBSTEP_LOOKAHEAD_MIN, SUBSTEP_LOOKAHEAD_MAX)
+              local ev_off = nil
+              if rs5k_note_off and mode == "gate" then
+                ev_off = at_time + gate_time
+              end
+              local echo_vel = echo_velocity_for_index(step_vel, echo_idx, echo_vel_mode, echo_vel_step)
+              if at_time <= (elapsed + echo_lookahead) + 0.0000001 then
+                if lane_track and lane_fx >= 0 then
+                  set_rs5k_pitch_semitones(lane_track, lane_fx, step_pitch)
+                  set_rs5k_pan_percent(lane_track, lane_fx, step_pan)
+                  set_rs5k_volume_db(lane_track, lane_fx, step_volume)
+                  set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
+                  set_rs5k_release_ms(lane_track, lane_fx, step_release)
+                end
+                trigger_lane_note(state, lane, note, echo_vel, mode, true, ev_off)
+              else
+                state.pending_events = state.pending_events or {}
+                state.pending_events[#state.pending_events + 1] = {
+                  at = at_time,
+                  lookahead = echo_lookahead,
+                  track = lane_track,
+                  fx = lane_fx,
+                  pitch = step_pitch,
+                  pan = step_pan,
+                  volume = step_volume,
+                  attack = step_attack,
+                  release = step_release,
+                  lane = lane,
+                  note = note,
+                  vel = echo_vel,
                   mode = mode,
                   retrigger = true,
                   off_at_time = ev_off,
@@ -1920,14 +2422,42 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
       end
 
       clock.last_step = lane_step
-      clock.step_index = (clock.step_index % cycle_steps) + 1
+      clock.tick_index = clock.tick_index + 1
       clock.next_time = clock.next_time + lane_period
     end
     ::continue_lane::
   end
 end
 
-local function engine_sync(state, seq, parent, solo_map, any_solo, total_steps, lane_tracks, host_enabled)
+local function has_rs5k_step_modulation(seq, lane_tracks, total_steps)
+  local lane_settings = seq and seq.lane_settings or nil
+  if type(lane_settings) ~= "table" then return false end
+  for lane = 1, GRID_SLOTS do
+    local lane_track = lane_tracks and lane_tracks[lane] or nil
+    local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+    if lane_track and lane_fx >= 0 then
+      local cfg = lane_settings[lane]
+      if type(cfg) == "table" then
+        local pattern_lane = seq.pattern and seq.pattern[lane] or nil
+        for step = 1, total_steps do
+          if pattern_lane and pattern_lane[step] == 1 then
+            local step_pitch = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, step, 0)) or 0), -24, 24)
+            local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, step, 0)) or 0), -100, 100)
+            local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, step, 0)) or 0), -24, 24)
+            local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, step, 0)) or 0), 0, 2000)
+            local step_release = clamp(math.floor(tonumber(table_step_value(cfg.step_release, step, 0)) or 0), 0, 2000)
+            if step_pitch ~= 0 or step_pan ~= 0 or step_volume ~= 0 or step_attack ~= 0 or step_release ~= 0 then
+              return true
+            end
+          end
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function engine_sync(state, seq, parent, solo_map, any_solo, total_steps, lane_tracks, host_enabled, running_override)
   if not parent then return end
   engine_ensure_attached()
 
@@ -1947,7 +2477,10 @@ local function engine_sync(state, seq, parent, solo_map, any_solo, total_steps, 
   local tempo = tonumber(r.Master_GetTempo and r.Master_GetTempo() or 120) or 120
   if tempo <= 0 then tempo = 120 end
   local sync_mode = host_enabled and 1 or 0
-  local running = state.playing == true
+  local running = running_override
+  if running == nil then
+    running = state.playing == true
+  end
 
   local lane_fx_list = {}
   for lane = 1, GRID_SLOTS do
@@ -1967,25 +2500,40 @@ local function engine_sync(state, seq, parent, solo_map, any_solo, total_steps, 
   state.lane_applied_step = state.lane_applied_step or {}
   local lane_settings = seq.lane_settings or {}
   for lane = 1, GRID_SLOTS do
-    local cur = engine_read_lane_step(lane)
-    state.lane_play_steps[lane] = cur
-    if cur then
+    local cur = nil
+    if running then
+      cur = engine_read_lane_step(lane)
+      state.lane_play_steps[lane] = cur
+    elseif not state.playing then
+      state.lane_play_steps[lane] = nil
+    else
+      cur = state.lane_play_steps[lane]
+    end
+    if running and cur then
       local cfg = lane_settings[lane]
-      local pattern_lane = seq.pattern and seq.pattern[lane]
-      local is_on = pattern_lane and pattern_lane[cur] == 1
-      if cfg and is_on and state.lane_applied_step[lane] ~= cur then
+      if cfg and state.lane_applied_step[lane] ~= cur then
         state.lane_applied_step[lane] = cur
         local lane_track = lane_tracks and lane_tracks[lane] or nil
         local lane_fx = lane_fx_list[lane] or -1
         if lane_track and lane_fx >= 0 then
-          local step_pitch = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, cur, 0)) or 0), -24, 24)
-          local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, cur, 0)) or 0), -100, 100)
-          local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, cur, 0)) or 0), -24, 24)
+          local cycle_steps = clamp(math.floor(tonumber(cfg.cycle_steps) or total_steps), 1, total_steps)
+          local apply_step = state.lane_applied_step_init and state.lane_applied_step_init[lane] and (((cur % cycle_steps) + 1)) or cur
+          state.lane_applied_step_init = state.lane_applied_step_init or {}
+          state.lane_applied_step_init[lane] = true
+          local step_pitch = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, apply_step, 0)) or 0), -24, 24)
+          local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, apply_step, 0)) or 0), -100, 100)
+          local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, apply_step, 0)) or 0), -24, 6)
+          local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, apply_step, 0)) or 0), 0, 2000)
+          local step_release = clamp(math.floor(tonumber(table_step_value(cfg.step_release, apply_step, 0)) or 0), 0, 2000)
           set_rs5k_pitch_semitones(lane_track, lane_fx, step_pitch)
           set_rs5k_pan_percent(lane_track, lane_fx, step_pan)
           set_rs5k_volume_db(lane_track, lane_fx, step_volume)
+          set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
+          set_rs5k_release_ms(lane_track, lane_fx, step_release)
         end
       end
+    elseif not state.playing then
+      state.lane_applied_step[lane] = nil
     end
   end
 
@@ -2025,8 +2573,7 @@ local function current_step_index(state, seq)
   local tempo = tonumber(r.Master_GetTempo and r.Master_GetTempo() or 120) or 120
   local step_duration = (60 / tempo) / 4
   if step_duration <= 0 then step_duration = 0.125 end
-  local elapsed = (r.time_precise and r.time_precise() or os.clock()) - (state.started_at or 0)
-  if elapsed < 0 then elapsed = 0 end
+  local elapsed = playback_elapsed(state)
   local idx = math.floor(elapsed / step_duration) % total_steps
   return idx + 1
 end
@@ -2107,6 +2654,44 @@ local function lane_index_for_track(lane_tracks, track)
   return nil
 end
 
+local function sync_manager_slot_from_lane(app, lane)
+  if not app or not app.rs5k_manager then return end
+  local slot = clamp(math.floor(tonumber(lane) or 1), 1, GRID_SLOTS)
+  app.rs5k_manager.selected_slot = slot
+end
+
+find_note_filter_fx = function(track)
+  if not track then return -1 end
+  local function normalize_name(name)
+    local lower = (name or ""):lower()
+    return lower:gsub("[^a-z0-9]", "")
+  end
+
+  local function is_note_filter_name(name)
+    local lower = (name or ""):lower()
+    if lower:find("midi_note_filter", 1, true) then return true end
+    if lower:find("midi note filter", 1, true) then return true end
+    local normalized = normalize_name(lower)
+    return normalized:find("midinotefilter", 1, true) ~= nil
+  end
+
+  local count = r.TrackFX_GetCount(track)
+  for i = 0, count - 1 do
+    local ok, name = r.TrackFX_GetFXName(track, i, "")
+    if ok and is_note_filter_name(name) then
+      return i
+    end
+  end
+  return -1
+end
+
+local function get_note_filter_note(track, fx)
+  if not track or fx == nil or fx < 0 or not r.TrackFX_GetParamNormalized then return nil end
+  local value = r.TrackFX_GetParamNormalized(track, fx, 0)
+  if value == nil then return nil end
+  return clamp(math.floor((tonumber(value) or 0) * 128 + 0.5), 0, 127)
+end
+
 local function rs5k_note_for_track(track, fallback_note)
   local fallback = clamp(math.floor(tonumber(fallback_note) or BASE_NOTE), 0, 127)
   local fx = find_rs5k_fx(track)
@@ -2120,31 +2705,58 @@ local function rs5k_note_for_track(track, fallback_note)
   return clamp(math.floor((n * 127) + 0.5), 0, 127)
 end
 
+local function track_note_for_export(track, fallback_note)
+  local note_filter_fx = find_note_filter_fx(track)
+  local note_filter_note = note_filter_fx >= 0 and get_note_filter_note(track, note_filter_fx) or nil
+  if note_filter_note ~= nil then
+    return note_filter_note
+  end
+  local fx = find_rs5k_fx(track)
+  if fx >= 0 then
+    return rs5k_note_for_track(track, fallback_note)
+  end
+  return clamp(math.floor(tonumber(fallback_note) or BASE_NOTE), 0, 127)
+end
+
 local function export_sequence_to_midi(track, seq, opts)
   if not track then return false, 0 end
   opts = type(opts) == "table" and opts or nil
   local song_mode = opts and opts.song_mode == true
   local current_slot = clamp(math.floor(tonumber(opts and opts.current_slot) or 1), 1, PATTERN_SLOTS)
+  local section_repeat_count = math.max(1, math.floor(tonumber(opts and opts.section_repeat_count) or 1))
   local section_plan = {}
 
-  local function build_lane_events(section_seq, lane, section_steps, rs5k_note_off, base_pitch)
-    local cfg = section_seq.lane_settings and section_seq.lane_settings[lane] or { mode = "gate", cycle_steps = section_steps, speed = 1, retrigger = true }
-    ensure_lane_step_params(cfg, section_steps, 100)
+  local function build_lane_events(section_seq, lane, section_steps, rs5k_note_off, base_pitch, use_pitch_as_note_offset, phase)
+    local cfg = section_seq.lane_settings and section_seq.lane_settings[lane] or { mode = "gate", cycle_steps = section_steps, speed = 1, direction = "fw", retrigger = true }
+    ensure_lane_step_params(cfg, section_steps, DEFAULT_STEP_VELOCITY)
+    if cfg.muted == true then
+      return {}, phase
+    end
     local mode = tostring(cfg.mode or "gate")
     if mode ~= "gate" and mode ~= "oneshot" then
       mode = "gate"
     end
     local retrigger = cfg.retrigger ~= false
+    local echo_enabled = cfg.echo_enabled == true
+    local echo_count = normalize_lane_echo_count(cfg.echo_count)
+    local echo_vel_mode = normalize_lane_echo_mode(cfg.echo_vel_mode)
+    local echo_vel_step = normalize_lane_echo_step(cfg.echo_vel_step)
+    local echo_interval_steps = lane_echo_interval_steps(cfg.echo_rate)
     local cycle_steps = clamp(math.floor(tonumber(cfg.cycle_steps) or section_steps), 1, section_steps)
     local lane_speed = normalize_lane_speed(cfg.speed)
+    local direction = normalize_lane_direction(cfg.direction)
     local lane_period_steps = (section_steps / cycle_steps) / lane_speed
+    local step_epsilon = 1e-7
     local events = {}
     local triggers = {}
+    local step_mode_mask = M.normalize_step_mode_mask(cfg.step_mode_mask)
 
-    local lane_step = 1
-    local lane_step_start = 0
-    while lane_step_start < section_steps do
-      if section_seq.pattern and section_seq.pattern[lane] and section_seq.pattern[lane][lane_step] == 1 then
+    local lane_tick = math.max(0, math.floor(tonumber(phase and phase.tick_index) or 0))
+    local lane_step_start = tonumber(phase and phase.next_step_start) or 0
+    while lane_step_start < (section_steps - step_epsilon) do
+      local lane_step = lane_direction_step(cycle_steps, direction, lane_tick)
+      local cycle_index = math.floor(lane_tick / math.max(1, cycle_steps))
+      if M.step_mode_mask_allows(step_mode_mask, cycle_index) and section_seq.pattern and section_seq.pattern[lane] and section_seq.pattern[lane][lane_step] == 1 then
         local step_vel = clamp(math.floor(tonumber(table_step_value(cfg.step_velocity, lane_step, 100)) or 100), 1, 127)
         local step_gate = clamp(math.floor(tonumber(table_step_value(cfg.step_gate, lane_step, 100)) or 100), 1, 100)
         local step_len = clamp(math.floor(tonumber(table_step_value(cfg.step_length, lane_step, 1)) or 1), 1, section_steps)
@@ -2153,19 +2765,21 @@ local function export_sequence_to_midi(track, seq, opts)
         local chance_ok = step_prob >= 100 or (step_prob > 0 and (math.random() * 100) <= step_prob)
         if chance_ok then
           local sub_period_steps = lane_period_steps / step_substeps
-          local gate_steps = step_len * (step_gate / 100)
+          local gate_steps = step_substeps > 1 and (sub_period_steps * (step_gate / 100)) or (step_len * (step_gate / 100))
+          local pitch_offset = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, lane_step, 0)) or 0), -24, 24)
           if gate_steps <= 0 then
             gate_steps = math.min(1, sub_period_steps)
           end
 
           for sub_idx = 1, step_substeps do
             local start_steps = lane_step_start + ((sub_idx - 1) * sub_period_steps)
-            if start_steps < section_steps then
+            if start_steps < (section_steps - step_epsilon) then
               if (not rs5k_note_off) or mode == "oneshot" then
                 triggers[#triggers + 1] = {
                   start_steps = start_steps,
                   vel = step_vel,
-                  pitch = clamp(base_pitch + clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, lane_step, 0)) or 0), -24, 24), 0, 127),
+                  pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
+                  pitch_offset = pitch_offset,
                 }
               else
                 local end_steps = start_steps + gate_steps
@@ -2174,14 +2788,42 @@ local function export_sequence_to_midi(track, seq, opts)
                   start_steps = start_steps,
                   end_steps = end_steps,
                   vel = step_vel,
-                  pitch = clamp(base_pitch + clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, lane_step, 0)) or 0), -24, 24), 0, 127),
+                  pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
+                  pitch_offset = pitch_offset,
                 }
+              end
+            end
+          end
+
+          if echo_enabled then
+            for echo_idx = 1, echo_count do
+              local echo_start = lane_step_start + (echo_idx * echo_interval_steps)
+              if echo_start < (section_steps - step_epsilon) then
+                local echo_vel = echo_velocity_for_index(step_vel, echo_idx, echo_vel_mode, echo_vel_step)
+                if (not rs5k_note_off) or mode == "oneshot" then
+                  triggers[#triggers + 1] = {
+                    start_steps = echo_start,
+                    vel = echo_vel,
+                    pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
+                    pitch_offset = pitch_offset,
+                  }
+                else
+                  local echo_end = echo_start + gate_steps
+                  if echo_end > section_steps then echo_end = section_steps end
+                  events[#events + 1] = {
+                    start_steps = echo_start,
+                    end_steps = echo_end,
+                    vel = echo_vel,
+                    pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
+                    pitch_offset = pitch_offset,
+                  }
+                end
               end
             end
           end
         end
       end
-      lane_step = (lane_step % cycle_steps) + 1
+      lane_tick = lane_tick + 1
       lane_step_start = lane_step_start + lane_period_steps
     end
 
@@ -2199,6 +2841,7 @@ local function export_sequence_to_midi(track, seq, opts)
             end_steps = math.min(end_steps, section_steps),
             vel = cur.vel,
             pitch = cur.pitch,
+            pitch_offset = cur.pitch_offset,
           }
         end
       else
@@ -2208,6 +2851,7 @@ local function export_sequence_to_midi(track, seq, opts)
           end_steps = section_steps,
           vel = first.vel,
           pitch = first.pitch,
+          pitch_offset = first.pitch_offset,
         }
       end
     end
@@ -2230,7 +2874,44 @@ local function export_sequence_to_midi(track, seq, opts)
       events = merged
     end
 
-    return events
+    local next_step_start = lane_step_start - section_steps
+    if math.abs(next_step_start) < step_epsilon then
+      next_step_start = 0
+    end
+
+    return events, {
+      tick_index = lane_tick,
+      next_step_start = next_step_start,
+    }
+  end
+
+  local function pitch_norm_for_semitones(track_ref, fx_ref, pitch_idx_ref, semitones)
+    if not track_ref or fx_ref == nil or fx_ref < 0 or pitch_idx_ref == nil or pitch_idx_ref < 0 then return nil end
+    local semis = tonumber(semitones) or 0
+
+    local display_min, display_max = nil, nil
+    if r.TrackFX_FormatParamValueNormalized then
+      local ok0, txt0 = r.TrackFX_FormatParamValueNormalized(track_ref, fx_ref, pitch_idx_ref, 0, "")
+      local ok1, txt1 = r.TrackFX_FormatParamValueNormalized(track_ref, fx_ref, pitch_idx_ref, 1, "")
+      local n0 = ok0 and parse_param_display_number(txt0) or nil
+      local n1 = ok1 and parse_param_display_number(txt1) or nil
+      if n0 and n1 and n1 > n0 + 0.000001 then
+        display_min, display_max = n0, n1
+      end
+    end
+
+    if display_min and display_max then
+      local target = clamp(semis, display_min, display_max)
+      return clamp((target - display_min) / (display_max - display_min), 0, 1)
+    end
+
+    if not r.TrackFX_GetParamEx then return nil end
+    local _, min_v, max_v = r.TrackFX_GetParamEx(track_ref, fx_ref, pitch_idx_ref)
+    local min_num = tonumber(min_v)
+    local max_num = tonumber(max_v)
+    if not min_num or not max_num or max_num <= min_num then return nil end
+    local target = clamp(semis, min_num, max_num)
+    return clamp((target - min_num) / (max_num - min_num), 0, 1)
   end
 
   if song_mode then
@@ -2256,10 +2937,13 @@ local function export_sequence_to_midi(track, seq, opts)
     local fallback_seq = song_mode
       and resolve_slot_sequence_for_export(opts and opts.state, opts and opts.guid, opts and opts.patterns, opts and opts.selected_pattern_index, current_slot, seq, current_slot, seq)
       or sanitize_sequence(seq)
-    section_plan[1] = {
-      seq = fallback_seq,
-      steps = clamp(math.floor(tonumber(fallback_seq.steps) or STEPS_PER_BAR), 4, STEPS_PER_BAR * 4),
-    }
+    local fallback_steps = clamp(math.floor(tonumber(fallback_seq.steps) or STEPS_PER_BAR), 4, STEPS_PER_BAR * 4)
+    for _ = 1, section_repeat_count do
+      section_plan[#section_plan + 1] = {
+        seq = fallback_seq,
+        steps = fallback_steps,
+      }
+    end
   end
 
   local total_steps = 0
@@ -2285,9 +2969,52 @@ local function export_sequence_to_midi(track, seq, opts)
   for lane = 1, GRID_SLOTS do
     local lane_track = lane_tracks[lane]
     if lane_track then
-      local base_pitch = rs5k_note_for_track(lane_track, BASE_NOTE + (lane - 1))
+      local base_pitch = track_note_for_export(lane_track, BASE_NOTE + (lane - 1))
       local lane_fx = find_rs5k_fx(lane_track)
       local rs5k_note_off = lane_track and lane_fx >= 0 and rs5k_obeys_note_off(lane_track, lane_fx) or true
+      local use_pitch_as_note_offset = true
+      local lane_pitch_env = nil
+      local lane_pitch_param_idx = nil
+      local inserted_pitch_points = false
+      if lane_track and lane_fx >= 0 and r.GetFXEnvelope and r.InsertEnvelopePoint then
+        local key = (track_guid(lane_track) or tostring(lane_track)) .. "#" .. tostring(lane_fx)
+        local cached_pitch_idx = rs5k_pitch_param_cache[key]
+        if cached_pitch_idx == nil or cached_pitch_idx < 0 then
+          cached_pitch_idx = -1
+          if r.TrackFX_GetNumParams and r.TrackFX_GetParamName then
+            local pcount = r.TrackFX_GetNumParams(lane_track, lane_fx)
+            for pi = 0, (pcount or 0) - 1 do
+              local ok, pname = r.TrackFX_GetParamName(lane_track, lane_fx, pi, "")
+              local lower = ok and pname and tostring(pname):lower() or ""
+              if lower:find("pitch adjust", 1, true) or lower:find("pitch offset", 1, true) then
+                cached_pitch_idx = pi
+                break
+              end
+            end
+            if cached_pitch_idx < 0 then
+              for pi = 0, (pcount or 0) - 1 do
+                local ok, pname = r.TrackFX_GetParamName(lane_track, lane_fx, pi, "")
+                local lower = ok and pname and tostring(pname):lower() or ""
+                if lower == "pitch" or lower:find("coarse", 1, true) then
+                  cached_pitch_idx = pi
+                  break
+                end
+              end
+            end
+          end
+          if cached_pitch_idx >= 0 then
+            rs5k_pitch_param_cache[key] = cached_pitch_idx
+          else
+            rs5k_pitch_param_cache[key] = nil
+          end
+        end
+        lane_pitch_param_idx = cached_pitch_idx
+        local base_norm = pitch_norm_for_semitones(lane_track, lane_fx, lane_pitch_param_idx, 0)
+        if base_norm ~= nil and lane_pitch_param_idx ~= nil and lane_pitch_param_idx >= 0 then
+          use_pitch_as_note_offset = false
+        end
+      end
+      local lane_phase = { tick_index = 0, next_step_start = 0 }
 
       for section_idx = 1, #section_plan do
         local section = section_plan[section_idx]
@@ -2304,7 +3031,8 @@ local function export_sequence_to_midi(track, seq, opts)
         if sec_item then
           local take = r.GetActiveTake(sec_item)
           if take and r.TakeIsMIDI(take) then
-            local events = build_lane_events(section.seq, lane, section.steps, rs5k_note_off, base_pitch)
+            local events, next_phase = build_lane_events(section.seq, lane, section.steps, rs5k_note_off, base_pitch, use_pitch_as_note_offset, lane_phase)
+            lane_phase = next_phase or lane_phase
             local inserted_lane = 0
             for _, ev in ipairs(events) do
               local note_start_qn = section_start_qn + (ev.start_steps / 4)
@@ -2323,6 +3051,21 @@ local function export_sequence_to_midi(track, seq, opts)
               if ok then
                 inserted_lane = inserted_lane + 1
                 inserted = inserted + 1
+                if lane_pitch_param_idx and lane_pitch_param_idx >= 0 and r.InsertEnvelopePoint then
+                  local semis = clamp(math.floor(tonumber(ev.pitch_offset) or 0), -24, 24)
+                  if semis ~= 0 and note_start_time then
+                    if not lane_pitch_env then
+                      lane_pitch_env = r.GetFXEnvelope(lane_track, lane_fx, lane_pitch_param_idx, true)
+                    end
+                    if lane_pitch_env then
+                      local norm = pitch_norm_for_semitones(lane_track, lane_fx, lane_pitch_param_idx, semis)
+                      if norm ~= nil then
+                        r.InsertEnvelopePoint(lane_pitch_env, note_start_time, norm, 1, 0, false, true)
+                        inserted_pitch_points = true
+                      end
+                    end
+                  end
+                end
               end
             end
             if inserted_lane > 0 then
@@ -2334,6 +3077,15 @@ local function export_sequence_to_midi(track, seq, opts)
             r.DeleteTrackMediaItem(lane_track, sec_item)
           end
         end
+      end
+      if lane_pitch_env and inserted_pitch_points and r.InsertEnvelopePoint and r.Envelope_SortPoints then
+        local final_qn = start_qn + (total_steps / 4)
+        local final_time = qn_to_time(final_qn)
+        local reset_norm = pitch_norm_for_semitones(lane_track, lane_fx, lane_pitch_param_idx, 0)
+        if final_time and reset_norm ~= nil then
+          r.InsertEnvelopePoint(lane_pitch_env, final_time, reset_norm, 1, 0, false, true)
+        end
+        r.Envelope_SortPoints(lane_pitch_env)
       end
     end
   end
@@ -2458,6 +3210,79 @@ local function lane_toggle_button(ctx, id, text, w, h, active)
   return clicked
 end
 
+local function lane_direction_button(ctx, id, direction, w, h)
+  local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, w, h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local held = r.ImGui_IsItemActive(ctx)
+  local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+  local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+
+  local bg = Theme.colors.frame_bg
+  local border = Theme.colors.border
+  local icon_col = Theme.colors.text
+  if held then
+    bg = Theme.colors.frame_hover
+    border = Theme.colors.accent
+    icon_col = Theme.colors.accent
+  elseif hovered then
+    bg = Theme.colors.frame_hover
+    icon_col = blend_rgb(Theme.colors.text, Theme.colors.accent, 0.35)
+  end
+
+  r.ImGui_DrawList_AddRectFilled(dl, min_x, min_y, max_x, max_y, bg, 5)
+  r.ImGui_DrawList_AddRect(dl, min_x, min_y, max_x, max_y, border, 5, 0, 1)
+
+  local cx = (min_x + max_x) * 0.5
+  local cy = (min_y + max_y) * 0.5
+  local pad = math.max(6, math.floor(h * 0.28))
+  local left_x = min_x + pad
+  local right_x = max_x - pad
+  local arrow_size = math.max(4, math.floor(h * 0.18))
+  local stroke = 1.8
+  local dir = normalize_lane_direction(direction)
+
+  local function draw_arrow(x1, y1, x2, y2)
+    r.ImGui_DrawList_AddLine(dl, x1, y1, x2, y2, icon_col, stroke)
+    local ang = math.atan((y2 - y1), (x2 - x1))
+    local back = ang + math.pi
+    local a1 = back + 0.62
+    local a2 = back - 0.62
+    r.ImGui_DrawList_AddLine(dl, x2, y2, x2 + math.cos(a1) * arrow_size, y2 + math.sin(a1) * arrow_size, icon_col, stroke)
+    r.ImGui_DrawList_AddLine(dl, x2, y2, x2 + math.cos(a2) * arrow_size, y2 + math.sin(a2) * arrow_size, icon_col, stroke)
+  end
+
+  if dir == "bw" then
+    draw_arrow(right_x, cy, left_x, cy)
+  elseif dir == "pendulum" then
+    local top_y = cy - math.max(4, math.floor(h * 0.14))
+    local bot_y = cy + math.max(4, math.floor(h * 0.14))
+    draw_arrow(left_x + 2, top_y, right_x, top_y)
+    draw_arrow(right_x - 2, bot_y, left_x, bot_y)
+  else
+    draw_arrow(left_x, cy, right_x, cy)
+  end
+
+  return clicked
+end
+
+local function toggle_lane_solo(solo_map, lane)
+  if type(solo_map) ~= "table" then return false end
+  local next_value = not (solo_map[lane] == true)
+  solo_map[lane] = next_value or nil
+  return true
+end
+
+local function solo_map_has_active_lane(solo_map)
+  if type(solo_map) ~= "table" then return false end
+  for _, v in pairs(solo_map) do
+    if v == true then
+      return true
+    end
+  end
+  return false
+end
+
 function M.ensure_stopped(app)
   if not app or not app.sequencer then return end
   stop_playback(app.sequencer, get_selected_rack_parent_track())
@@ -2477,7 +3302,8 @@ function M.init(app)
     lane_applied_step = {},
     engine_setup_id = nil,
     engine_restart_pending = false,
-    solo_by_guid = {},
+    step_solo_by_guid = {},
+    euclid_solo_by_guid = {},
     lane_params_open_by_guid = {},
     pattern_library = nil,
     selected_pattern_index = 0,
@@ -2498,10 +3324,14 @@ function M.init(app)
     velocity_ready_by_guid = {},
     selected_lane_by_guid = {},
     lane_auto_names_by_guid = {},
+    last_trigger_at_by_guid = {},
     lane_clipboard = nil,
     page_clipboard = nil,
+    step_cache = {},
+    step_cache_guid = nil,
     euclid_cache = {},
     euclid_cache_guid = nil,
+    euclid_seq_cache = {},
     euclid_library = nil,
     euclid_pattern_name_edit = "",
     euclid_pattern_name_target = 0,
@@ -2528,9 +3358,9 @@ local function draw_step(app)
   end
 
   local guid = track_guid(parent)
-  if state.cache_guid ~= guid then
-    state.cache_guid = guid
-    state.cache[guid] = load_sequence(parent)
+  if state.step_cache_guid ~= guid then
+    state.step_cache_guid = guid
+    state.step_cache[guid] = load_sequence(parent)
     if state.playing and state.current_guid ~= guid then
       stop_playback(state, parent)
     end
@@ -2542,8 +3372,8 @@ local function draw_step(app)
     state.velocity_ready_by_guid[guid] = true
   end
 
-  local seq = state.cache[guid] or new_sequence()
-  state.cache[guid] = seq
+  local seq = state.step_cache[guid] or new_sequence()
+  state.step_cache[guid] = seq
   if seq.repeat_enabled == nil then
     seq.repeat_enabled = true
   end
@@ -2558,9 +3388,9 @@ local function draw_step(app)
     state.lane_auto_names_by_guid[guid] = lane_auto_names
   end
   local lane_auto_mode = seq.lane_auto_name_enabled == true
-  state.solo_by_guid = state.solo_by_guid or {}
-  local solo_map = state.solo_by_guid[guid] or {}
-  state.solo_by_guid[guid] = solo_map
+  state.step_solo_by_guid = state.step_solo_by_guid or {}
+  local solo_map = state.step_solo_by_guid[guid] or {}
+  state.step_solo_by_guid[guid] = solo_map
   state.lane_params_open_by_guid = state.lane_params_open_by_guid or {}
   local lane_params_open = state.lane_params_open_by_guid[guid] or {}
   state.lane_params_open_by_guid[guid] = lane_params_open
@@ -2581,13 +3411,7 @@ local function draw_step(app)
     state.pattern_name_edit = selected_name
     state.pattern_name_target = selected_pattern_index
   end
-  local any_solo = false
-  for _, v in pairs(solo_map) do
-    if v == true then
-      any_solo = true
-      break
-    end
-  end
+  local any_solo = solo_map_has_active_lane(solo_map)
   local total_steps = STEPS_PER_BAR
   local host_enabled = seq.host_transport == true
   local lane_tracks = collect_lane_tracks(parent)
@@ -2596,6 +3420,7 @@ local function draw_step(app)
   if selected_track_lane and selected_track_lane ~= selected_lane then
     selected_lane = selected_track_lane
     state.selected_lane_by_guid[guid] = selected_lane
+    sync_manager_slot_from_lane(app, selected_lane)
   end
   if lane_auto_mode and not next(lane_auto_names) then
     lane_auto_names = build_lane_auto_names(lane_tracks)
@@ -2618,7 +3443,7 @@ local function draw_step(app)
       preset_rev_seen[selected_pattern_index] = global_rev
       if load_pattern_from_library(state.pattern_library or {}, selected_pattern_index, seq, current_slot) then
         save_sequence(parent, seq)
-        state.cache[guid] = seq
+        state.step_cache[guid] = seq
         if state.playing and state.current_guid == guid then
           restart_playback_synced(state, guid)
         end
@@ -2637,7 +3462,8 @@ local function draw_step(app)
       current_slot = clamp(math.floor(tonumber(song_info.page) or current_slot), 1, PATTERN_SLOTS)
       state.pattern_slot_by_guid[guid] = current_slot
       if load_pattern_for_editing(state, guid, state.pattern_library or {}, selected_pattern_index, seq, current_slot) then
-        state.cache[guid] = seq
+        state.step_cache[guid] = seq
+        state.song_page_started_at = r.time_precise and r.time_precise() or os.clock()
         restart_playback_synced(state, guid)
       end
     end
@@ -2659,7 +3485,7 @@ local function draw_step(app)
     local host_playing = (play_state & 1) == 1
     if host_playing then
       if (not state.playing) or state.current_guid ~= guid then
-        start_playback(state, guid)
+        start_playback(state, guid, nil, parent)
       end
     elseif state.playing then
       stop_playback(state, parent)
@@ -2673,20 +3499,62 @@ local function draw_step(app)
   local pattern_btn_gap = 4
   local page_action_w = 56
   local lane_action_w = clear_w
-  local top_section_h = 70
+  local top_preview_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+  local top_pattern_label_w = select(1, r.ImGui_CalcTextSize(ctx, "Pattern")) or 0
+  local top_lane_label_w = select(1, r.ImGui_CalcTextSize(ctx, string.format("Lane %02d", selected_lane))) or 0
+  local top_pattern_controls_w = (PATTERN_SLOTS * pattern_btn_w) + ((PATTERN_SLOTS + 2) * pattern_btn_gap) + (page_action_w * 2) + clear_w
+  local top_lane_controls_w = (lane_action_w * 5) + (pattern_btn_gap * 4)
+  local top_pattern_row_w = top_pattern_label_w + top_group_gap + top_pattern_controls_w
+  local top_lane_row_w = top_lane_label_w + top_group_gap + top_lane_controls_w
+  local top_divider_gap = 14
+  local top_single_row = top_preview_w >= (top_pattern_row_w + top_divider_gap + top_lane_row_w)
+  local top_section_h = top_single_row and 42 or 66
   local top_section_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   local top_x = r.ImGui_GetCursorPosX(ctx)
   if r.ImGui_BeginChild(ctx, "##tk_seq_top_rows", 0, top_section_h, 1, top_section_flags) then
-    local top_row_y = r.ImGui_GetCursorPosY(ctx) - 2
-    local top_rows_x = top_x + 16
-    local pattern_label_y = top_row_y - 5
+    local row_start_x = r.ImGui_GetCursorPosX(ctx)
+    local child_start_y = r.ImGui_GetCursorPosY(ctx)
+    local child_inner_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local child_inner_h = select(2, r.ImGui_GetContentRegionAvail(ctx)) or top_section_h
+    local lane_label = string.format("Lane %02d", selected_lane)
+    local pattern_label_w = select(1, r.ImGui_CalcTextSize(ctx, "Pattern")) or 0
+    local lane_label_w = select(1, r.ImGui_CalcTextSize(ctx, lane_label)) or 0
+    local pattern_controls_w = (PATTERN_SLOTS * pattern_btn_w) + ((PATTERN_SLOTS + 2) * pattern_btn_gap) + (page_action_w * 2) + clear_w
+    local lane_controls_w = (lane_action_w * 5) + (pattern_btn_gap * 4)
+    local pattern_row_w = pattern_label_w + top_group_gap + pattern_controls_w
+    local lane_row_w = lane_label_w + top_group_gap + lane_controls_w
+    local divider_gap = 14
+    local top_rows_x = row_start_x + math.floor(math.max(0, child_inner_w - pattern_row_w) * 0.5)
+    local lane_rows_x = row_start_x + math.floor(math.max(0, child_inner_w - lane_row_w) * 0.5)
+    local top_row_y
+    local lane_row_y
+    if top_single_row then
+      local block_w = pattern_row_w + divider_gap + lane_row_w
+      local block_x = row_start_x + math.floor(math.max(0, child_inner_w - block_w) * 0.5)
+      top_rows_x = block_x
+      lane_rows_x = block_x + pattern_row_w + divider_gap
+      top_row_y = child_start_y + math.floor(math.max(0, child_inner_h - top_button_h) * 0.5) - 3
+      lane_row_y = top_row_y
+      local dl_top = r.ImGui_GetWindowDrawList(ctx)
+      local win_x_top, win_y_top = r.ImGui_GetWindowPos(ctx)
+      local divider_x = lane_rows_x - math.floor(divider_gap * 0.5)
+      local divider_y1 = top_row_y - 3
+      local divider_y2 = top_row_y + top_button_h + 3
+      r.ImGui_DrawList_AddLine(dl_top, win_x_top + divider_x, win_y_top + divider_y1, win_x_top + divider_x, win_y_top + divider_y2, Theme.colors.border, 1)
+    else
+      local rows_block_h = top_button_h + 4 + top_button_h
+      top_row_y = child_start_y + math.floor(math.max(0, child_inner_h - rows_block_h) * 0.5) - 2
+      lane_row_y = top_row_y + top_button_h + 4
+    end
+    local label_nudge_y = -4
+    local pattern_label_y = top_row_y + 1 + label_nudge_y
     local pattern_buttons_y = top_row_y
     r.ImGui_SetCursorPosX(ctx, top_rows_x)
     r.ImGui_SetCursorPosY(ctx, pattern_label_y)
     r.ImGui_AlignTextToFramePadding(ctx)
     r.ImGui_Text(ctx, "Pattern")
-    local pattern_label_w = select(1, r.ImGui_CalcTextSize(ctx, "Pattern")) or 0
     local top_controls_x = top_rows_x + pattern_label_w + top_group_gap
+    local lane_controls_x = top_single_row and (lane_rows_x + lane_label_w + top_group_gap) or top_controls_x
     r.ImGui_SetCursorPosX(ctx, top_controls_x)
     r.ImGui_SetCursorPosY(ctx, pattern_buttons_y)
     for slot = 1, PATTERN_SLOTS do
@@ -2700,6 +3568,7 @@ local function draw_step(app)
         state.pattern_slot_by_guid[guid] = current_slot
         if load_pattern_for_editing(state, guid, state.pattern_library or {}, selected_pattern_index, seq, current_slot) then
           save_sequence(parent, seq)
+          state.song_page_started_at = r.time_precise and r.time_precise() or os.clock()
           restart_playback_synced(state, guid)
         end
       end
@@ -2746,27 +3615,11 @@ local function draw_step(app)
       end
     end
 
-    local lane_row_y = top_row_y + top_button_h + 4
-    local lane_label = string.format("Lane %02d", selected_lane)
-    r.ImGui_SetCursorPosX(ctx, top_rows_x)
-    r.ImGui_SetCursorPosY(ctx, lane_row_y + 4)
+    r.ImGui_SetCursorPosX(ctx, lane_rows_x)
+    r.ImGui_SetCursorPosY(ctx, lane_row_y + 4 + label_nudge_y)
     r.ImGui_Text(ctx, lane_label)
-    r.ImGui_SetCursorPosX(ctx, top_controls_x)
+    r.ImGui_SetCursorPosX(ctx, lane_controls_x)
     r.ImGui_SetCursorPosY(ctx, lane_row_y)
-    if transport_text_button(ctx, "tk_seq_lane_speed", lane_speed_label(seq.lane_settings[selected_lane] and seq.lane_settings[selected_lane].speed), lane_action_w, top_button_h) then
-      local lane_cfg = seq.lane_settings[selected_lane] or new_sequence().lane_settings[selected_lane]
-      seq.lane_settings[selected_lane] = lane_cfg
-      lane_cfg.speed = next_lane_speed(lane_cfg.speed)
-      ensure_lane_step_params(lane_cfg, total_steps, 100)
-      save_sequence(parent, seq)
-      if state.playing then
-        restart_playback_synced(state, guid)
-      end
-    end
-    if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Lane speed: 1x -> 0.5x -> 2x")
-    end
-    r.ImGui_SameLine(ctx, 0, pattern_btn_gap)
     if transport_text_button(ctx, "tk_seq_lane_rs5k", "RS5k", lane_action_w, top_button_h) then
       local lane_track = lane_tracks[selected_lane]
       local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
@@ -2795,7 +3648,7 @@ local function draw_step(app)
       if clip and type(clip.pattern) == "table" and type(clip.settings) == "table" then
         seq.pattern[selected_lane] = clone_table(clip.pattern)
         seq.lane_settings[selected_lane] = clone_table(clip.settings)
-        ensure_lane_step_params(seq.lane_settings[selected_lane], total_steps, 100)
+        ensure_lane_step_params(seq.lane_settings[selected_lane], total_steps, DEFAULT_STEP_VELOCITY)
         save_sequence(parent, seq)
       end
     end
@@ -2815,10 +3668,36 @@ local function draw_step(app)
     if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "Clear selected lane")
     end
+    r.ImGui_SameLine(ctx, 0, pattern_btn_gap)
+    local lane_cfg = seq.lane_settings[selected_lane] or new_sequence().lane_settings[selected_lane]
+    seq.lane_settings[selected_lane] = lane_cfg
+    local lane_muted = lane_cfg.muted == true
+    if transport_text_button(ctx, "tk_seq_lane_mute", lane_muted and "Unmute" or "Mute", lane_action_w, top_button_h) then
+      lane_cfg.muted = not lane_muted
+      save_sequence(parent, seq)
+      if state.playing then
+        stop_notes(state)
+        restart_playback_synced(state, guid)
+      end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, lane_muted and "Lane muted" or "Lane active")
+    end
     r.ImGui_EndChild(ctx)
   end
 
-  local transport_h = 70
+  local transport_button_w = 32
+  local transport_slider_w = 120
+  local transport_host_w = 60
+  local transport_export_w = 60
+  local transport_gap_x = 4
+  local preset_combo_w = 100
+  local preset_w = 60
+  local preset_gap = 4
+  local transport_controls_w = (transport_button_w * 3) + transport_slider_w + transport_host_w + transport_export_w + (transport_gap_x * 5)
+  local preset_controls_w = preset_combo_w + (preset_w * 4) + (preset_gap * 4)
+  local step_transport_single_row = (select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0) >= (transport_controls_w + preset_controls_w + 14)
+  local transport_h = step_transport_single_row and 44 or 70
   local transport_gap = 6
   local avail_h_after_steps = select(2, r.ImGui_GetContentRegionAvail(ctx)) or 0
   local layout_top_y = r.ImGui_GetCursorPosY(ctx)
@@ -2833,7 +3712,7 @@ local function draw_step(app)
     local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
     local solo_w = 18
     local step_marker_w = 8
-    local steps_to_solo_gap = 12
+    local steps_to_solo_gap = 20
     local marker_right_padding = 5
     local lane_grid_w = math.max(120, avail_w - label_w - 2)
     local steps_area_w = math.max(80, lane_grid_w - solo_w - steps_to_solo_gap)
@@ -2843,9 +3722,9 @@ local function draw_step(app)
     end
     if state.playing and (state.engine_dead_frames or 0) > 45 then
       if not state.engine_fx_present then
-        r.ImGui_TextColored(ctx, Theme.colors.warning, "Sequencer engine (JSFX) kon niet laden op de kit-track.")
+        r.ImGui_TextColored(ctx, Theme.colors.warning, "Sequencer engine (JSFX) could not be loaded on the kit track.")
       else
-        r.ImGui_TextColored(ctx, Theme.colors.warning, "Sequencer engine draait niet (controleer FX-bypass op de kit-track).")
+        r.ImGui_TextColored(ctx, Theme.colors.warning, "Sequencer engine is not running (check FX bypass on the kit track).")
       end
     end
 
@@ -2853,7 +3732,7 @@ local function draw_step(app)
       local row_y = r.ImGui_GetCursorPosY(ctx)
       local lane_cfg = seq.lane_settings[lane] or { mode = "gate", cycle_steps = total_steps, retrigger = true }
       seq.lane_settings[lane] = lane_cfg
-      ensure_lane_step_params(lane_cfg, total_steps, 100)
+      ensure_lane_step_params(lane_cfg, total_steps, DEFAULT_STEP_VELOCITY)
       local lane_track = lane_tracks[lane]
       local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
       local rs5k_note_off = lane_fx >= 0 and rs5k_obeys_note_off(lane_track, lane_fx) or false
@@ -2866,20 +3745,33 @@ local function draw_step(app)
       r.ImGui_SetCursorPosX(ctx, row_x)
       r.ImGui_SetCursorPosY(ctx, row_y)
       r.ImGui_InvisibleButton(ctx, "##tk_seq_lane_toggle_" .. tostring(lane), label_w, cell_h)
+      local label_min_x, label_min_y = r.ImGui_GetItemRectMin(ctx)
+      local label_max_x, label_max_y = r.ImGui_GetItemRectMax(ctx)
       local left_clicked = r.ImGui_IsItemClicked(ctx, 0)
       local right_clicked = r.ImGui_IsItemClicked(ctx, 1)
       if right_clicked then
-        lane_params_open[lane] = not lane_open
-        lane_open = lane_params_open[lane] == true
+        lane_open = not lane_open
+        lane_params_open[lane] = lane_open
+        selected_lane = lane
+        state.selected_lane_by_guid[guid] = lane
+        sync_manager_slot_from_lane(app, lane)
+        if lane_track then
+          r.SetOnlyTrackSelected(lane_track)
+        end
       elseif left_clicked then
         selected_lane = lane
         state.selected_lane_by_guid[guid] = lane
+        sync_manager_slot_from_lane(app, lane)
         if lane_track then
           r.SetOnlyTrackSelected(lane_track)
         end
       end
+      if is_solo then
+        local label_dl = r.ImGui_GetWindowDrawList(ctx)
+        r.ImGui_DrawList_AddCircleFilled(label_dl, label_max_x - 6, label_min_y + 6, 4, Theme.colors.danger, 16)
+      end
       if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Left click: select lane | Right click: lane parameters")
+        r.ImGui_SetTooltip(ctx, "Left click: select lane | Right click: edit lane open/dicht")
       end
       r.ImGui_SetCursorPosX(ctx, row_x)
       r.ImGui_SetCursorPosY(ctx, row_y + 1)
@@ -2913,16 +3805,14 @@ local function draw_step(app)
       if r.ImGui_GetMousePos then
         mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
       end
-      local marker_min_x = win_x + marker_button_x
-      local marker_max_x = marker_min_x + marker_hit_w
-      local marker_min_y = win_y + row_y
-      local marker_max_y = marker_min_y + cell_h
-      local marker_pointer_in_zone = mouse_x >= marker_min_x and mouse_x <= marker_max_x and mouse_y >= marker_min_y and mouse_y <= marker_max_y
       r.ImGui_SetCursorPosX(ctx, marker_button_x)
       r.ImGui_SetCursorPosY(ctx, row_y)
       r.ImGui_InvisibleButton(ctx, "##tk_seq_lane_steps_handle_" .. tostring(lane), marker_hit_w, cell_h)
+      local handle_rect_min_x, handle_rect_min_y = r.ImGui_GetItemRectMin(ctx)
+      local handle_rect_max_x, handle_rect_max_y = r.ImGui_GetItemRectMax(ctx)
       local handle_hovered = r.ImGui_IsItemHovered(ctx)
       local handle_active = r.ImGui_IsItemActive(ctx)
+      local marker_pointer_in_zone = mouse_x >= handle_rect_min_x and mouse_x <= handle_rect_max_x and mouse_y >= handle_rect_min_y and mouse_y <= handle_rect_max_y
       local marker_draw_center_x = win_x + marker_center_x
       if handle_active and r.ImGui_GetMousePos then
         local drag_mouse_x = select(1, r.ImGui_GetMousePos(ctx))
@@ -3000,8 +3890,8 @@ local function draw_step(app)
         marker_draw_min_x = win_x + steps_x + steps_area_w + 1
       end
       local draw_marker_x = clamp(marker_draw_center_x - math.floor(step_marker_w * 0.5), marker_draw_min_x, (win_x + marker_right_limit) - step_marker_w)
-      local hmin_x, hmin_y = draw_marker_x, win_y + row_y
-      local hmax_x, hmax_y = hmin_x + step_marker_w, hmin_y + cell_h
+      local hmin_x, hmin_y = draw_marker_x, handle_rect_min_y
+      local hmax_x, hmax_y = hmin_x + step_marker_w, handle_rect_max_y
       local hdl = r.ImGui_GetWindowDrawList(ctx)
       local handle_col = handle_active and Theme.colors.accent or (handle_hovered and Theme.colors.accent_hover or Theme.colors.border)
       r.ImGui_DrawList_AddRectFilled(hdl, hmin_x, hmin_y, hmax_x, hmax_y, handle_col, 3)
@@ -3032,13 +3922,7 @@ local function draw_step(app)
       if r.ImGui_Button(ctx, "##tk_seq_solo_" .. tostring(lane), solo_w, cell_h) then
         solo_map[lane] = not is_solo
         stop_notes(state)
-        any_solo = false
-        for _, v in pairs(solo_map) do
-          if v == true then
-            any_solo = true
-            break
-          end
-        end
+        any_solo = solo_map_has_active_lane(solo_map)
       end
       if r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, "Solo")
@@ -3064,6 +3948,7 @@ local function draw_step(app)
         r.ImGui_SetCursorPosX(ctx, row_x)
         r.ImGui_SetCursorPosY(ctx, param_y + top_pad)
         r.ImGui_SetNextItemWidth(ctx, label_w - 2)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 9, 2)
         if r.ImGui_BeginCombo(ctx, "##tk_seq_param_mode_" .. tostring(lane), param_label) then
           if r.ImGui_Selectable(ctx, "Velocity##tk_seq_param_vel_" .. tostring(lane), pmode == "velocity") then
             lane_cfg.param_mode = "velocity"
@@ -3107,6 +3992,31 @@ local function draw_step(app)
           end
           r.ImGui_EndCombo(ctx)
         end
+        r.ImGui_PopStyleVar(ctx)
+        r.ImGui_SetCursorPosX(ctx, row_x)
+        r.ImGui_SetCursorPosY(ctx, param_y + top_pad + 30)
+        r.ImGui_SetNextItemWidth(ctx, label_w - 2)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 9, 2)
+        if r.ImGui_BeginCombo(ctx, "##tk_seq_lane_stepmode_dropdown_" .. tostring(lane), "Step " .. M.normalize_step_mode_mask(lane_cfg.step_mode_mask)) then
+          for i = 1, 10 do
+            local mask = ({ "xxxx", "x...", ".x..", "..x.", "...x", ".x.x", "x.x.", "x..x", "xx..", "..xx" })[i]
+            if r.ImGui_Selectable(ctx, mask, lane_cfg.step_mode_mask == mask) then
+              lane_cfg.step_mode_mask = mask
+              save_sequence(parent, seq)
+              if state.playing then
+                restart_playback_synced(state, guid)
+              end
+            end
+            if lane_cfg.step_mode_mask == mask then
+              r.ImGui_SetItemDefaultFocus(ctx)
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_PopStyleVar(ctx)
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Step Mode mask per loop: x = trigger, . = skip")
+        end
 
         r.ImGui_SetCursorPosX(ctx, row_x + label_w)
         r.ImGui_SetCursorPosY(ctx, param_y + top_pad)
@@ -3124,8 +4034,6 @@ local function draw_step(app)
         local dl = r.ImGui_GetWindowDrawList(ctx)
         local win_x, win_y = r.ImGui_GetWindowPos(ctx)
         local divider_col = blend_rgb(Theme.colors.border, 0xFFFFFFFF, 0.18)
-        local top_divider_y = param_y + 2
-        r.ImGui_DrawList_AddLine(dl, win_x + lane_edit_x1, win_y + top_divider_y, win_x + lane_edit_x2, win_y + top_divider_y, divider_col, 1)
 
         for lane_step = visible_start, visible_end do
           local lane_cell_w = base_w + (((lane_step - visible_start + 1) <= remainder) and 1 or 0)
@@ -3200,7 +4108,15 @@ local function draw_step(app)
             elseif is_velocity then
               r.ImGui_SetTooltip(ctx, "Velocity: " .. tostring(now_v) .. " | Lane step: " .. tostring(lane_step))
             elseif is_gate then
-              r.ImGui_SetTooltip(ctx, "Gate: " .. tostring(now_v) .. "% | Lane step: " .. tostring(lane_step))
+              local gate_tip = "Gate: " .. tostring(now_v) .. "% | Lane step: " .. tostring(lane_step) .. "\nControls note length in Gate mode."
+              if lane_fx and lane_fx >= 0 then
+                if rs5k_note_off then
+                  gate_tip = gate_tip .. "\nRS5K Note-off is enabled, so Gate can shorten notes."
+                else
+                  gate_tip = gate_tip .. "\nRS5K Note-off is disabled, so Gate will not shorten notes."
+                end
+              end
+              r.ImGui_SetTooltip(ctx, gate_tip)
             elseif is_length then
               r.ImGui_SetTooltip(ctx, "Length: " .. tostring(now_v) .. " step(s) | Lane step: " .. tostring(lane_step))
             elseif is_pitch then
@@ -3231,13 +4147,25 @@ local function draw_step(app)
 
         local btn_h = 20
         local btn_gap = 6
-        local btn1_w = 78
+        local btn1_w = 74
         local btn2_w = 64
         local btn3_w = 72
-        local controls_w = btn1_w + btn2_w + btn3_w + (btn_gap * 2)
+        local btn4_w = 62
+        local btn5_w = 62
+        local btn6_w = 62
+        local btn7_w = 44
+        local btn8_w = 62
+        local btn9_w = 56
+        btn6_w = btn1_w
+        btn7_w = btn2_w
+        btn8_w = btn3_w
+        btn9_w = btn4_w
+        local btn10_w = btn5_w
         local controls_y = (param_y + top_pad) + slider_h + 4
+        local top_divider_screen_y = win_y + controls_y - 6
+        r.ImGui_DrawList_AddLine(dl, win_x + lane_edit_x1, top_divider_screen_y, win_x + lane_edit_x2, top_divider_screen_y, divider_col, 1)
 
-        r.ImGui_SetCursorPosX(ctx, row_x + label_w)
+        r.ImGui_SetCursorPosX(ctx, row_x)
         r.ImGui_SetCursorPosY(ctx, controls_y)
         if lane_toggle_button(ctx, "tk_seq_lane_oneshot_" .. tostring(lane), "One-shot", btn1_w, btn_h, oneshot_enabled) then
           oneshot_enabled = not oneshot_enabled
@@ -3262,11 +4190,161 @@ local function draw_step(app)
           rs5k_note_off = next_value
         end
 
-        local controls_bottom = controls_y + btn_h
-        local bottom_divider_y = controls_bottom + 10
-        r.ImGui_DrawList_AddLine(dl, win_x + lane_edit_x1, win_y + bottom_divider_y, win_x + lane_edit_x2, win_y + bottom_divider_y, divider_col, 1)
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        if transport_text_button(ctx, "tk_seq_lane_speed_edit_" .. tostring(lane), lane_speed_label(lane_cfg.speed), btn4_w, btn_h) then
+          lane_cfg.speed = next_lane_speed(lane_cfg.speed)
+          ensure_lane_step_params(lane_cfg, total_steps, DEFAULT_STEP_VELOCITY)
+          save_sequence(parent, seq)
+          if state.playing then
+            restart_playback_synced(state, guid)
+          end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Lane speed: 1x -> 0.5x -> 2x")
+        end
 
-        extra_h = (bottom_divider_y - param_y) + 8
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        local direction_label = lane_direction_label(lane_cfg.direction)
+        if lane_direction_button(ctx, "tk_seq_lane_direction_edit_" .. tostring(lane), lane_cfg.direction, btn5_w, btn_h) then
+          lane_cfg.direction = next_lane_direction(lane_cfg.direction)
+          ensure_lane_step_params(lane_cfg, total_steps, DEFAULT_STEP_VELOCITY)
+          save_sequence(parent, seq)
+          if state.playing then
+            restart_playback_synced(state, guid)
+          end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Direction: " .. direction_label .. "\nClick to cycle FW -> BW -> PND")
+        end
+
+        local echo_controls_y = controls_y + btn_h + 4
+        local echo_enabled = lane_cfg.echo_enabled == true
+        local echo_count = normalize_lane_echo_count(lane_cfg.echo_count)
+        local echo_mode = normalize_lane_echo_mode(lane_cfg.echo_vel_mode)
+        local echo_rate = normalize_lane_echo_rate(lane_cfg.echo_rate)
+        local echo_step = normalize_lane_echo_step(lane_cfg.echo_vel_step)
+
+        r.ImGui_SetCursorPosX(ctx, row_x)
+        r.ImGui_SetCursorPosY(ctx, echo_controls_y)
+        if lane_toggle_button(ctx, "tk_seq_lane_echo_enabled_" .. tostring(lane), "Echo", btn6_w, btn_h, echo_enabled) then
+          lane_cfg.echo_enabled = not echo_enabled
+          save_sequence(parent, seq)
+          if state.playing then
+            restart_playback_synced(state, guid)
+          end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Echo 1/16 On/Off")
+        end
+
+        local echo_combo_pad_y = 2
+        if r.ImGui_GetTextLineHeight and r.ImGui_PushStyleVar and r.ImGui_StyleVar_FramePadding then
+          local line_h = tonumber(r.ImGui_GetTextLineHeight(ctx)) or 14
+          echo_combo_pad_y = math.max(1, math.floor((btn_h - line_h) * 0.5))
+          r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, echo_combo_pad_y)
+        end
+
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        r.ImGui_SetNextItemWidth(ctx, btn7_w)
+        if r.ImGui_BeginCombo(ctx, "##tk_seq_lane_echo_count_" .. tostring(lane), "x" .. tostring(echo_count)) then
+          for n = 1, ECHO_MAX_COUNT do
+            local selected = echo_count == n
+            if r.ImGui_Selectable(ctx, "x" .. tostring(n), selected) then
+              lane_cfg.echo_count = n
+              save_sequence(parent, seq)
+              if state.playing then
+                restart_playback_synced(state, guid)
+              end
+            end
+            if selected then
+              r.ImGui_SetItemDefaultFocus(ctx)
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Echo repeats: " .. tostring(echo_count))
+        end
+
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        r.ImGui_SetNextItemWidth(ctx, btn8_w)
+        if r.ImGui_BeginCombo(ctx, "##tk_seq_lane_echo_mode_" .. tostring(lane), lane_echo_mode_label(echo_mode)) then
+          for i = 1, #ECHO_MODE_ITEMS do
+            local item = ECHO_MODE_ITEMS[i]
+            local selected = echo_mode == item.value
+            if r.ImGui_Selectable(ctx, item.label, selected) then
+              lane_cfg.echo_vel_mode = item.value
+              save_sequence(parent, seq)
+              if state.playing then
+                restart_playback_synced(state, guid)
+              end
+            end
+            if selected then
+              r.ImGui_SetItemDefaultFocus(ctx)
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Echo velocity mode")
+        end
+
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        r.ImGui_SetNextItemWidth(ctx, btn10_w)
+        if r.ImGui_BeginCombo(ctx, "##tk_seq_lane_echo_rate_" .. tostring(lane), lane_echo_rate_label(echo_rate)) then
+          for i = 1, #ECHO_RATE_ITEMS do
+            local item = ECHO_RATE_ITEMS[i]
+            local selected = echo_rate == item
+            if r.ImGui_Selectable(ctx, item, selected) then
+              lane_cfg.echo_rate = item
+              save_sequence(parent, seq)
+              if state.playing then
+                restart_playback_synced(state, guid)
+              end
+            end
+            if selected then
+              r.ImGui_SetItemDefaultFocus(ctx)
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Echo rate")
+        end
+
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        r.ImGui_SetNextItemWidth(ctx, btn9_w)
+        if r.ImGui_BeginCombo(ctx, "##tk_seq_lane_echo_step_" .. tostring(lane), tostring(echo_step)) then
+          for i = 1, #ECHO_STEP_ITEMS do
+            local item = ECHO_STEP_ITEMS[i]
+            local selected = echo_step == item
+            if r.ImGui_Selectable(ctx, tostring(item), selected) then
+              lane_cfg.echo_vel_step = item
+              save_sequence(parent, seq)
+              if state.playing then
+                restart_playback_synced(state, guid)
+              end
+            end
+            if selected then
+              r.ImGui_SetItemDefaultFocus(ctx)
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Echo velocity delta")
+        end
+        if r.ImGui_PopStyleVar then
+          r.ImGui_PopStyleVar(ctx)
+        end
+
+        local controls_bottom = echo_controls_y + btn_h
+        local bottom_divider_y = controls_bottom + 10
+        local _, echo_row_max_y = r.ImGui_GetItemRectMax(ctx)
+        local bottom_divider_screen_y = echo_row_max_y + 4
+        r.ImGui_DrawList_AddLine(dl, win_x + lane_edit_x1, bottom_divider_screen_y, win_x + lane_edit_x2, bottom_divider_screen_y, divider_col, 1)
+
+        extra_h = (bottom_divider_y - param_y) + 32
       end
       r.ImGui_SetCursorPosX(ctx, row_x)
       r.ImGui_SetCursorPosY(ctx, row_y + cell_h + row_gap + extra_h)
@@ -3292,7 +4370,7 @@ local function draw_step(app)
       save_sequence(parent, seq)
     end
     if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Klik: Auto Name aan/uit")
+      r.ImGui_SetTooltip(ctx, "Click: toggle Auto Name on/off")
     end
     local rack_label = "Rack: " .. track_name(parent)
     r.ImGui_SameLine(ctx, 0, 10)
@@ -3306,26 +4384,19 @@ local function draw_step(app)
     local song_slots = seq.song_slots or {}
     local song_row_x = r.ImGui_GetCursorPosX(ctx)
     local song_row_y = r.ImGui_GetCursorPosY(ctx)
-    local song_dl = r.ImGui_GetWindowDrawList(ctx)
-    local song_label_w = 92
     local song_avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
-    local song_solo_w = 18
-    local song_steps_to_solo_gap = 12
-    local song_steps_area_w = math.max(80, song_avail_w - song_label_w - song_solo_w - song_steps_to_solo_gap - 2)
+    local song_steps_area_w = math.max(80, song_avail_w - 2)
     local song_step_gap = 2
     local song_visible_count = 8
     local song_gap_total = (song_visible_count - 1) * song_step_gap
     local song_usable_w = math.max(song_visible_count, song_steps_area_w - song_gap_total)
     local song_base_w = math.floor(song_usable_w / song_visible_count)
     local song_remainder = song_usable_w - (song_base_w * song_visible_count)
-    local song_steps_x = song_row_x + song_label_w
+    local song_steps_x = song_row_x
     local song_slot_h = 40
     local song_content_h = song_slot_h
     local song_row_offset_y = math.max(0, math.floor(math.max(0, song_lane_h - song_content_h) * 0.5) - 32)
     local song_cells_y = song_row_y + song_row_offset_y
-    r.ImGui_SetCursorPosX(ctx, song_row_x)
-    r.ImGui_SetCursorPosY(ctx, song_cells_y + 8)
-    r.ImGui_TextColored(ctx, Theme.colors.accent, "Song")
     r.ImGui_SetCursorPosX(ctx, song_steps_x)
     r.ImGui_SetCursorPosY(ctx, song_cells_y)
     for song_slot = 1, 8 do
@@ -3360,24 +4431,46 @@ local function draw_step(app)
       local r_tw = select(1, r.ImGui_CalcTextSize(ctx, rep_text)) or 0
       r.ImGui_DrawList_AddText(song_draw, song_min_x + math.floor(((song_max_x - song_min_x) - p_tw) * 0.5), song_min_y + 2, song_page > 0 and Theme.colors.text or Theme.colors.text_dim, page_text)
       r.ImGui_DrawList_AddText(song_draw, song_min_x + math.floor(((song_max_x - song_min_x) - r_tw) * 0.5), song_min_y + 18, Theme.colors.text_dim, rep_text)
-      if song_clicked then
+      local song_double_clicked = song_hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0)
+      if song_double_clicked then
+        song_page = 0
+        song_repeats = 1
+      elseif song_clicked then
         local mouse_x, mouse_y = 0, 0
         if r.ImGui_GetMousePos then
           mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
         end
         if mouse_y <= (song_min_y + (song_slot_h * 0.5)) then
-          song_page = (song_page + 1) % (PATTERN_SLOTS + 1)
-          if song_page == 0 then
-            song_repeats = 1
+          song_page = song_page + 1
+          if song_page > PATTERN_SLOTS then
+            song_page = 1
+          elseif song_page < 1 then
+            song_page = 1
           end
         else
-          song_repeats = (song_repeats % 8) + 1
+          song_repeats = song_repeats + 1
+          if song_repeats > 8 then
+            song_repeats = 1
+          end
         end
       elseif song_right_clicked then
-        song_page = 0
-        song_repeats = 1
+        local mouse_x, mouse_y = 0, 0
+        if r.ImGui_GetMousePos then
+          mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+        end
+        if mouse_y <= (song_min_y + (song_slot_h * 0.5)) then
+          song_page = song_page - 1
+          if song_page < 1 then
+            song_page = PATTERN_SLOTS
+          end
+        else
+          song_repeats = song_repeats - 1
+          if song_repeats < 1 then
+            song_repeats = 8
+          end
+        end
       end
-      if song_clicked or song_right_clicked then
+      if song_double_clicked or song_clicked or song_right_clicked then
         seq.song_slots = seq.song_slots or {}
         seq.song_slots[song_slot] = {
           page = song_page,
@@ -3386,7 +4479,7 @@ local function draw_step(app)
         save_sequence(parent, seq)
       end
       if song_hovered then
-        r.ImGui_SetTooltip(ctx, "Boven: page | Onder: repeats | Rechtsklik: leegmaken")
+        r.ImGui_SetTooltip(ctx, "Boven: page | Onder: repeats | Links omhoog | Rechts omlaag | Dubbelklik: wis")
       end
       r.ImGui_PopStyleColor(ctx, 3)
       if song_slot < 8 then
@@ -3404,30 +4497,37 @@ local function draw_step(app)
   local transport_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   if r.ImGui_BeginChild(ctx, "##tk_seq_transport", 0, transport_h, 1, transport_flags) then
     local button_h = 24
-    local button_w = 32
-    local host_w = 60
-    local export_w = 60
+    local button_w = transport_button_w
+    local host_w = transport_host_w
+    local export_w = transport_export_w
     local bar_gap = 6
     local row_gap_y = 4
     local row_start_x = r.ImGui_GetCursorPosX(ctx)
     local child_start_y = r.ImGui_GetCursorPosY(ctx)
+    local child_inner_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local child_inner_h = select(2, r.ImGui_GetContentRegionAvail(ctx)) or transport_h
     local preset_pad_y = 2
-    local row2_h = button_h + (preset_pad_y * 2)
-    local transport_content_h = button_h + row_gap_y + row2_h
-    local transport_center_nudge_y = -12
-    local y = child_start_y + math.floor(math.max(0, transport_h - transport_content_h) * 0.5) + transport_center_nudge_y
-    local pattern_y = y + button_h + row_gap_y
-    local preset_gap = 4
-    local transport_gap_x = preset_gap
-    local preset_w = 60
+    local transport_content_h = step_transport_single_row and button_h or (button_h + row_gap_y + button_h + (preset_pad_y * 2))
+    local y = child_start_y + math.floor(math.max(0, child_inner_h - transport_content_h) * 0.5) - 5
+    local pattern_y = step_transport_single_row and y or (y + button_h + row_gap_y)
+    local divider_gap = 14
+    local single_row_total_w = transport_controls_w + divider_gap + preset_controls_w
+    local transport_x = row_start_x
     local preset_x = row_start_x
-    local preset_combo_w = 100
-    local transport_reserved = (button_w * 2) + host_w + export_w + (transport_gap_x * 4)
-    local slider_w = 120
+    if step_transport_single_row then
+      local block_x = row_start_x + math.floor(math.max(0, child_inner_w - single_row_total_w) * 0.5)
+      transport_x = block_x
+      preset_x = block_x + transport_controls_w + divider_gap
+    else
+      transport_x = row_start_x + math.floor(math.max(0, child_inner_w - transport_controls_w) * 0.5)
+      preset_x = row_start_x + math.floor(math.max(0, child_inner_w - preset_controls_w) * 0.5)
+    end
+    local slider_w = transport_slider_w
+    r.ImGui_SetCursorPosX(ctx, transport_x)
     r.ImGui_SetCursorPosY(ctx, y)
     if transport_icon_button(ctx, "tk_seq_transport_play", "play", button_w, button_h, state.playing) then
       if not host_enabled and not state.playing then
-        start_playback(state, guid)
+        start_playback(state, guid, nil, parent)
       end
     end
     local play_right_clicked = r.ImGui_IsItemClicked(ctx, 1)
@@ -3436,14 +4536,14 @@ local function draw_step(app)
         if state.playing then
           stop_playback(state, parent)
         end
-        start_playback(state, guid, true)
+        start_playback(state, guid, true, parent)
       end
     end
     if r.ImGui_IsItemHovered(ctx) then
       if host_enabled then
         r.ImGui_SetTooltip(ctx, "Host transport active")
       else
-        r.ImGui_SetTooltip(ctx, "Linksklik: pattern mode | Rechtsklik: song mode")
+        r.ImGui_SetTooltip(ctx, "Left click: pattern mode | Right click: song mode")
       end
     end
 
@@ -3527,8 +4627,10 @@ local function draw_step(app)
       stash_working_pattern(state, guid, selected_pattern_index, current_slot, seq)
       r.Undo_BeginBlock()
       r.PreventUIRefresh(1)
+      local section_repeat_count = song_mode == true and 1 or sequence_export_repeat_count(seq)
       local ok = select(1, export_sequence_to_midi(parent, seq, {
         song_mode = song_mode == true,
+        section_repeat_count = section_repeat_count,
         state = state,
         guid = guid,
         patterns = state.pattern_library,
@@ -3558,7 +4660,16 @@ local function draw_step(app)
       run_export(true)
     end
     if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Linksklik: pattern export | Rechtsklik: song export")
+      r.ImGui_SetTooltip(ctx, "Left click: pattern export | Right click: song export")
+    end
+
+    if step_transport_single_row then
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      local win_x, win_y = r.ImGui_GetWindowPos(ctx)
+      local divider_x = transport_x + transport_controls_w + math.floor(divider_gap * 0.5)
+      local divider_y1 = y - 3
+      local divider_y2 = y + button_h + 3
+      r.ImGui_DrawList_AddLine(dl, win_x + divider_x, win_y + divider_y1, win_x + divider_x, win_y + divider_y2, Theme.colors.border, 1)
     end
 
     local patterns = state.pattern_library or {}
@@ -3581,6 +4692,7 @@ local function draw_step(app)
           clear_working_preset(state, guid, i)
           if load_pattern_from_library(patterns, i, seq, current_slot) then
             save_sequence(parent, seq)
+            state.song_page_started_at = r.time_precise and r.time_precise() or os.clock()
             restart_playback_synced(state, guid)
           end
         end
@@ -3735,7 +4847,42 @@ local EUCLID_EXT_KEY = "P_EXT:TK_KIT_MAKER_EUCLID"
 local EUCLID_PRESET_KEY = "EUCLID_PRESETS"
 local EUCLID_SPEEDS = { 0.5, 1, 2 }
 
-local function euclid_pattern(steps, pulses, rotation)
+function euclid_default_seed()
+  local t = (r.time_precise and r.time_precise()) or os.clock()
+  return math.floor((t or 0) * 1000000) % 2147483647
+end
+
+function euclid_vel_rand_range(level)
+  local l = clamp(math.floor(tonumber(level) or 2), 0, 3)
+  if l <= 0 then return 0 end
+  if l == 1 then return 12 end
+  if l == 3 then return 60 end
+  return 24
+end
+
+function euclid_pitch_rand_range(level)
+  local l = clamp(math.floor(tonumber(level) or 2), 0, 3)
+  if l <= 0 then return 0 end
+  if l == 1 then return 2 end
+  if l == 3 then return 12 end
+  return 6
+end
+
+function euclid_volume_rand_range(level)
+  local l = clamp(math.floor(tonumber(level) or 2), 0, 3)
+  if l <= 0 then return 0 end
+  if l == 1 then return 3 end
+  if l == 3 then return 12 end
+  return 6
+end
+
+function euclid_rand_unit(lane, step, salt, seed)
+  local seed_term = (tonumber(seed) or 0) * 0.001
+  local x = math.sin((lane * 12.9898) + (step * 78.233) + (salt * 37.719) + seed_term) * 43758.5453
+  return ((x - math.floor(x)) * 2) - 1
+end
+
+function euclid_pattern(steps, pulses, rotation)
   steps = clamp(math.floor(tonumber(steps) or STEPS_PER_BAR), 1, STEPS_PER_BAR)
   pulses = clamp(math.floor(tonumber(pulses) or 0), 0, steps)
   local pat = {}
@@ -3761,20 +4908,95 @@ local function euclid_pattern(steps, pulses, rotation)
   return pat, steps
 end
 
-local function euclid_new()
-  local d = { host_transport = false, repeat_enabled = true, lane_auto_name_enabled = false, selected_lane = 1, selected_preset = 0, lanes = {} }
+function euclid_new()
+  local d = { host_transport = false, repeat_enabled = true, lane_auto_name_enabled = false, selected_lane = 1, selected_preset = 0, connect_lines = false, lanes = {} }
   for lane = 1, GRID_SLOTS do
-    d.lanes[lane] = { steps = 16, pulses = lane == 1 and 4 or 0, rotation = 0, speed = 1, substeps = 1, pitch = 0, volume = 0 }
+    d.lanes[lane] = {
+      steps = 16,
+      pulses = lane == 1 and 4 or 0,
+      rotation = 0,
+      speed = 1,
+      direction = "fw",
+      substeps = 1,
+      velocity = 127,
+      length = 1,
+      pitch = 0,
+      volume = 0,
+      probability = 100,
+      accent = 0,
+      gate = 100,
+      pan = 0,
+      attack = 0,
+      release = 0,
+      vel_human = 0,
+      vel_rand_level = 2,
+      vel_rand_seed = euclid_default_seed(),
+      pitch_human = 0,
+      pitch_rand_level = 0,
+      pitch_rand_seed = euclid_default_seed(),
+      volume_human = 0,
+      volume_rand_level = 0,
+      volume_rand_seed = euclid_default_seed(),
+      echo_enabled = false,
+      echo_count = 2,
+      echo_vel_mode = "flat",
+      echo_vel_step = 6,
+      echo_rate = "1/16",
+      step_mode_mask = "xxxx",
+      mode = "gate",
+      retrigger = true,
+      muted = false,
+    }
   end
   return d
 end
 
-local function euclid_sanitize(data)
+function euclid_empty_lane()
+  return {
+    steps = 16,
+    pulses = 0,
+    rotation = 0,
+    speed = 1,
+    direction = "fw",
+    substeps = 1,
+    velocity = 127,
+    length = 1,
+    pitch = 0,
+    volume = 0,
+    probability = 100,
+    accent = 0,
+    gate = 100,
+    pan = 0,
+    attack = 0,
+    release = 0,
+    vel_human = 0,
+    vel_rand_level = 0,
+    vel_rand_seed = 0,
+    pitch_human = 0,
+    pitch_rand_level = 0,
+    pitch_rand_seed = 0,
+    volume_human = 0,
+    volume_rand_level = 0,
+    volume_rand_seed = 0,
+    echo_enabled = false,
+    echo_count = 2,
+    echo_vel_mode = "flat",
+    echo_vel_step = 6,
+    echo_rate = "1/16",
+    step_mode_mask = "xxxx",
+    mode = "gate",
+    retrigger = true,
+    muted = false,
+  }
+end
+
+function euclid_sanitize(data)
   local out = euclid_new()
   if type(data) ~= "table" then return out end
   out.host_transport = data.host_transport == true
   out.repeat_enabled = data.repeat_enabled ~= false
   out.lane_auto_name_enabled = data.lane_auto_name_enabled == true
+  out.connect_lines = data.connect_lines == true
   out.selected_lane = clamp(math.floor(tonumber(data.selected_lane) or 1), 1, GRID_SLOTS)
   out.selected_preset = math.max(0, math.floor(tonumber(data.selected_preset) or 0))
   if type(data.lanes) == "table" then
@@ -3787,9 +5009,36 @@ local function euclid_sanitize(data)
           pulses = clamp(math.floor(tonumber(s.pulses) or 0), 0, steps),
           rotation = clamp(math.floor(tonumber(s.rotation) or 0), 0, steps - 1),
           speed = normalize_lane_speed(s.speed),
+          direction = normalize_lane_direction(s.direction),
           substeps = clamp(math.floor(tonumber(s.substeps) or 1), 1, 8),
+          velocity = clamp(math.floor(tonumber(s.velocity) or 127), 1, 127),
+          length = clamp(math.floor(tonumber(s.length) or 1), 1, steps),
           pitch = clamp(math.floor(tonumber(s.pitch) or 0), -24, 24),
           volume = clamp(math.floor(tonumber(s.volume) or 0), -24, 6),
+          probability = clamp(math.floor(tonumber(s.probability) or 100), 0, 100),
+          accent = clamp(math.floor(tonumber(s.accent) or 0), 0, 27),
+          gate = clamp(math.floor(tonumber(s.gate) or 100), 1, 100),
+          pan = clamp(math.floor(tonumber(s.pan) or 0), -100, 100),
+          attack = clamp(math.floor(tonumber(s.attack) or 0), 0, 2000),
+          release = clamp(math.floor(tonumber(s.release) or 0), 0, 2000),
+          vel_human = clamp(math.floor(tonumber(s.vel_human) or 0), 0, 40),
+          vel_rand_level = clamp(math.floor(tonumber(s.vel_rand_level) or ((tonumber(s.vel_human) or 0) >= 26 and 3 or ((tonumber(s.vel_human) or 0) >= 10 and 2 or 1))), 0, 3),
+          vel_rand_seed = math.max(0, math.floor(tonumber(s.vel_rand_seed) or euclid_default_seed())),
+          pitch_human = clamp(math.floor(tonumber(s.pitch_human) or 0), 0, 12),
+          pitch_rand_level = clamp(math.floor(tonumber(s.pitch_rand_level) or ((tonumber(s.pitch_human) or 0) <= 0 and 0 or ((tonumber(s.pitch_human) or 0) >= 9 and 3 or ((tonumber(s.pitch_human) or 0) >= 4 and 2 or 1)))), 0, 3),
+          pitch_rand_seed = math.max(0, math.floor(tonumber(s.pitch_rand_seed) or euclid_default_seed())),
+          volume_human = clamp(math.floor(tonumber(s.volume_human) or 0), 0, 12),
+          volume_rand_level = clamp(math.floor(tonumber(s.volume_rand_level) or ((tonumber(s.volume_human) or 0) <= 0 and 0 or ((tonumber(s.volume_human) or 0) >= 9 and 3 or ((tonumber(s.volume_human) or 0) >= 4 and 2 or 1)))), 0, 3),
+          volume_rand_seed = math.max(0, math.floor(tonumber(s.volume_rand_seed) or euclid_default_seed())),
+          echo_enabled = s.echo_enabled == true,
+          echo_count = normalize_lane_echo_count(s.echo_count),
+          echo_vel_mode = normalize_lane_echo_mode(s.echo_vel_mode),
+          echo_vel_step = normalize_lane_echo_step(s.echo_vel_step),
+          echo_rate = normalize_lane_echo_rate(s.echo_rate),
+          step_mode_mask = M.normalize_step_mode_mask(s.step_mode_mask),
+          mode = tostring(s.mode or "gate") == "oneshot" and "oneshot" or "gate",
+          retrigger = s.retrigger ~= false,
+          muted = s.muted == true,
         }
       end
     end
@@ -3797,7 +5046,29 @@ local function euclid_sanitize(data)
   return out
 end
 
-local function euclid_load(track)
+function euclid_init_lane_params(L)
+  if type(L) ~= "table" then return end
+  L.velocity = 127
+  L.pitch = 0
+  L.volume = 0
+  L.probability = 100
+  L.gate = 100
+  L.pan = 0
+  L.attack = 0
+  L.release = 0
+  L.accent = 0
+  L.vel_human = 0
+  L.vel_rand_level = 0
+  L.vel_rand_seed = 0
+  L.pitch_human = 0
+  L.pitch_rand_level = 0
+  L.pitch_rand_seed = 0
+  L.volume_human = 0
+  L.volume_rand_level = 0
+  L.volume_rand_seed = 0
+end
+
+function euclid_load(track)
   if not track then return euclid_new() end
   local ok, raw = r.GetSetMediaTrackInfo_String(track, EUCLID_EXT_KEY, "", false)
   if not ok or not raw or raw == "" then return euclid_new() end
@@ -3806,7 +5077,7 @@ local function euclid_load(track)
   return euclid_sanitize(decoded)
 end
 
-local function euclid_save(track, data)
+function euclid_save(track, data)
   if not track then return false end
   local payload = euclid_sanitize(data)
   local ok, encoded = pcall(json.encode, payload)
@@ -3815,37 +5086,121 @@ local function euclid_save(track, data)
   return true
 end
 
-local function euclid_build_seq(edata)
+function euclid_build_seq(edata)
   local seq = new_sequence()
   seq.host_transport = edata.host_transport == true
   for lane = 1, GRID_SLOTS do
-    local L = edata.lanes[lane] or { steps = 16, pulses = 0, rotation = 0, speed = 1, substeps = 1, pitch = 0, volume = 0 }
+    local L = edata.lanes[lane] or {
+      steps = 16,
+      pulses = 0,
+      rotation = 0,
+      speed = 1,
+      direction = "fw",
+      substeps = 1,
+      velocity = 127,
+      length = 1,
+      pitch = 0,
+      volume = 0,
+      probability = 100,
+      accent = 0,
+      gate = 100,
+      pan = 0,
+      attack = 0,
+      release = 0,
+      vel_human = 0,
+      vel_rand_level = 2,
+      vel_rand_seed = euclid_default_seed(),
+      pitch_human = 0,
+      pitch_rand_level = 0,
+      pitch_rand_seed = euclid_default_seed(),
+      volume_human = 0,
+      volume_rand_level = 0,
+      volume_rand_seed = euclid_default_seed(),
+      echo_enabled = false,
+      echo_count = 2,
+      echo_vel_mode = "flat",
+      echo_vel_step = 6,
+      echo_rate = "1/16",
+      mode = "gate",
+      retrigger = true,
+      muted = false,
+    }
     local steps = clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)
     local pulses = clamp(math.floor(tonumber(L.pulses) or 0), 0, steps)
     local substeps = clamp(math.floor(tonumber(L.substeps) or 1), 1, 8)
+    local velocity = clamp(math.floor(tonumber(L.velocity) or 127), 1, 127)
+    local length = clamp(math.floor(tonumber(L.length) or 1), 1, steps)
     local pitch = clamp(math.floor(tonumber(L.pitch) or 0), -24, 24)
     local volume = clamp(math.floor(tonumber(L.volume) or 0), -24, 6)
+    local probability = clamp(math.floor(tonumber(L.probability) or 100), 0, 100)
+    local gate = clamp(math.floor(tonumber(L.gate) or 100), 1, 100)
+    local pan = clamp(math.floor(tonumber(L.pan) or 0), -100, 100)
+    local attack = clamp(math.floor(tonumber(L.attack) or 0), 0, 2000)
+    local release = clamp(math.floor(tonumber(L.release) or 0), 0, 2000)
+    local vel_rand_level = clamp(math.floor(tonumber(L.vel_rand_level) or 2), 0, 3)
+    local vel_rand_seed = math.max(0, math.floor(tonumber(L.vel_rand_seed) or 0))
+    local vel_rand_range = euclid_vel_rand_range(vel_rand_level)
+    local pitch_rand_level = clamp(math.floor(tonumber(L.pitch_rand_level) or ((tonumber(L.pitch_human) or 0) <= 0 and 0 or ((tonumber(L.pitch_human) or 0) >= 9 and 3 or ((tonumber(L.pitch_human) or 0) >= 4 and 2 or 1)))), 0, 3)
+    local pitch_rand_seed = math.max(0, math.floor(tonumber(L.pitch_rand_seed) or 0))
+    local pitch_rand_range = euclid_pitch_rand_range(pitch_rand_level)
+    local volume_rand_level = clamp(math.floor(tonumber(L.volume_rand_level) or ((tonumber(L.volume_human) or 0) <= 0 and 0 or ((tonumber(L.volume_human) or 0) >= 9 and 3 or ((tonumber(L.volume_human) or 0) >= 4 and 2 or 1)))), 0, 3)
+    local volume_rand_seed = math.max(0, math.floor(tonumber(L.volume_rand_seed) or 0))
+    local volume_rand_range = euclid_volume_rand_range(volume_rand_level)
     local pat = euclid_pattern(steps, pulses, L.rotation)
     for step = 1, STEPS_PER_BAR do
-      seq.pattern[lane][step] = (step <= steps and pat[step] == 1) and 1 or 0
+      local is_on = (L.muted ~= true) and (step <= steps and pat[step] == 1)
+      seq.pattern[lane][step] = is_on and 1 or 0
+      local vel = velocity
+      local step_pitch = pitch
+      local step_volume = volume
+      local step_pan = pan
+      local step_probability = probability
+      if is_on then
+        local rv = euclid_rand_unit(lane, step, 1, vel_rand_seed)
+        local rp = euclid_rand_unit(lane, step, 2, pitch_rand_seed)
+        local rdb = euclid_rand_unit(lane, step, 3, volume_rand_seed)
+        local vel_offset = math.floor((rv * vel_rand_range) + ((rv >= 0) and 0.5 or -0.5))
+        vel = clamp(velocity + vel_offset, 1, 127)
+        step_pitch = clamp(pitch + math.floor((rp * pitch_rand_range) + 0.5), -24, 24)
+        step_volume = clamp(volume + math.floor((rdb * volume_rand_range) + 0.5), -24, 6)
+      else
+        step_pan = 0
+        step_probability = 0
+      end
+      seq.lane_settings[lane].step_velocity[step] = vel
+      seq.lane_settings[lane].step_gate[step] = gate
+      seq.lane_settings[lane].step_length[step] = length
+      seq.lane_settings[lane].step_pan[step] = step_pan
+      seq.lane_settings[lane].step_probability[step] = step_probability
       seq.lane_settings[lane].step_substeps[step] = substeps
-      seq.lane_settings[lane].step_pitch[step] = pitch
-      seq.lane_settings[lane].step_volume[step] = volume
+      seq.lane_settings[lane].step_pitch[step] = step_pitch
+      seq.lane_settings[lane].step_volume[step] = step_volume
+      seq.lane_settings[lane].step_attack[step] = attack
+      seq.lane_settings[lane].step_release[step] = release
     end
     seq.lane_settings[lane].cycle_steps = steps
     seq.lane_settings[lane].speed = normalize_lane_speed(L.speed)
+    seq.lane_settings[lane].direction = normalize_lane_direction(L.direction)
+    seq.lane_settings[lane].echo_enabled = L.echo_enabled == true
+    seq.lane_settings[lane].echo_count = normalize_lane_echo_count(L.echo_count)
+    seq.lane_settings[lane].echo_vel_mode = normalize_lane_echo_mode(L.echo_vel_mode)
+    seq.lane_settings[lane].echo_vel_step = normalize_lane_echo_step(L.echo_vel_step)
+    seq.lane_settings[lane].echo_rate = normalize_lane_echo_rate(L.echo_rate)
+    seq.lane_settings[lane].step_mode_mask = M.normalize_step_mode_mask(L.step_mode_mask)
+    seq.lane_settings[lane].mode = tostring(L.mode or "gate") == "oneshot" and "oneshot" or "gate"
+    seq.lane_settings[lane].retrigger = L.retrigger ~= false
   end
   return seq
 end
 
-local function euclid_pattern_snapshot(edata)
+function euclid_pattern_snapshot(edata)
   local clean = euclid_sanitize({ lanes = edata and edata.lanes or nil })
   return {
     lanes = clean.lanes,
   }
 end
 
-local function euclid_normalize_entry(item, idx)
+function euclid_normalize_entry(item, idx)
   local clean = euclid_sanitize({ lanes = type(item) == "table" and item.lanes or nil })
   return {
     name = normalize_pattern_name(type(item) == "table" and item.name or nil, idx),
@@ -3853,7 +5208,7 @@ local function euclid_normalize_entry(item, idx)
   }
 end
 
-local function euclid_normalize_library(raw)
+function euclid_normalize_library(raw)
   local out = {}
   if type(raw) ~= "table" then return out end
   for _, item in ipairs(raw) do
@@ -3864,17 +5219,17 @@ local function euclid_normalize_library(raw)
   return out
 end
 
-local function euclid_load_library()
+function euclid_load_library()
   if not r.GetExtState then return {} end
   local raw = r.GetExtState(GLOBAL_PATTERN_SECTION, EUCLID_PRESET_KEY)
-  if not raw or raw == "" then return out end
+  if not raw or raw == "" then return {} end
   local ok, dec = pcall(json.decode, raw)
-  if not ok or type(dec) ~= "table" then return out end
+  if not ok or type(dec) ~= "table" then return {} end
   local src = type(dec.presets) == "table" and dec.presets or dec
   return euclid_normalize_library(src)
 end
 
-local function euclid_save_library(patterns)
+function euclid_save_library(patterns)
   if not r.SetExtState then return false end
   local payload = { presets = euclid_normalize_library(patterns) }
   local ok, encoded = pcall(json.encode, payload)
@@ -3883,20 +5238,20 @@ local function euclid_save_library(patterns)
   return true
 end
 
-local function euclid_speed_index(speed)
+function euclid_speed_index(speed)
   local s = normalize_lane_speed(speed)
   if s == 0.5 then return 1 end
   if s == 2 then return 3 end
   return 2
 end
 
-local function euclid_ring_radius(lane, outer, inner)
+function euclid_ring_radius(lane, outer, inner)
   if GRID_SLOTS <= 1 then return outer end
   local stepr = (outer - inner) / (GRID_SLOTS - 1)
   return outer - (lane - 1) * stepr
 end
 
-local function euclid_knob(ctx, state, id, value, vmin, vmax, size, col, fmt)
+function euclid_knob(ctx, state, id, value, vmin, vmax, size, col, fmt, reset_value)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local cx, cy = x + size * 0.5, y + size * 0.5
@@ -3911,11 +5266,34 @@ local function euclid_knob(ctx, state, id, value, vmin, vmax, size, col, fmt)
   end
   if active and state.knob_drag and state.knob_drag.id == id then
     local dy = my - state.knob_drag.y0
-    local raw = state.knob_drag.v0 - dy * 0.08
+    local drag_step = 0.08
+    if id and (id:find("euclid_attack_", 1, true) or id:find("euclid_release_", 1, true)) then
+      local shift_down = false
+      if r.ImGui_IsKeyDown then
+        if r.ImGui_Key_LeftShift then
+          shift_down = shift_down or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift())
+        end
+        if r.ImGui_Key_RightShift then
+          shift_down = shift_down or r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift())
+        end
+      end
+      if shift_down then
+        drag_step = 0.8
+      end
+    end
+    local raw = state.knob_drag.v0 - dy * drag_step
     newv = clamp(math.floor(raw + 0.5), vmin, vmax)
     if newv ~= value then changed = true end
   elseif (not active) and state.knob_drag and state.knob_drag.id == id then
     state.knob_drag = nil
+  end
+  if hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    local rv = clamp(math.floor((tonumber(reset_value) or vmin) + 0.5), vmin, vmax)
+    newv = rv
+    changed = rv ~= value
+    if state.knob_drag and state.knob_drag.id == id then
+      state.knob_drag = nil
+    end
   end
   local a0 = math.pi * 0.75
   local a1 = math.pi * 2.25
@@ -3938,7 +5316,7 @@ local function euclid_knob(ctx, state, id, value, vmin, vmax, size, col, fmt)
   return changed, newv, hovered
 end
 
-local function euclid_lane_button(ctx, id, text, w, h, active)
+function euclid_lane_button(ctx, id, text, w, h, active)
   local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, w, h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local held = r.ImGui_IsItemActive(ctx)
@@ -3967,7 +5345,7 @@ local function euclid_lane_button(ctx, id, text, w, h, active)
   return clicked
 end
 
-local function draw_euclid(app)
+function draw_euclid(app)
   local ctx = app.ctx
   local state = app.sequencer
   process_preview_note_offs(state)
@@ -4014,17 +5392,13 @@ local function draw_euclid(app)
   if sel_lane_track and sel_lane_track ~= selected_lane then
     selected_lane = sel_lane_track
     edata.selected_lane = selected_lane
+    sync_manager_slot_from_lane(app, selected_lane)
   end
-  state.solo_by_guid = state.solo_by_guid or {}
-  local solo_map = state.solo_by_guid[guid] or {}
-  state.solo_by_guid[guid] = solo_map
-  local any_solo = false
-  for _, v in pairs(solo_map) do
-    if v == true then
-      any_solo = true
-      break
-    end
-  end
+  state.euclid_solo_by_guid = state.euclid_solo_by_guid or {}
+  local connect_lines = edata.connect_lines == true
+  local solo_map = state.euclid_solo_by_guid[guid] or {}
+  state.euclid_solo_by_guid[guid] = solo_map
+  local any_solo = solo_map_has_active_lane(solo_map)
   state.lane_auto_names_by_guid = state.lane_auto_names_by_guid or {}
   local lane_auto_names = state.lane_auto_names_by_guid[guid]
   if type(lane_auto_names) ~= "table" then
@@ -4056,7 +5430,7 @@ local function draw_euclid(app)
     local host_playing = (play_state & 1) == 1
     if host_playing then
       if (not state.playing) or state.current_guid ~= guid then
-        start_playback(state, guid)
+        start_playback(state, guid, nil, parent)
       end
     elseif state.playing then
       stop_playback(state, parent)
@@ -4064,12 +5438,26 @@ local function draw_euclid(app)
   end
 
   local seq = euclid_build_seq(edata)
+  state.cache = state.cache or {}
+  state.euclid_seq_cache = state.euclid_seq_cache or {}
+  state.euclid_seq_cache[guid] = seq
   if host_enabled or (state.playing and state.current_guid == guid) then
     engine_sync(state, seq, parent, solo_map, any_solo, total_steps, lane_tracks, host_enabled)
   end
 
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  local transport_h = 70
+  local transport_button_w = 32
+  local transport_slider_w = 120
+  local transport_host_w = 60
+  local transport_export_w = 60
+  local transport_gap_x = 4
+  local preset_combo_w = 100
+  local preset_w = 60
+  local preset_gap = 4
+  local transport_controls_w = (transport_button_w * 3) + transport_slider_w + transport_host_w + transport_export_w + (transport_gap_x * 5)
+  local preset_controls_w = preset_combo_w + (preset_w * 4) + (preset_gap * 4)
+  local euclid_transport_single_row = avail_w >= (transport_controls_w + preset_controls_w + 14)
+  local transport_h = euclid_transport_single_row and 44 or 70
   local main_h = math.max(160, avail_h - transport_h - 12)
   local main_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
 
@@ -4079,8 +5467,11 @@ local function draw_euclid(app)
 
     local inner_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
     local knob_size = 42
-    local knob_gap = 8
+    local knob_gap = 6
     local knob_count = 7
+    local knob_rows = 3
+    local knob_row_h = knob_size + 14
+    local knob_row_gap = 3
     local knobs_total_w = (knob_size * knob_count) + (knob_gap * (knob_count - 1))
     local frame_pad = 8
     local clear_h = 22
@@ -4089,18 +5480,23 @@ local function draw_euclid(app)
     local lane_panel_w = knobs_total_w
     local lane_cols = 8
     local lane_rows = 2
-    local lane_cell_size = math.floor((lane_panel_w - (lane_gap * (lane_cols - 1))) / lane_cols)
+    local lane_cell_size = (lane_panel_w - (lane_gap * (lane_cols - 1))) / lane_cols
     local lane_grid_content_h = (lane_cell_size * lane_rows) + (lane_gap * (lane_rows - 1))
-    local lane_panel_h = lane_grid_content_h + 20
-    local right_h = frame_pad + (knob_size + 14) + 3 + (knob_size + 14) + 8 + 1 + 8 + lane_panel_h + 8 + clear_h + frame_pad
+    local lane_panel_h = lane_grid_content_h + 34
+    local right_h = frame_pad + (knob_row_h * knob_rows) + (knob_row_gap * (knob_rows - 1)) + 8 + 1 + 8 + lane_panel_h + 8 + clear_h + frame_pad + 72
     local ring_gap = 12
     local ring_bottom_padding = 24
     local stack_gap = 8
     local stack_layout = inner_w < (right_w + ring_gap + 160)
-    local ring_h_limit = stack_layout and (main_h - right_h - stack_gap) or (main_h - ring_bottom_padding)
+    local right_bottom_safe_pad = 0
+    local right_h_draw = right_h
+    local ring_h_limit = stack_layout and (main_h - right_h - stack_gap - right_bottom_safe_pad) or (main_h - ring_bottom_padding)
     local ring_w_limit = stack_layout and (inner_w - (frame_pad * 2)) or (inner_w - right_w - ring_gap)
     local ring_fit = math.min(ring_h_limit, ring_w_limit)
-    local ring_size = stack_layout and clamp(ring_fit, 96, 2000) or math.max(160, ring_fit)
+    local ring_size = stack_layout and clamp(ring_fit, 120, 2000) or math.max(160, ring_fit)
+    if stack_layout then
+      right_h_draw = right_h
+    end
     local ring_x = stack_layout and (main_x + math.max(0, (inner_w - ring_size) * 0.5)) or main_x
     local right_x = stack_layout and (main_x + math.max(0, (inner_w - right_w) * 0.5)) or (main_x + math.max(0, inner_w - right_w))
 
@@ -4133,6 +5529,7 @@ local function draw_euclid(app)
       if best and bestd <= ring_step * 0.6 then
         selected_lane = best
         edata.selected_lane = best
+        sync_manager_slot_from_lane(app, best)
         if lane_tracks[best] then r.SetOnlyTrackSelected(lane_tracks[best]) end
         euclid_save(parent, edata)
       end
@@ -4149,6 +5546,31 @@ local function draw_euclid(app)
       local play_step = (state.playing and state.lane_play_steps) and state.lane_play_steps[lane] or nil
       if is_sel then
         r.ImGui_DrawList_AddCircle(dl, cx, cy, rr, blend_rgb(lane_col, 0xFFFFFFFF, 0.15), 64, 1.5)
+      end
+      if connect_lines then
+        local points = {}
+        for i = 1, steps do
+          if pat[i] == 1 then
+            local ang = -math.pi * 0.5 + (i - 1) / steps * math.pi * 2
+            local px = cx + math.cos(ang) * rr
+            local py = cy + math.sin(ang) * rr
+            points[#points + 1] = { px, py }
+          end
+        end
+        if #points >= 2 then
+          local line_col = is_sel and blend_rgb(lane_col, 0xFFFFFFFF, 0.35) or blend_rgb(lane_col, Theme.colors.frame_bg, 0.35)
+          local line_th = is_sel and 1.6 or 1.1
+          for p = 1, #points - 1 do
+            local a = points[p]
+            local b = points[p + 1]
+            r.ImGui_DrawList_AddLine(dl, a[1], a[2], b[1], b[2], line_col, line_th)
+          end
+          if #points >= 3 then
+            local a = points[#points]
+            local b = points[1]
+            r.ImGui_DrawList_AddLine(dl, a[1], a[2], b[1], b[2], line_col, line_th)
+          end
+        end
       end
       for i = 1, steps do
         local ang = -math.pi * 0.5 + (i - 1) / steps * math.pi * 2
@@ -4187,38 +5609,271 @@ local function draw_euclid(app)
 
     local right_y
     if stack_layout then
-      local right_top_min = main_y + ring_size + stack_gap
-      local right_bottom_safe_pad = 30
-      local right_top_bottom_aligned = main_y + math.max(0, main_h - right_h - right_bottom_safe_pad)
-      right_y = math.max(right_top_min, right_top_bottom_aligned)
+      right_y = main_y + ring_size + stack_gap
     else
       right_y = main_y
     end
 
     r.ImGui_SetCursorPosX(ctx, right_x)
     r.ImGui_SetCursorPosY(ctx, right_y)
-    if r.ImGui_BeginChild(ctx, "##tk_euclid_right", right_w, right_h, 1, main_flags) then
+    if r.ImGui_BeginChild(ctx, "##tk_euclid_right", right_w, right_h_draw, 1, main_flags) then
       local L = edata.lanes[selected_lane]
       local steps = clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)
       local pulses = clamp(math.floor(tonumber(L.pulses) or 0), 0, steps)
       local rotation = clamp(math.floor(tonumber(L.rotation) or 0), 0, math.max(0, steps - 1))
       local substeps = clamp(math.floor(tonumber(L.substeps) or 1), 1, 8)
+      local velocity = clamp(math.floor(tonumber(L.velocity) or 100), 1, 127)
+      local length = clamp(math.floor(tonumber(L.length) or 1), 1, steps)
       local pitch = clamp(math.floor(tonumber(L.pitch) or 0), -24, 24)
       local volume = clamp(math.floor(tonumber(L.volume) or 0), -24, 6)
+      local probability = clamp(math.floor(tonumber(L.probability) or 100), 0, 100)
+      local gate = clamp(math.floor(tonumber(L.gate) or 100), 1, 100)
+      local pan = clamp(math.floor(tonumber(L.pan) or 0), -100, 100)
+      local attack = clamp(math.floor(tonumber(L.attack) or 0), 0, 2000)
+      local release = clamp(math.floor(tonumber(L.release) or 0), 0, 2000)
+      local vel_rand_level = clamp(math.floor(tonumber(L.vel_rand_level) or 2), 0, 3)
+      local vel_rand_seed = math.max(0, math.floor(tonumber(L.vel_rand_seed) or euclid_default_seed()))
+      local pitch_rand_level = clamp(math.floor(tonumber(L.pitch_rand_level) or ((tonumber(L.pitch_human) or 0) <= 0 and 0 or ((tonumber(L.pitch_human) or 0) >= 9 and 3 or ((tonumber(L.pitch_human) or 0) >= 4 and 2 or 1)))), 0, 3)
+      local pitch_rand_seed = math.max(0, math.floor(tonumber(L.pitch_rand_seed) or euclid_default_seed()))
+      local volume_rand_level = clamp(math.floor(tonumber(L.volume_rand_level) or ((tonumber(L.volume_human) or 0) <= 0 and 0 or ((tonumber(L.volume_human) or 0) >= 9 and 3 or ((tonumber(L.volume_human) or 0) >= 4 and 2 or 1)))), 0, 3)
+      local volume_rand_seed = math.max(0, math.floor(tonumber(L.volume_rand_seed) or euclid_default_seed()))
+      local echo_enabled = L.echo_enabled == true
+      local echo_popup_id = "Echo settings##tk_euclid_echo_popup_" .. tostring(selected_lane)
+      local step_popup_id = "Step mode##tk_euclid_step_popup_" .. tostring(selected_lane)
+      local step_mode_mask = M.normalize_step_mode_mask(L.step_mode_mask)
+      local direction_label = lane_direction_label(L.direction)
       local lane_col = lane_color(selected_lane)
+      local lane_track_sel = lane_tracks and lane_tracks[selected_lane] or nil
+      local lane_fx_sel = lane_track_sel and find_rs5k_fx(lane_track_sel) or -1
+      local lane_has_rs5k = lane_track_sel and lane_fx_sel >= 0
       local changed_any = false
-      local function draw_one(id, label, val, vmin, vmax, disp)
+      function tk_euclid_draw_one(id, label, val, vmin, vmax, disp, reset_val, draw_col)
         r.ImGui_BeginGroup(ctx)
         local start_x = r.ImGui_GetCursorPosX(ctx)
         local start_y = r.ImGui_GetCursorPosY(ctx)
-        local ch, nv = euclid_knob(ctx, state, id, val, vmin, vmax, knob_size, lane_col, disp)
+        local ch, nv, hovered = euclid_knob(ctx, state, id, val, vmin, vmax, knob_size, draw_col or lane_col, disp, reset_val)
         local label_y = start_y + knob_size - 1
         local lw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
         r.ImGui_SetCursorPosX(ctx, start_x + math.max(0, (knob_size - lw) * 0.5))
         r.ImGui_SetCursorPosY(ctx, label_y)
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
         r.ImGui_EndGroup(ctx)
-        return ch, nv
+        return ch, nv, hovered
+      end
+      function tk_euclid_draw_toggle(id, button_text, label, active, tip)
+        r.ImGui_BeginGroup(ctx)
+        local sx = r.ImGui_GetCursorPosX(ctx)
+        local sy = r.ImGui_GetCursorPosY(ctx)
+        local btn_h = 20
+        local btn_y = sy + math.floor((knob_size - btn_h) * 0.5) - 2
+        r.ImGui_SetCursorPosX(ctx, sx)
+        r.ImGui_SetCursorPosY(ctx, btn_y)
+        local clicked = lane_toggle_button(ctx, id, button_text, knob_size, btn_h, active)
+        if tip and r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, tip)
+        end
+        local label_y = sy + knob_size - 1
+        local lw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+        r.ImGui_SetCursorPosX(ctx, sx + math.max(0, (knob_size - lw) * 0.5))
+        r.ImGui_SetCursorPosY(ctx, label_y)
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
+        r.ImGui_EndGroup(ctx)
+        return clicked
+      end
+      function tk_euclid_draw_direction(id, label, direction, tip)
+        r.ImGui_BeginGroup(ctx)
+        local sx = r.ImGui_GetCursorPosX(ctx)
+        local sy = r.ImGui_GetCursorPosY(ctx)
+        local btn_h = 20
+        local btn_y = sy + math.floor((knob_size - btn_h) * 0.5) - 2
+        r.ImGui_SetCursorPosX(ctx, sx)
+        r.ImGui_SetCursorPosY(ctx, btn_y)
+        local clicked = lane_direction_button(ctx, id, direction, knob_size, btn_h)
+        if tip and r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, tip)
+        end
+        local label_y = sy + knob_size - 1
+        local lw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+        r.ImGui_SetCursorPosX(ctx, sx + math.max(0, (knob_size - lw) * 0.5))
+        r.ImGui_SetCursorPosY(ctx, label_y)
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
+        r.ImGui_EndGroup(ctx)
+        return clicked
+      end
+      function tk_euclid_draw_rand_dice(id, label, level, seed, kind, blocked)
+        r.ImGui_BeginGroup(ctx)
+        local sx = r.ImGui_GetCursorPosX(ctx)
+        local sy = r.ImGui_GetCursorPosY(ctx)
+        r.ImGui_InvisibleButton(ctx, "##" .. id, knob_size, knob_size)
+        local hovered = r.ImGui_IsItemHovered(ctx)
+        local held = r.ImGui_IsItemActive(ctx)
+        local left_clicked = r.ImGui_IsItemClicked(ctx, 0)
+        local right_clicked = r.ImGui_IsItemClicked(ctx, 1)
+        local popup_id = "##" .. id .. "_menu"
+        if right_clicked and not blocked then
+          r.ImGui_OpenPopup(ctx, popup_id)
+        end
+
+        local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+        local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local box = math.floor(math.min(knob_size - 8, 28))
+        local bx = min_x + math.floor(((max_x - min_x) - box) * 0.5)
+        local by = min_y + math.floor(((max_y - min_y) - box) * 0.5) - 1
+        local b2x = bx + box
+        local b2y = by + box
+
+        local bg = Theme.colors.frame_bg
+        local border = Theme.colors.border
+        if level > 0 then
+          bg = blend_rgb(Theme.colors.frame_bg, Theme.colors.accent, 0.24)
+          border = blend_rgb(Theme.colors.border, Theme.colors.accent, 0.42)
+        end
+        if blocked then
+          bg = blend_rgb(Theme.colors.frame_bg, Theme.colors.border, 0.22)
+          border = blend_rgb(Theme.colors.border, Theme.colors.frame_bg, 0.25)
+        end
+        if held then
+          bg = blend_rgb(bg, Theme.colors.accent_hover, 0.28)
+        elseif hovered then
+          bg = blend_rgb(bg, Theme.colors.frame_hover, 0.45)
+        end
+
+        r.ImGui_DrawList_AddRectFilled(dl, bx, by, b2x, b2y, bg, 6)
+        r.ImGui_DrawList_AddRect(dl, bx, by, b2x, b2y, border, 6, 0, 1)
+
+        local face = ((math.abs(math.floor(tonumber(seed) or 0)) % 6) + 1)
+        local pip_col = (blocked and Theme.colors.text_dim) or (level > 0 and Theme.colors.accent or Theme.colors.text_dim)
+        local px1 = bx + box * 0.28
+        local px2 = bx + box * 0.50
+        local px3 = bx + box * 0.72
+        local py1 = by + box * 0.28
+        local py2 = by + box * 0.50
+        local py3 = by + box * 0.72
+        local pr = math.max(2, math.floor(box * 0.08))
+        local function pip(x, y)
+          r.ImGui_DrawList_AddCircleFilled(dl, x, y, pr, pip_col, 12)
+        end
+
+        if face == 1 or face == 3 or face == 5 then pip(px2, py2) end
+        if face >= 2 then pip(px1, py1); pip(px3, py3) end
+        if face >= 4 then pip(px3, py1); pip(px1, py3) end
+        if face == 6 then pip(px1, py2); pip(px3, py2) end
+
+        if blocked then
+          r.ImGui_DrawList_AddLine(dl, bx + 3, by + 3, b2x - 3, b2y - 3, blend_rgb(Theme.colors.border, 0xFFFFFFFF, 0.15), 2)
+        end
+
+        if hovered and not blocked then
+          local tip_name = (kind == "pitch" and "pitch") or (kind == "volume" and "volume") or "velocity"
+          r.ImGui_SetTooltip(ctx, "Left click: reroll " .. tip_name .. " randomization\nRight click: choose intensity or reset")
+        end
+
+        local changed_level = false
+        local new_level = level
+        local reset_clicked = false
+        if (not blocked) and r.ImGui_BeginPopup(ctx, popup_id) then
+          local light_text = "Light (+/-12)"
+          local medium_text = "Medium (+/-24)"
+          local heavy_text = "Heavy (+/-60)"
+          local reset_text = "Reset to lane Velocity"
+          if kind == "pitch" then
+            light_text = "Light (+/-2 st)"
+            medium_text = "Medium (+/-6 st)"
+            heavy_text = "Heavy (+/-12 st)"
+            reset_text = "Reset to lane Pitch"
+          elseif kind == "volume" then
+            light_text = "Light (+/-3 dB)"
+            medium_text = "Medium (+/-6 dB)"
+            heavy_text = "Heavy (+/-12 dB)"
+            reset_text = "Reset to lane Volume"
+          end
+          if r.ImGui_Selectable(ctx, "Off (no random)##" .. id, level == 0) then
+            new_level = 0
+            changed_level = true
+          end
+          if r.ImGui_Selectable(ctx, light_text .. "##" .. id, level == 1) then
+            new_level = 1
+            changed_level = true
+          end
+          if r.ImGui_Selectable(ctx, medium_text .. "##" .. id, level == 2) then
+            new_level = 2
+            changed_level = true
+          end
+          if r.ImGui_Selectable(ctx, heavy_text .. "##" .. id, level == 3) then
+            new_level = 3
+            changed_level = true
+          end
+          r.ImGui_Separator(ctx)
+          if r.ImGui_Selectable(ctx, reset_text .. "##" .. id, false) then
+            new_level = 0
+            changed_level = true
+            reset_clicked = true
+          end
+          r.ImGui_EndPopup(ctx)
+        end
+
+        local label_y = sy + knob_size - 1
+        local lw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+        r.ImGui_SetCursorPosX(ctx, sx + math.max(0, (knob_size - lw) * 0.5))
+        r.ImGui_SetCursorPosY(ctx, label_y)
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
+        r.ImGui_EndGroup(ctx)
+        return left_clicked, changed_level, new_level, reset_clicked
+      end
+
+function draw_init_button(ctx, id, label, size, tip)
+  r.ImGui_BeginGroup(ctx)
+  local sx = r.ImGui_GetCursorPosX(ctx)
+  local sy = r.ImGui_GetCursorPosY(ctx)
+  local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, size, size)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local held = r.ImGui_IsItemActive(ctx)
+  if tip and hovered then
+    r.ImGui_SetTooltip(ctx, tip)
+  end
+
+  local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+  local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local box = math.floor(math.min(size - 8, 28))
+  local bx = min_x + math.floor(((max_x - min_x) - box) * 0.5)
+  local by = min_y + math.floor(((max_y - min_y) - box) * 0.5) - 1
+  local b2x = bx + box
+  local b2y = by + box
+
+  local bg = Theme.colors.frame_bg
+  local border = Theme.colors.border
+  if held then
+    bg = blend_rgb(bg, Theme.colors.accent_hover, 0.28)
+    border = Theme.colors.accent
+  elseif hovered then
+    bg = blend_rgb(bg, Theme.colors.frame_hover, 0.45)
+  end
+
+  r.ImGui_DrawList_AddRectFilled(dl, bx, by, b2x, b2y, bg, 6)
+  r.ImGui_DrawList_AddRect(dl, bx, by, b2x, b2y, border, 6, 0, 1)
+
+  local label_y = sy + size - 1
+  local lw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+  r.ImGui_SetCursorPosX(ctx, sx + math.max(0, (size - lw) * 0.5))
+  r.ImGui_SetCursorPosY(ctx, label_y)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
+  r.ImGui_EndGroup(ctx)
+  return clicked
+end
+
+      function tk_euclid_draw_dummy(label)
+        r.ImGui_BeginGroup(ctx)
+        local sx = r.ImGui_GetCursorPosX(ctx)
+        local sy = r.ImGui_GetCursorPosY(ctx)
+        r.ImGui_Dummy(ctx, knob_size, knob_size)
+        local label_y = sy + knob_size - 1
+        local lw = select(1, r.ImGui_CalcTextSize(ctx, label)) or 0
+        r.ImGui_SetCursorPosX(ctx, sx + math.max(0, (knob_size - lw) * 0.5))
+        r.ImGui_SetCursorPosY(ctx, label_y)
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
+        r.ImGui_EndGroup(ctx)
       end
       local int_disp = function(v) return tostring(v) end
       local speed_disp = function(v) return tostring(EUCLID_SPEEDS[clamp(v, 1, 3)]) .. "x" end
@@ -4231,52 +5886,220 @@ local function draw_euclid(app)
         if v > 0 then return "+" .. tostring(v) .. "dB" end
         return tostring(v) .. "dB"
       end
+      local percent_disp = function(v) return tostring(v) .. "%" end
+      local ms_disp = function(v) return tostring(v) .. "ms" end
+      local pan_disp = function(v)
+        if v > 0 then return "R" .. tostring(v) end
+        if v < 0 then return "L" .. tostring(math.abs(v)) end
+        return "C"
+      end
       local content_x = math.floor(math.max(0, (right_w - knobs_total_w) * 0.5))
 
       r.ImGui_SetCursorPosX(ctx, content_x)
 
-      local cs, ns = draw_one("euclid_steps_" .. selected_lane, "Steps", steps, 1, STEPS_PER_BAR, int_disp)
+      local cs, ns = tk_euclid_draw_one("euclid_steps_" .. selected_lane, "Steps", steps, 1, STEPS_PER_BAR, int_disp, 16)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      local cp, np = draw_one("euclid_pulse_" .. selected_lane, "Pulse", pulses, 0, steps, int_disp)
+      local cp, np = tk_euclid_draw_one("euclid_pulse_" .. selected_lane, "Pulse", pulses, 0, steps, int_disp, 0)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      local cr, nr = draw_one("euclid_rot_" .. selected_lane, "Rotate", rotation, 0, math.max(0, steps - 1), int_disp)
+      local cr, nr = tk_euclid_draw_one("euclid_rot_" .. selected_lane, "Rotate", rotation, 0, math.max(0, steps - 1), int_disp, 0)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      local csp, nsp = draw_one("euclid_speed_" .. selected_lane, "Speed", euclid_speed_index(L.speed), 1, 3, speed_disp)
+      local csp, nsp = tk_euclid_draw_one("euclid_speed_" .. selected_lane, "Speed", euclid_speed_index(L.speed), 1, 3, speed_disp, 2)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      local csub, nsub = draw_one("euclid_substeps_" .. selected_lane, "Sub", substeps, 1, 8, sub_disp)
+      local csub, nsub = tk_euclid_draw_one("euclid_substeps_" .. selected_lane, "Sub", substeps, 1, 8, sub_disp, 1)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      local cpi, npi = draw_one("euclid_pitch_" .. selected_lane, "Pitch", pitch, -24, 24, pitch_disp)
+      local clen, nlen = tk_euclid_draw_one("euclid_length_" .. selected_lane, "Len", length, 1, steps, int_disp, 1)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      local cvol, nvol = draw_one("euclid_volume_" .. selected_lane, "Vol", volume, -24, 6, volume_disp)
+      local cprob, nprob = tk_euclid_draw_one("euclid_prob_" .. selected_lane, "Prob", probability, 0, 100, percent_disp, 100)
 
       r.ImGui_Dummy(ctx, 0, 0)
       r.ImGui_SetCursorPosX(ctx, content_x)
-      draw_one("euclid_dummy_1_" .. selected_lane, "D1", 0, 0, 100, int_disp)
+      local cvel, nvel = tk_euclid_draw_one("euclid_velocity_" .. selected_lane, "Vel", velocity, 1, 127, int_disp, 100)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      draw_one("euclid_dummy_2_" .. selected_lane, "D2", 0, 0, 100, int_disp)
+      if not lane_has_rs5k and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
+      local cpi, npi = tk_euclid_draw_one("euclid_pitch_" .. selected_lane, "Pitch", pitch, -24, 24, pitch_disp, 0, lane_has_rs5k and lane_col or Theme.colors.border)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      draw_one("euclid_dummy_3_" .. selected_lane, "D3", 0, 0, 100, int_disp)
+      local cvol, nvol = tk_euclid_draw_one("euclid_volume_" .. selected_lane, "Vol", volume, -24, 6, volume_disp, 0, lane_has_rs5k and lane_col or Theme.colors.border)
+      if not lane_has_rs5k and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      draw_one("euclid_dummy_4_" .. selected_lane, "D4", 0, 0, 100, int_disp)
+      local cgate, ngate, hgate = tk_euclid_draw_one("euclid_gate_" .. selected_lane, "Gate", gate, 1, 100, percent_disp, 100)
+      if hgate then
+        local gate_value = cgate and ngate or gate
+        local gate_tip = "Gate: " .. tostring(gate_value) .. "%\nControls note length in Gate mode."
+        local gate_track = lane_tracks[selected_lane]
+        local gate_fx = gate_track and find_rs5k_fx(gate_track) or -1
+        if gate_fx >= 0 then
+          if rs5k_obeys_note_off(gate_track, gate_fx) then
+            gate_tip = gate_tip .. "\nRS5K Note-off is enabled, so Gate can shorten notes."
+          else
+            gate_tip = gate_tip .. "\nRS5K Note-off is disabled, so Gate will not shorten notes."
+          end
+        end
+        r.ImGui_SetTooltip(ctx, gate_tip)
+      end
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      draw_one("euclid_dummy_5_" .. selected_lane, "D5", 0, 0, 100, int_disp)
+      if not lane_has_rs5k and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
+      local cpan, npan = tk_euclid_draw_one("euclid_pan_" .. selected_lane, "Pan", pan, -100, 100, pan_disp, 0, lane_has_rs5k and lane_col or Theme.colors.border)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      draw_one("euclid_dummy_6_" .. selected_lane, "D6", 0, 0, 100, int_disp)
+      local cattack, nattack, hattack = tk_euclid_draw_one("euclid_attack_" .. selected_lane, "Attack", attack, 0, 2000, ms_disp, 0, lane_has_rs5k and lane_col or Theme.colors.border)
       r.ImGui_SameLine(ctx, 0, knob_gap)
-      draw_one("euclid_dummy_7_" .. selected_lane, "D7", 0, 0, 100, int_disp)
+      local crelease, nrelease, hrelease = tk_euclid_draw_one("euclid_release_" .. selected_lane, "Release", release, 0, 2000, ms_disp, 0, lane_has_rs5k and lane_col or Theme.colors.border)
+      if not lane_has_rs5k and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+
+      r.ImGui_Dummy(ctx, 0, 0)
+      r.ImGui_SetCursorPosX(ctx, content_x)
+      local cvel_dice, cvel_dice_level, n_vel_dice_level, cvel_dice_reset = tk_euclid_draw_rand_dice(
+        "tk_euclid_vel_dice_" .. tostring(selected_lane),
+        "VelRnd",
+        vel_rand_level,
+        vel_rand_seed,
+        "velocity"
+      )
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      if not lane_has_rs5k and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
+      local cpit_dice, cpit_dice_level, n_pit_dice_level, cpit_dice_reset = tk_euclid_draw_rand_dice(
+        "tk_euclid_pitch_dice_" .. tostring(selected_lane),
+        "PitRnd",
+        pitch_rand_level,
+        pitch_rand_seed,
+        "pitch",
+        not lane_has_rs5k
+      )
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cvol_dice, cvol_dice_level, n_vol_dice_level, cvol_dice_reset = tk_euclid_draw_rand_dice(
+        "tk_euclid_vol_dice_" .. tostring(selected_lane),
+        "VolRnd",
+        volume_rand_level,
+        volume_rand_seed,
+        "volume",
+        not lane_has_rs5k
+      )
+      if not lane_has_rs5k and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cdirection = tk_euclid_draw_direction(
+        "tk_euclid_direction_" .. tostring(selected_lane),
+        "",
+        L.direction,
+        "Direction: " .. direction_label .. "\nClick to cycle FW -> BW -> PND"
+      )
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cstep = tk_euclid_draw_toggle(
+        "tk_euclid_step_inline_" .. tostring(selected_lane),
+        "Step",
+        "",
+        step_mode_mask ~= "xxxx",
+        "Open Step Mode instellingen (" .. step_mode_mask .. ")"
+      )
+      if cstep then
+        r.ImGui_OpenPopup(ctx, step_popup_id)
+      end
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cecho = tk_euclid_draw_toggle(
+        "tk_euclid_echo_inline_" .. tostring(selected_lane),
+        "Echo",
+        "",
+        echo_enabled,
+        "Open echo instellingen"
+      )
+      if cecho then
+        r.ImGui_OpenPopup(ctx, echo_popup_id)
+      end
+      r.ImGui_SameLine(ctx, 0, knob_gap)
+      local cinit = tk_euclid_draw_toggle(
+        "tk_euclid_init_" .. tostring(selected_lane),
+        "Init",
+        "",
+        false,
+        "Reset lane parameter knobs to defaults"
+      )
+      if cinit then
+        euclid_init_lane_params(L)
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      if hattack then
+        r.ImGui_SetTooltip(ctx, "Shift + drag: faster adjustment")
+      elseif hrelease then
+        r.ImGui_SetTooltip(ctx, "Shift + drag: faster adjustment")
+      end
 
       if cs then
         L.steps = ns
         L.pulses = clamp(math.floor(tonumber(L.pulses) or 0), 0, ns)
         L.rotation = clamp(math.floor(tonumber(L.rotation) or 0), 0, math.max(0, ns - 1))
+        L.length = clamp(math.floor(tonumber(L.length) or 1), 1, ns)
         changed_any = true
       end
       if cp then L.pulses = clamp(np, 0, clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)); changed_any = true end
       if cr then L.rotation = clamp(nr, 0, math.max(0, clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR) - 1)); changed_any = true end
       if csp then L.speed = EUCLID_SPEEDS[clamp(nsp, 1, 3)]; changed_any = true end
       if csub then L.substeps = clamp(nsub, 1, 8); changed_any = true end
-      if cpi then L.pitch = clamp(npi, -24, 24); changed_any = true end
-      if cvol then L.volume = clamp(nvol, -24, 6); changed_any = true end
+      if cvel then L.velocity = clamp(nvel, 1, 127); changed_any = true end
+      if clen then L.length = clamp(nlen, 1, clamp(math.floor(tonumber(L.steps) or 16), 1, STEPS_PER_BAR)); changed_any = true end
+      if lane_has_rs5k and cpi then L.pitch = clamp(npi, -24, 24); changed_any = true end
+      if lane_has_rs5k and cvol then L.volume = clamp(nvol, -24, 6); changed_any = true end
+      if cprob then L.probability = clamp(nprob, 0, 100); changed_any = true end
+      if cgate then L.gate = clamp(ngate, 1, 100); changed_any = true end
+      if lane_has_rs5k and cpan then L.pan = clamp(npan, -100, 100); changed_any = true end
+      if lane_has_rs5k and cattack then L.attack = clamp(nattack, 0, 2000); changed_any = true end
+      if lane_has_rs5k and crelease then L.release = clamp(nrelease, 0, 2000); changed_any = true end
+      if cvel_dice then
+        local t = (r.time_precise and r.time_precise()) or os.clock()
+        L.vel_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
+        changed_any = true
+      end
+      if cvel_dice_level then
+        L.vel_rand_level = clamp(math.floor(tonumber(n_vel_dice_level) or vel_rand_level), 0, 3)
+        if L.vel_rand_level > 0 and (tonumber(L.vel_rand_seed) or 0) <= 0 then
+          local t = (r.time_precise and r.time_precise()) or os.clock()
+          L.vel_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
+        end
+        changed_any = true
+      end
+      if cvel_dice_reset then
+        L.vel_rand_seed = 0
+        changed_any = true
+      end
+      if lane_has_rs5k and cpit_dice then
+        local t = (r.time_precise and r.time_precise()) or os.clock()
+        L.pitch_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
+        changed_any = true
+      end
+      if lane_has_rs5k and cpit_dice_level then
+        L.pitch_rand_level = clamp(math.floor(tonumber(n_pit_dice_level) or pitch_rand_level), 0, 3)
+        if L.pitch_rand_level > 0 and (tonumber(L.pitch_rand_seed) or 0) <= 0 then
+          local t = (r.time_precise and r.time_precise()) or os.clock()
+          L.pitch_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
+        end
+        changed_any = true
+      end
+      if lane_has_rs5k and cpit_dice_reset then
+        L.pitch_rand_seed = 0
+        changed_any = true
+      end
+      if lane_has_rs5k and cvol_dice then
+        local t = (r.time_precise and r.time_precise()) or os.clock()
+        L.volume_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
+        changed_any = true
+      end
+      if lane_has_rs5k and cvol_dice_level then
+        L.volume_rand_level = clamp(math.floor(tonumber(n_vol_dice_level) or volume_rand_level), 0, 3)
+        if L.volume_rand_level > 0 and (tonumber(L.volume_rand_seed) or 0) <= 0 then
+          local t = (r.time_precise and r.time_precise()) or os.clock()
+          L.volume_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
+        end
+        changed_any = true
+      end
+      if lane_has_rs5k and cvol_dice_reset then
+        L.volume_rand_seed = 0
+        changed_any = true
+      end
+      if cdirection then
+        L.direction = next_lane_direction(L.direction)
+        changed_any = true
+      end
 
       if changed_any then
         euclid_save(parent, edata)
@@ -4285,17 +6108,248 @@ local function draw_euclid(app)
         end
       end
 
-      r.ImGui_Spacing(ctx)
-      r.ImGui_Separator(ctx)
-      r.ImGui_Spacing(ctx)
+      local divider_pad = 2
+      local bottom_gap = 6
+      local top_button_w = math.max(36, math.floor((lane_panel_w - (bottom_gap * 3)) / 4))
+      local bottom_button_w = math.max(36, math.floor((lane_panel_w - (bottom_gap * 3)) / 4))
+      local top_row_x = 8
+      r.ImGui_Dummy(ctx, 0, divider_pad + 1)
+      if r.ImGui_BeginPopupModal(ctx, echo_popup_id, true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        local popup_echo_enabled = L.echo_enabled == true
+        local popup_echo_count = normalize_lane_echo_count(L.echo_count)
+        local popup_echo_mode = normalize_lane_echo_mode(L.echo_vel_mode)
+        local popup_echo_rate = normalize_lane_echo_rate(L.echo_rate)
+        local popup_echo_step = normalize_lane_echo_step(L.echo_vel_step)
+        local popup_changed = false
+
+        if lane_toggle_button(ctx, "tk_euclid_echo_popup_enabled", "Echo", 92, 22, popup_echo_enabled) then
+          L.echo_enabled = not popup_echo_enabled
+          popup_changed = true
+        end
+
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_SetNextItemWidth(ctx, 120)
+        if r.ImGui_BeginCombo(ctx, "##tk_euclid_echo_popup_count", "x" .. tostring(popup_echo_count)) then
+          for n = 1, ECHO_MAX_COUNT do
+            if r.ImGui_Selectable(ctx, "x" .. tostring(n) .. "##tk_euclid_echo_popup_count_" .. tostring(n), popup_echo_count == n) then
+              L.echo_count = n
+              popup_changed = true
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+
+        r.ImGui_SetNextItemWidth(ctx, 120)
+        if r.ImGui_BeginCombo(ctx, "##tk_euclid_echo_popup_mode", lane_echo_mode_label(popup_echo_mode)) then
+          for i = 1, #ECHO_MODE_ITEMS do
+            local item = ECHO_MODE_ITEMS[i]
+            if r.ImGui_Selectable(ctx, item.label .. "##tk_euclid_echo_popup_mode_" .. tostring(i), popup_echo_mode == item.value) then
+              L.echo_vel_mode = item.value
+              popup_changed = true
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+
+        r.ImGui_SetNextItemWidth(ctx, 120)
+        if r.ImGui_BeginCombo(ctx, "##tk_euclid_echo_popup_rate", lane_echo_rate_label(popup_echo_rate)) then
+          for i = 1, #ECHO_RATE_ITEMS do
+            local item = ECHO_RATE_ITEMS[i]
+            if r.ImGui_Selectable(ctx, item .. "##tk_euclid_echo_popup_rate_" .. tostring(i), popup_echo_rate == item) then
+              L.echo_rate = item
+              popup_changed = true
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+
+        r.ImGui_SetNextItemWidth(ctx, 120)
+        if r.ImGui_BeginCombo(ctx, "##tk_euclid_echo_popup_step", tostring(popup_echo_step)) then
+          for i = 1, #ECHO_STEP_ITEMS do
+            local item = ECHO_STEP_ITEMS[i]
+            if r.ImGui_Selectable(ctx, tostring(item) .. "##tk_euclid_echo_popup_step_" .. tostring(i), popup_echo_step == item) then
+              L.echo_vel_step = item
+              popup_changed = true
+            end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+
+        if popup_changed then
+          euclid_save(parent, edata)
+          if state.playing and state.current_guid == guid then
+            restart_playback_synced(state, guid)
+          end
+        end
+
+        r.ImGui_Dummy(ctx, 0, 6)
+        if r.ImGui_Button(ctx, "Close##tk_euclid_echo_popup_close", 92, 0) then
+          r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+      end
+      if r.ImGui_BeginPopupModal(ctx, step_popup_id, true, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        local popup_step_mask = M.normalize_step_mode_mask(L.step_mode_mask)
+        local popup_step_changed = false
+
+        r.ImGui_Text(ctx, "Step mask per loop")
+        r.ImGui_Dummy(ctx, 0, 4)
+        for i = 1, 10 do
+          local mask = ({ "xxxx", "x...", ".x..", "..x.", "...x", ".x.x", "x.x.", "x..x", "xx..", "..xx" })[i]
+          if r.ImGui_Selectable(ctx, mask .. "##tk_euclid_step_mask_" .. tostring(i), popup_step_mask == mask) then
+            L.step_mode_mask = mask
+            popup_step_changed = true
+          end
+          if popup_step_mask == mask then
+            r.ImGui_SetItemDefaultFocus(ctx)
+          end
+        end
+
+        if popup_step_changed then
+          euclid_save(parent, edata)
+          if state.playing and state.current_guid == guid then
+            restart_playback_synced(state, guid)
+          end
+        end
+
+        r.ImGui_Dummy(ctx, 0, 6)
+        if r.ImGui_Button(ctx, "Close##tk_euclid_step_popup_close", 92, 0) then
+          r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+      end
+      r.ImGui_SetCursorPosX(ctx, top_row_x)
+      local _, btn_min_y = r.ImGui_GetItemRectMin(ctx)
+      local _, btn_max_y = r.ImGui_GetItemRectMax(ctx)
+      if lane_toggle_button(ctx, "tk_euclid_lines", "Lines", top_button_w, clear_h, connect_lines) then
+        edata.connect_lines = not connect_lines
+        connect_lines = edata.connect_lines == true
+        euclid_save(parent, edata)
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Toggle lane verbinding-lijnen")
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+      r.ImGui_SameLine(ctx, 0, bottom_gap)
+      if transport_text_button(ctx, "tk_euclid_clear_lane", "Clear", top_button_w, clear_h) then
+        edata.lanes[selected_lane] = euclid_empty_lane()
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Clear selected lane")
+      end
+      r.ImGui_SameLine(ctx, 0, bottom_gap)
+      if transport_text_button(ctx, "tk_euclid_clear_all", "Clear All", top_button_w, clear_h) then
+        for lane = 1, GRID_SLOTS do
+          edata.lanes[lane] = euclid_empty_lane()
+        end
+        edata.selected_preset = 0
+        selected_pattern_index = 0
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Clear all lanes")
+      end
+      r.ImGui_SameLine(ctx, 0, bottom_gap)
+      if transport_text_button(ctx, "tk_euclid_open_rs5k", "RS5K", top_button_w, clear_h) then
+        local lane_track = lane_tracks and lane_tracks[selected_lane] or nil
+        local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+        if lane_track and lane_fx >= 0 and r.TrackFX_Show then
+          r.TrackFX_Show(lane_track, lane_fx, 3)
+        end
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Open RS5K for selected lane")
+      end
+
+      r.ImGui_SetCursorPosY(ctx, (select(2, r.ImGui_GetItemRectMax(ctx)) - select(2, r.ImGui_GetWindowPos(ctx))) + 2)
       r.ImGui_SetCursorPosX(ctx, content_x)
-      if r.ImGui_BeginChild(ctx, "##tk_euclid_lanegrid", lane_panel_w, lane_panel_h, 0, main_flags) then
+      local oneshot_enabled = tostring(L.mode or "gate") == "oneshot"
+      if lane_toggle_button(ctx, "tk_euclid_lane_oneshot", "OneShot", bottom_button_w, clear_h, oneshot_enabled) then
+        L.mode = oneshot_enabled and "gate" or "oneshot"
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+      r.ImGui_SameLine(ctx, 0, bottom_gap)
+      local retrig_enabled = L.retrigger ~= false
+      if lane_toggle_button(ctx, "tk_euclid_lane_retrig", "Retrig", bottom_button_w, clear_h, retrig_enabled) then
+        L.retrigger = not retrig_enabled
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+      r.ImGui_SameLine(ctx, 0, bottom_gap)
+      local noteoff_track = lane_tracks and lane_tracks[selected_lane] or nil
+      local noteoff_fx = noteoff_track and find_rs5k_fx(noteoff_track) or -1
+      local noteoff_enabled = noteoff_track and noteoff_fx >= 0 and rs5k_obeys_note_off(noteoff_track, noteoff_fx) or false
+      if lane_toggle_button(ctx, "tk_euclid_lane_noteoff", "NoteOff", bottom_button_w, clear_h, noteoff_enabled) and noteoff_track and noteoff_fx >= 0 then
+        set_rs5k_obey_note_off(noteoff_track, noteoff_fx, not noteoff_enabled)
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+      r.ImGui_SameLine(ctx, 0, bottom_gap)
+      local lane_muted = L.muted == true
+      if lane_toggle_button(ctx, "tk_euclid_lane_mute", "Mute", bottom_button_w, clear_h, lane_muted) then
+        L.muted = not lane_muted
+        euclid_save(parent, edata)
+        if state.playing then
+          stop_notes(state)
+          restart_playback_synced(state, guid)
+        end
+      end
+      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
+      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
+
+      do
+        local dl_div = r.ImGui_GetWindowDrawList(ctx)
+        local win_x = select(1, r.ImGui_GetWindowPos(ctx))
+        local top_line_y = btn_min_y - divider_pad
+        local bottom_line_y = btn_max_y + divider_pad + 8
+        r.ImGui_DrawList_AddLine(dl_div, win_x + 1, top_line_y, win_x + right_w - 1, top_line_y, Theme.colors.border, 1)
+        r.ImGui_DrawList_AddLine(dl_div, win_x + 1, bottom_line_y, win_x + right_w - 1, bottom_line_y, Theme.colors.border, 1)
+      end
+
+      r.ImGui_Dummy(ctx, 0, divider_pad + 1)
+
+      local lane_panel_h_draw = lane_panel_h
+      r.ImGui_SetCursorPosX(ctx, content_x)
+      if r.ImGui_BeginChild(ctx, "##tk_euclid_lanegrid", lane_panel_w, lane_panel_h_draw, 0, main_flags) then
         local cols = lane_cols
         local rows = lane_rows
         local gap = lane_gap
         local cell_size = lane_cell_size
         for lane = 1, GRID_SLOTS do
           local is_sel = lane == selected_lane
+          local is_solo = solo_map[lane] == true
           if is_sel then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent_hover)
@@ -4308,39 +6362,33 @@ local function draw_euclid(app)
           if r.ImGui_Button(ctx, string.format("%02d##tk_euclid_lane_grid_%d", lane, lane), cell_size, cell_size) then
             selected_lane = lane
             edata.selected_lane = lane
+            sync_manager_slot_from_lane(app, lane)
             if lane_tracks[lane] then r.SetOnlyTrackSelected(lane_tracks[lane]) end
             euclid_save(parent, edata)
           end
+          if is_solo then
+            local btn_min_x, btn_min_y = r.ImGui_GetItemRectMin(ctx)
+            local btn_max_x = select(1, r.ImGui_GetItemRectMax(ctx))
+            local btn_dl = r.ImGui_GetWindowDrawList(ctx)
+            r.ImGui_DrawList_AddCircleFilled(btn_dl, btn_max_x - 6, btn_min_y + 6, 4, Theme.colors.danger, 16)
+          end
+          if r.ImGui_IsItemClicked(ctx, 1) then
+            if toggle_lane_solo(solo_map, lane) then
+              stop_notes(state)
+            end
+            any_solo = solo_map_has_active_lane(solo_map)
+          end
           if r.ImGui_IsItemHovered(ctx) then
             local lane_name = tostring(lane_auto_names[lane] or Naming.note_name(BASE_NOTE + lane - 1))
-            r.ImGui_SetTooltip(ctx, lane_name)
+            r.ImGui_SetTooltip(ctx, lane_name .. "\nLeft click: select lane | Right click: toggle solo on/off")
           end
           r.ImGui_PopStyleColor(ctx, 3)
           if (lane % cols) ~= 0 then
             r.ImGui_SameLine(ctx, 0, gap)
           end
         end
-        r.ImGui_Dummy(ctx, 0, math.max(0, lane_panel_h - (rows * cell_size) - ((rows - 1) * gap)))
+        r.ImGui_Dummy(ctx, 0, math.max(0, lane_panel_h_draw - (rows * cell_size) - ((rows - 1) * gap) - 8))
         r.ImGui_EndChild(ctx)
-      end
-
-      local clear_w = 56
-      r.ImGui_Dummy(ctx, 0, 8)
-      local clear_x = content_x + math.max(0, knobs_total_w - clear_w)
-      r.ImGui_SetCursorPosX(ctx, clear_x)
-      if transport_text_button(ctx, "tk_euclid_clear", "Clear", clear_w, clear_h) then
-        local blank = euclid_new()
-        edata.lanes = blank.lanes
-        edata.selected_preset = 0
-        selected_pattern_index = 0
-        euclid_save(parent, edata)
-        if state.playing then
-          stop_notes(state)
-          restart_playback_synced(state, guid)
-        end
-      end
-      if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Alle lanes leegmaken")
       end
 
       r.ImGui_EndChild(ctx)
@@ -4357,30 +6405,37 @@ local function draw_euclid(app)
   local tflags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   if r.ImGui_BeginChild(ctx, "##tk_euclid_transport", 0, transport_h, 1, tflags) then
     local button_h = 24
-    local button_w = 32
-    local host_w = 60
-    local export_w = 60
+    local button_w = transport_button_w
+    local host_w = transport_host_w
+    local export_w = transport_export_w
     local bar_gap = transport_gap
     local row_gap_y = 4
     local row_start_x = r.ImGui_GetCursorPosX(ctx)
     local child_start_y = r.ImGui_GetCursorPosY(ctx)
+    local child_inner_w = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local child_inner_h = select(2, r.ImGui_GetContentRegionAvail(ctx)) or transport_h
     local preset_pad_y = 2
-    local row2_h = button_h + (preset_pad_y * 2)
-    local transport_content_h = button_h + row_gap_y + row2_h
-    local transport_center_nudge_y = -12
-    local y = child_start_y + math.floor(math.max(0, transport_h - transport_content_h) * 0.5) + transport_center_nudge_y
-    local pattern_y = y + button_h + row_gap_y
-    local preset_gap = 4
-    local transport_gap_x = preset_gap
-    local preset_w = 60
+    local transport_content_h = euclid_transport_single_row and button_h or (button_h + row_gap_y + button_h + (preset_pad_y * 2))
+    local y = child_start_y + math.floor(math.max(0, child_inner_h - transport_content_h) * 0.5) - 5
+    local pattern_y = euclid_transport_single_row and y or (y + button_h + row_gap_y)
+    local divider_gap = 14
+    local single_row_total_w = transport_controls_w + divider_gap + preset_controls_w
+    local transport_x = row_start_x
     local preset_x = row_start_x
-    local preset_combo_w = 100
-    local transport_reserved = (button_w * 2) + host_w + export_w + (transport_gap_x * 4)
-    local slider_w = 120
+    if euclid_transport_single_row then
+      local block_x = row_start_x + math.floor(math.max(0, child_inner_w - single_row_total_w) * 0.5)
+      transport_x = block_x
+      preset_x = block_x + transport_controls_w + divider_gap
+    else
+      transport_x = row_start_x + math.floor(math.max(0, child_inner_w - transport_controls_w) * 0.5)
+      preset_x = row_start_x + math.floor(math.max(0, child_inner_w - preset_controls_w) * 0.5)
+    end
+    local slider_w = transport_slider_w
 
+    r.ImGui_SetCursorPosX(ctx, transport_x)
     r.ImGui_SetCursorPosY(ctx, y)
     if transport_icon_button(ctx, "tk_euclid_play", "play", button_w, button_h, state.playing) then
-      if not host_enabled and not state.playing then start_playback(state, guid) end
+      if not host_enabled and not state.playing then start_playback(state, guid, nil, parent) end
     end
     if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, host_enabled and "Host transport active" or "Play")
@@ -4442,12 +6497,14 @@ local function draw_euclid(app)
       r.ImGui_SetTooltip(ctx, "Playback follows host transport")
     end
 
-    local function run_export()
+    function tk_euclid_run_export(repeat_override)
       local seq_export = euclid_build_seq(edata)
+      local repeat_count = tonumber(repeat_override) or sequence_export_repeat_count(seq_export)
       r.Undo_BeginBlock()
       r.PreventUIRefresh(1)
       local ok = select(1, export_sequence_to_midi(parent, seq_export, {
         song_mode = false,
+        section_repeat_count = repeat_count,
         state = state,
         guid = guid,
       }))
@@ -4463,10 +6520,22 @@ local function draw_euclid(app)
     r.ImGui_SameLine(ctx, 0, transport_gap_x)
     r.ImGui_SetCursorPosY(ctx, y)
     if transport_text_button(ctx, "tk_euclid_export", "Export", export_w, button_h) then
-      run_export()
+      tk_euclid_run_export()
+    end
+    if r.ImGui_IsItemClicked(ctx, 1) then
+      tk_euclid_run_export(4)
     end
     if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Export pattern to lane tracks")
+      r.ImGui_SetTooltip(ctx, "Left click: export 1 pattern | Right click: export 4 patterns (Step Mode cycle)")
+    end
+
+    if euclid_transport_single_row then
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      local win_x, win_y = r.ImGui_GetWindowPos(ctx)
+      local divider_x = transport_x + transport_controls_w + math.floor(divider_gap * 0.5)
+      local divider_y1 = y - 3
+      local divider_y2 = y + button_h + 3
+      r.ImGui_DrawList_AddLine(dl, win_x + divider_x, win_y + divider_y1, win_x + divider_x, win_y + divider_y2, Theme.colors.border, 1)
     end
 
     local preset_label = selected_pattern_index > 0 and normalize_pattern_name(patterns[selected_pattern_index] and patterns[selected_pattern_index].name, selected_pattern_index) or "No preset"

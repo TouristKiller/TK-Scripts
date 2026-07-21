@@ -18,6 +18,9 @@ local IMAGE_EXT = {
   gif = true,
 }
 
+local MAX_COVER_DIMENSION = 4096
+local MAX_COVER_PIXELS = 16777216
+
 local RS5K_BASE_NOTE = 36
 local RS5K_MAX_SLOTS = 127 - RS5K_BASE_NOTE + 1
 local KIT_RACK_SLOTS = 16
@@ -34,6 +37,42 @@ end
 local function is_image_file(path)
   local ext = tostring(path or ""):match("%.([%w]+)$")
   return ext ~= nil and IMAGE_EXT[ext:lower()] == true
+end
+
+local function validate_cover_image(state, path)
+  if not is_image_file(path) then
+    return false, "Selected file is not a supported image."
+  end
+  if not r.ImGui_CreateImage then
+    return false, "Image loading API is not available."
+  end
+
+  local ok_create, tex = pcall(r.ImGui_CreateImage, path)
+  if not ok_create or not tex then
+    return false, "Image could not be decoded."
+  end
+
+  if r.ImGui_Image_GetSize then
+    local ok_size, w, h = pcall(r.ImGui_Image_GetSize, tex)
+    if not ok_size then
+      return false, "Image metadata could not be read."
+    end
+    w = as_number(w) or 0
+    h = as_number(h) or 0
+    if w <= 0 or h <= 0 then
+      return false, "Image has invalid dimensions."
+    end
+    if w > MAX_COVER_DIMENSION or h > MAX_COVER_DIMENSION then
+      return false, "Image is too large (max 4096 px per side)."
+    end
+    if (w * h) > MAX_COVER_PIXELS then
+      return false, "Image is too large (max 16 megapixels)."
+    end
+  end
+
+  state.cover_cache = state.cover_cache or {}
+  state.cover_cache[path] = tex
+  return true, nil
 end
 
 local function file_leaf(path)
@@ -1040,6 +1079,54 @@ local function add_collection_as_pool(app)
   app.view = "builder"
 end
 
+local function add_folder_as_pool(app, folder_path, alias)
+  local folder = Scanner.normalize(folder_path or "")
+  if folder == "" then return false end
+
+  ensure_builder_state(app)
+
+  local id = "pool_" .. tostring(app.builder.next_pool_n)
+  app.builder.next_pool_n = app.builder.next_pool_n + 1
+
+  app.pools[id] = {
+    id = id,
+    alias = alias and alias ~= "" and alias or (file_leaf(folder) ~= "" and file_leaf(folder) or folder),
+    folders = { folder },
+    recursive = false,
+    files = {},
+    mode = "repeat",
+    _bag = {},
+  }
+  app.builder.pool_order[#app.builder.pool_order + 1] = id
+  Scanner.scan_pool(app.pools[id])
+  app.view = "builder"
+  return true
+end
+
+local function add_folder_to_existing_pool(app, pool_id, folder_path)
+  local folder = Scanner.normalize(folder_path or "")
+  if folder == "" then return false, "Folder path is empty." end
+
+  ensure_builder_state(app)
+  local pool = app.pools[pool_id]
+  if not pool then return false, "Pool not found." end
+
+  for _, existing in ipairs(pool.folders or {}) do
+    if Scanner.normalize(existing):lower() == folder:lower() then
+      return false, "Folder is al gekoppeld aan deze pool."
+    end
+  end
+
+  pool.folders = pool.folders or {}
+  pool.folders[#pool.folders + 1] = folder
+  pool.files = {}
+  pool._bag = {}
+  pool._views = nil
+  Scanner.scan_pool(pool)
+  app.view = "builder"
+  return true
+end
+
 local function use_collection_as_explosion_source(app)
   local col = selected_collection(app)
   if not col then return end
@@ -1049,6 +1136,17 @@ local function use_collection_as_explosion_source(app)
   app.explosion.found_files = nil
   app.explosion.result = nil
   app.view = "explosion"
+end
+
+local function use_folder_as_explosion_source(app, folder_path, recursive)
+  local folder = Scanner.normalize(folder_path or "")
+  if folder == "" then return false end
+  app.explosion.source_folder = folder
+  app.explosion.recursive = recursive ~= false
+  app.explosion.found_files = nil
+  app.explosion.result = nil
+  app.view = "explosion"
+  return true
 end
 
 local function collection_index_by_id(collections, id)
@@ -1142,16 +1240,16 @@ local function draw_collection_context_menu(app, col)
     if r.ImGui_MenuItem(ctx, "Set Cover##" .. col.id) then
       local image = Dialogs.browse_file("Select collection cover", col.cover_path or col.path, "")
       if image then
-        if is_image_file(image) then
+        local ok_cover, err = validate_cover_image(state, image)
+        if ok_cover then
           if col.cover_path and state.cover_cache[col.cover_path] then
             state.cover_cache[col.cover_path] = nil
           end
           col.cover_path = image
-          state.cover_cache[image] = nil
           state.preview_error = nil
           save(app)
         else
-          state.preview_error = "Selected file is not a supported image."
+          state.preview_error = err or "Selected file is not a supported image."
         end
       end
     end
@@ -1370,13 +1468,69 @@ local function draw_samples_list(app)
       elseif can_force and force_action == "collapse" then
         r.ImGui_SetNextItemOpen(ctx, false, r.ImGui_Cond_Always())
       end
-      if r.ImGui_CollapsingHeader(ctx, label) then
+      local folder_open = r.ImGui_CollapsingHeader(ctx, label)
+      if folder_open then
         for _, f in ipairs(group.files) do
           draw_sample_row(app, f)
         end
       end
       if r.ImGui_IsItemHovered(ctx) and group.dir ~= "(Root)" then
         r.ImGui_SetTooltip(ctx, group.dir)
+      end
+      if r.ImGui_BeginPopupContextItem(ctx, "##folder_group_ctx_" .. tostring(i)) then
+        local folder_path
+        if group.dir == "(Root)" then
+          folder_path = base
+        elseif base ~= "" then
+          folder_path = base .. "/" .. group.dir
+        else
+          folder_path = group.dir
+        end
+        folder_path = Scanner.normalize(folder_path)
+        local folder_alias = group.dir == "(Root)" and (col.name or file_leaf(folder_path)) or file_leaf(folder_path)
+
+        if r.ImGui_MenuItem(ctx, "Use for Explosion##folder_explosion_" .. tostring(i)) then
+          local ok = use_folder_as_explosion_source(app, folder_path, true)
+          if not ok then
+            state.preview_error = "Kon folder niet als Explosion bron instellen."
+          end
+        end
+
+        r.ImGui_Separator(ctx)
+
+        if r.ImGui_MenuItem(ctx, "Add as Builder Pool##folder_pool_new_" .. tostring(i)) then
+          local ok = add_folder_as_pool(app, folder_path, folder_alias)
+          if ok then
+            state.preview_error = "Folder toegevoegd als nieuwe Builder pool: " .. tostring(folder_alias)
+          else
+            state.preview_error = "Kon folder niet als pool toevoegen."
+          end
+        end
+
+        if r.ImGui_BeginMenu(ctx, "Add to Existing Builder Pool##folder_pool_existing_" .. tostring(i)) then
+          if not app.builder or not app.builder.pool_order or #app.builder.pool_order == 0 then
+            r.ImGui_BeginDisabled(ctx, true)
+            r.ImGui_MenuItem(ctx, "No pools yet")
+            r.ImGui_EndDisabled(ctx)
+          else
+            for _, pool_id in ipairs(app.builder.pool_order) do
+              local pool = app.pools and app.pools[pool_id] or nil
+              if pool then
+                if r.ImGui_MenuItem(ctx, (pool.alias or pool_id) .. "##folder_pool_target_" .. tostring(i) .. "_" .. pool_id) then
+                  local ok, err = add_folder_to_existing_pool(app, pool_id, folder_path)
+                  if ok then
+                    state.preview_error = "Folder toegevoegd aan pool: " .. tostring(pool.alias or pool_id)
+                  else
+                    state.preview_error = err or "Kon folder niet toevoegen aan pool."
+                  end
+                end
+              end
+            end
+          end
+          r.ImGui_EndMenu(ctx)
+        end
+
+        r.ImGui_EndPopup(ctx)
       end
     end
     state.folder_header_action = nil
@@ -1478,7 +1632,9 @@ local function draw_collections_panel(app, panel_h)
       local tile_visible = r.ImGui_BeginChild(ctx, "##tile_" .. c.id, tile_w, tile_h, 1, tile_flags)
       if tile_visible then
         local cover_inset = 2
-        local tex = cover_texture(state, c.cover_path)
+        local cover_path = c.cover_path
+        local tex = cover_texture(state, cover_path)
+        local cover_drawn = false
         if tex and r.ImGui_Image then
           local img_w, img_h = 0, 0
           if r.ImGui_Image_GetSize then
@@ -1499,8 +1655,19 @@ local function draw_collections_panel(app, panel_h)
           end
           local x0, y0 = r.ImGui_GetCursorPos(ctx)
           r.ImGui_SetCursorPos(ctx, x0 + cover_inset + math.max(0, (avail_w - draw_w) * 0.5), y0 + cover_inset + math.max(0, (avail_h - draw_h) * 0.5))
-          r.ImGui_Image(ctx, tex, draw_w, draw_h)
-        else
+          local ok_draw = pcall(r.ImGui_Image, ctx, tex, draw_w, draw_h)
+          if ok_draw then
+            cover_drawn = true
+          else
+            if cover_path and state.cover_cache then
+              state.cover_cache[cover_path] = false
+            end
+            c.cover_path = nil
+            state.preview_error = "Cover image kon niet worden geladen en is verwijderd."
+            save(app)
+          end
+        end
+        if not cover_drawn then
           local nc_w = as_number(r.ImGui_CalcTextSize(ctx, "NO COVER")) or 60
           local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
           avail_w = math.max(1, (as_number(avail_w) or tile_w) - (cover_inset * 2))
@@ -1865,7 +2032,6 @@ function M.init(app)
     search = loaded.search or "",
     auto_audition = loaded.auto_audition ~= false,
     preview_volume = loaded.preview_volume or 1.0,
-    manager_audition_mode = loaded.manager_audition_mode == "preview" and "preview" or "track",
     manager_rack_color = loaded.manager_rack_color or 0x4DA3FFFF,
     manager_rack_gradient = loaded.manager_rack_gradient == true,
     manager_save_dir = loaded.manager_save_dir or "",
