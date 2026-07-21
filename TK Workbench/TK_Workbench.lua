@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.10
+-- @version 0.5.11
 -- @changelog:
+-- v0.5.11
+--   + Media Browser: Fixed embedded cover art on Opus/OGG (and other Vorbis-tagged) files being decoded corruptly - the Base64 decoder for METADATA_BLOCK_PICTURE artwork kept growing its bit accumulator without discarding already-emitted bits, which mangled larger images and caused "Corrupt JPEG data: N extraneous bytes before marker" errors plus unreadable cached thumbnails; this replaces the 0.5.10 workaround with the real fix and the cover cache is regenerated automatically so thumbnails now load correctly (thanks to the forum user who tracked down the root cause)
 -- v0.5.10
 --   + Media Browser: Fixed the ReaScript console being spammed with "Corrupt JPEG data: N extraneous bytes before marker" warnings when opening folders with Opus/OGG (or other) files whose embedded JPEG cover art is slightly non-standard; the artwork is now sanitized (stray bytes between JPEG header segments are stripped, image data kept untouched) before it is cached, and already-cached covers are cleaned up automatically on first view, so the thumbnails still show without the console noise
 -- v0.5.9

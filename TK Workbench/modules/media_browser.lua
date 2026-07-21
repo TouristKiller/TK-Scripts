@@ -94,7 +94,6 @@ local state = {
   folder_art_image_cache = {},
   embedded_art_path_cache = {},
   embedded_art_image_cache = {},
-  embedded_art_sanitized = {},
   waveform_cache = {},
   midi_note_cache = {},
   waveform_pending = {},
@@ -647,14 +646,18 @@ function mb_base64_decode(s)
   local dec = {}
   for i = 1, #b64 do dec[b64:sub(i,i)] = i - 1 end
   local out, acc, bits = {}, 0, 0
-  for c in s:gmatch(".") do
+  s = s:gsub("%s", "")
+  for i = 1, #s do
+    local c = s:sub(i, i)
+    if c == "=" then break end
     local v = dec[c]
     if v then
-      acc = acc * 64 + v
+      acc = (acc << 6) | v
       bits = bits + 6
-      if bits >= 8 then
+      while bits >= 8 do
         bits = bits - 8
-        out[#out+1] = string.char(math.floor(acc / (2^bits)) % 256)
+        out[#out+1] = string.char((acc >> bits) & 0xFF)
+        acc = acc & ((1 << bits) - 1)
       end
     end
   end
@@ -733,44 +736,6 @@ function mb_extract_ogg(path)
   return nil
 end
 
-function mb_sanitize_jpeg(data)
-  if not data or #data < 4 then return data end
-  if data:byte(1) ~= 0xFF or data:byte(2) ~= 0xD8 then return data end
-  local n = #data
-  local out = { string.char(0xFF, 0xD8) }
-  local p = 3
-  local changed = false
-  while p <= n do
-    local start = p
-    while p <= n and data:byte(p) ~= 0xFF do p = p + 1 end
-    if p > start then changed = true end
-    if p > n then break end
-    while p <= n and data:byte(p) == 0xFF do p = p + 1 end
-    if p > n then break end
-    local marker = data:byte(p)
-    p = p + 1
-    if marker == 0xD9 then
-      out[#out + 1] = string.char(0xFF, 0xD9)
-      break
-    elseif marker == 0xDA then
-      out[#out + 1] = string.char(0xFF, 0xDA) .. data:sub(p)
-      break
-    elseif (marker >= 0xD0 and marker <= 0xD7) or marker == 0x01 then
-      out[#out + 1] = string.char(0xFF, marker)
-    else
-      if p + 1 > n then break end
-      local len = data:byte(p) * 256 + data:byte(p + 1)
-      if len < 2 then break end
-      local payload_end = p + 1 + (len - 2)
-      if payload_end > n then payload_end = n end
-      out[#out + 1] = string.char(0xFF, marker) .. data:sub(p, payload_end)
-      p = payload_end + 1
-    end
-  end
-  if not changed then return data end
-  return table.concat(out)
-end
-
 function embedded_art_path(file_path)
   local key = normalize_path(file_path)
   local cached = state.embedded_art_path_cache[key]
@@ -790,25 +755,12 @@ function embedded_art_path(file_path)
   end)
   if not ok or not img or not img_ext then state.embedded_art_path_cache[key] = false; return nil end
   ensure_cache_dir()
-  local out_path = cache_dir .. "/art_" .. cache_key(file_path) .. "." .. img_ext
+  local out_path = cache_dir .. "/art2_" .. cache_key(file_path) .. "." .. img_ext
   if not file_exists(out_path) then
-    if img_ext == "jpg" then img = mb_sanitize_jpeg(img) end
     local wf = io.open(out_path, "wb")
     if not wf then state.embedded_art_path_cache[key] = false; return nil end
     wf:write(img)
     wf:close()
-  elseif img_ext == "jpg" and not state.embedded_art_sanitized[out_path] then
-    state.embedded_art_sanitized[out_path] = true
-    local rf = io.open(out_path, "rb")
-    if rf then
-      local existing = rf:read("*a")
-      rf:close()
-      local cleaned = mb_sanitize_jpeg(existing)
-      if cleaned ~= existing then
-        local wf = io.open(out_path, "wb")
-        if wf then wf:write(cleaned); wf:close() end
-      end
-    end
   end
   state.embedded_art_path_cache[key] = out_path
   return out_path
