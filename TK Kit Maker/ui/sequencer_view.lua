@@ -3508,7 +3508,7 @@ local function draw_step(app)
   local top_lane_row_w = top_lane_label_w + top_group_gap + top_lane_controls_w
   local top_divider_gap = 14
   local top_single_row = top_preview_w >= (top_pattern_row_w + top_divider_gap + top_lane_row_w)
-  local top_section_h = top_single_row and 42 or 66
+  local top_section_h = top_single_row and 38 or 62
   local top_section_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
   local top_x = r.ImGui_GetCursorPosX(ctx)
   if r.ImGui_BeginChild(ctx, "##tk_seq_top_rows", 0, top_section_h, 1, top_section_flags) then
@@ -3771,7 +3771,7 @@ local function draw_step(app)
         r.ImGui_DrawList_AddCircleFilled(label_dl, label_max_x - 6, label_min_y + 6, 4, Theme.colors.danger, 16)
       end
       if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Left click: select lane | Right click: edit lane open/dicht")
+        r.ImGui_SetTooltip(ctx, "Left click: select lane | Right click: edit lane open/close")
       end
       r.ImGui_SetCursorPosX(ctx, row_x)
       r.ImGui_SetCursorPosY(ctx, row_y + 1)
@@ -4479,7 +4479,7 @@ local function draw_step(app)
         save_sequence(parent, seq)
       end
       if song_hovered then
-        r.ImGui_SetTooltip(ctx, "Boven: page | Onder: repeats | Links omhoog | Rechts omlaag | Dubbelklik: wis")
+        r.ImGui_SetTooltip(ctx, "Top: page | Bottom: repeats | Left: increase | Right: decrease | Double-click: clear")
       end
       r.ImGui_PopStyleColor(ctx, 3)
       if song_slot < 8 then
@@ -4717,7 +4717,7 @@ local function draw_step(app)
       save_global_patterns(updated)
     end
     if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Save alle pattern pages naar de geselecteerde preset")
+      r.ImGui_SetTooltip(ctx, "Save all pattern pages to the selected preset")
     end
 
     r.ImGui_SameLine(ctx, 0, preset_gap)
@@ -5483,7 +5483,7 @@ function draw_euclid(app)
     local lane_cell_size = (lane_panel_w - (lane_gap * (lane_cols - 1))) / lane_cols
     local lane_grid_content_h = (lane_cell_size * lane_rows) + (lane_gap * (lane_rows - 1))
     local lane_panel_h = lane_grid_content_h + 34
-    local right_h = frame_pad + (knob_row_h * knob_rows) + (knob_row_gap * (knob_rows - 1)) + 8 + 1 + 8 + lane_panel_h + 8 + clear_h + frame_pad + 72
+    local right_h = frame_pad + (knob_row_h * knob_rows) + (knob_row_gap * (knob_rows - 1)) + 8 + 1 + 8 + lane_panel_h + 8 + clear_h + frame_pad + 54
     local ring_gap = 12
     local ring_bottom_padding = 24
     local stack_gap = 8
@@ -5987,7 +5987,7 @@ end
         "Step",
         "",
         step_mode_mask ~= "xxxx",
-        "Open Step Mode instellingen (" .. step_mode_mask .. ")"
+        "Open Step Mode settings (" .. step_mode_mask .. ")"
       )
       if cstep then
         r.ImGui_OpenPopup(ctx, step_popup_id)
@@ -5998,7 +5998,7 @@ end
         "Echo",
         "",
         echo_enabled,
-        "Open echo instellingen"
+        "Open echo settings"
       )
       if cecho then
         r.ImGui_OpenPopup(ctx, echo_popup_id)
@@ -6227,7 +6227,7 @@ end
         euclid_save(parent, edata)
       end
       if r.ImGui_IsItemHovered(ctx) then
-        r.ImGui_SetTooltip(ctx, "Toggle lane verbinding-lijnen")
+        r.ImGui_SetTooltip(ctx, "Toggle lane connection lines")
       end
       btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
       btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
@@ -6387,7 +6387,7 @@ end
             r.ImGui_SameLine(ctx, 0, gap)
           end
         end
-        r.ImGui_Dummy(ctx, 0, math.max(0, lane_panel_h_draw - (rows * cell_size) - ((rows - 1) * gap) - 8))
+        r.ImGui_Dummy(ctx, 0, math.max(0, lane_panel_h_draw - (rows * cell_size) - ((rows - 1) * gap) - 5))
         r.ImGui_EndChild(ctx)
       end
 

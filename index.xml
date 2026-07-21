@@ -389,7 +389,7 @@
 
 <category name="TK Kit Maker">
     <reapack name="TK_Kit_Maker.lua" type="script" desc="TK Kit Maker">
-        <version name="2.2" author="TouristKiller" time="2026-07-21T12:00:00Z">
+        <version name="2.3" author="TouristKiller" time="2026-07-21T21:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/TK_Kit_Maker.lua</source>
             <source file="core/browser_store.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/browser_store.lua</source>
             <source file="core/categories.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/categories.lua</source>
