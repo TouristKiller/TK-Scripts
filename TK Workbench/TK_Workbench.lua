@@ -1,7 +1,23 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.1
+-- @version 0.6.2
 -- @changelog:
+-- v0.6.2
+--   + Send Studio: The header shows the track name in a bar tinted with the track colour that fills up to the Pin button (with the multi-select count shown inside it); long names are truncated so Pin always stays in view, and the module label was dropped
+--   + Send Studio: Added prev/next arrows in the header to step through the project's tracks (cyclic), with Shift-click to jump to the first / last track
+--   + Send Studio: Card view can now fill a column top-to-bottom before starting the next one (better for a tall, narrow side-docker), with a Cols/Rows toggle in the footer to switch back to the row-first layout
+--   + Send Studio: The Add Send/Receive picker lets you star favourite destination tracks (stored per project) that float to the top of the list
+--   + Send Studio: View and open the FX of a send/receive's track - an FX button (list) and FX submenu (right-click) that open the FX chain or any individual plugin
+--   + Send Studio: Solo (S) isolates one send/receive by muting the track's other sends and receives - exclusive by default, Ctrl-click to add more; the solo state is stored per project so it survives reloads and is fully reversible; labelled Solo send / Solo receive to match the lane
+--   + Send Studio: Solo defeat (D) exempts a send/receive so it stays audible whenever a solo is active on the track
+--   + Send Studio: Listen (headphone) solos the original and return track and mutes the track's other routings so only that path plays; Shift-click listens to the return only (drops the source's master send for the wet return), with a distinct highlight colour per mode; the return track's own volume and pan are in the right-click / "..." menu
+--   + Send Studio: Added MIDI source/destination channel selectors in the routing popup
+--   + Send Studio: Reworked the strip buttons - Mute/Solo/Defeat on the top row and a drawn headphone Listen icon with Phase/Mono below - and trimmed the right-click menu to options that are not already on the strip
+--   + Send Studio: The New Bus and Add Send/Receive track pickers are now modal windows, so a click inside them can no longer leak through to the panel behind (e.g. clicking Create no longer also triggers a strip control underneath)
+--   + Send Studio: Selecting a send/receive's other track (clicking its name) now scrolls the mixer to that track too, matching the TCP behaviour
+--   + Send Studio: The Add Send/Receive track picker is larger with a wider filter, so it is easier to browse and less prone to overscrolling
+--   + Send Studio: The audio-channel routing popup now lists higher channel pairs (3/4, 5/6 ...) even when the track does not have them yet - picking one grows the track's channel count automatically (marked with "(add)")
+--   + Send Studio: Added a Track fader row (the selected/pinned track's own volume and mute, with -1/+1 dB nudge), handy for aux/return tracks you keep at 0 and blend with the track fader
 -- v0.6.1
 --   + Send Studio: Fixed the mixer-strip faders (volume and pan) not responding on some setups - the strips now use ReaImGui's own hit-testing and input capture instead of raw mouse state, so dragging works regardless of ReaImGui version, window focus or docking
 --   + Send Studio: Fixed the Listen (L) button not isolating properly - it now uses Solo In Place, so soloing the return bus no longer un-mutes every other track that feeds it; you hear only the original track and its return

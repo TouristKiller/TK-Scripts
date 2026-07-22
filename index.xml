@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.1" author="TouristKiller" time="2026-07-22T17:30:00Z">
+    <version name="0.6.2" author="TouristKiller" time="2026-07-23T01:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -115,23 +115,22 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
-                v0.6.1
-                + Send Studio: Fixed the mixer-strip faders (volume and pan) not responding on some setups - the strips now use ReaImGui's own hit-testing and input capture instead of raw mouse state, so dragging works regardless of ReaImGui version, window focus or docking
-                + Send Studio: Fixed the Listen (L) button not isolating properly - it now uses Solo In Place, so soloing the return bus no longer un-mutes every other track that feeds it; you hear only the original track and its return
-                + Send Studio: The list view no longer runs off-screen in a narrow side-docker - the track name fills the top line and the controls flow onto the next line(s) when there is not enough width, with a divider between sends; Shift+wheel over the list volume/pan sliders does the same fine-adjust as the card faders
-                + Send Studio: Added -1 dB / +1 dB nudge buttons around the volume of each send (either side of the readout on card strips, next to the slider in list view), for quick step adjustments without dragging
-                + Send Studio: In list view the volume/pan value stays readable when the slider handle passes over it (the grab now uses the muted accent colour that contrasts with the text)
-                v0.6.0
-                + Send Studio: New module for fast send/receive management, styled after the Control Room module - a vertical mixer-strip (card) view that flexes to fill the window up to a maximum width and wraps to the next row when it gets too narrow, plus a compact list view; toggle between them in the footer
-                + Send Studio: Per send/receive controls for volume (drag fader, Shift+scroll for fine, double-click for 0 dB), pan, mute, phase invert, mono sum, send mode (Post / Pre-FX / Pre-Fader) and the source/destination audio channel; right-click a strip for the same options plus "select destination track" and remove
-                + Send Studio: Solo send (S) isolates one send among the sends to the same track, and Listen (L) auditions "return and original tracks only" by soloing just the source and destination track; a "Reset Solo" button appears while either is active and restores the previous state, so you never leave the project soloed by accident
-                + Send Studio: Pinnable target track (follow the selection or lock onto one track) and multi-track creation - with several tracks selected, Add / New bus / Paste apply to all of them at once
-                + Send Studio: Add sends/receives via a filterable track picker, create a new bus track and send the active track(s) to it in one action, and copy/paste a track's sends (including channels, mode, phase, mono and pan) onto other tracks
-                v0.5.11
-                + Media Browser: Fixed embedded cover art on Opus/OGG (and other Vorbis-tagged) files being decoded corruptly - the Base64 decoder for METADATA_BLOCK_PICTURE artwork kept growing its bit accumulator without discarding already-emitted bits, which mangled larger images and caused "Corrupt JPEG data: N extraneous bytes before marker" errors plus unreadable cached thumbnails; this replaces the 0.5.10 workaround with the real fix and the cover cache is regenerated automatically so thumbnails now load correctly (thanks to the forum user who tracked down the root cause)
-                v0.5.10
-                + Media Browser: Fixed the ReaScript console being spammed with "Corrupt JPEG data: N extraneous bytes before marker" warnings when opening folders with Opus/OGG (or other) files whose embedded JPEG cover art is slightly non-standard; the artwork is now sanitized (stray bytes between JPEG header segments are stripped, image data kept untouched) before it is cached, and already-cached covers are cleaned up automatically on first view, so the thumbnails still show without the console noise
-
+                v0.6.2
+                + Send Studio: The header shows the track name in a bar tinted with the track colour that fills up to the Pin button (with the multi-select count shown inside it); long names are truncated so Pin always stays in view, and the module label was dropped
+                + Send Studio: Added prev/next arrows in the header to step through the project's tracks (cyclic), with Shift-click to jump to the first / last track
+                + Send Studio: Card view can now fill a column top-to-bottom before starting the next one (better for a tall, narrow side-docker), with a Cols/Rows toggle in the footer to switch back to the row-first layout
+                + Send Studio: The Add Send/Receive picker lets you star favourite destination tracks (stored per project) that float to the top of the list
+                + Send Studio: View and open the FX of a send/receive's track - an FX button (list) and FX submenu (right-click) that open the FX chain or any individual plugin
+                + Send Studio: Solo (S) isolates one send/receive by muting the track's other sends and receives - exclusive by default, Ctrl-click to add more; the solo state is stored per project so it survives reloads and is fully reversible; labelled Solo send / Solo receive to match the lane
+                + Send Studio: Solo defeat (D) exempts a send/receive so it stays audible whenever a solo is active on the track
+                + Send Studio: Listen (headphone) solos the original and return track and mutes the track's other routings so only that path plays; Shift-click listens to the return only (drops the source's master send for the wet return), with a distinct highlight colour per mode; the return track's own volume and pan are in the right-click / "..." menu
+                + Send Studio: Added MIDI source/destination channel selectors in the routing popup
+                + Send Studio: Reworked the strip buttons - Mute/Solo/Defeat on the top row and a drawn headphone Listen icon with Phase/Mono below - and trimmed the right-click menu to options that are not already on the strip
+                + Send Studio: The New Bus and Add Send/Receive track pickers are now modal windows, so a click inside them can no longer leak through to the panel behind (e.g. clicking Create no longer also triggers a strip control underneath)
+                + Send Studio: Selecting a send/receive's other track (clicking its name) now scrolls the mixer to that track too, matching the TCP behaviour
+                + Send Studio: The Add Send/Receive track picker is larger with a wider filter, so it is easier to browse and less prone to overscrolling
+                + Send Studio: The audio-channel routing popup now lists higher channel pairs (3/4, 5/6 ...) even when the track does not have them yet - picking one grows the track's channel count automatically (marked with "(add)")
+                + Send Studio: Added a Track fader row (the selected/pinned track's own volume and mute, with -1/+1 dB nudge), handy for aux/return tracks you keep at 0 and blend with the track fader
 
 ]]></changelog>
      </version>
