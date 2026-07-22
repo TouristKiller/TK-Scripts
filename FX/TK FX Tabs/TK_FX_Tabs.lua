@@ -1,7 +1,24 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.1.4
+-- @version 1.2.0
 -- @changelog:
+--   v1.2.0
+--   + Detached (dockable launcher) mode: turn the tab bar into a normal, dockable window that no longer attaches to the plugin; clicking a tab opens/focuses that FX (opening still centers it when 'Center FX' is on)
+--   # Detached mode: the BYPASS/OFFLINE overlay now shows again, centered in the REAPER window
+--   + Option 'Hide tab bar when no FX is open': the tab bar only shows while an FX window is open and returns automatically
+--   # On launch, the tab bar now opens on an already-visible FX instead of jumping to the first plugin of the track
+--   # The highlighted tab now always matches the shown FX (stable per-FX identity fixes wrong/last-tab highlighting after add/remove/online)
+--   # Tab bar left edge slider now moves the left edge in every mode (free mode no longer only grows to the right / jumps the plugin)
+--   # Tab bar vertical offset now also works when Center FX and Follow are both off (free mode)
+--   # BYPASS/OFFLINE overlay no longer floats on top of unrelated FX windows (macOS)
+--   # The active FX now always keeps its tab, even when it falls outside the 'Show tabs' filter
+--   + Content setting now has a hint that regular FX only appear as tabs when set to 'All FX'
+--   + Fixed plugin window size option: force plugin windows to one size (resizable plugins)
+--   + Overflow dropdown: bypass, offline and remove are now available per FX (submenu)
+--   # Long FX names on tabs are truncated with '...' instead of overlapping the next tab
+--   # Tab bar no longer gets stuck behind the plugin after tweaking a parameter (with top overlap > 0)
+--   # Center FX: your own centering shortcuts now work and manually moved plugins no longer snap back (re-click the tab to re-center)
+--   # Follow FX window: improved behaviour on macOS (tab bar returns above the plugin after dragging)
 --   v1.1.4
 --   + ESC closes the script
 --   v1.1.3
@@ -61,6 +78,7 @@ local topbar_popup_hold_until = 0
 local topbar_control_block_until = 0
 local window_touch_pause_until = 0
 local topbar_restack_until = 0
+local place_state = { moved = false, applied_left = nil, applied_top = nil, mouse_down = false, left_nudge = 0, bar_left = nil, bar_top = nil }
 local topbar_owner_hwnd = nil
 local topbar_owner_fx_hwnd = nil
 local topbar_original_owner = nil
@@ -68,7 +86,9 @@ local topbar_owner_supported = IS_WINDOWS
 local external_open_state = {}
 local host_rect = { left = 0, top = 0, width = 0, height = 0 }
 local fx_size_cache = {}
+fixed_size_state = {}
 local tab_width_cache = {}
+local tab_label_cache = {}
 local tab_scroll_x = 0
 local tab_context_key = ""
 local topbar_width = 980
@@ -141,8 +161,13 @@ local settings = {
   vertical_offset = ext_get_number("vertical_offset", 0),
   topbar_left_overhang = ext_get_number("topbar_left_overhang", topbar_side_overhang),
   topbar_right_overhang = ext_get_number("topbar_right_overhang", topbar_side_overhang),
+  fixed_fx_size = ext_get_bool("fixed_fx_size", false),
+  fixed_fx_width = ext_get_number("fixed_fx_width", 900),
+  fixed_fx_height = ext_get_number("fixed_fx_height", 600),
   theme_preset = ext_get_string("theme_preset", "REAPER Theme"),
   theme_topbar_border = ext_get_bool("theme_topbar_border", true),
+  auto_hide_when_empty = ext_get_bool("auto_hide_when_empty", false),
+  detached_mode = ext_get_bool("detached_mode", false),
   scan_interval = 0.75,
 }
 
@@ -721,6 +746,12 @@ local function cached_fx_size(entry)
 end
 
 function entry_window_size(entry)
+  if settings.fixed_fx_size and not settings.follow_fx_position and entry then
+    local st = fixed_size_state[entry.key]
+    if not (st and st.giveup) then
+      return { width = clamp(settings.fixed_fx_width, 200, 4000), height = clamp(settings.fixed_fx_height, 150, 4000) }
+    end
+  end
   return cached_fx_size(entry)
 end
 
@@ -807,7 +838,7 @@ function cache_entry_current_fx_window_size(entry, track)
   return measure_fx_window(entry, hwnd)
 end
 
-local function topbar_hwnd()
+function topbar_hwnd()
   if not r.JS_Window_Find then return nil end
   return r.JS_Window_Find(SCRIPT_NAME, true)
 end
@@ -834,7 +865,7 @@ function sync_topbar_window_to_blocked_entry(entry)
   r.JS_Window_SetPosition(hwnd, native_left, native_top, native_right - native_left, native_bottom - native_top)
 end
 
-local function blocked_state_hwnd()
+function blocked_state_hwnd()
   if not r.JS_Window_Find then return nil end
   return r.JS_Window_Find(BLOCKED_WINDOW_NAME, true)
 end
@@ -946,7 +977,13 @@ local function left_mouse_down()
 end
 
 local function update_window_touch_pause()
-  if left_mouse_down() then window_touch_pause_until = r.time_precise() + 0.18 end
+  local mouse_down = left_mouse_down()
+  if mouse_down then
+    window_touch_pause_until = r.time_precise() + 0.18
+  elseif place_state.mouse_down then
+    topbar_restack_until = r.time_precise() + 0.5
+  end
+  place_state.mouse_down = mouse_down
 end
 
 local function window_touch_paused()
@@ -957,7 +994,7 @@ local function topbar_drag_active()
   return topbar_dragging and left_mouse_down()
 end
 
-local function fx_window_is_above_topbar(fx_hwnd, topbar)
+function fx_window_is_above_topbar(fx_hwnd, topbar)
   if not fx_hwnd or not topbar or not r.JS_Window_GetRelated then return false end
   local current = topbar
   for _ = 1, 64 do
@@ -1017,7 +1054,7 @@ local function bring_blocked_pair_to_front()
   return true
 end
 
-local function window_rect_needs_update(hwnd, left, top, right, bottom)
+function window_rect_needs_update(hwnd, left, top, right, bottom)
   if not r.JS_Window_GetRect then return true end
   local ok, current_left, current_top, current_right, current_bottom = r.JS_Window_GetRect(hwnd)
   if not ok then return true end
@@ -1054,7 +1091,29 @@ function follow_fx_window_update()
   host_rect.width = math.max(180, x_max - x_min)
   host_rect.height = math.max(140, y_max - y_min)
   follow_pair_on_top = foreground_is_topbar_pair(hwnd)
+  if not IS_WINDOWS then keep_topbar_above_fx(hwnd) end
   return true
+end
+
+function set_host_rect_from_fx(hwnd, entry)
+  if not hwnd or not r.JS_Window_GetRect then return false end
+  local ok, left, top, right, bottom = r.JS_Window_GetRect(hwnd)
+  if not ok or not left or not top or not right or not bottom or right <= left or bottom <= top then return false end
+  if entry then measure_fx_window(entry, hwnd) end
+  local imgui_left, imgui_top = native_to_imgui(left, top)
+  local imgui_right, imgui_bottom = native_to_imgui(right, bottom)
+  host_rect.left = math.min(imgui_left, imgui_right)
+  host_rect.top = math.min(imgui_top, imgui_bottom)
+  host_rect.width = math.max(180, math.abs(imgui_right - imgui_left))
+  host_rect.height = math.max(140, math.abs(imgui_bottom - imgui_top))
+  return true
+end
+
+function fx_native_topleft(hwnd)
+  if not hwnd or not r.JS_Window_GetRect then return false end
+  local ok, left, top = r.JS_Window_GetRect(hwnd)
+  if not ok or not left or not top then return false end
+  return true, left, top
 end
 
 local function place_active_window()
@@ -1073,11 +1132,39 @@ local function place_active_window()
   if not hwnd then return false end
   set_topbar_owner(hwnd)
   if not dragging_topbar then keep_topbar_above_fx(hwnd) end
+  local center_mode = settings.center_fx_in_reaper_window == true
+  local resized_window = measure_fx_window(entry, hwnd)
+  if settings.fixed_fx_size then
+    local actual = cached_fx_size(entry)
+    local want_w = clamp(settings.fixed_fx_width, 200, 4000)
+    local want_h = clamp(settings.fixed_fx_height, 150, 4000)
+    local st = fixed_size_state[entry.key]
+    if not st then st = { mismatch = 0, giveup = false }; fixed_size_state[entry.key] = st end
+    if not st.giveup then
+      if math.abs((actual.width or 0) - want_w) > 6 or math.abs((actual.height or 0) - want_h) > 6 then
+        st.mismatch = st.mismatch + 1
+        if st.mismatch > 12 then st.giveup = true end
+      else
+        st.mismatch = 0
+      end
+    end
+  end
+  if center_mode and not dragging_topbar and not place_state.moved and not resized_window then
+    local cok, cleft, ctop = fx_native_topleft(hwnd)
+    if cok and place_state.applied_left then
+      if math.abs(cleft - place_state.applied_left) > 6 or math.abs(ctop - place_state.applied_top) > 6 then
+        place_state.moved = true
+      end
+    end
+  end
+  if center_mode and place_state.moved and not dragging_topbar then
+    set_host_rect_from_fx(hwnd, entry)
+    return true
+  end
   local pending_placement = r.time_precise() < pending_place_until
   if not dragging_topbar and not pending_placement and not foreground_allows_active_window_placement(hwnd) then return false end
   local pending_restack = r.time_precise() < topbar_restack_until and foreground_is_topbar_pair(hwnd)
-  local resized_window = measure_fx_window(entry, hwnd)
-  local size = cached_fx_size(entry)
+  local size = entry_window_size(entry)
   host_rect.width = size.width
   host_rect.height = size.height
   if not dragging_topbar then apply_centered_host_rect() end
@@ -1093,12 +1180,59 @@ local function place_active_window()
     moved_window = true
     topbar_restack_until = r.time_precise() + 0.35
   end
+  place_state.applied_left = native_left
+  place_state.applied_top = native_top
   if not dragging_topbar and (pending_placement or resized_window) then
     bring_topbar_pair_to_front(hwnd)
   elseif not dragging_topbar and (moved_window or pending_restack) then
     place_topbar_above_fx(hwnd)
   end
   return true
+end
+
+function place_detached_active_window()
+  if active_key == "" then return end
+  if not settings.center_fx_in_reaper_window then place_state.applied_left = nil; place_state.applied_top = nil; return end
+  if window_touch_paused() then return end
+  if not r.JS_Window_SetPosition then return end
+  local entry = find_entry_by_key(active_key)
+  if entry_blocked_state(entry) then return end
+  local track = resolve_entry_track(entry)
+  if not track then return end
+  refresh_entry_state(entry, track)
+  if entry_blocked_state(entry) then return end
+  local hwnd = safe_trackfx_get_floating_window(track, entry.fx_index)
+  if not hwnd then return end
+  local resized_window = measure_fx_window(entry, hwnd)
+  if not place_state.moved and not resized_window then
+    local cok, cleft, ctop = fx_native_topleft(hwnd)
+    if cok and place_state.applied_left then
+      if math.abs(cleft - place_state.applied_left) > 6 or math.abs(ctop - place_state.applied_top) > 6 then place_state.moved = true end
+    end
+  end
+  if place_state.moved then return end
+  local size = entry_window_size(entry)
+  local reaper_left, reaper_top, reaper_width, reaper_height = reaper_window_rect()
+  local margin = 10
+  local left = reaper_left + (reaper_width - size.width) * 0.5
+  local top = reaper_top + (reaper_height - size.height) * 0.5
+  local min_left = reaper_left + margin
+  local max_left = reaper_left + reaper_width - size.width - margin
+  if max_left >= min_left then left = clamp(left, min_left, max_left) end
+  local min_top = reaper_top + margin
+  local max_top = reaper_top + reaper_height - size.height - margin
+  if max_top >= min_top then top = clamp(top, min_top, max_top) else top = math.max(min_top, top) end
+  local nx1, ny1 = imgui_to_native(left, top)
+  local nx2, ny2 = imgui_to_native(left + size.width, top + size.height)
+  local native_left = js_int(math.min(nx1, nx2))
+  local native_top = js_int(math.min(ny1, ny2))
+  local native_right = js_int(math.max(nx1, nx2))
+  local native_bottom = js_int(math.max(ny1, ny2))
+  if window_rect_needs_update(hwnd, native_left, native_top, native_right, native_bottom) then
+    r.JS_Window_SetPosition(hwnd, native_left, native_top, native_right - native_left, native_bottom - native_top)
+  end
+  place_state.applied_left = native_left
+  place_state.applied_top = native_top
 end
 
 local function close_entry(entry)
@@ -1259,6 +1393,10 @@ end
 local function activate_entry(entry)
   if not entry then return end
   local previous_key = active_key
+  place_state.moved = false
+  place_state.applied_left = nil
+  place_state.applied_top = nil
+  fixed_size_state[entry.key] = nil
   local track = resolve_entry_track(entry)
   if not track then return end
   refresh_entry_state(entry, track)
@@ -1316,6 +1454,14 @@ local function process_pending_activation()
   if entry then activate_entry(entry) end
 end
 
+function fx_entry_key(track, guid, fx_index)
+  if r.TrackFX_GetFXGUID then
+    local fx_guid = r.TrackFX_GetFXGUID(track, fx_index)
+    if fx_guid and fx_guid ~= "" then return fx_guid end
+  end
+  return tostring(guid) .. "|" .. tostring(fx_index)
+end
+
 local function scan_instruments(force)
   local now = r.time_precise()
   if not force and now - last_scan_time < settings.scan_interval then return end
@@ -1335,7 +1481,7 @@ local function scan_instruments(force)
         if content_mode_allows_fx(fx_index, primary_instrument, fx_name) then
           local guid = track_guid(track)
           next_instruments[#next_instruments + 1] = {
-            key = guid .. "|" .. tostring(fx_index),
+            key = fx_entry_key(track, guid, fx_index),
             track_guid = guid,
             track_index = track_index,
             track_name = track_name(track, track_index),
@@ -1351,6 +1497,7 @@ local function scan_instruments(force)
   end
   instruments = next_instruments
   tab_width_cache = {}
+  tab_label_cache = {}
   if #instruments == 0 then selected_key = ""; active_key = ""; return end
   if previous_selected_key ~= "" and find_entry_by_key(previous_selected_key) then selected_key = previous_selected_key else selected_key = instruments[1].key end
 end
@@ -1444,37 +1591,51 @@ end
 
 local function visible_instruments()
   local mode = normalized_tab_filter_mode()
-  if mode == TAB_FILTER_ALL then return instruments end
-  local visible = {}
-  if mode == TAB_FILTER_SELECTED then
+  local visible
+  if mode == TAB_FILTER_ALL then
+    visible = instruments
+  elseif mode == TAB_FILTER_SELECTED then
+    visible = {}
     local selected_guids = selected_track_guid_set()
     for index = 1, #instruments do
       local entry = instruments[index]
       if selected_guids[entry.track_guid] then visible[#visible + 1] = entry end
     end
-    return visible
-  end
-  local anchor_track = tab_filter_anchor_track()
-  if not anchor_track then return instruments end
-  if mode == TAB_FILTER_FOLDER then
-    local anchor_folder = track_guid(top_folder_track(anchor_track))
-    for index = 1, #instruments do
-      local entry = instruments[index]
-      local track = resolve_entry_track(entry)
-      if track and track_guid(top_folder_track(track)) == anchor_folder then visible[#visible + 1] = entry end
+  else
+    local anchor_track = tab_filter_anchor_track()
+    if not anchor_track then
+      visible = instruments
+    elseif mode == TAB_FILTER_FOLDER then
+      visible = {}
+      local anchor_folder = track_guid(top_folder_track(anchor_track))
+      for index = 1, #instruments do
+        local entry = instruments[index]
+        local track = resolve_entry_track(entry)
+        if track and track_guid(top_folder_track(track)) == anchor_folder then visible[#visible + 1] = entry end
+      end
+    elseif mode == TAB_FILTER_GROUP then
+      visible = {}
+      local anchor_tokens = track_group_tokens(anchor_track)
+      for index = 1, #instruments do
+        local entry = instruments[index]
+        local track = resolve_entry_track(entry)
+        if track and shares_group_tokens(track, anchor_tokens) then visible[#visible + 1] = entry end
+      end
+    else
+      visible = instruments
     end
-    return visible
   end
-  if mode == TAB_FILTER_GROUP then
-    local anchor_tokens = track_group_tokens(anchor_track)
-    for index = 1, #instruments do
-      local entry = instruments[index]
-      local track = resolve_entry_track(entry)
-      if track and shares_group_tokens(track, anchor_tokens) then visible[#visible + 1] = entry end
+  if active_key ~= "" and visible ~= instruments then
+    local found = false
+    for index = 1, #visible do
+      if visible[index].key == active_key then found = true; break end
     end
-    return visible
+    if not found then
+      local active_entry = find_entry_by_key(active_key)
+      if active_entry then visible[#visible + 1] = active_entry end
+    end
   end
-  return instruments
+  return visible
 end
 
 local function entry_is_visible_in_tabs(key, entries)
@@ -1493,7 +1654,11 @@ local function ensure_active_entry_visible()
     return
   end
   if entry_is_visible_in_tabs(active_key, entries) then
-    if not entry_is_visible_in_tabs(selected_key, entries) then selected_key = active_key end
+    if pending_activate_key == "" then
+      selected_key = active_key
+    elseif not entry_is_visible_in_tabs(selected_key, entries) then
+      selected_key = active_key
+    end
     return
   end
   activate_entry(entries[1])
@@ -1509,7 +1674,30 @@ end
 local function close_existing_instruments_on_start()
   if startup_clean_done then return end
   startup_clean_done = true
-  if #instruments > 0 then close_all_instruments() end
+  if #instruments == 0 then return end
+  local adopt = nil
+  local selected_entry = selected_track_entry()
+  if selected_entry then
+    local track = resolve_entry_track(selected_entry)
+    if track and safe_trackfx_get_floating_window(track, selected_entry.fx_index) then adopt = selected_entry end
+  end
+  if not adopt then
+    for index = 1, #instruments do
+      local entry = instruments[index]
+      local track = resolve_entry_track(entry)
+      if track and safe_trackfx_get_floating_window(track, entry.fx_index) then adopt = entry; break end
+    end
+  end
+  if not adopt then
+    close_all_instruments()
+    return
+  end
+  for index = 1, #instruments do
+    local entry = instruments[index]
+    if entry.key ~= adopt.key then close_entry(entry) end
+  end
+  startup_open_done = true
+  activate_entry(adopt)
 end
 
 local function file_exists(path)
@@ -1696,7 +1884,7 @@ local function add_instrument_to_project(item)
   if not new_index or new_index < 0 then add_instrument_error = instruments_only and "Instrument could not be added." or "FX could not be added."; return end
   if settings.select_track_on_open and r.SetOnlyTrackSelected then r.SetOnlyTrackSelected(track) end
   scan_instruments(true)
-  local entry = find_entry_by_key(track_guid(track) .. "|" .. tostring(new_index))
+  local entry = find_entry_by_key(fx_entry_key(track, track_guid(track), new_index))
   if entry then request_activate_entry(entry) end
   add_instrument_error = nil
   add_instrument_search = ""
@@ -1824,17 +2012,6 @@ local function find_entry_index_by_key(key)
   return nil
 end
 
-local function find_entry_after_delete(track_guid_value, fx_index, fx_name)
-  local key = track_guid_value .. "|" .. tostring(fx_index)
-  local entry = find_entry_by_key(key)
-  if entry then return entry end
-  for index = 1, #instruments do
-    local candidate = instruments[index]
-    if candidate.track_guid == track_guid_value and candidate.fx_name == fx_name then return candidate end
-  end
-  return nil
-end
-
 local function set_entry_bypass(entry, bypassed)
   local track = resolve_entry_track(entry)
   if not track then return end
@@ -1868,13 +2045,7 @@ local function remove_entry(entry)
   if not track then return end
   local entry_index = find_entry_index_by_key(entry.key)
   local target = entry_index and (instruments[entry_index + 1] or instruments[entry_index - 1]) or nil
-  local target_guid, target_fx_index, target_fx_name = nil, nil, nil
-  if target then
-    target_guid = target.track_guid
-    target_fx_index = target.fx_index
-    target_fx_name = target.fx_name
-    if target.track_guid == entry.track_guid and target.fx_index > entry.fx_index then target_fx_index = target_fx_index - 1 end
-  end
+  local target_key = target and target.key or nil
   close_entry(entry)
   r.Undo_BeginBlock()
   local ok = safe_trackfx_delete(track, entry.fx_index)
@@ -1885,7 +2056,7 @@ local function remove_entry(entry)
   pending_close_key = ""
   pending_close_deadline = 0
   scan_instruments(true)
-  local next_entry = target_guid and find_entry_after_delete(target_guid, target_fx_index, target_fx_name) or nil
+  local next_entry = target_key and find_entry_by_key(target_key) or nil
   if next_entry then
     activate_entry(next_entry)
   elseif #instruments > 0 then
@@ -1897,36 +2068,41 @@ local function remove_entry(entry)
   end
 end
 
+function draw_fx_action_controls(entry, allow_midi)
+  if not entry then return end
+  local bypassed = entry.enabled == false
+  local offline = entry.offline == true
+  local changed_bypass, next_bypass = r.ImGui_Checkbox(ctx, "Bypass", bypassed)
+  if changed_bypass then set_entry_bypass(entry, next_bypass); r.ImGui_CloseCurrentPopup(ctx); return end
+  local changed_offline, next_offline = r.ImGui_Checkbox(ctx, "Offline", offline)
+  if changed_offline then set_entry_offline(entry, next_offline); r.ImGui_CloseCurrentPopup(ctx); return end
+  local track = resolve_entry_track(entry)
+  if allow_midi and track and entry_supports_midi_input(entry, track) and r.ImGui_BeginCombo then
+    local current_input = math.floor(r.GetMediaTrackInfo_Value(track, "I_RECINPUT") or -1)
+    if r.ImGui_BeginCombo(ctx, "MIDI input", midi_input_label(current_input)) then
+      local options = midi_input_options()
+      for option_index = 1, #options do
+        local option = options[option_index]
+        local selected = current_input == option.value
+        if r.ImGui_Selectable(ctx, option.label, selected) then
+          set_track_midi_input(track, option.value)
+          current_input = option.value
+        end
+        if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+  end
+  r.ImGui_Separator(ctx)
+  if r.ImGui_Selectable(ctx, "Remove") then remove_entry(entry); r.ImGui_CloseCurrentPopup(ctx); return end
+end
+
 local function draw_tab_context_popup()
   if r.ImGui_BeginPopup(ctx, "FX Tab Context", topbar_popup_flags()) then
     topbar_popup_active = true
     local entry = find_entry_by_key(tab_context_key)
     if entry then
-      local bypassed = entry.enabled == false
-      local offline = entry.offline == true
-      local changed_bypass, next_bypass = r.ImGui_Checkbox(ctx, "Bypass", bypassed)
-      if changed_bypass then set_entry_bypass(entry, next_bypass); r.ImGui_CloseCurrentPopup(ctx) end
-      local changed_offline, next_offline = r.ImGui_Checkbox(ctx, "Offline", offline)
-      if changed_offline then set_entry_offline(entry, next_offline); r.ImGui_CloseCurrentPopup(ctx) end
-      local track = resolve_entry_track(entry)
-      if track and entry_supports_midi_input(entry, track) and r.ImGui_BeginCombo then
-        local current_input = math.floor(r.GetMediaTrackInfo_Value(track, "I_RECINPUT") or -1)
-        if r.ImGui_BeginCombo(ctx, "MIDI input", midi_input_label(current_input)) then
-          local options = midi_input_options()
-          for option_index = 1, #options do
-            local option = options[option_index]
-            local selected = current_input == option.value
-            if r.ImGui_Selectable(ctx, option.label, selected) then
-              set_track_midi_input(track, option.value)
-              current_input = option.value
-            end
-            if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
-          end
-          r.ImGui_EndCombo(ctx)
-        end
-      end
-      r.ImGui_Separator(ctx)
-      if r.ImGui_Selectable(ctx, "Remove") then remove_entry(entry); r.ImGui_CloseCurrentPopup(ctx) end
+      draw_fx_action_controls(entry, true)
     else
       r.ImGui_TextDisabled(ctx, "FX not found")
     end
@@ -2062,15 +2238,35 @@ local function draw_settings_popup()
       local changed_overlap, next_overlap = r.ImGui_SliderInt(ctx, "Plugin top overlap", settings.plugin_overlap_y, 0, 80, "%d px")
       if changed_overlap then settings.plugin_overlap_y = next_overlap; ext_set_number("plugin_overlap_y", next_overlap); pending_place_until = r.time_precise() + 0.5 end
       local changed_left_overhang, next_left_overhang = r.ImGui_SliderInt(ctx, "Tab bar left edge", topbar_left_overhang(), -24, 48, "%d px")
-      if changed_left_overhang then settings.topbar_left_overhang = next_left_overhang; ext_set_number("topbar_left_overhang", next_left_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+      if changed_left_overhang then
+        if not settings.center_fx_in_reaper_window and not settings.follow_fx_position then
+          place_state.left_nudge = place_state.left_nudge + (next_left_overhang - topbar_left_overhang())
+        end
+        settings.topbar_left_overhang = next_left_overhang; ext_set_number("topbar_left_overhang", next_left_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0
+      end
       local changed_right_overhang, next_right_overhang = r.ImGui_SliderInt(ctx, "Tab bar right edge", topbar_right_overhang(), -24, 48, "%d px")
       if changed_right_overhang then settings.topbar_right_overhang = next_right_overhang; ext_set_number("topbar_right_overhang", next_right_overhang); update_topbar_width_from_size(topbar_width); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
       local changed_voffset, next_voffset = r.ImGui_SliderInt(ctx, "Tab bar vertical offset", topbar_vertical_offset(), -120, 120, "%d px")
       if changed_voffset then settings.vertical_offset = next_voffset; ext_set_number("vertical_offset", next_voffset); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
       if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Fine-tune the vertical position of the tab bar.") end
+      local changed_fixed, next_fixed = r.ImGui_Checkbox(ctx, "Fixed plugin window size", settings.fixed_fx_size == true)
+      if changed_fixed then settings.fixed_fx_size = next_fixed; ext_set_bool("fixed_fx_size", next_fixed); fixed_size_state = {}; pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Force plugin windows to one fixed size instead of their own size.\nOnly works for resizable plugins; others keep their own size.") end
+      if settings.fixed_fx_size then
+        local changed_fxw, next_fxw = r.ImGui_SliderInt(ctx, "Plugin width", math.floor(settings.fixed_fx_width), 200, 2000, "%d px")
+        if changed_fxw then settings.fixed_fx_width = next_fxw; ext_set_number("fixed_fx_width", next_fxw); fixed_size_state = {}; pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+        local changed_fxh, next_fxh = r.ImGui_SliderInt(ctx, "Plugin height", math.floor(settings.fixed_fx_height), 150, 1600, "%d px")
+        if changed_fxh then settings.fixed_fx_height = next_fxh; ext_set_number("fixed_fx_height", next_fxh); fixed_size_state = {}; pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
+      end
     end
     local changed_start, next_start = r.ImGui_Checkbox(ctx, "Open FX on start", settings.auto_open_on_start)
     if changed_start then settings.auto_open_on_start = next_start; ext_set_bool("auto_open_on_start", next_start); if next_start and active_key == "" then startup_open_done = false; open_startup_instrument() end end
+    local changed_autohide, next_autohide = r.ImGui_Checkbox(ctx, "Hide tab bar when no FX is open", settings.auto_hide_when_empty == true)
+    if changed_autohide then settings.auto_hide_when_empty = next_autohide; ext_set_bool("auto_hide_when_empty", next_autohide) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The tab bar only appears while an FX window is open.\nIt returns automatically when you open an FX.") end
+    local changed_detached, next_detached = r.ImGui_Checkbox(ctx, "Detached (dockable launcher)", settings.detached_mode == true)
+    if changed_detached then settings.detached_mode = next_detached; ext_set_bool("detached_mode", next_detached); if next_detached then clear_topbar_owner() end; place_state.moved = false; place_state.applied_left = nil; place_state.applied_top = nil; pending_place_until = 0; last_place_time = 0 end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Turn the tab bar into a normal, dockable window (launcher).\nIt no longer attaches to or moves the plugin; clicking a tab opens/focuses that FX.\nWhile detached, Center/Follow/edge/offset and auto-hide are ignored (except: opening an FX still centers it when 'Center FX' is on).") end
     local changed_capture, next_capture = r.ImGui_Checkbox(ctx, "Capture externally opened FX", settings.capture_external_floating)
     if changed_capture then settings.capture_external_floating = next_capture; ext_set_bool("capture_external_floating", next_capture); external_open_state = {} end
     local center_disabled = settings.follow_fx_position == true
@@ -2095,10 +2291,12 @@ local function draw_settings_popup()
     if changed_flip then settings.vertical_flip = next_flip; ext_set_bool("vertical_flip", next_flip); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Place the tab bar on the opposite (bottom) side of the plugin.\nWorks in all modes. Also fixes macOS setups where the bar\nappears at the bottom instead of the top.") end
     local changed_numbers, next_numbers = r.ImGui_Checkbox(ctx, "Show track numbers", settings.show_track_numbers ~= false)
-    if changed_numbers then settings.show_track_numbers = next_numbers; ext_set_bool("show_track_numbers", next_numbers); tab_width_cache = {} end
+    if changed_numbers then settings.show_track_numbers = next_numbers; ext_set_bool("show_track_numbers", next_numbers); tab_width_cache = {}; tab_label_cache = {} end
     if r.ImGui_BeginCombo then
       local current_content = normalized_content_mode()
-      if r.ImGui_BeginCombo(ctx, "Content", CONTENT_MODE_LABELS[current_content + 1] or CONTENT_MODE_LABELS[1]) then
+      local content_combo_open = r.ImGui_BeginCombo(ctx, "Content", CONTENT_MODE_LABELS[current_content + 1] or CONTENT_MODE_LABELS[1])
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Which FX show up as tabs.\nRegular (non-instrument) FX only appear when this is set to 'All FX'.") end
+      if content_combo_open then
         for mode = CONTENT_MODE_ALL_FX, CONTENT_MODE_INSTRUMENTS do
           local selected = current_content == mode
           if r.ImGui_Selectable(ctx, CONTENT_MODE_LABELS[mode + 1], selected) then
@@ -2173,6 +2371,47 @@ local function draw_toolbar()
   r.ImGui_DrawList_AddCircleFilled(r.ImGui_GetWindowDrawList(ctx), dot_x + dot_size * 0.5, dot_y + dot_size * 0.5, 5.5, dot_col, 18)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
   draw_settings_popup()
+end
+
+function truncate_text_to_width(text, max_width)
+  text = tostring(text or "")
+  if text == "" or not r.ImGui_CalcTextSize then return text end
+  if max_width <= 0 then return "" end
+  if (r.ImGui_CalcTextSize(ctx, text) or 0) <= max_width then return text end
+  local ellipsis = "..."
+  local starts = {}
+  local i = 1
+  local n = #text
+  while i <= n do
+    starts[#starts + 1] = i
+    local b = string.byte(text, i)
+    local step = 1
+    if b >= 0xF0 then step = 4 elseif b >= 0xE0 then step = 3 elseif b >= 0xC0 then step = 2 end
+    i = i + step
+  end
+  local lo, hi, best = 0, #starts - 1, 0
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    local cut = text:sub(1, (starts[mid + 1] or (n + 1)) - 1)
+    if (r.ImGui_CalcTextSize(ctx, cut .. ellipsis) or 0) <= max_width then
+      best = mid
+      lo = mid + 1
+    else
+      hi = mid - 1
+    end
+  end
+  if best <= 0 then return ellipsis end
+  return text:sub(1, (starts[best + 1] or (n + 1)) - 1) .. ellipsis
+end
+
+function tab_display_label(entry, max_text_width)
+  local base = entry_label(entry)
+  local cache_key = entry.key .. "|" .. tostring(math.floor((max_text_width or 0) + 0.5)) .. "|" .. base
+  local cached = tab_label_cache[cache_key]
+  if cached ~= nil then return cached end
+  local result = truncate_text_to_width(base, max_text_width)
+  tab_label_cache[cache_key] = result
+  return result
 end
 
 local function tab_width(entry)
@@ -2264,7 +2503,7 @@ local function draw_custom_tabs()
       local text_col = active and theme.text_active or theme.text_tab
       r.ImGui_DrawList_AddRectFilled(draw_list, tab_x1, y, tab_x2, y + tab_h - 1, bg, 5)
       r.ImGui_DrawList_AddRect(draw_list, tab_x1, y, tab_x2, y + tab_h - 1, active and theme.accent or theme.border, 5, 0, active and 1.4 or 0.8)
-      r.ImGui_DrawList_AddText(draw_list, tab_x1 + 12, y + 6, text_col, entry_label(entry))
+      r.ImGui_DrawList_AddText(draw_list, tab_x1 + 12, y + 6, text_col, tab_display_label(entry, width - 22))
       if hovered and r.ImGui_IsMouseClicked and r.ImGui_IsMouseClicked(ctx, 0) then
         handle_tab_activation_click(entry)
       end
@@ -2284,12 +2523,14 @@ local function draw_custom_tabs()
       topbar_popup_active = true
       for entry_index = 1, #hidden_entries do
         local entry = hidden_entries[entry_index]
-        local selected = selected_key == entry.key
-        if r.ImGui_Selectable(ctx, entry_label(entry) .. "##overflow_tab_" .. tostring(entry_index) .. "_" .. entry.key, selected) then
-          handle_tab_activation_click(entry)
-          r.ImGui_CloseCurrentPopup(ctx)
+        r.ImGui_PushID(ctx, "overflow_" .. tostring(entry_index) .. "_" .. entry.key)
+        if r.ImGui_BeginMenu(ctx, entry_label(entry)) then
+          if r.ImGui_MenuItem(ctx, "Show") then handle_tab_activation_click(entry); r.ImGui_CloseCurrentPopup(ctx) end
+          r.ImGui_Separator(ctx)
+          draw_fx_action_controls(entry, false)
+          r.ImGui_EndMenu(ctx)
         end
-        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, entry.track_name .. "\n" .. entry.fx_name) end
+        r.ImGui_PopID(ctx)
       end
       r.ImGui_EndPopup(ctx)
     end
@@ -2303,13 +2544,15 @@ end
 
 local function update_plugin_rect_from_topbar()
   local window_left, window_top = r.ImGui_GetWindowPos(ctx)
+  place_state.bar_left = window_left
+  place_state.bar_top = window_top
   local _, window_height = r.ImGui_GetWindowSize(ctx)
   local _, viewport_top, _, viewport_height = main_viewport_rect()
   local overlap = clamp(settings.plugin_overlap_y, 0, 80)
   local viewport_bottom = viewport_top + viewport_height - 12
   local active_entry = find_entry_by_key(active_key)
   local size = entry_window_size(active_entry)
-  local plugin_top = settings.vertical_flip and (window_top - size.height + overlap) or (window_top + window_height - overlap)
+  local plugin_top = (settings.vertical_flip and (window_top - size.height + overlap) or (window_top + window_height - overlap)) - topbar_vertical_offset()
   if topbar_dragging or (not settings.center_fx_in_reaper_window and not settings.follow_fx_position) then
     host_rect.left = math.floor(window_left + topbar_left_overhang() + 0.5)
     host_rect.top = math.floor(plugin_top + 0.5)
@@ -2335,7 +2578,7 @@ local function draw_blocked_state_window()
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoScrollbar")
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoScrollWithMouse")
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoSavedSettings")
-  flags = add_imgui_flag(flags, "ImGui_WindowFlags_TopMost")
+  if foreground_is_topbar_pair(blocked_state_hwnd()) then flags = add_imgui_flag(flags, "ImGui_WindowFlags_TopMost") end
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoBackground")
   flags = add_imgui_flag(flags, "ImGui_WindowFlags_NoInputs")
   local visible = r.ImGui_Begin(ctx, BLOCKED_WINDOW_NAME, true, flags)
@@ -2439,6 +2682,9 @@ local function capture_external_floating_window()
   pending_activate_frames = 0
   selected_key = opened_entry.key
   active_key = opened_entry.key
+  place_state.moved = false
+  place_state.applied_left = nil
+  place_state.applied_top = nil
   update_topbar_width_from_size(entry_window_size(opened_entry).width)
   pending_place_until = now + 1.25
   last_place_time = 0
@@ -2479,49 +2725,95 @@ local function loop()
   process_pending_activation()
   ensure_active_entry_visible()
   local active_entry = find_entry_by_key(active_key)
-  if entry_blocked_state(active_entry) then sync_host_rect_to_entry_size(active_entry) end
-  if settings.follow_fx_position and not topbar_dragging then follow_fx_window_update() end
-  r.ImGui_SetNextWindowSize(ctx, topbar_window_width(topbar_width), topbar_height, imgui_flag("ImGui_Cond_Always"))
-  local topbar_left, topbar_top = topbar_position_from_host_rect()
-  if topbar_left and topbar_top and (settings.center_fx_in_reaper_window or settings.follow_fx_position) and not topbar_dragging then
-    r.ImGui_SetNextWindowPos(ctx, topbar_left, topbar_top, imgui_flag("ImGui_Cond_Always"))
-  else
-    local centered_left, centered_top = centered_topbar_position()
-    if centered_left and centered_top then r.ImGui_SetNextWindowPos(ctx, centered_left, centered_top, imgui_flag("ImGui_Cond_Always")) end
-  end
+  local detached = settings.detached_mode == true
+  if not detached and entry_blocked_state(active_entry) then sync_host_rect_to_entry_size(active_entry) end
+  if not detached and settings.follow_fx_position and not topbar_dragging then follow_fx_window_update() end
   local window_flags = 0
   window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoScrollbar")
   window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoScrollWithMouse")
-  window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoTitleBar")
-  window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoResize")
-  window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoBackground")
-  window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoDocking")
-  if settings.follow_fx_position and follow_pair_on_top then window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_TopMost") end
-  if r.ImGui_SetNextWindowDockID then r.ImGui_SetNextWindowDockID(ctx, 0, imgui_flag("ImGui_Cond_Always")) end
-  local theme_stack = push_theme()
-  draw_blocked_state_window()
-  local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
-  if visible then
-    sync_topbar_window_to_blocked_entry(active_entry)
-    draw_topbar_background()
-    draw_toolbar()
-    if r.ImGui_SetCursorPosY then r.ImGui_SetCursorPosY(ctx, math.max(0, topbar_height - 31)) end
-    draw_custom_tabs()
-    if not r.JS_Window_SetPosition or not r.TrackFX_GetFloatingWindow then r.ImGui_TextColored(ctx, theme.text_dim, "js_ReaScriptAPI is not available") end
-    update_topbar_focus_click()
-    update_plugin_rect_from_topbar()
-    if esc_requested_close() and not topbar_popup_active then close_requested = true end
+  if detached then
+    r.ImGui_SetNextWindowSize(ctx, 360, 120, imgui_flag("ImGui_Cond_FirstUseEver"))
+    window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoTitleBar")
+  else
+    r.ImGui_SetNextWindowSize(ctx, topbar_window_width(topbar_width), topbar_height, imgui_flag("ImGui_Cond_Always"))
+    local topbar_left, topbar_top = topbar_position_from_host_rect()
+    if topbar_left and topbar_top and (settings.center_fx_in_reaper_window or settings.follow_fx_position) and not topbar_dragging then
+      r.ImGui_SetNextWindowPos(ctx, topbar_left, topbar_top, imgui_flag("ImGui_Cond_Always"))
+      place_state.left_nudge = 0
+    else
+      local centered_left, centered_top = centered_topbar_position()
+      if centered_left and centered_top then
+        r.ImGui_SetNextWindowPos(ctx, centered_left, centered_top, imgui_flag("ImGui_Cond_Always"))
+      elseif place_state.left_nudge ~= 0 and place_state.bar_left and not topbar_dragging then
+        r.ImGui_SetNextWindowPos(ctx, place_state.bar_left - place_state.left_nudge, place_state.bar_top, imgui_flag("ImGui_Cond_Always"))
+        place_state.left_nudge = 0
+      end
+    end
+    window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoTitleBar")
+    window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoResize")
+    window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoBackground")
+    window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoDocking")
+    if settings.follow_fx_position and follow_pair_on_top then window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_TopMost") end
+    if r.ImGui_SetNextWindowDockID then r.ImGui_SetNextWindowDockID(ctx, 0, imgui_flag("ImGui_Cond_Always")) end
   end
-  r.ImGui_End(ctx)
-  pop_theme(theme_stack)
+  local open = true
+  if not (settings.auto_hide_when_empty and not detached and active_key == "" and pending_activate_key == "" and not topbar_dragging) then
+    local theme_stack = push_theme()
+    if detached then
+      if entry_blocked_state(active_entry) then
+        local size = entry_window_size(active_entry)
+        local reaper_left, reaper_top, reaper_width, reaper_height = reaper_window_rect()
+        local overlap = clamp(settings.plugin_overlap_y, 0, 80)
+        local centered_top = reaper_top + (reaper_height - size.height) * 0.5
+        host_rect.left = reaper_left + (reaper_width - size.width) * 0.5
+        host_rect.width = size.width
+        host_rect.height = size.height + overlap
+        host_rect.top = settings.vertical_flip and centered_top or (centered_top - overlap)
+        draw_blocked_state_window()
+      end
+    else
+      draw_blocked_state_window()
+    end
+    local visible
+    visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
+    if visible then
+      if detached then
+        draw_toolbar()
+        draw_custom_tabs()
+        if not r.JS_Window_SetPosition or not r.TrackFX_GetFloatingWindow then r.ImGui_TextColored(ctx, theme.text_dim, "js_ReaScriptAPI is not available") end
+        if esc_requested_close() and not topbar_popup_active then close_requested = true end
+      else
+        sync_topbar_window_to_blocked_entry(active_entry)
+        draw_topbar_background()
+        draw_toolbar()
+        if r.ImGui_SetCursorPosY then r.ImGui_SetCursorPosY(ctx, math.max(0, topbar_height - 31)) end
+        draw_custom_tabs()
+        if not r.JS_Window_SetPosition or not r.TrackFX_GetFloatingWindow then r.ImGui_TextColored(ctx, theme.text_dim, "js_ReaScriptAPI is not available") end
+        update_topbar_focus_click()
+        update_plugin_rect_from_topbar()
+        if esc_requested_close() and not topbar_popup_active then close_requested = true end
+      end
+    end
+    r.ImGui_End(ctx)
+    pop_theme(theme_stack)
+  end
   if close_requested then
     cleanup()
     return
   end
-  set_topbar_owner()
-  capture_external_floating_window()
-  maintain_active_window()
-  process_pending_pair_front()
+  if detached then
+    clear_topbar_owner()
+    capture_external_floating_window()
+    place_detached_active_window()
+    if pending_close_key ~= "" and pending_close_deadline > 0 and r.time_precise() >= pending_close_deadline then
+      close_pending_previous()
+    end
+  else
+    set_topbar_owner()
+    capture_external_floating_window()
+    maintain_active_window()
+    process_pending_pair_front()
+  end
   if open then
     r.defer(loop)
   else

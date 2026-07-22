@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.0
+-- @version 0.6.1
 -- @changelog:
+-- v0.6.1
+--   + Send Studio: Fixed the mixer-strip faders (volume and pan) not responding on some setups - the strips now use ReaImGui's own hit-testing and input capture instead of raw mouse state, so dragging works regardless of ReaImGui version, window focus or docking
+--   + Send Studio: Fixed the Listen (L) button not isolating properly - it now uses Solo In Place, so soloing the return bus no longer un-mutes every other track that feeds it; you hear only the original track and its return
+--   + Send Studio: The list view no longer runs off-screen in a narrow side-docker - the track name fills the top line and the controls flow onto the next line(s) when there is not enough width, with a divider between sends; Shift+wheel over the list volume/pan sliders does the same fine-adjust as the card faders
+--   + Send Studio: Added -1 dB / +1 dB nudge buttons around the volume of each send (either side of the readout on card strips, next to the slider in list view), for quick step adjustments without dragging
+--   + Send Studio: In list view the volume/pan value stays readable when the slider handle passes over it (the grab now uses the muted accent colour that contrasts with the text)
 -- v0.6.0
 --   + Send Studio: New module for fast send/receive management, styled after the Control Room module - a vertical mixer-strip (card) view that flexes to fill the window up to a maximum width and wraps to the next row when it gets too narrow, plus a compact list view; toggle between them in the footer
 --   + Send Studio: Per send/receive controls for volume (drag fader, Shift+scroll for fine, double-click for 0 dB), pan, mute, phase invert, mono sum, send mode (Post / Pre-FX / Pre-Fader) and the source/destination audio channel; right-click a strip for the same options plus "select destination track" and remove

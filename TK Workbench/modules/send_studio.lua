@@ -465,7 +465,9 @@ local function toggle_audition(src, dst)
       local guid = track_guid(track)
       if valid_track(track) and guid then
         solos[guid] = r.GetMediaTrackInfo_Value(track, "I_SOLO") or 0
-        r.SetMediaTrackInfo_Value(track, "I_SOLO", (guid == src_guid or guid == dst_guid) and 1 or 0)
+        -- Solo-In-Place (2), not normal solo (1): normal solo follows routing, so
+        -- soloing the return bus would also un-mute every other track feeding it.
+        r.SetMediaTrackInfo_Value(track, "I_SOLO", (guid == src_guid or guid == dst_guid) and 2 or 0)
       end
     end
     state.audition = { key = audition_key(src, dst), solos = solos }
@@ -869,7 +871,11 @@ local function draw_strip(app, lane, settings, width, height)
   local enabled = lane.enabled == true
   r.ImGui_PushID(ctx, lane.id)
   local left_x, top_y = r.ImGui_GetCursorScreenPos(ctx)
-  r.ImGui_Dummy(ctx, width, height)
+  -- One InvisibleButton spans the whole strip so ImGui does the hit-testing and
+  -- input capture; we route clicks/drags to the sub-controls by mouse position.
+  r.ImGui_InvisibleButton(ctx, "##strip", width, height)
+  local strip_hovered = r.ImGui_IsItemHovered(ctx) == true
+  local strip_active = r.ImGui_IsItemActive(ctx) == true
   if r.ImGui_BeginPopupContextItem and r.ImGui_BeginPopupContextItem(ctx, "##send_studio_strip_menu") then
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Send Mode")
     for _, mode in ipairs(SEND_MODES) do
@@ -888,16 +894,14 @@ local function draw_strip(app, lane, settings, width, height)
   local right_x = left_x + width
   local bottom_y = top_y + height
   local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-  local hovered = mouse_x >= left_x and mouse_x <= right_x and mouse_y >= top_y and mouse_y <= bottom_y
+  local hovered = strip_hovered
 
-  -- When any popup/combo is open, our custom-drawn buttons must not react to
-  -- clicks meant for that popup (they bypass ImGui's input capture).
-  local popup_open = false
-  if r.ImGui_IsPopupOpen and r.ImGui_PopupFlags_AnyPopup then
-    local ok, result = pcall(r.ImGui_IsPopupOpen, ctx, "", r.ImGui_PopupFlags_AnyPopup())
-    popup_open = ok and result == true
-  end
-  local interact = enabled and not popup_open
+  -- ImGui owns hit-testing via the InvisibleButton above, so clicks only count
+  -- when the strip is genuinely hovered (this respects window focus, open
+  -- popups and item overlap) and a drag only continues while that button stays
+  -- active. This removes the global-mouse fragility that could freeze the
+  -- fader on some ReaImGui/REAPER setups.
+  local interact = enabled and strip_hovered
 
   -- Strip background (darker than the buttons for contrast)
   local corner = UIScale.px(5)
@@ -964,11 +968,25 @@ local function draw_strip(app, lane, settings, width, height)
   local name_hovered = mouse_x >= x0 and mouse_x <= x1 and mouse_y >= name_y0 and mouse_y <= name_y1
   if name_hovered and interact and r.ImGui_IsMouseClicked(ctx, 0) then lane.select_other() end
 
-  -- dB value above the name label
+  -- dB value above the name label, flanked by -1 dB / +1 dB nudge buttons
   local value_text = enabled and format_db(lane.value, settings) or "--"
   local value_h = r.ImGui_GetTextLineHeight(ctx)
   local value_y = name_y0 - UIScale.round(3) - value_h
   local value_w = calc_text_width(ctx, value_text)
+  if enabled then
+    local step_w = UIScale.round(16)
+    local step_y0 = value_y - UIScale.round(1)
+    local step_y1 = value_y + value_h + UIScale.round(2)
+    local minus_clicked, minus_hov = strip_button(ctx, draw_list, x0, step_y0, x0 + step_w, step_y1, "-", false, nil, mouse_x, mouse_y)
+    local plus_clicked, plus_hov = strip_button(ctx, draw_list, x1 - step_w, step_y0, x1, step_y1, "+", false, nil, mouse_x, mouse_y)
+    if interact then
+      local cur_db = linear_to_db(lane.value, settings.min_db)
+      if minus_clicked then lane.write_volume(db_to_linear(clamp(cur_db - 1, settings.min_db, settings.max_db), settings.min_db, settings.max_db)) end
+      if plus_clicked then lane.write_volume(db_to_linear(clamp(cur_db + 1, settings.min_db, settings.max_db), settings.min_db, settings.max_db)) end
+    end
+    if minus_hov then r.ImGui_SetTooltip(ctx, "-1 dB")
+    elseif plus_hov then r.ImGui_SetTooltip(ctx, "+1 dB") end
+  end
   r.ImGui_DrawList_AddText(draw_list, (x0 + x1 - value_w) * 0.5, value_y, enabled and Theme.colors.text or Theme.colors.text_dim, value_text)
 
   -- Pan strip below the button cluster
@@ -989,7 +1007,7 @@ local function draw_strip(app, lane, settings, width, height)
   elseif pan_hovered and interact and r.ImGui_IsMouseClicked(ctx, 0) then
     state.drag = { id = lane.id, kind = "pan" }
   end
-  if enabled and state.drag and state.drag.id == lane.id and state.drag.kind == "pan" then
+  if strip_active and state.drag and state.drag.id == lane.id and state.drag.kind == "pan" then
     lane.write_pan(clamp((mouse_x - pan_mid) / (pan_range * 0.5), -1, 1))
   end
 
@@ -1023,19 +1041,19 @@ local function draw_strip(app, lane, settings, width, height)
     elseif fader_hovered and interact and r.ImGui_IsMouseClicked(ctx, 0) and not pan_hovered then
       state.drag = { id = lane.id, kind = "vol" }
     end
-    local wheel = fader_hovered and shift_key_down(ctx) and mouse_wheel_delta(ctx) or 0
+    local wheel = fader_hovered and strip_hovered and shift_key_down(ctx) and mouse_wheel_delta(ctx) or 0
     if enabled and math.abs(wheel) > 0.0001 then
       lane.write_volume(db_to_linear(clamp(current_db + wheel * 0.1, settings.min_db, settings.max_db), settings.min_db, settings.max_db))
     end
-    if enabled and state.drag and state.drag.id == lane.id and state.drag.kind == "vol" then
+    if strip_active and state.drag and state.drag.id == lane.id and state.drag.kind == "vol" then
       local next_normalized = clamp((fader_bottom - mouse_y) / range, 0, 1)
       lane.write_volume(db_to_linear(settings.min_db + next_normalized * (settings.max_db - settings.min_db), settings.min_db, settings.max_db))
     end
     if handle_hovered then r.ImGui_SetTooltip(ctx, "Drag: volume | Shift+scroll: fine | Double-click: 0 dB") end
   end
 
-  -- Release drag
-  if not r.ImGui_IsMouseDown(ctx, 0) and state.drag and state.drag.id == lane.id then state.drag = nil end
+  -- Release drag when ImGui reports the strip is no longer being held
+  if not strip_active and state.drag and state.drag.id == lane.id then state.drag = nil end
 
   if not enabled and hovered then r.ImGui_SetTooltip(ctx, "Destination track missing") end
   draw_channel_popup(app, lane, "##send_studio_chan")
@@ -1047,101 +1065,155 @@ end
 -- ---------------------------------------------------------------------------
 
 local function push_slider_theme(ctx)
+  -- Use the muted accent for the grab: ImGui draws the value text on top of the
+  -- grab, and accent_soft contrasts with the theme text colour in every preset,
+  -- so the readout stays legible even when the handle sits over it.
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x00000044)
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), Theme.colors.accent)
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), Theme.colors.accent)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), Theme.colors.accent_soft)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), Theme.colors.accent_soft)
   return 3
 end
 
-local function draw_list_row(app, lane, settings, name_width)
+-- Shift+wheel fine-adjust for a native slider (call right after the slider,
+-- while it is the current item). Returns the new value or nil when unchanged.
+local function slider_wheel_delta(ctx, current, step, minimum, maximum)
+  if not r.ImGui_IsItemHovered(ctx) or not shift_key_down(ctx) then return nil end
+  local wheel = mouse_wheel_delta(ctx)
+  if math.abs(wheel) < 0.0001 then return nil end
+  return clamp(current + wheel * step, minimum, maximum)
+end
+
+local function draw_list_row(app, lane, settings)
   local ctx = app.ctx
   local enabled = lane.enabled == true
   r.ImGui_PushID(ctx, lane.id)
 
-  -- Colour swatch + name
+  local gap = UIScale.round(8)
+  if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
+    local ok, sx = pcall(r.ImGui_GetStyleVar, ctx, r.ImGui_StyleVar_ItemSpacing())
+    if ok and sx then gap = sx end
+  end
+  local avail = r.ImGui_GetContentRegionAvail(ctx)
+  local swatch_w = UIScale.round(10)
+
+  -- Line 1: colour swatch + track name, filling the row width
   local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local line_h = r.ImGui_GetFrameHeight(ctx)
   r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy + UIScale.round(3), cx + UIScale.round(4), cy + line_h - UIScale.round(3), lane.handle_color or Theme.colors.border, UIScale.px(2))
-  r.ImGui_Dummy(ctx, UIScale.round(8), line_h)
+  r.ImGui_Dummy(ctx, swatch_w, line_h)
   r.ImGui_SameLine(ctx, 0, 0)
-  local name_color = enabled and Theme.colors.text or Theme.colors.text_dim
   r.ImGui_AlignTextToFramePadding(ctx)
-  r.ImGui_TextColored(ctx, name_color, ellipsize_text(ctx, lane.label, name_width))
+  r.ImGui_TextColored(ctx, enabled and Theme.colors.text or Theme.colors.text_dim, ellipsize_text(ctx, lane.label, math.max(UIScale.round(40), avail - swatch_w - UIScale.round(6))))
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, lane.label) end
-  r.ImGui_SameLine(ctx, UIScale.round(8) + name_width + UIScale.round(10))
 
-  -- Mute
+  -- Control widths for the wrapping flow below (buttons fixed, sliders capped to the pane)
   local mute_w = UIScale.text_button_w(ctx, "M", 30, 6)
-  if lane.muted then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.warning, nil, nil, 4.5))
-  end
-  if r.ImGui_Button(ctx, "M##mute", mute_w, 0) and enabled then lane.write_mute(not lane.muted) end
-  if lane.muted then r.ImGui_PopStyleColor(ctx, 3) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, lane.muted and "Unmute" or "Mute") end
-  r.ImGui_SameLine(ctx)
-
-  -- Solo send (isolate among sends to the same track)
   local toggle_w = UIScale.text_button_w(ctx, "S", 26, 6)
-  if lane.listen_active then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.accent, nil, nil, 4.5))
-  end
-  if r.ImGui_Button(ctx, "S##solo", toggle_w, 0) and enabled then lane.toggle_listen() end
-  if lane.listen_active then r.ImGui_PopStyleColor(ctx, 3) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Solo send: isolate among sends to the same track") end
-  r.ImGui_SameLine(ctx)
-
-  -- Listen: solo original + return track only
-  if lane.audition_active then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.accent, nil, nil, 4.5))
-  end
-  if r.ImGui_Button(ctx, "L##listen", toggle_w, 0) and enabled then lane.toggle_audition() end
-  if lane.audition_active then r.ImGui_PopStyleColor(ctx, 3) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Listen: solo original + return track only") end
-  r.ImGui_SameLine(ctx)
-
-  -- Volume slider (dB)
-  local shown_db = linear_to_db(lane.value, settings.min_db)
-  r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
-  local slider_count = push_slider_theme(ctx)
-  local vol_changed, next_db = r.ImGui_SliderDouble(ctx, "##vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
-  r.ImGui_PopStyleColor(ctx, slider_count)
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then lane.write_volume(1) elseif vol_changed then lane.write_volume(db_to_linear(next_db, settings.min_db, settings.max_db)) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click to reset to 0 dB") end
-  r.ImGui_SameLine(ctx)
-
-  -- Pan slider
-  r.ImGui_SetNextItemWidth(ctx, UIScale.round(110))
-  slider_count = push_slider_theme(ctx)
-  local pan_changed, next_pan = r.ImGui_SliderDouble(ctx, "##pan", tonumber(lane.pan) or 0, -1, 1, format_pan(lane.pan))
-  r.ImGui_PopStyleColor(ctx, slider_count)
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then lane.write_pan(0) elseif pan_changed then lane.write_pan(next_pan) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click to center") end
-  r.ImGui_SameLine(ctx)
-
-  -- Send mode (cycles on click)
   local mode_w = UIScale.text_button_w(ctx, "Pre-Fader", 74, 6)
-  if r.ImGui_Button(ctx, send_mode_label(lane.mode) .. "##mode", mode_w, 0) then lane.write_mode(next_send_mode(lane.mode)) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Send mode (click to cycle)") end
-  r.ImGui_SameLine(ctx)
+  local chan_w = UIScale.text_button_w(ctx, "MIDI > Mono 1", 90, 6)
+  local rm_w = UIScale.text_button_w(ctx, "x", 26, 6)
+  local vol_w = math.min(UIScale.round(150), avail)
+  local pan_w = math.min(UIScale.round(110), avail)
 
-  -- Audio channel routing (source -> destination)
-  local chan_text = chan_label(lane.src_raw) .. " > " .. chan_label(lane.dst_raw)
-  if r.ImGui_Button(ctx, chan_text .. "##chan", UIScale.text_button_w(ctx, "MIDI > Mono 1", 90, 6), 0) then r.ImGui_OpenPopup(ctx, "##send_studio_chan") end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Source > destination audio channel") end
+  local function toggle_button(label, active, action, tip)
+    if active then
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.accent, nil, nil, 4.5))
+    end
+    if r.ImGui_Button(ctx, label, toggle_w, 0) and enabled then action() end
+    if active then r.ImGui_PopStyleColor(ctx, 3) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, tip) end
+  end
+
+  local items = {}
+  items[#items + 1] = { w = mute_w, draw = function()
+    if lane.muted then
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
+      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.warning, nil, nil, 4.5))
+    end
+    if r.ImGui_Button(ctx, "M##mute", mute_w, 0) and enabled then lane.write_mute(not lane.muted) end
+    if lane.muted then r.ImGui_PopStyleColor(ctx, 3) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, lane.muted and "Unmute" or "Mute") end
+  end }
+  items[#items + 1] = { w = toggle_w, draw = function() toggle_button("S##solo", lane.listen_active, lane.toggle_listen, "Solo send: isolate among sends to the same track") end }
+  items[#items + 1] = { w = toggle_w, draw = function() toggle_button("L##listen", lane.audition_active, lane.toggle_audition, "Listen: solo original + return track only") end }
+  local step_w = UIScale.text_button_w(ctx, "-", 22, 6)
+  local function nudge_volume(delta)
+    local cur = linear_to_db(lane.value, settings.min_db)
+    lane.write_volume(db_to_linear(clamp(cur + delta, settings.min_db, settings.max_db), settings.min_db, settings.max_db))
+  end
+  items[#items + 1] = { w = step_w, draw = function()
+    if r.ImGui_Button(ctx, "-##voldn", step_w, 0) and enabled then nudge_volume(-1) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "-1 dB") end
+  end }
+  items[#items + 1] = { w = vol_w, draw = function()
+    local shown_db = linear_to_db(lane.value, settings.min_db)
+    r.ImGui_SetNextItemWidth(ctx, vol_w)
+    local sc = push_slider_theme(ctx)
+    local changed, nd = r.ImGui_SliderDouble(ctx, "##vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
+    r.ImGui_PopStyleColor(ctx, sc)
+    local applied = false
+    if r.ImGui_IsItemHovered(ctx) then
+      if r.ImGui_IsMouseClicked(ctx, 1) then lane.write_volume(1); applied = true
+      else
+        local wd = slider_wheel_delta(ctx, shown_db, 0.1, settings.min_db, settings.max_db)
+        if wd then lane.write_volume(db_to_linear(wd, settings.min_db, settings.max_db)); applied = true end
+      end
+      r.ImGui_SetTooltip(ctx, "Drag | Shift+wheel: fine | Right-click: 0 dB")
+    end
+    if not applied and changed then lane.write_volume(db_to_linear(nd, settings.min_db, settings.max_db)) end
+  end }
+  items[#items + 1] = { w = step_w, draw = function()
+    if r.ImGui_Button(ctx, "+##volup", step_w, 0) and enabled then nudge_volume(1) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "+1 dB") end
+  end }
+  items[#items + 1] = { w = pan_w, draw = function()
+    local shown_pan = tonumber(lane.pan) or 0
+    r.ImGui_SetNextItemWidth(ctx, pan_w)
+    local sc = push_slider_theme(ctx)
+    local changed, np = r.ImGui_SliderDouble(ctx, "##pan", shown_pan, -1, 1, format_pan(lane.pan))
+    r.ImGui_PopStyleColor(ctx, sc)
+    local applied = false
+    if r.ImGui_IsItemHovered(ctx) then
+      if r.ImGui_IsMouseClicked(ctx, 1) then lane.write_pan(0); applied = true
+      else
+        local wp = slider_wheel_delta(ctx, shown_pan, 0.02, -1, 1)
+        if wp then lane.write_pan(wp); applied = true end
+      end
+      r.ImGui_SetTooltip(ctx, "Drag | Shift+wheel: fine | Right-click: center")
+    end
+    if not applied and changed then lane.write_pan(np) end
+  end }
+  items[#items + 1] = { w = mode_w, draw = function()
+    if r.ImGui_Button(ctx, send_mode_label(lane.mode) .. "##mode", mode_w, 0) then lane.write_mode(next_send_mode(lane.mode)) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Send mode (click to cycle)") end
+  end }
+  items[#items + 1] = { w = chan_w, draw = function()
+    local chan_text = chan_label(lane.src_raw) .. " > " .. chan_label(lane.dst_raw)
+    if r.ImGui_Button(ctx, chan_text .. "##chan", chan_w, 0) then r.ImGui_OpenPopup(ctx, "##send_studio_chan") end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Source > destination audio channel") end
+  end }
+  items[#items + 1] = { w = rm_w, draw = function()
+    if r.ImGui_Button(ctx, "x##remove", rm_w, 0) then lane.remove() end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, lane.category == -1 and "Remove receive" or "Remove send") end
+  end }
+
+  -- Flow the controls and wrap to the next line when the next one won't fit.
+  local start_x = r.ImGui_GetCursorScreenPos(ctx)
+  local visible_x2 = start_x + r.ImGui_GetContentRegionAvail(ctx)
+  for i, item in ipairs(items) do
+    item.draw()
+    if i < #items then
+      local last_x2 = select(1, r.ImGui_GetItemRectMax(ctx))
+      if last_x2 + gap + items[i + 1].w < visible_x2 then r.ImGui_SameLine(ctx, 0, gap) end
+    end
+  end
   draw_channel_popup(app, lane, "##send_studio_chan")
-  r.ImGui_SameLine(ctx)
 
-  -- Remove
-  if r.ImGui_Button(ctx, "x##remove", UIScale.text_button_w(ctx, "x", 26, 6), 0) then lane.remove() end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, lane.category == -1 and "Remove receive" or "Remove send") end
-
+  r.ImGui_Separator(ctx)
   r.ImGui_PopID(ctx)
 end
 
@@ -1174,10 +1246,8 @@ local function draw_section_strips(app, settings, rows)
 end
 
 local function draw_section_list(app, settings, rows)
-  local ctx = app.ctx
-  local name_width = UIScale.round(150)
   for _, lane in ipairs(rows) do
-    draw_list_row(app, lane, settings, name_width)
+    draw_list_row(app, lane, settings)
   end
 end
 
