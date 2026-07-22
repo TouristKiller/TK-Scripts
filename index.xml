@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.5.11" author="TouristKiller" time="2026-07-21T21:40:00Z">
+    <version name="0.6.0" author="TouristKiller" time="2026-07-22T01:55:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -75,6 +75,7 @@
     <source main="main" file="Module Actions/TK_Workbench_Open_Automation_Item_Manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Automation_Item_Manager.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Color_Studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Color_Studio.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Control_Room.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Control_Room.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Send_Studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Send_Studio.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_FX_Chain_Builder.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_FX_Chain_Builder.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_FX_Groups.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_FX_Groups.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Home.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Home.lua</source>
@@ -99,6 +100,7 @@
      <source file="modules/automation_item_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/automation_item_manager.lua</source>
      <source file="modules/color_studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/color_studio.lua</source>
      <source file="modules/control_room.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/control_room.lua</source>
+     <source file="modules/send_studio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/send_studio.lua</source>
      <source file="modules/fx_chain_builder.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/fx_chain_builder.lua</source>
      <source file="modules/fx_groups.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/fx_groups.lua</source>
      <source file="modules/instrument_rack.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/instrument_rack.lua</source>
@@ -113,6 +115,12 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+                v0.6.0
+                + Send Studio: New module for fast send/receive management, styled after the Control Room module - a vertical mixer-strip (card) view that flexes to fill the window up to a maximum width and wraps to the next row when it gets too narrow, plus a compact list view; toggle between them in the footer
+                + Send Studio: Per send/receive controls for volume (drag fader, Shift+scroll for fine, double-click for 0 dB), pan, mute, phase invert, mono sum, send mode (Post / Pre-FX / Pre-Fader) and the source/destination audio channel; right-click a strip for the same options plus "select destination track" and remove
+                + Send Studio: Solo send (S) isolates one send among the sends to the same track, and Listen (L) auditions "return and original tracks only" by soloing just the source and destination track; a "Reset Solo" button appears while either is active and restores the previous state, so you never leave the project soloed by accident
+                + Send Studio: Pinnable target track (follow the selection or lock onto one track) and multi-track creation - with several tracks selected, Add / New bus / Paste apply to all of them at once
+                + Send Studio: Add sends/receives via a filterable track picker, create a new bus track and send the active track(s) to it in one action, and copy/paste a track's sends (including channels, mode, phase, mono and pan) onto other tracks
                 v0.5.11
                 + Media Browser: Fixed embedded cover art on Opus/OGG (and other Vorbis-tagged) files being decoded corruptly - the Base64 decoder for METADATA_BLOCK_PICTURE artwork kept growing its bit accumulator without discarding already-emitted bits, which mangled larger images and caused "Corrupt JPEG data: N extraneous bytes before marker" errors plus unreadable cached thumbnails; this replaces the 0.5.10 workaround with the real fix and the cover cache is regenerated automatically so thumbnails now load correctly (thanks to the forum user who tracked down the root cause)
                 v0.5.10

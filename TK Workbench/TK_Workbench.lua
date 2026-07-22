@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.5.11
+-- @version 0.6.0
 -- @changelog:
+-- v0.6.0
+--   + Send Studio: New module for fast send/receive management, styled after the Control Room module - a vertical mixer-strip (card) view that flexes to fill the window up to a maximum width and wraps to the next row when it gets too narrow, plus a compact list view; toggle between them in the footer
+--   + Send Studio: Per send/receive controls for volume (drag fader, Shift+scroll for fine, double-click for 0 dB), pan, mute, phase invert, mono sum, send mode (Post / Pre-FX / Pre-Fader) and the source/destination audio channel; right-click a strip for the same options plus "select destination track" and remove
+--   + Send Studio: Solo send (S) isolates one send among the sends to the same track, and Listen (L) auditions "return and original tracks only" by soloing just the source and destination track; a "Reset Solo" button appears while either is active and restores the previous state, so you never leave the project soloed by accident
+--   + Send Studio: Pinnable target track (follow the selection or lock onto one track) and multi-track creation - with several tracks selected, Add / New bus / Paste apply to all of them at once
+--   + Send Studio: Add sends/receives via a filterable track picker, create a new bus track and send the active track(s) to it in one action, and copy/paste a track's sends (including channels, mode, phase, mono and pan) onto other tracks
 -- v0.5.11
 --   + Media Browser: Fixed embedded cover art on Opus/OGG (and other Vorbis-tagged) files being decoded corruptly - the Base64 decoder for METADATA_BLOCK_PICTURE artwork kept growing its bit accumulator without discarding already-emitted bits, which mangled larger images and caused "Corrupt JPEG data: N extraneous bytes before marker" errors plus unreadable cached thumbnails; this replaces the 0.5.10 workaround with the real fix and the cover cache is regenerated automatically so thumbnails now load correctly (thanks to the forum user who tracked down the root cause)
 -- v0.5.10
@@ -377,6 +383,7 @@ local module_names = {
   "track_tags",
   "automation_item_manager",
   "control_room",
+  "send_studio",
   "instrument_rack",
   "fx_groups",
   "fx_chain_builder",
@@ -867,6 +874,17 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddCircleFilled(draw_list, L(17), MY(6), RD(4), color, 12)
     r.ImGui_DrawList_AddCircleFilled(draw_list, cx, MY(-4), RD(4), color, 12)
     r.ImGui_DrawList_AddCircleFilled(draw_list, R(17), MY(10), RD(4), color, 12)
+  elseif id == "send_studio" then
+    r.ImGui_DrawList_AddCircleFilled(draw_list, L(12), cy, RD(4), color, 16)
+    r.ImGui_DrawList_AddLine(draw_list, L(15), cy, MX(-2), cy, color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-2), cy, MX(-2), T(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-2), cy, MX(-2), B(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-2), T(15), R(13), T(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-2), B(15), R(13), B(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(17), T(11), R(11), T(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(17), T(19), R(11), T(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(17), B(19), R(11), B(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(17), B(11), R(11), B(15), color, W(2))
   elseif id == "instrument_rack" then
     r.ImGui_DrawList_AddRect(draw_list, L(7), T(8), R(7), B(8), color, RD(3), 0, W(2))
     for index = 0, 3 do
