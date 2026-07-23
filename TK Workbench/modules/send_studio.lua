@@ -453,6 +453,18 @@ local function write_track_own_mute(track, muted)
   end)
 end
 
+local function read_track_own_solo(track)
+  if not valid_track(track) or not r.GetMediaTrackInfo_Value then return false end
+  return (r.GetMediaTrackInfo_Value(track, "I_SOLO") or 0) > 0
+end
+
+local function write_track_own_solo(track, on)
+  if not valid_track(track) or not r.SetMediaTrackInfo_Value then return false end
+  return write_with_undo("Send Studio: Track solo", function()
+    return r.SetMediaTrackInfo_Value(track, "I_SOLO", on and 1 or 0)
+  end)
+end
+
 local function read_track_own_pan(track)
   if not valid_track(track) or not r.GetMediaTrackInfo_Value then return 0 end
   return r.GetMediaTrackInfo_Value(track, "D_PAN") or 0
@@ -1803,6 +1815,30 @@ local function draw_header(app, settings, target, pinned, source_count)
 end
 
 -- Toolbar with global actions: new bus, copy/paste sends, reset solo/listen.
+-- Optional companion script: TK Patchbay (standalone), a sibling of the TK
+-- Workbench folder. It may not be installed; the button reflects that.
+local PATCHBAY_PATH = (function()
+  local ok, src = pcall(function() return debug.getinfo(1, "S").source end)
+  if not ok or type(src) ~= "string" then return nil end
+  local sep = package.config:sub(1, 1)
+  local module_dir = src:match("@?(.*[\\/])")
+  local workbench_dir = module_dir and module_dir:match("^(.*[\\/])[^\\/]+[\\/]$")
+  local tk_scripts_dir = workbench_dir and workbench_dir:match("^(.*[\\/])[^\\/]+[\\/]$")
+  if not tk_scripts_dir then return nil end
+  return tk_scripts_dir .. "FX" .. sep .. "TK_Patchbay_Standalone.lua"
+end)()
+
+local function patchbay_installed()
+  return PATCHBAY_PATH ~= nil and r.file_exists and r.file_exists(PATCHBAY_PATH) == true
+end
+
+local function launch_patchbay()
+  if not patchbay_installed() or not r.AddRemoveReaScript then return false end
+  local cmd = r.AddRemoveReaScript(true, 0, PATCHBAY_PATH, true)
+  if cmd and cmd ~= 0 then r.Main_OnCommand(cmd, 0); return true end
+  return false
+end
+
 local function draw_toolbar(app, settings, target, sources)
   local ctx = app.ctx
   local has_target = valid_track(target)
@@ -1837,6 +1873,21 @@ local function draw_toolbar(app, settings, target, sources)
     if reset then reset_all_listen(target) end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear active solo/listen and restore the previous state") end
   end
+
+  -- Patchbay launcher, right-aligned
+  local installed = patchbay_installed()
+  local patch_w = calc_text_width(ctx, "Patchbay") + UIScale.round(14)
+  r.ImGui_SameLine(ctx)
+  local avail_x = r.ImGui_GetContentRegionAvail(ctx)
+  if avail_x > patch_w then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (avail_x - patch_w)) end
+  if not installed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.text_dim) end
+  if r.ImGui_SmallButton(ctx, "Patchbay##send_studio_patchbay") then
+    if installed then launch_patchbay() else app.status = "TK Patchbay Standalone is not installed" end
+  end
+  if not installed then r.ImGui_PopStyleColor(ctx, 1) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, installed and "Open TK Patchbay (standalone)" or "TK Patchbay Standalone is not installed") end
+
+  r.ImGui_Separator(ctx)
 end
 
 -- The target track's own volume fader (handy for aux/return tracks kept at 0).
@@ -1849,14 +1900,11 @@ local function draw_track_fader(app, settings, target)
     if ok and sx then gap = sx end
   end
   local muted = read_track_own_mute(target)
+  local soloed = read_track_own_solo(target)
   local shown_db = linear_to_db(read_track_own_volume(target), settings.min_db)
   local function nudge(delta)
     write_track_own_volume(target, db_to_linear(clamp(shown_db + delta, settings.min_db, settings.max_db), settings.min_db, settings.max_db))
   end
-
-  r.ImGui_AlignTextToFramePadding(ctx)
-  r.ImGui_TextColored(ctx, Theme.colors.accent, "Track")
-  r.ImGui_SameLine(ctx)
 
   local mute_w = UIScale.text_button_w(ctx, "M", 30, 6)
   if muted then
@@ -1867,6 +1915,17 @@ local function draw_track_fader(app, settings, target)
   if r.ImGui_Button(ctx, "M##track_mute", mute_w, 0) then write_track_own_mute(target, not muted) end
   if muted then r.ImGui_PopStyleColor(ctx, 3) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, muted and "Unmute track" or "Mute track") end
+  r.ImGui_SameLine(ctx)
+
+  local solo_w = UIScale.text_button_w(ctx, "S", 26, 6)
+  if soloed then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.accent, nil, nil, 4.5))
+  end
+  if r.ImGui_Button(ctx, "S##track_solo", solo_w, 0) then write_track_own_solo(target, not soloed) end
+  if soloed then r.ImGui_PopStyleColor(ctx, 3) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, soloed and "Unsolo track" or "Solo track") end
   r.ImGui_SameLine(ctx)
 
   local step_w = UIScale.text_button_w(ctx, "-", 22, 6)
@@ -1982,8 +2041,8 @@ function M.draw(app)
   state.apply_tracks = sources
 
   draw_header(app, settings, target, pinned, #sources)
-  draw_toolbar(app, settings, target, sources)
   draw_track_fader(app, settings, target)
+  draw_toolbar(app, settings, target, sources)
   r.ImGui_Dummy(ctx, 1, UIScale.round(4))
 
   local footer_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(22)

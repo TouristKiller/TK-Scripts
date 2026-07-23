@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.2" author="TouristKiller" time="2026-07-23T01:30:00Z">
+    <version name="0.6.3" author="TouristKiller" time="2026-07-23T14:00:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -115,6 +115,9 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+                v0.6.3
+                + Send Studio: The selected track's own volume fader now sits directly under the track name (the "Track" label is gone) and has a Solo button next to Mute
+                + Send Studio: Added a right-aligned Patchbay button in the toolbar that launches the standalone TK Patchbay; it dims and reports when that script is not installed
                 v0.6.2
                 + Send Studio: The header shows the track name in a bar tinted with the track colour that fills up to the Pin button (with the multi-select count shown inside it); long names are truncated so Pin always stays in view, and the module label was dropped
                 + Send Studio: Added prev/next arrows in the header to step through the project's tracks (cyclic), with Shift-click to jump to the first / last track

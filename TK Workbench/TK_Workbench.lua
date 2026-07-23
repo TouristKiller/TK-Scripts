@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.2
+-- @version 0.6.3
 -- @changelog:
+-- v0.6.3
+--   + Send Studio: The selected track's own volume fader now sits directly under the track name (the "Track" label is gone) and has a Solo button next to Mute
 -- v0.6.2
 --   + Send Studio: The header shows the track name in a bar tinted with the track colour that fills up to the Pin button (with the multi-select count shown inside it); long names are truncated so Pin always stays in view, and the module label was dropped
 --   + Send Studio: Added prev/next arrows in the header to step through the project's tracks (cyclic), with Shift-click to jump to the first / last track
