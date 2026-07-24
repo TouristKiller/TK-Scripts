@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.41
+-- @version 0.6.46
 -- @changelog:
+-- v0.6.46
+--   + Send Studio: In list view, the live volume and pan slider value is now drawn above the handle while hovering/dragging, so the mouse cursor no longer covers it
+-- v0.6.45
+--   + Send Studio: The Add Send/Receive picker can now be stretched taller by dragging the grip at its bottom edge; the height is remembered and can grow up to nearly the screen height
+--   + Send Studio: The return track's volume and pan (in the lane's right-click menu) can be reset with a right-click on the slider or a small 0 / C button next to it
+--   + Send Studio: The Pin button is now a compact thumbtack icon so track names get more room, and the track fader's + button now lines up right under it
 -- v0.6.41
 --   + Fixed: Module rail - tiles were pushed off-centre when the rail is docked on the left
 --   + Fixed: Transport - right-clicking a tile to open a module in split view could throw an ImGui EndChild error

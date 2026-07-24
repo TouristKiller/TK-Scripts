@@ -970,7 +970,17 @@ local function draw_picker_popup(app, settings, target)
   local changed, value = r.ImGui_InputTextWithHint(ctx, "##send_studio_picker_filter", "Filter tracks...", state.picker_filter or "")
   if changed then state.picker_filter = value end
   local filter = tostring(state.picker_filter or ""):lower()
-  if r.ImGui_BeginChild(ctx, "##send_studio_picker_list", UIScale.round(340), UIScale.round(460)) then
+  local list_w = UIScale.round(340)
+  local min_h = UIScale.round(160)
+  -- Cap the list to (almost) the screen height so it can stretch as tall as the
+  -- display allows (bigger on 4K than on HD), while staying on screen.
+  local max_h = UIScale.round(1600)
+  if r.ImGui_GetMainViewport and r.ImGui_Viewport_GetWorkSize then
+    local ok, _, vh = pcall(r.ImGui_Viewport_GetWorkSize, r.ImGui_GetMainViewport(ctx))
+    if ok and vh and vh > 0 then max_h = math.max(UIScale.round(300), vh - UIScale.round(160)) end
+  end
+  settings.picker_height = math.max(min_h, math.min(max_h, settings.picker_height or UIScale.round(460)))
+  if r.ImGui_BeginChild(ctx, "##send_studio_picker_list", list_w, settings.picker_height) then
     local candidates = candidate_tracks(guid_set(sources))
     local favset = load_favorites()
     -- Split into favourites (shown on top) and the rest, keeping project order.
@@ -1016,6 +1026,32 @@ local function draw_picker_popup(app, settings, target)
     for _, item in ipairs(others) do picker_row(item, item.depth * UIScale.round(12)) end
     if shown == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No matching tracks") end
     r.ImGui_EndChild(ctx)
+  end
+
+  -- Vertical resize handle: drag the grip to stretch the list (persisted).
+  local rz_h = UIScale.round(9)
+  r.ImGui_InvisibleButton(ctx, "##send_studio_picker_resize", list_w, rz_h)
+  local rz_hov = r.ImGui_IsItemHovered(ctx)
+  local rz_act = r.ImGui_IsItemActive and r.ImGui_IsItemActive(ctx)
+  if (rz_hov or rz_act) and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNS then
+    r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS())
+  end
+  if rz_act and r.ImGui_GetMouseDelta then
+    local _, dy = r.ImGui_GetMouseDelta(ctx)
+    if dy and dy ~= 0 then
+      settings.picker_height = math.max(min_h, math.min(max_h, settings.picker_height + dy))
+    end
+  end
+  if r.ImGui_IsItemDeactivated and r.ImGui_IsItemDeactivated(ctx) and app.save_settings then app.save_settings() end
+  do
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+    local gcol = (rz_hov or rz_act) and Theme.colors.accent or Theme.colors.border
+    local cxg, cyg = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+    for i = -2, 2 do
+      r.ImGui_DrawList_AddCircleFilled(dl, cxg + i * UIScale.round(5), cyg, UIScale.px(1.5), gcol, 8)
+    end
   end
   r.ImGui_EndPopup(ctx)
 end
@@ -1179,13 +1215,25 @@ local function draw_lane_extras(ctx, lane, settings)
   local min_db, max_db = settings.min_db, settings.max_db
   r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
   local vch, vdb = r.ImGui_SliderDouble(ctx, "Vol##ret_vol", linear_to_db(read_track_own_volume(other), min_db), min_db, max_db, "%.1f dB")
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then write_track_own_volume(other, 1)
-  elseif vch then write_track_own_volume(other, db_to_linear(vdb, min_db, max_db)) end
+  if vch then write_track_own_volume(other, db_to_linear(vdb, min_db, max_db)) end
+  if r.ImGui_IsItemHovered(ctx) then
+    if r.ImGui_IsMouseClicked and r.ImGui_IsMouseClicked(ctx, 1) then write_track_own_volume(other, 1)
+    else r.ImGui_SetTooltip(ctx, "Right-click (or the 0 button) to reset to 0 dB") end
+  end
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(4))
+  if r.ImGui_SmallButton(ctx, "0##ret_vol_reset") then write_track_own_volume(other, 1) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Reset volume to 0 dB") end
   local rpan = read_track_own_pan(other)
   r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
   local pch, pval = r.ImGui_SliderDouble(ctx, "Pan##ret_pan", rpan, -1, 1, format_pan(rpan))
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then write_track_own_pan(other, 0)
-  elseif pch then write_track_own_pan(other, pval) end
+  if pch then write_track_own_pan(other, pval) end
+  if r.ImGui_IsItemHovered(ctx) then
+    if r.ImGui_IsMouseClicked and r.ImGui_IsMouseClicked(ctx, 1) then write_track_own_pan(other, 0)
+    else r.ImGui_SetTooltip(ctx, "Right-click (or the C button) to reset to center") end
+  end
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(4))
+  if r.ImGui_SmallButton(ctx, "C##ret_pan_reset") then write_track_own_pan(other, 0) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Reset pan to center") end
 end
 
 local function draw_lane_extras_popup(app, lane, settings, popup_id)
@@ -1480,6 +1528,21 @@ local function slider_wheel_delta(ctx, current, step, minimum, maximum)
   return clamp(current + wheel * step, minimum, maximum)
 end
 
+local function draw_slider_value_above(ctx, value, text, minimum, maximum, color)
+  local x0, y0 = r.ImGui_GetItemRectMin(ctx)
+  local x1 = select(1, r.ImGui_GetItemRectMax(ctx))
+  local span = math.max(0.000001, (maximum or 1) - (minimum or 0))
+  local t = clamp(((tonumber(value) or 0) - (minimum or 0)) / span, 0, 1)
+  local tw = calc_text_width(ctx, text)
+  local th = r.ImGui_GetTextLineHeight(ctx)
+  local px = x0 + (x1 - x0) * t
+  local tx = clamp(px - tw * 0.5, x0 + UIScale.round(2), x1 - tw - UIScale.round(2))
+  local ty = y0 - th - UIScale.round(3)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  r.ImGui_DrawList_AddRectFilled(dl, tx - UIScale.round(4), ty - UIScale.round(1), tx + tw + UIScale.round(4), ty + th + UIScale.round(1), 0x000000DD, UIScale.px(3))
+  r.ImGui_DrawList_AddText(dl, tx, ty, color or Theme.colors.accent, text)
+end
+
 local function draw_list_row(app, lane, settings)
   local ctx = app.ctx
   local enabled = lane.enabled == true
@@ -1556,6 +1619,10 @@ local function draw_list_row(app, lane, settings)
     local sc = push_slider_theme(ctx)
     local changed, nd = r.ImGui_SliderDouble(ctx, "##vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
     r.ImGui_PopStyleColor(ctx, sc)
+    local preview_db = (changed and type(nd) == "number") and nd or shown_db
+    if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
+      draw_slider_value_above(ctx, preview_db, string.format("%.1f dB", preview_db), settings.min_db, settings.max_db, Theme.colors.accent)
+    end
     local applied = false
     if r.ImGui_IsItemHovered(ctx) then
       if r.ImGui_IsMouseClicked(ctx, 1) then lane.write_volume(1); applied = true
@@ -1577,6 +1644,10 @@ local function draw_list_row(app, lane, settings)
     local sc = push_slider_theme(ctx)
     local changed, np = r.ImGui_SliderDouble(ctx, "##pan", shown_pan, -1, 1, format_pan(lane.pan))
     r.ImGui_PopStyleColor(ctx, sc)
+    local preview_pan = (changed and type(np) == "number") and np or shown_pan
+    if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
+      draw_slider_value_above(ctx, preview_pan, format_pan(preview_pan), -1, 1, Theme.colors.accent)
+    end
     local applied = false
     if r.ImGui_IsItemHovered(ctx) then
       if r.ImGui_IsMouseClicked(ctx, 1) then lane.write_pan(0); applied = true
@@ -1748,8 +1819,8 @@ end
 local function draw_header(app, settings, target, pinned, source_count)
   local ctx = app.ctx
   local gap = UIScale.round(8)
-  local pin_label = pinned and "Pinned" or "Pin"
-  local pin_w = UIScale.text_button_w(ctx, "Pinned", 64, 8)
+  local frame_h = r.ImGui_GetFrameHeight(ctx)
+  local pin_w = frame_h -- compact icon-only pin so the track name gets more room
   local show_badge = (not pinned) and (source_count or 0) > 1
   local badge_text = show_badge and ("+" .. tostring(source_count - 1)) or nil
 
@@ -1758,11 +1829,10 @@ local function draw_header(app, settings, target, pinned, source_count)
     local number = track_index_label(target)
     local label = (number ~= "" and (number .. "  ") or "") .. track_name(target)
     local color = track_color(target)
-    local frame_h = r.ImGui_GetFrameHeight(ctx)
     local th = r.ImGui_GetTextLineHeight(ctx)
     local name_pad = UIScale.round(5)
     local arrow_w = UIScale.round(16)
-    local bar_w = math.max(UIScale.round(40), r.ImGui_GetContentRegionAvail(ctx) - arrow_w * 2 - pin_w - gap * 4)
+    local bar_w = math.max(UIScale.round(40), r.ImGui_GetContentRegionAvail(ctx) - arrow_w * 2 - pin_w - gap * 3)
 
     -- Previous track (Shift-click: first)
     local lclick, lhov = header_arrow(ctx, "##send_studio_prev", "left", arrow_w, frame_h)
@@ -1798,20 +1868,27 @@ local function draw_header(app, settings, target, pinned, source_count)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No track selected")
   end
 
-  -- Pin toggle on the right
+  -- Pin toggle on the right: a compact icon (a thumbtack) instead of a text button.
   r.ImGui_SameLine(ctx)
   local avail_x = r.ImGui_GetContentRegionAvail(ctx)
   if avail_x > pin_w then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (avail_x - pin_w)) end
-  if pinned then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.accent, nil, nil, 4.5))
-  end
-  if r.ImGui_Button(ctx, pin_label .. "##send_studio_pin", pin_w, 0) then
+  local px, py = r.ImGui_GetCursorScreenPos(ctx)
+  local pin_clicked = r.ImGui_InvisibleButton(ctx, "##send_studio_pin", pin_w, frame_h)
+  local pin_hov = r.ImGui_IsItemHovered(ctx)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local bg = pinned and Theme.colors.accent_soft or (pin_hov and Theme.colors.frame_hover or Theme.colors.frame_bg)
+  local bd = (pinned or pin_hov) and Theme.colors.accent or Theme.colors.border
+  local icol = (pinned or pin_hov) and Theme.colors.accent or Theme.colors.text_dim
+  r.ImGui_DrawList_AddRectFilled(dl, px, py, px + pin_w, py + frame_h, bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(dl, px, py, px + pin_w, py + frame_h, bd, UIScale.px(4), 0, UIScale.px(1))
+  local cxp, cyp = px + pin_w * 0.5, py + frame_h * 0.5
+  local s = math.min(pin_w, frame_h) * 0.5
+  r.ImGui_DrawList_AddCircleFilled(dl, cxp, cyp - s * 0.35, s * 0.40, icol, 16)
+  r.ImGui_DrawList_AddTriangleFilled(dl, cxp - s * 0.22, cyp - s * 0.08, cxp + s * 0.22, cyp - s * 0.08, cxp, cyp + s * 0.72, icol)
+  if pin_clicked then
     if pinned then set_pin(app, settings, nil) else set_pin(app, settings, target) end
   end
-  if pinned then r.ImGui_PopStyleColor(ctx, 3) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, pinned and "Unpin - follow selection again" or "Pin this track (stop following selection)") end
+  if pin_hov then r.ImGui_SetTooltip(ctx, pinned and "Unpin - follow selection again" or "Pin this track (stop following selection)") end
 end
 
 -- Toolbar with global actions: new bus, copy/paste sends, reset solo/listen.
@@ -1934,7 +2011,8 @@ local function draw_track_fader(app, settings, target)
   r.ImGui_SameLine(ctx)
 
   local avail = r.ImGui_GetContentRegionAvail(ctx)
-  local slider_w = math.max(UIScale.round(70), avail - step_w - gap * 2)
+  -- Reserve only one gap so the "+" ends flush right, right under the Pin icon.
+  local slider_w = math.max(UIScale.round(70), avail - step_w - gap)
   r.ImGui_SetNextItemWidth(ctx, slider_w)
   local sc = push_slider_theme(ctx)
   local changed, nd = r.ImGui_SliderDouble(ctx, "##track_vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
