@@ -1107,6 +1107,10 @@ function M.draw(app)
     reorder_block(app, settings, state.pending_reorder.source, state.pending_reorder.target)
     state.pending_reorder = nil
   end
+  -- Cards advance the cursor with SetCursorScreenPos and submit no trailing item;
+  -- a final Dummy grows the window/child boundary so EndChild (e.g. in a split
+  -- pane) does not assert.
+  r.ImGui_Dummy(ctx, 1, 1)
 end
 
 return M
