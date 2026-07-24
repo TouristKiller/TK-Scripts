@@ -1,7 +1,17 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.3
+-- @version 0.6.4
 -- @changelog:
+-- v0.6.4
+--   + New module: Transport - a modular transport built from cards you can add, remove, drag to reorder, and anchor to the top or bottom of the window (via the Blocks button)
+--   + Transport: Transport buttons card - vector-drawn go-to-start / play / pause / stop / record / go-to-end / loop that justify to the full card width, with live play/record/repeat state highlighting
+--   + Transport: Tempo card - a large draggable/scrollable BPM readout (double-click to type), -/Tap/+ row, and a clickable time-signature badge to set the signature at the current measure or project start
+--   + Transport: Time selection card - big length readout with a bars.beats badge, start/end, and buttons to move the edit cursor to the selection start/end or clear it
+--   + Transport: Play rate card - themed slider (0.25-4x) with a 1x reset and a preserve-pitch toggle
+--   + Transport: Metronome card - on/off, click volume, 0.5x/1x/2x/4x speed presets, metronome-during-playback/record toggles, and a gear that opens REAPER's metronome settings
+--   + Transport: Navigator card - a 2D bird's-eye of the arrange (tracks x time) with items, markers/regions and the edit/play cursor; drag the viewport to pan, edges/wheel to zoom time, Ctrl+wheel to zoom track height, and zoom past the project end
+--   + Transport: Master scope card - a scrolling peak view of the master output that runs during playback, scrolls out on stop, and restarts on the next play
+--   + Workbench: Added an optional Module rail - a slim, always-visible strip of module icons along the left or right window edge (icon-only, name on hover) so any module is one click away; right-click a rail icon to load that module into the split view; toggle and side live in Preferences
 -- v0.6.3
 --   + Send Studio: The selected track's own volume fader now sits directly under the track name (the "Track" label is gone) and has a Solo button next to Mute
 -- v0.6.2
@@ -399,6 +409,7 @@ local MODULE_ACTION_HEARTBEAT_KEY = "heartbeat"
 local module_names = {
   "project_overview",
   "timepiece",
+  "transport",
   "project_browser",
   "action_browser",
   "action_clipboard",
@@ -843,6 +854,9 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, cx, B(14), cx, B(10), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, L(10), cy, L(14), cy, color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, R(14), cy, R(10), cy, color, W(2))
+  elseif id == "transport" then
+    r.ImGui_DrawList_AddRect(draw_list, L(6), T(10), R(6), B(10), color, RD(6), 0, W(2))
+    r.ImGui_DrawList_AddTriangleFilled(draw_list, L(18), T(18), L(18), B(18), R(16), cy, color)
   elseif id == "action_browser" then
     r.ImGui_DrawList_AddRect(draw_list, L(7), T(9), R(7), B(9), color, RD(4), 0, W(2))
     r.ImGui_DrawList_AddLine(draw_list, L(14), T(18), L(20), MY(-1), color, W(2))
@@ -1464,6 +1478,31 @@ local function draw_preferences_settings()
       save_settings()
     end
     r.ImGui_Separator(ctx)
+    changed, value = r.ImGui_Checkbox(ctx, "Module rail", app.settings.sidebar_enabled == true)
+    if changed then
+      app.settings.sidebar_enabled = value
+      app.status = value and "Module rail shown" or "Module rail hidden"
+      save_settings()
+    end
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "A slim strip of module icons along the window edge (name on hover).")
+    do
+      local rail_side = app.settings.sidebar_side == "right" and "Right" or "Left"
+      local rail_disabled = app.settings.sidebar_enabled ~= true
+      if rail_disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
+      r.ImGui_PushItemWidth(ctx, 140)
+      if r.ImGui_BeginCombo(ctx, "Rail side", rail_side) then
+        if r.ImGui_Selectable(ctx, "Left", rail_side == "Left") then
+          app.settings.sidebar_side = "left"; app.status = "Module rail: left"; save_settings()
+        end
+        if r.ImGui_Selectable(ctx, "Right", rail_side == "Right") then
+          app.settings.sidebar_side = "right"; app.status = "Module rail: right"; save_settings()
+        end
+        r.ImGui_EndCombo(ctx)
+      end
+      r.ImGui_PopItemWidth(ctx)
+      if rail_disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+    end
+    r.ImGui_Separator(ctx)
     local auto_collapse_locked = app.cache.window_docked == true
     local auto_collapse_disabled_stack = auto_collapse_locked and r.ImGui_BeginDisabled and r.ImGui_EndDisabled
     if auto_collapse_disabled_stack then r.ImGui_BeginDisabled(ctx, true) end
@@ -2072,6 +2111,71 @@ local function draw_module_canvas()
   end
 end
 
+local function module_rail_width()
+  return UIScale.round(54)
+end
+
+-- A slim, always-visible strip of icon-only module tiles along the window edge.
+-- Reuses the same icon art and click behaviour as the Home grid / dropdown.
+local function draw_module_rail()
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local rail_left = app.settings.sidebar_side ~= "right"
+  local pad_outer = UIScale.round(0)
+  local pad_inner = UIScale.round(10)
+  local avail_w = r.ImGui_GetContentRegionAvail(ctx) or UIScale.round(40)
+  -- Bias the tiles toward the outer edge (small outer margin, larger gap to the
+  -- inner divider). Indent lives on the left, so it flips with the rail side.
+  local tile = math.max(UIScale.round(20), avail_w - pad_outer - pad_inner)
+  local inset = UIScale.round(7)
+  local left_indent = rail_left and pad_outer or pad_inner
+  r.ImGui_Dummy(ctx, 1, pad_outer)
+  -- Guard against Indent(0): ImGui treats a 0 argument as the default IndentSpacing
+  -- (~21px), which shoved the left-rail tiles off-centre.
+  if left_indent > 0 then r.ImGui_Indent(ctx, left_indent) end
+
+  local function tile_button(key, is_active, tooltip, on_activate, paint, on_context)
+    r.ImGui_PushID(ctx, key)
+    local clicked = r.ImGui_InvisibleButton(ctx, "##rail_tile", tile, tile)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    local right_clicked = on_context and r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1)
+    local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+    local bg = is_active and Theme.colors.accent_soft or (hovered and Theme.colors.frame_hover or Theme.colors.frame_bg)
+    local border = (is_active or hovered) and Theme.colors.accent or Theme.colors.border
+    local icon_color = Theme.text_for_background(bg, (hovered or is_active) and Theme.colors.accent or Theme.colors.text_dim, nil, 3)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, bg, UIScale.px(5))
+    r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, border, UIScale.px(5), 0, is_active and UIScale.px(1.6) or UIScale.px(0.8))
+    paint(x1, y1, x2, y2, icon_color)
+    if hovered and tooltip then r.ImGui_SetTooltip(ctx, tooltip) end
+    if clicked then on_activate() end
+    if right_clicked then on_context() end
+    r.ImGui_PopID(ctx)
+  end
+
+  for _, module in ipairs(app.modules) do
+    if not is_module_hidden(module.id) then
+      local mod = module
+      local tip = tostring(mod.title or mod.id) .. "\nRight-click: show in split view"
+      tile_button(mod.id, app.settings.active_module == mod.id, tip,
+        function() if mod.on_click then mod.on_click() else set_active_view(mod.id) end end,
+        function(x1, y1, x2, y2, color)
+          draw_module_icon(draw_list, mod, (x1 + x2) * 0.5, (y1 + y2) * 0.5, tile - inset * 2, color)
+        end,
+        function() set_split_module(mod.id) end)
+    end
+  end
+
+  if horizontal_rack_entry_visible() then
+    tile_button("__hrack", false, tostring(HORIZONTAL_RACK_ENTRY.title),
+      function() open_horizontal_rack() end,
+      function(x1, y1, x2, y2, color)
+        draw_module_icon(draw_list, HORIZONTAL_RACK_ENTRY, (x1 + x2) * 0.5, (y1 + y2) * 0.5, tile - inset * 2, color)
+      end)
+  end
+
+  if left_indent > 0 then r.ImGui_Unindent(ctx, left_indent) end
+end
+
 local function visible_module_error_ids()
   local result = {}
   if is_home_active() then return result end
@@ -2151,20 +2255,67 @@ if r.atexit then r.atexit(shutdown) end
 local function draw_shell()
   draw_top_bar()
   local status_h = app.settings.show_status and UI.info_line_height(ctx, true) or 0
-  local _, available_h = r.ImGui_GetContentRegionAvail(ctx)
+  local avail_w, available_h = r.ImGui_GetContentRegionAvail(ctx)
   local canvas_h = math.max(40, (available_h or 240) - status_h)
   local canvas_flags = 0
   if r.ImGui_WindowFlags_NoScrollbar then canvas_flags = canvas_flags | r.ImGui_WindowFlags_NoScrollbar() end
   if r.ImGui_WindowFlags_NoScrollWithMouse then canvas_flags = canvas_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
   app.cache.captured_info_line = nil
-  local child_visible = r.ImGui_BeginChild(ctx, "##workbench_module_canvas", 0, canvas_h, 0, canvas_flags)
-  if child_visible then
-    UI.begin_info_line_capture(app)
-    draw_module_canvas()
-    UI.end_info_line_capture(app)
-    r.ImGui_Dummy(ctx, 1, 1)
-    r.ImGui_EndChild(ctx)
+
+  local rail_enabled = app.settings.sidebar_enabled == true
+  local rail_w = rail_enabled and module_rail_width() or 0
+  local rail_left = app.settings.sidebar_side ~= "right"
+  local spacing = UIScale.gap(4)
+  local rail_flags = 0
+  if r.ImGui_WindowFlags_NoScrollbar then rail_flags = rail_flags | r.ImGui_WindowFlags_NoScrollbar() end
+  local shell_draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local shell_origin_x, shell_origin_y = r.ImGui_GetCursorScreenPos(ctx)
+
+  local function draw_rail_pane()
+    if r.ImGui_PushStyleVar and r.ImGui_StyleVar_WindowPadding then
+      r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), UIScale.round(4), UIScale.round(4))
+    end
+    local visible = r.ImGui_BeginChild(ctx, "##workbench_module_rail", rail_w, canvas_h, 0, rail_flags)
+    if visible then
+      draw_module_rail()
+      r.ImGui_EndChild(ctx)
+    end
+    if r.ImGui_PopStyleVar and r.ImGui_StyleVar_WindowPadding then r.ImGui_PopStyleVar(ctx, 1) end
   end
+
+  local function draw_canvas_pane(width)
+    local child_visible = r.ImGui_BeginChild(ctx, "##workbench_module_canvas", width, canvas_h, 0, canvas_flags)
+    if child_visible then
+      UI.begin_info_line_capture(app)
+      draw_module_canvas()
+      UI.end_info_line_capture(app)
+      r.ImGui_Dummy(ctx, 1, 1)
+      r.ImGui_EndChild(ctx)
+    end
+  end
+
+  if rail_enabled and rail_left then
+    draw_rail_pane()
+    r.ImGui_SameLine(ctx, 0, spacing)
+    draw_canvas_pane(0)
+  elseif rail_enabled then
+    local canvas_w = math.max(40, (avail_w or 240) - rail_w - spacing)
+    draw_canvas_pane(canvas_w)
+    r.ImGui_SameLine(ctx, 0, spacing)
+    draw_rail_pane()
+  else
+    draw_canvas_pane(0)
+  end
+
+  if rail_enabled then
+    -- Divider sits on the rail band's inner edge, so tile->divider spacing equals
+    -- the tile->outer-edge window padding on the other side of the strip.
+    local sep_x = rail_left and (shell_origin_x + rail_w)
+      or (shell_origin_x + (avail_w or 0) - rail_w)
+    sep_x = math.floor(sep_x) + 0.5
+    r.ImGui_DrawList_AddLine(shell_draw_list, sep_x, shell_origin_y, sep_x, shell_origin_y + canvas_h, Theme.colors.border, UIScale.px(1))
+  end
+
   if app.settings.show_status then draw_status_bar() end
 end
 

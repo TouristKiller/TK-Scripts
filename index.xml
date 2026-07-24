@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.3" author="TouristKiller" time="2026-07-23T14:00:00Z">
+    <version name="0.6.4" author="TouristKiller" time="2026-07-24T14:00:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -89,6 +89,7 @@
     <source main="main" file="Module Actions/TK_Workbench_Open_Track_Recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Track_Recall.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Arrange_BG.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Arrange_BG.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Timepiece.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Timepiece.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Transport.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Transport.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Track_Tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Track_Tags.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Calculator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Calculator.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Lyrics.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Lyrics.lua</source>
@@ -111,10 +112,21 @@
     <source file="modules/project_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/project_browser.lua</source>
      <source file="modules/script_launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/script_launcher.lua</source>
     <source file="modules/timepiece.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/timepiece.lua</source>
+     <source file="modules/transport.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/transport.lua</source>
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
+                v0.6.4
+                + New module: Transport - a modular transport built from cards you can add, remove, drag to reorder, and anchor to the top or bottom of the window (via the Blocks button)
+                + Transport: Transport buttons card - vector-drawn go-to-start / play / pause / stop / record / go-to-end / loop that justify to the full card width, with live play/record/repeat state highlighting
+                + Transport: Tempo card - a large draggable/scrollable BPM readout (double-click to type), -/Tap/+ row, and a clickable time-signature badge to set the signature at the current measure or project start
+                + Transport: Time selection card - big length readout with a bars.beats badge, start/end, and buttons to move the edit cursor to the selection start/end or clear it
+                + Transport: Play rate card - themed slider (0.25-4x) with a 1x reset and a preserve-pitch toggle
+                + Transport: Metronome card - on/off, click volume, 0.5x/1x/2x/4x speed presets, metronome-during-playback/record toggles, and a gear that opens REAPER's metronome settings
+                + Transport: Navigator card - a 2D bird's-eye of the arrange (tracks x time) with items, markers/regions and the edit/play cursor; drag the viewport to pan, edges/wheel to zoom time, Ctrl+wheel to zoom track height, and zoom past the project end
+                + Transport: Master scope card - a scrolling peak view of the master output that runs during playback, scrolls out on stop, and restarts on the next play
+                + Workbench: Added an optional Module rail - a slim, always-visible strip of module icons along the left or right window edge (icon-only, name on hover) so any module is one click away; right-click a rail icon to load that module into the split view; toggle and side live in Preferences
                 v0.6.3
                 + Send Studio: The selected track's own volume fader now sits directly under the track name (the "Track" label is gone) and has a Solo button next to Mute
                 + Send Studio: Added a right-aligned Patchbay button in the toolbar that launches the standalone TK Patchbay; it dims and reports when that script is not installed
