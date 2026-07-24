@@ -1,8 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.47
+-- @version 0.6.48
 -- @changelog:
--- v0.6.47
+-- v0.6.48
+--   + Send Studio: Added Link mode to mirror matching sends across selected tracks (relative volume/pan, absolute mute/mode/phase/mono), with a toolbar Link toggle and status feedback while adjusting
 --   + Send Studio: In list view, the live volume and pan slider value is now drawn above the handle while hovering/dragging, so the mouse cursor no longer covers it
 --   + Send Studio: The Add Send/Receive picker can now be stretched taller by dragging the grip at its bottom edge; the height is remembered and can grow up to nearly the screen height
 --   + Send Studio: The return track's volume and pan (in the lane's right-click menu) can be reset with a right-click on the slider or a small 0 / C button next to it

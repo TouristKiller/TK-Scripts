@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.47" author="TouristKiller" time="2026-07-24T21:00:00Z">
+    <version name="0.6.48" author="TouristKiller" time="2026-07-24T21:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -117,7 +117,8 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
       <changelog><![CDATA[
-                v0.6.47
+                v0.6.48
+                + Send Studio: Added Link mode to mirror matching sends across selected tracks (relative volume/pan, absolute mute/mode/phase/mono), with a toolbar Link toggle and status feedback while adjusting
                 + Send Studio: In list view, the live volume and pan slider value is now drawn above the handle while hovering/dragging, so the mouse cursor no longer covers it.
                 + Send Studio: The Add Send/Receive picker can now be stretched taller by dragging the grip at its bottom edge; the height is remembered and can grow up to nearly the screen height
                 + Send Studio: The return track's volume and pan (in the lane's right-click menu) can be reset with a right-click on the slider or a small 0 / C button next to it

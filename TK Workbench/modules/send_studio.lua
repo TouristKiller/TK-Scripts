@@ -14,6 +14,7 @@ local defaults = {
   max_db = 12,
   view_mode = "cards",        -- "cards" | "list"
   card_flow = "columns",      -- "columns" (fill height first) | "rows" (fill width first)
+  link_enabled = false,
   pinned_guid = "",
   show_sends = true,
   show_receives = true,
@@ -685,7 +686,117 @@ local function toggle_audition(tracks, opts)
 end
 
 -- Build lane descriptors for a given category (0 = sends, -1 = receives).
-local function build_rows(track, category, settings)
+local function find_matching_route_index(track, category, other_guid)
+  if not valid_track(track) or not other_guid or other_guid == "" or not r.GetTrackNumSends then return nil end
+  for i = 0, (r.GetTrackNumSends(track, category) or 0) - 1 do
+    local other = send_other_track(track, category, i)
+    if valid_track(other) and track_guid(other) == other_guid then return i end
+  end
+  return nil
+end
+
+local function link_is_active(settings, pinned, sources)
+  return settings.link_enabled == true and pinned ~= true and type(sources) == "table" and #sources > 1
+end
+
+local function write_lane_value(app, settings, pinned, sources, lane_track, category, index, other, kind, current_value, target_value)
+  if not valid_track(lane_track) then return false end
+  if kind == "vol" and not link_is_active(settings, pinned, sources) then
+    return write_send_volume(lane_track, category, index, target_value)
+  end
+  if kind == "pan" and not link_is_active(settings, pinned, sources) then
+    return write_send_pan(lane_track, category, index, target_value)
+  end
+  if kind == "mute" and not link_is_active(settings, pinned, sources) then
+    return write_send_mute(lane_track, category, index, target_value)
+  end
+  if kind == "mode" and not link_is_active(settings, pinned, sources) then
+    return write_send_mode(lane_track, category, index, target_value)
+  end
+  if kind == "phase" and not link_is_active(settings, pinned, sources) then
+    return write_send_phase(lane_track, category, index, target_value)
+  end
+  if kind == "mono" and not link_is_active(settings, pinned, sources) then
+    return write_send_mono(lane_track, category, index, target_value)
+  end
+
+  local other_guid = track_guid(other)
+  if not other_guid then
+    if kind == "vol" then return write_send_volume(lane_track, category, index, target_value) end
+    if kind == "pan" then return write_send_pan(lane_track, category, index, target_value) end
+    if kind == "mute" then return write_send_mute(lane_track, category, index, target_value) end
+    if kind == "mode" then return write_send_mode(lane_track, category, index, target_value) end
+    if kind == "phase" then return write_send_phase(lane_track, category, index, target_value) end
+    if kind == "mono" then return write_send_mono(lane_track, category, index, target_value) end
+    return false
+  end
+
+  local min_db = settings.min_db or defaults.min_db
+  local max_db = settings.max_db or defaults.max_db
+  local delta_db = 0
+  local delta_pan = 0
+  if kind == "vol" then
+    delta_db = linear_to_db(target_value, min_db) - linear_to_db(current_value, min_db)
+  elseif kind == "pan" then
+    delta_pan = (tonumber(target_value) or 0) - (tonumber(current_value) or 0)
+  end
+
+  local tracks = {}
+  for _, track in ipairs(sources or {}) do if valid_track(track) then tracks[#tracks + 1] = track end end
+  local has_master = false
+  for _, track in ipairs(tracks) do if track == lane_track then has_master = true; break end end
+  if not has_master then tracks[#tracks + 1] = lane_track end
+
+  local changed_routes = 0
+  local touched_tracks = {}
+  local ok = write_with_undo("Send Studio: Link", function()
+    for _, track in ipairs(tracks) do
+      local match_index = nil
+      if track == lane_track then match_index = index else match_index = find_matching_route_index(track, category, other_guid) end
+      if match_index ~= nil then
+        local next_value = nil
+        if kind == "vol" then
+          local old = send_value(track, category, match_index, "D_VOL") or 1
+          local next_db = clamp(linear_to_db(old, min_db) + delta_db, min_db, max_db)
+          next_value = db_to_linear(next_db, min_db, max_db)
+          r.SetTrackSendInfo_Value(track, category, match_index, "D_VOL", next_value)
+        elseif kind == "pan" then
+          local old = send_value(track, category, match_index, "D_PAN") or 0
+          next_value = clamp(old + delta_pan, -1, 1)
+          r.SetTrackSendInfo_Value(track, category, match_index, "D_PAN", next_value)
+        elseif kind == "mute" then
+          r.SetTrackSendInfo_Value(track, category, match_index, "B_MUTE", target_value and 1 or 0)
+        elseif kind == "mode" then
+          r.SetTrackSendInfo_Value(track, category, match_index, "I_SENDMODE", tonumber(target_value) or 0)
+        elseif kind == "phase" then
+          r.SetTrackSendInfo_Value(track, category, match_index, "B_PHASE", target_value and 1 or 0)
+        elseif kind == "mono" then
+          r.SetTrackSendInfo_Value(track, category, match_index, "B_MONO", target_value and 1 or 0)
+        end
+        local guid = track_guid(track)
+        if guid and guid ~= "" then touched_tracks[guid] = true end
+        changed_routes = changed_routes + 1
+      end
+    end
+    return changed_routes > 0
+  end)
+
+  if ok and app then
+    local track_count = 0
+    for _ in pairs(touched_tracks) do track_count = track_count + 1 end
+    if kind == "vol" then
+      app.status = "Send Studio Link: volume linked across " .. tostring(track_count) .. " tracks"
+    elseif kind == "pan" then
+      app.status = "Send Studio Link: pan linked across " .. tostring(track_count) .. " tracks"
+    elseif kind == "mute" or kind == "mode" or kind == "phase" or kind == "mono" then
+      app.status = "Send Studio Link: routing setting applied across " .. tostring(track_count) .. " tracks"
+    end
+  end
+
+  return ok
+end
+
+local function build_rows(app, track, category, settings, pinned, sources)
   local rows = {}
   if not valid_track(track) or not r.GetTrackNumSends then return rows end
   local count = r.GetTrackNumSends(track, category) or 0
@@ -730,12 +841,12 @@ local function build_rows(track, category, settings)
       solo_defeat = solo_state(solo_map, category, other) == SOLO_DEFEAT,
       audition_active = audition_active({ src_track, dst_track }, "n"),
       audition_return_active = audition_active({ src_track, dst_track }, "ro"),
-      write_volume = function(v) return write_send_volume(track, category, index, v) end,
-      write_pan = function(v) return write_send_pan(track, category, index, v) end,
-      write_mute = function(v) return write_send_mute(track, category, index, v) end,
-      write_mode = function(v) return write_send_mode(track, category, index, v) end,
-      write_phase = function(v) return write_send_phase(track, category, index, v) end,
-      write_mono = function(v) return write_send_mono(track, category, index, v) end,
+      write_volume = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "vol", volume, v) end,
+      write_pan = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "pan", pan, v) end,
+      write_mute = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "mute", muted, v) end,
+      write_mode = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "mode", mode, v) end,
+      write_phase = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "phase", phase, v) end,
+      write_mono = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "mono", (send_value(track, category, index, "B_MONO") or 0) == 1, v) end,
       write_srcchan = function(v) return write_send_srcchan(track, category, index, v) end,
       write_dstchan = function(v) return write_send_dstchan(track, category, index, v) end,
       write_midi_src = function(ch) return write_send_midi_src(track, category, index, ch) end,
@@ -1455,6 +1566,17 @@ local function draw_strip(app, lane, settings, width, height)
   if strip_active and state.drag and state.drag.id == lane.id and state.drag.kind == "pan" then
     lane.write_pan(clamp((mouse_x - pan_mid) / (pan_range * 0.5), -1, 1))
   end
+  local pan_dragging = state.drag and state.drag.id == lane.id and state.drag.kind == "pan"
+  if pan_hovered or pan_dragging then
+    local ptxt = format_pan(lane.pan)
+    local ptw = calc_text_width(ctx, ptxt)
+    local pth = r.ImGui_GetTextLineHeight(ctx)
+    local pcx = clamp(pan_dot_x, pan_left + ptw * 0.5 + UIScale.round(4), pan_right - ptw * 0.5 - UIScale.round(4))
+    local tx = pcx - ptw * 0.5
+    local ty = pan_y - UIScale.round(7) - pth
+    r.ImGui_DrawList_AddRectFilled(draw_list, tx - UIScale.round(4), ty - UIScale.round(1), tx + ptw + UIScale.round(4), ty + pth + UIScale.round(1), 0x000000DD, UIScale.px(3))
+    r.ImGui_DrawList_AddText(draw_list, tx, ty, Theme.colors.accent, ptxt)
+  end
 
   -- Vertical fader between pan strip and the dB value
   local fader_top = pan_y + UIScale.round(12)
@@ -1620,7 +1742,8 @@ local function draw_list_row(app, lane, settings)
     local changed, nd = r.ImGui_SliderDouble(ctx, "##vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
     r.ImGui_PopStyleColor(ctx, sc)
     local preview_db = (changed and type(nd) == "number") and nd or shown_db
-    if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
+    local active_db = (r.ImGui_IsItemActive and r.ImGui_IsItemActive(ctx)) or false
+    if r.ImGui_IsItemHovered(ctx) or active_db or changed then
       draw_slider_value_above(ctx, preview_db, string.format("%.1f dB", preview_db), settings.min_db, settings.max_db, Theme.colors.accent)
     end
     local applied = false
@@ -1645,7 +1768,8 @@ local function draw_list_row(app, lane, settings)
     local changed, np = r.ImGui_SliderDouble(ctx, "##pan", shown_pan, -1, 1, format_pan(lane.pan))
     r.ImGui_PopStyleColor(ctx, sc)
     local preview_pan = (changed and type(np) == "number") and np or shown_pan
-    if r.ImGui_IsItemHovered(ctx) or r.ImGui_IsItemActive(ctx) then
+    local active_pan = (r.ImGui_IsItemActive and r.ImGui_IsItemActive(ctx)) or false
+    if r.ImGui_IsItemHovered(ctx) or active_pan or changed then
       draw_slider_value_above(ctx, preview_pan, format_pan(preview_pan), -1, 1, Theme.colors.accent)
     end
     local applied = false
@@ -1916,10 +2040,31 @@ local function launch_patchbay()
   return false
 end
 
-local function draw_toolbar(app, settings, target, sources)
+local function draw_toolbar(app, settings, target, sources, pinned)
   local ctx = app.ctx
   local has_target = valid_track(target)
   local clip_count = state.clipboard and #state.clipboard or 0
+  local selected_count = type(sources) == "table" and #sources or 0
+
+  local link_was_enabled = settings.link_enabled == true
+  if link_was_enabled then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(Theme.colors.accent, nil, nil, 4.5))
+  end
+  local link_label = (not pinned and selected_count > 1) and ("Link (" .. tostring(selected_count) .. ")") or "Link"
+  if r.ImGui_SmallButton(ctx, link_label .. "##send_studio_link") then
+    settings.link_enabled = not settings.link_enabled
+    if app.save_settings then app.save_settings() end
+    app.status = settings.link_enabled and "Send Studio Link: on" or "Send Studio Link: off"
+  end
+  if link_was_enabled then r.ImGui_PopStyleColor(ctx, 3) end
+  if r.ImGui_IsItemHovered(ctx) then
+    if pinned then r.ImGui_SetTooltip(ctx, "Link is enabled, but works only when Pin is off")
+    elseif selected_count <= 1 then r.ImGui_SetTooltip(ctx, "Select multiple tracks to use Link")
+    else r.ImGui_SetTooltip(ctx, "Link matching sends across selected tracks") end
+  end
+  r.ImGui_SameLine(ctx)
 
   if r.ImGui_SmallButton(ctx, "+ Bus##send_studio_newbus") and has_target then state.bus_open = true end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Create a new bus track and send the active track(s) to it") end
@@ -2120,7 +2265,7 @@ function M.draw(app)
 
   draw_header(app, settings, target, pinned, #sources)
   draw_track_fader(app, settings, target)
-  draw_toolbar(app, settings, target, sources)
+  draw_toolbar(app, settings, target, sources, pinned)
   r.ImGui_Dummy(ctx, 1, UIScale.round(4))
 
   local footer_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(22)
@@ -2130,8 +2275,8 @@ function M.draw(app)
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Tip: use Pin to keep a track in view while selecting others.")
     else
       local _, body_h = r.ImGui_GetContentRegionAvail(ctx)
-      local sends = build_rows(target, 0, settings)
-      local receives = build_rows(target, -1, settings)
+      local sends = build_rows(app, target, 0, settings, pinned, sources)
+      local receives = build_rows(app, target, -1, settings, pinned, sources)
       draw_section(app, settings, "Sends", sends, "send", body_h)
       r.ImGui_Separator(ctx)
       r.ImGui_Dummy(ctx, 1, UIScale.round(4))
