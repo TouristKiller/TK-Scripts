@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.4
+-- @version 0.6.41
 -- @changelog:
+-- v0.6.41
+--   + Fixed: Module rail - tiles were pushed off-centre when the rail is docked on the left
+--   + Fixed: Transport - right-clicking a tile to open a module in split view could throw an ImGui EndChild error
 -- v0.6.4
 --   + New module: Transport - a modular transport built from cards you can add, remove, drag to reorder, and anchor to the top or bottom of the window (via the Blocks button)
 --   + Transport: Transport buttons card - vector-drawn go-to-start / play / pause / stop / record / go-to-end / loop that justify to the full card width, with live play/record/repeat state highlighting
