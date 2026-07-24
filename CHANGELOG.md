@@ -2,6 +2,22 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.6.49] - 2026-07-24
+
+### TK Workbench
+#### Toegevoegd
+- **Script Launcher list view**: Nieuwe lijstweergave toegevoegd naast de bestaande tegelweergave, inclusief directe run bij klik en contextacties (Edit/Delete).
+- **Split view quick toggle**: Rechtermuisklik op de splitview-knop toggelt splitview nu direct aan/uit.
+
+#### Gewijzigd
+- **Script Launcher toolbar-uitlijning**: Zoekveld gebruikt nu de resterende breedte van de toolbar, zodat knoppen en zoekveld strakker over de vensterbreedte verdeeld zijn.
+- **Script Launcher labels in list view**: Labels-toggle werkt nu ook in lijstweergave via gegroepeerde labelsecties.
+- **Splitview knop-tooltip**: Tooltip verduidelijkt nu expliciet dat rechtermuisklik splitview aan/uit zet.
+- **Transport Blocks-knop uitlijning**: Breedteberekening van de rechts uitgelijnde Blocks-knop compacter gemaakt voor minder visuele lege ruimte rechts.
+
+#### Bugfixes
+- **Search veld rechterruimte**: Onnodige vaste rechterruimte in zoekvelden verminderd door clear-knopruimte alleen te reserveren wanneer er zoektekst aanwezig is.
+
 ## [TK Trackname in Arrange 1.9.3] - 2026-07-01
 
 ### TK Trackname in Arrange

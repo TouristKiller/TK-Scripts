@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.48
+-- @version 0.6.49
 -- @changelog:
+-- v0.6.49
+--   + Script Launcher: Added a List view mode next to tiles, with click-to-run items and Edit/Delete on right-click
+--   + Script Launcher: Labels toggle now also works in List view by grouping entries under label headers
+--   + Script Launcher: Search field layout tightened to use remaining toolbar width with less empty right-side space
+--   + Workbench: Right-click the Split view button to toggle split on/off directly (left-click still opens the split menu)
+--   + Workbench: Split view button tooltip now mentions the new right-click toggle
+--   + Transport: Header Blocks button spacing tightened for a cleaner right-aligned look
 -- v0.6.48
 --   + Send Studio: Added Link mode to mirror matching sends across selected tracks (relative volume/pan, absolute mute/mode/phase/mono), with a toolbar Link toggle and status feedback while adjusting
 --   + Send Studio: In list view, the live volume and pan slider value is now drawn above the handle while hovering/dragging, so the mouse cursor no longer covers it
@@ -1147,14 +1154,22 @@ local function draw_top_bar()
   if home_hovered then r.ImGui_SetTooltip(ctx, "Home") end
   r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
   local split_x, split_y = r.ImGui_GetCursorScreenPos(ctx)
-  if r.ImGui_InvisibleButton(ctx, "##tk_workbench_split", home_size, home_size) then r.ImGui_OpenPopup(ctx, "##tk_workbench_split_menu") end
+  local split_clicked = r.ImGui_InvisibleButton(ctx, "##tk_workbench_split", home_size, home_size)
+  local split_right_clicked = r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1)
+  if split_clicked then r.ImGui_OpenPopup(ctx, "##tk_workbench_split_menu") end
+  if split_right_clicked then
+    local enabled = app.settings.split_view_enabled == true
+    app.settings.split_view_enabled = not enabled
+    app.status = app.settings.split_view_enabled and "Split view enabled" or "Split view disabled"
+    save_settings()
+  end
   local split_hovered = r.ImGui_IsItemHovered(ctx)
   local split_active = split_view_available()
   local split_color = (split_active or split_hovered) and Theme.colors.accent or Theme.colors.text_dim
   r.ImGui_DrawList_AddRectFilled(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_active and Theme.colors.accent_soft or Theme.colors.frame_bg, UIScale.px(4))
   r.ImGui_DrawList_AddRect(draw_list, split_x, split_y, split_x + home_size, split_y + home_size, split_hovered and Theme.colors.accent or Theme.colors.border, UIScale.px(4), 0, UIScale.px(1))
   draw_split_icon(draw_list, split_x + icon_inset, split_y + icon_inset, home_size - icon_inset * 2, split_color)
-  if split_hovered then r.ImGui_SetTooltip(ctx, "Split view") end
+  if split_hovered then r.ImGui_SetTooltip(ctx, "Split view\nRight-click: toggle on/off") end
   if r.ImGui_BeginPopup(ctx, "##tk_workbench_split_menu") then
     local enabled = app.settings.split_view_enabled == true
     local changed, value = r.ImGui_Checkbox(ctx, "Split View", enabled)

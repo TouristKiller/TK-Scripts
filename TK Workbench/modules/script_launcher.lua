@@ -14,6 +14,7 @@ local M = {
 local defaults = {
   search_term = "",
   show_labels = true,
+  view_mode = "grid",
   sort_mode = "name",
   max_textures_per_frame = 12,
   max_cached_textures = 120,
@@ -58,6 +59,7 @@ local function ensure_settings(app)
       changed = true
     end
   end
+  if settings.view_mode ~= "list" then settings.view_mode = "grid" end
   if settings.sort_mode ~= "manual" then settings.sort_mode = "name" end
   if changed and app.save_settings then app.save_settings() end
   return settings
@@ -636,6 +638,37 @@ local function draw_grid(app, settings, items, width)
   end
 end
 
+local function draw_list(app, items)
+  local ctx = app.ctx
+  local function draw_list_row(item)
+    local entry = item.entry
+    local row_text = tostring(entry.name or entry.cmd)
+    r.ImGui_PushID(ctx, "script_launcher_list_" .. tostring(item.index))
+    if r.ImGui_Selectable(ctx, row_text, false) then
+      execute_entry(app, entry)
+    end
+    if r.ImGui_BeginPopupContextItem(ctx, "##script_launcher_list_ctx") then
+      if r.ImGui_Selectable(ctx, "Edit") then
+        state.pending_edit_index = item.index
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      if r.ImGui_Selectable(ctx, "Delete") then
+        table.remove(state.entries, item.index)
+        save_entries()
+        state.dirty_filter = true
+        app.status = "Deleted launcher item"
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_EndPopup(ctx)
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, tostring(entry.cmd or "")) end
+    r.ImGui_PopID(ctx)
+  end
+  for _, item in ipairs(items) do
+    draw_list_row(item)
+  end
+end
+
 local function grouped_items(items)
   local groups = {}
   local order = {}
@@ -706,7 +739,17 @@ function M.draw(app)
   end
   if not labels_active then r.ImGui_PopStyleColor(ctx) end
   r.ImGui_SameLine(ctx)
-  local search_w = math.max(UIScale.round(80), (avail_w or UIScale.round(320)) - button_h * 2 - labels_w - UIScale.round(32))
+  local list_active = settings.view_mode == "list"
+  if not list_active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x555555FF) end
+  local view_w = UIScale.text_button_w(ctx, "List", 48)
+  if r.ImGui_Button(ctx, "List##script_launcher_view", view_w, button_h) then
+    settings.view_mode = list_active and "grid" or "list"
+    if app.save_settings then app.save_settings() end
+  end
+  if not list_active then r.ImGui_PopStyleColor(ctx) end
+  r.ImGui_SameLine(ctx)
+  local remaining_w = r.ImGui_GetContentRegionAvail(ctx) or UIScale.round(80)
+  local search_w = math.max(UIScale.round(80), remaining_w - UIScale.round(2))
   local search_changed, search = UI.search_input(ctx, "##script_launcher_search", "Search scripts", settings.search_term or "", search_w)
   if search_changed then settings.search_term = search; state.dirty_filter = true; if app.save_settings then app.save_settings() end end
   if state.pending_edit_index and state.entries[state.pending_edit_index] then
@@ -731,6 +774,16 @@ function M.draw(app)
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No launcher items yet.")
       elseif #state.filtered == 0 then
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No matching launcher items.")
+      elseif settings.view_mode == "list" and settings.show_labels ~= false then
+        local groups, order = grouped_items(state.filtered)
+        for _, label in ipairs(order) do
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
+          r.ImGui_Separator(ctx)
+          draw_list(app, groups[label])
+          r.ImGui_Spacing(ctx)
+        end
+      elseif settings.view_mode == "list" then
+        draw_list(app, state.filtered)
       elseif settings.show_labels ~= false then
         local groups, order = grouped_items(state.filtered)
         for _, label in ipairs(order) do

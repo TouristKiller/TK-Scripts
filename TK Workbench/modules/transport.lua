@@ -1073,7 +1073,7 @@ function M.draw(app)
   local width = math.max(UIScale.round(140), avail_w or UIScale.round(280))
 
   -- Header row: right-aligned block-settings button.
-  local btn_w = UIScale.text_button_w(ctx, "Blocks", 60, 8)
+  local btn_w = UIScale.text_button_w(ctx, "Blocks", 0, 4)
   if width > btn_w then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (width - btn_w)) end
   if r.ImGui_SmallButton(ctx, "Blocks##transport_settings") then r.ImGui_OpenPopup(ctx, "##transport_settings_popup") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add, remove or reorder transport blocks") end

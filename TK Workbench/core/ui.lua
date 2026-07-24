@@ -172,19 +172,20 @@ end
 
 function M.search_input(ctx, id, hint, value, width)
 	value = tostring(value or "")
-	local spacing = UIScale.round(4)
-	local clear_w = UIScale.round(18)
+	local has_value = value ~= ""
+	local spacing = has_value and UIScale.round(3) or 0
+	local clear_w = has_value and UIScale.round(16) or 0
 	local total_w = tonumber(width)
 	if not total_w or total_w <= 0 then total_w = r.ImGui_GetContentRegionAvail(ctx) or UIScale.round(200) end
 	local input_w = math.max(UIScale.round(40), total_w - clear_w - spacing)
 	r.ImGui_SetNextItemWidth(ctx, input_w)
 	local changed, new_value = r.ImGui_InputTextWithHint(ctx, id, hint, value)
 	if changed then value = new_value end
-	r.ImGui_SameLine(ctx, 0, spacing)
-	local btn_h = r.ImGui_GetFrameHeight(ctx)
-	local x, y = r.ImGui_GetCursorScreenPos(ctx)
-	local clicked = r.ImGui_InvisibleButton(ctx, id .. "_clear", clear_w, btn_h)
-	if value ~= "" then
+	if has_value then
+		r.ImGui_SameLine(ctx, 0, spacing)
+		local btn_h = r.ImGui_GetFrameHeight(ctx)
+		local x, y = r.ImGui_GetCursorScreenPos(ctx)
+		local clicked = r.ImGui_InvisibleButton(ctx, id .. "_clear", clear_w, btn_h)
 		local hovered = r.ImGui_IsItemHovered(ctx)
 		local draw_list = r.ImGui_GetWindowDrawList(ctx)
 		local cx = x + clear_w * 0.5
