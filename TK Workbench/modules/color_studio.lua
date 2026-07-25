@@ -1992,6 +1992,21 @@ local function draw_auto_tab(ctx, app, settings)
   draw_auto_rules_overview(ctx, app, settings)
 end
 
+-- Read-only palette access for other modules: the palette that is active here
+-- (including its brightness/saturation adjustment, colour count and sorting),
+-- plus the active and recent colours. The Transport module's marker strip uses
+-- this so both modules stay on one palette instead of duplicating the tables.
+function M.active_palette(app)
+  local settings = ensure_settings(app)
+  local pal = palette(settings)
+  return {
+    name = pal.name,
+    colors = adjusted_palette_colors(settings),
+    active_color = tonumber(settings.active_color),
+    recent_colors = settings.recent_colors or {},
+  }
+end
+
 function M.init(app)
   ensure_settings(app)
 end

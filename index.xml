@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.49" author="TouristKiller" time="2026-07-24T23:55:00Z">
+    <version name="0.6.50" author="TouristKiller" time="2026-07-25T16:26:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -117,6 +117,27 @@
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
     <changelog><![CDATA[
+            v0.6.50
+            + New block: Transport - Markers & regions: every marker and region as a colour-coded chip, wrapped over as many rows as fit and scrollable beyond that; markers show a flag and regions a bar, and the one your cursor sits in lights up (during playback it follows the play cursor)
+            + Transport: Markers & regions - click a marker to move the edit cursor, click a region to also set the time selection, double-click to play from there or to loop and play a region, right-click for rename, go to, set time selection, loop and play, or delete
+            + Transport: Markers & regions - toolbar with prev/next marker, an M+R / M / R filter that cycles on click, +M (marker at the edit cursor) and +R (region from the time selection), plus a line naming the marker or region you are currently in
+            + Transport: Markers & regions - right-click a chip to colour the marker or region straight from Color Studio's active palette, pick any colour with the custom picker, grab Color Studio's active colour, or reset to REAPER's default; dragging the picker previews live and lands as a single undo point
+            + Transport: Markers & regions - a ruler lanes button next to +M / +R that hides or shows every ruler lane in one click. REAPER's per-lane actions only toggle and report no state, so this sets the lanes directly through the project's own lane info instead: always all hidden or all shown, never a mix, empty lanes included
+            + New block: Transport - Record status: the take counter big in view with a red dot that blinks while recording, an ARM badge, free space on the recording path with an estimate of how long that lasts at the current arm count (turns amber under ten minutes), and a list of the armed tracks in their track colour - click one to select and scroll to it, right-click to disarm, and cycle its input monitoring (off / on / tape style) with the chip on the right
+            + Transport: Record status - the take counter runs on timeline time, so it matches the length of the item you end up with rather than the wall clock. After you stop it holds the last take's length (the dot goes grey) until the next recording starts, so undoing or deleting that take does not clear it. The remaining-time estimate assumes 24-bit, so recording in 32-bit float leaves you roughly a quarter less than shown
+            + New block: Transport - Pre-roll / count-in: pre-roll on play and on record with its length in measures, count-in on play and on record, and the record mode (normal / time selection auto-punch / selected item auto-punch) as three chips where the active one lights up, plus a gear to REAPER's own metronome and pre-roll settings - all of it a click away instead of buried in a dialog
+            + Transport: Metronome - the click pattern as a row of beat cells instead of a grid in a dialog: one cell per beat carrying the click sound it uses (A to D) or a dash when muted, click to cycle through them. Odd meters simply get more cells, and while the transport rolls the row follows the play cursor so the meter you hear is the meter you see
+            + Transport: Metronome - the row reads and writes the pattern of the tempo / time signature marker governing the cursor, so editing inside a 5/4 section changes that marker's own pattern instead of scattering new markers through the tempo map. The time signature at the right of the row says which pattern you are looking at: dim for the project's own, accent-coloured when a marker carries one of its own - REAPER's metronome settings only ever show the project pattern, so the two can differ
+            + Transport: Metronome - a click pattern REAPER will not take is rolled back and every edit is a single undo step, so changing the pattern cannot leave the project without an audible click
+            + Transport: Transport buttons - two curved back / forward arrows that step through the edit cursor's history, so a quick look at the end of the project is one click away from where you were. Only deliberate jumps are kept, so dragging or nudging the cursor never floods the list, and the history keeps filling up while another module is on screen
+            + Transport: The Transport buttons card is now pinned to the anchored edge (top or bottom) instead of scrolling along with the rest, so the transport stays in view however short the window gets; the other cards scroll behind it once they no longer fit. The pinned card has no drag handle and shows as "Pinned" in the Blocks menu
+            + Transport: Time selection - A / B / C section slots with a Loop toggle next to them: right-click stores the current time selection, left-click recalls it. Recalling sets the time selection and loop points and seeks, so with repeat on you drop straight into the other section while mixing; slots are stored per project and the slot matching the current selection lights up
+            + Transport: Navigator card - four zoom buttons along the right edge: P zooms out to the whole project (time and track heights), and slots 1-3 store a zoom - right-click to save, left-click to recall - kept per project including track heights and vertical scroll
+            + Color Studio: Exposes its active palette to other modules (including the brightness/saturation adjustment, colour count, sorting and custom palettes), so the Transport marker strip always offers exactly the colours Color Studio is showing
+            + Fixed: "ImGui_EndChild: Missing PopID()" crashes that took the whole window down - Project Browser (list, detail and preview panels), Script Launcher, Arrange BG Presets and FX Chain Builder all called EndChild outside the "if BeginChild succeeded" block, so a panel clipped out of view (in split view, or scrolled off-screen) ended a child that was never begun
+            + Fixed: Workbench - a failing frame no longer takes the whole window down. An ImGui structural failure in a module invalidates the context, after which every remaining call in that frame fails as well, ending the defer chain; the frame is now caught and simply dropped, and the next one starts from a fresh context
+            + Fixed: Workbench - a module error is no longer drawn on an ImGui context that the failure just invalidated, which raised a second, confusing error on top of the real one and hid it
+            + Fixed: Project Browser - the Previews popup and its rows are guarded so a failure inside them cannot skip an EndPopup or PopID, and the preview panel's error is written to the log instead of being swallowed silently
             v0.6.49
             + Script Launcher: Added a List view mode next to tiles, with click-to-run items and Edit/Delete on right-click
             + Script Launcher: Labels toggle now also works in List view by grouping entries under label headers
@@ -124,25 +145,6 @@
             + Workbench: Right-click the Split view button to toggle split on/off directly (left-click still opens the split menu)
             + Workbench: Split view button tooltip now mentions the new right-click toggle
             + Transport: Header Blocks button spacing tightened for a cleaner right-aligned look
-            v0.6.48
-                + Send Studio: Added Link mode to mirror matching sends across selected tracks (relative volume/pan, absolute mute/mode/phase/mono), with a toolbar Link toggle and status feedback while adjusting
-                + Send Studio: In list view, the live volume and pan slider value is now drawn above the handle while hovering/dragging, so the mouse cursor no longer covers it.
-                + Send Studio: The Add Send/Receive picker can now be stretched taller by dragging the grip at its bottom edge; the height is remembered and can grow up to nearly the screen height
-                + Send Studio: The return track's volume and pan (in the lane's right-click menu) can be reset with a right-click on the slider or a small 0 / C button next to it
-                + Send Studio: The Pin button is now a compact thumbtack icon so track names get more room, and the track fader's + button now lines up right under it
-                v0.6.41
-                + Fixed: Module rail - tiles were pushed off-centre when the rail is docked on the left
-                + Fixed: Transport - right-clicking a tile to open a module in split view could throw an ImGui EndChild error
-                v0.6.4
-                + New module: Transport - a modular transport built from cards you can add, remove, drag to reorder, and anchor to the top or bottom of the window (via the Blocks button)
-                + Transport: Transport buttons card - vector-drawn go-to-start / play / pause / stop / record / go-to-end / loop that justify to the full card width, with live play/record/repeat state highlighting
-                + Transport: Tempo card - a large draggable/scrollable BPM readout (double-click to type), -/Tap/+ row, and a clickable time-signature badge to set the signature at the current measure or project start
-                + Transport: Time selection card - big length readout with a bars.beats badge, start/end, and buttons to move the edit cursor to the selection start/end or clear it
-                + Transport: Play rate card - themed slider (0.25-4x) with a 1x reset and a preserve-pitch toggle
-                + Transport: Metronome card - on/off, click volume, 0.5x/1x/2x/4x speed presets, metronome-during-playback/record toggles, and a gear that opens REAPER's metronome settings
-                + Transport: Navigator card - a 2D bird's-eye of the arrange (tracks x time) with items, markers/regions and the edit/play cursor; drag the viewport to pan, edges/wheel to zoom time, Ctrl+wheel to zoom track height, and zoom past the project end
-                + Transport: Master scope card - a scrolling peak view of the master output that runs during playback, scrolls out on stop, and restarts on the next play
-                + Workbench: Added an optional Module rail - a slim, always-visible strip of module icons along the left or right window edge (icon-only, name on hover) so any module is one click away; right-click a rail icon to load that module into the split view; toggle and side live in Preferences
 
 ]]></changelog>
      </version>

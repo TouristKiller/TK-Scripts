@@ -1,7 +1,28 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.49
+-- @version 0.6.50
 -- @changelog:
+-- v0.6.50
+--   + New block: Transport - Markers & regions: every marker and region as a colour-coded chip, wrapped over as many rows as fit and scrollable beyond that; markers show a flag and regions a bar, and the one your cursor sits in lights up (during playback it follows the play cursor)
+--   + Transport: Markers & regions - click a marker to move the edit cursor, click a region to also set the time selection, double-click to play from there or to loop and play a region, right-click for rename, go to, set time selection, loop and play, or delete
+--   + Transport: Markers & regions - toolbar with prev/next marker, an M+R / M / R filter that cycles on click, +M (marker at the edit cursor) and +R (region from the time selection), plus a line naming the marker or region you are currently in
+--   + Transport: Markers & regions - right-click a chip to colour the marker or region straight from Color Studio's active palette, pick any colour with the custom picker, grab Color Studio's active colour, or reset to REAPER's default; dragging the picker previews live and lands as a single undo point
+--   + Transport: Markers & regions - a ruler lanes button next to +M / +R that hides or shows every ruler lane in one click. REAPER's per-lane actions only toggle and report no state, so this sets the lanes directly through the project's own lane info instead: always all hidden or all shown, never a mix, empty lanes included
+--   + New block: Transport - Record status: the take counter big in view with a red dot that blinks while recording, an ARM badge, free space on the recording path with an estimate of how long that lasts at the current arm count (turns amber under ten minutes), and a list of the armed tracks in their track colour - click one to select and scroll to it, right-click to disarm, and cycle its input monitoring (off / on / tape style) with the chip on the right
+--   + Transport: Record status - the take counter runs on timeline time, so it matches the length of the item you end up with rather than the wall clock. After you stop it holds the last take's length (the dot goes grey) until the next recording starts, so undoing or deleting that take does not clear it. The remaining-time estimate assumes 24-bit, so recording in 32-bit float leaves you roughly a quarter less than shown
+--   + New block: Transport - Pre-roll / count-in: pre-roll on play and on record with its length in measures, count-in on play and on record, and the record mode (normal / time selection auto-punch / selected item auto-punch) as three chips where the active one lights up, plus a gear to REAPER's own metronome and pre-roll settings - all of it a click away instead of buried in a dialog
+--   + Transport: Metronome - the click pattern as a row of beat cells instead of a grid in a dialog: one cell per beat carrying the click sound it uses (A to D) or a dash when muted, click to cycle through them. Odd meters simply get more cells, and while the transport rolls the row follows the play cursor so the meter you hear is the meter you see
+--   + Transport: Metronome - the row reads and writes the pattern of the tempo / time signature marker governing the cursor, so editing inside a 5/4 section changes that marker's own pattern instead of scattering new markers through the tempo map. The time signature at the right of the row says which pattern you are looking at: dim for the project's own, accent-coloured when a marker carries one of its own - REAPER's metronome settings only ever show the project pattern, so the two can differ
+--   + Transport: Metronome - a click pattern REAPER will not take is rolled back and every edit is a single undo step, so changing the pattern cannot leave the project without an audible click
+--   + Transport: Transport buttons - two curved back / forward arrows that step through the edit cursor's history, so a quick look at the end of the project is one click away from where you were. Only deliberate jumps are kept, so dragging or nudging the cursor never floods the list, and the history keeps filling up while another module is on screen
+--   + Transport: The Transport buttons card is now pinned to the anchored edge (top or bottom) instead of scrolling along with the rest, so the transport stays in view however short the window gets; the other cards scroll behind it once they no longer fit. The pinned card has no drag handle and shows as "Pinned" in the Blocks menu
+--   + Transport: Time selection - A / B / C section slots with a Loop toggle next to them: right-click stores the current time selection, left-click recalls it. Recalling sets the time selection and loop points and seeks, so with repeat on you drop straight into the other section while mixing; slots are stored per project and the slot matching the current selection lights up
+--   + Transport: Navigator card - four zoom buttons along the right edge: P zooms out to the whole project (time and track heights), and slots 1-3 store a zoom - right-click to save, left-click to recall - kept per project including track heights and vertical scroll
+--   + Color Studio: Exposes its active palette to other modules (including the brightness/saturation adjustment, colour count, sorting and custom palettes), so the Transport marker strip always offers exactly the colours Color Studio is showing
+--   + Fixed: "ImGui_EndChild: Missing PopID()" crashes that took the whole window down - Project Browser (list, detail and preview panels), Script Launcher, Arrange BG Presets and FX Chain Builder all called EndChild outside the "if BeginChild succeeded" block, so a panel clipped out of view (in split view, or scrolled off-screen) ended a child that was never begun
+--   + Fixed: Workbench - a failing frame no longer takes the whole window down. An ImGui structural failure in a module invalidates the context, after which every remaining call in that frame fails as well, ending the defer chain; the frame is now caught and simply dropped, and the next one starts from a fresh context
+--   + Fixed: Workbench - a module error is no longer drawn on an ImGui context that the failure just invalidated, which raised a second, confusing error on top of the real one and hid it
+--   + Fixed: Project Browser - the Previews popup and its rows are guarded so a failure inside them cannot skip an EndPopup or PopID, and the preview panel's error is written to the log instead of being swallowed silently
 -- v0.6.49
 --   + Script Launcher: Added a List view mode next to tiles, with click-to-run items and Edit/Delete on right-click
 --   + Script Launcher: Labels toggle now also works in List view by grouping entries under label headers
@@ -1992,6 +2013,12 @@ local function pop_workspace_style(vars)
 end
 
 local function draw_module_error(module, err)
+  -- An ImGui structural failure (an unbalanced PushID or BeginChild inside a
+  -- module) invalidates the context on its way out. Drawing the message on that
+  -- dead context would raise a second, more confusing error and hide the real
+  -- one, so bail out here: loop() recreates the context on the next frame and
+  -- the message shows up then.
+  if r.ImGui_ValidatePtr and not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then return end
   local width = r.ImGui_GetContentRegionAvail(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -2404,7 +2431,7 @@ local function draw_missing_extensions_popup()
   end
 end
 
-local function loop()
+local function draw_frame()
   if r.ImGui_ValidatePtr and not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
     ctx = r.ImGui_CreateContext(SCRIPT_NAME)
     app.ctx = ctx
@@ -2465,7 +2492,22 @@ local function loop()
   Theme.pop(ctx, theme_stack)
   pop_scaled_font(scaled_font_pushed)
   flush_window_size_if_dirty()
-  if open and not app.close_requested then
+  return open
+end
+
+-- An ImGui structural failure inside a module (an unbalanced PushID or
+-- BeginChild) invalidates the context on its way out, and every later call in
+-- that frame then fails too -- including the ones that were meant to clean up.
+-- Without this guard the very first of those errors ends the defer chain and
+-- takes the whole window down. Catching it here costs one dropped frame:
+-- draw_frame recreates the context at the top of the next one and carries on.
+local function loop()
+  local ok, result = pcall(draw_frame)
+  if not ok then
+    record_module_error("workbench.frame", result)
+    result = true -- keep going; the next frame starts from a fresh context
+  end
+  if result and not app.close_requested then
     r.defer(loop)
   else
     shutdown()
