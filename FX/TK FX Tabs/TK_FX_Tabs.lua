@@ -1,10 +1,12 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.2.1
 -- @changelog:
+--   v1.2.1
+--   + Close FX button (amber dot): closes only the FX window while the script keeps running (combine with 'Hide tab bar when no FX is open' to hide the bar as well)
+--   # Detached mode: the BYPASS/OFFLINE overlay now shows again, centered in the REAPER window
 --   v1.2.0
 --   + Detached (dockable launcher) mode: turn the tab bar into a normal, dockable window that no longer attaches to the plugin; clicking a tab opens/focuses that FX (opening still centers it when 'Center FX' is on)
---   # Detached mode: the BYPASS/OFFLINE overlay now shows again, centered in the REAPER window
 --   + Option 'Hide tab bar when no FX is open': the tab bar only shows while an FX window is open and returns automatically
 --   # On launch, the tab bar now opens on an already-visible FX instead of jumping to the first plugin of the track
 --   # The highlighted tab now always matches the shown FX (stable per-FX identity fixes wrong/last-tab highlighting after add/remove/online)
@@ -2351,15 +2353,29 @@ local function draw_toolbar()
   r.ImGui_SameLine(ctx)
   r.ImGui_TextColored(ctx, theme.text_dim, label)
   r.ImGui_SameLine(ctx)
+  local dot_size = 18
   if r.ImGui_SetCursorPosX and r.ImGui_GetWindowSize then
     local window_w = select(1, r.ImGui_GetWindowSize(ctx))
-    r.ImGui_SetCursorPosX(ctx, math.max(0, window_w - 62))
+    r.ImGui_SetCursorPosX(ctx, math.max(0, window_w - (active_entry and 87 or 62)))
   end
   if current_item_rect_clicked(r.ImGui_Button(ctx, "...", 28, 0)) then open_topbar_popup("FX Tabs Settings") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Settings") end
+  if active_entry then
+    r.ImGui_SameLine(ctx, 0, 7)
+    local hide_x, hide_y = r.ImGui_GetCursorScreenPos(ctx)
+    local hide_clicked = false
+    if r.ImGui_InvisibleButton then
+      hide_clicked = r.ImGui_InvisibleButton(ctx, "##close_fx_window", dot_size, dot_size)
+    elseif r.ImGui_Button(ctx, "##close_fx_window", dot_size, dot_size) then
+      hide_clicked = true
+    end
+    if current_item_rect_clicked(hide_clicked) then close_active_window() end
+    local hide_col = r.ImGui_IsItemHovered(ctx) and 0xE9B44CFF or 0x8A7238FF
+    r.ImGui_DrawList_AddCircleFilled(r.ImGui_GetWindowDrawList(ctx), hide_x + dot_size * 0.5, hide_y + dot_size * 0.5, 5.5, hide_col, 18)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close FX window (script keeps running)") end
+  end
   r.ImGui_SameLine(ctx, 0, 7)
   local dot_x, dot_y = r.ImGui_GetCursorScreenPos(ctx)
-  local dot_size = 18
   local close_clicked = false
   if r.ImGui_InvisibleButton then
     close_clicked = r.ImGui_InvisibleButton(ctx, "##close_script", dot_size, dot_size)
