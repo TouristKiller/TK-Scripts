@@ -1,8 +1,13 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.4
--- @changelog 
+-- @version 2.0.5
+-- @changelog
 --[[
+    v2.0.5:
+    + Fixed: Monitor Volume did not reflect or control the actual master hardware output volume - it now reads/writes the master output 1 send volume directly instead of nudging via SWS actions and tracking a cached value that drifted out of sync
+    + Fixed: Right-click reset on Monitor Volume only reset the display, not the real output volume
+    + Removed: SWS dependency for Monitor Volume (native REAPER API is used now)
+
     v2.0.4:
     + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
 
@@ -9456,23 +9461,48 @@ function MasterVolumeSlider(main_window_width, main_window_height)
  end
 end
 
+MONITOR_HW_SEND_IDX = 0
+
+function GetMonitorVolumeTrack()
+ local master_track = r.GetMasterTrack(0)
+ if not master_track then return nil end
+ if r.GetTrackNumSends(master_track, 1) <= MONITOR_HW_SEND_IDX then return nil end
+ return master_track
+end
+
+function GetMonitorVolumeDB()
+ local master_track = GetMonitorVolumeTrack()
+ if not master_track then return nil end
+
+ local volume_linear = r.GetTrackSendInfo_Value(master_track, 1, MONITOR_HW_SEND_IDX, "D_VOL")
+
+ if volume_linear < 0.0000000298023223876953125 then
+ return -150.0
+ elseif volume_linear > 3.981071705534969 then
+ return 12.0
+ end
+ return 20.0 * math.log(volume_linear, 10)
+end
+
+function SetMonitorVolumeDB(volume_db)
+ local master_track = GetMonitorVolumeTrack()
+ if not master_track then return end
+
+ local volume_linear = volume_db <= -150.0 and 0.0 or 10.0 ^ (volume_db / 20.0)
+ r.SetTrackSendInfo_Value(master_track, 1, MONITOR_HW_SEND_IDX, "D_VOL", volume_linear)
+end
+
 function MonitorVolumeSlider(main_window_width, main_window_height)
  if not settings.show_monitor_volume then return end
- 
+
  local allow_input = not settings.edit_mode
- 
- local command_id_up = r.NamedCommandLookup("_SWS_MAST_O1_1")
- local command_id_down = r.NamedCommandLookup("_SWS_MAST_O1_-1")
- local command_id_reset = r.NamedCommandLookup("_SWS_MAST_O1_0")
- 
- if not command_id_up or command_id_up == 0 then
- r.ImGui_Text(ctx, "SWS Extension required for Monitor Volume")
+
+ local volume_db = GetMonitorVolumeDB()
+ if not volume_db then
+ r.ImGui_Text(ctx, "No hardware output on Master track")
  return
  end
- 
- local volume_db = r.GetExtState("TK_TRANSPORT", "monitor_volume_cache")
- volume_db = tonumber(volume_db) or 0.0
- 
+
  local pos_x = settings.monitor_volume_x_px and ScalePosX(settings.monitor_volume_x_px, main_window_width, settings) 
  or ((settings.monitor_volume_x or 0.5) * main_window_width)
  local pos_y = settings.monitor_volume_y_px and ScalePosY(settings.monitor_volume_y_px, main_window_height, settings) 
@@ -9502,25 +9532,13 @@ function MonitorVolumeSlider(main_window_width, main_window_height)
  local new_pct = (rel_x / slider_width) * 100
  new_pct = math.max(0, math.min(100, new_pct))
  local new_db = (new_pct / 100) * 72 - 60
- 
- local db_change = new_db - volume_db
- if math.abs(db_change) >= 0.5 then
- local steps = math.floor(db_change + 0.5)
- local cmd = steps > 0 and command_id_up or command_id_down
- for i = 1, math.abs(steps) do
- r.Main_OnCommand(cmd, 0)
+ SetMonitorVolumeDB(new_db)
  end
- volume_db = new_db
- r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", tostring(volume_db), false)
- end
- end
- 
+
  if allow_input and r.ImGui_IsItemClicked(ctx, 1) then
- r.Main_OnCommand(command_id_reset, 0)
- volume_db = 0.0
- r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", "0.0", false)
+ SetMonitorVolumeDB(0.0)
  end
- 
+
  local draw_list = r.ImGui_GetWindowDrawList(ctx)
  local bg_color = settings.monitor_volume_slider_bg or 0x808080FF
  local fill_color = settings.monitor_volume_grab or 0x00AA00FF
@@ -9605,25 +9623,13 @@ function MonitorVolumeSlider(main_window_width, main_window_height)
  
  if allow_input and rv then
  local new_db = display_mode == 0 and new_value or ((new_value / 100) * 72 - 60)
- local db_change = new_db - volume_db
- 
- if math.abs(db_change) >= 0.5 then
- local steps = math.floor(db_change + 0.5)
- local cmd = steps > 0 and command_id_up or command_id_down
- for i = 1, math.abs(steps) do
- r.Main_OnCommand(cmd, 0)
+ SetMonitorVolumeDB(new_db)
  end
- volume_db = new_db
- r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", tostring(volume_db), false)
- end
- end
- 
+
  if allow_input and r.ImGui_IsItemClicked(ctx, 1) then
- r.Main_OnCommand(command_id_reset, 0)
- volume_db = 0.0
- r.SetExtState("TK_TRANSPORT", "monitor_volume_cache", "0.0", false)
+ SetMonitorVolumeDB(0.0)
  end
- 
+
  r.ImGui_PopItemWidth(ctx)
  
  local min_x, min_y = r.ImGui_GetItemRectMin(ctx)

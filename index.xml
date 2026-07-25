@@ -463,7 +463,7 @@ v2.2
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="2.0.4" author="TouristKiller" time="2026-07-04T12:00:00Z">
+        <version name="2.0.5" author="TouristKiller" time="2026-07-25T20:50:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -472,11 +472,13 @@ v2.2
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
             <changelog><![CDATA[
+    v2.0.5:
+    + Fixed: Monitor Volume did not reflect or control the actual master hardware output volume - it now reads/writes the master output 1 send volume directly instead of nudging via SWS actions and tracking a cached value that drifted out of sync
+    + Fixed: Right-click reset on Monitor Volume only reset the display, not the real output volume
+    + Removed: SWS dependency for Monitor Volume (native REAPER API is used now)
+
     v2.0.4:
     + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
-
-    v2.0.3:
-    + Fixed: Script failed to load ("'end' expected") due to two missing 'end' statements in GetReaperCustomColors
 
 ]]></changelog>
         </version>
