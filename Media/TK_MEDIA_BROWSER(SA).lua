@@ -1,8 +1,14 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.91
+-- @version 0.9.92
 -- @changelog:
 --[[
+v0.9.92:
++ Fixed the window freezing for several seconds when opening the spectral view: the analysis is now spread over frames instead of blocking the UI
++ Spectral results are now cached to disk and reused, so a file you have viewed before shows its spectral display instantly (also after a restart)
++ Speeded up spectral analysis of short files: the audio is read in one pass instead of hundreds of separate seeks
++ Reduced short hitches while auditioning: faster pitch detection and less allocation in the oscilloscope
+
 v0.9.91:
 + Fixed a vertical scrollbar appearing in the left panel when the oscilloscope was hidden, and the transport section jumping up/down when toggling the oscilloscope: the transport is now anchored to a fixed position and the oscilloscope fills the space above it
 
@@ -297,6 +303,9 @@ local waveform = {
     oscilloscope_cache_file = "",
     spectral_cache = {},
     spectral_cache_file = "",
+    spectral_store = {},
+    spectral_store_loaded = false,
+    spectral_store_dirty = false,
     leading_silence_cache = {},
     silence_trim_cache = {},
     peak_build_pending = {},
@@ -1210,16 +1219,18 @@ local function is_video_or_image_file(filename)
 end
 
 local function detect_pitch_autocorrelation(audio_buffer, sample_rate)
-    if not audio_buffer or #audio_buffer < 200 then
+    local buffer_len = audio_buffer and #audio_buffer or 0
+    if buffer_len < 200 then
         waveform.pitch_debug = "Buf too small"
         return nil
     end
 
     local energy = 0
-    for i = 1, #audio_buffer do
-        energy = energy + audio_buffer[i] * audio_buffer[i]
+    for i = 1, buffer_len do
+        local sample = audio_buffer[i]
+        energy = energy + sample * sample
     end
-    energy = math.sqrt(energy / #audio_buffer)
+    energy = math.sqrt(energy / buffer_len)
 
     if energy < 0.02 then
         waveform.pitch_debug = string.format("Silence (%.4f)", energy)
@@ -1230,54 +1241,52 @@ local function detect_pitch_autocorrelation(audio_buffer, sample_rate)
     local max_freq = 1200
 
     local min_period = math.floor(sample_rate / max_freq)
-    local max_period = math.min(math.floor(sample_rate / min_freq), math.floor(#audio_buffer / 3))
+    local max_period = math.min(math.floor(sample_rate / min_freq), math.floor(buffer_len / 3))
+    if max_period <= min_period then
+        waveform.pitch_debug = "Range too small"
+        return nil
+    end
+
+    local abs = math.abs
+    local fine_samples = math.min(buffer_len - max_period, 2048)
+    if fine_samples < 128 then fine_samples = 128 end
+    local coarse_samples = math.min(fine_samples, 512)
+    local coarse_step = math.floor((max_period - min_period) / 96)
+    if coarse_step < 1 then coarse_step = 1 end
 
     local best_correlation = -1
     local best_period = 0
-    local samples_to_check = math.min(#audio_buffer - max_period, 2048)
 
-    for period = min_period, max_period, 1 do
+    for period = min_period, max_period, coarse_step do
         local sum_diff = 0
-        local count = 0
-
-        for i = 1, samples_to_check do
-            if i + period <= #audio_buffer then
-                sum_diff = sum_diff + math.abs(audio_buffer[i] - audio_buffer[i + period])
-                count = count + 1
-            end
+        for i = 1, coarse_samples do
+            sum_diff = sum_diff + abs(audio_buffer[i] - audio_buffer[i + period])
         end
-
-        if count > 0 then
-            local avg_diff = sum_diff / count
-            local correlation = 1 - avg_diff
-
-            if correlation > best_correlation then
-                best_correlation = correlation
-                best_period = period
-            end
+        local correlation = 1 - (sum_diff / coarse_samples)
+        if correlation > best_correlation then
+            best_correlation = correlation
+            best_period = period
         end
     end
 
-    if best_period > min_period and best_period < max_period then
-        local sum_diff_prev = 0
-        local count_prev = 0
-        for i = 1, samples_to_check do
-            if i + best_period - 1 <= #audio_buffer then
-                sum_diff_prev = sum_diff_prev + math.abs(audio_buffer[i] - audio_buffer[i + best_period - 1])
-                count_prev = count_prev + 1
-            end
-        end
-        local prev_corr = count_prev > 0 and (1 - sum_diff_prev / count_prev) or -1
+    if best_period <= 0 then
+        waveform.pitch_debug = "No period"
+        return nil
+    end
 
-        local sum_diff_next = 0
-        local count_next = 0
-        for i = 1, samples_to_check do
-            if i + best_period + 1 <= #audio_buffer then
-                sum_diff_next = sum_diff_next + math.abs(audio_buffer[i] - audio_buffer[i + best_period + 1])
-                count_next = count_next + 1
-            end
+    local fine_start = math.max(min_period, best_period - coarse_step)
+    local fine_end = math.min(max_period, best_period + coarse_step)
+    best_correlation = -1
+    for period = fine_start, fine_end do
+        local sum_diff = 0
+        for i = 1, fine_samples do
+            sum_diff = sum_diff + abs(audio_buffer[i] - audio_buffer[i + period])
         end
-        local next_corr = count_next > 0 and (1 - sum_diff_next / count_next) or -1
+        local correlation = 1 - (sum_diff / fine_samples)
+        if correlation > best_correlation then
+            best_correlation = correlation
+            best_period = period
+        end
     end
 
     local energy_threshold = 0.55 - (energy - 0.02) * 2
@@ -5348,6 +5357,288 @@ local function calculate_spectral_data(file_path, num_slices, num_freq_bands)
     
     return spectral_data
 end 
+
+function tkmb_spectral_cancel_job()
+    local job = waveform.spectral_job
+    if job then
+        if job.source then r.PCM_Source_Destroy(job.source) end
+        if job.peakbuffer and job.peakbuffer.clear then job.peakbuffer.clear() end
+        if job.samplebuffer and job.samplebuffer.clear then job.samplebuffer.clear() end
+        if job.bulk and job.bulk.clear then job.bulk.clear() end
+    end
+    waveform.spectral_job = nil
+end
+
+function tkmb_spectral_begin(file_path, num_slices)
+    tkmb_spectral_cancel_job()
+    if not file_path or file_path == "" or not num_slices or num_slices < 1 then return false end
+
+    tkmb_spectral_store_load()
+    local file_size = tkmb_spectral_file_size(file_path)
+    local entry = waveform.spectral_store[file_path]
+    if entry then
+        if #entry.data == num_slices and file_size and file_size == entry.size then
+            entry.used = os.time()
+            waveform.spectral_store_dirty = true
+            waveform.spectral_cache = tkmb_spectral_decode(entry.data)
+            waveform.spectral_cache_file = file_path
+            return true
+        end
+        waveform.spectral_store[file_path] = nil
+        waveform.spectral_store_dirty = true
+    end
+
+    local source = r.PCM_Source_CreateFromFile(file_path)
+    if not source then return false end
+    local length = r.GetMediaSourceLength(source)
+    if not length or length <= 0 then
+        r.PCM_Source_Destroy(source)
+        return false
+    end
+    local samplerate = r.GetMediaSourceSampleRate(source)
+    if not samplerate or samplerate <= 0 then samplerate = 44100 end
+    local channels = r.GetMediaSourceNumChannels(source) or 1
+    if channels < 1 then channels = 1 end
+    local fft_size = 1024
+    local data = {}
+    for i = 1, num_slices do data[i] = 0.5 end
+    local job = {
+        file = file_path,
+        size = file_size,
+        source = source,
+        length = length,
+        samplerate = samplerate,
+        channels = channels,
+        fft_size = fft_size,
+        slices = num_slices,
+        index = 0,
+        data = data,
+        samplebuffer = r.new_array(fft_size * 2)
+    }
+
+    local total_samples = math.floor(length * samplerate + 0.5)
+    if total_samples > fft_size and total_samples <= samplerate * 4 then
+        local bulk = r.new_array(total_samples * channels * 2)
+        bulk.clear()
+        if r.PCM_Source_GetPeaks(source, samplerate, 0, channels, total_samples, 0, bulk) then
+            job.bulk = bulk
+            job.total_samples = total_samples
+        else
+            bulk.clear()
+        end
+    end
+    if not job.bulk then
+        job.peakbuffer = r.new_array(fft_size * channels * 2)
+    end
+
+    waveform.spectral_job = job
+    waveform.spectral_cache = data
+    waveform.spectral_cache_file = file_path
+    return true
+end
+
+function tkmb_spectral_slice_value(job, start_time)
+    local fft_size = job.fft_size
+    local channels = job.channels
+    local samplebuffer = job.samplebuffer
+    local peakbuffer, frames, offset
+
+    if job.bulk then
+        peakbuffer = job.bulk
+        frames = job.total_samples
+        offset = math.floor(start_time * job.samplerate)
+        if offset < 0 then offset = 0 end
+    else
+        peakbuffer = job.peakbuffer
+        frames = fft_size
+        offset = 0
+        peakbuffer.clear()
+        if not r.PCM_Source_GetPeaks(job.source, job.samplerate, start_time, channels, fft_size, 0, peakbuffer) then
+            return 0.5
+        end
+    end
+
+    local abs = math.abs
+    samplebuffer.clear()
+    for i = 1, fft_size do
+        local frame = offset + i - 1
+        local sample = 0
+        if frame < frames then
+            if channels == 1 then
+                sample = peakbuffer[frame + 1] or 0
+            else
+                local sample_abs = 0
+                local index = frame * channels
+                for ch = 1, channels do
+                    local candidate = peakbuffer[index + ch] or 0
+                    local candidate_abs = abs(candidate)
+                    if candidate_abs > sample_abs then
+                        sample = candidate
+                        sample_abs = candidate_abs
+                    end
+                end
+            end
+        end
+        samplebuffer[i] = sample
+    end
+    samplebuffer.fft_real(fft_size, true)
+
+    local bands = {0, 0, 0, 0, 0, 0}
+    local half = fft_size / 2
+    local bin_band = TKMB_SPECTRAL_BINBAND
+    if not bin_band or bin_band.half ~= half then
+        bin_band = { half = half, counts = {0, 0, 0, 0, 0, 0} }
+        for bin = 1, half - 1 do
+            local ratio = bin / half
+            local b
+            if ratio < 0.16 then b = 1
+            elseif ratio < 0.32 then b = 2
+            elseif ratio < 0.50 then b = 3
+            elseif ratio < 0.70 then b = 4
+            elseif ratio < 0.85 then b = 5
+            else b = 6 end
+            bin_band[bin] = b
+            bin_band.counts[b] = bin_band.counts[b] + 1
+        end
+        TKMB_SPECTRAL_BINBAND = bin_band
+    end
+
+    local sqrt = math.sqrt
+    for bin = 1, half - 1 do
+        local re = samplebuffer[bin * 2] or 0
+        local im = samplebuffer[bin * 2 + 1] or 0
+        local b = bin_band[bin]
+        bands[b] = bands[b] + sqrt(re * re + im * im)
+    end
+
+    local band_counts = bin_band.counts
+    for b = 1, 6 do
+        if band_counts[b] > 0 then bands[b] = bands[b] / band_counts[b] end
+    end
+
+    bands[1] = bands[1] * 0.15
+    bands[2] = bands[2] * 0.20
+    bands[3] = bands[3] * 0.35
+    bands[4] = bands[4] * 0.70
+    bands[5] = bands[5] * 1.30
+    bands[6] = bands[6] * 2.20
+
+    local total = 0
+    for b = 1, 6 do total = total + bands[b] end
+    if total > 0 then
+        for b = 1, 6 do bands[b] = bands[b] / total end
+    end
+    for b = 1, 6 do bands[b] = bands[b] * bands[b] end
+    total = 0
+    for b = 1, 6 do total = total + bands[b] end
+    if total > 0 then
+        for b = 1, 6 do bands[b] = bands[b] / total end
+    end
+
+    local weighted_sum = 0
+    for b = 1, 6 do weighted_sum = weighted_sum + (bands[b] * (b - 1)) end
+    return (weighted_sum / 5.0) ^ 0.7
+end
+
+function tkmb_spectral_step(budget)
+    local job = waveform.spectral_job
+    if not job then return end
+    budget = budget or 0.004
+    if job.bulk then budget = budget * 3 end
+    local deadline = r.time_precise() + budget
+    while job.index < job.slices do
+        local i = job.index + 1
+        job.index = i
+        job.data[i] = tkmb_spectral_slice_value(job, ((i - 1) / job.slices) * job.length)
+        if r.time_precise() >= deadline then break end
+    end
+    if job.index >= job.slices then
+        if job.size then
+            waveform.spectral_store[job.file] = {
+                data = tkmb_spectral_encode(job.data),
+                size = job.size,
+                used = os.time()
+            }
+            waveform.spectral_store_dirty = true
+        end
+        tkmb_spectral_cancel_job()
+    end
+end
+
+function tkmb_spectral_file_size(path)
+    local file = io.open(path, "rb")
+    if not file then return nil end
+    local size = file:seek("end")
+    file:close()
+    return size
+end
+
+function tkmb_spectral_encode(data)
+    local alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+-"
+    local out = {}
+    for i = 1, #data do
+        local v = data[i] or 0
+        if v < 0 then v = 0 elseif v > 1 then v = 1 end
+        local index = math.floor(v * 63 + 0.5) + 1
+        out[i] = alphabet:sub(index, index)
+    end
+    return table.concat(out)
+end
+
+function tkmb_spectral_decode(str)
+    if not TKMB_SPECTRAL_LOOKUP then
+        local alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+-"
+        TKMB_SPECTRAL_LOOKUP = {}
+        for i = 1, 64 do
+            TKMB_SPECTRAL_LOOKUP[alphabet:byte(i)] = (i - 1) / 63
+        end
+    end
+    local lookup = TKMB_SPECTRAL_LOOKUP
+    local data = {}
+    for i = 1, #str do
+        data[i] = lookup[str:byte(i)] or 0.5
+    end
+    return data
+end
+
+function tkmb_spectral_store_path()
+    return r.GetResourcePath() .. "/Scripts/TK_media_browser_spectral_cache.txt"
+end
+
+function tkmb_spectral_store_load()
+    if waveform.spectral_store_loaded then return end
+    waveform.spectral_store_loaded = true
+    local file = io.open(tkmb_spectral_store_path(), "r")
+    if not file then return end
+    local store = waveform.spectral_store
+    for line in file:lines() do
+        local path, size, used, data = line:match("^(.-)|(%d+)|(%d+)|(.+)$")
+        if path and path ~= "" then
+            store[path] = { data = data, size = tonumber(size), used = tonumber(used) }
+        end
+    end
+    file:close()
+end
+
+function tkmb_spectral_store_save()
+    if not waveform.spectral_store_dirty then return end
+    local entries = {}
+    for path, entry in pairs(waveform.spectral_store) do
+        entries[#entries + 1] = { path = path, data = entry.data, size = entry.size, used = entry.used or 0 }
+    end
+    if #entries > 50000 then
+        table.sort(entries, function(a, b) return a.used > b.used end)
+        for i = #entries, 50001, -1 do entries[i] = nil end
+    end
+    local file = io.open(tkmb_spectral_store_path(), "w")
+    if not file then return end
+    for i = 1, #entries do
+        local e = entries[i]
+        file:write(e.path, "|", tostring(e.size or 0), "|", tostring(e.used), "|", e.data, "\n")
+    end
+    file:close()
+    waveform.spectral_store_dirty = false
+end
 
 local function is_video_window_open()
     local video_window_state = r.GetToggleCommandStateEx(0, 50125)
@@ -11819,19 +12110,28 @@ function loop()
                         
                         if sample_rate then
                             -- Get peaks for pitch detection
-                            local peaks_buf = r.new_array(ui_settings.buffer_size * 2)
-                            r.PCM_Source_GetPeaks(playback.playing_source, sample_rate, play_pos, 1, ui_settings.buffer_size, 0, peaks_buf)
-                            
-                            ui_settings.audio_buffer = {}
-                            for i = 1, ui_settings.buffer_size do
+                            local peak_count = ui_settings.buffer_size
+                            local peaks_buf = ui_settings.osc_peaks_buf
+                            if not peaks_buf or #peaks_buf ~= peak_count * 2 then
+                                peaks_buf = r.new_array(peak_count * 2)
+                                ui_settings.osc_peaks_buf = peaks_buf
+                            end
+                            peaks_buf.clear()
+                            r.PCM_Source_GetPeaks(playback.playing_source, sample_rate, play_pos, 1, peak_count, 0, peaks_buf)
+
+                            local audio_buffer = ui_settings.audio_buffer
+                            for i = 1, peak_count do
                                 local idx_min = (i - 1) * 2 + 1
                                 local idx_max = (i - 1) * 2 + 2
                                 local min_val = peaks_buf[idx_min] or 0
                                 local max_val = peaks_buf[idx_max] or 0
                                 local sample = (min_val + max_val) / 2  -- Use average of min/max for better approximation
-                                ui_settings.audio_buffer[i] = math.max(-1, math.min(1, sample))
+                                audio_buffer[i] = math.max(-1, math.min(1, sample))
                             end
-                            
+                            for i = #audio_buffer, peak_count + 1, -1 do
+                                audio_buffer[i] = nil
+                            end
+
                             -- Optional: Apply simple low-pass filter to reduce noise for better pitch detection
                             -- local filtered_buffer = {}
                             -- for i = 1, #ui_settings.audio_buffer do
@@ -14922,14 +15222,21 @@ function loop()
                     if can_show_spectral then
                         local spec_file_changed = waveform.spectral_cache_file ~= file_to_show
                         local spec_cache_empty = #waveform.spectral_cache == 0
-                        local spectral_pixels = pixels
-                        if audio_length and audio_length > 8 then
-                            spectral_pixels = math.min(pixels, 160)
-                        end
+                        local spectral_pixels = 160
                         local spec_width_diff = #waveform.spectral_cache ~= spectral_pixels
-                        if spec_file_changed or spec_cache_empty or (spec_width_diff and waveform_width_stable(pixels)) then
-                            waveform.spectral_cache = calculate_spectral_data(file_to_show, spectral_pixels, 1)
-                            waveform.spectral_cache_file = file_to_show
+                        if (spec_file_changed or spec_cache_empty or (spec_width_diff and waveform_width_stable(pixels)))
+                            and waveform.spectral_fail_file ~= file_to_show then
+                            local job = waveform.spectral_job
+                            if not job or job.file ~= file_to_show or job.slices ~= spectral_pixels then
+                                if not tkmb_spectral_begin(file_to_show, spectral_pixels) then
+                                    waveform.spectral_fail_file = file_to_show
+                                    waveform.spectral_cache = {}
+                                    waveform.spectral_cache_file = file_to_show
+                                end
+                            end
+                        end
+                        if waveform.spectral_job then
+                            tkmb_spectral_step(0.012)
                         end
                         
                         if #waveform.spectral_cache > 0 then
@@ -14981,12 +15288,13 @@ function loop()
                                     blue = 255
                                 end
                                 
-                                    local color = r.ImGui_ColorConvertDouble4ToU32(red/255, green/255, blue/255, 1.0)
+                                    local color = (math.floor(red) << 24) | (math.floor(green) << 16) | (math.floor(blue) << 8) | 0xFF
                                     r.ImGui_DrawList_AddLine(draw_list, x, y_top, x, y_bottom, color, ui_settings.waveform_thickness)
                                 end
                             end
                         end
                     else
+                        if waveform.spectral_job then tkmb_spectral_cancel_job() end
                         local h = ui_settings.waveform_hue
                         local s = 1.0
                         local v = 1.0
@@ -15970,6 +16278,7 @@ end
 function exit_script()
     save_options()
     save_browser_position()
+    tkmb_spectral_store_save()
     on_exit()
 end
 r.atexit(exit_script)
