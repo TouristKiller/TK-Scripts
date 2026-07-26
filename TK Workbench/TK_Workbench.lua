@@ -1,7 +1,17 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.50
+-- @version 0.6.60
 -- @changelog:
+-- v0.6.60
+--   + New module: XY Pad - drag one puck to move two FX parameters at once, for quick two-handed tweaking without hunting through an FX window. Press Learn after touching a parameter to bind it to X or Y (track FX, including record FX); the puck follows the parameters, so moves made elsewhere show up too, and the readout under the pad uses the plugin's own formatting. Momentary mode puts both parameters back where they were when you let go, so you can ride a filter and drop it. Assignments are stored per project and keep pointing at the right track after a reorder
+--   + XY Pad: Movement recording - press Record, get a count-in in beats, then everything the two parameters do is captured and saved as a movement you can replay, loop and delete. The clock only starts on your first actual move, so a count-in you spend thinking costs nothing, and the still tail between letting go and reaching Stop is trimmed off again. Recording samples the parameters rather than the mouse, so a move made in the FX window or from a control surface is caught too, and repeated points are thinned out so a long gesture stays a few kilobytes. Playback scales to the project tempo using the tempo it was recorded at, and both recording and playback keep running while you are in another module. Movements are stored globally and survive a REAPER restart, so they can be reused across projects, and a right-click offers rename and delete
+--   + XY Pad: MIDI triggered movements - a note on the modulated track's own input starts the armed movement (the one you last clicked), filtered by the device and channel that track is set to. Note mode plays it once, or loops it if Loop is on; Gate mode loops it while a note is held and stops on the last note off; Hold mode does the same but freezes the movement where it was instead of stopping, so the next note carries on from there rather than starting over. Retrigger restarts from the beginning on every note or lets the movement run on. Polling is one API call and one integer compare per idle frame, so nothing is paid for until a note actually arrives
+--   + New block: Transport - Info: a readout of whatever you are working on, as label / value rows. Project shows name, length, tempo and meter, sample rate, track and item counts, markers and regions, and the cursor; Track shows number and name, item count, volume, pan, channels, FX count and its mute/solo/arm state; Item shows take name (with which take of how many), position, length and end, source file with its rate and channels or the note and CC count for MIDI, play rate and pitch when altered, and fade lengths; Region shows number, name, bounds, length and colour
+--   + Transport: Info - in Auto the context follows whatever you selected last rather than a fixed order, so picking a region while an item is still selected shows the region; the Prj / Trk / Item / Rgn chips pin one by hand
+--   + Transport: Info - every context reserves the same height, so switching one does not shift the cards below it, and hovering the rows gives the full values untruncated
+--   + New block: Transport - Levels: master, monitor and the selected track on one card, each with a fader, a mute and (for the track) a solo. Monitor means the same thing it does in Control Room - the master's first hardware output send, so the level going to the speakers - and the row dims to "--" when the master feeds nothing. The track row follows the selection and carries the track number, name and colour
+--   + Transport: Levels - the faders run in dB rather than on REAPER's 0..4 volume scale, where unity would sit at a quarter of the travel; double-click a fader for unity, and the solo column stays reserved on every row so the faders line up
+--   + Transport: Each card now carries its name in its drag strip, small and dim next to the grip dots, so a tall stack stays readable at a glance - left-aligned rather than centred, so scanning follows one fixed edge instead of a centre that moves with every name length. Costs a few pixels of strip height, so there is a "Show block names on the cards" switch in the Blocks menu to turn it off
 -- v0.6.50
 --   + New block: Transport - Markers & regions: every marker and region as a colour-coded chip, wrapped over as many rows as fit and scrollable beyond that; markers show a flag and regions a bar, and the one your cursor sits in lights up (during playback it follows the play cursor)
 --   + Transport: Markers & regions - click a marker to move the edit cursor, click a region to also set the time selection, double-click to play from there or to loop and play a region, right-click for rename, go to, set time selection, loop and play, or delete
@@ -465,7 +475,8 @@ local module_names = {
   "color_studio",
   "arrange_bg_presets",
   "calculator",
-  "lyrics"
+  "lyrics",
+  "xy_pad"
 }
 
 local theme_color_fields = {

@@ -27,14 +27,17 @@ local AVAILABLE = {
   { id = "markers", title = "Markers & regions" },
   { id = "record_status", title = "Record status" },
   { id = "preroll", title = "Pre-roll / count-in" },
+  { id = "info", title = "Info" },
+  { id = "levels", title = "Levels" },
   { id = "master_peak", title = "Master scope" },
 }
 
 local defaults = {
-  blocks = { "transport", "tempo", "time_selection", "playrate", "metronome", "navigator", "markers", "record_status", "preroll", "master_peak" },
+  blocks = { "transport", "tempo", "time_selection", "playrate", "metronome", "navigator", "markers", "record_status", "preroll", "info", "levels", "master_peak" },
   button_style = "classic",
   anchor = "top", -- "top" = stack from the top, "bottom" = pin the stack to the window bottom
   markers_filter = "all", -- "all" | "markers" | "regions"
+  show_block_names = true, -- the block's name in its grab strip
 }
 
 local BLOCK_PAYLOAD = "TRANSPORT_BLOCK"
@@ -57,6 +60,7 @@ local state = {
   scope = { buf = {}, head = 1, size = 1024 },
   cursor = { list = {}, index = 0, recorded = nil, pending = nil, pending_at = 0, proj = nil },
   rec = { start = nil, last = 0, was = false },
+  info = { seq = 0, sig = {}, recency = {} },
   markers = { list = nil, change = -1, last_build = nil, ctx_item = nil, open_ctx = false, rename_text = "", focus_rename = false, color_value = nil, color_dirty = false },
 }
 
@@ -88,6 +92,13 @@ local function ensure_settings(app)
   settings.blocks = clean
   if settings.anchor ~= "bottom" then settings.anchor = "top" end
   if settings.markers_filter ~= "markers" and settings.markers_filter ~= "regions" then settings.markers_filter = "all" end
+  settings.show_block_names = settings.show_block_names ~= false
+  settings.info_auto = settings.info_auto ~= false
+  local known_context = false
+  for _, context in ipairs({ "project", "track", "item", "region" }) do
+    if settings.info_context == context then known_context = true end
+  end
+  if not known_context then settings.info_context = "project" end
   return settings
 end
 
@@ -1372,6 +1383,227 @@ local function pr_write_measures(v)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Info: what you are looking at right now.
+-- ---------------------------------------------------------------------------
+-- In auto mode the context follows whatever you touched last instead of a fixed
+-- priority -- the trick the Notes module uses. Every selection that changes bumps
+-- a counter, and the highest one wins, so picking a region while an item is still
+-- selected shows the region. Choosing a context by hand pins it.
+-- Every context reserves the same number of rows, so the card keeps its height
+-- and the stack below it does not jump about when you switch context. Eight is
+-- what the fullest contexts need -- a project with unsaved changes, and an audio
+-- item with fades -- so nothing is cut off and the waste stays small.
+local INFO_ROWS = 8
+
+local INFO_CONTEXTS = {
+  { id = "project", label = "Prj" },
+  { id = "track", label = "Trk" },
+  { id = "item", label = "Item" },
+  { id = "region", label = "Rgn" },
+}
+
+local function info_bump(kind, signature)
+  local info = state.info
+  if info.sig[kind] ~= signature then
+    info.sig[kind] = signature
+    info.seq = info.seq + 1
+    info.recency[kind] = signature and info.seq or 0
+  end
+end
+
+local function info_current_region()
+  if not r.GetLastMarkerAndCurRegion then return nil end
+  local marker_idx, region_idx = r.GetLastMarkerAndCurRegion(0, focus_time())
+  local want = (region_idx and region_idx >= 0) and region_idx
+    or ((marker_idx and marker_idx >= 0) and marker_idx or nil)
+  if not want then return nil end
+  for _, entry in ipairs(mk_get_list()) do
+    if entry.idx == want then return entry end
+  end
+  return nil
+end
+
+local function info_resolve(app, settings)
+  local sel = app.selection or {}
+  local track = sel.track and sel.track.pointer or nil
+  local item = sel.item and sel.item.pointer or nil
+  local region = info_current_region()
+  info_bump("track", track and tostring(track) or nil)
+  info_bump("item", item and tostring(item) or nil)
+  info_bump("region", region and (region.idx .. "|" .. region.name) or nil)
+  if settings.info_auto == false then
+    return settings.info_context or "project", track, item, region
+  end
+  local best, kind = 0, "project"
+  local recency = state.info.recency
+  if item and (recency.item or 0) > best then best, kind = recency.item, "item" end
+  if track and (recency.track or 0) > best then best, kind = recency.track, "track" end
+  if region and (recency.region or 0) > best then best, kind = recency.region, "region" end
+  return kind, track, item, region
+end
+
+local function info_db(value)
+  if not value or value <= 0.0000001 then return "-inf dB" end
+  return string.format("%+.1f dB", 20 * math.log(value, 10))
+end
+
+local function info_pan(value)
+  value = value or 0
+  if math.abs(value) < 0.005 then return "center" end
+  return string.format("%d%% %s", math.floor(math.abs(value) * 100 + 0.5), value < 0 and "L" or "R")
+end
+
+local function info_file_name(path)
+  if not path or path == "" then return nil end
+  return path:match("([^\\/]+)$") or path
+end
+
+-- Each builder returns a list of { label, value } pairs. Rows whose value comes
+-- out empty are dropped, so a take without a source file simply shows one line
+-- less rather than an empty one.
+local function info_rows_project(app)
+  local p = (app.selection or {}).project
+  if not p then return {} end
+  local rows = {
+    { "Name", p.name ~= "" and p.name or "Unsaved" },
+    { "Length", fmt_len(p.length or 0) },
+    { "Tempo", string.format("%.2f BPM  %d/%d", p.tempo or 120, p.time_sig or 4, p.time_sig_denom or 4) },
+    { "Rate", (p.sample_rate or 0) > 0 and (math.floor(p.sample_rate) .. " Hz") or "device rate" },
+    { "Tracks", tostring(p.tracks or 0) .. " tracks, " .. tostring(p.items or 0) .. " items" },
+    { "Markers", tostring(p.markers or 0) .. " markers, " .. tostring(p.regions or 0) .. " regions" },
+    { "Cursor", fmt_pos(p.cursor or 0) },
+  }
+  if p.dirty then rows[#rows + 1] = { "State", "unsaved changes" } end
+  return rows
+end
+
+local function info_rows_track(track)
+  if not track then return { { "Track", "nothing selected" } } end
+  local index = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 0)
+  local _, name = r.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+  name = (name and name ~= "") and name or "unnamed"
+  local flags = {}
+  if (r.GetMediaTrackInfo_Value(track, "B_MUTE") or 0) > 0 then flags[#flags + 1] = "mute" end
+  if (r.GetMediaTrackInfo_Value(track, "I_SOLO") or 0) > 0 then flags[#flags + 1] = "solo" end
+  if (r.GetMediaTrackInfo_Value(track, "I_RECARM") or 0) > 0 then flags[#flags + 1] = "armed" end
+  if (r.GetMediaTrackInfo_Value(track, "B_PHASE") or 0) > 0 then flags[#flags + 1] = "phase" end
+  local fx = r.TrackFX_GetCount and r.TrackFX_GetCount(track) or 0
+  local rows = {
+    { "Track", index .. "  " .. name },
+    { "Items", tostring(r.CountTrackMediaItems and r.CountTrackMediaItems(track) or 0) },
+    { "Volume", info_db(r.GetMediaTrackInfo_Value(track, "D_VOL")) },
+    { "Pan", info_pan(r.GetMediaTrackInfo_Value(track, "D_PAN")) },
+    { "Channels", tostring(math.floor(r.GetMediaTrackInfo_Value(track, "I_NCHAN") or 2)) },
+    { "FX", fx > 0 and tostring(fx) or "none" },
+  }
+  if #flags > 0 then rows[#rows + 1] = { "State", table.concat(flags, ", ") } end
+  return rows
+end
+
+local function info_rows_item(item)
+  if not item then return { { "Item", "nothing selected" } } end
+  local pos = r.GetMediaItemInfo_Value(item, "D_POSITION") or 0
+  local len = r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0
+  local takes = r.CountTakes and r.CountTakes(item) or 0
+  local take = r.GetActiveTake and r.GetActiveTake(item) or nil
+  local rows = {}
+  if take then
+    local _, take_name = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+    take_name = (take_name and take_name ~= "") and take_name or "unnamed"
+    -- Which take out of how many rides along with the name: a row of its own
+    -- would push the longest context past the reserved height.
+    if takes > 1 then
+      local active = math.floor((r.GetMediaItemInfo_Value(item, "I_CURTAKE") or 0) + 1.5)
+      take_name = take_name .. "  (" .. active .. "/" .. takes .. ")"
+    end
+    rows[#rows + 1] = { "Take", take_name }
+  end
+  rows[#rows + 1] = { "Position", fmt_pos(pos) }
+  rows[#rows + 1] = { "Length", fmt_len(len) }
+  rows[#rows + 1] = { "End", fmt_pos(pos + len) }
+  if take and r.TakeIsMIDI and r.TakeIsMIDI(take) then
+    rows[#rows + 1] = { "Source", "MIDI" }
+    if r.MIDI_CountEvts then
+      local ok, _, notes, ccs = pcall(r.MIDI_CountEvts, take)
+      if ok and type(notes) == "number" then
+        local counted = notes .. (notes == 1 and " note" or " notes")
+        if type(ccs) == "number" and ccs > 0 then counted = counted .. ", " .. ccs .. " CC" end
+        rows[#rows + 1] = { "Events", counted }
+      end
+    end
+  elseif take and r.GetMediaItemTake_Source then
+    local source = r.GetMediaItemTake_Source(take)
+    if source then
+      local path = r.GetMediaSourceFileName and select(1, r.GetMediaSourceFileName(source, "")) or nil
+      local file = info_file_name(path)
+      if file then rows[#rows + 1] = { "Source", file } end
+      if r.GetMediaSourceSampleRate then
+        local rate = r.GetMediaSourceSampleRate(source) or 0
+        local channels = r.GetMediaSourceNumChannels and r.GetMediaSourceNumChannels(source) or 0
+        if rate > 0 then
+          rows[#rows + 1] = { "Audio", math.floor(rate) .. " Hz, " .. channels .. " ch" }
+        end
+      end
+    end
+    local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+    local pitch = r.GetMediaItemTakeInfo_Value(take, "D_PITCH") or 0
+    if math.abs(rate - 1) > 0.0001 or math.abs(pitch) > 0.0001 then
+      rows[#rows + 1] = { "Rate", string.format("%.3fx  %+.2f st", rate, pitch) }
+    end
+  end
+  local fade_in = r.GetMediaItemInfo_Value(item, "D_FADEINLEN") or 0
+  local fade_out = r.GetMediaItemInfo_Value(item, "D_FADEOUTLEN") or 0
+  if fade_in > 0 or fade_out > 0 then
+    rows[#rows + 1] = { "Fades", string.format("%.3fs / %.3fs", fade_in, fade_out) }
+  end
+  return rows
+end
+
+local function info_rows_region(entry)
+  if not entry then return { { "Region", "none at the cursor" } } end
+  local rows = {
+    { entry.is_region and "Region" or "Marker", tostring(entry.num) },
+    { "Name", entry.name ~= "" and entry.name or "unnamed" },
+    { "Position", fmt_pos(entry.pos) },
+  }
+  if entry.is_region then
+    rows[#rows + 1] = { "End", fmt_pos(entry.rgn_end) }
+    rows[#rows + 1] = { "Length", fmt_len(entry.rgn_end - entry.pos) }
+  end
+  if entry.color and entry.color ~= 0 then
+    rows[#rows + 1] = { "Colour", mk_color_hex(nav_color(entry.color, 0)) }
+  end
+  return rows
+end
+
+-- ---------------------------------------------------------------------------
+-- Levels: master, monitor and the selected track side by side.
+-- ---------------------------------------------------------------------------
+-- The quick version of what Control Room does in full. "Monitor" means the same
+-- thing there as here: the master's first hardware output send, which is the
+-- level going to the speakers. Faders run in dB rather than on REAPER's 0..4
+-- volume scale, where unity would otherwise sit at a quarter of the travel.
+local LVL_MIN_DB, LVL_MAX_DB = -60, 12
+
+local function lvl_to_db(volume)
+  if not volume or volume <= 0.0000001 then return LVL_MIN_DB end
+  return math.max(LVL_MIN_DB, math.min(LVL_MAX_DB, 20 * math.log(volume, 10)))
+end
+
+local function lvl_from_db(db)
+  if db <= LVL_MIN_DB + 0.05 then return 0 end
+  return 10 ^ (db / 20)
+end
+
+-- The master's first hardware output send, or nil when the master feeds nothing.
+local function lvl_monitor_send(master)
+  if not master or not r.GetTrackNumSends or not r.GetTrackSendInfo_Value then return nil end
+  local ok, count = pcall(r.GetTrackNumSends, master, 1)
+  if not ok or type(count) ~= "number" or count < 1 then return nil end
+  return 0
+end
+
 local BLOCKS = {}
 
 BLOCKS.transport = function(ctx, app, settings, width)
@@ -2396,6 +2628,180 @@ BLOCKS.preroll = function(ctx, app, settings, width)
   end
 end
 
+BLOCKS.info = function(ctx, app, settings, width)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local ox, oy = r.ImGui_GetCursorScreenPos(ctx)
+  ox, oy = math.floor(ox), math.floor(oy)
+  local gap = UIScale.gap(4)
+  local lh = r.ImGui_GetTextLineHeight(ctx)
+  local chip_h = UIScale.round(20)
+  local y = oy
+
+  local kind, track, item, region = info_resolve(app, settings)
+
+  -- Context row: Auto plus the four contexts, so you can pin one by hand.
+  local auto = settings.info_auto ~= false
+  local count = #INFO_CONTEXTS + 1
+  local cw = (width - (count - 1) * gap) / count
+  r.ImGui_SetCursorScreenPos(ctx, ox, y)
+  local aclicked, ahovered = text_chip(ctx, "info_auto", "Auto", auto, cw, chip_h)
+  if aclicked then
+    settings.info_auto = not auto
+    if settings.info_auto == false then settings.info_context = kind end
+    save(app)
+  end
+  if ahovered then
+    r.ImGui_SetTooltip(ctx, auto
+      and "Following whatever you selected last - click to pin the current context"
+      or "Pinned - click to follow the selection again")
+  end
+  for i, context in ipairs(INFO_CONTEXTS) do
+    r.ImGui_SetCursorScreenPos(ctx, ox + i * (cw + gap), y)
+    local clicked, hovered = text_chip(ctx, "info_ctx_" .. context.id, context.label, kind == context.id, cw, chip_h)
+    if clicked then
+      settings.info_auto = false
+      settings.info_context = context.id
+      save(app)
+    end
+    if hovered then r.ImGui_SetTooltip(ctx, "Show " .. context.id .. " info") end
+  end
+  y = y + chip_h + gap
+
+  local rows
+  if kind == "track" then rows = info_rows_track(track)
+  elseif kind == "item" then rows = info_rows_item(item)
+  elseif kind == "region" then rows = info_rows_region(region)
+  else rows = info_rows_project(app) end
+
+  -- Label left and dim, value right and readable, so the values line up into a
+  -- column you can scan without reading the labels.
+  local label_w = UIScale.round(56)
+  local row_h = lh + UIScale.round(3)
+  local drawn = 0
+  for _, row in ipairs(rows) do
+    local label, value = row[1], tostring(row[2] or "")
+    if value ~= "" and drawn < INFO_ROWS then
+      r.ImGui_DrawList_AddText(dl, ox, y, Theme.colors.text_dim, label)
+      local value_x = ox + label_w
+      local fitted = mk_fit(ctx, value, math.max(0, width - label_w))
+      local vw = r.ImGui_CalcTextSize(ctx, fitted)
+      r.ImGui_DrawList_AddText(dl, math.max(value_x, ox + width - vw), y, Theme.colors.text, fitted)
+      y = y + row_h
+      drawn = drawn + 1
+    end
+  end
+
+  -- One invisible item covering the full reserved height: it fixes the card's
+  -- size whatever the context holds, and hosts a tooltip with the untruncated
+  -- values.
+  r.ImGui_SetCursorScreenPos(ctx, ox, oy + chip_h + gap)
+  r.ImGui_InvisibleButton(ctx, "##info_rows", width, INFO_ROWS * row_h)
+  if r.ImGui_IsItemHovered(ctx) then
+    local full = {}
+    for _, row in ipairs(rows) do
+      if tostring(row[2] or "") ~= "" then full[#full + 1] = row[1] .. ": " .. tostring(row[2]) end
+    end
+    r.ImGui_SetTooltip(ctx, table.concat(full, "\n"))
+  end
+end
+
+BLOCKS.levels = function(ctx, app, settings, width)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local ox, oy = r.ImGui_GetCursorScreenPos(ctx)
+  ox, oy = math.floor(ox), math.floor(oy)
+  local gap = UIScale.gap(4)
+  local lh = r.ImGui_GetTextLineHeight(ctx)
+  local row_h = r.ImGui_GetFrameHeight(ctx)
+  local label_w = UIScale.round(46)
+  local btn_w = UIScale.round(20)
+  -- The solo column stays reserved on every row so the faders line up, even
+  -- though master and monitor have nothing to put in it.
+  local slider_w = math.max(UIScale.round(50), width - label_w - 2 * (btn_w + gap) - gap)
+  local y = oy
+
+  -- One row: name, fader in dB, then mute and (optionally) solo.
+  local function level_row(id, label, label_col, volume, set_volume, muted, set_mute, soloed, set_solo)
+    r.ImGui_DrawList_AddText(dl, ox, y + (row_h - lh) * 0.5, label_col,
+      mk_fit(ctx, label, label_w - gap))
+    if volume == nil then
+      r.ImGui_DrawList_AddText(dl, ox + label_w, y + (row_h - lh) * 0.5, Theme.colors.text_dim, "--")
+      r.ImGui_SetCursorScreenPos(ctx, ox, y)
+      r.ImGui_Dummy(ctx, width, row_h)
+      y = y + row_h + gap
+      return
+    end
+    r.ImGui_SetCursorScreenPos(ctx, ox + label_w, y)
+    r.ImGui_SetNextItemWidth(ctx, slider_w)
+    local styled = push_slider_style(ctx)
+    local changed, db = r.ImGui_SliderDouble(ctx, "##lvl_" .. id, lvl_to_db(volume),
+      LVL_MIN_DB, LVL_MAX_DB, lvl_to_db(volume) <= LVL_MIN_DB + 0.05 and "-inf" or "%.1f dB")
+    pop_slider_style(ctx, styled)
+    if changed then set_volume(lvl_from_db(db)) end
+    if r.ImGui_IsItemHovered(ctx) then
+      if r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0) then set_volume(1.0) end
+      r.ImGui_SetTooltip(ctx, label .. " level - double-click for unity")
+    end
+
+    r.ImGui_SetCursorScreenPos(ctx, ox + label_w + slider_w + gap, y)
+    local mclicked, mhovered = text_chip(ctx, "lvl_mute_" .. id, "M", muted == true, btn_w, row_h)
+    if mclicked and set_mute then set_mute(not muted) end
+    if mhovered then r.ImGui_SetTooltip(ctx, muted and "Unmute" or "Mute") end
+
+    if set_solo then
+      r.ImGui_SetCursorScreenPos(ctx, ox + label_w + slider_w + 2 * gap + btn_w, y)
+      local sclicked, shovered = text_chip(ctx, "lvl_solo_" .. id, "S", soloed == true, btn_w, row_h)
+      if sclicked then set_solo(not soloed) end
+      if shovered then r.ImGui_SetTooltip(ctx, soloed and "Unsolo" or "Solo") end
+    end
+    y = y + row_h + gap
+  end
+
+  -- Master.
+  local master = r.GetMasterTrack and r.GetMasterTrack(0) or nil
+  level_row("master", "Master", Theme.colors.text,
+    master and r.GetMediaTrackInfo_Value(master, "D_VOL") or nil,
+    function(v) r.SetMediaTrackInfo_Value(master, "D_VOL", v) end,
+    master and (r.GetMediaTrackInfo_Value(master, "B_MUTE") or 0) > 0,
+    function(on) r.SetMediaTrackInfo_Value(master, "B_MUTE", on and 1 or 0) end)
+
+  -- Monitor: the master's hardware output send.
+  local send = master and lvl_monitor_send(master) or nil
+  local send_vol, send_mute
+  if send then
+    local ok_vol, vol = pcall(r.GetTrackSendInfo_Value, master, 1, send, "D_VOL")
+    local ok_mute, mute = pcall(r.GetTrackSendInfo_Value, master, 1, send, "B_MUTE")
+    send_vol = ok_vol and vol or nil
+    send_mute = ok_mute and mute == 1 or false
+  end
+  level_row("monitor", "Monitor", send and Theme.colors.text or Theme.colors.text_dim,
+    send_vol,
+    function(v) r.SetTrackSendInfo_Value(master, 1, send, "D_VOL", v) end,
+    send_mute,
+    function(on) r.SetTrackSendInfo_Value(master, 1, send, "B_MUTE", on and 1 or 0) end)
+
+  -- The selected track, following the same selection everything else uses.
+  local track = (app.selection or {}).track and app.selection.track.pointer or nil
+  local track_label = "Track"
+  local track_col = Theme.colors.text_dim
+  if track then
+    local index = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 0)
+    local _, name = r.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+    track_label = index .. "  " .. ((name and name ~= "") and name or "Track")
+    -- Tint the name with the track colour, but only while it stays readable on
+    -- the card: a very dark or very saturated track would otherwise vanish.
+    track_col = Theme.text_for_background(Theme.colors.frame_bg,
+      nav_color(r.GetTrackColor and r.GetTrackColor(track) or 0, Theme.colors.text),
+      Theme.colors.text, 3)
+  end
+  level_row("track", track_label, track_col,
+    track and r.GetMediaTrackInfo_Value(track, "D_VOL") or nil,
+    function(v) r.SetMediaTrackInfo_Value(track, "D_VOL", v) end,
+    track and (r.GetMediaTrackInfo_Value(track, "B_MUTE") or 0) > 0,
+    function(on) r.SetMediaTrackInfo_Value(track, "B_MUTE", on and 1 or 0) end,
+    track and (r.GetMediaTrackInfo_Value(track, "I_SOLO") or 0) > 0,
+    function(on) r.SetMediaTrackInfo_Value(track, "I_SOLO", on and 1 or 0) end)
+end
+
 BLOCKS.master_peak = function(ctx, app, settings, width)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   local ox, oy = r.ImGui_GetCursorScreenPos(ctx)
@@ -2508,13 +2914,32 @@ local function draw_settings_popup(ctx, app, settings)
     app.status = value and "Transport: anchored to bottom" or "Transport: anchored to top"
     save(app)
   end
+  local named = settings.show_block_names ~= false
+  local name_changed, name_value = r.ImGui_Checkbox(ctx, "Show block names on the cards", named)
+  if name_changed then
+    settings.show_block_names = name_value
+    app.status = name_value and "Transport: block names shown" or "Transport: block names hidden"
+    save(app)
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Adds the name to each card's drag strip, which makes the strip slightly taller")
+  end
   r.ImGui_EndPopup(ctx)
 end
 
 -- A slim grab strip at the top of each card: drag it to reorder (drag source),
 -- and it doubles as the drop target for its card.
-local function draw_grab_handle(ctx, dl, id, inner_w)
-  local hh = UIScale.round(11)
+-- The name rides in the grab strip, left of centre next to the dots: scanning a
+-- stack of cards then follows one fixed left edge instead of a centre that moves
+-- with every name length. Small and dim on purpose -- the self-evident cards
+-- (transport buttons, the big BPM readout) should not have a label competing
+-- with their content, while Levels or Info benefit from one.
+local GRAB_NAME_SIZE = 10
+
+local function draw_grab_handle(ctx, dl, id, inner_w, show_name)
+  local name_font = show_name and get_font(ctx, GRAB_NAME_SIZE) or nil
+  -- Only pay for the taller strip when there is text to fit in it.
+  local hh = (show_name and name_font) and UIScale.round(14) or UIScale.round(11)
   r.ImGui_PushID(ctx, "grab_" .. id)
   local hx, hy = r.ImGui_GetCursorScreenPos(ctx)
   r.ImGui_InvisibleButton(ctx, "##grab", inner_w, hh)
@@ -2528,7 +2953,17 @@ local function draw_grab_handle(ctx, dl, id, inner_w)
       r.ImGui_DrawList_AddCircleFilled(dl, gx + coln * UIScale.round(4), gy + row * UIScale.round(3), UIScale.px(1.2), dot_col, 6)
     end
   end
-  if hovered and not active then r.ImGui_SetTooltip(ctx, "Drag to reorder") end
+  if show_name and name_font and r.ImGui_DrawList_AddTextEx then
+    local base = (r.ImGui_GetFontSize and r.ImGui_GetFontSize(ctx)) or 13
+    local scale = GRAB_NAME_SIZE / math.max(1, base)
+    local tx = hx + UIScale.round(18)
+    local ty = hy + (hh - r.ImGui_GetTextLineHeight(ctx) * scale) * 0.5
+    -- mk_fit measures in the current font, so the budget is scaled to match.
+    local label = mk_fit(ctx, block_title(id), math.max(0, (inner_w - (tx - hx)) / scale))
+    local col = (hovered or active) and Theme.colors.accent or Theme.colors.text_dim
+    pcall(r.ImGui_DrawList_AddTextEx, dl, name_font, GRAB_NAME_SIZE, tx, ty, col, label)
+  end
+  if hovered and not active then r.ImGui_SetTooltip(ctx, block_title(id) .. " - drag to reorder") end
   if r.ImGui_BeginDragDropSource and r.ImGui_BeginDragDropSource(ctx) then
     r.ImGui_SetDragDropPayload(ctx, BLOCK_PAYLOAD, id)
     r.ImGui_Text(ctx, block_title(id))
@@ -2568,7 +3003,7 @@ local function draw_block_card(ctx, app, settings, id, pinned)
   local inner_w = w - pad * 2
   -- The pinned card cannot be reordered, so it gets no grab handle (and the row
   -- of pixels it would have cost goes to the block instead).
-  if not pinned then draw_grab_handle(ctx, dl, id, inner_w) end
+  if not pinned then draw_grab_handle(ctx, dl, id, inner_w, settings.show_block_names ~= false) end
   -- Guard the block so a runtime error can't leave the group open (which would
   -- surface later as "ImGui_EndChild: Missing EndGroup()").
   local ok, err = pcall(block, ctx, app, settings, inner_w)
