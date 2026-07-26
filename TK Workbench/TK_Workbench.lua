@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.60
+-- @version 0.6.61
 -- @changelog:
+-- v0.6.61
+--   + XY Pad: Added the missing "TK Workbench: Open XY Pad" action, so the module can be opened straight from REAPER's action list or a toolbar button like every other one
+--   + XY Pad: The pad now shrinks with the window (down to a floor) instead of pushing the readout, the movements and the trigger row out of sight, and the spacing between rows was tightened to give the pad itself more of the height
 -- v0.6.60
 --   + New module: XY Pad - drag one puck to move two FX parameters at once, for quick two-handed tweaking without hunting through an FX window. Press Learn after touching a parameter to bind it to X or Y (track FX, including record FX); the puck follows the parameters, so moves made elsewhere show up too, and the readout under the pad uses the plugin's own formatting. Momentary mode puts both parameters back where they were when you let go, so you can ride a filter and drop it. Assignments are stored per project and keep pointing at the right track after a reorder
 --   + XY Pad: Movement recording - press Record, get a count-in in beats, then everything the two parameters do is captured and saved as a movement you can replay, loop and delete. The clock only starts on your first actual move, so a count-in you spend thinking costs nothing, and the still tail between letting go and reaching Stop is trimmed off again. Recording samples the parameters rather than the mouse, so a move made in the FX window or from a control surface is caught too, and repeated points are thinned out so a long gesture stays a few kilobytes. Playback scales to the project tempo using the tempo it was recorded at, and both recording and playback keep running while you are in another module. Movements are stored globally and survive a REAPER restart, so they can be reused across projects, and a right-click offers rename and delete

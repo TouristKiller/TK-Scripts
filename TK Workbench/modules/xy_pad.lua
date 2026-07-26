@@ -647,18 +647,26 @@ function M.draw(app)
   local settings = ensure_settings(app)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   local gap = UIScale.gap(6)
+  -- Vertical breathing room is kept tighter than the horizontal spacing: it is
+  -- repeated on every row, so it is where the height goes.
+  local vgap = UIScale.gap(2)
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
   local width = math.max(UIScale.round(160), avail_w or UIScale.round(320))
   local lh = r.ImGui_GetTextLineHeight(ctx)
   local row_h = r.ImGui_GetFrameHeight(ctx)
+  local spacing_y = UIScale.gap(4)
+  if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
+    local ok, _, sy = pcall(r.ImGui_GetStyleVar, ctx, r.ImGui_StyleVar_ItemSpacing())
+    if ok and type(sy) == "number" then spacing_y = sy end
+  end
 
   local resolved = axes(false)
   local ax, ay = resolved.x, resolved.y
 
   draw_slot(ctx, app, "x", ax, width)
-  r.ImGui_Dummy(ctx, 1, gap)
+  r.ImGui_Dummy(ctx, 1, vgap)
   draw_slot(ctx, app, "y", ay, width)
-  r.ImGui_Dummy(ctx, 1, gap)
+  r.ImGui_Dummy(ctx, 1, vgap)
 
   -- Options row.
   local chip_w = math.max(UIScale.round(70), (width - gap) / 2)
@@ -683,7 +691,7 @@ function M.draw(app)
     save(app)
   end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Repeat a movement until you stop it") end
-  r.ImGui_Dummy(ctx, 1, gap)
+  r.ImGui_Dummy(ctx, 1, vgap)
 
   -- Record row: arm, the count-in length, and how long the take is running.
   local recording = state.rec ~= nil
@@ -727,13 +735,28 @@ function M.draw(app)
   else
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(#move_load()) .. " saved")
   end
-  r.ImGui_Dummy(ctx, 1, gap)
+  r.ImGui_Dummy(ctx, 1, vgap)
 
   -- The pad: square, as large as the remaining room allows.
   local px, py = r.ImGui_GetCursorScreenPos(ctx)
   px, py = math.floor(px), math.floor(py)
   local _, room = r.ImGui_GetContentRegionAvail(ctx)
-  local size = math.max(UIScale.round(120), math.min(width, (room or width) - lh - gap * 2))
+  -- Work out what still has to fit underneath, so a short window shrinks the pad
+  -- instead of pushing the readout, the movements and the trigger row off screen.
+  local saved = move_load()
+  -- ImGui adds its item spacing after every item, so each spacer and each row of
+  -- buttons costs its own height plus that: leaving those out is what let the
+  -- trigger row slide off the bottom.
+  local below = gap + lh + spacing_y -- the readout line
+  if #saved > 0 then
+    below = below + vgap + spacing_y -- spacer above the movement buttons
+    below = below + math.ceil(#saved / 3) * (row_h + spacing_y)
+    below = below + vgap + spacing_y -- spacer above the MIDI row
+    below = below + row_h + spacing_y -- the mode buttons
+    if settings.trigger_mode ~= "off" then below = below + lh + spacing_y end -- its note line
+  end
+  below = below + spacing_y -- a little slack, so nothing sits flush against the edge
+  local size = clamp(math.min(width, (room or width) - below), UIScale.round(90), width)
   local vx = param_value(ax)
   local vy = param_value(ay)
   local live = vx ~= nil or vy ~= nil
@@ -832,7 +855,7 @@ function M.draw(app)
   -- Saved movements: click to play or stop, right-click to delete.
   local moves = move_load()
   if #moves > 0 then
-    r.ImGui_Dummy(ctx, 1, gap)
+    r.ImGui_Dummy(ctx, 1, vgap)
     local per_row = 3
     local move_w = (width - (per_row - 1) * gap) / per_row
     for index, move in ipairs(moves) do
@@ -875,7 +898,7 @@ function M.draw(app)
 
   -- MIDI trigger row: mode, retrigger, and what it is pointed at.
   if #moves > 0 then
-    r.ImGui_Dummy(ctx, 1, gap)
+    r.ImGui_Dummy(ctx, 1, vgap)
     local modes = {
       { id = "off", label = "Off" },
       { id = "note", label = "Note" },
