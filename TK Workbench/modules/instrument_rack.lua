@@ -120,6 +120,7 @@ end
 local defaults = {
   pinned_track_guid = "",
   add_fx_target = "tk_fx_browser",
+  replace_fx_target = "quick_add",
   show_screenshots = true,
   screenshot_height = 90,
   show_track_fx = true,
@@ -529,7 +530,7 @@ function quick_load_parser(force_scan)
   state.quick_add_load_error = nil
   if not file_exists(PARSER_PATH) then
     state.quick_add_parser_loaded = false
-    state.quick_add_load_error = "Sexan parser niet gevonden"
+    state.quick_add_load_error = "Sexan parser not found"
     state.quick_add_plugins = {}
     state.quick_add_groups = { all = {}, developer = {}, category = {}, folders = {}, types = {} }
     return false
@@ -544,7 +545,7 @@ function quick_load_parser(force_scan)
     state.quick_add_parser_loaded = true
   end
   if type(ReadFXFile) ~= "function" then
-    state.quick_add_load_error = "ReadFXFile is niet beschikbaar"
+    state.quick_add_load_error = "ReadFXFile is not available"
     return false
   end
   local plugin_list, categories
@@ -663,10 +664,10 @@ function quick_menu_plugin_items(app, ctx, id_prefix, plugins, search_term, max_
     shown = shown + 1
   end
   if #list == 0 then
-    r.ImGui_MenuItem(ctx, "Geen resultaten", nil, false, false)
+    r.ImGui_MenuItem(ctx, "No results", nil, false, false)
   elseif #list > cap then
     r.ImGui_Separator(ctx)
-    r.ImGui_MenuItem(ctx, "Toon verfijn zoekterm...", nil, false, false)
+    r.ImGui_MenuItem(ctx, "Narrow the search to see more...", nil, false, false)
   end
   return false
 end
@@ -698,12 +699,13 @@ function quick_menu_group_source(app, ctx, source_label, group_kind, search_term
       end
     end
   end
-  if not any then r.ImGui_MenuItem(ctx, "Geen resultaten", nil, false, false) end
+  if not any then r.ImGui_MenuItem(ctx, "No results", nil, false, false) end
   r.ImGui_EndMenu(ctx)
   return false
 end
 
 function quick_open_popup(track, target_type, take, insert_index, chain, container_api)
+  state.native_replace = nil
   state.quick_add_context = {
     track = track,
     target_type = target_type or "track",
@@ -715,7 +717,9 @@ function quick_open_popup(track, target_type, take, insert_index, chain, contain
   state.quick_add_popup_open = true
 end
 
-function quick_open_replace_popup(chain, api_id, label)
+function quick_open_replace_popup(app, chain, api_id, label)
+  local settings = app and ensure_settings(app)
+  if settings and settings.replace_fx_target == "native" and start_native_replace(app, chain, api_id, label) then return end
   state.quick_add_context = {
     target_type = "replace",
     chain = chain,
@@ -750,7 +754,7 @@ function quick_apply_plugin(app, plugin_name)
   if context.container_api ~= nil and context.chain then
     add_external_fx_into_container(app, context.chain, context.container_api, plugin_name)
     quick_add_recent_plugin(plugin_name)
-    app.status = "Toegevoegd via Quick Add"
+    app.status = "Added via Quick Add"
     return
   end
   if context.target_type == "input" then
@@ -761,7 +765,7 @@ function quick_apply_plugin(app, plugin_name)
     add_external_fx(app, context.track, plugin_name, context.insert_index)
   end
   quick_add_recent_plugin(plugin_name)
-  app.status = "Toegevoegd via Quick Add"
+  app.status = "Added via Quick Add"
 end
 
 function draw_quick_add_popup(app, ctx)
@@ -778,7 +782,7 @@ function draw_quick_add_popup(app, ctx)
     r.ImGui_Separator(ctx)
   end
   r.ImGui_SetNextItemWidth(ctx, UIScale.round(110))
-  local changed, value = r.ImGui_InputTextWithHint(ctx, "##ir_quick_add_search", "Zoek plugin...", state.quick_add_search or "")
+  local changed, value = r.ImGui_InputTextWithHint(ctx, "##ir_quick_add_search", "Search plugin...", state.quick_add_search or "")
   if changed then state.quick_add_search = value or "" end
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, "X##ir_quick_add_clear") then state.quick_add_search = "" end
@@ -2281,6 +2285,7 @@ end
 local function open_add_fx_browser(app, track, target_type, take)
   local settings = ensure_settings(app)
   if not validate_track(track) then return end
+  state.native_replace = nil
   target_type = target_type or "track"
   select_only_track(track)
   r.DeleteExtState("TKMIX", "rack_add_container", false)
@@ -2638,6 +2643,21 @@ local function draw_rack_settings_popup(app, ctx, settings, track)
         if app.save_settings then app.save_settings() end
       end
     end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Replace FX target")
+    local replace_targets = {
+      { id = "quick_add", label = "Quick Add menu", tip = "Pick the replacement from the built-in Quick Add list" },
+      { id = "native", label = "Native FX Browser", tip = "Open REAPER's own FX browser; the plugin you add there takes the place of the FX you are replacing" }
+    }
+    for _, target in ipairs(replace_targets) do
+      local selected = (settings.replace_fx_target or "quick_add") == target.id
+      if r.ImGui_MenuItem(ctx, target.label .. "##ir_replace_target_" .. target.id, nil, selected) then
+        settings.replace_fx_target = target.id
+        if app.save_settings then app.save_settings() end
+      end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, target.tip) end
+    end
+    r.ImGui_Separator(ctx)
     changed, value = r.ImGui_Checkbox(ctx, "Show Quick Add (cascading menu)", settings.quick_add_enabled ~= false)
     if changed then
       settings.quick_add_enabled = value
@@ -4544,10 +4564,10 @@ end
 
 function replace_fx(app, chain, api_id, plugin_name)
   chain = as_chain(chain)
-  if not chain_valid(chain) or not c_add_capable(chain) then return end
-  if not plugin_name or plugin_name == "" then return end
+  if not chain_valid(chain) or not c_add_capable(chain) then return false end
+  if not plugin_name or plugin_name == "" then return false end
   api_id = math.floor(tonumber(api_id) or -1)
-  if api_id < 0 then return end
+  if api_id < 0 then return false end
   local rec = chain.kind ~= "item" and api_id >= REC_FX_OFFSET and api_id < CONTAINER_BASE
   local old_guid = c_guid(chain, api_id)
   local parallel = cfg(chain, api_id, "parallel") or "0"
@@ -4587,6 +4607,73 @@ function replace_fx(app, chain, api_id, plugin_name)
   r.PreventUIRefresh(-1)
   r.Undo_EndBlock("Replace FX", -1)
   app.status = ok and ("Replaced with " .. get_fx_short_name(plugin_name)) or "FX could not be replaced"
+  return ok
+end
+
+function start_native_replace(app, chain, api_id, label)
+  chain = as_chain(chain)
+  if not chain_valid(chain) then return false end
+  local track = chain.track
+  if not validate_track(track) or not r.TrackFX_GetCount then return false end
+  local guids = {}
+  local count = r.TrackFX_GetCount(track) or 0
+  for index = 0, count - 1 do
+    local guid = get_fx_guid(track, index)
+    if guid then guids[guid] = true end
+  end
+  state.native_replace = {
+    chain = chain,
+    api_id = api_id,
+    track = track,
+    guids = guids,
+    count = count,
+    chain_was_visible = r.TrackFX_GetChainVisible and r.TrackFX_GetChainVisible(track) ~= -1,
+    deadline = r.time_precise() + 300
+  }
+  select_only_track(track)
+  r.DeleteExtState("TKMIX", "rack_add_container", false)
+  r.Main_OnCommand(40271, 0)
+  app.status = "Pick a plugin in the FX browser to replace " .. (label and label ~= "" and label or "this FX")
+  return true
+end
+
+function poll_native_replace(app)
+  local pending = state.native_replace
+  if not pending then return end
+  if not validate_track(pending.track) or r.time_precise() > pending.deadline then
+    state.native_replace = nil
+    return
+  end
+  local count = r.TrackFX_GetCount(pending.track) or 0
+  if count <= pending.count then
+    pending.count = count
+    return
+  end
+  local new_index
+  for index = count - 1, 0, -1 do
+    local guid = get_fx_guid(pending.track, index)
+    if guid and not pending.guids[guid] then
+      new_index = index
+      break
+    end
+  end
+  if not new_index then
+    pending.count = count
+    return
+  end
+  local _, plugin_name = r.TrackFX_GetFXName(pending.track, new_index, "")
+  local ident = fx_config_value(pending.track, new_index, "fx_ident")
+  state.native_replace = nil
+  r.TrackFX_Delete(pending.track, new_index)
+  if not pending.chain_was_visible and r.TrackFX_Show then r.TrackFX_Show(pending.track, 0, 0) end
+  if (not plugin_name or plugin_name == "") and ident then plugin_name = ident end
+  if not plugin_name or plugin_name == "" then
+    app.status = "Could not read the selected plugin"
+    return
+  end
+  if not replace_fx(app, pending.chain, pending.api_id, plugin_name) and ident and ident ~= "" and ident ~= plugin_name then
+    replace_fx(app, pending.chain, pending.api_id, ident)
+  end
 end
 
 function wrap_nested_fx_in_container(app, chain, source_api_id)
@@ -4994,7 +5081,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       local fx_parallel = (fx_config_value(track, fx_index, "parallel") or "0") ~= "0"
       if r.ImGui_MenuItem(ctx, "Parallel", nil, fx_parallel) then toggle_fx_parallel(app, track, fx_index) end
       if r.ImGui_MenuItem(ctx, "Wrap in container") then wrap_fx_in_container(app, track, fx_index) end
-      if r.ImGui_MenuItem(ctx, "Replace FX...") then quick_open_replace_popup(track, fx_index, short_name) end
+      if r.ImGui_MenuItem(ctx, "Replace FX...") then quick_open_replace_popup(app, track, fx_index, short_name) end
       if r.ImGui_MenuItem(ctx, "Remove") then delete_fx(app, track, fx_index, fx_name) end
     end
     if r.ImGui_BeginPopupContextItem(ctx, "##ir_fx_context") then
@@ -5444,7 +5531,7 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
       end
       r.ImGui_Separator(ctx)
       if r.ImGui_MenuItem(ctx, "Replace FX...", nil, false, r.TakeFX_AddByName ~= nil) then
-        quick_open_replace_popup(make_fx_chain(track, take, "item"), fx_index, short_name)
+        quick_open_replace_popup(app, make_fx_chain(track, take, "item"), fx_index, short_name)
       end
       if r.ImGui_MenuItem(ctx, "Remove", nil, false, r.TakeFX_Delete ~= nil) then delete_take_fx(app, take, fx_index, fx_name) end
     end
@@ -5555,6 +5642,7 @@ function M.draw(app)
   state.macro_count = settings.macro_count == 16 and 16 or 8
   update_external_drag(ctx)
   run_pending_param_action(app)
+  poll_native_replace(app)
   local track = get_target_track(settings)
   app.current_rack_track = track
   if settings.show_macros ~= false then process_macro_cc_input(app, track) end

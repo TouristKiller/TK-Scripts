@@ -13,6 +13,8 @@ local M = {
 local defaults = {
   pad_mode = "xy", -- "xy" = a parameter per axis, "corners" = one per corner
   momentary = false, -- restore the values held before the drag when you let go
+  level_law = "power", -- how a 0..1 position becomes a gain: "power" | "linear" | "db"
+  level_max_db = 0, -- what a level target reaches at the top of its travel
   show_grid = true,
   count_in_beats = 4,
   loop = true,
@@ -73,6 +75,13 @@ local function ensure_settings(app)
   end
   if settings.pad_mode ~= "corners" then settings.pad_mode = "xy" end
   settings.momentary = settings.momentary == true
+  local laws = { power = true, linear = true, db = true }
+  if not laws[settings.level_law] then settings.level_law = defaults.level_law end
+  settings.level_max_db = math.max(0, math.min(12, tonumber(settings.level_max_db) or 0))
+  -- The conversion helpers are plain module functions with no app in reach, so
+  -- the chosen defaults are parked where they can see them.
+  state.level_law = settings.level_law
+  state.level_max_db = settings.level_max_db
   settings.show_grid = settings.show_grid ~= false
   settings.loop = settings.loop ~= false
   settings.trigger_retrigger = settings.trigger_retrigger ~= false
@@ -159,21 +168,130 @@ end
 -- Note: TrackFX_GetFXName and friends return a boolean first and the text
 -- second, so behind a pcall the string is the third value. Reading it as the
 -- second silently yields a boolean and every name falls back to "FX 0".
--- Levels are held as a fraction of a dB range rather than REAPER's raw 0..4
--- volume, where unity sits at a quarter of the travel and the top half is all
--- boost. The same range the Levels card uses.
+
+-- Levels are held as a 0..1 like everything else, but what that fraction means
+-- is a choice, and in corner mode it decides whether a morph keeps its loudness.
+-- The four corner weights always add up to 1, so the middle hands each corner
+-- 0.25:
+--   db      spreads the fraction linearly over the fader's dB range, so 0.25 is
+--           -42 dB and the middle of a four-send morph collapses to near silence
+--   linear  the fraction is the gain itself, so 0.25 is -12 dB and four
+--           identical (correlated) sources sum straight back to unity
+--   power   the fraction is the power, gain = sqrt, so 0.25 is -6 dB and four
+--           unrelated sources sum back to unity -- the usual vector-mixing law
+-- Under linear and power a corner at full is unity; the dB law keeps the range
+-- the Levels card uses, boost included.
 local VOL_MIN_DB, VOL_MAX_DB = -60, 12
 
-local function volume_to_unit(volume)
+local LEVEL_LAWS = {
+  { id = "power", label = "Equal power",
+    tip = "gain = sqrt(position) - a corner at full is 0 dB and the middle -6 dB,\nso four unrelated sources sum back to about the same loudness" },
+  { id = "linear", label = "Linear",
+    tip = "gain = position - a corner at full is 0 dB and the middle -12 dB,\nso four copies of the same material sum back to exactly the same level" },
+  { id = "db", label = "Fader (dB)",
+    tip = "the position spread linearly over " .. VOL_MIN_DB .. " to +" .. VOL_MAX_DB ..
+      " dB - fader-like for a single level,\nbut a four-way morph dips badly in the middle" },
+}
+
+local function level_law()
+  return state.level_law or defaults.level_law
+end
+
+-- Under the linear and power laws a target at the top of its travel is unity,
+-- which is what keeps a morph from ever boosting. This lifts that ceiling for
+-- anyone who wants headroom; the dB law carries its own range and ignores it.
+local function level_ceiling(law)
+  if law == "db" then return 1 end
+  local db = state.level_max_db or 0
+  if db <= 0 then return 1 end
+  return 10 ^ (db / 20)
+end
+
+local function volume_to_unit(volume, law)
   if not volume or volume <= 0.0000001 then return 0 end
+  law = law or level_law()
+  if law == "linear" or law == "power" then
+    local gain = volume / level_ceiling(law)
+    if law == "linear" then return clamp(gain, 0, 1) end
+    return clamp(gain * gain, 0, 1)
+  end
   local db = 20 * math.log(volume, 10)
   return clamp((db - VOL_MIN_DB) / (VOL_MAX_DB - VOL_MIN_DB), 0, 1)
 end
 
-local function unit_to_volume(unit)
-  local db = VOL_MIN_DB + clamp(unit, 0, 1) * (VOL_MAX_DB - VOL_MIN_DB)
+local function unit_to_volume(unit, law)
+  unit = clamp(unit, 0, 1)
+  law = law or level_law()
+  if law == "linear" then return unit * level_ceiling(law) end
+  if law == "power" then return math.sqrt(unit) * level_ceiling(law) end
+  local db = VOL_MIN_DB + unit * (VOL_MAX_DB - VOL_MIN_DB)
   if db <= VOL_MIN_DB + 0.05 then return 0 end
   return 10 ^ (db / 20)
+end
+
+-- An FX parameter arrives normalised with the plugin's own taper already baked
+-- in, so nothing is imposed on it by default -- and REAPER exposes no taper type
+-- to detect, so guessing one would be exactly that. For the plugins whose 0..1
+-- does feel wrong (a frequency spread linearly over 20 Hz to 20 kHz is the
+-- classic), a curve can be picked by hand per slot.
+local CURVES = {
+  { id = "lin", label = "Linear", exp = 1,
+    tip = "The parameter follows the pad one to one" },
+  { id = "log", label = "Log", exp = 0.5,
+    tip = "Rises quickly at the start and slowly at the top -\nroom at the loud/high end of the travel" },
+  { id = "log2", label = "Log +", exp = 0.3, tip = "The same, stronger" },
+  { id = "exp", label = "Exp", exp = 2,
+    tip = "Rises slowly at the start and quickly at the top -\nroom at the quiet/low end, the one a linear frequency wants" },
+  { id = "exp2", label = "Exp +", exp = 3.3, tip = "The same, stronger" },
+}
+
+local CURVE_EXP = {}
+for _, curve in ipairs(CURVES) do CURVE_EXP[curve.id] = curve.exp end
+
+local LEVEL_LAW_IDS = {}
+for _, law in ipairs(LEVEL_LAWS) do LEVEL_LAW_IDS[law.id] = true end
+
+-- Scaling is kept per slot rather than per module: four corners can hold four
+-- different kinds of target. It sits beside the assignment in the project's ext
+-- state, in its own key, so an assignment written by an older version still
+-- parses and simply falls back to the module default.
+local function read_shape(axis)
+  if not r.GetProjExtState then return nil, nil end
+  local _, blob = r.GetProjExtState(0, EXT_SECTION, axis .. "_shape")
+  if not blob or blob == "" then return nil, nil end
+  local law, curve = blob:match("^([^|]*)|?([^|]*)$")
+  if not LEVEL_LAW_IDS[law] then law = nil end
+  if not CURVE_EXP[curve] then curve = nil end
+  return law, curve
+end
+
+local function write_shape(axis, law, curve)
+  if not r.SetProjExtState then return end
+  local blob = (law or "") .. "|" .. (curve or "")
+  r.SetProjExtState(0, EXT_SECTION, axis .. "_shape", blob == "|" and "" or blob)
+end
+
+local function entry_law(entry)
+  return (entry and entry.law) or level_law()
+end
+
+local function curve_exponent(entry)
+  return CURVE_EXP[entry and entry.curve or "lin"] or 1
+end
+
+-- Pad position -> parameter, and back again for reading it.
+local function curve_apply(entry, unit)
+  local exponent = curve_exponent(entry)
+  unit = clamp(unit, 0, 1)
+  if exponent == 1 then return unit end
+  return unit ^ exponent
+end
+
+local function curve_invert(entry, value)
+  local exponent = curve_exponent(entry)
+  value = clamp(value, 0, 1)
+  if exponent == 1 then return value end
+  return value ^ (1 / exponent)
 end
 
 local function send_label(track, index)
@@ -247,7 +365,14 @@ end
 local function axes(force)
   local now = os.clock()
   if not force and state.read_at >= 0 and (now - state.read_at) < 0.25 then return state.axes end
-  for _, axis in ipairs(AXES) do state.axes[axis] = read_axis(axis) end
+  for _, axis in ipairs(AXES) do
+    local entry = read_axis(axis)
+    if entry then
+      entry.axis = axis
+      entry.law, entry.curve = read_shape(axis)
+    end
+    state.axes[axis] = entry
+  end
   state.read_at = now
   return state.axes
 end
@@ -336,6 +461,7 @@ end
 
 local function clear(app, axis)
   if r.SetProjExtState then r.SetProjExtState(0, EXT_SECTION, axis, "") end
+  write_shape(axis, nil, nil)
   axes(true)
   app.status = "XY Pad: " .. axis:upper() .. " cleared"
 end
@@ -345,17 +471,17 @@ end
 local function param_value(entry)
   if not entry or entry.missing then return nil end
   if entry.kind == "vol" then
-    return volume_to_unit(r.GetMediaTrackInfo_Value(entry.track, "D_VOL"))
+    return volume_to_unit(r.GetMediaTrackInfo_Value(entry.track, "D_VOL"), entry_law(entry))
   elseif entry.kind == "pan" then
     return clamp(((r.GetMediaTrackInfo_Value(entry.track, "D_PAN") or 0) + 1) * 0.5, 0, 1)
   elseif entry.kind == "send" then
     if not r.GetTrackSendInfo_Value then return nil end
     local ok, value = pcall(r.GetTrackSendInfo_Value, entry.track, 0, entry.send, "D_VOL")
-    return ok and volume_to_unit(value) or nil
+    return ok and volume_to_unit(value, entry_law(entry)) or nil
   end
   if not r.TrackFX_GetParamNormalized then return nil end
   local ok, value = pcall(r.TrackFX_GetParamNormalized, entry.track, entry.fx, entry.param)
-  if ok and type(value) == "number" then return clamp(value, 0, 1) end
+  if ok and type(value) == "number" then return curve_invert(entry, value) end
   return nil
 end
 
@@ -363,15 +489,16 @@ local function set_param_value(entry, value)
   if not entry or entry.missing then return end
   value = clamp(value, 0, 1)
   if entry.kind == "vol" then
-    r.SetMediaTrackInfo_Value(entry.track, "D_VOL", unit_to_volume(value))
+    r.SetMediaTrackInfo_Value(entry.track, "D_VOL", unit_to_volume(value, entry_law(entry)))
   elseif entry.kind == "pan" then
     r.SetMediaTrackInfo_Value(entry.track, "D_PAN", value * 2 - 1)
   elseif entry.kind == "send" then
     if r.SetTrackSendInfo_Value then
-      pcall(r.SetTrackSendInfo_Value, entry.track, 0, entry.send, "D_VOL", unit_to_volume(value))
+      pcall(r.SetTrackSendInfo_Value, entry.track, 0, entry.send, "D_VOL",
+        unit_to_volume(value, entry_law(entry)))
     end
   elseif r.TrackFX_SetParamNormalized then
-    pcall(r.TrackFX_SetParamNormalized, entry.track, entry.fx, entry.param, value)
+    pcall(r.TrackFX_SetParamNormalized, entry.track, entry.fx, entry.param, curve_apply(entry, value))
   end
 end
 
@@ -597,9 +724,9 @@ local function envelope_value(entry, envelope, unit)
   if entry.kind == "pan" then
     raw = clamp(unit, 0, 1) * 2 - 1
   elseif entry.kind == "vol" or entry.kind == "send" then
-    raw = unit_to_volume(unit)
+    raw = unit_to_volume(unit, entry_law(entry))
   else
-    return clamp(unit, 0, 1)
+    return curve_apply(entry, unit)
   end
   if r.GetEnvelopeScalingMode and r.ScaleToEnvelopeMode then
     local ok, mode = pcall(r.GetEnvelopeScalingMode, envelope)
@@ -814,9 +941,11 @@ end
 local function formatted_value(entry)
   if not entry or entry.missing then return "" end
   if entry.kind == "vol" or entry.kind == "send" then
-    local unit = param_value(entry) or 0
-    if unit <= 0.0001 then return "-inf dB" end
-    return string.format("%+.1f dB", VOL_MIN_DB + unit * (VOL_MAX_DB - VOL_MIN_DB))
+    -- Through the law rather than straight off the position, so the readout says
+    -- what the fader says whichever scaling is in force.
+    local gain = unit_to_volume(param_value(entry) or 0, entry_law(entry))
+    if gain <= 0.0001 then return "-inf dB" end
+    return string.format("%+.1f dB", 20 * math.log(gain, 10))
   elseif entry.kind == "pan" then
     local pan = (param_value(entry) or 0.5) * 2 - 1
     if math.abs(pan) < 0.005 then return "center" end
@@ -1257,8 +1386,17 @@ local function draw_slot(ctx, app, settings, axis, label, entry, width)
         "\nParameter:  " .. (entry.param_name or "?")
       local value = formatted_value(entry)
       if value ~= "" then tip = tip .. "\nValue:  " .. value end
+      if entry.kind == "vol" or entry.kind == "send" then
+        for _, law in ipairs(LEVEL_LAWS) do
+          if law.id == entry_law(entry) then tip = tip .. "\nScaling:  " .. law.label end
+        end
+      elseif entry.curve then
+        for _, curve in ipairs(CURVES) do
+          if curve.id == entry.curve then tip = tip .. "\nCurve:  " .. curve.label end
+        end
+      end
     end
-    r.ImGui_SetTooltip(ctx, tip .. "\nRight-click for track volume, pan or a send")
+    r.ImGui_SetTooltip(ctx, tip .. "\nRight-click for track volume, pan, a send or the scaling")
   end
   if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1) then
     r.ImGui_OpenPopup(ctx, "##xy_target_" .. axis)
@@ -1290,6 +1428,62 @@ local function draw_slot(ctx, app, settings, axis, label, entry, width)
             r.ImGui_SetTooltip(ctx, "Fills all four corners at once and switches the pad to corner mode")
           end
         end
+      end
+    end
+    if entry and not entry.missing and (entry.kind == "vol" or entry.kind == "send") then
+      -- Per slot, because four corners can hold four different kinds of target.
+      -- The pick doubles as the default for whatever is assigned next.
+      r.ImGui_Separator(ctx)
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Level scaling")
+      for _, law in ipairs(LEVEL_LAWS) do
+        if r.ImGui_RadioButton(ctx, law.label .. "##xy_law_" .. law.id, entry_law(entry) == law.id) then
+          write_shape(axis, law.id, entry.curve)
+          settings.level_law = law.id
+          state.level_law = law.id
+          save(app)
+          axes(true)
+          app.status = "XY Pad: " .. axis:upper() .. " scaling set to " .. law.label
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, law.tip) end
+      end
+      if r.ImGui_Selectable(ctx, "Use this scaling for every slot") then
+        for _, other in ipairs(AXES) do
+          local _, curve = read_shape(other)
+          write_shape(other, entry_law(entry), curve)
+        end
+        axes(true)
+        app.status = "XY Pad: every slot now scales as " .. entry_law(entry)
+      end
+      if entry_law(entry) ~= "db" then
+        r.ImGui_Separator(ctx)
+        if r.ImGui_SetNextItemWidth then r.ImGui_SetNextItemWidth(ctx, UIScale.round(140)) end
+        local changed, value = r.ImGui_SliderDouble(ctx, "Max gain##xy_maxgain",
+          settings.level_max_db or 0, 0, 12, "+%.0f dB")
+        if changed then
+          settings.level_max_db = math.floor(clamp(value, 0, 12) + 0.5)
+          state.level_max_db = settings.level_max_db
+          save(app)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "What a level target reaches at the top of its travel.\n" ..
+            "0 dB keeps a morph from ever boosting; raise it for headroom")
+        end
+      end
+    elseif entry and not entry.missing and entry.kind ~= "pan" then
+      r.ImGui_Separator(ctx)
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Response curve")
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "A plugin parameter already carries its own taper,\n" ..
+          "so this is only for the ones that do not feel right")
+      end
+      for _, curve in ipairs(CURVES) do
+        local on = (entry.curve or "lin") == curve.id
+        if r.ImGui_RadioButton(ctx, curve.label .. "##xy_curve_" .. curve.id, on) then
+          write_shape(axis, entry.law, curve.id ~= "lin" and curve.id or nil)
+          axes(true)
+          app.status = "XY Pad: " .. axis:upper() .. " curve set to " .. curve.label
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, curve.tip) end
       end
     end
     r.ImGui_EndPopup(ctx)
@@ -1625,10 +1819,18 @@ function M.draw(app)
         local ty = place.y == 0 and (qy + UIScale.round(5)) or (qy + half - lh * 2 - UIScale.round(5))
         local text_col = Theme.text_for_background(Theme.colors.window_bg, colour, Theme.colors.text, 3)
         r.ImGui_DrawList_AddText(dl, tx, ty, text_col, name)
-        local pct = string.format("%d%%", math.floor(weight * 100 + 0.5))
-        local pw = r.ImGui_CalcTextSize(ctx, pct)
+        -- A weight of 25% says nothing about how loud that corner actually is,
+        -- so a level target shows its dB and everything else its share.
+        local readout
+        if entry.kind == "vol" or entry.kind == "send" then
+          local gain = unit_to_volume(weight, entry_law(entry))
+          readout = gain <= 0.0001 and "-inf dB" or string.format("%+.1f dB", 20 * math.log(gain, 10))
+        else
+          readout = string.format("%d%%", math.floor(curve_apply(entry, weight) * 100 + 0.5))
+        end
+        local pw = r.ImGui_CalcTextSize(ctx, readout)
         r.ImGui_DrawList_AddText(dl, place.x == 0 and tx or (qx + half - pw - UIScale.round(5)),
-          ty + lh, Theme.colors.text_dim, pct)
+          ty + lh, Theme.colors.text_dim, readout)
       end
     end
   end
@@ -1813,12 +2015,28 @@ function M.draw(app)
 
   local slots = slots_for(settings)
   local status = 0
+  local level_law_seen, level_mixed = nil, false
   for _, slot in ipairs(slots) do
     local entry = state.axes[slot.key]
-    if entry and not entry.missing then status = status + 1 end
+    if entry and not entry.missing then
+      status = status + 1
+      if entry.kind == "vol" or entry.kind == "send" then
+        local law = entry_law(entry)
+        if level_law_seen and level_law_seen ~= law then level_mixed = true end
+        level_law_seen = law
+      end
+    end
+  end
+  local law_note = ""
+  if level_mixed then
+    law_note = " | mixed scaling"
+  elseif level_law_seen then
+    for _, law in ipairs(LEVEL_LAWS) do
+      if law.id == level_law_seen then law_note = " | " .. law.label:lower() end
+    end
   end
   UI.draw_info_line(ctx, "XY Pad | " .. status .. " of " .. #slots .. " assigned | " ..
-    (corners and "4 corners" or "2 axes") .. (settings.momentary and " | momentary" or "") ..
+    (corners and "4 corners" or "2 axes") .. law_note .. (settings.momentary and " | momentary" or "") ..
     (state.auto.active and " | writing automation" or ""))
 end
 
