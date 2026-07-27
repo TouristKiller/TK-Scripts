@@ -715,6 +715,16 @@ function quick_open_popup(track, target_type, take, insert_index, chain, contain
   state.quick_add_popup_open = true
 end
 
+function quick_open_replace_popup(chain, api_id, label)
+  state.quick_add_context = {
+    target_type = "replace",
+    chain = chain,
+    replace_api = api_id,
+    replace_label = label
+  }
+  state.quick_add_popup_open = true
+end
+
 function quick_add_recent_plugin(name)
   if not name or name == "" then return end
   for index = #state.quick_add_recent, 1, -1 do
@@ -732,6 +742,11 @@ end
 function quick_apply_plugin(app, plugin_name)
   local context = state.quick_add_context
   if not context or not plugin_name or plugin_name == "" then return end
+  if context.replace_api ~= nil and context.chain then
+    replace_fx(app, context.chain, context.replace_api, plugin_name)
+    quick_add_recent_plugin(plugin_name)
+    return
+  end
   if context.container_api ~= nil and context.chain then
     add_external_fx_into_container(app, context.chain, context.container_api, plugin_name)
     quick_add_recent_plugin(plugin_name)
@@ -757,6 +772,11 @@ function draw_quick_add_popup(app, ctx)
     r.ImGui_OpenPopup(ctx, popup_id)
   end
   if not r.ImGui_BeginPopup(ctx, popup_id) then return end
+  local replace_context = state.quick_add_context
+  if replace_context and replace_context.replace_api then
+    r.ImGui_TextColored(ctx, Theme.colors.accent, "Replace " .. (replace_context.replace_label or "FX"))
+    r.ImGui_Separator(ctx)
+  end
   r.ImGui_SetNextItemWidth(ctx, UIScale.round(110))
   local changed, value = r.ImGui_InputTextWithHint(ctx, "##ir_quick_add_search", "Zoek plugin...", state.quick_add_search or "")
   if changed then state.quick_add_search = value or "" end
@@ -4522,6 +4542,53 @@ local function find_track_fx_api_by_guid(chain, guid)
   return nil
 end
 
+function replace_fx(app, chain, api_id, plugin_name)
+  chain = as_chain(chain)
+  if not chain_valid(chain) or not c_add_capable(chain) then return end
+  if not plugin_name or plugin_name == "" then return end
+  api_id = math.floor(tonumber(api_id) or -1)
+  if api_id < 0 then return end
+  local rec = chain.kind ~= "item" and api_id >= REC_FX_OFFSET and api_id < CONTAINER_BASE
+  local old_guid = c_guid(chain, api_id)
+  local parallel = cfg(chain, api_id, "parallel") or "0"
+  local insert_pos
+  if rec then insert_pos = -1000 - (api_id - REC_FX_OFFSET)
+  elseif api_id < CONTAINER_BASE then insert_pos = -1000 - api_id
+  else insert_pos = api_id end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local new_api
+  if rec then
+    new_api = r.TrackFX_AddByName(chain.track, plugin_name, true, insert_pos)
+  else
+    new_api = c_add(chain, plugin_name, insert_pos)
+  end
+  if (not new_api or new_api < 0) and plugin_name:lower():sub(-9) == ".rfxchain" then
+    local basename = plugin_name:match("([^/\\]+)$")
+    if basename and basename ~= plugin_name then
+      if rec then
+        new_api = r.TrackFX_AddByName(chain.track, basename, true, insert_pos)
+      else
+        new_api = c_add(chain, basename, insert_pos)
+      end
+    end
+  end
+  local ok = new_api ~= nil and new_api >= 0
+  if ok then
+    local old_api
+    if rec then
+      old_api = find_fx_index_by_guid(chain.track, old_guid)
+    else
+      old_api = find_track_fx_api_by_guid(chain, old_guid)
+    end
+    if old_api then ok = c_delete(chain, old_api) ~= false end
+    if parallel ~= "0" then cfg_set(chain, api_id, "parallel", parallel) end
+  end
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("Replace FX", -1)
+  app.status = ok and ("Replaced with " .. get_fx_short_name(plugin_name)) or "FX could not be replaced"
+end
+
 function wrap_nested_fx_in_container(app, chain, source_api_id)
   chain = as_chain(chain)
   if not chain_valid(chain) then return end
@@ -4927,6 +4994,7 @@ local function draw_fx_tile(app, ctx, settings, track, fx_index, item_width, cha
       local fx_parallel = (fx_config_value(track, fx_index, "parallel") or "0") ~= "0"
       if r.ImGui_MenuItem(ctx, "Parallel", nil, fx_parallel) then toggle_fx_parallel(app, track, fx_index) end
       if r.ImGui_MenuItem(ctx, "Wrap in container") then wrap_fx_in_container(app, track, fx_index) end
+      if r.ImGui_MenuItem(ctx, "Replace FX...") then quick_open_replace_popup(track, fx_index, short_name) end
       if r.ImGui_MenuItem(ctx, "Remove") then delete_fx(app, track, fx_index, fx_name) end
     end
     if r.ImGui_BeginPopupContextItem(ctx, "##ir_fx_context") then
@@ -5375,6 +5443,9 @@ local function draw_take_fx_tile(app, ctx, settings, track, take, fx_index, item
         wrap_fx_in_container(app, make_fx_chain(track, take, "item"), fx_index)
       end
       r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, "Replace FX...", nil, false, r.TakeFX_AddByName ~= nil) then
+        quick_open_replace_popup(make_fx_chain(track, take, "item"), fx_index, short_name)
+      end
       if r.ImGui_MenuItem(ctx, "Remove", nil, false, r.TakeFX_Delete ~= nil) then delete_take_fx(app, take, fx_index, fx_name) end
     end
     if r.ImGui_BeginPopupContextItem(ctx, "##ir_take_fx_context") then
