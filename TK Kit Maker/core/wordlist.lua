@@ -158,13 +158,16 @@ local function build_context_set(context_words)
   return set
 end
 
+local CONTEXT_CHANCE = 0.28
+
 local function pick_word(list, context_set, avoid)
+  local use_context = math.random() < CONTEXT_CHANCE
   local best = nil
   local best_score = -1
   for _, w in ipairs(list) do
     local wl = w:lower()
     local score = math.random()
-    if context_set[wl] then score = score + 3 end
+    if use_context and context_set[wl] then score = score + 3 end
     if avoid and wl == avoid:lower() then score = score - 100 end
     if score > best_score then
       best = w
@@ -195,13 +198,14 @@ function M.suggest_name(script_path, opts)
   end
 
   local function pick_not_used(list)
+    local use_context = math.random() < CONTEXT_CHANCE
     local best = nil
     local best_score = -1
     for _, w in ipairs(list) do
       local wl = w:lower()
       if not used[wl] then
         local score = math.random()
-        if context[wl] then score = score + 3 end
+        if use_context and context[wl] then score = score + 3 end
         if score > best_score then
           best = w
           best_score = score

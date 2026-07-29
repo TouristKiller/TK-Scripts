@@ -9,10 +9,16 @@ local Scanner  = require("core.scanner")
 local Theme    = require("core.theme")
 local Naming   = require("core.naming")
 local Categories = require("core.categories")
+local Duration = require("core.duration")
+local Bias     = require("core.bias")
+local Tags     = require("core.tags")
+local Character = require("ui.character")
+local PatternPresets = require("ui.pattern_presets")
 
 local M = {}
 
 local MAX_SLOTS = 128
+local DETONATE_STEPS_PER_FRAME = 3
 
 local function trim(s)
   return tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -23,12 +29,15 @@ function M.init(app)
     source_folder = "",
     destination   = "",
     alias         = "",
+    kit_name      = "",
     name_seed     = "",
     count         = 16,
     start_note    = 36,
     recursive     = true,
     stitched      = false,
     max_sample_seconds = 0,
+    length_bias   = Bias.new_config(),
+    tag_bias      = Tags.new_bias_config(),
     pattern       = "",
     found_files   = nil,
     result        = nil,
@@ -38,26 +47,44 @@ end
 local function rescan_preview(state)
   if state.source_folder == "" then
     state.found_files = nil
+    state.files = nil
+    state.cat_counts = nil
+    state.keyword_counts = nil
     return
   end
   local pool = { folders = { state.source_folder }, recursive = state.recursive }
   local files = Scanner.scan_pool(pool)
   state.found_files = #files
+  state.files = files
+  state.cat_counts = Categories.count_all(files)
+  state.keyword_counts = {}
 end
 
-local function step_badge(ctx, n)
-  local c = Theme.colors
-  local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  local dl = r.ImGui_GetWindowDrawList(ctx)
-  local size = 20
-  r.ImGui_DrawList_AddCircleFilled(dl, x + size * 0.5, y + size * 0.5 + 1, size * 0.5, c.accent_soft)
-  r.ImGui_DrawList_AddCircle(dl, x + size * 0.5, y + size * 0.5 + 1, size * 0.5, c.accent, 24, 1)
-  local tw = r.ImGui_CalcTextSize(ctx, n)
-  r.ImGui_DrawList_AddText(dl, x + (size - tw) * 0.5, y + 2, 0xFFFFFFFF, n)
-  r.ImGui_Dummy(ctx, size + 6, size)
-  r.ImGui_SameLine(ctx)
-  r.ImGui_AlignTextToFramePadding(ctx)
+local function split_pattern(str)
+  local out = {}
+  for part in tostring(str or ""):gmatch("[^,]+") do
+    local word = part:match("^%s*(.-)%s*$")
+    if word ~= "" then out[#out + 1] = word end
+  end
+  return out
 end
+
+local function spec_count(state, spec)
+  if not state.cat_counts then return nil end
+  if spec.category then return state.cat_counts[spec.category] end
+  if spec.keyword and spec.keyword ~= "" then
+    state.keyword_counts = state.keyword_counts or {}
+    local key = spec.keyword:lower()
+    if state.keyword_counts[key] == nil then
+      state.keyword_counts[key] = Categories.match_count(state.files, spec)
+    end
+    return state.keyword_counts[key]
+  end
+  return nil
+end
+
+-- Lives in core/theme.lua now, so the Builder numbers its steps the same way.
+local step_badge = Theme.step_badge
 
 local function path_row(ctx, id, value, placeholder)
   local avail = select(1, r.ImGui_GetContentRegionAvail(ctx))
@@ -68,23 +95,32 @@ local function path_row(ctx, id, value, placeholder)
   return r.ImGui_InputText(ctx, id, value)
 end
 
+-- Shared with the Builder; see ui/pattern_presets.lua.
+local function draw_pattern_presets(app, state)
+  r.ImGui_SameLine(app.ctx)
+  local picked = PatternPresets.button(app.ctx, "expl", state.pattern, state)
+  if picked then state.pattern = picked end
+end
+
 function M.draw(app)
   local ctx = app.ctx
   local state = app.explosion
   local c = Theme.colors
 
-  Theme.help(ctx, "Pick a source folder, a destination folder and the number of slots. Hit Detonate and the script copies random samples into a tidy, renamed kit.")
+  if state.source_folder ~= "" and state.found_files == nil then rescan_preview(state) end
+
+  Theme.help(ctx, "Point at a folder of samples, say how many slots you want, and hit Detonate. The script copies random samples into a tidy, renamed kit.")
   r.ImGui_Dummy(ctx, 0, 4)
 
   step_badge(ctx, "1")
   Theme.section(ctx, "Source folder")
   Theme.help(ctx, "A folder full of kicks, a whole sample pack -- anything you like.")
 
-  local src_changed, src_value = path_row(ctx, "##expl_src", state.source_folder, "Drag or pick a folder with samples...")
+  local src_changed, src_value = path_row(ctx, "##expl_src", state.source_folder, "Pick or paste a folder with samples...")
   if src_changed then state.source_folder = src_value; rescan_preview(state) end
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, "Browse##expl_src_browse", 82) then
-    local folder = Dialogs.browse_folder("Select source folder", state.source_folder)
+    local folder = Dialogs.browse_folder("Select source folder", state.source_folder, "source")
     if folder then state.source_folder = folder; rescan_preview(state) end
   end
 
@@ -104,30 +140,124 @@ function M.draw(app)
   r.ImGui_Dummy(ctx, 0, 4)
 
   step_badge(ctx, "2")
-  Theme.section(ctx, "Destination folder")
-  local dst_changed, dst_value = path_row(ctx, "##expl_dst", state.destination, "Where the kit should end up...")
-  if dst_changed then state.destination = dst_value end
+  Theme.section(ctx, "Kit layout")
+  Theme.help(ctx, "How many slots, and where they sit on the keyboard.")
+
+  local field_w = math.min(220, math.max(120, select(1, r.ImGui_GetContentRegionAvail(ctx)) - 60))
+
+  r.ImGui_SetNextItemWidth(ctx, field_w)
+  local count_changed, count_value = r.ImGui_SliderInt(ctx, "Slot count##expl_count", state.count, 1, MAX_SLOTS, "%d")
+  if count_changed then state.count = count_value end
+
+  local max_start_note = math.max(0, 127 - state.count + 1)
+  r.ImGui_SetNextItemWidth(ctx, field_w)
+  local note_changed, note_value = r.ImGui_SliderInt(ctx, "Start note##expl_note", state.start_note, 0, max_start_note, "%d")
+  if note_changed then state.start_note = note_value end
+  if state.start_note > max_start_note then state.start_note = max_start_note end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Browse##expl_dst_browse", 82) then
-    local folder = Dialogs.browse_folder("Select destination folder", state.destination)
-    if folder then state.destination = folder end
-  end
+  r.ImGui_AlignTextToFramePadding(ctx)
+  local last_note = math.min(127, state.start_note + state.count - 1)
+  Theme.label(ctx, string.format("%s -> %s", Naming.note_name(state.start_note), Naming.note_name(last_note)))
 
   r.ImGui_Dummy(ctx, 0, 4)
   r.ImGui_Separator(ctx)
   r.ImGui_Dummy(ctx, 0, 4)
 
   step_badge(ctx, "3")
-  Theme.section(ctx, "Kit layout")
+  Theme.section(ctx, "Slot pattern")
+  Theme.help(ctx, "Optional. Decides what kind of sample lands in each slot; leave it empty and every slot takes anything.")
 
-  local field_w = math.min(220, math.max(120, select(1, r.ImGui_GetContentRegionAvail(ctx)) - 60))
+  -- Optional slot pattern: repeats cyclically over the slots
+  local avail = select(1, r.ImGui_GetContentRegionAvail(ctx))
+  r.ImGui_SetNextItemWidth(ctx, math.min(avail - 116, 420))
+  local pat_changed, pat_value = r.ImGui_InputTextWithHint(ctx, "##expl_pattern", "e.g. Kick, Snare, Hihat, Clap", state.pattern)
+  if pat_changed then state.pattern = pat_value end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Comma-separated categories or keywords, assigned to slots in order.\nThe pattern repeats to fill all slots (4 entries x 16 slots = 4 rounds).\nEmpty = any sample. Unknown words match as 'name contains'.") end
+  r.ImGui_SameLine(ctx)
+  if Theme.ghost_button(ctx, "+##expl_pattern_add", 26) then
+    r.ImGui_OpenPopup(ctx, "##expl_pattern_popup")
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Append a category") end
+  if r.ImGui_BeginPopup(ctx, "##expl_pattern_popup") then
+    for _, cat in ipairs(Categories.list) do
+      local n = state.cat_counts and state.cat_counts[cat.id] or nil
+      local label = n and string.format("%s  (%d)", cat.label, n) or cat.label
+      local empty = n == 0
+      if empty then r.ImGui_BeginDisabled(ctx, true) end
+      if r.ImGui_Selectable(ctx, label .. "##pat_add_" .. cat.id) then
+        state.pattern = state.pattern == "" and cat.label or (state.pattern .. ", " .. cat.label)
+      end
+      if empty then r.ImGui_EndDisabled(ctx) end
+    end
+    r.ImGui_EndPopup(ctx)
+  end
 
-  r.ImGui_AlignTextToFramePadding(ctx)
-  Theme.label(ctx, "Name in filename (optional)")
+  draw_pattern_presets(app, state)
+
+  if state.pattern ~= "" then
+    local specs, labels = Categories.parse_pattern(state.pattern)
+    local words = split_pattern(state.pattern)
+    if #labels > 0 then
+      local missing = {}
+      local pushed = Theme.push_small(ctx)
+      local avail_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
+      local spacing = 14
+      local x = 0
+      for i = 1, #labels do
+        local n = spec_count(state, specs[i])
+        if n == 0 then missing[#missing + 1] = words[i] end
+        local text = n and string.format("%d %s (%d)", i, labels[i], n) or string.format("%d %s", i, labels[i])
+        local tw = select(1, r.ImGui_CalcTextSize(ctx, text))
+        if x > 0 then
+          if x + spacing + tw > avail_w then
+            x = 0
+          else
+            r.ImGui_SameLine(ctx, 0, spacing)
+            x = x + spacing
+          end
+        end
+        local col = (n == nil and c.text_dim) or (n == 0 and c.danger) or c.success
+        r.ImGui_TextColored(ctx, col, text)
+        if n == 0 and r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "No matching samples in the source folder.\nThese slots will be skipped on Detonate.")
+        end
+        x = x + tw
+      end
+      Theme.pop_font(ctx, pushed)
+
+      if state.count > #labels then Theme.help(ctx, "Pattern repeats to fill all slots.") end
+
+      if #missing > 0 then
+        if Theme.ghost_button(ctx, string.format("Drop %d empty##expl_pattern_clean", #missing)) then
+          local kept = {}
+          for i = 1, #words do
+            if spec_count(state, specs[i]) ~= 0 then kept[#kept + 1] = words[i] end
+          end
+          state.pattern = table.concat(kept, ", ")
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Removes: " .. table.concat(missing, ", "))
+        end
+      end
+    end
+  end
+
+  r.ImGui_Dummy(ctx, 0, 4)
+  r.ImGui_Separator(ctx)
+  r.ImGui_Dummy(ctx, 0, 4)
+
+  -- Naming comes last on purpose: it is the part you think about once the kit
+  -- itself is settled, and it used to open this half of the page.
+  step_badge(ctx, "4")
+  Theme.section(ctx, "Naming")
+  Theme.help(ctx, "Optional. Leave the kit name empty for a random one.")
+
   r.ImGui_SetNextItemWidth(ctx, field_w)
-  local alias_changed, alias_value = r.ImGui_InputTextWithHint(ctx, "##expl_alias", "e.g. Kick", state.alias)
-  if alias_changed then state.alias = alias_value end
+  local kn_changed, kn_value = r.ImGui_InputTextWithHint(ctx, "Kit name##expl_kit_name", "empty = random name", state.kit_name or "")
+  if kn_changed then state.kit_name = kn_value end
 
+  -- Seed and button sit right under the field they fill, so the chain
+  -- start word -> Generate -> kit name is visible instead of implied.
   r.ImGui_SetNextItemWidth(ctx, field_w)
   local seed_changed, seed_value = r.ImGui_InputTextWithHint(ctx, "Start word##expl_name_seed", "optional", state.name_seed or "")
   if seed_changed then state.name_seed = trim(seed_value) end
@@ -149,53 +279,39 @@ function M.draw(app)
       pattern       = pattern_specs,
       name_seed     = state.name_seed,
     })
-    state.alias = Engine.suggest_kit_name(kitdef, pools, app.script_path, state.name_seed)
+    state.kit_name = Engine.suggest_kit_name(kitdef, pools, app.script_path, state.name_seed)
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Fills the kit name above with a generated one.\nWith a start word it builds around that word.")
   end
 
   r.ImGui_SetNextItemWidth(ctx, field_w)
-  local count_changed, count_value = r.ImGui_SliderInt(ctx, "Slot count##expl_count", state.count, 1, MAX_SLOTS, "%d")
-  if count_changed then state.count = count_value end
+  local alias_changed, alias_value = r.ImGui_InputTextWithHint(ctx, "Name in filename##expl_alias", "e.g. Kick", state.alias)
+  if alias_changed then state.alias = alias_value end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Added to every copied sample's filename.\nThe kit name above names the folder.")
+  end
 
-  local max_start_note = math.max(0, 127 - state.count + 1)
-  r.ImGui_SetNextItemWidth(ctx, field_w)
-  local note_changed, note_value = r.ImGui_SliderInt(ctx, "Start note##expl_note", state.start_note, 0, max_start_note, "%d")
-  if note_changed then state.start_note = note_value end
-  if state.start_note > max_start_note then state.start_note = max_start_note end
+  r.ImGui_Dummy(ctx, 0, 4)
+  r.ImGui_Separator(ctx)
+  r.ImGui_Dummy(ctx, 0, 4)
+
+  step_badge(ctx, "5")
+  Theme.section(ctx, "Export")
+  Theme.help(ctx, "Where the kit lands, what gets picked, and what comes out.")
+
+  -- The destination sits here rather than up front: it is an output setting,
+  -- like the stitched WAV below it, and the Builder has always kept it with the
+  -- export. Everything above this point is about the kit itself.
+  local dst_changed, dst_value = path_row(ctx, "##expl_dst", state.destination, "Where the kit should end up...")
+  if dst_changed then state.destination = dst_value end
   r.ImGui_SameLine(ctx)
-  r.ImGui_AlignTextToFramePadding(ctx)
-  local last_note = math.min(127, state.start_note + state.count - 1)
-  Theme.label(ctx, string.format("%s -> %s", Naming.note_name(state.start_note), Naming.note_name(last_note)))
-
-  -- Optional slot pattern: repeats cyclically over the slots
-  local avail = select(1, r.ImGui_GetContentRegionAvail(ctx))
-  r.ImGui_SetNextItemWidth(ctx, math.min(avail - 40, 420))
-  local pat_changed, pat_value = r.ImGui_InputTextWithHint(ctx, "##expl_pattern", "Slot pattern (optional), e.g. Kick, Snare, Hihat, Clap", state.pattern)
-  if pat_changed then state.pattern = pat_value end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Comma-separated categories or keywords, assigned to slots in order.\nThe pattern repeats to fill all slots (4 entries x 16 slots = 4 rounds).\nEmpty = any sample. Unknown words match as 'name contains'.") end
-  r.ImGui_SameLine(ctx)
-  if Theme.ghost_button(ctx, "+##expl_pattern_add", 26) then
-    r.ImGui_OpenPopup(ctx, "##expl_pattern_popup")
-  end
-  if r.ImGui_BeginPopup(ctx, "##expl_pattern_popup") then
-    for _, cat in ipairs(Categories.list) do
-      if r.ImGui_Selectable(ctx, cat.label .. "##pat_add_" .. cat.id) then
-        state.pattern = state.pattern == "" and cat.label or (state.pattern .. ", " .. cat.label)
-      end
-    end
-    r.ImGui_EndPopup(ctx)
+  if r.ImGui_Button(ctx, "Browse##expl_dst_browse", 82) then
+    local folder = Dialogs.browse_folder("Select destination folder", state.destination, "destination")
+    if folder then state.destination = folder end
   end
 
-  if state.pattern ~= "" then
-    local _, labels = Categories.parse_pattern(state.pattern)
-    if #labels > 0 then
-      local parts = {}
-      for i = 1, math.min(#labels, 8) do parts[#parts + 1] = i .. " " .. labels[i] end
-      if #labels > 8 then parts[#parts + 1] = "..." end
-      local preview = table.concat(parts, "  ·  ")
-      if state.count > #labels then preview = preview .. "  ·  (repeats)" end
-      Theme.help(ctx, preview)
-    end
-  end
+  r.ImGui_Dummy(ctx, 0, 4)
 
   local st_changed, st_value = r.ImGui_Checkbox(ctx, "Stitched WAV + cues##expl_stitched", state.stitched)
   if st_changed then state.stitched = st_value end
@@ -208,6 +324,43 @@ function M.draw(app)
   local ml_changed, ml_value = r.ImGui_InputDouble(ctx, "##expl_maxlen", state.max_sample_seconds, 0, 0, "%.1f")
   if ml_changed then state.max_sample_seconds = math.max(0, ml_value) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Samples longer than this are never picked for the kit\n(and stay out of the stitched WAV). 0 = no limit.") end
+
+  local cfg = state.length_bias or Bias.new_config()
+  state.length_bias = cfg
+  local bias_changed, bias_enabled = r.ImGui_Checkbox(ctx, "Length bias##expl_bias_enable", cfg.enabled == true)
+  if bias_changed then cfg.enabled = bias_enabled end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Steers the random pick towards shorter or longer samples\ninstead of picking flat random.") end
+
+  r.ImGui_BeginDisabled(ctx, not cfg.enabled)
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 150)
+  local ctr_changed, ctr_value = r.ImGui_SliderDouble(ctx, "##expl_bias_center", cfg.center or 0.5, 0, 1, Bias.length_label(cfg.center or 0.5))
+  if ctr_changed then cfg.center = ctr_value end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Left = shortest samples, right = longest samples.") end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 110)
+  local foc_changed, foc_value = r.ImGui_SliderInt(ctx, "##expl_bias_focus", math.floor((cfg.focus or 0) * 100 + 0.5), 0, 100, "Focus %d%%")
+  if foc_changed then cfg.focus = foc_value / 100 end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "0% = still fully random, 100% = only the samples right at the bias point.") end
+  r.ImGui_EndDisabled(ctx)
+
+  r.ImGui_SameLine(ctx)
+  if Theme.ghost_button(ctx, string.format("Clear length cache (%d)##expl_bias_clear_cache", Duration.cache_size())) then
+    Duration.clear_cache()
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Forgets all measured sample lengths.\nUse this after replacing or re-rendering files;\nthe next detonate re-analyzes them.") end
+
+  r.ImGui_Dummy(ctx, 0, 6)
+
+  -- Character: the same weighting the Browser heatmap uses, applied to the pick.
+  -- Shown open rather than folded away -- it is one of the more interesting
+  -- controls on the page, and a collapsed header hides that it exists.
+  state.tag_bias = state.tag_bias or Tags.new_bias_config()
+  r.ImGui_AlignTextToFramePadding(ctx)
+  Theme.label(ctx, "Character  \226\128\148  " .. Character.summary(state.tag_bias))
+  Theme.help(ctx, "Leans the random pick towards a sound, without narrowing it down: every detonate still gives a different kit, they just all lean the same way.")
+  local analysed, total = Engine.tag_coverage({ source = { files = state.files or {} } })
+  Character.draw(ctx, state.tag_bias, "expl", { analysed = analysed, total = total })
 
   r.ImGui_Dummy(ctx, 0, 6)
 
@@ -235,11 +388,51 @@ function M.draw(app)
       max_sample_seconds = state.max_sample_seconds,
       pattern       = pattern_specs,
       name_seed     = state.name_seed,
+      name_prefix   = (trim(state.kit_name) ~= "") and trim(state.kit_name) or nil,
+      length_bias   = state.length_bias,
+      tag_bias      = state.tag_bias,
     })
     Engine.rescan_pools(pools, true)
-    state.result = Engine.generate_kit(kitdef, pools, 1, app.script_path)
+    state.batch = Engine.new_batch(kitdef, pools, app.script_path)
   end
   r.ImGui_EndDisabled(ctx)
+
+  if state.batch then
+    local batch = state.batch
+    if not r.ImGui_IsPopupOpen(ctx, "Detonating###expl_progress") then
+      r.ImGui_OpenPopup(ctx, "Detonating###expl_progress")
+    end
+    if r.ImGui_BeginPopupModal(ctx, "Detonating###expl_progress", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+      for _ = 1, DETONATE_STEPS_PER_FRAME do
+        if batch.done then break end
+        batch:step()
+      end
+
+      local pf = batch.prefetch
+      if pf then
+        r.ImGui_ProgressBar(ctx, pf.total > 0 and (pf.index / pf.total) or 0, 340, 0, string.format("Analyzing sample lengths  %d / %d", pf.index, pf.total))
+        r.ImGui_Dummy(ctx, 0, 2)
+        if Theme.ghost_button(ctx, "Cancel##expl_progress_cancel") then
+          state.batch = nil
+          r.ImGui_CloseCurrentPopup(ctx)
+        end
+      else
+        r.ImGui_ProgressBar(ctx, 1, 340, 0, "Building kit...")
+      end
+
+      if state.batch and batch.done then
+        state.batch = nil
+        state.result = batch.kits[1] or {
+          name = (trim(state.kit_name) ~= "") and trim(state.kit_name) or "Kit",
+          dest = state.destination,
+          results = {},
+          errors = batch.errors,
+        }
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_EndPopup(ctx)
+    end
+  end
 
   -- Result popup (modal): opens after Detonate, stays until closed
   if state.result then

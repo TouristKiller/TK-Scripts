@@ -7,6 +7,7 @@ local Theme = require("core.theme")
 local Naming = require("core.naming")
 local Store = require("core.browser_store")
 local Relink = require("core.relink")
+local RS5K = require("core.rs5k")
 
 local M = {}
 
@@ -402,19 +403,7 @@ local function direct_midi_note_off(note)
 end
 
 local function fx_looks_like_rs5k(track, fx)
-  if not track or fx == nil or fx < 0 then return false end
-  local ok, name = r.TrackFX_GetFXName(track, fx, "")
-  local lower_name = ok and name and name:lower() or ""
-  if lower_name:find("reasamplomatic", 1, true) or lower_name:find("rs5k", 1, true) then
-    return true
-  end
-  if r.TrackFX_GetNamedConfigParm then
-    local parm_ok, path = r.TrackFX_GetNamedConfigParm(track, fx, "FILE0")
-    if parm_ok and path ~= nil then
-      return true
-    end
-  end
-  return false
+  return RS5K.looks_like(track, fx)
 end
 
 local function fx_looks_like_instrument(track, fx)
@@ -819,7 +808,7 @@ local function choose_cover_path(app, parent, rows)
   if not parent then return nil end
   local current = resolve_cover_path(app, parent, rows)
   local start_folder = current and parent_folder_name(current) or (r.GetResourcePath() .. "/Data")
-  local path = Dialogs.browse_file("Select cover image", start_folder, "")
+  local path = Dialogs.browse_file("Select cover image", start_folder, "", "cover")
   if not path or path == "" then return nil end
   local ok_cover, err = validate_cover_image(app and app.rs5k_manager or {}, path)
   if not ok_cover then
@@ -1095,7 +1084,7 @@ local function save_current_kit(app, parent, rows)
   if not state or not parent then return false end
   local destination = state.save_dir
   if not destination or destination == "" then
-    destination = Dialogs.browse_folder("Save kit to folder", r.GetResourcePath() .. "/TrackTemplates")
+    destination = Dialogs.browse_folder("Save kit to folder", r.GetResourcePath() .. "/TrackTemplates", "template")
     if not destination or destination == "" then return false end
     state.save_dir = destination
     if app.browser then
@@ -1190,23 +1179,7 @@ play_preview = function(state, path, slot)
 end
 
 local function load_sample_into_rs5k(track, sample_path, midi_note)
-  local fx = -1
-  local count = r.TrackFX_GetCount(track)
-  for i = 0, count - 1 do
-    local ok_name, name = r.TrackFX_GetFXName(track, i, "")
-    local lower_name = ok_name and name and name:lower() or ""
-    if lower_name:find("reasamplomatic", 1, true) or lower_name:find("rs5k", 1, true) then
-      fx = i
-      break
-    end
-    if r.TrackFX_GetNamedConfigParm then
-      local ok_file = r.TrackFX_GetNamedConfigParm(track, i, "FILE0")
-      if ok_file then
-        fx = i
-        break
-      end
-    end
-  end
+  local fx = RS5K.find(track)
   if fx < 0 then
     fx = r.TrackFX_AddByName(track, "ReaSamplOmatic5000 (Cockos)", false, -1)
   end
@@ -1286,24 +1259,7 @@ local function create_empty_rack(app)
 end
 
 find_rs5k_fx = function(track)
-  if not track then return -1 end
-  local count = r.TrackFX_GetCount(track)
-  for i = 0, count - 1 do
-    if fx_looks_like_rs5k(track, i) then
-      return i
-    end
-  end
-
-  if r.TrackFX_GetRecCount then
-    local rec_count = r.TrackFX_GetRecCount(track)
-    for i = 0, rec_count - 1 do
-      local fx = 0x1000000 + i
-      if fx_looks_like_rs5k(track, fx) then
-        return fx
-      end
-    end
-  end
-  return -1
+  return RS5K.find(track)
 end
 
 remove_all_rs5k_fx = function(track)
@@ -1750,7 +1706,7 @@ end
 local function relink_item_browse(app, it)
   local rl = app.rs5k_manager.relink
   local start = rl.last_search_dir or Relink.dirname(it.old_path)
-  local pick = Dialogs.browse_file("Locate " .. it.basename, start, "")
+  local pick = Dialogs.browse_file("Locate " .. it.basename, start, "", "source")
   if pick and Relink.file_exists(pick) then
     if relink_set_file(it.track, it.fx, pick) then
       it.resolved = true
@@ -1800,7 +1756,7 @@ local function draw_relink_modal(app)
 
   if r.ImGui_Button(ctx, "Locate folder\226\128\166##relink_folder", 150, 0) then
     local start = rl.last_search_dir or (total > 0 and Relink.dirname(rl.items[1].old_path)) or ""
-    local folder = Dialogs.browse_folder("Search folder for missing samples", start)
+    local folder = Dialogs.browse_folder("Search folder for missing samples", start, "source")
     if folder then relink_try_folder(app, folder) end
   end
   r.ImGui_SameLine(ctx, 0, 8)

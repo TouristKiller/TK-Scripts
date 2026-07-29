@@ -12,6 +12,8 @@ local UsedLog  = require("core.used_log")
 local Stitcher = require("core.stitcher")
 local Duration = require("core.duration")
 local Categories = require("core.categories")
+local Bias     = require("core.bias")
+local Tags     = require("core.tags")
 
 local M = {}
 
@@ -66,40 +68,98 @@ end
 -- otherwise a cached filtered copy (keyed per keyword/category + length
 -- limit, since different slots can use different filters on the same pool).
 -- Each view carries its own use_up bag so no-repeat picking works within it.
-local function effective_pool(pool, max_seconds, spec)
+local function effective_pool(pool, max_seconds, spec, sort_by_length)
   local has_limit = max_seconds and max_seconds > 0
-  if not has_limit and not spec then return pool end
+  if not has_limit and not spec and not sort_by_length then return pool end
 
   local key = tostring(has_limit and max_seconds or 0) .. "|"
     .. (spec and (spec.keyword and ("k:" .. spec.keyword:lower()) or ("c:" .. spec.category)) or "")
+    .. (sort_by_length and "|len" or "")
 
   pool._views = pool._views or {}
   local view = pool._views[key]
   if not view or view.source_n ~= #pool.files then
-    local files = {}
-    for _, f in ipairs(pool.files) do
+    local kept = {}
+    for i, f in ipairs(pool.files) do
       local keep = not spec or Categories.matches(f, spec)
       if keep and has_limit then
         local d = Duration.seconds(f)
         keep = not d or d <= max_seconds
       end
-      if keep then files[#files + 1] = f end
+      if keep then
+        kept[#kept + 1] = { path = f, folder = (pool.file_folder and pool.file_folder[i]) or 1 }
+      end
     end
-    view = { source_n = #pool.files, files = files, _bag = {} }
+    if sort_by_length then
+      local secs = {}
+      for _, e in ipairs(kept) do secs[e.path] = Duration.seconds(e.path) or math.huge end
+      table.sort(kept, function(a, b)
+        if secs[a.path] == secs[b.path] then return a.path < b.path end
+        return secs[a.path] < secs[b.path]
+      end)
+    end
+    local files, folders = {}, {}
+    for i, e in ipairs(kept) do
+      files[i] = e.path
+      folders[i] = e.folder
+    end
+    view = { source_n = #pool.files, files = files, file_folder = folders, _bag = {}, sorted = sort_by_length == true }
     pool._views[key] = view
   end
   view.mode = pool.mode
   return view
 end
 
-local function pick_sample(pool, slot, used_log_enabled, max_seconds)
+local function view_weights(view, length_bias, folder_bias, folder_count, tag_bias)
+  local tag_key = tag_bias and Tags.bias_key(tag_bias) or ""
+  if tag_key == "" then tag_bias = nil end
+  if not length_bias and not folder_bias and not tag_bias then return nil end
+
+  local n = #view.files
+  local key = tostring(n) .. "|"
+    .. (length_bias and string.format("L%.4f,%.4f", length_bias.center, length_bias.focus) or "")
+    .. (folder_bias and string.format("F%.4f,%.4f,%d", folder_bias.center, folder_bias.focus, folder_count or 0) or "")
+    .. (tag_bias and ("T" .. tag_key) or "")
+  if view._w_key == key then return view._w end
+
+  local w = { key = key }
+  local use_length = length_bias and view.sorted
+  for i = 1, n do
+    local value = 1
+    if use_length then
+      value = value * Bias.weight_at(i, n, length_bias.center, length_bias.focus)
+    end
+    if folder_bias then
+      local fi = view.file_folder and view.file_folder[i]
+      if fi then
+        value = value * Bias.weight_at(fi, folder_count, folder_bias.center, folder_bias.focus)
+      end
+    end
+    if tag_bias then
+      value = value * Tags.bias_weight(tag_bias, view.files[i])
+    end
+    w[i] = value
+  end
+  view._w = w
+  view._w_key = key
+  return w
+end
+
+local function pick_sample(pool, slot, used_log_enabled, max_seconds, length_bias, tag_bias)
   if slot.lock_file then return slot.lock_file end
   if not pool or not pool.files or #pool.files == 0 then
     return nil, "no sample available in pool"
   end
 
+  -- A slot may override the kit-wide character: "the whole kit dark, but this
+  -- one hat short and sharp".
+  if Tags.bias_active(slot.tag_bias) then tag_bias = slot.tag_bias end
+
+  local folder_count = pool.folder_count or #(pool.folders or {})
+  local folder_bias = Bias.for_folders(pool.folder_bias, folder_count)
+
   local spec = Categories.spec_for_slot(slot)
-  local view = effective_pool(pool, max_seconds, spec)
+  local view = effective_pool(pool, max_seconds, spec, length_bias ~= nil)
   if #view.files == 0 then
     if spec then
       local suffix = (max_seconds and max_seconds > 0) and " within max length" or ""
@@ -108,40 +168,57 @@ local function pick_sample(pool, slot, used_log_enabled, max_seconds)
     return nil, string.format("all samples exceed max length (%.1fs)", max_seconds)
   end
 
+  local weights = view_weights(view, length_bias, folder_bias, folder_count, tag_bias)
+
   if used_log_enabled then
     local unused = {}
-    for _, f in ipairs(view.files) do
-      if not UsedLog.is_used(f) then unused[#unused + 1] = f end
+    for i, f in ipairs(view.files) do
+      if not UsedLog.is_used(f) then unused[#unused + 1] = i end
     end
     if #unused == 0 then
-      -- Every pickable sample has been used before; reset their history.
       for _, f in ipairs(view.files) do UsedLog.clear_used(f) end
-      unused = view.files
+      for i = 1, #view.files do unused[i] = i end
     end
-    local pick = unused[math.random(#unused)]
+    local index
+    if weights then
+      index = Bias.pick_weighted_subset(unused, weights)
+    else
+      index = unused[math.random(#unused)]
+    end
+    local pick = view.files[index]
     UsedLog.mark_used(pick)
     return pick
   end
 
-  return Picker.pick(view)
+  return Picker.pick(view, weights)
 end
 
 -- Generates ONE kit from a KitDef. Batch = call this N times (see new_batch()).
 -- pools: table keyed by pool_id -> Pool. script_path: needed for the wordlist
 -- fallback file when kitdef.name_prefix is nil.
 function M.generate_kit(kitdef, pools, kit_index, script_path)
-  local kit_name = (kitdef.name_prefix and kitdef.name_prefix ~= "")
-    and string.format("%s %03d", kitdef.name_prefix, kit_index)
-    or  M.suggest_kit_name(kitdef, pools, script_path, kitdef.name_seed)
+  local kit_name
+  if kitdef.name_prefix and kitdef.name_prefix ~= "" then
+    if kitdef.name_numbered == false then
+      kit_name = kitdef.name_prefix
+    else
+      kit_name = string.format("%s %03d", kitdef.name_prefix, kit_index)
+    end
+  else
+    kit_name = M.suggest_kit_name(kitdef, pools, script_path, kitdef.name_seed)
+  end
 
   local dest_dir, final_name = Exporter.make_folder(kitdef.export.destination, kit_name)
+
+  local bias = Bias.for_kit(kitdef.export.length_bias, kit_index, math.max(1, kitdef.export.kit_count or 1))
+  local tag_bias = Tags.bias_active(kitdef.export.tag_bias) and kitdef.export.tag_bias or nil
 
   local results = {}
   local errors = {}
 
   for _, slot in ipairs(kitdef.slots) do
     local pool = pools[slot.pool_id]
-    local sample, pick_err = pick_sample(pool, slot, kitdef.export.write_usedlog, kitdef.export.max_sample_seconds)
+    local sample, pick_err = pick_sample(pool, slot, kitdef.export.write_usedlog, kitdef.export.max_sample_seconds, bias, tag_bias)
 
     if sample then
       local filename = Naming.build(slot, sample, pool, kitdef.naming)
@@ -180,9 +257,43 @@ function M.generate_kit(kitdef, pools, kit_index, script_path)
   return { name = final_name, dest = dest_dir, results = results, errors = errors, stitched = stitched }
 end
 
+-- How much of the material behind a kit carries a measurement. A character
+-- bias over an unanalysed pool is not an error -- every weight comes out equal
+-- and picking stays random -- but it does nothing, so the UI has to be able to
+-- say so instead of leaving the user wondering.
+function M.tag_coverage(pools)
+  local files, seen = {}, {}
+  for _, pool in pairs(pools or {}) do
+    for _, f in ipairs(pool.files or {}) do
+      if not seen[f] then
+        seen[f] = true
+        files[#files + 1] = f
+      end
+    end
+  end
+  return Tags.count_analyzed(files), #files
+end
+
 -- Stateful batch runner: call runner:step() once (or a few times) per UI
 -- frame so a 100+ kit batch does not freeze the ReaImGui loop.
 function M.new_batch(kitdef, pools, script_path)
+  local prefetch
+  local needs_lengths = Bias.is_active(kitdef.export.length_bias)
+    or ((tonumber(kitdef.export.max_sample_seconds) or 0) > 0)
+  if needs_lengths then
+    local files, seen = {}, {}
+    for _, pool in pairs(pools) do
+      for _, f in ipairs(pool.files or {}) do
+        if not seen[f] then
+          seen[f] = true
+          files[#files + 1] = f
+        end
+      end
+    end
+    prefetch = Duration.new_prefetch(files)
+    if prefetch.total == 0 then prefetch = nil end
+  end
+
   return {
     kitdef = kitdef,
     pools = pools,
@@ -192,9 +303,15 @@ function M.new_batch(kitdef, pools, script_path)
     kits = {},
     errors = {},
     done = false,
+    prefetch = prefetch,
 
     step = function(self)
       if self.done then return false end
+      if self.prefetch then
+        if self.prefetch:step(96) then return true end
+        self.prefetch = nil
+        return true
+      end
       self.index = self.index + 1
       local ok, kit_or_err = pcall(M.generate_kit, self.kitdef, self.pools, self.index, self.script_path)
       if ok then
@@ -202,7 +319,10 @@ function M.new_batch(kitdef, pools, script_path)
       else
         self.errors[#self.errors + 1] = string.format("Kit %d: %s", self.index, tostring(kit_or_err))
       end
-      if self.index >= self.total then self.done = true end
+      if self.index >= self.total then
+        self.done = true
+        Duration.flush()
+      end
       return not self.done
     end,
   }
@@ -246,6 +366,7 @@ function M.kitdef_from_explosion(opts)
 
   local kitdef = {
     name_prefix = opts.name_prefix,
+    name_numbered = false,
     name_seed = opts.name_seed,
     slots = slots,
     naming = opts.naming or {
@@ -262,6 +383,8 @@ function M.kitdef_from_explosion(opts)
       write_usedlog = false,
       write_stitched = opts.stitched == true,
       max_sample_seconds = opts.max_sample_seconds or 0,
+      length_bias = opts.length_bias,
+      tag_bias = opts.tag_bias,
     },
   }
 

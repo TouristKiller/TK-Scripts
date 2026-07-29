@@ -23,7 +23,16 @@ local function default_state()
     search = "",
     browser_mode = "packs",
     collection_view = "list",
+    tile_size = "normal",
     auto_audition = true,
+    show_tags = true,
+    sample_view = "list",
+    list_flat = false,
+    grid_x = "tone",
+    grid_y = "decay",
+    grid_size = 4,
+    grid_center = 0.5,
+    grid_focus = 0.6,
     preview_volume = 1.0,
     manager_rack_color = 0x4DA3FFFF,
     manager_rack_gradient = false,
@@ -45,7 +54,27 @@ local function sanitize(state)
   out.manager_mode = state.manager_mode == "make" and "make" or "view"
   out.browser_mode = (state.browser_mode == "kits") and "kits" or "packs"
   out.collection_view = (state.collection_view == "tiles") and "tiles" or "list"
+  if state.tile_size == "small" or state.tile_size == "large" or state.tile_size == "huge" then
+    out.tile_size = state.tile_size
+  else
+    out.tile_size = "normal"
+  end
   out.auto_audition = state.auto_audition ~= false
+  out.show_tags = state.show_tags ~= false
+  out.sample_view = (state.sample_view == "grid") and "grid" or "list"
+  out.list_flat = state.list_flat == true
+  if state.grid_x == "tone" or state.grid_x == "decay" or state.grid_x == "transient" then
+    out.grid_x = state.grid_x
+  end
+  if state.grid_y == "tone" or state.grid_y == "decay" or state.grid_y == "transient" then
+    out.grid_y = state.grid_y
+  end
+  if out.grid_x == out.grid_y then
+    out.grid_y = (out.grid_x == "decay") and "tone" or "decay"
+  end
+  out.grid_size = math.max(3, math.min(8, math.floor(tonumber(state.grid_size) or 4)))
+  out.grid_center = math.max(0, math.min(1, tonumber(state.grid_center) or 0.5))
+  out.grid_focus = math.max(0, math.min(1, tonumber(state.grid_focus) or 0.6))
   out.preview_volume = math.max(0, math.min(2, tonumber(state.preview_volume) or 1.0))
   out.manager_rack_color = math.max(0, math.min(0xFFFFFFFF, math.floor(tonumber(state.manager_rack_color) or 0x4DA3FFFF)))
   out.manager_rack_gradient = state.manager_rack_gradient == true

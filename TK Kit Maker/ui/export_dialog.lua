@@ -7,6 +7,10 @@ local Engine  = require("core.engine")
 local Dialogs = require("core.dialogs")
 local Theme   = require("core.theme")
 local Naming  = require("core.naming")
+local Bias    = require("core.bias")
+local Tags    = require("core.tags")
+local Character = require("ui.character")
+local Duration = require("core.duration")
 
 local M = {}
 
@@ -44,7 +48,14 @@ end
 local STEPS_PER_FRAME = 2
 
 local PREFIX_STYLES = { "1", "01", "001" }
-local NOTE_STYLES   = { { id = "name", label = "Note name (C1)" }, { id = "number", label = "Note number (36)" }, { id = "none", label = "None" } }
+-- The example is spelled out by Naming rather than typed in, so it cannot drift
+-- from what the filenames actually get -- which is exactly what happened when
+-- the octave numbering moved and this label still said C1.
+local NOTE_STYLES   = {
+  { id = "name",   label = "Note name (" .. Naming.note_name(36) .. ")" },
+  { id = "number", label = "Note number (36)" },
+  { id = "none",   label = "None" },
+}
 
 function M.init(app)
   app.export_batch = nil
@@ -108,6 +119,83 @@ local function draw_naming_options(app)
   end
 end
 
+-- Kit-wide character. Individual slots can override it (see the Char column in
+-- the slots table); this is the default every slot follows.
+local function draw_character(app)
+  local ctx = app.ctx
+  local export = app.kitdef.export
+  export.tag_bias = export.tag_bias or Tags.new_bias_config()
+
+  r.ImGui_Dummy(ctx, 0, 2)
+  Theme.section(ctx, "Character  \226\128\148  " .. Tags.bias_summary(export.tag_bias))
+  Theme.help(ctx, "Leans every slot towards a sound without narrowing it down: a batch of 50 kits still gives 50 different kits, they just all lean the same way. Individual slots can override this in the Char column.")
+
+  local analysed, total = Engine.tag_coverage(app.pools)
+  Character.draw(ctx, export.tag_bias, "export", { analysed = analysed, total = total })
+end
+
+local function draw_length_bias(app)
+  local ctx = app.ctx
+  local export = app.kitdef.export
+  export.length_bias = export.length_bias or Bias.new_config()
+  local cfg = export.length_bias
+
+  r.ImGui_Dummy(ctx, 0, 2)
+  Theme.section(ctx, "Length bias")
+  Theme.help(ctx, "Steers the random pick towards shorter or longer samples instead of picking flat random.")
+
+  local en_changed, en_value = r.ImGui_Checkbox(ctx, "Enable##export_bias_enable", cfg.enabled == true)
+  if en_changed then cfg.enabled = en_value end
+
+  r.ImGui_BeginDisabled(ctx, not cfg.enabled)
+
+  r.ImGui_AlignTextToFramePadding(ctx)
+  Theme.label(ctx, "Bias")
+  r.ImGui_SameLine(ctx)
+  r.ImGui_BeginDisabled(ctx, cfg.sweep == true)
+  r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 60))
+  local ctr_changed, ctr_value = r.ImGui_SliderDouble(ctx, "##export_bias_center", cfg.center or 0.5, 0, 1, Bias.length_label(cfg.center or 0.5))
+  if ctr_changed then cfg.center = ctr_value end
+  r.ImGui_EndDisabled(ctx)
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Left = shortest samples, right = longest samples.") end
+
+  r.ImGui_AlignTextToFramePadding(ctx)
+  Theme.label(ctx, "Focus")
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 60))
+  local foc_changed, foc_value = r.ImGui_SliderInt(ctx, "##export_bias_focus", math.floor((cfg.focus or 0) * 100 + 0.5), 0, 100, "%d%%")
+  if foc_changed then cfg.focus = foc_value / 100 end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "0% = still fully random, 100% = only the samples right at the bias point.") end
+
+  local sw_changed, sw_value = r.ImGui_Checkbox(ctx, "Sweep over batch##export_bias_sweep", cfg.sweep == true)
+  if sw_changed then cfg.sweep = sw_value end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Kit 1 uses the shortest samples, the last kit the longest,\nwith every kit in between shifting one step further.") end
+
+  r.ImGui_EndDisabled(ctx)
+
+  if Theme.ghost_button(ctx, string.format("Clear length cache (%d)##export_bias_clear_cache", Duration.cache_size())) then
+    Duration.clear_cache()
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Forgets all measured sample lengths.\nUse this after replacing or re-rendering files;\nthe next export re-analyzes them.") end
+end
+
+-- First thing under Export, as in Explosion: where the kits land is the one
+-- setting you must fill in, so it should not be buried among the batch options.
+local function draw_destination(app)
+  local ctx = app.ctx
+  local export = app.kitdef.export
+
+  local avail = select(1, r.ImGui_GetContentRegionAvail(ctx))
+  r.ImGui_SetNextItemWidth(ctx, (as_number(avail) or 300) - 92)
+  local dest_changed, dest_value = r.ImGui_InputTextWithHint(ctx, "##export_destination", "Where the kits should end up...", export.destination or "")
+  if dest_changed then export.destination = dest_value end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "Browse##export_dest_browse", 82) then
+    local folder = Dialogs.browse_folder("Select destination folder", export.destination, "destination")
+    if folder then export.destination = folder end
+  end
+end
+
 local function draw_batch_options(app)
   local ctx = app.ctx
   local kitdef = app.kitdef
@@ -134,15 +222,6 @@ local function draw_batch_options(app)
     r.ImGui_SetTooltip(ctx, "Only works when Kit name prefix is empty.")
   end
 
-  local avail = select(1, r.ImGui_GetContentRegionAvail(ctx))
-  r.ImGui_SetNextItemWidth(ctx, avail - 92)
-  local dest_changed, dest_value = r.ImGui_InputTextWithHint(ctx, "##export_destination", "Destination folder for the kits...", export.destination or "")
-  if dest_changed then export.destination = dest_value end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Browse##export_dest_browse", 82) then
-    local folder = Dialogs.browse_folder("Select destination folder", export.destination)
-    if folder then export.destination = folder end
-  end
 
   r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 80))
   local count_changed, count_value = r.ImGui_SliderInt(ctx, "Kit count##export_kit_count", export.kit_count or 1, 1, 200, "%d")
@@ -170,6 +249,9 @@ local function draw_batch_options(app)
   local ml_changed, ml_value = r.ImGui_InputDouble(ctx, "##export_maxlen", export.max_sample_seconds or 0, 0, 0, "%.1f")
   if ml_changed then export.max_sample_seconds = math.max(0, ml_value) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Samples longer than this are never picked for a kit\n(and stay out of the stitched WAV). 0 = no limit.\nLocked samples are always used.") end
+
+  draw_length_bias(app)
+  draw_character(app)
 end
 
 -- Batch progress + result summary in a modal popup. Keeps stepping the batch
@@ -189,6 +271,12 @@ local function draw_progress_modal(app)
   for _ = 1, STEPS_PER_FRAME do
     if batch.done then break end
     batch:step()
+  end
+
+  if batch.prefetch then
+    local pf = batch.prefetch
+    r.ImGui_ProgressBar(ctx, pf.total > 0 and (pf.index / pf.total) or 0, 380, 0, string.format("Analyzing sample lengths  %d / %d", pf.index, pf.total))
+    r.ImGui_Dummy(ctx, 0, 2)
   end
 
   r.ImGui_ProgressBar(ctx, batch.index / batch.total, 380, 0, string.format("%d / %d", batch.index, batch.total))
@@ -260,20 +348,43 @@ function M.draw(app)
     return
   end
 
-  if not r.ImGui_CollapsingHeader(ctx, "Export###export_section") then return end
+  -- Not collapsible: the button that does the thing must not be foldable away.
+  Theme.step(ctx, "3", "Export")
   r.ImGui_Indent(ctx, 6)
 
+  draw_destination(app)
   draw_naming_options(app)
   draw_batch_options(app)
 
   r.ImGui_Dummy(ctx, 0, 4)
-  local has_slots = #(app.kitdef.slots or {}) > 0
+
+  -- Readiness at a glance. A slot with no pool is silently skipped on export,
+  -- and finding those meant reading down the whole table.
+  local slots = app.kitdef.slots or {}
+  local no_pool = 0
+  for _, slot in ipairs(slots) do
+    if not slot.pool_id or not app.pools[slot.pool_id] then no_pool = no_pool + 1 end
+  end
+
+  local has_slots = #slots > 0
   local has_destination = app.kitdef.export.destination and app.kitdef.export.destination ~= ""
   local can_export = has_slots and has_destination
 
+  if has_slots then
+    r.ImGui_AlignTextToFramePadding(ctx)
+    if no_pool > 0 then
+      r.ImGui_TextColored(ctx, c.warning, string.format(
+        "%d slots, %d without a pool \226\128\148 those stay empty.", #slots, no_pool))
+    else
+      r.ImGui_TextColored(ctx, c.success, string.format("%d slots, all linked to a pool.", #slots))
+    end
+  end
+
   if not can_export then
     r.ImGui_AlignTextToFramePadding(ctx)
-    r.ImGui_TextColored(ctx, c.text_faint, "Add slots and pick a destination folder to export.")
+    r.ImGui_TextColored(ctx, c.text_faint, has_slots
+      and "Pick a destination folder to export."
+      or "Add slots and pick a destination folder to export.")
   end
 
   local export_w = math.min(180, math.max(120, select(1, r.ImGui_GetContentRegionAvail(ctx))))

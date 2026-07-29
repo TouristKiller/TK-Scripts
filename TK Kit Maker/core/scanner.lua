@@ -49,14 +49,23 @@ end
 -- Returns the file list (also stored on pool.files).
 function M.scan_pool(pool)
   local results = {}
+  local folder_of = {}
+  local index = 0
   for _, folder in ipairs(pool.folders or {}) do
+    index = index + 1
     if folder and folder ~= "" then
+      local before = #results
       scan_dir(folder, pool.recursive ~= false, results)
+      for i = before + 1, #results do folder_of[i] = index end
     end
   end
   pool.files = results
+  pool.file_folder = folder_of
+  pool.folder_count = index
   pool._bag = {} -- invalidate use_up bag; it gets rebuilt from the fresh file list on next pick
   pool._views = nil -- invalidate the filtered pick views for the same reason
+  pool._w = nil
+  pool._w_key = nil
   return results
 end
 

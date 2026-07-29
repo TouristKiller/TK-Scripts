@@ -4,11 +4,20 @@ local M = {}
 
 local NOTE_NAMES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }
 
--- MIDI note 36 -> "C1" (matches the architecture doc's default: note 36 = C1).
+-- Octave numbering. There are two conventions in the wild and they differ by
+-- one: Yamaha calls middle C (note 60) C3, Roland and scientific pitch call it
+-- C4. This used to follow Yamaha, so note 36 read "C1" while REAPER's own MIDI
+-- editor showed it as C2 -- the same note under two names in one program.
+--
+-- REAPER can shift this with its "MIDI octave name display offset" preference;
+-- if you have changed that, this is the one number to match it with.
+local OCTAVE_OFFSET = -1
+
+-- MIDI note 36 -> "C2", 60 -> "C4".
 function M.note_name(midi_note)
   midi_note = math.floor(midi_note)
   local name = NOTE_NAMES[(midi_note % 12) + 1]
-  local octave = math.floor(midi_note / 12) - 2
+  local octave = math.floor(midi_note / 12) + OCTAVE_OFFSET
   return name .. tostring(octave)
 end
 

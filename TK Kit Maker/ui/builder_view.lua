@@ -12,8 +12,16 @@ local Theme   = require("core.theme")
 local Categories = require("core.categories")
 local Relink  = require("core.relink")
 local Store   = require("core.browser_store")
+local Bias    = require("core.bias")
+local Tags    = require("core.tags")
+local Naming  = require("core.naming")
+local Character = require("ui.character")
+local PatternPresets = require("ui.pattern_presets")
 
 local M = {}
+
+local draw_quick_layout_popup
+local draw_pattern_slots_popup
 
 local function fit_w(ctx, want, reserve)
   local avail = select(1, r.ImGui_GetContentRegionAvail(ctx))
@@ -25,7 +33,7 @@ local function new_naming()
 end
 
 local function new_export()
-  return { destination = "", kit_count = 1, write_midilog = false, write_sourcelog = false, write_usedlog = false, write_stitched = false, max_sample_seconds = 0 }
+  return { destination = "", kit_count = 1, write_midilog = false, write_sourcelog = false, write_usedlog = false, write_stitched = false, max_sample_seconds = 0, length_bias = Bias.new_config(), tag_bias = Tags.new_bias_config() }
 end
 
 function M.new_kitdef()
@@ -53,13 +61,29 @@ end
 local function pool_order_from(pools)
   local order = {}
   for id in pairs(pools) do order[#order + 1] = id end
-  table.sort(order)
+  -- Numerically where the ids allow it: a plain sort puts pool_10 between
+  -- pool_1 and pool_2.
+  table.sort(order, function(a, b)
+    local na = tonumber(a:match("^pool_(%d+)$"))
+    local nb = tonumber(b:match("^pool_(%d+)$"))
+    if na and nb then return na < nb end
+    return a < b
+  end)
   return order
 end
 
 local function load_preset(app, name)
   local kitdef, pools = Presets.load(name)
   if kitdef then
+    -- Presets written before character bias existed have no config at all, and
+    -- one written by a future version may have a partial one; normalise both.
+    kitdef.export = kitdef.export or {}
+    kitdef.export.tag_bias = Character.sanitize(kitdef.export.tag_bias)
+    for _, slot in ipairs(kitdef.slots or {}) do
+      if slot.tag_bias ~= nil then
+        slot.tag_bias = Character.sanitize(slot.tag_bias)
+      end
+    end
     app.kitdef = kitdef
     app.pools = pools
     app.builder.pool_order = pool_order_from(pools)
@@ -69,8 +93,17 @@ local function load_preset(app, name)
 end
 
 local function add_pool(app)
-  local id = "pool_" .. tostring(app.builder.next_pool_n)
-  app.builder.next_pool_n = app.builder.next_pool_n + 1
+  -- Skip ids that are already taken rather than trusting the counter. A loaded
+  -- preset brings its own pool_1, pool_2... while next_pool_n stays wherever it
+  -- was, so "+ Pool" landed straight on top of a pool the preset had filled:
+  -- the full one was replaced by an empty one, and pool_order then listed the
+  -- same id twice. Checking here covers every caller, now and later.
+  local id
+  repeat
+    id = "pool_" .. tostring(app.builder.next_pool_n)
+    app.builder.next_pool_n = app.builder.next_pool_n + 1
+  until not app.pools[id]
+
   app.pools[id] = {
     id = id,
     alias = "Pool " .. id:gsub("pool_", ""),
@@ -78,6 +111,7 @@ local function add_pool(app)
     recursive = true,
     files = {},
     mode = "repeat",
+    folder_bias = Bias.new_folder_config(),
     _bag = {},
   }
   app.builder.pool_order[#app.builder.pool_order + 1] = id
@@ -100,11 +134,62 @@ local function pool_sample_count(pool)
   return pool.files and #pool.files or 0
 end
 
+local function folder_leaf(path)
+  return tostring(path or ""):match("([^/\\]+)$") or tostring(path or "")
+end
+
+local function draw_folder_bias(app, pool)
+  local ctx = app.ctx
+  local n = #(pool.folders or {})
+
+  pool.folder_bias = pool.folder_bias or Bias.new_folder_config()
+  local cfg = pool.folder_bias
+
+  r.ImGui_BeginDisabled(ctx, n < 2)
+  local en_changed, en_value = r.ImGui_Checkbox(ctx, "Folder bias##folder_bias_enable", cfg.enabled == true)
+  if en_changed then cfg.enabled = en_value end
+  r.ImGui_EndDisabled(ctx)
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Favours folders around a chosen root folder instead of drawing\nfrom all folders equally. Use the folder order above as the axis.")
+  end
+  if n < 2 then
+    r.ImGui_SameLine(ctx)
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_faint, "(needs 2+ folders)")
+    return
+  end
+
+  r.ImGui_BeginDisabled(ctx, not cfg.enabled)
+
+  local root = math.max(1, math.min(n, math.floor(tonumber(cfg.root) or 1)))
+  cfg.root = root
+  r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 60))
+  if r.ImGui_BeginCombo(ctx, "Root folder##folder_bias_root", string.format("%d. %s", root, folder_leaf(pool.folders[root]))) then
+    for i, folder in ipairs(pool.folders) do
+      if r.ImGui_Selectable(ctx, string.format("%d. %s##folder_bias_root_%d", i, folder_leaf(folder), i), i == root) then
+        cfg.root = i
+      end
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+
+  r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 60))
+  local amt_changed, amt_value = r.ImGui_SliderDouble(ctx, "Bias##folder_bias_amount", tonumber(cfg.amount) or 0, -1, 1, Bias.folder_label(cfg.amount))
+  if amt_changed then cfg.amount = amt_value end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "0 = every folder equally likely.\nTowards + = the root folder and the ones below it in the list.\nTowards - = the root folder and the ones above it.")
+  end
+
+  r.ImGui_EndDisabled(ctx)
+end
+
 local function draw_pools(app)
   local ctx = app.ctx
   local c = Theme.colors
 
-  if not r.ImGui_CollapsingHeader(ctx, "Pools###pools_section") then return end
+  -- Not collapsible: pools and slots are what the Builder is for, and folding
+  -- them away leaves a page with nothing on it.
+  Theme.step(ctx, "1", "Pools")
   r.ImGui_Indent(ctx, 6)
 
   if Theme.primary_button(ctx, "+ Pool##builder_add_pool", 96, 0) then add_pool(app) end
@@ -128,14 +213,23 @@ local function draw_pools(app)
         if a_changed then pool.alias = a_value end
 
         Theme.label(ctx, "Folders")
+        Theme.help(ctx, "The order matters for the folder bias below: top = low end, bottom = high end.")
         local folder_pending_delete = nil
+        local folder_move = nil
         if #pool.folders == 0 then
           r.ImGui_TextColored(ctx, c.text_faint, "(no folders yet)")
         end
         for fi, folder in ipairs(pool.folders) do
           local missing = not Relink.dir_exists(folder)
-          r.ImGui_Bullet(ctx)
+          r.ImGui_BeginDisabled(ctx, fi == 1)
+          if r.ImGui_SmallButton(ctx, "^##folder_up_" .. fi) then folder_move = { from = fi, to = fi - 1 } end
+          r.ImGui_EndDisabled(ctx)
           r.ImGui_SameLine(ctx)
+          r.ImGui_BeginDisabled(ctx, fi == #pool.folders)
+          if r.ImGui_SmallButton(ctx, "v##folder_down_" .. fi) then folder_move = { from = fi, to = fi + 1 } end
+          r.ImGui_EndDisabled(ctx)
+          r.ImGui_SameLine(ctx)
+          r.ImGui_AlignTextToFramePadding(ctx)
           if missing then
             r.ImGui_TextColored(ctx, c.danger, folder)
           else
@@ -168,7 +262,7 @@ local function draw_pools(app)
             if remapped and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Relink to remembered location:\n" .. remapped) end
             if remapped then r.ImGui_SameLine(ctx) end
             if r.ImGui_SmallButton(ctx, "Relink##folder_relink_" .. fi) then
-              local pick = Dialogs.browse_folder("Locate folder for " .. (pool.alias or pool_id), remapped or folder)
+              local pick = Dialogs.browse_folder("Locate folder for " .. (pool.alias or pool_id), remapped or folder, "source")
               if pick and Relink.dir_exists(pick) then
                 if app.browser then
                   app.browser.relink_prefixes = app.browser.relink_prefixes or {}
@@ -191,9 +285,14 @@ local function draw_pools(app)
           table.remove(pool.folders, folder_pending_delete)
           pool.files = {}
         end
+        if folder_move then
+          local moved = table.remove(pool.folders, folder_move.from)
+          table.insert(pool.folders, folder_move.to, moved)
+          pool.files = {}
+        end
 
         if r.ImGui_Button(ctx, "+ Add folder##add_folder") then
-          local folder = Dialogs.browse_folder("Select folder for " .. (pool.alias or pool_id), "")
+          local folder = Dialogs.browse_folder("Select folder for " .. (pool.alias or pool_id), "", "source")
           if folder then pool.folders[#pool.folders + 1] = folder; pool.files = {} end
         end
         r.ImGui_SameLine(ctx)
@@ -207,6 +306,8 @@ local function draw_pools(app)
           if r.ImGui_Selectable(ctx, "Use up (no repeats + reshuffle)##mode_useup", pool.mode == "use_up") then pool.mode = "use_up" end
           r.ImGui_EndCombo(ctx)
         end
+
+        draw_folder_bias(app, pool)
 
         if Theme.ghost_button(ctx, "Scan##pool_rescan") then Scanner.scan_pool(pool) end
         r.ImGui_SameLine(ctx)
@@ -310,13 +411,48 @@ local function draw_filter_cell(app, slot, pool)
   end
 end
 
+-- Per-slot character override. Empty by default: the kit-wide setting under
+-- Export applies unless a slot says otherwise ("whole kit dark, but this hat
+-- short and sharp").
+local function draw_slot_character(app, slot)
+  local ctx = app.ctx
+  local active = Tags.bias_active(slot.tag_bias)
+
+  if active then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.accent)
+  end
+  if r.ImGui_SmallButton(ctx, (active and "On" or "\226\128\148") .. "##slot_char") then
+    slot.tag_bias = slot.tag_bias or Tags.new_bias_config()
+    r.ImGui_OpenPopup(ctx, "##slot_char_popup")
+  end
+  if active then r.ImGui_PopStyleColor(ctx) end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, active
+      and ("Character for this slot: " .. Tags.bias_summary(slot.tag_bias) .. "\nOverrides the kit-wide setting.")
+      or "Character for this slot only.\nLeave off to follow the kit-wide setting under Export.")
+  end
+
+  if r.ImGui_BeginPopup(ctx, "##slot_char_popup") then
+    slot.tag_bias = slot.tag_bias or Tags.new_bias_config()
+    Theme.section(ctx, string.format("Slot %d character", slot.number or 0))
+    Theme.help(ctx, "Overrides the kit-wide character for this slot only.")
+    r.ImGui_Dummy(ctx, 340, 2)
+    Character.draw(ctx, slot.tag_bias, "slot")
+    r.ImGui_Separator(ctx)
+    if Theme.ghost_button(ctx, "Clear##slot_char_clear") then
+      slot.tag_bias = nil
+      r.ImGui_CloseCurrentPopup(ctx)
+    end
+    r.ImGui_EndPopup(ctx)
+  end
+end
+
 local function draw_slots(app)
   local ctx = app.ctx
   local c = Theme.colors
   local kitdef = app.kitdef
 
-  local header = string.format("Slots  (%d)###slots_section", #kitdef.slots)
-  if not r.ImGui_CollapsingHeader(ctx, header) then return end
+  Theme.step(ctx, "2", string.format("Slots  (%d)", #kitdef.slots))
   r.ImGui_Indent(ctx, 6)
 
   if r.ImGui_Button(ctx, "+ Slot##add_slot") then add_slot(app, nil) end
@@ -324,10 +460,36 @@ local function draw_slots(app)
   if r.ImGui_Button(ctx, "+ 16 slots##add_16_slots") then
     for _ = 1, 16 do add_slot(app, nil) end
   end
+
   r.ImGui_SameLine(ctx)
-  if Theme.ghost_button(ctx, "Notes from 36##renote") then
+  if Theme.primary_button(ctx, "From pattern\226\128\166##sp_open", 120, 0) then
+    r.ImGui_OpenPopup(ctx, "##slot_pattern_popup")
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Type Kick, Snare, Hihat, Clap and get slots with the\nfilter and the matching pool already set.")
+  end
+  draw_pattern_slots_popup(app)
+
+  r.ImGui_SameLine(ctx)
+  if Theme.ghost_button(ctx, "Renumber notes##renote") then
     for i, slot in ipairs(kitdef.slots) do slot.midi_note = math.min(127, 35 + i) end
   end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, string.format(
+      "Numbers the notes upward from %s (36), one per slot.", Naming.note_name(36)))
+  end
+
+  -- Quick layout builds slots, so it belongs here rather than as a step of its
+  -- own after them -- it REPLACES the table, which read like a refinement when
+  -- it sat further down the page.
+  r.ImGui_SameLine(ctx)
+  if Theme.ghost_button(ctx, "Quick layout\226\128\166##qp_open", 108, 0) then
+    r.ImGui_OpenPopup(ctx, "##qp_popup")
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Fill a whole keyboard from three pools in one go.\nReplaces the slots you have.")
+  end
+  draw_quick_layout_popup(app)
 
   if #kitdef.slots == 0 then
     r.ImGui_TextColored(ctx, c.text_faint, "No slots yet. Add some and link each to a pool.")
@@ -344,13 +506,14 @@ local function draw_slots(app)
   else
     flags = flags | r.ImGui_TableFlags_SizingStretchProp()
   end
-  if r.ImGui_BeginTable(ctx, "##slots_table", 7, flags, 0, 0) then
+  if r.ImGui_BeginTable(ctx, "##slots_table", 8, flags, 0, 0) then
     if narrow then
       r.ImGui_TableSetupColumn(ctx, "#", r.ImGui_TableColumnFlags_WidthFixed(), 42)
       r.ImGui_TableSetupColumn(ctx, "Pool", r.ImGui_TableColumnFlags_WidthFixed(), 110)
       r.ImGui_TableSetupColumn(ctx, "Note", r.ImGui_TableColumnFlags_WidthFixed(), 42)
       r.ImGui_TableSetupColumn(ctx, "Pad", r.ImGui_TableColumnFlags_WidthFixed(), 42)
       r.ImGui_TableSetupColumn(ctx, "Filter", r.ImGui_TableColumnFlags_WidthFixed(), 120)
+      r.ImGui_TableSetupColumn(ctx, "Char", r.ImGui_TableColumnFlags_WidthFixed(), 46)
       r.ImGui_TableSetupColumn(ctx, "Lock", r.ImGui_TableColumnFlags_WidthFixed(), 56)
       r.ImGui_TableSetupColumn(ctx, "", r.ImGui_TableColumnFlags_WidthFixed(), 42)
     else
@@ -359,6 +522,7 @@ local function draw_slots(app)
       r.ImGui_TableSetupColumn(ctx, "Note", r.ImGui_TableColumnFlags_WidthFixed(), 42)
       r.ImGui_TableSetupColumn(ctx, "Pad", r.ImGui_TableColumnFlags_WidthFixed(), 42)
       r.ImGui_TableSetupColumn(ctx, "Filter", r.ImGui_TableColumnFlags_WidthFixed(), 110)
+      r.ImGui_TableSetupColumn(ctx, "Char", r.ImGui_TableColumnFlags_WidthFixed(), 46)
       r.ImGui_TableSetupColumn(ctx, "Lock", r.ImGui_TableColumnFlags_WidthStretch())
       r.ImGui_TableSetupColumn(ctx, "", r.ImGui_TableColumnFlags_WidthFixed(), 64)
     end
@@ -407,6 +571,9 @@ local function draw_slots(app)
       draw_filter_cell(app, slot, pool)
 
       r.ImGui_TableNextColumn(ctx)
+      draw_slot_character(app, slot)
+
+      r.ImGui_TableNextColumn(ctx)
       if slot.lock_file then
         local shown = slot.lock_file:match("([^/\\]+)$") or slot.lock_file
         if #shown > 20 then shown = "..." .. shown:sub(-17) end
@@ -419,7 +586,7 @@ local function draw_slots(app)
         if r.ImGui_SmallButton(ctx, "Unlock##unlock") then slot.lock_file = nil end
       else
         if r.ImGui_SmallButton(ctx, "Lock##lock") then
-          local file = Dialogs.browse_file("Select fixed sample", "")
+          local file = Dialogs.browse_file("Select fixed sample", "", nil, "source")
           if file then slot.lock_file = file end
         end
       end
@@ -461,34 +628,170 @@ local function pool_picker(app, label, key)
   end
 end
 
-local function draw_quick_preview(app)
+-- Slots from a pattern -------------------------------------------------------
+--
+-- The Builder's real cost is the setup: a pool, its folders, sixteen slots, a
+-- pool on each, a filter on each. Explosion already solves that with a comma
+-- separated pattern, and the same parser works here -- with one addition that
+-- matters more than it sounds: the pattern word is matched against the pool
+-- ALIASES, so pools called Kick / Snare / Hihat get wired up on their own.
+
+-- Exact alias match first, then a loose one so "Kicks" still answers to "Kick".
+local function pool_for_word(app, word)
+  word = (word or ""):lower()
+  if word == "" then return nil end
+
+  for _, id in ipairs(app.builder.pool_order) do
+    local pool = app.pools[id]
+    if pool and (pool.alias or ""):lower() == word then return id end
+  end
+  for _, id in ipairs(app.builder.pool_order) do
+    local alias = (app.pools[id] and app.pools[id].alias or ""):lower()
+    if alias ~= "" and (alias:find(word, 1, true) or word:find(alias, 1, true)) then
+      return id
+    end
+  end
+  return nil
+end
+
+local function spec_word(spec, label)
+  if spec.keyword and spec.keyword ~= "" then return spec.keyword end
+  return (label or ""):gsub('"', "")
+end
+
+draw_pattern_slots_popup = function(app)
   local ctx = app.ctx
-  if not r.ImGui_CollapsingHeader(ctx, "Quick layout (128 slots)##qp_section") then return end
-  r.ImGui_Indent(ctx, 6)
+  local c = Theme.colors
+  local b = app.builder
+  if not r.ImGui_BeginPopup(ctx, "##slot_pattern_popup") then return end
+
+  Theme.section(ctx, "Slots from a pattern")
+  Theme.help(ctx, "Comma-separated categories or keywords, repeated to fill the slots. Each slot gets that filter, and the pool whose alias matches the word.")
+  r.ImGui_Dummy(ctx, 420, 2)
+
+  b.slot_pattern = b.slot_pattern or ""
+  b.slot_pattern_count = b.slot_pattern_count or 16
+
+  r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 300, 40))
+  local p_changed, p_value = r.ImGui_InputTextWithHint(ctx, "##slot_pattern",
+    "e.g. Kick, Snare, Hihat, Clap", b.slot_pattern)
+  if p_changed then b.slot_pattern = p_value end
+  r.ImGui_SameLine(ctx)
+  if Theme.ghost_button(ctx, "+##slot_pattern_add", 26) then
+    r.ImGui_OpenPopup(ctx, "##slot_pattern_cats")
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Append a category") end
+  if r.ImGui_BeginPopup(ctx, "##slot_pattern_cats") then
+    for _, cat in ipairs(Categories.list) do
+      if r.ImGui_Selectable(ctx, cat.label .. "##sp_add_" .. cat.id) then
+        b.slot_pattern = b.slot_pattern == "" and cat.label or (b.slot_pattern .. ", " .. cat.label)
+      end
+    end
+    r.ImGui_EndPopup(ctx)
+  end
+
+  -- The same list Explosion offers, and the same store: a pattern saved on
+  -- either page shows up on the other.
+  r.ImGui_SameLine(ctx)
+  local from_preset = PatternPresets.button(ctx, "slots", b.slot_pattern, b)
+  if from_preset then b.slot_pattern = from_preset end
+
+  r.ImGui_SetNextItemWidth(ctx, 180)
+  local n_changed, n_value = r.ImGui_SliderInt(ctx, "Slots##slot_pattern_count", b.slot_pattern_count, 1, 128, "%d")
+  if n_changed then b.slot_pattern_count = n_value end
+
+  pool_picker(app, "Pool when nothing matches##slot_pattern_pool", "slot_pattern_pool")
+
+  -- Which pool each word resolved to, before anything is created.
+  local specs, labels = Categories.parse_pattern(b.slot_pattern)
+  local unmatched = 0
+  if #labels > 0 then
+    r.ImGui_Dummy(ctx, 0, 2)
+    local pushed = Theme.push_small(ctx)
+    for i = 1, #labels do
+      local id = pool_for_word(app, spec_word(specs[i], labels[i])) or b.slot_pattern_pool
+      local pool = id and app.pools[id]
+      if not pool then unmatched = unmatched + 1 end
+      r.ImGui_TextColored(ctx, pool and c.success or c.warning, string.format(
+        "%s  \226\134\146  %s", labels[i], pool and (pool.alias or "pool") or "no pool"))
+    end
+    Theme.pop_font(ctx, pushed)
+  end
+
+  local existing = #(app.kitdef.slots or {})
+  if existing > 0 then
+    r.ImGui_TextColored(ctx, c.warning,
+      string.format("Replaces the %d slot%s you have now.", existing, existing == 1 and "" or "s"))
+  end
+
+  r.ImGui_BeginDisabled(ctx, #specs == 0)
+  if Theme.primary_button(ctx, "Create slots##slot_pattern_go", 150, 0) then
+    local slots = {}
+    for i = 1, b.slot_pattern_count do
+      local idx = ((i - 1) % #specs) + 1
+      local spec = specs[idx]
+      local slot = {
+        number = i,
+        pool_id = pool_for_word(app, spec_word(spec, labels[idx])) or b.slot_pattern_pool,
+        midi_note = math.min(127, 35 + i),
+        pad = i,
+        lock_file = nil,
+      }
+      if spec.category then slot.category = spec.category else slot.keyword = spec.keyword end
+      -- Same field the filter cell sets by hand: core/naming.lua puts it in the
+      -- exported filename, so generated slots name their files like the rest.
+      slot.type_label = Categories.spec_label(spec)
+      slots[i] = slot
+    end
+    app.kitdef.slots = slots
+    r.ImGui_CloseCurrentPopup(ctx)
+  end
+  r.ImGui_EndDisabled(ctx)
+  if unmatched > 0 and r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Slots with no pool are created anyway; link them in the table.")
+  end
+
+  r.ImGui_EndPopup(ctx)
+end
+
+draw_quick_layout_popup = function(app)
+  local ctx = app.ctx
+  local c = Theme.colors
+  if not r.ImGui_BeginPopup(ctx, "##qp_popup") then return end
+
+  Theme.section(ctx, "Quick layout (128 slots)")
   Theme.help(ctx, "White keys alternate between pool A/B, all black keys go to one pool (e.g. Kick/Snare/Hi-hat).")
+  r.ImGui_Dummy(ctx, 320, 2)
 
   pool_picker(app, "White keys A (e.g. Kick)##qp_a", "quick_white_a")
   pool_picker(app, "White keys B (e.g. Snare)##qp_b", "quick_white_b")
   pool_picker(app, "Black keys (e.g. Hi-hat)##qp_black", "quick_black")
 
+  local existing = #(app.kitdef.slots or {})
+  if existing > 0 then
+    r.ImGui_TextColored(ctx, c.warning,
+      string.format("Replaces the %d slot%s you have now.", existing, existing == 1 and "" or "s"))
+  end
+
   local can_generate = app.builder.quick_white_a and app.builder.quick_white_b and app.builder.quick_black
   r.ImGui_BeginDisabled(ctx, not can_generate)
-  if r.ImGui_Button(ctx, "Generate 128-slot layout##qp_generate") then
+  if Theme.primary_button(ctx, "Generate 128 slots##qp_generate", 180, 0) then
     local layout = Engine.quick_preview_kitdef(
       app.builder.quick_white_a, app.builder.quick_white_b, app.builder.quick_black,
       { destination = app.kitdef.export.destination, naming = app.kitdef.naming, export = app.kitdef.export }
     )
     app.kitdef.slots = layout.slots
+    r.ImGui_CloseCurrentPopup(ctx)
   end
   r.ImGui_EndDisabled(ctx)
-  r.ImGui_Unindent(ctx, 6)
+  r.ImGui_EndPopup(ctx)
 end
 
-local function draw_presets(app)
+-- Saving and loading is a file operation, not a step in building a kit, so it
+-- sits in a bar above the steps rather than interrupting them halfway down.
+local function draw_presets_body(app)
   local ctx = app.ctx
   local c = Theme.colors
-  if not r.ImGui_CollapsingHeader(ctx, "Presets##presets_section") then return end
-  r.ImGui_Indent(ctx, 6)
 
   r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 90))
   local name_changed, name_value = r.ImGui_InputText(ctx, "##preset_name", app.builder.preset_name)
@@ -536,7 +839,37 @@ local function draw_presets(app)
     r.ImGui_PopStyleColor(ctx)
     r.ImGui_PopID(ctx)
   end
-  r.ImGui_Unindent(ctx, 6)
+end
+
+local function draw_preset_bar(app)
+  local ctx = app.ctx
+  local c = Theme.colors
+
+  if Theme.ghost_button(ctx, "Presets\226\128\166##builder_presets", 88, 0) then
+    r.ImGui_OpenPopup(ctx, "##builder_presets_popup")
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Save, load, update and delete pool + slot presets.")
+  end
+
+  r.ImGui_SameLine(ctx)
+  r.ImGui_AlignTextToFramePadding(ctx)
+  local pushed = Theme.push_small(ctx)
+  r.ImGui_TextColored(ctx, c.text_dim, app.builder.loaded_preset
+    and ("Preset: " .. app.builder.loaded_preset)
+    or "Unsaved kit")
+  Theme.pop_font(ctx, pushed)
+
+  if r.ImGui_BeginPopup(ctx, "##builder_presets_popup") then
+    Theme.section(ctx, "Presets")
+    r.ImGui_Dummy(ctx, 360, 2)
+    draw_presets_body(app)
+    r.ImGui_EndPopup(ctx)
+  end
+
+  r.ImGui_Dummy(ctx, 0, 4)
+  r.ImGui_Separator(ctx)
+  r.ImGui_Dummy(ctx, 0, 4)
 end
 
 local function draw_empty_state(app)
@@ -577,13 +910,18 @@ function M.draw(app)
   end
 
   local ctx = app.ctx
+  draw_preset_bar(app)
   draw_pools(app)
-  r.ImGui_Dummy(ctx, 0, 2)
+
+  r.ImGui_Dummy(ctx, 0, 4)
+  r.ImGui_Separator(ctx)
+  r.ImGui_Dummy(ctx, 0, 4)
+
   draw_slots(app)
-  r.ImGui_Dummy(ctx, 0, 2)
-  draw_quick_preview(app)
-  r.ImGui_Dummy(ctx, 0, 2)
-  draw_presets(app)
+
+  r.ImGui_Dummy(ctx, 0, 4)
+  r.ImGui_Separator(ctx)
+  -- Step 3 (Export) is drawn by ui/export_dialog.lua, right after this.
 end
 
 return M

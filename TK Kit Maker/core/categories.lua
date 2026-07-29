@@ -115,6 +115,53 @@ function M.match_count(files, spec)
   return n
 end
 
+local function hits_category(cat, collapsed, tokens)
+  for _, s in ipairs(cat.subs) do
+    if collapsed:find(s, 1, true) then return true end
+  end
+  for _, t in ipairs(cat.toks) do
+    if tokens[t] then return true end
+  end
+  return false
+end
+
+-- True when no category recognises the name at all. Worth being able to ask:
+-- these are the files whose naming nothing here understands, and they are
+-- exactly the ones a user would want to find and rename.
+function M.matches_none(path)
+  local haystack = haystack_of(path)
+  local collapsed = collapse(haystack)
+  local tokens = tokens_of(haystack)
+  for _, cat in ipairs(M.list) do
+    if hits_category(cat, collapsed, tokens) then return false end
+  end
+  return true
+end
+
+-- Counts every category in ONE pass over the file list: each filename is
+-- collapsed/tokenised once instead of once per category. Returns id -> count,
+-- plus how many files matched nothing at all.
+function M.count_all(files)
+  local counts = {}
+  for _, cat in ipairs(M.list) do counts[cat.id] = 0 end
+  local none = 0
+
+  for _, path in ipairs(files or {}) do
+    local haystack = haystack_of(path)
+    local collapsed = collapse(haystack)
+    local tokens = tokens_of(haystack)
+    local any = false
+    for _, cat in ipairs(M.list) do
+      if hits_category(cat, collapsed, tokens) then
+        counts[cat.id] = counts[cat.id] + 1
+        any = true
+      end
+    end
+    if not any then none = none + 1 end
+  end
+  return counts, none
+end
+
 -- Builds the spec for a slot (keyword beats category). Returns nil = no filter.
 function M.spec_for_slot(slot)
   if slot.keyword and slot.keyword ~= "" then return { keyword = slot.keyword } end

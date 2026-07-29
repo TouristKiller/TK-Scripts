@@ -42,6 +42,7 @@ function M.save(name, kitdef, pools)
       folders = pool.folders,
       recursive = pool.recursive,
       mode = pool.mode,
+      folder_bias = pool.folder_bias,
     }
   end
 

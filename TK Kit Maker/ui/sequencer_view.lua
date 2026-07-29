@@ -3,6 +3,9 @@ local Theme = require("core.theme")
 local Naming = require("core.naming")
 local json = require("core.json")
 local SeqBus = require("core.seq_bus")
+local Bias = require("core.bias")
+local Scales = require("core.scales")
+local RS5K = require("core.rs5k")
 
 local M = {}
 
@@ -413,6 +416,213 @@ local function blend_rgb(a, b, t)
   return pack_rgb(ar + (br - ar) * k, ag + (bg - ag) * k, ab + (bb - ab) * k)
 end
 
+function pitch_rand_level_of(cfg)
+  return clamp(math.floor(tonumber(cfg and cfg.pitch_rand_level) or 0), 0, 3)
+end
+
+function pitch_rand_choices(cfg, level)
+  local range = euclid_pitch_rand_range(level)
+  local down = clamp(math.floor(tonumber(cfg.pitch_rand_down) or range), 0, 24)
+  local up = clamp(math.floor(tonumber(cfg.pitch_rand_up) or range), 0, 24)
+  local offsets = Scales.offsets(cfg.pitch_scale, down, up)
+  if #offsets < 2 then return offsets, nil end
+  local focus = clamp(tonumber(cfg.pitch_bias_focus) or 0, 0, 1)
+  if focus <= 0 then return offsets, nil end
+  local center = Bias.center_from_anchor(Scales.root_index(offsets), #offsets, tonumber(cfg.pitch_bias) or 0)
+  return offsets, Bias.weights(#offsets, center, focus)
+end
+
+function pitch_rand_apply(cfg, lane, step, base, level)
+  level = level or pitch_rand_level_of(cfg)
+  if level <= 0 then return base end
+  local offsets, weights = pitch_rand_choices(cfg, level)
+  local n = #offsets
+  if n < 2 then return base end
+  local seed = math.max(0, math.floor(tonumber(cfg.pitch_rand_seed) or 0))
+  local u = (euclid_rand_unit(lane, step, 2, seed) + 1) * 0.5
+  if u >= 1 then u = 0.999999 elseif u < 0 then u = 0 end
+  local idx = weights and Bias.pick_weighted(weights, u) or (1 + math.floor(u * n))
+  return clamp(base + (offsets[clamp(idx, 1, n)] or 0), -24, 24)
+end
+
+function seq_step_pitch(cfg, lane, step)
+  local base = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, step, 0)) or 0), -24, 24)
+  return pitch_rand_apply(cfg, lane, step, base)
+end
+
+function pitch_rand_summary(cfg)
+  local level = pitch_rand_level_of(cfg)
+  if level <= 0 then return "Off" end
+  local range = euclid_pitch_rand_range(level)
+  local down = clamp(math.floor(tonumber(cfg.pitch_rand_down) or range), 0, 24)
+  local up = clamp(math.floor(tonumber(cfg.pitch_rand_up) or range), 0, 24)
+  local scale_id = Scales.normalize(cfg.pitch_scale)
+  if scale_id == "chromatic" then
+    return string.format("-%d/+%d", down, up)
+  end
+  return string.format("-%d/+%d %s", down, up, Scales.label(scale_id))
+end
+
+function pitch_rand_new_seed(cfg)
+  local t = (r.time_precise and r.time_precise()) or os.clock()
+  cfg.pitch_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
+end
+
+function pitch_rand_wake(cfg)
+  if pitch_rand_level_of(cfg) > 0 then return end
+  cfg.pitch_rand_level = 2
+  if (tonumber(cfg.pitch_rand_seed) or 0) <= 0 then pitch_rand_new_seed(cfg) end
+end
+
+-- Range / scale / bias controls, shared by the Euclid dice popup and the step
+-- sequencer dice popup.
+function pitch_rand_draw_options(ctx, id, cfg, level)
+  local changed = false
+  local range = euclid_pitch_rand_range(level)
+  local down = clamp(math.floor(tonumber(cfg.pitch_rand_down) or range), 0, 24)
+  local up = clamp(math.floor(tonumber(cfg.pitch_rand_up) or range), 0, 24)
+  local scale_id = Scales.normalize(cfg.pitch_scale)
+  local bias_amt = clamp(tonumber(cfg.pitch_bias) or 0, -1, 1)
+  local bias_focus = clamp(tonumber(cfg.pitch_bias_focus) or 0, 0, 1)
+
+  r.ImGui_Separator(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Range (semitones)")
+  r.ImGui_SetNextItemWidth(ctx, 170)
+  local cd, nd = r.ImGui_SliderInt(ctx, "Down##" .. id, down, 0, 24, "-%d st")
+  if cd then
+    cfg.pitch_rand_down = clamp(math.floor(nd), 0, 24)
+    if cfg.pitch_rand_down > 0 then pitch_rand_wake(cfg) end
+    changed = true
+  end
+  r.ImGui_SetNextItemWidth(ctx, 170)
+  local cu, nu = r.ImGui_SliderInt(ctx, "Up##" .. id, up, 0, 24, "+%d st")
+  if cu then
+    cfg.pitch_rand_up = clamp(math.floor(nu), 0, 24)
+    if cfg.pitch_rand_up > 0 then pitch_rand_wake(cfg) end
+    changed = true
+  end
+
+  r.ImGui_SetNextItemWidth(ctx, 170)
+  if r.ImGui_BeginCombo(ctx, "Scale##" .. id, Scales.label(scale_id)) then
+    for _, sc in ipairs(Scales.list) do
+      if r.ImGui_Selectable(ctx, sc.label .. "##" .. id .. sc.id, sc.id == scale_id) then
+        cfg.pitch_scale = sc.id
+        changed = true
+      end
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+
+  r.ImGui_Separator(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Bias")
+  r.ImGui_SetNextItemWidth(ctx, 170)
+  local cb, nb = r.ImGui_SliderDouble(ctx, "Aim##" .. id, bias_amt, -1, 1, euclid_pitch_bias_label(bias_amt))
+  if cb then
+    cfg.pitch_bias = clamp(nb, -1, 1)
+    changed = true
+  end
+  r.ImGui_SetNextItemWidth(ctx, 170)
+  local cf, nf = r.ImGui_SliderInt(ctx, "Strength##" .. id, math.floor((bias_focus * 100) + 0.5), 0, 100, "%d%%")
+  if cf then
+    cfg.pitch_bias_focus = clamp(nf / 100, 0, 1)
+    changed = true
+  end
+  if bias_focus <= 0 and r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "At 0 percent every allowed note is equally likely.")
+  end
+  return changed
+end
+
+function pitch_rand_draw_dice(ctx, id, size, cfg)
+  local level = pitch_rand_level_of(cfg)
+  local seed = math.max(0, math.floor(tonumber(cfg.pitch_rand_seed) or 0))
+  local changed = false
+
+  r.ImGui_InvisibleButton(ctx, "##" .. id, size, size)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local held = r.ImGui_IsItemActive(ctx)
+  local popup_id = "##" .. id .. "_menu"
+  if r.ImGui_IsItemClicked(ctx, 1) then
+    r.ImGui_OpenPopup(ctx, popup_id)
+  end
+  if r.ImGui_IsItemClicked(ctx, 0) then
+    pitch_rand_new_seed(cfg)
+    if level <= 0 then
+      cfg.pitch_rand_level = 2
+      level = 2
+    end
+    changed = true
+  end
+
+  local bx, by = r.ImGui_GetItemRectMin(ctx)
+  local b2x, b2y = r.ImGui_GetItemRectMax(ctx)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local bg = Theme.colors.frame_bg
+  local border = Theme.colors.border
+  if level > 0 then
+    bg = blend_rgb(Theme.colors.frame_bg, Theme.colors.accent, 0.24)
+    border = blend_rgb(Theme.colors.border, Theme.colors.accent, 0.42)
+  end
+  if held then
+    bg = blend_rgb(bg, Theme.colors.accent_hover, 0.28)
+  elseif hovered then
+    bg = blend_rgb(bg, Theme.colors.frame_hover, 0.45)
+  end
+  r.ImGui_DrawList_AddRectFilled(dl, bx, by, b2x, b2y, bg, 5)
+  r.ImGui_DrawList_AddRect(dl, bx, by, b2x, b2y, border, 5, 0, 1)
+
+  local box = b2x - bx
+  local face = ((math.abs(seed) % 6) + 1)
+  local pip_col = level > 0 and Theme.colors.accent or Theme.colors.text_dim
+  local px1, px2, px3 = bx + box * 0.28, bx + box * 0.50, bx + box * 0.72
+  local py1, py2, py3 = by + box * 0.28, by + box * 0.50, by + box * 0.72
+  local pr = math.max(1.5, box * 0.09)
+  local function pip(x, y) r.ImGui_DrawList_AddCircleFilled(dl, x, y, pr, pip_col, 12) end
+  if face == 1 or face == 3 or face == 5 then pip(px2, py2) end
+  if face >= 2 then pip(px1, py1); pip(px3, py3) end
+  if face >= 4 then pip(px3, py1); pip(px1, py3) end
+  if face == 6 then pip(px1, py2); pip(px3, py2) end
+
+  if hovered then
+    r.ImGui_SetTooltip(ctx, "Random pitch: " .. pitch_rand_summary(cfg) ..
+      "\nLeft click: reroll\nRight click: range, scale and bias")
+  end
+
+  if r.ImGui_BeginPopup(ctx, popup_id) then
+    if r.ImGui_Selectable(ctx, "Off (no random)##" .. id, level == 0) then
+      cfg.pitch_rand_level = 0
+      changed = true
+    end
+    if r.ImGui_Selectable(ctx, "Light (+/-2 st)##" .. id, level == 1) then
+      cfg.pitch_rand_level = 1
+      cfg.pitch_rand_down = euclid_pitch_rand_range(1)
+      cfg.pitch_rand_up = cfg.pitch_rand_down
+      if (tonumber(cfg.pitch_rand_seed) or 0) <= 0 then pitch_rand_new_seed(cfg) end
+      changed = true
+    end
+    if r.ImGui_Selectable(ctx, "Medium (+/-6 st)##" .. id, level == 2) then
+      cfg.pitch_rand_level = 2
+      cfg.pitch_rand_down = euclid_pitch_rand_range(2)
+      cfg.pitch_rand_up = cfg.pitch_rand_down
+      if (tonumber(cfg.pitch_rand_seed) or 0) <= 0 then pitch_rand_new_seed(cfg) end
+      changed = true
+    end
+    if r.ImGui_Selectable(ctx, "Heavy (+/-12 st)##" .. id, level == 3) then
+      cfg.pitch_rand_level = 3
+      cfg.pitch_rand_down = euclid_pitch_rand_range(3)
+      cfg.pitch_rand_up = cfg.pitch_rand_down
+      if (tonumber(cfg.pitch_rand_seed) or 0) <= 0 then pitch_rand_new_seed(cfg) end
+      changed = true
+    end
+    if pitch_rand_draw_options(ctx, id, cfg, pitch_rand_level_of(cfg)) then
+      changed = true
+    end
+    r.ImGui_EndPopup(ctx)
+  end
+
+  return changed
+end
+
 local function lane_color(lane)
   local h = ((lane - 1) / GRID_SLOTS)
   local s = 0.72
@@ -495,23 +705,11 @@ local function each_child_track(parent, fn)
   end
 end
 
+-- One rule, in core/rs5k.lua. This file, the Browser and the Kit Manager each
+-- had their own, and where they disagreed the Browser stacked a second RS5K on
+-- a pad instead of replacing its sample.
 local function find_rs5k_fx(track)
-  if not track then return -1 end
-  local count = r.TrackFX_GetCount(track)
-  for i = 0, count - 1 do
-    local ok, name = r.TrackFX_GetFXName(track, i, "")
-    local lower_name = ok and name and name:lower() or ""
-    if lower_name:find("reasamplomatic", 1, true) or lower_name:find("rs5k", 1, true) then
-      return i
-    end
-    if r.TrackFX_GetNamedConfigParm then
-      local ok_file = r.TrackFX_GetNamedConfigParm(track, i, "FILE0")
-      if ok_file then
-        return i
-      end
-    end
-  end
-  return -1
+  return RS5K.find(track)
 end
 
 local function get_rs5k_file(track, fx)
@@ -1178,6 +1376,13 @@ local function new_sequence()
       echo_rate = "1/16",
       step_mode_mask = "xxxx",
       param_mode = "velocity",
+      pitch_rand_level = 0,
+      pitch_rand_seed = 0,
+      pitch_rand_down = 6,
+      pitch_rand_up = 6,
+      pitch_scale = "chromatic",
+      pitch_bias = 0,
+      pitch_bias_focus = 0,
       step_velocity = vel_steps,
       step_gate = gate_steps,
       step_length = len_steps,
@@ -1259,6 +1464,13 @@ local function sanitize_sequence(data)
           echo_rate = normalize_lane_echo_rate(src.echo_rate),
           step_mode_mask = M.normalize_step_mode_mask(src.step_mode_mask),
           param_mode = (src.param_mode == "substeps" or src.param_mode == "gate" or src.param_mode == "length" or src.param_mode == "pitch" or src.param_mode == "pan" or src.param_mode == "volume") and src.param_mode or "velocity",
+          pitch_rand_level = clamp(math.floor(tonumber(src.pitch_rand_level) or 0), 0, 3),
+          pitch_rand_seed = math.max(0, math.floor(tonumber(src.pitch_rand_seed) or 0)),
+          pitch_rand_down = clamp(math.floor(tonumber(src.pitch_rand_down) or 6), 0, 24),
+          pitch_rand_up = clamp(math.floor(tonumber(src.pitch_rand_up) or 6), 0, 24),
+          pitch_scale = Scales.normalize(src.pitch_scale),
+          pitch_bias = clamp(tonumber(src.pitch_bias) or 0, -1, 1),
+          pitch_bias_focus = clamp(tonumber(src.pitch_bias_focus) or 0, 0, 1),
           step_velocity = {},
           step_gate = {},
           step_length = {},
@@ -1385,6 +1597,67 @@ local function save_sequence(track, seq)
   return true
 end
 
+-- The pattern pages you edit WITHOUT a preset used to live in memory only, so
+-- they were gone after a restart. They are kept in their own track key beside
+-- the sequence rather than inside it: save_sequence runs its payload through
+-- sanitize_sequence, which drops anything it does not recognise, and widening
+-- the sequence format to carry four more patterns is a far bigger change than
+-- this is worth.
+-- Gathered in one table rather than three top-level locals on purpose: this
+-- chunk sits close to Lua's limit of 200 locals per function, and three more
+-- tips it over.
+local scratch = { KEY = "P_EXT:TK_KIT_MAKER_SEQ_SCRATCH" }
+
+-- Which page was on screen is stored alongside them. Without it the page you
+-- were editing comes back as page 1: it is the only one NOT in the bucket --
+-- it lives in `seq` and goes to the track as the sequence itself -- so on
+-- reload it lands under whatever slot happens to be current.
+function scratch.save(track, state, guid)
+  if not track or not guid then return end
+  local by_guid = state.working_patterns_by_guid and state.working_patterns_by_guid[guid]
+  local bucket = by_guid and by_guid[0]
+
+  local pages = {}
+  for slot = 1, PATTERN_SLOTS do
+    -- false rather than nil: a hole in a Lua array does not survive JSON.
+    pages[slot] = (bucket and type(bucket[slot]) == "table") and bucket[slot] or false
+  end
+
+  local current = clamp(math.floor(tonumber(
+    state.pattern_slot_by_guid and state.pattern_slot_by_guid[guid] or 1) or 1), 1, PATTERN_SLOTS)
+
+  local ok, encoded = pcall(json.encode, { pages = pages, current = current })
+  if ok and encoded then
+    r.GetSetMediaTrackInfo_String(track, scratch.KEY, encoded, true)
+  end
+end
+
+-- `live` is a snapshot of the sequence just read off the track, which IS the
+-- page that was on screen. Returns the slot to go back to, or nil when this
+-- track has no scratch pages.
+function scratch.load(track, state, guid, live)
+  if not track or not guid then return nil end
+  local ok, raw = r.GetSetMediaTrackInfo_String(track, scratch.KEY, "", false)
+  if not ok or not raw or raw == "" then return nil end
+  local decoded_ok, decoded = pcall(json.decode, raw)
+  if not decoded_ok or type(decoded) ~= "table" or type(decoded.pages) ~= "table" then return nil end
+
+  local current = clamp(math.floor(tonumber(decoded.current) or 1), 1, PATTERN_SLOTS)
+
+  local bucket = {}
+  for slot = 1, PATTERN_SLOTS do
+    local page = decoded.pages[slot]
+    if type(page) == "table" then bucket[slot] = sanitize_sequence(page) end
+  end
+  -- Put the live page back where it belongs before anything reads the bucket.
+  if live then bucket[current] = live end
+
+  state.working_patterns_by_guid = state.working_patterns_by_guid or {}
+  state.working_patterns_by_guid[guid] = state.working_patterns_by_guid[guid] or {}
+  state.working_patterns_by_guid[guid][0] = bucket
+  return current
+end
+
 local function sequence_snapshot(seq)
   local clean = sanitize_sequence({
     steps = seq.steps,
@@ -1502,6 +1775,11 @@ local resolve_pattern_slot_for_save
 local function save_pattern_to_library(patterns, selected_idx, seq, as_new, slot_idx, state, guid)
   local lib = normalize_global_patterns(patterns)
   local idx = math.floor(tonumber(selected_idx) or 0)
+  -- Where the edited pages actually live, which is NOT where they are about to
+  -- be written: saving as new (or saving the first preset) moves idx to a fresh
+  -- entry below, and looking the pages up under that new number finds an empty
+  -- slot and silently stores blanks over pages 2-4.
+  local source_idx = idx
   local current_slot = clamp(math.floor(tonumber(slot_idx) or 1), 1, PATTERN_SLOTS)
   if as_new or idx < 1 or idx > #lib then
     idx = next_preset_number(lib)
@@ -1517,7 +1795,7 @@ local function save_pattern_to_library(patterns, selected_idx, seq, as_new, slot
   local shared_auto = seq.lane_auto_name_enabled == true
   local shared_repeat = seq.repeat_enabled ~= false
   for slot = 1, PATTERN_SLOTS do
-    local slot_seq = resolve_pattern_slot_for_save(state, guid, lib, idx, slot, current_slot, seq)
+    local slot_seq = resolve_pattern_slot_for_save(state, guid, lib, source_idx, slot, current_slot, seq)
     local snap = sequence_snapshot(slot_seq)
     snap.song_slots = clone_table(shared_song)
     snap.lane_auto_name_enabled = shared_auto
@@ -1525,6 +1803,19 @@ local function save_pattern_to_library(patterns, selected_idx, seq, as_new, slot
     lib[idx].patterns[slot] = snap
   end
   return lib, idx
+end
+
+-- Copies a snapshot into the live sequence. Shared by every load path so they
+-- cannot drift apart.
+local function apply_sequence_snapshot(seq, src)
+  local clean = sanitize_sequence(src)
+  seq.steps = clean.steps
+  seq.host_transport = clean.host_transport == true
+  seq.repeat_enabled = clean.repeat_enabled ~= false
+  seq.lane_auto_name_enabled = clean.lane_auto_name_enabled == true
+  seq.pattern = clone_table(clean.pattern)
+  seq.lane_settings = clone_table(clean.lane_settings)
+  seq.song_slots = clone_table(clean.song_slots)
 end
 
 local function load_pattern_from_library(patterns, selected_idx, seq, slot_idx)
@@ -1536,20 +1827,21 @@ local function load_pattern_from_library(patterns, selected_idx, seq, slot_idx)
   local slot = clamp(math.floor(tonumber(slot_idx) or 1), 1, PATTERN_SLOTS)
   local src = type(item.patterns) == "table" and item.patterns[slot] or nil
   if type(src) ~= "table" then src = blank_pattern_snapshot() end
-  local clean = sanitize_sequence(src)
-  seq.steps = clean.steps
-  seq.host_transport = clean.host_transport == true
-  seq.repeat_enabled = clean.repeat_enabled ~= false
-  seq.lane_auto_name_enabled = clean.lane_auto_name_enabled == true
-  seq.pattern = clone_table(clean.pattern)
-  seq.lane_settings = clone_table(clean.lane_settings)
-  seq.song_slots = clone_table(clean.song_slots)
+  apply_sequence_snapshot(seq, src)
   return true
 end
 
+-- Index 0 is a real bucket, not "nowhere": it is the scratch space used while
+-- no preset is selected. Without it the four pattern pages have no storage at
+-- all until the user happens to save a preset, and every page ends up editing
+-- the same live sequence.
 local function stash_working_pattern(state, guid, selected_idx, slot_idx, seq)
   local idx = math.floor(tonumber(selected_idx) or 0)
-  if idx < 1 then return end
+  if idx < 0 then return end
+  -- Bucket 0 is the only one that is not already held in a preset, so it is the
+  -- only one worth writing to the track. Flagged rather than written here: this
+  -- runs from a dozen places and none of them has the track to hand.
+  if idx == 0 then state.scratch_dirty_guid = guid end
   local slot = clamp(math.floor(tonumber(slot_idx) or 1), 1, PATTERN_SLOTS)
   state.working_patterns_by_guid = state.working_patterns_by_guid or {}
   state.working_patterns_by_guid[guid] = state.working_patterns_by_guid[guid] or {}
@@ -1559,20 +1851,13 @@ end
 
 local function load_working_pattern(state, guid, selected_idx, seq, slot_idx)
   local idx = math.floor(tonumber(selected_idx) or 0)
-  if idx < 1 then return false end
+  if idx < 0 then return false end
   local slot = clamp(math.floor(tonumber(slot_idx) or 1), 1, PATTERN_SLOTS)
   local by_guid = state.working_patterns_by_guid and state.working_patterns_by_guid[guid]
   local by_idx = by_guid and by_guid[idx]
   local snap = by_idx and by_idx[slot]
   if type(snap) ~= "table" then return false end
-  local clean = sanitize_sequence(snap)
-  seq.steps = clean.steps
-  seq.host_transport = clean.host_transport == true
-  seq.repeat_enabled = clean.repeat_enabled ~= false
-  seq.lane_auto_name_enabled = clean.lane_auto_name_enabled == true
-  seq.pattern = clone_table(clean.pattern)
-  seq.lane_settings = clone_table(clean.lane_settings)
-  seq.song_slots = clone_table(clean.song_slots)
+  apply_sequence_snapshot(seq, snap)
   return true
 end
 
@@ -1604,6 +1889,14 @@ local function load_pattern_for_editing(state, guid, patterns, selected_idx, seq
     ok = true
   else
     ok = load_pattern_from_library(patterns, selected_idx, seq, slot_idx)
+    -- With no preset selected there is no library entry to fall back on, so a
+    -- page that has never been edited has to come up empty. Without this the
+    -- previous page's contents simply stay on screen, which is what made all
+    -- four pages look -- and behave -- like a single pattern.
+    if not ok and math.floor(tonumber(selected_idx) or 0) < 1 then
+      apply_sequence_snapshot(seq, blank_pattern_snapshot())
+      ok = true
+    end
   end
   seq.song_slots = shared_song
   seq.lane_auto_name_enabled = shared_auto
@@ -2175,6 +2468,12 @@ local function restart_playback_synced(state, guid)
   end
 end
 
+function refresh_playback_params(state, guid)
+  if not state or not state.playing then return end
+  if guid and state.current_guid ~= guid then return end
+  state.lane_applied_step = {}
+end
+
 local function playback_elapsed(state)
   local now = r.time_precise and r.time_precise() or os.clock()
   local start_at = state and ((state.song_mode and state.song_page_started_at) or state.started_at) or now
@@ -2208,7 +2507,7 @@ end
 local function trigger_step_preview(state, lane, lane_step, lane_cfg, lane_track, lane_fx, rs5k_note_off, total_steps)
   if not r.StuffMIDIMessage then return end
   local base_note = BASE_NOTE + (lane - 1)
-  local step_pitch = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_pitch, lane_step, 0)) or 0), -24, 24)
+  local step_pitch = seq_step_pitch(lane_cfg, lane, lane_step)
   local step_pan = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_pan, lane_step, 0)) or 0), -100, 100)
   local step_volume = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_volume, lane_step, 0)) or 0), -24, 24)
     local step_attack = clamp(math.floor(tonumber(table_step_value(lane_cfg.step_attack, lane_step, 0)) or 0), 0, 2000)
@@ -2299,7 +2598,7 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
       local step_mode_ok = M.step_mode_mask_allows(cfg.step_mode_mask, cycle_index)
       if (not muted) and step_mode_ok and seq.pattern[lane] and seq.pattern[lane][lane_step] == 1 then
         local base_note = BASE_NOTE + (lane - 1)
-        local step_pitch = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, lane_step, 0)) or 0), -24, 24)
+        local step_pitch = seq_step_pitch(cfg, lane, lane_step)
         local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, lane_step, 0)) or 0), -100, 100)
         local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, lane_step, 0)) or 0), -24, 24)
         local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, lane_step, 0)) or 0), 0, 2000)
@@ -2441,7 +2740,7 @@ local function has_rs5k_step_modulation(seq, lane_tracks, total_steps)
         local pattern_lane = seq.pattern and seq.pattern[lane] or nil
         for step = 1, total_steps do
           if pattern_lane and pattern_lane[step] == 1 then
-            local step_pitch = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, step, 0)) or 0), -24, 24)
+            local step_pitch = seq_step_pitch(cfg, lane, step)
             local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, step, 0)) or 0), -100, 100)
             local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, step, 0)) or 0), -24, 24)
             local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, step, 0)) or 0), 0, 2000)
@@ -2520,7 +2819,7 @@ local function engine_sync(state, seq, parent, solo_map, any_solo, total_steps, 
           local apply_step = state.lane_applied_step_init and state.lane_applied_step_init[lane] and (((cur % cycle_steps) + 1)) or cur
           state.lane_applied_step_init = state.lane_applied_step_init or {}
           state.lane_applied_step_init[lane] = true
-          local step_pitch = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, apply_step, 0)) or 0), -24, 24)
+          local step_pitch = seq_step_pitch(cfg, lane, apply_step)
           local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, apply_step, 0)) or 0), -100, 100)
           local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, apply_step, 0)) or 0), -24, 6)
           local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, apply_step, 0)) or 0), 0, 2000)
@@ -2766,7 +3065,7 @@ local function export_sequence_to_midi(track, seq, opts)
         if chance_ok then
           local sub_period_steps = lane_period_steps / step_substeps
           local gate_steps = step_substeps > 1 and (sub_period_steps * (step_gate / 100)) or (step_len * (step_gate / 100))
-          local pitch_offset = clamp(math.floor(tonumber(table_step_value(cfg.step_pitch, lane_step, 0)) or 0), -24, 24)
+          local pitch_offset = seq_step_pitch(cfg, lane, lane_step)
           if gate_steps <= 0 then
             gate_steps = math.min(1, sub_period_steps)
           end
@@ -3093,7 +3392,7 @@ local function export_sequence_to_midi(track, seq, opts)
   return true, inserted
 end
 
-local function transport_icon_button(ctx, id, kind, w, h, active)
+function transport_icon_button(ctx, id, kind, w, h, active)
   local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, w, h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local held = r.ImGui_IsItemActive(ctx)
@@ -3152,7 +3451,7 @@ local function transport_icon_button(ctx, id, kind, w, h, active)
   return clicked
 end
 
-local function transport_text_button(ctx, id, text, w, h)
+function transport_text_button(ctx, id, text, w, h)
   local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, w, h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local held = r.ImGui_IsItemActive(ctx)
@@ -3181,7 +3480,7 @@ local function transport_text_button(ctx, id, text, w, h)
   return clicked
 end
 
-local function lane_toggle_button(ctx, id, text, w, h, active)
+function lane_toggle_button(ctx, id, text, w, h, active)
   local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, w, h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local held = r.ImGui_IsItemActive(ctx)
@@ -3210,7 +3509,7 @@ local function lane_toggle_button(ctx, id, text, w, h, active)
   return clicked
 end
 
-local function lane_direction_button(ctx, id, direction, w, h)
+function lane_direction_button(ctx, id, direction, w, h)
   local clicked = r.ImGui_InvisibleButton(ctx, "##" .. id, w, h)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local held = r.ImGui_IsItemActive(ctx)
@@ -3266,14 +3565,14 @@ local function lane_direction_button(ctx, id, direction, w, h)
   return clicked
 end
 
-local function toggle_lane_solo(solo_map, lane)
+function toggle_lane_solo(solo_map, lane)
   if type(solo_map) ~= "table" then return false end
   local next_value = not (solo_map[lane] == true)
   solo_map[lane] = next_value or nil
   return true
 end
 
-local function solo_map_has_active_lane(solo_map)
+function solo_map_has_active_lane(solo_map)
   if type(solo_map) ~= "table" then return false end
   for _, v in pairs(solo_map) do
     if v == true then
@@ -3361,9 +3660,26 @@ local function draw_step(app)
   if state.step_cache_guid ~= guid then
     state.step_cache_guid = guid
     state.step_cache[guid] = load_sequence(parent)
+    local slot = scratch.load(parent, state, guid, sequence_snapshot(state.step_cache[guid]))
+    if slot then
+      state.pattern_slot_by_guid = state.pattern_slot_by_guid or {}
+      state.pattern_slot_by_guid[guid] = slot
+    end
     if state.playing and state.current_guid ~= guid then
       stop_playback(state, parent)
     end
+  end
+
+  -- Written a frame after the change rather than at every stash site: the page
+  -- is already safe in memory by then, and this way one place covers all of
+  -- them instead of a dozen easily-missed hooks. The page you are ON counts as
+  -- a change too, or closing on page 4 would come back as page 1.
+  state.scratch_slot_seen = state.scratch_slot_seen or {}
+  local slot_now = state.pattern_slot_by_guid and state.pattern_slot_by_guid[guid]
+  if state.scratch_dirty_guid == guid or state.scratch_slot_seen[guid] ~= slot_now then
+    state.scratch_dirty_guid = nil
+    state.scratch_slot_seen[guid] = slot_now
+    scratch.save(parent, state, guid)
   end
 
   state.velocity_ready_by_guid = state.velocity_ready_by_guid or {}
@@ -3677,7 +3993,7 @@ local function draw_step(app)
       save_sequence(parent, seq)
       if state.playing then
         stop_notes(state)
-        restart_playback_synced(state, guid)
+        refresh_playback_params(state, guid)
       end
     end
     if r.ImGui_IsItemHovered(ctx) then
@@ -4004,7 +4320,7 @@ local function draw_step(app)
               lane_cfg.step_mode_mask = mask
               save_sequence(parent, seq)
               if state.playing then
-                restart_playback_synced(state, guid)
+                refresh_playback_params(state, guid)
               end
             end
             if lane_cfg.step_mode_mask == mask then
@@ -4017,6 +4333,15 @@ local function draw_step(app)
         if r.ImGui_IsItemHovered(ctx) then
           r.ImGui_SetTooltip(ctx, "Step Mode mask per loop: x = trigger, . = skip")
         end
+
+        r.ImGui_SetCursorPosX(ctx, row_x)
+        r.ImGui_SetCursorPosY(ctx, param_y + top_pad + 62)
+        if pitch_rand_draw_dice(ctx, "tk_seq_lane_pitch_dice_" .. tostring(lane), 26, lane_cfg) then
+          save_sequence(parent, seq)
+        end
+        r.ImGui_SameLine(ctx, 0, 6)
+        r.ImGui_SetCursorPosY(ctx, param_y + top_pad + 67)
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "PitRnd")
 
         r.ImGui_SetCursorPosX(ctx, row_x + label_w)
         r.ImGui_SetCursorPosY(ctx, param_y + top_pad)
@@ -4196,7 +4521,7 @@ local function draw_step(app)
           ensure_lane_step_params(lane_cfg, total_steps, DEFAULT_STEP_VELOCITY)
           save_sequence(parent, seq)
           if state.playing then
-            restart_playback_synced(state, guid)
+            refresh_playback_params(state, guid)
           end
         end
         if r.ImGui_IsItemHovered(ctx) then
@@ -4210,7 +4535,7 @@ local function draw_step(app)
           ensure_lane_step_params(lane_cfg, total_steps, DEFAULT_STEP_VELOCITY)
           save_sequence(parent, seq)
           if state.playing then
-            restart_playback_synced(state, guid)
+            refresh_playback_params(state, guid)
           end
         end
         if r.ImGui_IsItemHovered(ctx) then
@@ -4230,7 +4555,7 @@ local function draw_step(app)
           lane_cfg.echo_enabled = not echo_enabled
           save_sequence(parent, seq)
           if state.playing then
-            restart_playback_synced(state, guid)
+            refresh_playback_params(state, guid)
           end
         end
         if r.ImGui_IsItemHovered(ctx) then
@@ -4253,7 +4578,7 @@ local function draw_step(app)
               lane_cfg.echo_count = n
               save_sequence(parent, seq)
               if state.playing then
-                restart_playback_synced(state, guid)
+                refresh_playback_params(state, guid)
               end
             end
             if selected then
@@ -4276,7 +4601,7 @@ local function draw_step(app)
               lane_cfg.echo_vel_mode = item.value
               save_sequence(parent, seq)
               if state.playing then
-                restart_playback_synced(state, guid)
+                refresh_playback_params(state, guid)
               end
             end
             if selected then
@@ -4299,7 +4624,7 @@ local function draw_step(app)
               lane_cfg.echo_rate = item
               save_sequence(parent, seq)
               if state.playing then
-                restart_playback_synced(state, guid)
+                refresh_playback_params(state, guid)
               end
             end
             if selected then
@@ -4322,7 +4647,7 @@ local function draw_step(app)
               lane_cfg.echo_vel_step = item
               save_sequence(parent, seq)
               if state.playing then
-                restart_playback_synced(state, guid)
+                refresh_playback_params(state, guid)
               end
             end
             if selected then
@@ -4876,6 +5201,15 @@ function euclid_volume_rand_range(level)
   return 6
 end
 
+function euclid_pitch_bias_label(amount)
+  local a = tonumber(amount) or 0
+  if a <= -0.66 then return "Lowest notes" end
+  if a < -0.15 then return "Lean low" end
+  if a <= 0.15 then return "Around root" end
+  if a < 0.66 then return "Lean high" end
+  return "Highest notes"
+end
+
 function euclid_rand_unit(lane, step, salt, seed)
   local seed_term = (tonumber(seed) or 0) * 0.001
   local x = math.sin((lane * 12.9898) + (step * 78.233) + (salt * 37.719) + seed_term) * 43758.5453
@@ -4934,6 +5268,11 @@ function euclid_new()
       pitch_human = 0,
       pitch_rand_level = 0,
       pitch_rand_seed = euclid_default_seed(),
+      pitch_rand_down = 6,
+      pitch_rand_up = 6,
+      pitch_scale = "chromatic",
+      pitch_bias = 0,
+      pitch_bias_focus = 0,
       volume_human = 0,
       volume_rand_level = 0,
       volume_rand_seed = euclid_default_seed(),
@@ -4975,6 +5314,11 @@ function euclid_empty_lane()
     pitch_human = 0,
     pitch_rand_level = 0,
     pitch_rand_seed = 0,
+    pitch_rand_down = 6,
+    pitch_rand_up = 6,
+    pitch_scale = "chromatic",
+    pitch_bias = 0,
+    pitch_bias_focus = 0,
     volume_human = 0,
     volume_rand_level = 0,
     volume_rand_seed = 0,
@@ -5004,6 +5348,9 @@ function euclid_sanitize(data)
       local s = data.lanes[lane]
       if type(s) == "table" then
         local steps = clamp(math.floor(tonumber(s.steps) or 16), 1, STEPS_PER_BAR)
+        local phum = tonumber(s.pitch_human) or 0
+        local prl = clamp(math.floor(tonumber(s.pitch_rand_level) or (phum <= 0 and 0 or (phum >= 9 and 3 or (phum >= 4 and 2 or 1)))), 0, 3)
+        local prange = prl > 0 and euclid_pitch_rand_range(prl) or 6
         out.lanes[lane] = {
           steps = steps,
           pulses = clamp(math.floor(tonumber(s.pulses) or 0), 0, steps),
@@ -5025,8 +5372,13 @@ function euclid_sanitize(data)
           vel_rand_level = clamp(math.floor(tonumber(s.vel_rand_level) or ((tonumber(s.vel_human) or 0) >= 26 and 3 or ((tonumber(s.vel_human) or 0) >= 10 and 2 or 1))), 0, 3),
           vel_rand_seed = math.max(0, math.floor(tonumber(s.vel_rand_seed) or euclid_default_seed())),
           pitch_human = clamp(math.floor(tonumber(s.pitch_human) or 0), 0, 12),
-          pitch_rand_level = clamp(math.floor(tonumber(s.pitch_rand_level) or ((tonumber(s.pitch_human) or 0) <= 0 and 0 or ((tonumber(s.pitch_human) or 0) >= 9 and 3 or ((tonumber(s.pitch_human) or 0) >= 4 and 2 or 1)))), 0, 3),
+          pitch_rand_level = prl,
           pitch_rand_seed = math.max(0, math.floor(tonumber(s.pitch_rand_seed) or euclid_default_seed())),
+          pitch_rand_down = clamp(math.floor(tonumber(s.pitch_rand_down) or prange), 0, 24),
+          pitch_rand_up = clamp(math.floor(tonumber(s.pitch_rand_up) or prange), 0, 24),
+          pitch_scale = Scales.normalize(s.pitch_scale),
+          pitch_bias = clamp(tonumber(s.pitch_bias) or 0, -1, 1),
+          pitch_bias_focus = clamp(tonumber(s.pitch_bias_focus) or 0, 0, 1),
           volume_human = clamp(math.floor(tonumber(s.volume_human) or 0), 0, 12),
           volume_rand_level = clamp(math.floor(tonumber(s.volume_rand_level) or ((tonumber(s.volume_human) or 0) <= 0 and 0 or ((tonumber(s.volume_human) or 0) >= 9 and 3 or ((tonumber(s.volume_human) or 0) >= 4 and 2 or 1)))), 0, 3),
           volume_rand_seed = math.max(0, math.floor(tonumber(s.volume_rand_seed) or euclid_default_seed())),
@@ -5063,6 +5415,11 @@ function euclid_init_lane_params(L)
   L.pitch_human = 0
   L.pitch_rand_level = 0
   L.pitch_rand_seed = 0
+  L.pitch_rand_down = 6
+  L.pitch_rand_up = 6
+  L.pitch_scale = "chromatic"
+  L.pitch_bias = 0
+  L.pitch_bias_focus = 0
   L.volume_human = 0
   L.volume_rand_level = 0
   L.volume_rand_seed = 0
@@ -5142,7 +5499,6 @@ function euclid_build_seq(edata)
     local vel_rand_range = euclid_vel_rand_range(vel_rand_level)
     local pitch_rand_level = clamp(math.floor(tonumber(L.pitch_rand_level) or ((tonumber(L.pitch_human) or 0) <= 0 and 0 or ((tonumber(L.pitch_human) or 0) >= 9 and 3 or ((tonumber(L.pitch_human) or 0) >= 4 and 2 or 1)))), 0, 3)
     local pitch_rand_seed = math.max(0, math.floor(tonumber(L.pitch_rand_seed) or 0))
-    local pitch_rand_range = euclid_pitch_rand_range(pitch_rand_level)
     local volume_rand_level = clamp(math.floor(tonumber(L.volume_rand_level) or ((tonumber(L.volume_human) or 0) <= 0 and 0 or ((tonumber(L.volume_human) or 0) >= 9 and 3 or ((tonumber(L.volume_human) or 0) >= 4 and 2 or 1)))), 0, 3)
     local volume_rand_seed = math.max(0, math.floor(tonumber(L.volume_rand_seed) or 0))
     local volume_rand_range = euclid_volume_rand_range(volume_rand_level)
@@ -5157,11 +5513,10 @@ function euclid_build_seq(edata)
       local step_probability = probability
       if is_on then
         local rv = euclid_rand_unit(lane, step, 1, vel_rand_seed)
-        local rp = euclid_rand_unit(lane, step, 2, pitch_rand_seed)
         local rdb = euclid_rand_unit(lane, step, 3, volume_rand_seed)
         local vel_offset = math.floor((rv * vel_rand_range) + ((rv >= 0) and 0.5 or -0.5))
         vel = clamp(velocity + vel_offset, 1, 127)
-        step_pitch = clamp(pitch + math.floor((rp * pitch_rand_range) + 0.5), -24, 24)
+        step_pitch = pitch_rand_apply(L, lane, step, pitch, pitch_rand_level)
         step_volume = clamp(volume + math.floor((rdb * volume_rand_range) + 0.5), -24, 6)
       else
         step_pan = 0
@@ -5700,7 +6055,7 @@ function draw_euclid(app)
         r.ImGui_EndGroup(ctx)
         return clicked
       end
-      function tk_euclid_draw_rand_dice(id, label, level, seed, kind, blocked)
+      function tk_euclid_draw_rand_dice(id, label, level, seed, kind, blocked, lane_data)
         r.ImGui_BeginGroup(ctx)
         local sx = r.ImGui_GetCursorPosX(ctx)
         local sy = r.ImGui_GetCursorPosY(ctx)
@@ -5772,6 +6127,7 @@ function draw_euclid(app)
         local changed_level = false
         local new_level = level
         local reset_clicked = false
+        local opts_changed = false
         if (not blocked) and r.ImGui_BeginPopup(ctx, popup_id) then
           local light_text = "Light (+/-12)"
           local medium_text = "Medium (+/-24)"
@@ -5810,6 +6166,17 @@ function draw_euclid(app)
             changed_level = true
             reset_clicked = true
           end
+          if kind == "pitch" and changed_level and not reset_clicked and type(lane_data) == "table" and new_level > 0 then
+            local preset = euclid_pitch_rand_range(new_level)
+            lane_data.pitch_rand_down = preset
+            lane_data.pitch_rand_up = preset
+            opts_changed = true
+          end
+          if kind == "pitch" and type(lane_data) == "table" then
+            if pitch_rand_draw_options(ctx, id, lane_data, level) then
+              opts_changed = true
+            end
+          end
           r.ImGui_EndPopup(ctx)
         end
 
@@ -5819,7 +6186,7 @@ function draw_euclid(app)
         r.ImGui_SetCursorPosY(ctx, label_y)
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, label)
         r.ImGui_EndGroup(ctx)
-        return left_clicked, changed_level, new_level, reset_clicked
+        return left_clicked, changed_level, new_level, reset_clicked, opts_changed
       end
 
 function draw_init_button(ctx, id, label, size, tip)
@@ -5956,13 +6323,14 @@ end
       )
       r.ImGui_SameLine(ctx, 0, knob_gap)
       if not lane_has_rs5k and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
-      local cpit_dice, cpit_dice_level, n_pit_dice_level, cpit_dice_reset = tk_euclid_draw_rand_dice(
+      local cpit_dice, cpit_dice_level, n_pit_dice_level, cpit_dice_reset, cpit_dice_opts = tk_euclid_draw_rand_dice(
         "tk_euclid_pitch_dice_" .. tostring(selected_lane),
         "PitRnd",
         pitch_rand_level,
         pitch_rand_seed,
         "pitch",
-        not lane_has_rs5k
+        not lane_has_rs5k,
+        L
       )
       r.ImGui_SameLine(ctx, 0, knob_gap)
       local cvol_dice, cvol_dice_level, n_vol_dice_level, cvol_dice_reset = tk_euclid_draw_rand_dice(
@@ -6014,10 +6382,7 @@ end
       if cinit then
         euclid_init_lane_params(L)
         euclid_save(parent, edata)
-        if state.playing then
-          stop_notes(state)
-          restart_playback_synced(state, guid)
-        end
+        refresh_playback_params(state, guid)
       end
       if hattack then
         r.ImGui_SetTooltip(ctx, "Shift + drag: faster adjustment")
@@ -6079,6 +6444,9 @@ end
         L.pitch_rand_seed = 0
         changed_any = true
       end
+      if lane_has_rs5k and cpit_dice_opts then
+        changed_any = true
+      end
       if lane_has_rs5k and cvol_dice then
         local t = (r.time_precise and r.time_precise()) or os.clock()
         L.volume_rand_seed = (math.floor((t or 0) * 1000000) + math.random(1, 1000000)) % 2147483647
@@ -6103,9 +6471,7 @@ end
 
       if changed_any then
         euclid_save(parent, edata)
-        if state.playing and state.current_guid == guid then
-          restart_playback_synced(state, guid)
-        end
+        refresh_playback_params(state, guid)
       end
 
       local divider_pad = 2
@@ -6177,9 +6543,7 @@ end
 
         if popup_changed then
           euclid_save(parent, edata)
-          if state.playing and state.current_guid == guid then
-            restart_playback_synced(state, guid)
-          end
+          refresh_playback_params(state, guid)
         end
 
         r.ImGui_Dummy(ctx, 0, 6)
@@ -6207,9 +6571,7 @@ end
 
         if popup_step_changed then
           euclid_save(parent, edata)
-          if state.playing and state.current_guid == guid then
-            restart_playback_synced(state, guid)
-          end
+          refresh_playback_params(state, guid)
         end
 
         r.ImGui_Dummy(ctx, 0, 6)
@@ -6237,7 +6599,7 @@ end
         euclid_save(parent, edata)
         if state.playing then
           stop_notes(state)
-          restart_playback_synced(state, guid)
+          refresh_playback_params(state, guid)
         end
       end
       btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
@@ -6283,10 +6645,7 @@ end
       if lane_toggle_button(ctx, "tk_euclid_lane_oneshot", "OneShot", bottom_button_w, clear_h, oneshot_enabled) then
         L.mode = oneshot_enabled and "gate" or "oneshot"
         euclid_save(parent, edata)
-        if state.playing then
-          stop_notes(state)
-          restart_playback_synced(state, guid)
-        end
+        refresh_playback_params(state, guid)
       end
       btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
       btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
@@ -6295,10 +6654,7 @@ end
       if lane_toggle_button(ctx, "tk_euclid_lane_retrig", "Retrig", bottom_button_w, clear_h, retrig_enabled) then
         L.retrigger = not retrig_enabled
         euclid_save(parent, edata)
-        if state.playing then
-          stop_notes(state)
-          restart_playback_synced(state, guid)
-        end
+        refresh_playback_params(state, guid)
       end
       btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
       btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
@@ -6309,10 +6665,7 @@ end
       if lane_toggle_button(ctx, "tk_euclid_lane_noteoff", "NoteOff", bottom_button_w, clear_h, noteoff_enabled) and noteoff_track and noteoff_fx >= 0 then
         set_rs5k_obey_note_off(noteoff_track, noteoff_fx, not noteoff_enabled)
         euclid_save(parent, edata)
-        if state.playing then
-          stop_notes(state)
-          restart_playback_synced(state, guid)
-        end
+        refresh_playback_params(state, guid)
       end
       btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
       btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
@@ -6323,7 +6676,7 @@ end
         euclid_save(parent, edata)
         if state.playing then
           stop_notes(state)
-          restart_playback_synced(state, guid)
+          refresh_playback_params(state, guid)
         end
       end
       btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))

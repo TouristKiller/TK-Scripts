@@ -3,7 +3,6 @@
 -- in binary mode -- cross-platform, no shell required.
 
 local r = reaper
-local Naming = require("core.naming")
 
 local M = {}
 
@@ -96,15 +95,24 @@ end
 
 -- results: array of { slot = Slot, pool = Pool, sample = "src/path.wav", out_name = "..." }
 
+-- REAPER's note-name file format: one "<note> <name>" line per instrument, so
+-- the file can be loaded straight into the MIDI editor (File -> Note names) and
+-- the piano roll reads Kick / Snare instead of C2 / D2. Plain enough to read as
+-- a list too, which is all it used to be.
+--
+-- The name is the slot's role where there is one -- the word from its filter or
+-- pattern -- and the exported filename where there is not. A sample that fits
+-- no category still gets a usable row rather than a blank one.
 function M.write_midilog(dest_dir, kit_name, results)
   local path = dest_dir .. "/" .. kit_name .. " - MIDI.txt"
   local f = io.open(path, "w")
   if not f then return end
-  f:write("Kit: " .. kit_name .. "\n\n")
   for _, res in ipairs(results) do
-    local note_name = Naming.note_name(res.slot.midi_note)
-    f:write(string.format("Note %-3d (%-4s) Pad %-3d -> %s\n",
-      res.slot.midi_note, note_name, res.slot.pad or res.slot.number, res.out_name))
+    local role = res.slot.type_label
+    if not role or role == "" then
+      role = (res.out_name or ""):gsub("%.[%w]+$", "")
+    end
+    f:write(string.format("%d %s\n", res.slot.midi_note, role))
   end
   f:close()
 end

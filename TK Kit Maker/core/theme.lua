@@ -227,6 +227,29 @@ function M.pop(ctx, stack)
   if stack and stack.colors and stack.colors > 0 then r.ImGui_PopStyleColor(ctx, stack.colors) end
 end
 
+-- Numbered circle in front of a section title, for pages that walk the user
+-- through a fixed order. Shared so Explosion and Builder speak the same
+-- language instead of one numbering its steps and the other not.
+function M.step_badge(ctx, n)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local size = 20
+  r.ImGui_DrawList_AddCircleFilled(dl, x + size * 0.5, y + size * 0.5 + 1, size * 0.5, M.colors.accent_soft)
+  r.ImGui_DrawList_AddCircle(dl, x + size * 0.5, y + size * 0.5 + 1, size * 0.5, M.colors.accent, 24, 1)
+  local tw = r.ImGui_CalcTextSize(ctx, n)
+  r.ImGui_DrawList_AddText(dl, x + (size - tw) * 0.5, y + 2, 0xFFFFFFFF, n)
+  r.ImGui_Dummy(ctx, size + 6, size)
+  r.ImGui_SameLine(ctx)
+  r.ImGui_AlignTextToFramePadding(ctx)
+end
+
+-- A numbered step heading: badge, title, and an optional line of help.
+function M.step(ctx, n, title, help)
+  M.step_badge(ctx, n)
+  M.section(ctx, title)
+  if help then M.help(ctx, help) end
+end
+
 function M.section(ctx, title)
   local pushed = M.push_h2(ctx)
   r.ImGui_TextColored(ctx, M.colors.text, title)
