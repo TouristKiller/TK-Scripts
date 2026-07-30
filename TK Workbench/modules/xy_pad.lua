@@ -16,6 +16,7 @@ local defaults = {
   level_law = "power", -- how a 0..1 position becomes a gain: "power" | "linear" | "db"
   level_max_db = 0, -- what a level target reaches at the top of its travel
   show_grid = true,
+  corner_names = "auto", -- the track name in the corners: "off" | "auto" | "always"
   count_in_beats = 4,
   loop = true,
   trigger_mode = "off", -- "off" | "note" | "gate" | "hold"
@@ -83,6 +84,8 @@ local function ensure_settings(app)
   state.level_law = settings.level_law
   state.level_max_db = settings.level_max_db
   settings.show_grid = settings.show_grid ~= false
+  local naming = { off = true, auto = true, always = true }
+  if not naming[settings.corner_names] then settings.corner_names = defaults.corner_names end
   settings.loop = settings.loop ~= false
   settings.trigger_retrigger = settings.trigger_retrigger ~= false
   local known = { off = true, note = true, gate = true, hold = true }
@@ -254,25 +257,75 @@ for _, law in ipairs(LEVEL_LAWS) do LEVEL_LAW_IDS[law.id] = true end
 -- Scaling is kept per slot rather than per module: four corners can hold four
 -- different kinds of target. It sits beside the assignment in the project's ext
 -- state, in its own key, so an assignment written by an older version still
--- parses and simply falls back to the module default.
+-- parses and simply falls back to the module default. Fields are appended, and
+-- trailing empty ones are dropped, so a slot that carries nothing special still
+-- writes the same short blob it always did.
 local function read_shape(axis)
-  if not r.GetProjExtState then return nil, nil end
+  if not r.GetProjExtState then return nil end
   local _, blob = r.GetProjExtState(0, EXT_SECTION, axis .. "_shape")
-  if not blob or blob == "" then return nil, nil end
-  local law, curve = blob:match("^([^|]*)|?([^|]*)$")
-  if not LEVEL_LAW_IDS[law] then law = nil end
-  if not CURVE_EXP[curve] then curve = nil end
-  return law, curve
+  if not blob or blob == "" then return nil end
+  local fields = {}
+  for field in (blob .. "|"):gmatch("([^|]*)|") do fields[#fields + 1] = field end
+  local shape = {}
+  if LEVEL_LAW_IDS[fields[1]] then shape.law = fields[1] end
+  if CURVE_EXP[fields[2]] then shape.curve = fields[2] end
+  shape.invert = fields[3] == "1"
+  shape.range_min = tonumber(fields[4])
+  shape.range_max = tonumber(fields[5])
+  return shape
 end
 
-local function write_shape(axis, law, curve)
+local function entry_range(entry)
+  local lo = clamp(tonumber(entry and entry.range_min) or 0, 0, 1)
+  local hi = clamp(tonumber(entry and entry.range_max) or 1, 0, 1)
+  return lo, hi
+end
+
+local function write_shape(axis, shape)
   if not r.SetProjExtState then return end
-  local blob = (law or "") .. "|" .. (curve or "")
-  r.SetProjExtState(0, EXT_SECTION, axis .. "_shape", blob == "|" and "" or blob)
+  local blob = ""
+  if shape then
+    local lo, hi = entry_range(shape)
+    local fields = {
+      shape.law or "",
+      shape.curve or "",
+      shape.invert and "1" or "",
+      lo > 0.0005 and string.format("%.4f", lo) or "",
+      hi < 0.9995 and string.format("%.4f", hi) or "",
+    }
+    while #fields > 0 and fields[#fields] == "" do table.remove(fields) end
+    blob = table.concat(fields, "|")
+  end
+  r.SetProjExtState(0, EXT_SECTION, axis .. "_shape", blob)
 end
 
 local function entry_law(entry)
   return (entry and entry.law) or level_law()
+end
+
+local function entry_shaped(entry)
+  local lo, hi = entry_range(entry)
+  return (entry and entry.invert) or lo > 0.0005 or hi < 0.9995
+end
+
+-- Invert and the min/max range sit between the pad and whatever the target does
+-- with the value, so they work the same for an FX parameter, a volume, a pan or
+-- a send - and identically to the rack's macro mappings, where the inversion
+-- also comes after the curve rather than before it.
+local function shape_out(entry, unit)
+  unit = clamp(unit, 0, 1)
+  if entry and entry.invert then unit = 1 - unit end
+  local lo, hi = entry_range(entry)
+  return lo + (hi - lo) * unit
+end
+
+local function shape_in(entry, value)
+  value = clamp(value, 0, 1)
+  local lo, hi = entry_range(entry)
+  local span = hi - lo
+  local unit = span > 0.0001 and clamp((value - lo) / span, 0, 1) or 0
+  if entry and entry.invert then unit = 1 - unit end
+  return unit
 end
 
 local function curve_exponent(entry)
@@ -369,12 +422,26 @@ local function axes(force)
     local entry = read_axis(axis)
     if entry then
       entry.axis = axis
-      entry.law, entry.curve = read_shape(axis)
+      local shape = read_shape(axis)
+      if shape then
+        entry.law, entry.curve = shape.law, shape.curve
+        entry.invert, entry.range_min, entry.range_max = shape.invert, shape.range_min, shape.range_max
+      end
     end
     state.axes[axis] = entry
   end
   state.read_at = now
   return state.axes
+end
+
+-- A slot that gets a new target keeps its scaling and its curve, which are a
+-- preference for the slot, but not the invert and the range: those belonged to
+-- the parameter that has just been replaced.
+local function reset_travel(axis)
+  local shape = read_shape(axis)
+  if not shape then return end
+  shape.invert, shape.range_min, shape.range_max = nil, nil, nil
+  write_shape(axis, shape)
 end
 
 local function assign(app, axis)
@@ -403,6 +470,7 @@ local function assign(app, axis)
     return
   end
   r.SetProjExtState(0, EXT_SECTION, axis, string.format("%s|%d|%d", guid, fx_idx, param))
+  reset_travel(axis)
   axes(true)
   local entry = state.axes[axis]
   app.status = "XY Pad: " .. axis:upper() .. " = " ..
@@ -423,6 +491,7 @@ local function assign_track_target(app, axis, kind, index)
   local blob = guid .. "|" .. kind
   if kind == "send" then blob = blob .. "|" .. index end
   r.SetProjExtState(0, EXT_SECTION, axis, blob)
+  reset_travel(axis)
   axes(true)
   local entry = state.axes[axis]
   app.status = "XY Pad: " .. axis:upper() .. " = " ..
@@ -446,11 +515,13 @@ local function assign_send_morph(app, settings, track)
     local send = index - 1
     if send < sends then
       r.SetProjExtState(0, EXT_SECTION, slot.key, guid .. "|send|" .. send)
+      reset_travel(slot.key)
       placed = placed + 1
     else
       -- Fewer than four sends: the spare corners are emptied rather than left
       -- pointing at whatever was there before.
       r.SetProjExtState(0, EXT_SECTION, slot.key, "")
+      write_shape(slot.key, nil)
     end
   end
   settings.pad_mode = "corners"
@@ -461,14 +532,16 @@ end
 
 local function clear(app, axis)
   if r.SetProjExtState then r.SetProjExtState(0, EXT_SECTION, axis, "") end
-  write_shape(axis, nil, nil)
+  write_shape(axis, nil)
   axes(true)
   app.status = "XY Pad: " .. axis:upper() .. " cleared"
 end
 
 -- Every target speaks the same 0..1 whatever it really is, so the pad, the
 -- movements and the corner weights need to know nothing about the difference.
-local function param_value(entry)
+-- This is the value the target actually sits at, before invert and the range are
+-- taken back out of it - which is what a readout wants to show.
+local function target_raw(entry)
   if not entry or entry.missing then return nil end
   if entry.kind == "vol" then
     return volume_to_unit(r.GetMediaTrackInfo_Value(entry.track, "D_VOL"), entry_law(entry))
@@ -481,24 +554,34 @@ local function param_value(entry)
   end
   if not r.TrackFX_GetParamNormalized then return nil end
   local ok, value = pcall(r.TrackFX_GetParamNormalized, entry.track, entry.fx, entry.param)
-  if ok and type(value) == "number" then return curve_invert(entry, value) end
+  if ok and type(value) == "number" then return value end
   return nil
+end
+
+-- Where the puck belongs for that value: the whole chain walked backwards.
+local function param_value(entry)
+  local raw = target_raw(entry)
+  if not raw then return nil end
+  local unit = shape_in(entry, raw)
+  if entry.kind == "fx" or not entry.kind then return curve_invert(entry, unit) end
+  return unit
 end
 
 local function set_param_value(entry, value)
   if not entry or entry.missing then return end
   value = clamp(value, 0, 1)
   if entry.kind == "vol" then
-    r.SetMediaTrackInfo_Value(entry.track, "D_VOL", unit_to_volume(value, entry_law(entry)))
+    r.SetMediaTrackInfo_Value(entry.track, "D_VOL", unit_to_volume(shape_out(entry, value), entry_law(entry)))
   elseif entry.kind == "pan" then
-    r.SetMediaTrackInfo_Value(entry.track, "D_PAN", value * 2 - 1)
+    r.SetMediaTrackInfo_Value(entry.track, "D_PAN", shape_out(entry, value) * 2 - 1)
   elseif entry.kind == "send" then
     if r.SetTrackSendInfo_Value then
       pcall(r.SetTrackSendInfo_Value, entry.track, 0, entry.send, "D_VOL",
-        unit_to_volume(value, entry_law(entry)))
+        unit_to_volume(shape_out(entry, value), entry_law(entry)))
     end
   elseif r.TrackFX_SetParamNormalized then
-    pcall(r.TrackFX_SetParamNormalized, entry.track, entry.fx, entry.param, curve_apply(entry, value))
+    pcall(r.TrackFX_SetParamNormalized, entry.track, entry.fx, entry.param,
+      shape_out(entry, curve_apply(entry, value)))
   end
 end
 
@@ -722,11 +805,11 @@ end
 local function envelope_value(entry, envelope, unit)
   local raw
   if entry.kind == "pan" then
-    raw = clamp(unit, 0, 1) * 2 - 1
+    raw = shape_out(entry, unit) * 2 - 1
   elseif entry.kind == "vol" or entry.kind == "send" then
-    raw = unit_to_volume(unit, entry_law(entry))
+    raw = unit_to_volume(shape_out(entry, unit), entry_law(entry))
   else
-    return curve_apply(entry, unit)
+    return shape_out(entry, curve_apply(entry, unit))
   end
   if r.GetEnvelopeScalingMode and r.ScaleToEnvelopeMode then
     local ok, mode = pcall(r.GetEnvelopeScalingMode, envelope)
@@ -943,11 +1026,11 @@ local function formatted_value(entry)
   if entry.kind == "vol" or entry.kind == "send" then
     -- Through the law rather than straight off the position, so the readout says
     -- what the fader says whichever scaling is in force.
-    local gain = unit_to_volume(param_value(entry) or 0, entry_law(entry))
+    local gain = unit_to_volume(target_raw(entry) or 0, entry_law(entry))
     if gain <= 0.0001 then return "-inf dB" end
     return string.format("%+.1f dB", 20 * math.log(gain, 10))
   elseif entry.kind == "pan" then
-    local pan = (param_value(entry) or 0.5) * 2 - 1
+    local pan = (target_raw(entry) or 0.5) * 2 - 1
     if math.abs(pan) < 0.005 then return "center" end
     return string.format("%d%% %s", math.floor(math.abs(pan) * 100 + 0.5), pan < 0 and "L" or "R")
   end
@@ -955,7 +1038,7 @@ local function formatted_value(entry)
     local ok, _, text = pcall(r.TrackFX_GetFormattedParamValue, entry.track, entry.fx, entry.param, "")
     if ok and type(text) == "string" and text ~= "" then return text end
   end
-  local value = param_value(entry)
+  local value = target_raw(entry)
   return value and string.format("%d%%", math.floor(value * 100 + 0.5)) or ""
 end
 
@@ -1344,6 +1427,19 @@ local function draw_move_menu(ctx, app)
   r.ImGui_EndPopup(ctx)
 end
 
+-- Invert and a narrowed range are exactly the things you forget you set, so
+-- they are marked on the row itself rather than only inside the menu.
+local function shape_badge(entry)
+  if not entry or entry.missing or not entry_shaped(entry) then return "" end
+  local lo, hi = entry_range(entry)
+  local marks = entry.invert and "INV" or ""
+  if lo > 0.0005 or hi < 0.9995 then
+    if marks ~= "" then marks = marks .. " " end
+    marks = marks .. string.format("%d-%d%%", math.floor(lo * 100 + 0.5), math.floor(hi * 100 + 0.5))
+  end
+  return "[" .. marks .. "]"
+end
+
 local function draw_slot(ctx, app, settings, axis, label, entry, width)
   local gap = UIScale.gap(4)
   local row_h = r.ImGui_GetFrameHeight(ctx)
@@ -1367,7 +1463,23 @@ local function draw_slot(ctx, app, settings, axis, label, entry, width)
     colour = Theme.colors.text
   end
   local text_w = width - label_w - learn_w - clear_w - 3 * gap
-  r.ImGui_DrawList_AddText(dl, ox + label_w, oy + (row_h - lh) * 0.5, colour, fit(ctx, text, text_w))
+  -- The badge and the value are placed against the right edge of the row rather
+  -- than appended to the text, so they survive the truncation the name goes
+  -- through - the name is the part you can afford to lose.
+  local badge = shape_badge(entry)
+  local badge_w = badge ~= "" and (r.ImGui_CalcTextSize(ctx, badge) + gap) or 0
+  local value = (entry and not entry.missing) and formatted_value(entry) or ""
+  local value_w = value ~= "" and (r.ImGui_CalcTextSize(ctx, value) + gap) or 0
+  r.ImGui_DrawList_AddText(dl, ox + label_w, oy + (row_h - lh) * 0.5, colour,
+    fit(ctx, text, text_w - badge_w - value_w))
+  if value ~= "" then
+    r.ImGui_DrawList_AddText(dl, ox + label_w + text_w - badge_w - value_w + gap,
+      oy + (row_h - lh) * 0.5, Theme.colors.text, value)
+  end
+  if badge ~= "" then
+    r.ImGui_DrawList_AddText(dl, ox + label_w + text_w - badge_w + gap, oy + (row_h - lh) * 0.5,
+      Theme.colors.accent, badge)
+  end
 
   -- The row is the part that gets truncated, so hovering it spells everything
   -- out. The names are already read and cached with the assignment, so this
@@ -1395,8 +1507,14 @@ local function draw_slot(ctx, app, settings, axis, label, entry, width)
           if curve.id == entry.curve then tip = tip .. "\nCurve:  " .. curve.label end
         end
       end
+      if entry.invert then tip = tip .. "\nInverted:  runs backwards" end
+      local lo, hi = entry_range(entry)
+      if lo > 0.0005 or hi < 0.9995 then
+        tip = tip .. string.format("\nRange:  %d%% - %d%%",
+          math.floor(lo * 100 + 0.5), math.floor(hi * 100 + 0.5))
+      end
     end
-    r.ImGui_SetTooltip(ctx, tip .. "\nRight-click for track volume, pan, a send or the scaling")
+    r.ImGui_SetTooltip(ctx, tip .. "\nRight-click for track volume, pan, a send, the scaling or the travel")
   end
   if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1) then
     r.ImGui_OpenPopup(ctx, "##xy_target_" .. axis)
@@ -1437,7 +1555,8 @@ local function draw_slot(ctx, app, settings, axis, label, entry, width)
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Level scaling")
       for _, law in ipairs(LEVEL_LAWS) do
         if r.ImGui_RadioButton(ctx, law.label .. "##xy_law_" .. law.id, entry_law(entry) == law.id) then
-          write_shape(axis, law.id, entry.curve)
+          entry.law = law.id
+          write_shape(axis, entry)
           settings.level_law = law.id
           state.level_law = law.id
           save(app)
@@ -1448,8 +1567,9 @@ local function draw_slot(ctx, app, settings, axis, label, entry, width)
       end
       if r.ImGui_Selectable(ctx, "Use this scaling for every slot") then
         for _, other in ipairs(AXES) do
-          local _, curve = read_shape(other)
-          write_shape(other, entry_law(entry), curve)
+          local shape = read_shape(other) or {}
+          shape.law = entry_law(entry)
+          write_shape(other, shape)
         end
         axes(true)
         app.status = "XY Pad: every slot now scales as " .. entry_law(entry)
@@ -1479,11 +1599,52 @@ local function draw_slot(ctx, app, settings, axis, label, entry, width)
       for _, curve in ipairs(CURVES) do
         local on = (entry.curve or "lin") == curve.id
         if r.ImGui_RadioButton(ctx, curve.label .. "##xy_curve_" .. curve.id, on) then
-          write_shape(axis, entry.law, curve.id ~= "lin" and curve.id or nil)
+          entry.curve = curve.id ~= "lin" and curve.id or nil
+          write_shape(axis, entry)
           axes(true)
           app.status = "XY Pad: " .. axis:upper() .. " curve set to " .. curve.label
         end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, curve.tip) end
+      end
+    end
+
+    -- Whatever the target is, this is the part of it the pad covers and which
+    -- way round it runs. The entry is the very table the pad reads from, so
+    -- writing to it lands immediately and only the ext state has to follow.
+    if entry and not entry.missing then
+      r.ImGui_Separator(ctx)
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Travel")
+      local lo, hi = entry_range(entry)
+      local invert_changed, inverted = r.ImGui_Checkbox(ctx, "Invert##xy_invert_" .. axis, entry.invert == true)
+      if invert_changed then
+        entry.invert = inverted or nil
+        write_shape(axis, entry)
+        app.status = "XY Pad: " .. axis:upper() .. (inverted and " runs inverted" or " runs normally")
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Runs the target backwards, so the top of the pad puts it at its lowest.\n" ..
+          "One parameter opening while the other closes is what a pad is for")
+      end
+      if r.ImGui_SetNextItemWidth then r.ImGui_SetNextItemWidth(ctx, UIScale.round(140)) end
+      local min_changed, min_value = r.ImGui_SliderDouble(ctx, "Min##xy_min_" .. axis, lo * 100, 0, 100, "%.0f%%")
+      if min_changed then
+        entry.range_min = clamp(min_value / 100, 0, 1)
+        write_shape(axis, entry)
+      end
+      if r.ImGui_SetNextItemWidth then r.ImGui_SetNextItemWidth(ctx, UIScale.round(140)) end
+      local max_changed, max_value = r.ImGui_SliderDouble(ctx, "Max##xy_max_" .. axis, hi * 100, 0, 100, "%.0f%%")
+      if max_changed then
+        entry.range_max = clamp(max_value / 100, 0, 1)
+        write_shape(axis, entry)
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "The stretch of the target a full sweep of the pad covers.\n" ..
+          "Setting Min above Max is a second way of running it backwards")
+      end
+      if entry_shaped(entry) and r.ImGui_Selectable(ctx, "Reset travel##xy_travel_reset_" .. axis) then
+        entry.invert, entry.range_min, entry.range_max = nil, nil, nil
+        write_shape(axis, entry)
+        app.status = "XY Pad: " .. axis:upper() .. " travel reset"
       end
     end
     r.ImGui_EndPopup(ctx)
@@ -1700,6 +1861,26 @@ function M.draw(app)
     save(app)
   end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Repeat a movement until you stop it") end
+  -- Only in corner mode: the axis rows carry their full description already.
+  if settings.pad_mode == "corners" then
+    local naming = { "auto", "always", "off" }
+    local titles = { auto = "Auto", always = "Always", off = "Off" }
+    local current = settings.corner_names or "auto"
+    r.ImGui_SameLine(ctx, 0, gap * 2)
+    if r.ImGui_Button(ctx, "Names: " .. (titles[current] or "Auto") .. "##xy_corner_names") then
+      for index, id in ipairs(naming) do
+        if id == current then settings.corner_names = naming[index % #naming + 1] break end
+      end
+      save(app)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "The track name above the target in each corner\n" ..
+        "Auto:  only when the corners do not all sit on the same track\n" ..
+        "           (a track volume or pan always names its track)\n" ..
+        "Always / Off:  by hand\n" ..
+        "A send names the track it feeds, so the name added here is the one it leaves")
+    end
+  end
   r.ImGui_Dummy(ctx, 1, vgap)
 
   -- Record row: arm, the count-in length, and how long the take is running.
@@ -1803,6 +1984,27 @@ function M.draw(app)
       { key = "c1", x = 0, y = 0 }, { key = "c2", x = 1, y = 0 },
       { key = "c3", x = 0, y = 1 }, { key = "c4", x = 1, y = 1 },
     }
+    -- A send morph puts all four corners on the same track, so repeating that
+    -- name four times says nothing: the bus each send feeds is what tells them
+    -- apart, and that is already the main line. The source only earns its own
+    -- line once the corners no longer share a track.
+    local naming = settings.corner_names or "auto"
+    local mixed = false
+    local shared
+    for _, place in ipairs(places) do
+      local entry = state.axes[place.key]
+      if entry and entry.track and not entry.missing then
+        if shared == nil then
+          shared = entry.track
+        elseif entry.track ~= shared then
+          mixed = true
+          break
+        end
+      end
+    end
+    -- Three lines need the room for three lines; below that the name is what
+    -- goes, rather than three truncated lines fighting over the same corner.
+    local names_fit = half >= lh * 3 + UIScale.round(16)
     for index, place in ipairs(places) do
       local entry = state.axes[place.key]
       local weight = weights[index] or 0
@@ -1813,23 +2015,33 @@ function M.draw(app)
       r.ImGui_DrawList_AddRectFilled(dl, qx, qy, qx + half, qy + half,
         (colour & 0xFFFFFF00) | alpha, UIScale.px(4))
       if entry and not entry.missing then
-        local name = fit(ctx, entry.param_name or "?", half - UIScale.round(10))
+        -- "Volume" or "Pan" on its own is too little to go on, so a track
+        -- control names its track whatever the corners have in common.
+        local named = naming == "always" or
+          (naming == "auto" and (mixed or entry.kind == "vol" or entry.kind == "pan"))
+        named = named and names_fit and entry.track_name ~= nil
+        local pad = UIScale.round(5)
+        local avail = half - UIScale.round(10)
+        local name = fit(ctx, entry.param_name or "?", avail)
         local tw = r.ImGui_CalcTextSize(ctx, name)
-        local tx = place.x == 0 and (qx + UIScale.round(5)) or (qx + half - tw - UIScale.round(5))
-        local ty = place.y == 0 and (qy + UIScale.round(5)) or (qy + half - lh * 2 - UIScale.round(5))
+        local tx = place.x == 0 and (qx + pad) or (qx + half - tw - pad)
+        local ty = place.y == 0 and (qy + pad) or (qy + half - lh * (named and 3 or 2) - pad)
         local text_col = Theme.text_for_background(Theme.colors.window_bg, colour, Theme.colors.text, 3)
-        r.ImGui_DrawList_AddText(dl, tx, ty, text_col, name)
-        -- A weight of 25% says nothing about how loud that corner actually is,
-        -- so a level target shows its dB and everything else its share.
-        local readout
-        if entry.kind == "vol" or entry.kind == "send" then
-          local gain = unit_to_volume(weight, entry_law(entry))
-          readout = gain <= 0.0001 and "-inf dB" or string.format("%+.1f dB", 20 * math.log(gain, 10))
-        else
-          readout = string.format("%d%%", math.floor(curve_apply(entry, weight) * 100 + 0.5))
+        if named then
+          local who = fit(ctx, entry.track_name, avail)
+          local ww = r.ImGui_CalcTextSize(ctx, who)
+          r.ImGui_DrawList_AddText(dl, place.x == 0 and (qx + pad) or (qx + half - ww - pad),
+            ty, Theme.colors.text_dim, who)
+          ty = ty + lh
         end
+        r.ImGui_DrawList_AddText(dl, tx, ty, text_col, name)
+        -- The share this corner has of the puck is already what the tint says.
+        -- The number is the target read back instead, because the curve, the
+        -- travel and the level law all sit between the two and a share of 25%
+        -- can easily be a parameter sitting at 40%.
+        local readout = fit(ctx, formatted_value(entry), avail)
         local pw = r.ImGui_CalcTextSize(ctx, readout)
-        r.ImGui_DrawList_AddText(dl, place.x == 0 and tx or (qx + half - pw - UIScale.round(5)),
+        r.ImGui_DrawList_AddText(dl, place.x == 0 and (qx + pad) or (qx + half - pw - pad),
           ty + lh, Theme.colors.text_dim, readout)
       end
     end

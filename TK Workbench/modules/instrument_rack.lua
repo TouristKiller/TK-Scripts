@@ -3613,6 +3613,23 @@ local function remove_macro_assignment(track_id, slot, assignment_index)
   if assignments[assignment_index] then table.remove(assignments, assignment_index) end
 end
 
+function macro_assignment_range(assignment)
+  local lo = math.max(0, math.min(1, tonumber(assignment and assignment.range_min) or 0))
+  local hi = math.max(0, math.min(1, tonumber(assignment and assignment.range_max) or 1))
+  return lo, hi
+end
+
+function macro_assignment_badge(assignment)
+  local lo, hi = macro_assignment_range(assignment)
+  local marks = assignment and assignment.inverted and "INV" or ""
+  if lo > 0.0005 or hi < 0.9995 then
+    if marks ~= "" then marks = marks .. " " end
+    marks = marks .. string.format("%d-%d%%", math.floor(lo * 100 + 0.5), math.floor(hi * 100 + 0.5))
+  end
+  if marks == "" then return "" end
+  return "  [" .. marks .. "]"
+end
+
 local function draw_macro_context_menu(app, ctx, track, slot)
   local track_id = track_guid(track)
   local macro = ensure_macro_entry(track_id, slot)
@@ -3723,22 +3740,56 @@ local function draw_macro_context_menu(app, ctx, track, slot)
   else
     for assignment_index, assignment in ipairs(assignments) do
       local label = (assignment.fx_name ~= "" and assignment.fx_name or "FX") .. " / " .. (assignment.param_name ~= "" and assignment.param_name or ("Param " .. tostring(assignment.param_idx)))
-      if r.ImGui_BeginMenu(ctx, label .. "##ir_macro_assignment_" .. tostring(slot) .. "_" .. tostring(assignment_index)) then
+      if r.ImGui_BeginMenu(ctx, label .. macro_assignment_badge(assignment) .. "###ir_macro_assignment_" .. tostring(slot) .. "_" .. tostring(assignment_index)) then
         local target_track = find_track_by_guid(assignment.track_guid)
         local fx_index = find_fx_index_by_guid(target_track, assignment.fx_guid)
         local can_read = validate_track(target_track) and fx_index ~= nil
-        if r.ImGui_MenuItem(ctx, assignment.inverted and "Invert: On" or "Invert: Off") then
-          assignment.inverted = not assignment.inverted
+        local range_lo, range_hi = macro_assignment_range(assignment)
+        local suffix = tostring(slot) .. "_" .. tostring(assignment_index)
+        local invert_changed, inverted = r.ImGui_Checkbox(ctx, "Invert##ir_macro_invert_" .. suffix, assignment.inverted == true)
+        if invert_changed then
+          assignment.inverted = inverted or nil
           save_macros()
         end
-        if r.ImGui_MenuItem(ctx, "Set Current As Min", nil, false, can_read) then
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, string.format("Range: %d%% - %d%%",
+          math.floor(range_lo * 100 + 0.5), math.floor(range_hi * 100 + 0.5)))
+        if r.ImGui_SetNextItemWidth then r.ImGui_SetNextItemWidth(ctx, UIScale.round(130)) end
+        local min_changed, min_value = r.ImGui_SliderDouble(ctx, "Min##ir_macro_range_min_" .. suffix, range_lo * 100, 0, 100, "%.0f%%")
+        if min_changed then
+          assignment.range_min = math.max(0, math.min(1, min_value / 100))
+          state.macros_dirty = true
+        end
+        if r.ImGui_SetNextItemWidth then r.ImGui_SetNextItemWidth(ctx, UIScale.round(130)) end
+        local max_changed, max_value = r.ImGui_SliderDouble(ctx, "Max##ir_macro_range_max_" .. suffix, range_hi * 100, 0, 100, "%.0f%%")
+        if max_changed then
+          assignment.range_max = math.max(0, math.min(1, max_value / 100))
+          state.macros_dirty = true
+        end
+        -- Selectables instead of MenuItems: a MenuItem always shuts the menu,
+        -- and Min and Max are almost always set one after the other. The flag
+        -- was renamed in ImGui 1.91, so both names are tried; without either
+        -- the value is 0 and the menu simply closes as it used to.
+        local keep_open = (r.ImGui_SelectableFlags_NoAutoClosePopups and r.ImGui_SelectableFlags_NoAutoClosePopups())
+          or (r.ImGui_SelectableFlags_DontClosePopups and r.ImGui_SelectableFlags_DontClosePopups()) or 0
+        local can_disable = r.ImGui_BeginDisabled and r.ImGui_EndDisabled
+        if not can_read and can_disable then r.ImGui_BeginDisabled(ctx, true) end
+        if r.ImGui_Selectable(ctx, "Set Current As Min##ir_macro_setmin_" .. suffix, false, keep_open) and can_read then
           assignment.range_min = r.TrackFX_GetParamNormalized(target_track, fx_index, assignment.param_idx)
           save_macros()
         end
-        if r.ImGui_MenuItem(ctx, "Set Current As Max", nil, false, can_read) then
+        if r.ImGui_Selectable(ctx, "Set Current As Max##ir_macro_setmax_" .. suffix, false, keep_open) and can_read then
           assignment.range_max = r.TrackFX_GetParamNormalized(target_track, fx_index, assignment.param_idx)
           save_macros()
         end
+        if not can_read and can_disable then r.ImGui_EndDisabled(ctx) end
+        local can_reset = range_lo > 0.0005 or range_hi < 0.9995
+        if not can_reset and can_disable then r.ImGui_BeginDisabled(ctx, true) end
+        if r.ImGui_Selectable(ctx, "Reset Range##ir_macro_reset_" .. suffix, false, keep_open) and can_reset then
+          assignment.range_min = 0
+          assignment.range_max = 1
+          save_macros()
+        end
+        if not can_reset and can_disable then r.ImGui_EndDisabled(ctx) end
         r.ImGui_Separator(ctx)
         local curve = math.max(0.1, math.min(10, tonumber(assignment.curve) or 1))
         local curve_t = math.max(-1, math.min(1, math.log(curve) / math.log(10)))
