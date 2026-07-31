@@ -38,7 +38,7 @@ SRC = os.path.join(ROOT, "USER_GUIDE.md")
 OUT = os.path.join(ROOT, "USER_GUIDE.pdf")
 
 TITLE = "Kit Maker - User Guide"
-AUTHOR = "TouristKiller & Flurmechanic"
+AUTHOR = "TouristKiller & Flurmechanik"
 
 INK = colors.HexColor("#1A1A1E")
 DIM = colors.HexColor("#5A5A66")

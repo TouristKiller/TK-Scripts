@@ -1,8 +1,8 @@
 -- @description TK Kit Maker
--- @author TouristKiller & Flurmechanic
--- @version 0.2.34
+-- @author TouristKiller & Flurmechanik
+-- @version 0.2.35
 -- @changelog:
---   0.2.34
+--   0.2.35
 --   + Seeds in Explosion. Every detonate runs on one, and it is left in the
 --     field afterwards, so a kit you liked is never lost -- untick "New seed
 --     each detonate" and the same seed rebuilds the same kit. The same seed
