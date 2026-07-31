@@ -1,8 +1,13 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.92
+-- @version 0.9.93
 -- @changelog:
 --[[
+v0.9.93:
++ Fixed the oscilloscope keeping a seemingly random waveform on screen after a preview finished: the display now fades out to a flat line (paused playback keeps the frozen image)
++ The oscilloscope no longer rebuilds its cache while nothing is playing
++ Added "Pass Keyboard Shortcuts to REAPER" option (Settings): keys that are not used by a text field are sent to REAPER, so global shortcuts (e.g. the one closing this script) keep working while the browser has focus
+
 v0.9.92:
 + Fixed the window freezing for several seconds when opening the spectral view: the analysis is now spread over frames instead of blocking the UI
 + Spectral results are now cached to disk and reused, so a file you have viewed before shows its spectral display instantly (also after a restart)
@@ -348,7 +353,45 @@ local waveform = {
     slice_no_fades = false,
     slice_selected_index = nil,
     slice_random_order = nil,
+    osc_last_segment = {},
+    osc_fade_start = nil,
 }
+
+OSC_FADE_TIME = 0.45
+
+function osc_store_segment(seg)
+    waveform.osc_last_segment = seg
+    waveform.osc_fade_start = nil
+end
+
+function osc_fade_amount()
+    if not waveform.osc_fade_start then
+        waveform.osc_fade_start = r.time_precise()
+    end
+    local elapsed = r.time_precise() - waveform.osc_fade_start
+    if elapsed >= OSC_FADE_TIME then return 0 end
+    local t = 1 - (elapsed / OSC_FADE_TIME)
+    return t * t
+end
+
+function draw_osc_points(draw_list, pos_x, pos_y, width, height, color, seg, scale)
+    local count = seg and #seg or 0
+    local center_y = pos_y + height / 2
+    if count < 2 or scale <= 0.001 then
+        r.ImGui_DrawList_AddLine(draw_list, pos_x, center_y, pos_x + width, center_y, color, 1)
+        return
+    end
+    local step = width / (count - 1)
+    for i = 1, count - 1 do
+        local y1 = center_y + (seg[i] or 0) * scale * height / 2
+        local y2 = center_y + (seg[i + 1] or 0) * scale * height / 2
+        r.ImGui_DrawList_AddLine(draw_list, pos_x + (i - 1) * step, y1, pos_x + i * step, y2, color, 1)
+    end
+end
+
+function draw_osc_idle(draw_list, pos_x, pos_y, width, height, color)
+    draw_osc_points(draw_list, pos_x, pos_y, width, height, color, waveform.osc_last_segment, osc_fade_amount())
+end
 
 local waveform_resize_debounce = { last_pixels = -1, change_time = 0, threshold = 0.15 }
 
@@ -532,6 +575,7 @@ local ui_settings = {
     folder_pane_match_results = true,
     time_display_compact = false,
     hide_scrollbar = false,  
+    pass_keys_to_reaper = false,
     compact_view = false,
     selected_font = "Arial",  
     button_height = 25,
@@ -2867,6 +2911,7 @@ local function save_options()
             flatten_search_results = ui_settings.flatten_search_results,
             folder_pane_match_results = ui_settings.folder_pane_match_results,
             hide_scrollbar = ui_settings.hide_scrollbar,
+            pass_keys_to_reaper = ui_settings.pass_keys_to_reaper,
             compact_view = ui_settings.compact_view,
             selected_font = ui_settings.selected_font,
             button_height = ui_settings.button_height,
@@ -2963,6 +3008,7 @@ local function get_settings_table()
         flatten_search_results = ui_settings.flatten_search_results,
         folder_pane_match_results = ui_settings.folder_pane_match_results,
         hide_scrollbar = ui_settings.hide_scrollbar,
+        pass_keys_to_reaper = ui_settings.pass_keys_to_reaper,
         compact_view = ui_settings.compact_view,
         selected_font = ui_settings.selected_font,
         button_height = ui_settings.button_height,
@@ -3028,6 +3074,7 @@ local function apply_settings_from_table(settings)
     ui_settings.flatten_search_results = settings.flatten_search_results ~= nil and settings.flatten_search_results or false
     ui_settings.folder_pane_match_results = settings.folder_pane_match_results ~= false
     ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
+    ui_settings.pass_keys_to_reaper = settings.pass_keys_to_reaper == true
     if settings.compact_view ~= nil then ui_settings.compact_view = settings.compact_view end
     ui_settings.selected_font = settings.selected_font or "Default"
     ui_settings.button_height = settings.button_height or 20
@@ -3202,6 +3249,7 @@ local function load_options()
             else
                 ui_settings.hide_scrollbar = false
             end
+            ui_settings.pass_keys_to_reaper = options.pass_keys_to_reaper == true
             if options.compact_view ~= nil then
                 ui_settings.compact_view = options.compact_view
             end
@@ -3295,6 +3343,7 @@ local function load_options()
                         else
                             ui_settings.hide_scrollbar = false
                         end
+                        ui_settings.pass_keys_to_reaper = options2.pass_keys_to_reaper == true
                         ui_settings.selected_font = options2.selected_font or "Arial"
                         ui_settings.button_height = options2.button_height or 25
                         ui_settings.use_numaplayer = options2.use_numaplayer or false
@@ -12582,7 +12631,13 @@ function loop()
                                 if source then
                                     file_length = r.GetMediaSourceLength(source) or 0
                                 end
-                                if file_length > 0 then
+                                local preview_active = (retval and pos ~= nil) and true or false
+                                if preview_active and file_length > 0 and not playback.loop_play and pos >= file_length - 0.02 then
+                                    preview_active = false
+                                end
+                                if not preview_active then
+                                    draw_osc_idle(draw_list, pos_x, pos_y, width, height, accent_color)
+                                elseif file_length > 0 then
                                     local progress = pos / file_length
                                     local segment_width = 0.1  
                                     local start_idx = math.floor(progress * #waveform.oscilloscope_cache * (1 - segment_width))
@@ -12590,14 +12645,12 @@ function loop()
                                     start_idx = math.max(1, start_idx)
                                     end_idx = math.min(#waveform.oscilloscope_cache, end_idx)
 
-                                    for i = start_idx, end_idx - 1 do
-                                        local local_i = i - start_idx + 1
-                                        local x1 = pos_x + (local_i - 1) * width / (end_idx - start_idx)
-                                        local y1 = pos_y + height/2 + waveform.oscilloscope_cache[i] * height/2
-                                        local x2 = pos_x + local_i * width / (end_idx - start_idx)
-                                        local y2 = pos_y + height/2 + waveform.oscilloscope_cache[i+1] * height/2
-                                        r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, accent_color, 1)
+                                    local seg = {}
+                                    for i = start_idx, end_idx do
+                                        seg[#seg + 1] = waveform.oscilloscope_cache[i] or 0
                                     end
+                                    osc_store_segment(seg)
+                                    draw_osc_points(draw_list, pos_x, pos_y, width, height, accent_color, seg, 1.0)
                                     
                                     if ui.pitch_detection_enabled then
                                         r.ImGui_PushFont(ctx, small_font, small_font_size)
@@ -12647,70 +12700,13 @@ function loop()
                         end
                     else
                         if playback.current_playing_file ~= "" and not is_video_or_gif then
-                            local pixels = math.floor(width)
-                            local osc_file_changed = waveform.oscilloscope_cache_file ~= playback.current_playing_file
-                            local osc_cache_empty = #waveform.oscilloscope_cache == 0
-                            local osc_width_diff = #waveform.oscilloscope_cache ~= pixels
-                            local osc_needs_rebuild = osc_file_changed or osc_cache_empty or (osc_width_diff and waveform_width_stable(pixels))
-                            if osc_needs_rebuild then
-                                waveform.oscilloscope_cache = {}
-                                waveform.oscilloscope_cache_file = playback.current_playing_file
-                                local source = r.PCM_Source_CreateFromFile(playback.current_playing_file)
-                                if source then
-                                    local length = r.GetMediaSourceLength(source)
-                                    if length and length > 0 then
-                                        local samplerate = 44100
-                                        local numch = r.GetMediaSourceNumChannels(source) or 2
-                                        local temp_track = r.GetTrack(0, 0)
-                                        if temp_track then
-                                            local num_items_before = r.CountTrackMediaItems(temp_track)
-                                            local temp_item = r.AddMediaItemToTrack(temp_track)
-                                            if temp_item then
-                                                local take = r.AddTakeToMediaItem(temp_item)
-                                                if take then
-                                                    r.SetMediaItemTake_Source(take, source)
-                                                    r.SetMediaItemLength(temp_item, length, false)
-                                                    r.UpdateItemInProject(temp_item)
-                                                    local accessor = r.CreateTakeAudioAccessor(take)
-                                                    if accessor then
-                                                        for i = 0, pixels - 1 do
-                                                            local start_time = (i / pixels) * length
-                                                            local samples_to_read = math.max(100, math.floor((length / pixels) * samplerate))
-                                                            local buffer = r.new_array(samples_to_read * numch)
-                                                            local ok = r.GetAudioAccessorSamples(accessor, samplerate, numch, start_time, samples_to_read, buffer)
-                                                            local peak = 0
-                                                            if ok > 0 then
-                                                                for j = 1, ok * numch do
-                                                                    local v = buffer[j] or 0
-                                                                    if math.abs(v) > peak then peak = v end
-                                                                end
-                                                            end
-                                                            waveform.oscilloscope_cache[i + 1] = peak
-                                                            buffer.clear()
-                                                        end
-                                                        r.DestroyAudioAccessor(accessor)
-                                                    end
-                                                    r.DeleteTrackMediaItem(temp_track, temp_item)
-                                                    if num_items_before == r.CountTrackMediaItems(temp_track) then
-                                                    end
-                                                end
-                                            end
-                                        end
-                                    end
-                                end
-                            end
                             local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
                             
-                            if #waveform.oscilloscope_cache > 0 then
-                                for i = 1, #waveform.oscilloscope_cache - 1 do
-                                    local x1 = pos_x + (i-1) * width / #waveform.oscilloscope_cache
-                                    local y1 = pos_y + height/2 + waveform.oscilloscope_cache[i] * height/2
-                                    local x2 = pos_x + i * width / #waveform.oscilloscope_cache
-                                    local y2 = pos_y + height/2 + waveform.oscilloscope_cache[i+1] * height/2
-                                    r.ImGui_DrawList_AddLine(draw_list, x1, y1, x2, y2, accent_color, 1)
-                                end
+                            if playback.is_paused then
+                                waveform.osc_fade_start = nil
+                                draw_osc_points(draw_list, pos_x, pos_y, width, height, accent_color, waveform.osc_last_segment, 1.0)
                             else
-                                r.ImGui_DrawList_AddLine(draw_list, pos_x, pos_y + height/2, pos_x + width, pos_y + height/2, accent_color, 1)
+                                draw_osc_idle(draw_list, pos_x, pos_y, width, height, accent_color)
                             end
                             
                             if ui.pitch_detection_enabled and playback.playing_preview then
@@ -14450,6 +14446,16 @@ function loop()
                     if scrollbar_changed then
                         ui_settings.hide_scrollbar = new_scrollbar
                         save_options()
+                    end
+
+                    r.ImGui_Spacing(ctx)
+                    local passkeys_changed, new_passkeys = r.ImGui_Checkbox(ctx, "Pass Keyboard Shortcuts to REAPER", ui_settings.pass_keys_to_reaper)
+                    if passkeys_changed then
+                        ui_settings.pass_keys_to_reaper = new_passkeys
+                        save_options()
+                    end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Send keys that are not used by a text field to REAPER,\nso global shortcuts (e.g. closing this script) keep working while the browser has focus.\nKeys with a REAPER shortcut (Space, arrows, ...) then no longer control the browser.")
                     end
 
                     r.ImGui_Spacing(ctx)
@@ -16268,7 +16274,9 @@ function loop()
 
     r.ImGui_PopFont(ctx)
     handle_reaper_drop()
-    r.ImGui_SetNextFrameWantCaptureKeyboard(ctx, true)
+    if not ui_settings.pass_keys_to_reaper then
+        r.ImGui_SetNextFrameWantCaptureKeyboard(ctx, true)
+    end
     if open then
         r.defer(loop)
     else
