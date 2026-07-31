@@ -3,12 +3,13 @@
 -- ever called -- this module only implements the two Pool.mode behaviours.
 
 local Bias = require("core.bias")
+local Rng  = require("core.rng")
 
 local M = {}
 
 local function shuffle_indices(list)
   for i = #list, 2, -1 do
-    local j = math.random(i)
+    local j = Rng.random(i)
     list[i], list[j] = list[j], list[i]
   end
   return list
@@ -54,7 +55,7 @@ function M.pick(pool, weights)
     return pool.files[Bias.pick_weighted(weights)]
   end
 
-  return pool.files[math.random(n)]
+  return pool.files[Rng.random(n)]
 end
 
 return M

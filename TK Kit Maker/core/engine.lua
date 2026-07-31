@@ -14,6 +14,7 @@ local Duration = require("core.duration")
 local Categories = require("core.categories")
 local Bias     = require("core.bias")
 local Tags     = require("core.tags")
+local Rng      = require("core.rng")
 
 local M = {}
 
@@ -183,7 +184,7 @@ local function pick_sample(pool, slot, used_log_enabled, max_seconds, length_bia
     if weights then
       index = Bias.pick_weighted_subset(unused, weights)
     else
-      index = unused[math.random(#unused)]
+      index = unused[Rng.random(#unused)]
     end
     local pick = view.files[index]
     UsedLog.mark_used(pick)
@@ -196,7 +197,24 @@ end
 -- Generates ONE kit from a KitDef. Batch = call this N times (see new_batch()).
 -- pools: table keyed by pool_id -> Pool. script_path: needed for the wordlist
 -- fallback file when kitdef.name_prefix is nil.
+-- Kit N of a seeded batch runs on seed + N - 1, so every kit in the batch has
+-- a seed of its own and can be rebuilt on its own -- "seed 84246" is one kit,
+-- not "the 34th kit of run 84213". Rng.new spins the generator before handing
+-- it over, which is what stops those consecutive seeds opening on very nearly
+-- the same pick.
+function M.seed_for(kitdef, kit_index)
+  local base = tonumber(kitdef and kitdef.seed)
+  if not base then return nil end
+  return math.floor(base) + (kit_index or 1) - 1
+end
+
 function M.generate_kit(kitdef, pools, kit_index, script_path)
+  -- Installed for the whole render and cleared at the end. There is one exit,
+  -- and a crash on the way cannot leave a stale generator behind either: the
+  -- next render installs its own first, and an unseeded one installs nothing,
+  -- which is plain math.random.
+  Rng.use(M.seed_for(kitdef, kit_index))
+
   local kit_name
   if kitdef.name_prefix and kitdef.name_prefix ~= "" then
     if kitdef.name_numbered == false then
@@ -254,7 +272,11 @@ function M.generate_kit(kitdef, pools, kit_index, script_path)
     end
   end
 
-  return { name = final_name, dest = dest_dir, results = results, errors = errors, stitched = stitched }
+  Rng.clear()
+  return {
+    name = final_name, dest = dest_dir, results = results, errors = errors,
+    stitched = stitched, seed = M.seed_for(kitdef, kit_index),
+  }
 end
 
 -- How much of the material behind a kit carries a measurement. A character
@@ -368,6 +390,9 @@ function M.kitdef_from_explosion(opts)
     name_prefix = opts.name_prefix,
     name_numbered = false,
     name_seed = opts.name_seed,
+    -- Not the same thing as name_seed, which is a start *word* for the kit name
+    -- generator. This one makes the whole pick reproducible.
+    seed = opts.seed,
     slots = slots,
     naming = opts.naming or {
       prefix_style = "001",

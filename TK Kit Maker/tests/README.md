@@ -34,6 +34,8 @@ pip install lupa
 | `test_charbias.lua` | Character bias: that it weights and never excludes, and the focus curve. |
 | `test_patternslots.lua` | "From pattern": parsing, and matching a word to a pool alias. |
 | `test_pools.lua` | Pool id allocation after loading a preset. |
+| `test_fixedpool.lua` | A heatmap-cell pool keeping its files through a scan and a preset round-trip. |
+| `test_seed.lua` | Seeded generation: reproducibility, the frozen sequence, and that neighbouring seeds are unrelated. |
 | `test_stale.lua` | Detecting an edited sample, and that a cache without the stamp still loads. |
 
 ## Why these two extra checks

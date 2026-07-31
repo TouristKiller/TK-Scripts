@@ -22,6 +22,11 @@ racks → **Step** or **Euclid** to program patterns on those racks. The
 together. **Esc** or the red dot (top-right) closes the window; your **Theme**
 choice is remembered.
 
+The installed version is shown next to the **Kit Maker** title. **Right-click
+that title** for this manual and for the two folders Kit Maker uses — they are
+not the same place: the script is installed under `Scripts`, while presets and
+the tag cache are written next to REAPER's own data.
+
 ---
 
 ## 1. Install & requirements
@@ -223,6 +228,26 @@ range covered in between.
 - The weighting slider applies to the picks too, so "spread the spectrum, but
   all punchy" is a single action.
 
+#### A cell as a Builder pool
+
+Right-click a cell → **Add cell as Builder Pool**. The samples in that cell
+become a pool and the Builder opens. Link a slot to it and that slot draws only
+from that corner of the sound space — so "this pad gets something short and
+bright, whatever else the kit does" is a thing you can state once and keep.
+
+This is the only pool that is a fixed list of files rather than a folder: what
+selects the samples is how they measure, not where they live. So it behaves a
+little differently, on purpose:
+
+- It has no folder list and no **Scan** — there is nothing to rescan it from.
+- The list is stored *inside* a preset instead of being rebuilt on load, unlike
+  every other pool.
+- It is a snapshot. Re-analysing or adding samples does not change it; make a
+  new one from the cell if you want the pack's current contents.
+
+The name comes from where the cell sits — *Sub Legato*, *Air Short*, *Middle* —
+and is yours to rename in the Builder.
+
 #### Show kit
 
 The other direction: **Show kit** marks where the selected rack's pads sit in
@@ -295,7 +320,37 @@ destination lives there, the same as in the Builder.
 | **Start word + Generate kit name** | Type an optional seed word, then **Generate kit name** to auto-name the kit (leave the seed empty for a fully random name). |
 | **Stitched WAV + cues** | Also joins every sample into one WAV with an embedded cue point per slice — ready for slicers. WAV sources only; other formats are skipped. |
 | **Max sample length (s)** | Samples longer than this are never picked (and stay out of the stitched WAV). 0 = no limit. |
+| **Seed** | The number the random pick starts from. See below. |
 | **Character** | Leans the pick towards a sound — dark, punchy, short — on the axes measured by the analyser. See below. |
+
+### Seeds — rebuilding a kit, and sharing one
+
+A computer's randomness is a fixed sequence; the **seed** is only where you
+start reading it. Start at the same place and you get the same kit.
+
+Every detonate runs on a seed, and the one it used is left in the field
+afterwards. So the kit you liked and pressed past is never gone — untick **New
+seed each detonate** and press again to get it back.
+
+More usefully, it travels. The same seed over the same samples builds the same
+kit on anyone's machine, so a good combination can be shared as a number rather
+than as a folder of files.
+
+That last part only holds if the samples really are the same, which is what the
+**pack** code under the seed is for. It counts the files and reads their names.
+Two people whose codes match will get the same kit from the same seed; if the
+codes differ, one of you has an extra sample or a renamed one, and the seed will
+build something else — correctly, but not what was meant.
+
+Some fine print worth knowing:
+
+- Kits in a batch are seeded consecutively, so kit 34 of seed 84213 is simply
+  seed 84246 — one kit, shareable on its own.
+- **Generate kit name** stays random on every press; it is a button you press
+  until you like the answer. The name a *detonate* generates does follow the
+  seed, so the same seed gives the same kit under the same name.
+- Changing anything else — the slot pattern, the character bias, the max length
+  — changes the kit too. The seed reproduces a roll of the dice, not a recipe.
 
 ### Character
 

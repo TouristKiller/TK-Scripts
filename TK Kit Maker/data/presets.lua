@@ -43,6 +43,12 @@ function M.save(name, kitdef, pools)
       recursive = pool.recursive,
       mode = pool.mode,
       folder_bias = pool.folder_bias,
+      -- A fixed pool's file list is not a cache: it *is* the pool. It was cut
+      -- out of a heatmap cell, so there is no folder to rebuild it from and it
+      -- is the one list that has to travel with the preset.
+      fixed = pool.fixed,
+      fixed_origin = pool.fixed_origin,
+      files = pool.fixed and pool.files or nil,
     }
   end
 
@@ -70,7 +76,10 @@ function M.load(name)
 
   local pools = {}
   for id, pool in pairs(data.pools or {}) do
-    pool.files = {}
+    -- Everything else is rescanned fresh off disk; a fixed pool keeps the list
+    -- it was saved with, because nothing would rescan it back.
+    if not pool.fixed then pool.files = {} end
+    pool.files = pool.files or {}
     pool._bag = {}
     pools[id] = pool
   end

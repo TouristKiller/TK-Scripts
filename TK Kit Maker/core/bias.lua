@@ -1,3 +1,5 @@
+local Rng = require("core.rng")
+
 local M = {}
 
 local function clamp01(v)
@@ -48,8 +50,8 @@ function M.pick_weighted(w, u)
   if n == 1 then return 1 end
   local total = 0
   for i = 1, n do total = total + (w[i] or 0) end
-  if total <= 0 then return u and (1 + math.floor(u * n)) or math.random(n) end
-  local roll = (u or math.random()) * total
+  if total <= 0 then return u and (1 + math.floor(u * n)) or Rng.random(n) end
+  local roll = (u or Rng.random()) * total
   local acc = 0
   for i = 1, n do
     acc = acc + (w[i] or 0)
@@ -64,8 +66,8 @@ function M.pick_weighted_subset(indices, w)
   if n == 1 then return indices[1] end
   local total = 0
   for i = 1, n do total = total + (w[indices[i]] or 0) end
-  if total <= 0 then return indices[math.random(n)] end
-  local roll = math.random() * total
+  if total <= 0 then return indices[Rng.random(n)] end
+  local roll = Rng.random() * total
   local acc = 0
   for i = 1, n do
     acc = acc + (w[indices[i]] or 0)
@@ -83,7 +85,7 @@ function M.order_indices(indices, w)
     if weight <= 1e-12 then
       key = -math.huge
     else
-      key = math.log(math.random()) / weight
+      key = math.log(Rng.random()) / weight
     end
     keyed[i] = { idx = idx, key = key }
   end

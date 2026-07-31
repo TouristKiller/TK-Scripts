@@ -20,27 +20,54 @@ local function is_audio_file(name)
 end
 M.is_audio_file = is_audio_file
 
+-- Names sort case-insensitively, by the lower-cased name with the raw one as
+-- tie-break. Windows and macOS disagree about where uppercase belongs, and the
+-- point of sorting at all is that the order is the same everywhere.
+local function by_name(a, b)
+  local la, lb = a:lower(), b:lower()
+  if la ~= lb then return la < lb end
+  return a < b
+end
+
+-- Sorted, not in the order the filesystem happens to hand things back.
+--
+-- That order is nobody's promise: it varies between filesystems, and copying a
+-- pack to another drive can change it. Every position downstream is built on
+-- this list -- which sample a seed picks, which one a "use up" bag hands out
+-- next -- so an unsorted scan would mean the same seed over the same samples
+-- building a different kit on someone else's machine, with nothing on screen
+-- to explain why.
 local function scan_dir(path, recursive, results)
   path = normalize(path)
   local prefix = path .. "/"
 
+  local files = {}
   local i = 0
   while true do
     local fn = r.EnumerateFiles(path, i)
     if not fn then break end
     if is_audio_file(fn) then
-      results[#results + 1] = prefix .. fn
+      files[#files + 1] = fn
     end
     i = i + 1
   end
+  table.sort(files, by_name)
+  for k = 1, #files do
+    results[#results + 1] = prefix .. files[k]
+  end
 
   if recursive then
+    local dirs = {}
     local j = 0
     while true do
       local dn = r.EnumerateSubdirectories(path, j)
       if not dn then break end
-      scan_dir(prefix .. dn, recursive, results)
+      dirs[#dirs + 1] = dn
       j = j + 1
+    end
+    table.sort(dirs, by_name)
+    for k = 1, #dirs do
+      scan_dir(prefix .. dirs[k], recursive, results)
     end
   end
 end
@@ -48,6 +75,12 @@ end
 -- Scans all folders configured on the pool and refreshes pool.files in place.
 -- Returns the file list (also stored on pool.files).
 function M.scan_pool(pool)
+  -- A fixed pool carries its own file list -- picked out of a heatmap cell
+  -- rather than read off a folder -- so there is nothing to rebuild it from and
+  -- a scan would simply empty it. Guarding here rather than at the call sites
+  -- because there are eight of them, including two that scan everything.
+  if pool.fixed then return pool.files or {} end
+
   local results = {}
   local folder_of = {}
   local index = 0

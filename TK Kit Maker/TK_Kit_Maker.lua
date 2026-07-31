@@ -1,16 +1,58 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanic
--- @version 0.2.33
+-- @version 0.2.34
 -- @changelog:
+--   0.2.34
+--   + Seeds in Explosion. Every detonate runs on one, and it is left in the
+--     field afterwards, so a kit you liked is never lost -- untick "New seed
+--     each detonate" and the same seed rebuilds the same kit. The same seed
+--     over the same samples gives the same kit on anyone's machine, so a kit
+--     can be shared as a number instead of as files.
+--     Beside it is the pack's fingerprint, because a seed alone does not
+--     describe a kit: the same seed over a different set of samples gives a
+--     different kit, correctly but bafflingly. Matching fingerprints mean two
+--     people are drawing from the same material.
+--   # Picking no longer uses math.random. Up to Lua 5.3 that is the C library's
+--     generator, whose sequence differs between Windows and macOS -- so a
+--     shared seed would have built a different kit for the person you shared it
+--     with, which is the one thing it exists to prevent. Kit Maker now carries
+--     its own, in arithmetic that behaves identically everywhere. The step
+--     sequencer's randomisation is untouched.
+--   # Folders are scanned in sorted order instead of the order the filesystem
+--     happens to return. That order is nobody's promise -- it varies between
+--     filesystems and copying a pack can change it -- and every position
+--     downstream is built on it: which sample a seed picks, which one a "use
+--     up" pool hands out next.
+--   + The version number sits beside the title, on its baseline. It is read off
+--     this script's own @version header, so it cannot drift from what ReaPack
+--     installed, and its width is reserved in the header row -- the buttons on
+--     the right stop against it however narrow the window is pulled.
+--   + Right-click the title for the manual and for the two folders Kit Maker
+--     uses: where the script is installed, and where it writes its presets and
+--     the tag cache. Those are not the same place, which is the point.
+--   + "Add cell as Builder Pool" on the heatmap's right-click menu: a corner of
+--     the sound space becomes a pool, so a slot can be told "something short and
+--     bright belongs here" and never draw anything else. This is the first pool
+--     that is a fixed list of files rather than a folder, since what picks the
+--     samples is how they measure, not where they live -- the list is saved with
+--     a preset instead of being rescanned, and the folder controls are hidden
+--     for it, two of which would have emptied it.
+--   + "Export as a kit folder..." now on the file list too, not only the
+--     heatmap -- on the right-click menu of the open collection, writing out
+--     whatever the list is showing. The tag and filename filters are the
+--     selection, so cutting 213 samples down to the twelve you want makes a kit
+--     of exactly those. The menu names the count before you commit.
+--   # Browser: adding a collection or a folder as a pool could overwrite one of
+--     a loaded preset's pools. The same counter bug that was fixed in the
+--     Builder, in two entry points that did not share the fix. Ids already in
+--     use are now skipped wherever a pool is created.
+--
+--   0.2.33
 --   + Re-analyse changed files: compares each sample with the file on disk and
 --     re-measures only what was edited or replaced. The sample you click on is
 --     checked the same way, so a re-rendered file shows its new figures.
---   + "Export as a kit folder..." on both halves of the Browser. From the
---     heatmap it writes the picked pads out; from the file list, on the right-
---     click menu of the open collection, it writes out whatever the list is
---     showing -- so the tag and filename filters are the selection, and cutting
---     213 samples down to the twelve you want makes a kit of exactly those.
---     Copied, numbered and named the way an exported kit always is.
+--   + Heatmap: "Export as a kit folder..." writes the picked samples to disk as
+--     a normal kit, next to the existing options that load them into a rack.
 --   # Step sequencer: the four pattern pages now survive a restart without a
 --     preset. They lived in memory only; they are kept on the kit track, in
 --     their own key beside the sequence.

@@ -212,10 +212,24 @@ local function draw_pools(app)
         local a_changed, a_value = r.ImGui_InputText(ctx, "Alias##alias", pool.alias)
         if a_changed then pool.alias = a_value end
 
-        Theme.label(ctx, "Folders")
-        Theme.help(ctx, "The order matters for the folder bias below: top = low end, bottom = high end.")
+        -- A fixed pool is a list of files, not a folder: it came out of a
+        -- heatmap cell, where what selects a sample is how it measures rather
+        -- than where it lives. The folder editor is hidden for it -- not only
+        -- because it has nothing to show, but because "+ Add folder" and the
+        -- Subfolders checkbox both clear pool.files to force a rescan, and for
+        -- this pool that rescan can never put anything back.
+        if pool.fixed then
+          local pushed_fixed = Theme.push_small(ctx)
+          r.ImGui_TextColored(ctx, c.text_faint, pool.fixed_origin or "A fixed set of samples.")
+          Theme.pop_font(ctx, pushed_fixed)
+          r.ImGui_Dummy(ctx, 0, 2)
+        end
+
         local folder_pending_delete = nil
         local folder_move = nil
+        if not pool.fixed then
+        Theme.label(ctx, "Folders")
+        Theme.help(ctx, "The order matters for the folder bias below: top = low end, bottom = high end.")
         if #pool.folders == 0 then
           r.ImGui_TextColored(ctx, c.text_faint, "(no folders yet)")
         end
@@ -298,6 +312,7 @@ local function draw_pools(app)
         r.ImGui_SameLine(ctx)
         local rec_changed, rec_value = r.ImGui_Checkbox(ctx, "Subfolders##recursive", pool.recursive)
         if rec_changed then pool.recursive = rec_value; pool.files = {} end
+        end -- not pool.fixed
 
         r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 60))
         local mode_label = pool.mode == "use_up" and "Use up (no repeats)" or "Repeat (repeats allowed)"
@@ -307,10 +322,12 @@ local function draw_pools(app)
           r.ImGui_EndCombo(ctx)
         end
 
-        draw_folder_bias(app, pool)
-
-        if Theme.ghost_button(ctx, "Scan##pool_rescan") then Scanner.scan_pool(pool) end
-        r.ImGui_SameLine(ctx)
+        -- Folder bias orders the pick across folders; a fixed pool has none.
+        if not pool.fixed then
+          draw_folder_bias(app, pool)
+          if Theme.ghost_button(ctx, "Scan##pool_rescan") then Scanner.scan_pool(pool) end
+          r.ImGui_SameLine(ctx)
+        end
         if count > 0 then
           r.ImGui_AlignTextToFramePadding(ctx)
           r.ImGui_TextColored(ctx, c.success, count .. " samples")

@@ -1,5 +1,7 @@
 -- Random two-word kit name generator, used when a KitDef has no name_prefix.
 
+local Rng = require("core.rng")
+
 local M = {}
 
 local words = nil
@@ -161,12 +163,12 @@ end
 local CONTEXT_CHANCE = 0.28
 
 local function pick_word(list, context_set, avoid)
-  local use_context = math.random() < CONTEXT_CHANCE
+  local use_context = Rng.random() < CONTEXT_CHANCE
   local best = nil
   local best_score = -1
   for _, w in ipairs(list) do
     local wl = w:lower()
-    local score = math.random()
+    local score = Rng.random()
     if use_context and context_set[wl] then score = score + 3 end
     if avoid and wl == avoid:lower() then score = score - 100 end
     if score > best_score then
@@ -174,7 +176,7 @@ local function pick_word(list, context_set, avoid)
       best_score = score
     end
   end
-  return best or list[math.random(#list)]
+  return best or list[Rng.random(#list)]
 end
 
 function M.suggest_name(script_path, opts)
@@ -182,7 +184,7 @@ function M.suggest_name(script_path, opts)
   local dlist, nlist, tlist = load_role_buckets(script_path)
   local context = build_context_set(opts.context_words)
   local seed = tostring(opts.seed_word or ""):gsub("^%s+", ""):gsub("%s+$", "")
-  local prefer_three = opts.word_count == 3 or (opts.word_count == nil and math.random() < 0.38)
+  local prefer_three = opts.word_count == 3 or (opts.word_count == nil and Rng.random() < 0.38)
 
   local function split_seed(s)
     local out = {}
@@ -198,13 +200,13 @@ function M.suggest_name(script_path, opts)
   end
 
   local function pick_not_used(list)
-    local use_context = math.random() < CONTEXT_CHANCE
+    local use_context = Rng.random() < CONTEXT_CHANCE
     local best = nil
     local best_score = -1
     for _, w in ipairs(list) do
       local wl = w:lower()
       if not used[wl] then
-        local score = math.random()
+        local score = Rng.random()
         if use_context and context[wl] then score = score + 3 end
         if score > best_score then
           best = w
@@ -213,7 +215,7 @@ function M.suggest_name(script_path, opts)
       end
     end
     if not best then
-      best = list[math.random(#list)]
+      best = list[Rng.random(#list)]
     end
     add_used(best)
     return best
@@ -236,7 +238,7 @@ function M.suggest_name(script_path, opts)
   if #parts == 0 then
     local first = pick_not_used(dlist)
     parts[#parts + 1] = first
-    if target_count == 3 and math.random() < 0.52 then
+    if target_count == 3 and Rng.random() < 0.52 then
       parts[#parts + 1] = pick_not_used(dlist)
     elseif target_count == 3 then
       parts[#parts + 1] = pick_not_used(nlist)

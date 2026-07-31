@@ -10,7 +10,19 @@ local SequencerView = require("ui.sequencer_view")
 
 local M = {}
 
+-- Read off the script's own @version header rather than kept as a constant
+-- here: that header is what ReaPack installs and upgrades against, so this is
+-- the one number that cannot drift out of step with what the user actually has.
+local function read_version(script_path)
+  local f = io.open((script_path or "") .. "TK_Kit_Maker.lua", "r")
+  if not f then return nil end
+  local head = f:read(2048) or ""
+  f:close()
+  return head:match("@version%s+([%w%.%-]+)")
+end
+
 function M.init(app)
+  app.version = read_version(app.script_path)
   local loaded = Store.load()
   app.view = loaded.view or "browser"
   ExplosionView.init(app)
@@ -68,17 +80,87 @@ local function close_button(ctx, size)
   return clicked
 end
 
+local function file_exists(path)
+  local f = io.open(path, "r")
+  if not f then return false end
+  f:close()
+  return true
+end
+
+-- Right-click menu on the title. It lives here rather than as a button because
+-- the header row is the one place in the program that runs out of width first,
+-- and these are read-once things: where the manual is, where the presets and
+-- the tag cache are kept.
+local function draw_header_menu(app)
+  local ctx = app.ctx
+  if not r.ImGui_BeginPopup(ctx, "##header_menu") then return end
+
+  local shell = r.CF_ShellExecute
+  local manual = (app.script_path or "") .. "USER_GUIDE.pdf"
+  if not file_exists(manual) then manual = (app.script_path or "") .. "USER_GUIDE.md" end
+
+  r.ImGui_BeginDisabled(ctx, not shell or not file_exists(manual))
+  if r.ImGui_MenuItem(ctx, "Open manual") then shell(manual) end
+  r.ImGui_EndDisabled(ctx)
+
+  r.ImGui_Separator(ctx)
+
+  r.ImGui_BeginDisabled(ctx, not shell)
+  if r.ImGui_MenuItem(ctx, "Show script folder") then shell(app.script_path) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, app.script_path or "") end
+
+  -- Not the same folder: the script is installed under Scripts, while anything
+  -- Kit Maker writes lives beside REAPER's own data.
+  local data_dir = r.GetResourcePath() .. "/TK_Kit_Maker"
+  if r.ImGui_MenuItem(ctx, "Show presets and cache folder") then
+    r.RecursiveCreateDirectory(data_dir, 0)
+    shell(data_dir)
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, data_dir) end
+  r.ImGui_EndDisabled(ctx)
+
+  r.ImGui_EndPopup(ctx)
+end
+
 local function draw_header(app)
   local ctx = app.ctx
   local pushed = Theme.push_h1(ctx)
   r.ImGui_TextColored(ctx, Theme.colors.accent, "Kit Maker")
   local title_x, _ = r.ImGui_GetItemRectMin(ctx)
-  local _, title_bottom_y = r.ImGui_GetItemRectMax(ctx)
+  local title_x2, title_bottom_y = r.ImGui_GetItemRectMax(ctx)
+  -- Opened here, drawn further down: the popup has to be built once the title's
+  -- font is off the stack, or the menu renders in the heading face.
+  if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##header_menu") end
+  local title_hovered = r.ImGui_IsItemHovered(ctx)
   Theme.pop_font(ctx, pushed)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   local pushed_small = Theme.push_small(ctx)
   r.ImGui_DrawList_AddText(dl, title_x + 1, title_bottom_y - 2, Theme.colors.text_dim, "by TK & Flurmechanik")
+
+  -- The version rides on the title's baseline, tight against the name. Drawn
+  -- rather than laid out, because an ordinary item would sit on the top of the
+  -- line instead of the baseline -- but its width is reserved immediately
+  -- after, so the buttons on the right cannot run into it however narrow the
+  -- window gets. They are right-aligned within whatever is left.
+  local version_w = 0
+  if app.version then
+    local label = app.version
+    local w, h = r.ImGui_CalcTextSize(ctx, label)
+    version_w = (w or 0) + 6
+    r.ImGui_DrawList_AddText(dl, title_x2 + 6, title_bottom_y - (h or 10) - 4,
+      Theme.colors.text_faint, label)
+  end
   Theme.pop_font(ctx, pushed_small)
+
+  if title_hovered then
+    r.ImGui_SetTooltip(ctx, "Right-click for the manual and Kit Maker's folders")
+  end
+  draw_header_menu(app)
+
+  if version_w > 0 then
+    r.ImGui_SameLine(ctx, 0, 0)
+    r.ImGui_Dummy(ctx, version_w, 0)
+  end
 
   local theme_w = 108
   local manager_w = 108

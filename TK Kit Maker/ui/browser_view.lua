@@ -1190,14 +1190,26 @@ local function ensure_builder_state(app)
   end
 end
 
+-- Skips ids that are already taken rather than trusting the counter: a loaded
+-- preset brings its own pool_1, pool_2... while next_pool_n stays where it was.
+-- The Builder's own "+ Pool" learned this the hard way; these two entry points
+-- never did.
+local function new_pool_id(app)
+  local id
+  repeat
+    id = "pool_" .. tostring(app.builder.next_pool_n)
+    app.builder.next_pool_n = app.builder.next_pool_n + 1
+  until not app.pools[id]
+  return id
+end
+
 local function add_collection_as_pool(app)
   local col = selected_collection(app)
   if not col then return end
 
   ensure_builder_state(app)
 
-  local id = "pool_" .. tostring(app.builder.next_pool_n)
-  app.builder.next_pool_n = app.builder.next_pool_n + 1
+  local id = new_pool_id(app)
 
   app.pools[id] = {
     id = id,
@@ -1219,8 +1231,7 @@ local function add_folder_as_pool(app, folder_path, alias)
 
   ensure_builder_state(app)
 
-  local id = "pool_" .. tostring(app.builder.next_pool_n)
-  app.builder.next_pool_n = app.builder.next_pool_n + 1
+  local id = new_pool_id(app)
 
   app.pools[id] = {
     id = id,
@@ -1237,6 +1248,62 @@ local function add_folder_as_pool(app, folder_path, alias)
   return true
 end
 
+-- Where a cell sits on one axis, in that axis's own words. The grid is rescaled
+-- to the collection on screen, so this says where the cell falls within that
+-- selection -- not an absolute frequency or length.
+local function axis_word(axis, idx, size)
+  if not axis or size < 2 then return "mid" end
+  local f = (idx - 0.5) / size
+  if f < 0.34 then return axis.lo end
+  if f > 0.66 then return axis.hi end
+  return "mid"
+end
+
+local function cell_alias(grid, row, col)
+  local function cap(w) return (w:sub(1, 1):upper() .. w:sub(2)) end
+  local x = axis_word(grid.x_axis, col, grid.size)
+  -- Row 1 is the top of the grid while the axis grows upward.
+  local y = axis_word(grid.y_axis, grid.size + 1 - row, grid.size)
+  if x == y then return x == "mid" and "Middle" or cap(x) end
+  return cap(x) .. " " .. cap(y)
+end
+
+-- A heatmap cell as a Builder pool: the samples in one corner of the sound
+-- space, so a slot can be told "something short and bright goes here" and never
+-- draw anything else. This is the one pool that is a fixed list of files rather
+-- than a folder, since what selects them is how they measure, not where they
+-- live -- see the `fixed` flag, which Scanner.scan_pool honours.
+local function add_cell_as_pool(app, row, col)
+  local state = app.browser
+  local grid = state.grid
+  local cell = grid and Heatmap.cell(grid, row, col)
+  if not cell or cell.n == 0 then return false end
+
+  ensure_builder_state(app)
+  local id = new_pool_id(app)
+
+  local files = {}
+  for i, item in ipairs(cell.items) do files[i] = item.path end
+
+  app.pools[id] = {
+    id = id,
+    alias = cell_alias(grid, row, col),
+    folders = {},
+    recursive = false,
+    files = files,
+    fixed = true,
+    fixed_origin = string.format("%d samples from the heatmap: %s %s, %s %s",
+      #files,
+      grid.x_axis.label:lower(), axis_word(grid.x_axis, col, grid.size),
+      grid.y_axis.label:lower(), axis_word(grid.y_axis, grid.size + 1 - row, grid.size)),
+    mode = "repeat",
+    _bag = {},
+  }
+  app.builder.pool_order[#app.builder.pool_order + 1] = id
+  app.view = "builder"
+  return true
+end
+
 local function add_folder_to_existing_pool(app, pool_id, folder_path)
   local folder = Scanner.normalize(folder_path or "")
   if folder == "" then return false, "Folder path is empty." end
@@ -1244,10 +1311,11 @@ local function add_folder_to_existing_pool(app, pool_id, folder_path)
   ensure_builder_state(app)
   local pool = app.pools[pool_id]
   if not pool then return false, "Pool not found." end
+  if pool.fixed then return false, "This pool holds a fixed set of samples." end
 
   for _, existing in ipairs(pool.folders or {}) do
     if Scanner.normalize(existing):lower() == folder:lower() then
-      return false, "Folder is al gekoppeld aan deze pool."
+      return false, "That folder is already linked to this pool."
     end
   end
 
@@ -2939,6 +3007,23 @@ local function draw_grid_cells(app, grid, x0, y0, area_w, area_h)
       Theme.pop_font(ctx, pushed)
       r.ImGui_Separator(ctx)
       sample_menu_items(app, state.grid_menu_file)
+    end
+
+    -- The whole cell, rather than the one sample the walk is on: a corner of
+    -- the sound space handed to the Builder as a pool.
+    local at = state.grid_pick
+    local cell = at and Heatmap.cell(grid, at.row, at.col)
+    if cell and cell.n > 0 then
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, string.format("Add cell as Builder Pool (%d samples)", cell.n)) then
+        add_cell_as_pool(app, at.row, at.col)
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, string.format(
+          "Make a pool of every sample in this cell, and open the Builder.\n"
+            .. "Link a slot to it and that slot only ever draws\n%s.",
+          cell_alias(grid, at.row, at.col):lower() .. " samples"))
+      end
     end
     r.ImGui_EndPopup(ctx)
   end

@@ -12,6 +12,7 @@ local Categories = require("core.categories")
 local Duration = require("core.duration")
 local Bias     = require("core.bias")
 local Tags     = require("core.tags")
+local Rng      = require("core.rng")
 local Character = require("ui.character")
 local PatternPresets = require("ui.pattern_presets")
 
@@ -39,6 +40,12 @@ function M.init(app)
     length_bias   = Bias.new_config(),
     tag_bias      = Tags.new_bias_config(),
     pattern       = "",
+    -- Every detonate runs on a seed, whether or not you chose it. Rolling a new
+    -- one each time is the old behaviour -- a different kit every press -- but
+    -- the number is left in the field afterwards, so a kit you liked is never
+    -- unrecoverable. Untick to keep the seed and rebuild the same kit.
+    seed          = Rng.new_seed(),
+    seed_auto     = true,
     found_files   = nil,
     result        = nil,
   }
@@ -56,6 +63,10 @@ local function rescan_preview(state)
   local files = Scanner.scan_pool(pool)
   state.found_files = #files
   state.files = files
+  -- Computed here rather than per frame: a seed only describes a kit together
+  -- with the samples it drew from, and this is what tells two people whether
+  -- they are holding the same pack.
+  state.fingerprint = Rng.fingerprint(files)
   state.cat_counts = Categories.count_all(files)
   state.keyword_counts = {}
 end
@@ -313,6 +324,60 @@ function M.draw(app)
 
   r.ImGui_Dummy(ctx, 0, 4)
 
+  -- The seed. Every detonate uses one; this only decides whether you pick it.
+  r.ImGui_AlignTextToFramePadding(ctx)
+  Theme.label(ctx, "Seed")
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 110)
+  local seed_num_changed, seed_num = r.ImGui_InputInt(ctx, "##expl_seed", math.floor(tonumber(state.seed) or 0), 0, 0)
+  if seed_num_changed then
+    state.seed = math.max(0, seed_num)
+    state.seed_auto = false
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx,
+      "The same seed over the same samples builds the same kit --\n"
+        .. "on any machine, so a kit can be shared as a number\ninstead of as files.")
+  end
+
+  r.ImGui_SameLine(ctx)
+  if Theme.ghost_button(ctx, "Roll##expl_seed_roll", 54, 0) then
+    state.seed = Rng.new_seed()
+    state.seed_auto = false
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Pick a new seed now.") end
+
+  r.ImGui_SameLine(ctx)
+  local auto_changed, auto_value = r.ImGui_Checkbox(ctx, "New seed each detonate##expl_seed_auto", state.seed_auto ~= false)
+  if auto_changed then state.seed_auto = auto_value end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx,
+      "On: a different kit every press, and the seed it used is left\n"
+        .. "here afterwards -- so a kit you liked can always be rebuilt.\n"
+        .. "Off: the same kit every press, until you change the seed.")
+  end
+
+  -- The other half of the recipe. A seed on its own does not describe a kit:
+  -- the same seed over a different set of samples gives a different kit,
+  -- correctly but bafflingly. Two people comparing these two numbers can see
+  -- at once which of the two is out of step.
+  -- On its own line: the row above already holds three controls, and this page
+  -- has to survive a narrow window.
+  if state.fingerprint then
+    local pushed_fp = Theme.push_small(ctx)
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_TextColored(ctx, c.text_faint, "pack " .. state.fingerprint)
+    Theme.pop_font(ctx, pushed_fp)
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx,
+        "Identifies the samples this seed will draw from: how many\n"
+          .. "there are, and their names. A seed only rebuilds the same kit\n"
+          .. "for someone whose pack shows this same code.")
+    end
+  end
+
+  r.ImGui_Dummy(ctx, 0, 4)
+
   local st_changed, st_value = r.ImGui_Checkbox(ctx, "Stitched WAV + cues##expl_stitched", state.stitched)
   if st_changed then state.stitched = st_value end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Also joins all samples into one WAV with embedded cue points per slice (for slicers).\nWAV sources only; other formats are skipped.") end
@@ -377,6 +442,11 @@ function M.draw(app)
     if state.pattern ~= "" then
       pattern_specs = Categories.parse_pattern(state.pattern)
     end
+    -- Rolled before the run, not after, so the field shows the seed that built
+    -- the kit you are looking at rather than the one for the next press.
+    if state.seed_auto ~= false or not tonumber(state.seed) then
+      state.seed = Rng.new_seed()
+    end
     local kitdef, pools = Engine.kitdef_from_explosion({
       source_folder = state.source_folder,
       recursive     = state.recursive,
@@ -391,6 +461,7 @@ function M.draw(app)
       name_prefix   = (trim(state.kit_name) ~= "") and trim(state.kit_name) or nil,
       length_bias   = state.length_bias,
       tag_bias      = state.tag_bias,
+      seed          = math.floor(tonumber(state.seed) or 0),
     })
     Engine.rescan_pools(pools, true)
     state.batch = Engine.new_batch(kitdef, pools, app.script_path)
@@ -446,6 +517,20 @@ function M.draw(app)
       Theme.label(ctx, res.dest)
       r.ImGui_Dummy(ctx, 0, 2)
       r.ImGui_TextColored(ctx, c.success, string.format("%d samples copied", #res.results))
+      -- The recipe, next to the result: this number and the same samples
+      -- rebuild this exact kit, here or on anyone else's machine.
+      if res.seed then
+        local recipe = "Seed " .. tostring(res.seed)
+        if state.fingerprint then recipe = recipe .. "   pack " .. state.fingerprint end
+        r.ImGui_Text(ctx, recipe)
+        r.ImGui_SameLine(ctx)
+        if Theme.ghost_button(ctx, "Copy##expl_result_seed", 56, 0) then
+          if r.ImGui_SetClipboardText then r.ImGui_SetClipboardText(ctx, recipe) end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Copy the recipe. Someone whose pack shows the same\ncode can rebuild this exact kit from the seed.")
+        end
+      end
       if res.stitched then
         local stitched_name = res.stitched:match("([^/\\]+)$") or res.stitched
         r.ImGui_Text(ctx, "Stitched: " .. stitched_name)
