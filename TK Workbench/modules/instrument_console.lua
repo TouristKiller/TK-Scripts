@@ -31,10 +31,13 @@ local defaults = {
   last_active_fx = -1
 }
 
+local custom_images_path = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/CustomImages/"
+
 local state = {
   entries = {},
   screenshot_path = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/Screenshots/",
   screenshot_index = nil,
+  custom_image_index = nil,
   screenshot_cache = {},
   screenshot_missing = {},
   last_project_count = nil,
@@ -149,9 +152,54 @@ local function build_screenshot_index(force)
   end
 end
 
+local function build_custom_image_index(force)
+  if state.custom_image_index and not force then return end
+  state.custom_image_index = {}
+  local index = 0
+  while true do
+    local file_name = r.EnumerateFiles(custom_images_path, index)
+    if not file_name then break end
+    local base = file_name:match("(.+)%.png$") or file_name:match("(.+)%.jpg$") or file_name:match("(.+)%.jpeg$")
+    if base then
+      local key = normalize_plugin_name(base)
+      if key ~= "" and not state.custom_image_index[key] then state.custom_image_index[key] = file_name end
+      -- bestandsnamen slaan de type-prefix op als "VST3i_ " i.p.v. "VST3i: "
+      local untagged = normalize_plugin_name((base:gsub("^[%a%d]+_%s*", "")))
+      if untagged ~= "" and not state.custom_image_index[untagged] then state.custom_image_index[untagged] = file_name end
+    end
+    index = index + 1
+  end
+end
+
+local function get_custom_image_path(plugin_name)
+  build_custom_image_index(false)
+  local index = state.custom_image_index
+  if not index then return nil end
+  local file_name = index[normalize_plugin_name(plugin_name)] or index[normalize_plugin_name(clean_fx_name(plugin_name))]
+  if not file_name then return nil end
+  local path = custom_images_path .. file_name
+  if file_exists(path) then return path end
+  return nil
+end
+
 local function get_screenshot_path(plugin_name)
   if not plugin_name or plugin_name == "" then return nil end
   local now = r.time_precise and r.time_precise() or os.clock()
+  local custom = get_custom_image_path(plugin_name)
+  if custom then
+    local cached = state.screenshot_cache[plugin_name]
+    if cached then
+      if cached.path ~= custom then
+        cached.img = nil
+        cached.path = custom
+      end
+      cached.t = now
+    else
+      state.screenshot_cache[plugin_name] = { path = custom, t = now }
+    end
+    state.screenshot_missing[plugin_name] = nil
+    return custom
+  end
   local missing = state.screenshot_missing[plugin_name]
   if missing and now - missing < 600 then return nil end
   local cached = state.screenshot_cache[plugin_name]
@@ -501,6 +549,7 @@ local function draw_settings_popup(ctx, app, settings)
   changed, settings.show_screenshots = r.ImGui_Checkbox(ctx, "Show screenshots when available", settings.show_screenshots == true)
   if changed then
     if not settings.show_screenshots then state.screenshot_cache = {}; state.screenshot_missing = {} end
+    state.custom_image_index = nil
     if app.save_settings then app.save_settings() end
   end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Uses existing screenshots only") end

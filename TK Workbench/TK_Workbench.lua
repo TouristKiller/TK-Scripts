@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.64
+-- @version 0.6.65
 -- @changelog:
+-- v0.6.65
+--   + Plugin Browser, Instrument Rack and Instrument Console now show the custom images you assign in the TK FX Browser (right-click a plugin there > "Set Custom Image...") instead of the captured screenshot, so JSFX and other plugins that don't capture well can carry their own artwork everywhere
 -- v0.6.64
 --   + XY Pad: An assignment can now run inverted and cover a stretch of its target rather than all of it, set with an Invert switch and a Min and Max slider in the new "Travel" part of the right-click menu. It sits between the pad and the target rather than inside any one kind of it, so it works the same for an FX parameter, a volume, a pan or a send, and it applies to the recorded automation as well. Setting Min above Max is a second way of running it backwards. The row shows what is set as [INV 20-60%] against its right edge, out of reach of the truncation a long name goes through, and assigning something new clears the travel while leaving the slot's scaling and curve alone
 --   + XY Pad: The assignment rows now carry the live value of their target, so the pad can be ridden without the plugin window open. In corner mode the number in each corner is the value read back from the target instead of that corner's share of the blend - not the same thing once a curve, a travel or a level law sits in between, where a corner on a quarter of the puck can be a parameter at 40%. The share is what the corner's tint says, which is the better thing to show it with anyway

@@ -21,6 +21,8 @@ local local_favorites_path = workbench_root .. "plugin_browser_favorites.txt"
 local shared_ratings_path = fx_root .. "plugin_ratings.json"
 local shared_pinned_path = fx_root .. "pinned_plugins.txt"
 local custom_folders_path = fx_root .. "custom_folders.json"
+local custom_images_path = fx_root .. "CustomImages/"
+local custom_plugin_images_path = fx_root .. "custom_plugin_images.json"
 
 local defaults = {
   search_term = "",
@@ -82,6 +84,10 @@ local state = {
   recent_index = {},
   screenshot_path = fx_root .. "Screenshots/",
   screenshot_index = nil,
+  custom_image_index = nil,
+  custom_image_map = nil,
+  custom_image_signature = nil,
+  custom_image_signature_checked_at = 0,
   screenshot_cache = {},
   screenshot_cache_order = {},
   screenshot_load_queue = {},
@@ -644,6 +650,39 @@ local function build_screenshot_index(force)
   end
 end
 
+local function build_custom_image_index(force)
+  local now = r.time_precise()
+  if state.custom_image_index and not force and now - (state.custom_image_signature_checked_at or 0) < screenshot_signature_check_interval then return end
+  local files = {}
+  local index = 0
+  while true do
+    local file_name = r.EnumerateFiles(custom_images_path, index)
+    if not file_name then break end
+    local lower_file = file_name:lower()
+    if lower_file:match("%.png$") or lower_file:match("%.jpg$") or lower_file:match("%.jpeg$") then files[#files + 1] = file_name end
+    index = index + 1
+  end
+  local signature = tostring(#files) .. "|" .. table.concat(files, "|")
+  state.custom_image_signature_checked_at = now
+  if state.custom_image_index and not force and signature == state.custom_image_signature then return end
+  state.custom_image_signature = signature
+  state.custom_image_index = {}
+  state.custom_image_map = read_json(custom_plugin_images_path) or {}
+  for _, file_name in ipairs(files) do
+    local base = file_name:gsub("%.[Pp][Nn][Gg]$", ""):gsub("%.[Jj][Pp][Ee]?[Gg]$", "")
+    if base ~= "" then
+      local function index_key(value)
+        local key = normalize_plugin_name(value)
+        if key ~= "" and not state.custom_image_index[key] then state.custom_image_index[key] = file_name end
+      end
+      index_key(base)
+      index_key(strip_trailing_plugin_tag(base))
+      index_key(strip_channel_tag(base))
+      index_key(strip_trailing_plugin_tag(strip_channel_tag(base)))
+    end
+  end
+end
+
 local function screenshot_keys(plugin)
   if type(plugin) == "table" then
     local signature = table.concat({ tostring(plugin.name or ""), tostring(plugin.clean_name or ""), tostring(plugin.display_name or ""), tostring(plugin.alias or "") }, "\31")
@@ -767,10 +806,60 @@ local function requeue_screenshot_load(key, queued)
   end
 end
 
+local function resolve_custom_image(plugin, keys)
+  build_custom_image_index(false)
+  local index = state.custom_image_index
+  if not index then return nil end
+  local map = state.custom_image_map
+  if type(map) == "table" and type(plugin) == "table" then
+    local mapped = map[plugin.name] or map[plugin.display_name] or map[plugin.clean_name] or map[plugin.alias]
+    if type(mapped) == "string" and mapped ~= "" then
+      return mapped, "custom\1" .. mapped
+    end
+  elseif type(map) == "table" and type(plugin) == "string" then
+    local mapped = map[plugin]
+    if type(mapped) == "string" and mapped ~= "" then
+      return mapped, "custom\1" .. mapped
+    end
+  end
+  for _, candidate in ipairs(keys) do
+    local file_name = index[candidate]
+    if file_name then return file_name, "custom\1" .. candidate end
+  end
+  return nil
+end
+
 local function get_screenshot_image(ctx, plugin)
   build_screenshot_index(false)
   local keys = screenshot_keys(plugin)
   local now = r.time_precise()
+  local custom_file, custom_key = resolve_custom_image(plugin, keys)
+  if custom_key then
+    local entry = state.screenshot_cache[custom_key]
+    if entry then
+      touch_screenshot_image(custom_key)
+      state.screenshot_visible_keys[custom_key] = true
+      return entry.image
+    end
+    local custom_missing = state.screenshot_missing[custom_key]
+    if custom_missing == true or (custom_missing and now - custom_missing >= 2.0) then
+      state.screenshot_missing[custom_key] = nil
+      custom_missing = nil
+    end
+    if not custom_missing then
+      local custom_path = custom_images_path .. custom_file
+      if file_exists(custom_path) then
+        state.screenshot_visible_keys[custom_key] = true
+        if not state.screenshot_load_queued[custom_key] then
+          state.screenshot_load_queue[custom_key] = { key = custom_key, path = custom_path }
+          state.screenshot_load_order[#state.screenshot_load_order + 1] = custom_key
+          state.screenshot_load_queued[custom_key] = true
+        end
+        return nil
+      end
+      state.screenshot_missing[custom_key] = now
+    end
+  end
   for _, candidate in ipairs(keys) do
     if state.screenshot_cache[candidate] then
       touch_screenshot_image(candidate)
@@ -865,6 +954,9 @@ local function invalidate_screenshots(ctx)
   state.screenshot_index = nil
   state.screenshot_signature = nil
   state.screenshot_signature_checked_at = 0
+  state.custom_image_index = nil
+  state.custom_image_signature = nil
+  state.custom_image_signature_checked_at = 0
   state.screenshot_missing = {}
   state.screenshot_load_queue = {}
   state.screenshot_load_order = {}

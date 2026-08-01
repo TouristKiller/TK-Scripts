@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.11
+-- @version 3.2.12
 -- @changelog:
 --[[ 
+    v3.2.12:
+        + Custom images: assign your own artwork to a plugin via the right-click menu ("Set Custom Image..."), handy for JSFX and other plugins that don't capture well. The image is copied to the CustomImages folder, scaled down to a max width and used everywhere instead of the captured screenshot; "Remove Custom Image" brings the screenshot back.
+        + Custom images settings (SCREENSHOTS tab): on/off toggle, max width, "Open Custom Images Folder" and "Rescan Custom Images" - dropping a file named after the plugin straight into that folder works too, no need to assign it from the menu.
+        + Folder info bar: no longer pushes a scrollbar into the window (the reserved height is measured instead of fixed) and it now also shows for the Developer, All Plugins and Category subgroups.
     v3.2.11:
         + TK Notes: fixed per-selection text sizing - larger text now sits on the same baseline as the rest of the line, and the A- / A+ buttons no longer behave erratically (reliable increase/decrease with the selection kept active).
     v3.2.1:
@@ -1418,6 +1422,8 @@ function SetDefaultConfig()
         bulk_screenshot_lv2i = true,  
         default_folder = nil,
         screenshot_size_option = 2, -- 1 = 128x128, 2 = 500x(to scale), 3 = original
+        use_custom_images = true,
+        custom_image_max_width = 500,
         screenshot_default_folder_only = false,
         screenshot_controls_layout = "horizontal", -- "horizontal", "vertical", or "auto"
         apply_type_priority = true,
@@ -4056,7 +4062,11 @@ end
 
 local screenshot_exists_cache = {}
 
-function HasScreenshot(plugin_name)
+function HasScreenshot(plugin_name, ignore_custom)
+    if not ignore_custom and GetCustomImagePath then
+        local custom = GetCustomImagePath(plugin_name)
+        if custom then return custom end
+    end
     if screenshot_exists_cache[plugin_name] ~= nil then
         return screenshot_exists_cache[plugin_name]
     end
@@ -5154,6 +5164,198 @@ function SavePluginAliases()
 end
 
 LoadPluginAliases()
+
+-------------------------------------------------------------
+-- CUSTOM IMAGES (user artwork, overrules captured screenshots)
+custom_images_path = script_path .. "CustomImages" .. os_separator
+custom_plugin_images_path = script_path .. "custom_plugin_images.json"
+custom_plugin_images = {}
+custom_image_index_norm = nil
+custom_image_resolve_cache = {}
+
+function EnsureCustomImagesFolderExists()
+    r.RecursiveCreateDirectory(custom_images_path, 0)
+    return custom_images_path
+end
+
+function LoadCustomPluginImages()
+    local file = io.open(custom_plugin_images_path, "r")
+    if file then
+        local content = file:read("*all")
+        file:close()
+        local ok, data = pcall(json.decode, content)
+        custom_plugin_images = (ok and type(data) == "table") and data or {}
+    else
+        custom_plugin_images = {}
+    end
+end
+
+function SaveCustomPluginImages()
+    local file = io.open(custom_plugin_images_path, "w")
+    if file then
+        file:write(json.encode(custom_plugin_images))
+        file:close()
+    end
+end
+
+function BuildCustomImageIndex(force)
+    if custom_image_index_norm and not force then return end
+    custom_image_index_norm = {}
+    EnsureCustomImagesFolderExists()
+    local i = 0
+    while true do
+        local fname = r.EnumerateFiles(custom_images_path, i)
+        if not fname then break end
+        local base = fname:match('(.+)%.png$') or fname:match('(.+)%.jpg$') or fname:match('(.+)%.jpeg$')
+        if base then
+            local function index_norm(value)
+                local norm = NormalizePluginNameForMatch(value)
+                if norm ~= '' and not custom_image_index_norm[norm] then
+                    custom_image_index_norm[norm] = fname
+                end
+            end
+            index_norm(base)
+            index_norm(StripTrailingPluginTag(base))
+            index_norm(StripChannelTag(base))
+            index_norm(StripTrailingPluginTag(StripChannelTag(base)))
+        end
+        i = i + 1
+    end
+end
+
+function InvalidateCustomImageCaches()
+    custom_image_index_norm = nil
+    custom_image_resolve_cache = {}
+    screenshot_exists_cache = {}
+end
+
+function GetCustomImagePath(plugin_name)
+    if config and config.use_custom_images == false then return nil end
+    if type(plugin_name) ~= 'string' or plugin_name == '' then return nil end
+    local cached = custom_image_resolve_cache[plugin_name]
+    if cached ~= nil then
+        if cached == false then return nil end
+        return cached
+    end
+    local result = false
+    local mapped = custom_plugin_images[plugin_name]
+    if type(mapped) == 'string' and mapped ~= '' then
+        local mapped_path = custom_images_path .. mapped
+        if r.file_exists(mapped_path) then result = mapped_path end
+    end
+    if not result then
+        BuildCustomImageIndex()
+        local file = custom_image_index_norm[NormalizePluginNameForMatch(plugin_name)]
+            or custom_image_index_norm[NormalizePluginNameForMatch(StripTrailingPluginTag(plugin_name))]
+            or custom_image_index_norm[NormalizePluginNameForMatch(StripRedundantLeadingTag(plugin_name))]
+            or custom_image_index_norm[NormalizePluginNameForMatch(StripChannelTag(plugin_name))]
+        if type(file) == 'string' and file ~= '' then result = custom_images_path .. file end
+    end
+    custom_image_resolve_cache[plugin_name] = result
+    return result or nil
+end
+
+function HasCustomImage(plugin_name)
+    return GetCustomImagePath(plugin_name) ~= nil
+end
+
+function CopyImageFileBytes(src_path, dest_path)
+    local src = io.open(src_path, "rb")
+    if not src then return false end
+    local data = src:read("*a")
+    src:close()
+    local dst = io.open(dest_path, "wb")
+    if not dst then return false end
+    dst:write(data)
+    dst:close()
+    return true
+end
+
+function WriteScaledCustomImage(src_path, ext, dest_png)
+    local loader = (ext == "png") and r.JS_LICE_LoadPNG or r.JS_LICE_LoadJPG
+    if not loader or not r.JS_LICE_WritePNG then return false end
+    local bmp = loader(src_path)
+    if not bmp then return false end
+    local w = r.JS_LICE_GetWidth(bmp)
+    local h = r.JS_LICE_GetHeight(bmp)
+    local max_w = (config and config.custom_image_max_width) or 500
+    if w and h and w > 0 and h > 0 then
+        if w > max_w then
+            local new_w = max_w
+            local new_h = m_max(1, m_floor(h * (max_w / w)))
+            local dest = r.JS_LICE_CreateBitmap(true, new_w, new_h)
+            r.JS_LICE_ScaledBlit(dest, 0, 0, new_w, new_h, bmp, 0, 0, w, h, 1, "FAST")
+            r.JS_LICE_WritePNG(dest_png, dest, false)
+            r.JS_LICE_DestroyBitmap(dest)
+        else
+            r.JS_LICE_WritePNG(dest_png, bmp, false)
+        end
+    end
+    r.JS_LICE_DestroyBitmap(bmp)
+    return r.file_exists(dest_png) and true or false
+end
+
+function RemoveCustomImageForPlugin(plugin_name, skip_refresh)
+    if type(plugin_name) ~= 'string' or plugin_name == '' then return end
+    local resolved = GetCustomImagePath(plugin_name)
+    if resolved and r.file_exists(resolved) then os.remove(resolved) end
+    local safe_name = get_safe_name(plugin_name)
+    for _, ext in ipairs({ ".png", ".jpg", ".jpeg" }) do
+        local path = custom_images_path .. safe_name .. ext
+        if r.file_exists(path) then os.remove(path) end
+    end
+    custom_plugin_images[plugin_name] = nil
+    SaveCustomPluginImages()
+    InvalidateCustomImageCaches()
+    if not skip_refresh then
+        ClearScreenshotCache()
+        folder_changed = true
+    end
+end
+
+function ImportCustomImageForPlugin(plugin_name)
+    if type(plugin_name) ~= 'string' or plugin_name == '' then return end
+    if not r.JS_Dialog_BrowseForOpenFiles then return end
+    local rv, file = r.JS_Dialog_BrowseForOpenFiles("Choose Custom Image", "", "", "Image files\0*.png;*.jpg;*.jpeg\0All files\0*.*\0", false)
+    if rv ~= 1 or not file or file == "" then return end
+    local ext = file:match("%.(%w+)$")
+    ext = ext and ext:lower() or ""
+    if ext ~= "png" and ext ~= "jpg" and ext ~= "jpeg" then
+        r.MB("Only PNG and JPG images are supported.", "Custom Image", 0)
+        return
+    end
+    if ext == "jpeg" then ext = "jpg" end
+    EnsureCustomImagesFolderExists()
+    RemoveCustomImageForPlugin(plugin_name, true)
+    local safe_name = get_safe_name(plugin_name)
+    local dest = custom_images_path .. safe_name .. ".png"
+    if not WriteScaledCustomImage(file, ext, dest) then
+        dest = custom_images_path .. safe_name .. "." .. ext
+        if not CopyImageFileBytes(file, dest) then
+            r.MB("Could not copy the image.", "Custom Image", 0)
+            return
+        end
+    end
+    custom_plugin_images[plugin_name] = dest:match("([^/\\]+)$")
+    SaveCustomPluginImages()
+    InvalidateCustomImageCaches()
+    ClearScreenshotCache()
+    folder_changed = true
+end
+
+function OpenCustomImagesFolder()
+    local path = EnsureCustomImagesFolderExists()
+    local os_name = r.GetOS()
+    if os_name:match("Win") then
+        os.execute('start "" "' .. path .. '"')
+    elseif os_name:match("OSX") then
+        os.execute('open "' .. path .. '"')
+    else
+        os.execute('xdg-open "' .. path .. '" &')
+    end
+end
+
+LoadCustomPluginImages()
 
 function ShowPluginRatingUI(plugin_name)
     local rating = plugin_ratings[plugin_name] or 0
@@ -6378,9 +6580,45 @@ end
 
 _folder_count_cache = _folder_count_cache or {}
 _folder_count_cache_dirty = _folder_count_cache_dirty or false
+_subgroup_category_cache = _subgroup_category_cache or {}
 
 function InvalidateFolderCountCache()
     _folder_count_cache = {}
+    _subgroup_category_cache = {}
+end
+
+function GetSubgroupCategoryName(name)
+    if not name or name == '' or not CAT_TEST then return nil end
+    local cached = _subgroup_category_cache[name]
+    if cached ~= nil then
+        if cached == false then return nil end
+        return cached
+    end
+    local found = false
+    for i = 1, #CAT_TEST do
+        local cat = CAT_TEST[i]
+        if cat and (cat.name == "ALL PLUGINS" or cat.name == "DEVELOPER" or cat.name == "CATEGORY") then
+            for j = 1, #(cat.list or {}) do
+                if cat.list[j] and cat.list[j].name == name then
+                    found = cat.name
+                    break
+                end
+            end
+        end
+        if found then break end
+    end
+    _subgroup_category_cache[name] = found
+    return found or nil
+end
+
+function GetFolderInfoBarTarget()
+    if selected_folder and selected_folder ~= '' then return selected_folder, nil end
+    local name = browser_panel_selected
+    if name and name ~= '' then
+        local cat = GetSubgroupCategoryName(name)
+        if cat then return name, cat end
+    end
+    return nil
 end
 
 function BuildFolderBreadcrumbLabel(folder)
@@ -6423,6 +6661,9 @@ function GetFolderPluginCounts(folder)
         for _, fx in ipairs(list) do plugins[#plugins+1] = fx.fx_name end
     else
         plugins = GetPluginsForFolder(folder) or {}
+        if #plugins == 0 then
+            plugins = GetFxListForSubgroup(folder) or {}
+        end
     end
     local total = #plugins
     local with_shot = 0
@@ -6435,15 +6676,18 @@ function GetFolderPluginCounts(folder)
     return with_shot, total
 end
 
+folder_info_bar_height = folder_info_bar_height or 24
+
 function DrawFolderInfoBar()
     if not config.show_folder_info_bar then return end
-    local folder = selected_folder
-    if not folder or folder == '' then return end
-    local label = BuildFolderBreadcrumbLabel(folder)
+    local folder, category = GetFolderInfoBarTarget()
+    if not folder then return end
+    local label = category and (category .. "  \xE2\x80\xBA  " .. folder) or BuildFolderBreadcrumbLabel(folder)
     local with_shot, total = GetFolderPluginCounts(folder)
     local count_text = string.format("%d / %d", with_shot, total)
     local sep = "   \xE2\x80\xA2   "
     local full_text = label .. sep .. count_text
+    local start_y = r.ImGui_GetCursorPosY(ctx)
     r.ImGui_Separator(ctx)
     if InfoBarFont and r.ImGui_ValidatePtr(InfoBarFont, 'ImGui_Resource*') then
         r.ImGui_PushFont(ctx, InfoBarFont)
@@ -6458,6 +6702,8 @@ function DrawFolderInfoBar()
     if InfoBarFont and r.ImGui_ValidatePtr(InfoBarFont, 'ImGui_Resource*') then
         r.ImGui_PopFont(ctx)
     end
+    local used = math.ceil(r.ImGui_GetCursorPosY(ctx) - start_y)
+    if used > 0 then folder_info_bar_height = used end
 end
 
 
@@ -7917,6 +8163,29 @@ function ShowConfigWindow()
             r.ImGui_PushItemWidth(ctx, slider_width)
             _, config.screenshot_display_size = r.ImGui_SliderInt(ctx, "##Display Size", config.screenshot_display_size, 100, 500)
             r.ImGui_PopItemWidth(ctx)
+            NewSection("CUSTOM IMAGES:")
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local ci_changed
+            ci_changed, config.use_custom_images = r.ImGui_Checkbox(ctx, "Use Custom Images", config.use_custom_images ~= false)
+            if ci_changed then InvalidateCustomImageCaches(); ClearScreenshotCache(); folder_changed = true end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Max Width")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            _, config.custom_image_max_width = r.ImGui_SliderInt(ctx, "##Custom Image Max Width", config.custom_image_max_width or 500, 200, 1000)
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            if r.ImGui_Button(ctx, "Open Custom Images Folder", slider_width * 2) then
+                OpenCustomImagesFolder()
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Rescan Custom Images", slider_width) then
+                InvalidateCustomImageCaches()
+                ClearScreenshotCache()
+                folder_changed = true
+            end
             NewSection("PERFORMANCE:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             r.ImGui_Text(ctx, "Max Textures/Frame")
@@ -13099,7 +13368,7 @@ function ShowPluginContextMenuInline(plugin_name)
                 folder_changed = true
             end)
         end
-        if HasScreenshot(plugin_name) then
+        if HasScreenshot(plugin_name, true) then
             if r.ImGui_MenuItem(ctx, "Remove Screenshot") then
                 local norm = NormalizePluginNameForMatch(plugin_name)
                 local indexed_file = screenshot_index_norm and screenshot_index_norm[norm]
@@ -13133,6 +13402,15 @@ function ShowPluginContextMenuInline(plugin_name)
                 ClearScreenshotCache()
                 BuildScreenshotIndex(true)
                 folder_changed = true
+            end
+        end
+
+        if r.ImGui_MenuItem(ctx, "Set Custom Image...") then
+            ImportCustomImageForPlugin(plugin_name)
+        end
+        if HasCustomImage(plugin_name) then
+            if r.ImGui_MenuItem(ctx, "Remove Custom Image") then
+                RemoveCustomImageForPlugin(plugin_name)
             end
         end
 
@@ -23780,7 +24058,7 @@ function ShowScreenshotWindow()
         end
     end
 
-    local _info_bar_h = (config.show_folder_info_bar and selected_folder and selected_folder ~= '') and 24 or 0
+    local _info_bar_h = (config.show_folder_info_bar and GetFolderInfoBarTarget() ~= nil) and folder_info_bar_height or 0
     local screenshot_list_open = r.ImGui_BeginChild(ctx, "ScreenshotList", 0, _info_bar_h > 0 and -_info_bar_h or 0, 0, r.ImGui_WindowFlags_NoNavInputs())
     if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2); popped_view_stylevars = true end
     if screenshot_list_open then
