@@ -169,6 +169,10 @@ end
 function M.push_h1(ctx) return push_font(ctx, fonts.h1, 22) end
 function M.push_h2(ctx) return push_font(ctx, fonts.h2, 16) end
 function M.push_small(ctx) return push_font(ctx, fonts.small, 12) end
+-- Smaller still, for text that labels something rather than says anything --
+-- the version beside the logo. Same face as small, asked for at a lower size,
+-- so it costs no extra font.
+function M.push_tiny(ctx) return push_font(ctx, fonts.small, 10) end
 function M.push_body(ctx) return push_font(ctx, fonts.body, 14) end
 function M.pop_font(ctx, pushed)
   if pushed and r.ImGui_PopFont then pcall(r.ImGui_PopFont, ctx) end

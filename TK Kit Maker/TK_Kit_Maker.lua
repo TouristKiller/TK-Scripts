@@ -5,9 +5,12 @@
 --   0.2.39
 --   + The Kit Maker wordmark in the header, in place of the word. It is decoded
 --     once and drawn as a texture after that, which costs less per frame than
---     laying out the text did. Sized to the heading it replaces, so the version
---     number and the byline still hang where they did, and it falls back to the
---     words if the image is missing.
+--     laying out the text did, and it falls back to the words if the image is
+--     missing. "by TK & Flurmechanik" sits under it and the version number off
+--     its top-right shoulder, a size smaller, so the three read in that order.
+--     Four constants at the top of ui/main_window.lua size and place the lot;
+--     everything else measures itself against whatever the logo turns out to be,
+--     including the row of buttons beside it.
 --
 --   0.2.38
 --   + Mono / Stereo added to the tag filter, for the samplers and grooveboxes

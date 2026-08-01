@@ -132,6 +132,27 @@ end
 -- which is what a user gets if the PNG was not installed alongside the script.
 local LOGO_FILE = "ui/Kitmaker_logo.png"
 
+-- The dials for the header. Nothing else needs touching to resize it: the
+-- byline, the version number and the row of buttons beside the logo all measure
+-- themselves against whatever the logo turns out to be.
+--
+--   SCALE   how much taller than the heading it replaces
+--   LIFT    pixels to raise it, to take up the slack above a wide, short mark
+--   GAP     pixels between the logo's bottom edge and the byline
+--   INDENT  byline indent, as a fraction of the logo's width
+--
+-- GAP is negative on purpose, and the reason is worth knowing before anyone
+-- "corrects" it. Text is drawn from the top of its line box, and a line box
+-- carries about four pixels of empty space above the letters. At GAP 0 the
+-- letters therefore sit four pixels lower than they look like they should. The
+-- logo has no transparent margin of its own -- its ink runs to all four edges
+-- -- so the negative value is buying back the font's padding, not overlapping
+-- the picture. Around -3 the two just clear each other.
+local LOGO_SCALE = 1.4
+local LOGO_LIFT = 8
+local BYLINE_GAP = -3
+local BYLINE_INDENT = 0.04
+
 local function header_logo(app)
   local cached = app.logo
   if cached and r.ImGui_ValidatePtr then
@@ -164,24 +185,31 @@ end
 local function draw_header(app)
   local ctx = app.ctx
 
-  -- Sized to the heading it replaces, so nothing below it moves: the subtitle
-  -- and the version still hang off the same baseline, and the buttons on the
-  -- right still measure from the same place.
+  -- Measured against the heading it replaces, then scaled. The two numbers to
+  -- turn are the four at the top of this file.
   local pushed = Theme.push_h1(ctx)
   local line_h = select(2, r.ImGui_CalcTextSize(ctx, "Kit Maker"))
   Theme.pop_font(ctx, pushed)
   line_h = tonumber(line_h) or 24
 
   local logo = header_logo(app)
+  local logo_h = logo and math.floor(line_h * LOGO_SCALE + 0.5) or line_h
+  local logo_w = logo and (logo_h * (logo.w / logo.h)) or 0
   if logo then
-    r.ImGui_Image(ctx, logo.tex, line_h * (logo.w / logo.h), line_h)
+    -- A wide, short mark leaves slack above it that a line of text would have
+    -- filled. Raising the item rather than the picture keeps everything that
+    -- measures itself against the logo -- byline, version, buttons -- in step.
+    if LOGO_LIFT ~= 0 then
+      r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) - LOGO_LIFT)
+    end
+    r.ImGui_Image(ctx, logo.tex, logo_w, logo_h)
   else
     local p = Theme.push_h1(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.accent, "Kit Maker")
     Theme.pop_font(ctx, p)
   end
 
-  local title_x, _ = r.ImGui_GetItemRectMin(ctx)
+  local title_x, title_top_y = r.ImGui_GetItemRectMin(ctx)
   local title_x2, title_bottom_y = r.ImGui_GetItemRectMax(ctx)
   -- Opened here, drawn further down: the popup has to be built once the title's
   -- font is off the stack, or the menu renders in the heading face.
@@ -189,26 +217,37 @@ local function draw_header(app)
   local title_hovered = r.ImGui_IsItemHovered(ctx)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   local pushed_small = Theme.push_small(ctx)
-  -- An image's rect ends where the picture ends; a line of text carries
-  -- descender space below its baseline. Hence the extra pixels under the logo,
-  -- so the two do not sit at different distances from the name above them.
-  r.ImGui_DrawList_AddText(dl, title_x + 1, title_bottom_y + (logo and 1 or -2),
-    Theme.colors.text_dim, "by TK & Flurmechanik")
 
-  -- The version rides on the title's baseline, tight against the name. Drawn
-  -- rather than laid out, because an ordinary item would sit on the top of the
-  -- line instead of the baseline -- but its width is reserved immediately
-  -- after, so the buttons on the right cannot run into it however narrow the
-  -- window gets. They are right-aligned within whatever is left.
+  -- Under the mark, clear of it. Overlapping was tried and does not work with
+  -- this wordmark: its swash runs the full width along the bottom, so any
+  -- overlap draws a line straight through the text.
+  --
+  -- Drawn rather than laid out, so it costs no vertical space of its own -- it
+  -- hangs in the gap the header already has.
+  local sub_y = title_bottom_y + (logo and BYLINE_GAP or -2)
+  r.ImGui_DrawList_AddText(dl, title_x + (logo and logo_w * BYLINE_INDENT or 1),
+    sub_y, Theme.colors.text_dim, "by TK & Flurmechanik")
+
+  Theme.pop_font(ctx, pushed_small)
+
+  -- Off the mark's top-right shoulder, a size down from the byline: it labels
+  -- the logo rather than saying anything, so it should not compete with it.
+  --
+  -- Drawn rather than laid out, because an ordinary item would sit at the top
+  -- of the line -- but its width is reserved immediately after, so the buttons
+  -- on the right cannot run into it however narrow the window gets. They are
+  -- right-aligned within whatever is left.
   local version_w = 0
   if app.version then
+    local pushed_tiny = Theme.push_tiny(ctx)
     local label = app.version
     local w, h = r.ImGui_CalcTextSize(ctx, label)
-    version_w = (w or 0) + 6
-    r.ImGui_DrawList_AddText(dl, title_x2 + 6, title_bottom_y - (h or 10) - 4,
-      Theme.colors.text_faint, label)
+    h = tonumber(h) or 10
+    version_w = (tonumber(w) or 0) + 8
+    local y = logo and (title_top_y + 1) or (title_bottom_y - h - 4)
+    r.ImGui_DrawList_AddText(dl, title_x2 + 6, y, Theme.colors.text_faint, label)
+    Theme.pop_font(ctx, pushed_tiny)
   end
-  Theme.pop_font(ctx, pushed_small)
 
   if title_hovered then
     r.ImGui_SetTooltip(ctx, "Right-click for the manual and Kit Maker's folders")
@@ -224,21 +263,35 @@ local function draw_header(app)
   local manager_w = 108
   local close_size = 16
   local gap = 10
+  local fh = r.ImGui_GetFrameHeight(ctx)
+
+  -- The logo is taller than a button, so the row beside it has to be centred
+  -- against the logo rather than left at the top of the line. SameLine resets
+  -- the Y each time, which is why this is applied per widget instead of once.
+  local row_lift = math.max(0, ((logo and logo_h or line_h) - fh) * 0.5)
+  local function centre_on_logo()
+    if row_lift > 0 then
+      r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + row_lift)
+    end
+  end
+
   r.ImGui_SameLine(ctx)
   local avail = select(1, r.ImGui_GetContentRegionAvail(ctx))
   local cluster_w = theme_w + gap + manager_w + gap + close_size
   r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + math.max(0, avail - cluster_w))
+  centre_on_logo()
   r.ImGui_AlignTextToFramePadding(ctx)
   Theme.theme_combo(ctx, theme_w)
 
   r.ImGui_SameLine(ctx, 0, gap)
+  centre_on_logo()
   if tab_button(ctx, "Kit Manager", "Open the kit manager window", app.browser and app.browser.manager_visible == true, manager_w) then
     app.browser.manager_visible = app.browser.manager_visible ~= true
     save(app)
   end
 
   r.ImGui_SameLine(ctx, 0, gap)
-  local fh = r.ImGui_GetFrameHeight(ctx)
+  centre_on_logo()
   r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + (fh - close_size) * 0.5 - 4)
   if close_button(ctx, close_size) then
     app.request_close = true
