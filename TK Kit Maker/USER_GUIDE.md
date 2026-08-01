@@ -92,8 +92,14 @@ button top-left shows which you are in and switches to the other:
   toggle that plays a sample the moment you click it (double-click always
   plays).
 - Right-click a sample to **Load to RS5K on selected track**, drop it into a
-  specific **rack slot**, or **Show in Explorer**. Drag a sample onto a track
-  to load it; hold **Alt** while dragging for REAPER's native file drag.
+  specific **rack slot**, or **Show in Explorer**.
+- **Drag** a sample onto a REAPER track or a Kit Manager pad to load it into
+  RS5K there.
+- **Alt+drag** starts a real file drag instead, the kind the operating system
+  handles — so the sample can be dropped into *any* sampler that accepts files
+  (Kontakt, Battery, whatever you use), or into another program entirely. This
+  one needs the **TK Native Helper** extension, installed separately through
+  ReaPack; everything else works without it.
 
 ### Sample analysis & tags
 

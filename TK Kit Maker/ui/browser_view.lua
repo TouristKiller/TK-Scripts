@@ -848,7 +848,12 @@ end
 local function start_external_file_drag(app, file_path)
   local state = app.browser
   if not r.TK_StartFileDrag then
-    state.preview_error = "TK Native Helper is not installed. Install 'reaper_tk_native_helper' via ReaPack (Extensions) and restart REAPER."
+    -- Not a failure of Kit Maker's, and worth saying what still works: this is
+    -- one optional extension away, and everything else keeps going without it.
+    state.preview_error =
+      "Alt+drag needs the TK Native Helper extension. Install "
+      .. "'reaper_tk_native_helper' from ReaPack (Extensions) and restart REAPER. "
+      .. "Dragging without Alt works without it."
     return false
   end
   local ok = pcall(r.TK_StartFileDrag, file_path)
@@ -1552,7 +1557,16 @@ local function draw_sample_row(app, file_path)
   end
 
   if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, file_path)
+    -- Both routes are spelled out because neither is discoverable and they end
+    -- up in different places. A plain drag carries a ReaImGui payload, which
+    -- only Kit Maker's own windows and REAPER's tracks can see. Holding Alt
+    -- hands the file to the operating system instead, and that is the one any
+    -- other sampler will accept.
+    local alt = r.TK_StartFileDrag
+      and "Alt+drag: a real file drag -- into any sampler, or out of REAPER."
+      or "Alt+drag drops into any sampler (needs the TK Native Helper extension)."
+    r.ImGui_SetTooltip(ctx, file_path
+      .. "\n\nDrag onto a track or a rack pad to load it into RS5K.\n" .. alt)
     if r.ImGui_IsMouseDoubleClicked(ctx, 0) then
       play_preview(app, file_path)
     end

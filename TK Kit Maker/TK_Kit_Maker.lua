@@ -1,7 +1,15 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.35
+-- @version 0.2.36
 -- @changelog:
+--   0.2.36
+--   + Alt+drag a sample for a real file drag: the operating system's kind, so
+--     it can be dropped into any sampler that takes files, or into another
+--     program entirely. This was already in, and unfindable -- the sample
+--     tooltip now names it, alongside what a plain drag does, since the two end
+--     up in different places. Needs the TK Native Helper extension; the message
+--     when it is missing now says so, and says that everything else still works.
+--
 --   0.2.35
 --   + Seeds in Explosion. Every detonate runs on one, and it is left in the
 --     field afterwards, so a kit you liked is never lost -- untick "New seed

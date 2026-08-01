@@ -410,7 +410,7 @@
 
 <category name="TK Kit Maker">
     <reapack name="TK_Kit_Maker.lua" type="script" desc="TK Kit Maker">
-        <version name="0.2.35" author="TouristKiller &amp; Flurmechanik" time="2026-07-31T17:10:00Z">
+        <version name="0.2.36" author="TouristKiller &amp; Flurmechanik" time="2026-08-01T16:30:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/TK_Kit_Maker.lua</source>
             <source file="core/analyzer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/analyzer.lua</source>
             <source file="core/bias.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/bias.lua</source>
@@ -453,6 +453,9 @@
             <source file="ui/sequencer_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/sequencer_view.lua</source>
             <source file="USER_GUIDE.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/USER_GUIDE.pdf</source>
             <changelog><![CDATA[
+v0.2.36
++ Alt+drag a sample for a real file drag - the operating system's kind, so it can be dropped into any sampler that takes files (Kontakt, Battery, anything), or into another program entirely. This was already in the script and unfindable: the sample tooltip now names it, alongside what a plain drag does, since the two end up in different places. Alt+drag needs the TK Native Helper extension; the message when it is missing now says so, and says that everything else works without it.
+
 v0.2.35
 + Seeds in Explosion. Every detonate runs on one and leaves it in the field afterwards, so a kit you liked is never lost - untick "New seed each detonate" and the same seed rebuilds the same kit. The same seed over the same samples gives the same kit on anyone's machine, so a good combination can be shared as a number instead of as files. Next to it is the pack's fingerprint, because a seed alone does not describe a kit: matching fingerprints are what tell two people they are drawing from the same material.
 # Picking no longer uses math.random. Up to Lua 5.3 that is the C library's generator, whose sequence differs between Windows and macOS - so a shared seed would have built a different kit for the person you shared it with, which is the one thing it exists to prevent. Kit Maker now carries its own, in arithmetic that behaves identically everywhere. The step sequencer's randomisation is untouched.
