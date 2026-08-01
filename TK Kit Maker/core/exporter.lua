@@ -117,11 +117,23 @@ function M.write_midilog(dest_dir, kit_name, results)
   f:close()
 end
 
-function M.write_sourcelog(dest_dir, kit_name, results)
+-- recipe (optional): { seed = n, pack = "404-3A9C21" }. Written into the log so
+-- the kit carries the two numbers that rebuild it. The sample paths below are
+-- only meaningful on the machine that made the kit; the recipe is the part that
+-- travels, and this is the file it belongs in.
+function M.write_sourcelog(dest_dir, kit_name, results, recipe)
   local path = dest_dir .. "/" .. kit_name .. " - Sources.txt"
   local f = io.open(path, "w")
   if not f then return end
-  f:write("Kit: " .. kit_name .. "\n\n")
+  f:write("Kit: " .. kit_name .. "\n")
+  if recipe and recipe.seed then
+    f:write("Seed: " .. tostring(recipe.seed) .. "\n")
+    if recipe.pack then
+      f:write("Pack: " .. tostring(recipe.pack) .. "\n")
+    end
+    f:write("\nThe same seed over a pack with the same code rebuilds this kit.\n")
+  end
+  f:write("\n")
   for _, res in ipairs(results) do
     f:write(res.out_name .. "\n    " .. res.sample .. "\n")
   end

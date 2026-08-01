@@ -845,6 +845,27 @@ local function load_sample_to_rack_slot(app, parent_track, sample_path, slot)
   return false
 end
 
+-- Opens the file manager with the file selected.
+--
+-- Not CF_ShellExecute on the file: that means "open this with whatever handles
+-- it", so a .wav went to the user's audio player instead of to Explorer, which
+-- is exactly what the menu item promises not to do. Only the file manager
+-- itself can highlight a file, and it takes an argument to do it. Same approach
+-- as TK Workbench.
+local function reveal_in_explorer(path)
+  if not path or path == "" then return false end
+  local os_name = r.GetOS() or ""
+  if os_name:match("^Win") then
+    os.execute('explorer /select,"' .. path:gsub("/", "\\") .. '"')
+  elseif os_name:match("^OSX") or os_name:match("^macOS") then
+    os.execute('open -R "' .. path .. '"')
+  elseif r.CF_ShellExecute then
+    -- Nothing portable selects a file on Linux; the folder is the next best.
+    r.CF_ShellExecute((path:match("^(.*)[/\\][^/\\]*$")) or path)
+  end
+  return true
+end
+
 local function start_external_file_drag(app, file_path)
   local state = app.browser
   if not r.TK_StartFileDrag then
@@ -1069,9 +1090,19 @@ local function create_rs5k_drum_rack_from_collection(app)
     return false
   end
 
+  -- The stitched WAV is one long file containing every sample in the kit, made
+  -- for slicers. It is not a pad sound, and it used to become one: the mapping
+  -- sorts by filename and digits sort before letters, so "<kit> - Stitched.wav"
+  -- always landed last. With sixteen one-shots it was number seventeen and fell
+  -- outside the rack unnoticed -- but a kit of eight put it on pad nine.
   local files = {}
+  local stitched = 0
   for i = 1, #scanned do
-    files[i] = scanned[i]
+    if file_leaf(scanned[i]):lower():match("%s%-%s*stitched%.wav$") then
+      stitched = stitched + 1
+    else
+      files[#files + 1] = scanned[i]
+    end
   end
   table.sort(files, function(a, b)
     return file_leaf(a):lower() < file_leaf(b):lower()
@@ -1125,6 +1156,10 @@ local function create_rs5k_drum_rack_from_collection(app)
 
   if total_files > #mapped then
     state.preview_error = "Rack created with " .. tostring(#mapped) .. " mapped samples."
+  elseif stitched > 0 then
+    -- Said out loud rather than left silent: the kit folder holds a file the
+    -- rack does not, and that is worth knowing before you go looking for it.
+    state.preview_error = string.format("Rack created with %d samples. Stitched WAV skipped.", #mapped)
   else
     state.preview_error = nil
   end
@@ -1647,8 +1682,8 @@ sample_menu_items = function(app, file_path)
       end
       r.ImGui_EndMenu(ctx)
     end
-    if r.CF_ShellExecute and r.ImGui_MenuItem(ctx, "Show in Explorer##" .. file_path) then
-      r.CF_ShellExecute(file_path)
+    if r.ImGui_MenuItem(ctx, "Show in Explorer##" .. file_path) then
+      reveal_in_explorer(file_path)
     end
 end
 

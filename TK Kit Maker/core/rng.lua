@@ -99,20 +99,29 @@ end
 
 -- A pack's fingerprint. A seed alone does not describe a kit -- the same seed
 -- over a different set of samples gives a different kit, correctly but
--- confusingly. This is the other half of the answer: cheap, order-independent
--- (the caller sorts), and good enough to say "we are not looking at the same
--- pack" rather than to prove that we are.
+-- confusingly. This is the other half of the answer: cheap, and good enough to
+-- say "we are not looking at the same pack" rather than to prove that we are.
+--
+-- Sorted here rather than trusting the caller, because the callers differ: a
+-- folder scan arrives in order, but a Builder's pools are walked with pairs()
+-- and come out in whatever order the hash table gives, which is not even stable
+-- between two runs of the same script.
 function M.fingerprint(files)
-  local n = #files
+  local names = {}
+  for i = 1, #files do
+    names[i] = files[i]:match("([^/\\]+)$") or files[i]
+  end
+  table.sort(names)
+
   local h = 5381
-  for i = 1, n do
-    local name = files[i]:match("([^/\\]+)$") or files[i]
+  for i = 1, #names do
+    local name = names[i]
     for j = 1, #name do
       -- Kept under 2^53 by folding at every step, for the same reason as above.
       h = (h * 33 + name:byte(j)) % 16777216
     end
   end
-  return string.format("%d-%06X", n, h)
+  return string.format("%d-%06X", #names, h)
 end
 
 return M

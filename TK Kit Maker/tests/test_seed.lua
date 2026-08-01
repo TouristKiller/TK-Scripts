@@ -133,6 +133,51 @@ check("kit 1 is the seed itself", Engine.seed_for({ seed = 84213 }, 1) == 84213)
 check("kit 34 is seed + 33", Engine.seed_for({ seed = 84213 }, 34) == 84246)
 check("no seed means no seed", Engine.seed_for({}, 3) == nil)
 
+-- 7. The fingerprint must not depend on the order it is handed the files. The
+-- Builder walks its pools with pairs(), whose order is not stable even between
+-- two runs of the same script -- so an order-sensitive hash would have given
+-- the same user a different code each time they opened the dialog.
+print("fingerprint order")
+local forward = { "D:/P/a.wav", "D:/P/b.wav", "D:/P/c.wav" }
+local reverse = { "D:/P/c.wav", "D:/P/a.wav", "D:/P/b.wav" }
+check("order does not change the code",
+  Rng.fingerprint(forward) == Rng.fingerprint(reverse), Rng.fingerprint(reverse))
+
+local pools = {
+  pool_1 = { files = { "D:/P/a.wav", "D:/P/b.wav" } },
+  pool_2 = { files = { "D:/P/c.wav", "D:/P/a.wav" } },  -- a.wav in both
+}
+check("pooled files are deduplicated",
+  Engine.pack_fingerprint(pools) == Rng.fingerprint(forward), Engine.pack_fingerprint(pools))
+check("no pools, no code", Engine.pack_fingerprint({}) == nil)
+
+-- 8. The recipe has to reach the sources log, which is the only thing an
+-- exported kit carries with it.
+print("sources log")
+local Exporter = require("core.exporter")
+local dir = (os.getenv("TEMP") or "."):gsub("\\", "/") .. "/tkkm_seedtest"
+os.execute('mkdir "' .. dir:gsub("/", "\\") .. '" 2>nul')
+local rows = { { out_name = "001_C2_kick.wav", sample = "D:/P/a.wav" } }
+
+Exporter.write_sourcelog(dir, "With Recipe", rows, { seed = 84213, pack = "3-D38751" })
+local f = io.open(dir .. "/With Recipe - Sources.txt", "r")
+local body = f and f:read("*a") or ""
+if f then f:close() end
+check("the seed is written", body:find("Seed: 84213", 1, true) ~= nil, body)
+check("the pack code is written", body:find("Pack: 3-D38751", 1, true) ~= nil, body)
+check("the samples are still listed", body:find("001_C2_kick.wav", 1, true) ~= nil, body)
+
+-- An unseeded kit has no recipe, and must not grow an empty or misleading one.
+Exporter.write_sourcelog(dir, "No Recipe", rows, nil)
+local g = io.open(dir .. "/No Recipe - Sources.txt", "r")
+local plain = g and g:read("*a") or ""
+if g then g:close() end
+check("no recipe, no Seed line", plain:find("Seed", 1, true) == nil, plain)
+check("but still a usable log", plain:find("001_C2_kick.wav", 1, true) ~= nil, plain)
+
+os.remove(dir .. "/With Recipe - Sources.txt")
+os.remove(dir .. "/No Recipe - Sources.txt")
+
 print()
 print(fail == 0 and "ALL CHECKS PASSED" or (fail .. " CHECK(S) FAILED"))
 

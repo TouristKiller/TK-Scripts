@@ -65,6 +65,10 @@ M.BANDS = Analyzer.BANDS
 
 M.TRANSIENTS = { "SOFT", "MEDIUM", "HARD", "IMPACT" }
 M.DECAYS     = { "SHORT", "MEDIUM", "LONG", "LEGATO" }
+-- Not a judgement about the sound, but about the file: hardware samplers and
+-- grooveboxes that only play mono either refuse a stereo file or sum it, and
+-- summing is where the phase problems come from.
+M.CHANNELS   = { "MONO", "STEREO" }
 M.TONALITIES = { "NOISE", "PITCHED", "DEFINED", "CHROMATIC" }
 M.SPACES     = { "DRY", "ROOM", "HALL", "WET" }
 M.SOURCES    = { "ACOUSTIC", "ELECTRONIC", "FOLEY" }
@@ -479,6 +483,9 @@ function M.derive(m)
     decay = bucket(m.decay_ms, { 120, 450, 1500 }),
     tonality = tonality,
     space = space01 and bucket(space01, { 0.18, 0.38, 0.62 }) or nil,
+    -- Measured all along -- it is what decides whether the space axis reports
+    -- anything -- and simply never offered as something to filter on.
+    channels = ((m.nch or 1) >= 2) and 2 or 1,
   }
 end
 
@@ -490,6 +497,7 @@ function M.derive_labels(d)
     decay = M.DECAYS[d.decay],
     tonality = M.TONALITIES[d.tonality],
     space = d.space and M.SPACES[d.space] or nil,
+    channels = M.CHANNELS[d.channels],
   }
 end
 
@@ -735,11 +743,12 @@ end
 -- Unmeasured samples carry no labels, so an active filter excludes them --
 -- correct here, where the bias treats them as average instead.
 
-M.FILTER_AXES = { "category", "band", "transient", "decay", "tonality", "space", "source" }
+M.FILTER_AXES = { "category", "band", "transient", "decay", "tonality", "space", "channels", "source" }
 
 M.FILTER_LABELS = {
   category = "Category", band = "Frequency", transient = "Transient",
-  decay = "Decay", tonality = "Tonality", space = "Space", source = "Source",
+  decay = "Decay", tonality = "Tonality", space = "Space", channels = "Channels",
+  source = "Source",
 }
 
 -- Category and source are read from the path rather than the audio, so those
@@ -794,6 +803,7 @@ local function axis_values(axis_id)
   elseif axis_id == "transient" then return M.TRANSIENTS
   elseif axis_id == "decay" then return M.DECAYS
   elseif axis_id == "tonality" then return M.TONALITIES
+  elseif axis_id == "channels" then return M.CHANNELS
   elseif axis_id == "space" then return M.SPACES
   elseif axis_id == "source" then return M.SOURCES
   elseif axis_id == "category" then

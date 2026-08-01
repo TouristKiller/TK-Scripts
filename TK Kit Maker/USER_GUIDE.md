@@ -157,6 +157,12 @@ The seventeen categories are **Kick · Snare · Hihat · Open hihat · Closed hi
 those same files will not respond to a Builder slot filter or an Explosion
 pattern either.
 
+**Channels** splits the collection into **MONO** and **STEREO**. Useful when
+you are building for hardware: plenty of samplers and grooveboxes either refuse
+a stereo file or sum it to mono, and summing is where the phase problems come
+from. This one needed no new analysis — the channel count has always been
+measured, since it decides whether the Space axis reports anything at all.
+
 Every other tag needs a measurement, so while one of those is selected the
 unanalysed samples drop out of the list — the popup says how many.
 
@@ -282,7 +288,8 @@ moment's work.
   Explosion** sets it as the Explosion source, or **Add as Builder Pool**
   creates a pool from it.
 - From a **KITS** collection: **Create Drum Rack (RS5K)** builds a
-  ready-to-play rack in REAPER, mapped from note 36 up.
+  ready-to-play rack in REAPER, mapped from note 36 up. A stitched WAV in the
+  folder is left out — it is the whole kit in one file, not a pad sound.
 - **Export … samples as a kit folder…** (right-click the collection you have
   open) copies what the file list is showing into a new kit folder, numbered and
   renamed like any other Kit Maker export. The filters *are* the selection:
@@ -357,6 +364,15 @@ Some fine print worth knowing:
   seed, so the same seed gives the same kit under the same name.
 - Changing anything else — the slot pattern, the character bias, the max length
   — changes the kit too. The seed reproduces a roll of the dice, not a recipe.
+- The **Builder** has the same thing, in its Batch section. There the seed sits
+  on the kit definition rather than on the dialog, so a **preset carries its
+  seed**: a saved Builder setup and its seed rebuild the same kits together.
+  It reproduces more, too — the pools, the slots and the bias, not only the
+  picks.
+- Switch on the **Sources log** and the exported kit carries its own recipe:
+  the log opens with the seed and the pack code. The sample paths further down
+  only mean anything on the machine that made the kit; those two lines are the
+  part that travels.
 
 ### Character
 
@@ -450,6 +466,8 @@ separator, with a live **Preview** of the resulting filename.
 - **Kit name prefix** (empty = random) and a **Start word** + **Generate kit
   name** helper.
 - **Kit count** (1–200) to make many variations in one run.
+- **Seed** — the number the picks start from, with the pack code underneath.
+  See *Seeds* under Explosion; it works the same here, and a preset saves it.
 - Optional logs: **MIDI log**, **Sources log**, **Used-samples log** (avoids
   repeats across sessions), plus **Stitched WAV + cues** and **Max sample
   length**. The MIDI log is written in REAPER's note-name format (`36 Kick`),

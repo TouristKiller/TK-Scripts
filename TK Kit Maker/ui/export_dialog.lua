@@ -11,6 +11,7 @@ local Bias    = require("core.bias")
 local Tags    = require("core.tags")
 local Character = require("ui.character")
 local Duration = require("core.duration")
+local Rng     = require("core.rng")
 
 local M = {}
 
@@ -227,6 +228,53 @@ local function draw_batch_options(app)
   local count_changed, count_value = r.ImGui_SliderInt(ctx, "Kit count##export_kit_count", export.kit_count or 1, 1, 200, "%d")
   if count_changed then export.kit_count = count_value end
 
+  -- The seed, as in Explosion. It lives on the kitdef rather than on the
+  -- dialog, so a preset carries it: a saved Builder setup and its seed rebuild
+  -- the same kits together.
+  r.ImGui_AlignTextToFramePadding(ctx)
+  Theme.label(ctx, "Seed")
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 110)
+  local sd_changed, sd_value = r.ImGui_InputInt(ctx, "##export_seed", math.floor(tonumber(kitdef.seed) or 0), 0, 0)
+  if sd_changed then
+    kitdef.seed = math.max(0, sd_value)
+    kitdef.seed_auto = false
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx,
+      "The same seed over the same samples builds the same kits --\n"
+        .. "on any machine. A batch runs on consecutive seeds, so kit 34\n"
+        .. "of seed 84213 is simply seed 84246 on its own.")
+  end
+
+  r.ImGui_SameLine(ctx)
+  if Theme.ghost_button(ctx, "Roll##export_seed_roll", 54, 0) then
+    kitdef.seed = Rng.new_seed()
+    kitdef.seed_auto = false
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Pick a new seed now.") end
+
+  r.ImGui_SameLine(ctx)
+  local sa_changed, sa_value = r.ImGui_Checkbox(ctx, "New seed each export##export_seed_auto", kitdef.seed_auto ~= false)
+  if sa_changed then kitdef.seed_auto = sa_value end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx,
+      "On: different kits every export, with the seed left here afterwards.\n"
+        .. "Off: the same kits every export, until you change the seed.")
+  end
+
+  local pack = Engine.pack_fingerprint(app.pools)
+  if pack then
+    local pushed_fp = Theme.push_small(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_faint, "pack " .. pack)
+    Theme.pop_font(ctx, pushed_fp)
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx,
+        "Identifies the samples in your pools. A seed only rebuilds\n"
+          .. "the same kits for someone whose pools show this same code.")
+    end
+  end
+
   r.ImGui_Dummy(ctx, 0, 1)
   local midi_changed, midi_value = r.ImGui_Checkbox(ctx, "MIDI log##export_midilog", export.write_midilog)
   if midi_changed then export.write_midilog = midi_value end
@@ -391,6 +439,11 @@ function M.draw(app)
   r.ImGui_BeginDisabled(ctx, not can_export)
   if Theme.primary_button(ctx, "Batch export", export_w, 38) then
     Engine.rescan_pools(app.pools, false)
+    -- Rolled before the run, so the field ends up showing the seed that built
+    -- the kits you have, not the one for the next press.
+    if app.kitdef.seed_auto ~= false or not tonumber(app.kitdef.seed) then
+      app.kitdef.seed = Rng.new_seed()
+    end
     app.export_batch = Engine.new_batch(app.kitdef, app.pools, app.script_path)
   end
   r.ImGui_EndDisabled(ctx)

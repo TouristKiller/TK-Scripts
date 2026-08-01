@@ -410,7 +410,7 @@
 
 <category name="TK Kit Maker">
     <reapack name="TK_Kit_Maker.lua" type="script" desc="TK Kit Maker">
-        <version name="0.2.36" author="TouristKiller &amp; Flurmechanik" time="2026-08-01T16:30:00Z">
+        <version name="0.2.39" author="TouristKiller &amp; Flurmechanik" time="2026-08-01T20:00:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/TK_Kit_Maker.lua</source>
             <source file="core/analyzer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/analyzer.lua</source>
             <source file="core/bias.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/bias.lua</source>
@@ -442,6 +442,7 @@
             <source file="data/words_first.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/words_first.txt</source>
             <source file="data/words_second.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/words_second.txt</source>
             <source file="data/words_third.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/data/words_third.txt</source>
+            <source file="ui/Kitmaker_logo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/Kitmaker_logo.png</source>
             <source file="ui/browser_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/browser_view.lua</source>
             <source file="ui/builder_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/builder_view.lua</source>
             <source file="ui/character.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/character.lua</source>
@@ -453,6 +454,19 @@
             <source file="ui/sequencer_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/sequencer_view.lua</source>
             <source file="USER_GUIDE.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/USER_GUIDE.pdf</source>
             <changelog><![CDATA[
+v0.2.39
++ The Kit Maker wordmark in the header, in place of the word. It is decoded once and drawn as a texture after that, which costs less per frame than laying out the text did. It is sized to the heading it replaces, so the version number and the byline still hang where they did, and it falls back to the words if the image is missing.
+
+v0.2.38
++ Mono / Stereo added to the tag filter, for the samplers and grooveboxes that only play mono or sum a stereo file down - and sum it into phase problems. The channel count was measured all along, being what decides whether the Space axis says anything, so this needs no re-analysis: a collection measured before today can be filtered on it right away.
+# "Show in Explorer" opened the sample in whatever program handles .wav instead of showing it in a folder. It asked the system to open the file, which is not the same request - only the file manager can highlight a file, and it has to be told to.
+# Building a rack from a kit folder no longer puts the stitched WAV on a pad. That file is the whole kit end to end, made for slicers, and the mapping sorted by filename - where digits come before letters, so it always landed last. A kit of sixteen pushed it past the rack and hid the problem; a kit of eight put it on pad nine.
+
+v0.2.37
++ Seeds in the Builder too, in the Batch section, working the same way as Explosion's. They live on the kit definition rather than on the dialog, so a preset carries its seed - a saved Builder setup and its seed rebuild the same kits together. It is stronger here than in Explosion, since a seed reproduces the pools, the slots and the bias as well as the picks.
++ The sources log now opens with the recipe: the seed and the pack's code. The sample paths in that file only mean anything on the machine that wrote them; the recipe is the part that travels, and this is where an exported kit can carry it.
+# The pack fingerprint no longer depends on the order the files arrive in. A folder scan is sorted, but the Builder walks its pools with pairs(), whose order is not stable between two runs - so the same pools could show a different code each time the dialog was opened.
+
 v0.2.36
 + Alt+drag a sample for a real file drag - the operating system's kind, so it can be dropped into any sampler that takes files (Kontakt, Battery, anything), or into another program entirely. This was already in the script and unfindable: the sample tooltip now names it, alongside what a plain drag does, since the two end up in different places. Alt+drag needs the TK Native Helper extension; the message when it is missing now says so, and says that everything else works without it.
 

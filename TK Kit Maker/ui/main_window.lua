@@ -122,20 +122,78 @@ local function draw_header_menu(app)
   r.ImGui_EndPopup(ctx)
 end
 
+-- The wordmark, decoded once and then a texture: drawing it costs less per
+-- frame than laying out the text it replaces. ReaImGui collects images that are
+-- not attached, so the pointer is revalidated the same way the Browser does it
+-- for cover art, and a file that cannot be read is remembered as `false` rather
+-- than retried sixty times a second.
+--
+-- Everything here falls back to the words "Kit Maker" if the image is missing,
+-- which is what a user gets if the PNG was not installed alongside the script.
+local LOGO_FILE = "ui/Kitmaker_logo.png"
+
+local function header_logo(app)
+  local cached = app.logo
+  if cached and r.ImGui_ValidatePtr then
+    local ok, valid = pcall(r.ImGui_ValidatePtr, cached.tex, "ImGui_Image*")
+    if not ok or not valid then cached = nil end
+  end
+  if cached ~= nil then return cached or nil end
+  if not r.ImGui_CreateImage or not r.ImGui_Image then
+    app.logo = false
+    return nil
+  end
+
+  local ok, tex = pcall(r.ImGui_CreateImage, (app.script_path or "") .. LOGO_FILE)
+  if not ok or not tex then
+    app.logo = false
+    return nil
+  end
+
+  local w, h = 250, 86
+  if r.ImGui_Image_GetSize then
+    local ok_size, iw, ih = pcall(r.ImGui_Image_GetSize, tex)
+    if ok_size and tonumber(iw) and tonumber(ih) and tonumber(ih) > 0 then
+      w, h = tonumber(iw), tonumber(ih)
+    end
+  end
+  app.logo = { tex = tex, w = w, h = h }
+  return app.logo
+end
+
 local function draw_header(app)
   local ctx = app.ctx
+
+  -- Sized to the heading it replaces, so nothing below it moves: the subtitle
+  -- and the version still hang off the same baseline, and the buttons on the
+  -- right still measure from the same place.
   local pushed = Theme.push_h1(ctx)
-  r.ImGui_TextColored(ctx, Theme.colors.accent, "Kit Maker")
+  local line_h = select(2, r.ImGui_CalcTextSize(ctx, "Kit Maker"))
+  Theme.pop_font(ctx, pushed)
+  line_h = tonumber(line_h) or 24
+
+  local logo = header_logo(app)
+  if logo then
+    r.ImGui_Image(ctx, logo.tex, line_h * (logo.w / logo.h), line_h)
+  else
+    local p = Theme.push_h1(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.accent, "Kit Maker")
+    Theme.pop_font(ctx, p)
+  end
+
   local title_x, _ = r.ImGui_GetItemRectMin(ctx)
   local title_x2, title_bottom_y = r.ImGui_GetItemRectMax(ctx)
   -- Opened here, drawn further down: the popup has to be built once the title's
   -- font is off the stack, or the menu renders in the heading face.
   if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##header_menu") end
   local title_hovered = r.ImGui_IsItemHovered(ctx)
-  Theme.pop_font(ctx, pushed)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   local pushed_small = Theme.push_small(ctx)
-  r.ImGui_DrawList_AddText(dl, title_x + 1, title_bottom_y - 2, Theme.colors.text_dim, "by TK & Flurmechanik")
+  -- An image's rect ends where the picture ends; a line of text carries
+  -- descender space below its baseline. Hence the extra pixels under the logo,
+  -- so the two do not sit at different distances from the name above them.
+  r.ImGui_DrawList_AddText(dl, title_x + 1, title_bottom_y + (logo and 1 or -2),
+    Theme.colors.text_dim, "by TK & Flurmechanik")
 
   -- The version rides on the title's baseline, tight against the name. Drawn
   -- rather than laid out, because an ordinary item would sit on the top of the

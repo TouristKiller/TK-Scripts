@@ -1,7 +1,45 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.36
+-- @version 0.2.39
 -- @changelog:
+--   0.2.39
+--   + The Kit Maker wordmark in the header, in place of the word. It is decoded
+--     once and drawn as a texture after that, which costs less per frame than
+--     laying out the text did. Sized to the heading it replaces, so the version
+--     number and the byline still hang where they did, and it falls back to the
+--     words if the image is missing.
+--
+--   0.2.38
+--   + Mono / Stereo added to the tag filter, for the samplers and grooveboxes
+--     that only play mono or sum a stereo file down -- and sum it into phase
+--     problems. The channel count was measured all along, being what decides
+--     whether the Space axis says anything at all, so this needs no re-analysis:
+--     a collection measured before today can be filtered on it right away.
+--   # "Show in Explorer" opened the sample in whatever program handles .wav
+--     instead of showing it in a folder. It asked the system to open the file,
+--     which is not the same request -- only the file manager can highlight a
+--     file, and it has to be told to. Same route TK Workbench uses.
+--   # Building a rack from a kit folder no longer puts the stitched WAV on a
+--     pad. That file is the whole kit end to end, made for slicers, and the
+--     mapping sorted by filename -- where digits come before letters, so it
+--     always landed last. A kit of sixteen pushed it past the rack and hid the
+--     problem; a kit of eight put it on pad nine.
+--
+--   0.2.37
+--   + Seeds in the Builder too, in the Batch section, working the same way as
+--     Explosion's. They sit on the kit definition rather than on the dialog, so
+--     a preset carries its seed: a saved Builder setup and its seed rebuild the
+--     same kits together. Stronger here than in Explosion, since a seed
+--     reproduces the pools, the slots and the bias as well as the picks.
+--   + The sources log now opens with the recipe -- the seed and the pack's
+--     code. The sample paths in that file only mean anything on the machine
+--     that wrote them; the recipe is the part that travels, and this is where
+--     an exported kit can carry it.
+--   # The pack fingerprint no longer depends on the order the files arrive in.
+--     A folder scan is sorted, but the Builder walks its pools with pairs(),
+--     whose order is not stable between two runs -- so the same pools could
+--     have shown a different code each time the dialog was opened.
+--
 --   0.2.36
 --   + Alt+drag a sample for a real file drag: the operating system's kind, so
 --     it can be dropped into any sampler that takes files, or into another

@@ -208,6 +208,23 @@ function M.seed_for(kitdef, kit_index)
   return math.floor(base) + (kit_index or 1) - 1
 end
 
+-- Everything the kit could have been drawn from, as one code. Paired with the
+-- seed it is the whole recipe: the seed says which roll of the dice, this says
+-- which dice.
+function M.pack_fingerprint(pools)
+  local files, seen = {}, {}
+  for _, pool in pairs(pools or {}) do
+    for _, f in ipairs(pool.files or {}) do
+      if not seen[f] then
+        seen[f] = true
+        files[#files + 1] = f
+      end
+    end
+  end
+  if #files == 0 then return nil end
+  return Rng.fingerprint(files)
+end
+
 function M.generate_kit(kitdef, pools, kit_index, script_path)
   -- Installed for the whole render and cleared at the end. There is one exit,
   -- and a crash on the way cannot leave a stale generator behind either: the
@@ -252,7 +269,11 @@ function M.generate_kit(kitdef, pools, kit_index, script_path)
   end
 
   if kitdef.export.write_midilog   then Exporter.write_midilog(dest_dir, final_name, results)   end
-  if kitdef.export.write_sourcelog then Exporter.write_sourcelog(dest_dir, final_name, results) end
+  if kitdef.export.write_sourcelog then
+    local seed = M.seed_for(kitdef, kit_index)
+    Exporter.write_sourcelog(dest_dir, final_name, results,
+      seed and { seed = seed, pack = M.pack_fingerprint(pools) } or nil)
+  end
   if kitdef.export.write_usedlog   then UsedLog.flush() end
 
   local stitched
