@@ -1,8 +1,12 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.93
+-- @version 0.9.94
 -- @changelog:
 --[[
+v0.9.94:
++ The file list now keeps the selected file centred while auditioning with the arrow keys (also Page Up/Down, Home/End and random play), instead of letting it stick to the bottom edge or scroll out of view
++ Removed the blue keyboard-navigation frame in the file list, so only the accent colour of the actually selected/playing file remains
+
 v0.9.93:
 + Fixed the oscilloscope keeping a seemingly random waveform on screen after a preview finished: the display now fades out to a flat line (paused playback keeps the frozen image)
 + The oscilloscope no longer rebuilds its cache while nothing is playing
@@ -6944,6 +6948,7 @@ end
 
 local function request_scroll_selected_file()
     ui.scroll_selected_file = true
+    ui.scroll_selected_deadline = r.time_precise() + 1.0
 end
 
 local function get_display_index_for_path(files, path)
@@ -6956,25 +6961,29 @@ local function get_display_index_for_path(files, path)
 end
 
 local function scroll_selected_file_into_view(row_h, files_to_display)
+    ui.scroll_target_index = nil
     if not ui.scroll_selected_file then return end
     if not ui.selected_index or ui.selected_index < 1 then return end
     if not r.ImGui_GetScrollY or not r.ImGui_GetWindowHeight or not r.ImGui_SetScrollY then return end
-    local now = r.time_precise()
-    if ui.last_playback_scroll_time > 0 and now - ui.last_playback_scroll_time < ui.follow_scroll_interval then return end
-    ui.last_playback_scroll_time = now
-    ui.scroll_selected_file = false
-    row_h = math.max(1, row_h or 18)
+    if r.time_precise() > (ui.scroll_selected_deadline or 0) then
+        ui.scroll_selected_file = false
+        return
+    end
     local target_index = get_display_index_for_path(files_to_display, playback.current_playing_file) or ui.selected_index
     ui.selected_index = target_index
-    local top = (target_index - 1) * row_h
-    local bottom = top + row_h
-    local scroll_y = r.ImGui_GetScrollY(ctx)
-    local window_h = math.max(row_h, r.ImGui_GetWindowHeight(ctx) - (row_h * 2))
-    if top < scroll_y then
-        r.ImGui_SetScrollY(ctx, math.max(0, top - row_h))
-    elseif bottom > scroll_y + window_h then
-        r.ImGui_SetScrollY(ctx, math.max(0, bottom - window_h + row_h))
+    ui.scroll_target_index = target_index
+    row_h = math.max(1, row_h or 18)
+    local window_h = math.max(1, r.ImGui_GetWindowHeight(ctx))
+    local scroll_max = r.ImGui_GetScrollMaxY and r.ImGui_GetScrollMaxY(ctx) or 0
+    local total_items = files_to_display and #files_to_display or 0
+    if total_items > 0 and scroll_max > 0 then
+        local measured = (scroll_max + window_h) / total_items
+        if measured > 1 then row_h = measured end
     end
+    -- grove sprong zodat de rij binnen het clipper-bereik valt; SetScrollHereY op de rij centreert daarna exact
+    local target_scroll = ((target_index - 1) * row_h) + (row_h * 0.5) - (window_h * 0.5)
+    if target_scroll < 0 then target_scroll = 0 end
+    r.ImGui_SetScrollY(ctx, target_scroll)
 end
 
 local function get_min_display_label()
@@ -8905,6 +8914,11 @@ function draw_file_list()
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), accent_color)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), accent_hover_color)
                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderActive(), accent_active_color)
+                    if r.ImGui_Col_NavCursor then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_NavCursor(), 0)
+                    elseif r.ImGui_Col_NavHighlight then
+                        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_NavHighlight(), 0)
+                    end
                     
                     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_CellPadding(), 4, 4)  
                     
@@ -9293,6 +9307,11 @@ function draw_file_list()
                                     end
                                 end
                                 
+                                if ui.scroll_selected_file and ui.scroll_target_index == i and r.ImGui_SetScrollHereY then
+                                    r.ImGui_SetScrollHereY(ctx, 0.5)
+                                    ui.scroll_selected_file = false
+                                end
+
                                 if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_DelayNormal()) then
                                     if r.ImGui_BeginTooltip(ctx) then
                                         r.ImGui_PushFont(ctx, small_font, small_font_size)
@@ -9595,7 +9614,7 @@ function draw_file_list()
                         r.ImGui_EndTable(ctx)
                     end
                     r.ImGui_PopStyleVar(ctx, 1)  
-                    r.ImGui_PopStyleColor(ctx, 6)  
+                    r.ImGui_PopStyleColor(ctx, (r.ImGui_Col_NavCursor or r.ImGui_Col_NavHighlight) and 7 or 6)  
                 else
                     local accent_color = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0, 0.62)
                     local accent_hover_color = r.ImGui_ColorConvertDouble4ToU32(0.34, 0.34, 0.34, 0.55)
@@ -9770,6 +9789,7 @@ function handle_keyboard_navigation()
     if #ui.visible_files > 0 then
         if key_up and ui.selected_index > 1 then
             ui.selected_index = ui.selected_index - 1
+            request_scroll_selected_file()
             playback.selected_file = ui.visible_files[ui.selected_index].name
             
             waveform.selection_active = false
@@ -9801,7 +9821,7 @@ function handle_keyboard_navigation()
             local next_index = playback.random_play and get_random_visible_file_index(ui.selected_index) or (ui.selected_index + 1)
             if not next_index then return false end
             ui.selected_index = next_index
-            if playback.random_play then request_scroll_selected_file() end
+            request_scroll_selected_file()
             playback.selected_file = ui.visible_files[ui.selected_index].name
             
             waveform.selection_active = false
@@ -9833,6 +9853,7 @@ function handle_keyboard_navigation()
             local new_index = math.max(1, ui.selected_index - 10)
             if new_index ~= ui.selected_index then
                 ui.selected_index = new_index
+                request_scroll_selected_file()
                 playback.selected_file = ui.visible_files[ui.selected_index].name
                 
                 waveform.selection_active = false
@@ -9864,6 +9885,7 @@ function handle_keyboard_navigation()
             local new_index = math.min(#ui.visible_files, ui.selected_index + 10)
             if new_index ~= ui.selected_index then
                 ui.selected_index = new_index
+                request_scroll_selected_file()
                 playback.selected_file = ui.visible_files[ui.selected_index].name
                 
                 waveform.selection_active = false
@@ -9894,6 +9916,7 @@ function handle_keyboard_navigation()
         elseif key_home then
             if #ui.visible_files > 0 then
                 ui.selected_index = 1
+                request_scroll_selected_file()
                 playback.selected_file = ui.visible_files[ui.selected_index].name
                 
                 waveform.selection_active = false
@@ -9924,6 +9947,7 @@ function handle_keyboard_navigation()
         elseif key_end then
             if #ui.visible_files > 0 then
                 ui.selected_index = #ui.visible_files
+                request_scroll_selected_file()
                 playback.selected_file = ui.visible_files[ui.selected_index].name
                 
                 waveform.selection_active = false

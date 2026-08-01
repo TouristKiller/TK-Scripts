@@ -609,24 +609,21 @@ v0.2.36
 
  <category name="Media">
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.9.93" author="TouristKiller" time="2026-07-31T13:30:00Z">
+        <version name="0.9.94" author="TouristKiller" time="2026-08-01T23:00:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
+                v0.9.94:
+                + The file list now keeps the selected file centred while auditioning with the arrow keys (also Page Up/Down, Home/End and random play), instead of letting it stick to the bottom edge or scroll out of view
+                + Removed the blue keyboard-navigation frame in the file list, so only the accent colour of the actually selected/playing file remains
+
                 v0.9.93
                 + Fixed the oscilloscope keeping a seemingly random waveform on screen after a preview finished: the display now fades out to a flat line (paused playback keeps the frozen image)
                 + The oscilloscope no longer rebuilds its cache while nothing is playing
                 + Added "Pass Keyboard Shortcuts to REAPER" option (Settings): keys that are not used by a text field are sent to REAPER, so global shortcuts (e.g. the one closing this script) keep working while the browser has focus
 
-                v0.9.92
-                + Fixed the window freezing for several seconds when opening the spectral view: the analysis is now spread over frames instead of blocking the UI
-                + Spectral results are now cached to disk and reused, so a file you have viewed before shows its spectral display instantly (also after a restart)
-                + Speeded up spectral analysis of short files: the audio is read in one pass instead of hundreds of separate seeks
-                + Reduced short hitches while auditioning: faster pitch detection and less allocation in the oscilloscope
-                v0.9.91
-                + Fixed a vertical scrollbar appearing in the left panel when the oscilloscope was hidden, and the transport section jumping up/down when toggling the oscilloscope: the transport is now anchored to a fixed position and the oscilloscope fills the space above it
 ]]></changelog>
         </version>
     </reapack>
