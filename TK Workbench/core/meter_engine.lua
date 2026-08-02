@@ -8,9 +8,16 @@ local source_uses_engine
 
 M.plugin_name = "JS: TK Control Room Meter"
 M.plugin_match = "TK Control Room Meter"
+-- Paths first, desc last: a desc match is ambiguous the moment a second copy of
+-- the file exists anywhere under Effects, and REAPER picks between them itself.
+-- The first entry is where ReaPack actually puts it - type="effect" prefixes the
+-- category onto the source's file path, so the category "TK Scripts/TK Workbench"
+-- and the file "TK Scripts/Mixer/..." double up. Keep this list in step with
+-- index.xml, and keep the desc entries as the fallback for older installs.
 M.plugin_names = {
-  "JS: TK Control Room Meter",
+  "JS: TK Scripts/TK Workbench/TK Scripts/Mixer/TK_Control_Room_Meter.jsfx",
   "JS: TK Scripts/Mixer/TK_Control_Room_Meter.jsfx",
+  "JS: TK Control Room Meter",
   "JS: TK_Control_Room_Meter"
 }
 
@@ -41,8 +48,12 @@ M.sliders = {
   true_peak = { index = 8, min = -100, max = 12 },
   time = { index = 9, min = 0, max = 86400 },
   momentary = { index = 10, min = -100, max = 12 },
-  sample_peak = { index = 11, min = -100, max = 12 }
+  sample_peak = { index = 11, min = -100, max = 12 },
+  layout = { index = 12, min = 0, max = 4 }
 }
+
+-- Mirrors the Channel Layout slider of TK_Control_Room_Meter.jsfx.
+M.default_layout_index = 1
 
 local function valid_track(track)
   return track and r.ValidatePtr2(0, track, "MediaTrack*") == true
@@ -92,7 +103,7 @@ end
 
 local function source_key(source)
   if not source then return "none" end
-  return tostring(source.id or "none") .. ":" .. tostring(track_guid(source.track))
+  return tostring(source.id or "none") .. ":" .. tostring(track_guid(source.track)) .. ":" .. tostring(source.layout_index or "")
 end
 
 function M.find_meter_fx(track)
@@ -123,6 +134,29 @@ function M.ensure_meter_fx(track, auto_install)
     end
   end
   return nil, "Meter JSFX not found"
+end
+
+-- Writing the layout slider makes the JSFX restart its integration, so only
+-- write when the value actually differs from what the plugin already holds.
+function M.apply_layout(track, fx_index, layout_index)
+  if not valid_track(track) or not fx_index or not r.TrackFX_GetParam or not r.TrackFX_SetParam then return false end
+  layout_index = math.floor(tonumber(layout_index) or M.default_layout_index)
+  if layout_index < M.sliders.layout.min then layout_index = M.sliders.layout.min end
+  if layout_index > M.sliders.layout.max then layout_index = M.sliders.layout.max end
+  -- A meter instance loaded from an older JSFX has no layout slider. Writing
+  -- past the end would silently fail and reset the cache on every frame.
+  if r.TrackFX_GetNumParams then
+    local count = r.TrackFX_GetNumParams(track, fx_index)
+    if tonumber(count) and tonumber(count) <= M.sliders.layout.index then return false end
+  end
+  -- TrackFX_GetParam returns value, min, max: keep only the first, or tonumber
+  -- receives a second argument and switches to its base-conversion form.
+  local raw = r.TrackFX_GetParam(track, fx_index, M.sliders.layout.index)
+  local current = tonumber(raw)
+  if current and math.abs(current - layout_index) < 0.25 then return false end
+  r.TrackFX_SetParam(track, fx_index, M.sliders.layout.index, layout_index)
+  info_cache = {}
+  return true
 end
 
 function M.reset(track, options)
@@ -216,6 +250,7 @@ function M.read(track, options)
   options = type(options) == "table" and options or {}
   local fx_index, status = M.ensure_meter_fx(track, options.auto_install == true)
   if not fx_index then return { available = false, status = status or "Meter unavailable" } end
+  if options.layout_index then M.apply_layout(track, fx_index, options.layout_index) end
   return {
     available = true,
     status = nil,
@@ -240,7 +275,7 @@ function M.info_items(settings, source, colors)
   local read_hz = math.max(1, tonumber(settings.meter_read_hz) or 20)
   local cached = info_cache[key]
   if cached and timestamp - cached.timestamp < 1 / read_hz then return cached.items end
-  local data = source_uses_engine(source) and M.read(source.track, { auto_install = settings.meter_fx_auto_install ~= false }) or { available = false, status = "Peak only" }
+  local data = source_uses_engine(source) and M.read(source.track, { auto_install = settings.meter_fx_auto_install ~= false, layout_index = source.layout_index }) or { available = false, status = "Peak only" }
   local true_peak_color = data.true_peak and data.true_peak >= 0 and colors.danger or nil
   local elapsed = tonumber(data.time) or 0
   local available = data.available == true

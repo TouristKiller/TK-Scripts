@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.65" author="TouristKiller" time="2026-08-02T00:05:00Z">
+    <version name="0.6.66" author="TouristKiller" time="2026-08-02T16:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -57,6 +57,7 @@
     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_8.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_8.lua</source>
     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_9.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_9.lua</source>
     <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_10.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Toggle_Lock_Slot_10.lua</source>
+     <source file="core/channel_layouts.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/channel_layouts.lua</source>
      <source file="core/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/json.lua</source>
      <source file="core/action_clipboard_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/action_clipboard_runner.lua</source>
      <source file="core/media_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/media_categorizer.lua</source>
@@ -118,7 +119,18 @@
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
+     <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.6.66
+            + Control Room: Monitoring is no longer stereo only. A monitor output can be Mono, Stereo, Quad, 5.1 or 7.1, picked per monitor with a new Format row in Setup > Monitors, and a Master format at the top of that tab says what the main mix is - it drives the master meter, the fold-down and the default for anything added later, while every monitor keeps its own. The master track is widened when a format needs more channels than it has, and never narrowed again, since those channels may be carrying something the Control Room knows nothing about
+            + Control Room: Fixed multichannel hardware outputs being described wrongly. REAPER packs the send width above the channel offset in I_SRCCHAN, so a 6 channel send arrives as 3072 plus the offset, and only the mono bit was being read out of it - which showed every 5.1 send as "Mono" and every quad one as "Stereo". Anyone who had built a multichannel output in REAPER's own routing dialog was reading the wrong thing about it
+            + Control Room: Monitor modes follow the format. Full plays the whole bed, Mono Sum collapses it, and each speaker can be soloed by name - L, R, C, LFE, Ls, Rs - to check one driver at a time. L Speaker and R Speaker stay for stereo monitors, where panning is the thing that makes sense. The old Stereo, L Source and R Source modes map onto the new ones, so existing setups carry over unchanged
+            + Control Room: Fold to Stereo, a new monitor mode for hearing what a surround mix collapses to. REAPER's master cannot send to a regular track and an FX on the master would colour every output, so the downmix (new TK Control Room Downmix JSFX) writes a stereo pair into spare master channels past the bed and the monitor reads that instead - the surround feed to the main outputs is left alone. Centre and surround levels are adjustable, LFE is left out by default as most delivery specs ask, and its level reaches +10 dB for when you do want it at the gain a surround listener hears it at
+            + Control Room: Switching the last monitor away from Fold to Stereo stops the downmix instead of deleting it, so it can no longer sit there overwriting the fold pair while nothing listens. Setup shows "(idle)" when that has happened, and the Remove button beside it takes the plugin out properly
+            + Control Room: The meter draws a bar per channel with the speaker names on the peaks, and the loudness numbers under it are measured to ITU-R BS.1770-4 for surround - front channels at unity, surround and back channels at 1.41, LFE out of the loudness sum but still in the true peak. The meter JSFX carries eight pins for it; on a stereo master the rest are silent, so a stereo reading is exactly what it always was
+            + Control Room: A monitor's format is remembered rather than read back from its send, because soloing a speaker rewrites that send to a single channel and destroys the evidence of which group it came from. Without it, picking "C Only" once would have left the monitor mono for good
+            + Control Room: Cue outputs take the same formats and widen their own track when they need to, and the Targets tab lists the destinations available at a chosen width instead of assuming pairs
+
             v0.6.65
             + Plugin Browser, Instrument Rack and Instrument Console now show the custom images you assign in the TK FX Browser (right-click a plugin there > "Set Custom Image...") instead of the captured screenshot, so JSFX and other plugins that don't capture well can carry their own artwork everywhere
 

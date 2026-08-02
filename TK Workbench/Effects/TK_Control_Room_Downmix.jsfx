@@ -1,0 +1,98 @@
+desc:TK Control Room Downmix
+author:TouristKiller
+version:0.1
+
+// Folds a multichannel bed down to a stereo pair on spare channels of the same
+// track. The Control Room installs this on the master so a fold-down check can
+// be monitored without altering the surround bed feeding the main outputs.
+// The fold offset must sit outside the source bed or the output feeds back.
+
+in_pin:1
+in_pin:2
+in_pin:3
+in_pin:4
+in_pin:5
+in_pin:6
+in_pin:7
+in_pin:8
+in_pin:9
+in_pin:10
+in_pin:11
+in_pin:12
+in_pin:13
+in_pin:14
+in_pin:15
+in_pin:16
+out_pin:1
+out_pin:2
+out_pin:3
+out_pin:4
+out_pin:5
+out_pin:6
+out_pin:7
+out_pin:8
+out_pin:9
+out_pin:10
+out_pin:11
+out_pin:12
+out_pin:13
+out_pin:14
+out_pin:15
+out_pin:16
+
+slider1:3<0,4,1{Mono,Stereo,Quad,5.1,7.1}>Source Layout
+slider2:0<0,14,1>Source Offset (ch)
+slider3:6<0,14,1>Fold Offset (ch)
+slider4:-3<-12,0,0.1>Center Level (dB)
+slider5:-3<-12,0,0.1>Surround Level (dB)
+slider6:0<0,1,1{Off,On}>Include LFE
+// LFE is reproduced 10 dB above the other channels, so a fold-down that means
+// to represent what a surround listener hears needs to reach +10 here.
+slider7:0<-24,10,0.1>LFE Level (dB)
+slider8:0<-12,12,0.1>Output Trim (dB)
+slider9:1<0,1,1{Off,On}>Run
+
+@init
+c_gain = 0.707945784;
+s_gain = 0.707945784;
+lfe_gain = 0;
+trim = 1;
+lay = 3;
+src = 0;
+dst = 6;
+valid = 0;
+
+@slider
+lay = min(4, max(0, floor(slider1)));
+src = max(0, floor(slider2));
+dst = max(0, floor(slider3));
+c_gain = pow(10, slider4 / 20);
+s_gain = pow(10, slider5 / 20);
+lfe_gain = slider6 >= 0.5 ? pow(10, slider7 / 20) : 0;
+trim = pow(10, slider8 / 20);
+lay == 0 ? width = 1 : lay == 1 ? width = 2 : lay == 2 ? width = 4 : lay == 3 ? width = 6 : width = 8;
+// Refuse to run when the fold pair overlaps the bed it reads from.
+valid = (dst >= src + width || dst + 2 <= src) && (dst + 2 <= num_ch);
+
+@sample
+(slider9 >= 0.5 && valid) ? (
+  lay >= 3 ? (
+    dl = spl(src) + c_gain * spl(src + 2) + lfe_gain * spl(src + 3) + s_gain * spl(src + 4);
+    dr = spl(src + 1) + c_gain * spl(src + 2) + lfe_gain * spl(src + 3) + s_gain * spl(src + 5);
+    lay == 4 ? (
+      dl += s_gain * spl(src + 6);
+      dr += s_gain * spl(src + 7);
+    );
+  ) : lay == 2 ? (
+    dl = spl(src) + s_gain * spl(src + 2);
+    dr = spl(src + 1) + s_gain * spl(src + 3);
+  ) : lay == 1 ? (
+    dl = spl(src);
+    dr = spl(src + 1);
+  ) : (
+    dl = spl(src);
+    dr = spl(src);
+  );
+  spl(dst) = dl * trim;
+  spl(dst + 1) = dr * trim;
+);

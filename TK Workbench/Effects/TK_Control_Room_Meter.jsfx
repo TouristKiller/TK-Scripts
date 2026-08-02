@@ -1,11 +1,23 @@
 desc:TK Control Room Meter
 author:TouristKiller
-version:0.2
+version:0.3
 
 in_pin:Left
 in_pin:Right
+in_pin:Center
+in_pin:LFE
+in_pin:Surround L
+in_pin:Surround R
+in_pin:Back L
+in_pin:Back R
 out_pin:Left
 out_pin:Right
+out_pin:Center
+out_pin:LFE
+out_pin:Surround L
+out_pin:Surround R
+out_pin:Back L
+out_pin:Back R
 
 slider1:1<0,1,1{Off,On}>Run
 slider2:0<0,1,1{Off,Reset}>Reset
@@ -19,14 +31,18 @@ slider9:-100<-100,12,0.1>-True Peak (dBTP)
 slider10:0<0,86400,1>-Time (s)
 slider11:-100<-100,12,0.1>-Momentary (LUFS)
 slider12:-100<-100,12,0.1>-Sample Peak (dB)
+slider13:1<0,4,1{Mono,Stereo,Quad,5.1,7.1}>Channel Layout
 
 @init
 floor_db = -100;
 bins_per_db = 10;
 db_per_bin = 0.1;
 num_bins = 1024;
+max_ch = 8;
+surround_weight = 1.41;
 last_reset = slider2;
 last_srate = srate;
+last_layout = -1;
 
 function power_to_lufs(power)
 (
@@ -47,9 +63,10 @@ function cubic_peak(y0, y1, y2, y3, t)
   abs(y);
 );
 
-function bq_set_shelf()
+// The K-weighting filters are identical on every channel, so the coefficients
+// live in globals and only the two delay elements are stored per channel.
+function set_shelf_coeffs()
   local(db f0 Q K Vh Vb a0)
-  instance(b0 b1 b2 a1 a2 z1 z2)
 (
   db = 3.999843853973347;
   f0 = 1681.974450955533;
@@ -58,48 +75,70 @@ function bq_set_shelf()
   Vh = pow(10, db / 20);
   Vb = pow(Vh, 0.4996667741545416);
   a0 = 1 + K / Q + K * K;
-  a1 = 2 * (K * K - 1) / a0;
-  a2 = (1 - K / Q + K * K) / a0;
-  b0 = (Vh + Vb * K / Q + K * K) / a0;
-  b1 = 2 * (K * K - Vh) / a0;
-  b2 = (Vh - Vb * K / Q + K * K) / a0;
-  z1 = 0;
-  z2 = 0;
+  sh_a1 = 2 * (K * K - 1) / a0;
+  sh_a2 = (1 - K / Q + K * K) / a0;
+  sh_b0 = (Vh + Vb * K / Q + K * K) / a0;
+  sh_b1 = 2 * (K * K - Vh) / a0;
+  sh_b2 = (Vh - Vb * K / Q + K * K) / a0;
 );
 
-function bq_set_highpass()
+function set_highpass_coeffs()
   local(f0 Q K a0)
-  instance(b0 b1 b2 a1 a2 z1 z2)
 (
   f0 = 38.13547087602444;
   Q = 0.5003270373238773;
   K = tan($pi * f0 / srate);
   a0 = 1 + K / Q + K * K;
-  a1 = 2 * (K * K - 1) / a0;
-  a2 = (1 - K / Q + K * K) / a0;
-  b0 = 1;
-  b1 = -2;
-  b2 = 1;
-  z1 = 0;
-  z2 = 0;
+  hp_a1 = 2 * (K * K - 1) / a0;
+  hp_a2 = (1 - K / Q + K * K) / a0;
+  hp_b0 = 1;
+  hp_b1 = -2;
+  hp_b2 = 1;
 );
 
-function bq_process(x)
-  local(y)
-  instance(b0 b1 b2 a1 a2 z1 z2)
+function shelf_process(idx, x)
+  local(y ptr)
 (
-  y = b0 * x + z1;
-  z1 = b1 * x - a1 * y + z2;
-  z2 = b2 * x - a2 * y;
+  ptr = filt_base + idx * 4;
+  y = sh_b0 * x + ptr[0];
+  ptr[0] = sh_b1 * x - sh_a1 * y + ptr[1];
+  ptr[1] = sh_b2 * x - sh_a2 * y;
   y;
+);
+
+function highpass_process(idx, x)
+  local(y ptr)
+(
+  ptr = filt_base + idx * 4 + 2;
+  y = hp_b0 * x + ptr[0];
+  ptr[0] = hp_b1 * x - hp_a1 * y + ptr[1];
+  ptr[1] = hp_b2 * x - hp_a2 * y;
+  y;
+);
+
+function channel_true_peak(idx, x)
+  local(ptr y0 y1 y2 pk)
+(
+  ptr = tp_base + idx * 3;
+  y0 = ptr[0];
+  y1 = ptr[1];
+  y2 = ptr[2];
+  pk = abs(x);
+  pk = max(pk, cubic_peak(y0, y1, y2, x, 0.25));
+  pk = max(pk, cubic_peak(y0, y1, y2, x, 0.50));
+  pk = max(pk, cubic_peak(y0, y1, y2, x, 0.75));
+  ptr[0] = y1;
+  ptr[1] = y2;
+  ptr[2] = x;
+  pk;
 );
 
 function init_filters()
 (
-  l_shelf.bq_set_shelf();
-  l_hp.bq_set_highpass();
-  r_shelf.bq_set_shelf();
-  r_hp.bq_set_highpass();
+  set_shelf_coeffs();
+  set_highpass_coeffs();
+  memset(filt_base, 0, max_ch * 4);
+  memset(tp_base, 0, max_ch * 3);
 );
 
 function init_buffers()
@@ -112,17 +151,65 @@ function init_buffers()
   integrated_count_base = short_base + short_size + 16;
   integrated_sum_base = integrated_count_base + num_bins + 16;
   lra_count_base = integrated_sum_base + num_bins + 16;
+  filt_base = lra_count_base + num_bins + 16;
+  tp_base = filt_base + max_ch * 4 + 16;
+  weight_base = tp_base + max_ch * 3 + 16;
   memset(momentary_base, 0, momentary_size);
   memset(short_base, 0, short_size);
   memset(integrated_count_base, 0, num_bins);
   memset(integrated_sum_base, 0, num_bins);
   memset(lra_count_base, 0, num_bins);
+  memset(filt_base, 0, max_ch * 4);
+  memset(tp_base, 0, max_ch * 3);
+  memset(weight_base, 0, max_ch);
+);
+
+// Power weights per ITU-R BS.1770-4: front channels 1.0, surround and back
+// channels 1.41, LFE excluded from the loudness sum but still peak metered.
+function apply_layout()
+  local(lay)
+(
+  lay = min(4, max(0, floor(slider13)));
+  lay == 0 ? layout_ch = 1 :
+  lay == 1 ? layout_ch = 2 :
+  lay == 2 ? layout_ch = 4 :
+  lay == 3 ? layout_ch = 6 : layout_ch = 8;
+  memset(weight_base, 0, max_ch);
+  lay == 0 ? (
+    weight_base[0] = 1;
+  ) : lay == 1 ? (
+    weight_base[0] = 1;
+    weight_base[1] = 1;
+  ) : lay == 2 ? (
+    weight_base[0] = 1;
+    weight_base[1] = 1;
+    weight_base[2] = surround_weight;
+    weight_base[3] = surround_weight;
+  ) : lay == 3 ? (
+    weight_base[0] = 1;
+    weight_base[1] = 1;
+    weight_base[2] = 1;
+    weight_base[3] = 0;
+    weight_base[4] = surround_weight;
+    weight_base[5] = surround_weight;
+  ) : (
+    weight_base[0] = 1;
+    weight_base[1] = 1;
+    weight_base[2] = 1;
+    weight_base[3] = 0;
+    weight_base[4] = surround_weight;
+    weight_base[5] = surround_weight;
+    weight_base[6] = surround_weight;
+    weight_base[7] = surround_weight;
+  );
+  last_layout = lay;
 );
 
 function reset_meter()
 (
-  init_filters();
   init_buffers();
+  init_filters();
+  apply_layout();
   momentary_sum = 0;
   short_sum = 0;
   momentary_pos = 0;
@@ -142,12 +229,6 @@ function reset_meter()
   true_peak = 0;
   sample_peak = 0;
   elapsed_samples = 0;
-  tp_l0 = 0;
-  tp_l1 = 0;
-  tp_l2 = 0;
-  tp_r0 = 0;
-  tp_r1 = 0;
-  tp_r2 = 0;
   slider5 = floor_db;
   slider6 = floor_db;
   slider7 = floor_db;
@@ -289,6 +370,7 @@ slider4 = 3000;
   last_srate = srate;
   reset_needed = 1;
 );
+(last_layout != min(4, max(0, floor(slider13)))) ? reset_needed = 1;
 slider2 >= 0.5 ? reset_needed = 1;
 last_reset = slider2;
 reset_needed ? (
@@ -299,28 +381,31 @@ reset_needed ? (
   last_reset = slider2;
 );
 
+@block
+// num_ch can still be unset while @init runs and changes when the track is
+// rewired, so the working channel count is resolved per block rather than
+// once at reset. Without this the meter can silently stay on channel 1.
+active_ch = min(layout_ch, num_ch);
+active_ch < 1 ? active_ch = 1;
+
 @sample
 slider1 >= 0.5 ? (
-  l = spl0;
-  r = spl1;
-  sample_peak = max(sample_peak, max(abs(l), abs(r)));
+  ch = 0;
+  p = 0;
+  loop(active_ch,
+    x = spl(ch);
+    ax = abs(x);
+    ax > sample_peak ? sample_peak = ax;
+    tp = channel_true_peak(ch, x);
+    tp > true_peak ? true_peak = tp;
+    w = weight_base[ch];
+    w > 0 ? (
+      k = highpass_process(ch, shelf_process(ch, x));
+      p += w * k * k;
+    );
+    ch += 1;
+  );
   true_peak = max(true_peak, sample_peak);
-  true_peak = max(true_peak, cubic_peak(tp_l0, tp_l1, tp_l2, l, 0.25));
-  true_peak = max(true_peak, cubic_peak(tp_l0, tp_l1, tp_l2, l, 0.50));
-  true_peak = max(true_peak, cubic_peak(tp_l0, tp_l1, tp_l2, l, 0.75));
-  true_peak = max(true_peak, cubic_peak(tp_r0, tp_r1, tp_r2, r, 0.25));
-  true_peak = max(true_peak, cubic_peak(tp_r0, tp_r1, tp_r2, r, 0.50));
-  true_peak = max(true_peak, cubic_peak(tp_r0, tp_r1, tp_r2, r, 0.75));
-  tp_l0 = tp_l1;
-  tp_l1 = tp_l2;
-  tp_l2 = l;
-  tp_r0 = tp_r1;
-  tp_r1 = tp_r2;
-  tp_r2 = r;
-
-  kl = l_hp.bq_process(l_shelf.bq_process(l));
-  kr = r_hp.bq_process(r_shelf.bq_process(r));
-  p = kl * kl + kr * kr;
 
   old_m = momentary_base[momentary_pos];
   momentary_sum += p - old_m;

@@ -2,12 +2,13 @@ local r = reaper
 local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
 local MeterEngine = require("core.meter_engine")
+local Layouts = require("core.channel_layouts")
 
 local M = {
   id = "control_room",
   title = "Control Room",
   icon = "CTL",
-  version = "0.1.0"
+  version = "0.2.0"
 }
 
 local defaults = {
@@ -35,7 +36,15 @@ local defaults = {
   cue_mix_active_guid = "",
   cue_send_prefader = true,
   cue_send_modes = {},
-  setup_window = {}
+  setup_window = {},
+  master_layout = "stereo",
+  monitor_formats = {},
+  fold_center_db = -3,
+  fold_surround_db = -3,
+  fold_lfe = false,
+  fold_lfe_db = 0,
+  fold_trim_db = 0,
+  settings_version = 4
 }
 
 local state = {
@@ -57,7 +66,9 @@ local state = {
   cue_listen = {},
   cue_cleanup_status = nil,
   cue_names_synced = false,
-  apply_send_mode_cue_guid = nil
+  apply_send_mode_cue_guid = nil,
+  fold_status = nil,
+  fold_sync_time = 0
 }
 
 local metronome_keys = {
@@ -72,10 +83,27 @@ local metronome_keys = {
 local METRONOME_TOGGLE_ACTION = 40364
 local REAROUTE_CHANNELS = 16
 local CUE_TRACK_EXT_KEY = "P_EXT:TK_CONTROL_ROOM_CUE"
-local MONITOR_MODES = { "stereo", "mono", "left_source", "right_source", "left_speaker", "right_speaker" }
-local MONITOR_MODE_LABELS = { stereo = "Stereo", mono = "Mono Sum", left_source = "L Source", right_source = "R Source", left_speaker = "L Speaker", right_speaker = "R Speaker" }
-local CUE_OUTPUT_MODES = { "stereo", "mono" }
-local CUE_OUTPUT_MODE_LABELS = { stereo = "Stereo", mono = "Mono Sum" }
+local MONITOR_MODE_LABELS = { full = "Full", mono = "Mono Sum", fold_stereo = "Fold to Stereo", left_speaker = "L Speaker", right_speaker = "R Speaker" }
+-- Modes stored by earlier versions, mapped onto the layout aware names.
+local LEGACY_MONITOR_MODES = {
+  stereo = "full", ["mono sum"] = "mono", sum = "mono",
+  left = "speaker:0", l = "speaker:0", left_source = "speaker:0", ["l source"] = "speaker:0",
+  right = "speaker:1", r = "speaker:1", right_source = "speaker:1", ["r source"] = "speaker:1",
+  ["left speaker"] = "left_speaker", ["l speaker"] = "left_speaker",
+  ["right speaker"] = "right_speaker", ["r speaker"] = "right_speaker"
+}
+local FOLD_PLUGIN_MATCH = "TK Control Room Downmix"
+-- Paths first, desc last, mirroring MeterEngine.plugin_names. The first entry is
+-- the ReaPack install path once this effect is added to index.xml; until then
+-- only the desc entries resolve.
+local FOLD_PLUGIN_NAMES = {
+  "JS: TK Scripts/TK Workbench/TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx",
+  "JS: TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx",
+  "JS: TK Control Room Downmix",
+  "JS: TK_Control_Room_Downmix"
+}
+local FOLD_PARAMS = { layout = 0, source = 1, fold = 2, center = 3, surround = 4, lfe_on = 5, lfe = 6, trim = 7, run = 8 }
+local MAX_TRACK_CHANNELS = 128
 
 local function copy_default(value)
   if type(value) ~= "table" then return value end
@@ -84,16 +112,53 @@ local function copy_default(value)
   return result
 end
 
+-- Monitor keys used to encode the send width ("hardware:stereo:0"). Width is
+-- now read from I_SRCCHAN, so the key only identifies the destination and stays
+-- stable when the format changes.
+local function migrate_monitor_keys(settings)
+  local changed = false
+  for _, field in ipairs({ "monitor_aliases", "monitor_modes" }) do
+    local table_value = settings[field]
+    if type(table_value) == "table" then
+      -- Collect first: adding keys during a pairs() walk skips entries.
+      local renames = {}
+      for key, value in pairs(table_value) do
+        local kind, channel = tostring(key):match("^(%a+):%a+:(%d+)$")
+        if kind and channel then renames[#renames + 1] = { old = key, new = kind .. ":" .. channel, value = value } end
+      end
+      for _, rename in ipairs(renames) do
+        if table_value[rename.new] == nil then table_value[rename.new] = rename.value end
+        table_value[rename.old] = nil
+        changed = true
+      end
+    end
+  end
+  return changed
+end
+
 local function ensure_settings(app)
   app.settings.control_room = app.settings.control_room or {}
   local settings = app.settings.control_room
   local changed = false
+  local prior_version = tonumber(settings.settings_version) or 1
   for key, value in pairs(defaults) do
     if settings[key] == nil then
       settings[key] = copy_default(value)
       changed = true
     end
   end
+  if prior_version < 3 then
+    if migrate_monitor_keys(settings) then changed = true end
+    changed = true
+  end
+  if prior_version < 4 then
+    -- The old default attenuated LFE by 10 dB on fold-down, on a slider that
+    -- could not reach the +10 dB the channel is actually reproduced at. Only
+    -- lift values still sitting on that default, never a deliberate choice.
+    if tonumber(settings.fold_lfe_db) == -10 then settings.fold_lfe_db = 0 end
+    changed = true
+  end
+  if changed then settings.settings_version = 4 end
   if changed and app.save_settings then app.save_settings() end
   return settings
 end
@@ -211,22 +276,47 @@ local function write_track_mute(track, muted, label)
   end)
 end
 
-local function read_track_peak(track)
-  if not valid_track(track) or not r.Track_GetPeakInfo then return 0 end
-  local left_ok, left_peak = pcall(r.Track_GetPeakInfo, track, 0)
-  local right_ok, right_peak = pcall(r.Track_GetPeakInfo, track, 1)
-  left_peak = left_ok and tonumber(left_peak) or 0
-  right_peak = right_ok and tonumber(right_peak) or 0
-  return math.max(math.abs(left_peak or 0), math.abs(right_peak or 0))
+local function track_channel_count(track)
+  if not valid_track(track) or not r.GetMediaTrackInfo_Value then return 2 end
+  local ok, value = pcall(r.GetMediaTrackInfo_Value, track, "I_NCHAN")
+  if not ok then return 2 end
+  return math.max(2, math.min(MAX_TRACK_CHANNELS, math.floor(tonumber(value) or 2)))
 end
 
-local function read_track_peaks(track)
-  if not valid_track(track) or not r.Track_GetPeakInfo then return 0, 0 end
-  local left_ok, left_peak = pcall(r.Track_GetPeakInfo, track, 0)
-  local right_ok, right_peak = pcall(r.Track_GetPeakInfo, track, 1)
-  left_peak = left_ok and tonumber(left_peak) or 0
-  right_peak = right_ok and tonumber(right_peak) or 0
-  return math.abs(left_peak or 0), math.abs(right_peak or 0)
+-- Widens a track when a layout needs more channels. Never narrows: the user may
+-- be using the extra channels for something the Control Room knows nothing of.
+local function grow_track_channel_count(track, channels, label)
+  if not valid_track(track) or not r.SetMediaTrackInfo_Value then return false end
+  channels = math.max(2, math.min(MAX_TRACK_CHANNELS, math.floor(tonumber(channels) or 2)))
+  if channels % 2 == 1 then channels = channels + 1 end
+  if track_channel_count(track) >= channels then return true end
+  return write_with_undo(label or "Control Room: Set track channels", function()
+    return r.SetMediaTrackInfo_Value(track, "I_NCHAN", channels)
+  end)
+end
+
+local function read_channel_peak(track, channel)
+  if not valid_track(track) or not r.Track_GetPeakInfo then return 0 end
+  local ok, value = pcall(r.Track_GetPeakInfo, track, math.max(0, math.floor(tonumber(channel) or 0)))
+  return ok and math.abs(tonumber(value) or 0) or 0
+end
+
+local function read_channel_peaks(track, base, count)
+  local peaks = {}
+  base = math.max(0, math.floor(tonumber(base) or 0))
+  count = math.max(1, math.floor(tonumber(count) or 2))
+  for index = 1, count do peaks[index] = read_channel_peak(track, base + index - 1) end
+  return peaks
+end
+
+local function read_track_peak(track, base, count)
+  if not valid_track(track) then return 0 end
+  count = count or math.min(track_channel_count(track), 8)
+  local highest = 0
+  for _, value in ipairs(read_channel_peaks(track, base or 0, count)) do
+    if value > highest then highest = value end
+  end
+  return highest
 end
 
 local function smoothed_meter(id, raw_value, settings)
@@ -302,99 +392,131 @@ local function output_channel_name(channel)
   return "Out " .. tostring(channel + 1)
 end
 
-local function output_target_name(channel, mono, rearoute)
+local function output_target_name(channel, width, mono, rearoute)
   channel = math.max(0, math.floor(tonumber(channel) or 0))
+  width = mono and 1 or math.max(1, math.floor(tonumber(width) or 2))
   if rearoute then
-    local name = mono and tostring(channel + 1) or (tostring(channel + 1) .. " / " .. tostring(channel + 2))
-    return "ReaRoute " .. name
+    return "ReaRoute " .. Layouts.channel_span(channel, { channels = width })
   end
-  if mono then return output_channel_name(channel) end
-  return output_channel_name(channel) .. " / " .. output_channel_name(channel + 1)
+  if width <= 1 then return output_channel_name(channel) end
+  if width == 2 then return output_channel_name(channel) .. " / " .. output_channel_name(channel + 1) end
+  return output_channel_name(channel) .. " - " .. output_channel_name(channel + width - 1)
 end
 
-local function add_output_target(targets, channel, mono, rearoute)
+local function add_output_target(targets, channel, width, mono, rearoute)
+  width = mono and 1 or math.max(1, math.floor(tonumber(width) or 2))
   targets[#targets + 1] = {
     channel = channel,
+    width = width,
     mono = mono == true,
     rearoute = rearoute == true,
-    name = output_target_name(channel, mono == true, rearoute == true)
+    name = output_target_name(channel, width, mono == true, rearoute == true)
   }
 end
 
-local function available_output_targets(outputs)
+-- REAPER takes the destination width from I_SRCCHAN, so the usable destination
+-- base channels depend on how wide the send is. The mono entries set the
+-- I_DSTCHAN mono bit, which collapses the send onto a single hardware channel.
+local function available_output_targets(outputs, layout)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  local width = layout.channels
+  local step = width == 1 and 1 or 2
   local targets = {}
   local count = 0
   if r.GetNumAudioOutputs then
     local ok, value = pcall(r.GetNumAudioOutputs)
     count = ok and math.floor(tonumber(value) or 0) or 0
   end
-  for channel = 0, count - 2, 2 do
-    add_output_target(targets, channel, false, false)
+  for channel = 0, count - width, step do
+    add_output_target(targets, channel, width, false, false)
   end
-  for channel = 0, count - 1 do
-    add_output_target(targets, channel, true, false)
+  if width > 1 then
+    for channel = 0, count - 1 do
+      add_output_target(targets, channel, 1, true, false)
+    end
   end
-  if #targets == 0 then add_output_target(targets, 0, true, false) end
+  if #targets == 0 then add_output_target(targets, 0, 1, true, false) end
   local rearoute_count = 0
   for _, output in ipairs(outputs or {}) do
     local target = output and output.target or nil
-    if target and target.rearoute then rearoute_count = math.max(rearoute_count, target.channel + (target.mono and 1 or 2)) end
+    if target and target.rearoute then rearoute_count = math.max(rearoute_count, target.channel + (target.width or 2)) end
   end
   rearoute_count = math.max(rearoute_count, REAROUTE_CHANNELS)
-  for channel = 0, rearoute_count - 2, 2 do
-    add_output_target(targets, channel, false, true)
+  for channel = 0, rearoute_count - width, step do
+    add_output_target(targets, channel, width, false, true)
   end
-  for channel = 0, rearoute_count - 1 do
-    add_output_target(targets, channel, true, true)
+  if width > 1 then
+    for channel = 0, rearoute_count - 1 do
+      add_output_target(targets, channel, 1, true, true)
+    end
   end
   return targets
 end
 
-local function source_target_name(channel, mono)
-  channel = math.max(0, math.floor(tonumber(channel) or 0))
-  if mono then return "Master " .. tostring(channel + 1) end
-  return "Master " .. tostring(channel + 1) .. " / " .. tostring(channel + 2)
+local function source_target_name(channel, layout)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  local name = "Master " .. Layouts.channel_span(channel, layout)
+  if layout.channels > 2 then name = name .. " (" .. layout.label .. ")" end
+  return name
 end
 
-local function add_source_target(targets, channel, mono)
+local function add_source_target(targets, channel, layout)
   targets[#targets + 1] = {
     channel = channel,
-    mono = mono == true,
-    name = source_target_name(channel, mono == true)
+    layout = layout.id,
+    width = layout.channels,
+    mono = layout.channels == 1,
+    name = source_target_name(channel, layout)
   }
 end
 
-local function available_source_targets(master)
+-- Pass a layout to list only the base channels valid for that format, or omit
+-- it to list every format that fits inside the master track.
+local function available_source_targets(master, layout)
   local targets = {}
-  local count = 2
-  if valid_track(master) and r.GetMediaTrackInfo_Value then
-    local ok, value = pcall(r.GetMediaTrackInfo_Value, master, "I_NCHAN")
-    if ok then count = math.max(2, math.floor(tonumber(value) or 2)) end
+  local count = track_channel_count(master)
+  local list
+  if layout then
+    layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+    list = layout and { layout } or {}
+  else
+    list = Layouts.fitting(count)
   end
-  for channel = 0, count - 2 do
-    add_source_target(targets, channel, false)
-  end
-  for channel = 0, count - 1 do
-    add_source_target(targets, channel, true)
+  for _, item in ipairs(list) do
+    for _, channel in ipairs(Layouts.offsets(count, item)) do
+      add_source_target(targets, channel, item)
+    end
   end
   return targets
 end
 
+-- I_SRCCHAN packs the width above the channel offset, so a 6 channel send
+-- reads back as 3072 + offset. Masking only the mono bit reported those as
+-- mono and 4 channel sends as stereo.
 local function monitor_send_source(master, index)
   if valid_track(master) and index and r.GetTrackSendInfo_Value then
     local ok, raw_channel = pcall(r.GetTrackSendInfo_Value, master, 1, index, "I_SRCCHAN")
     if ok and type(raw_channel) == "number" then
       raw_channel = math.floor(raw_channel)
-      if raw_channel < 0 then return { raw = raw_channel, channel = -1, mono = false, name = "None" } end
-      local channel = raw_channel & 0x1FF
-      local mono = (raw_channel & 1024) == 1024
-      return { raw = raw_channel, channel = channel, mono = mono, name = source_target_name(channel, mono) }
+      if raw_channel < 0 then return { raw = raw_channel, channel = -1, layout = nil, width = 0, mono = false, name = "None" } end
+      local channel, layout = Layouts.decode_src(raw_channel)
+      return {
+        raw = raw_channel,
+        channel = channel,
+        layout = layout.id,
+        width = layout.channels,
+        mono = layout.channels == 1,
+        name = source_target_name(channel, layout)
+      }
     end
   end
-  return { raw = 0, channel = 0, mono = false, name = source_target_name(0, false) }
+  local layout = Layouts.by_id("stereo")
+  return { raw = 0, channel = 0, layout = layout.id, width = layout.channels, mono = false, name = source_target_name(0, layout) }
 end
 
-local function monitor_send_target(master, index)
+local function monitor_send_target(master, index, width)
   if valid_track(master) and index and r.GetTrackSendInfo_Value then
     local ok, raw_channel = pcall(r.GetTrackSendInfo_Value, master, 1, index, "I_DSTCHAN")
     if ok and type(raw_channel) == "number" then
@@ -402,8 +524,9 @@ local function monitor_send_target(master, index)
       local channel = raw_channel & 0x1FF
       local mono = (raw_channel & 1024) == 1024
       local rearoute = (raw_channel & 512) == 512
-      local name = output_target_name(channel, mono, rearoute)
-      return { raw = raw_channel, channel = channel, mono = mono, rearoute = rearoute, name = name }
+      local dest_width = mono and 1 or math.max(1, math.floor(tonumber(width) or 2))
+      local name = output_target_name(channel, dest_width, mono, rearoute)
+      return { raw = raw_channel, channel = channel, width = dest_width, mono = mono, rearoute = rearoute, name = name }
     end
   end
   return nil
@@ -424,8 +547,9 @@ local function monitor_outputs(master)
   if not valid_track(master) or not r.GetTrackNumSends then return outputs end
   local count = r.GetTrackNumSends(master, 1) or 0
   for index = 0, count - 1 do
-    local target = monitor_send_target(master, index)
-    outputs[#outputs + 1] = { index = index, target = target, name = target and target.name or monitor_send_name(master, index) }
+    local source = monitor_send_source(master, index)
+    local target = monitor_send_target(master, index, source.width)
+    outputs[#outputs + 1] = { index = index, source = source, target = target, name = target and target.name or monitor_send_name(master, index) }
   end
   return outputs
 end
@@ -468,17 +592,14 @@ end
 
 local function targets_match(left, right)
   if not left or not right then return false end
-  return left.channel == right.channel and left.mono == right.mono and left.rearoute == right.rearoute
+  return left.channel == right.channel and left.mono == right.mono and left.rearoute == right.rearoute and (left.width or 2) == (right.width or 2)
 end
 
-local function source_targets_match(left, right)
-  if not left or not right then return false end
-  return left.channel == right.channel and left.mono == right.mono
-end
-
+-- Identifies the destination only. Width used to be part of this key, which
+-- meant aliases and modes were lost whenever the format changed.
 local function monitor_target_key(target)
   if not target then return nil end
-  return table.concat({ target.rearoute and "rearoute" or "hardware", target.mono and "mono" or "stereo", tostring(target.channel or 0) }, ":")
+  return (target.rearoute and "rearoute" or "hardware") .. ":" .. tostring(target.channel or 0)
 end
 
 local function clean_alias(value)
@@ -553,16 +674,42 @@ local function write_cue_track_name(cue)
   return r.GetSetMediaTrackInfo_String(cue.track, "P_NAME", cue_track_name(cue), true)
 end
 
+-- Cue output formats are stored as layout ids. Older configs hold "stereo" or
+-- "mono", which are layout ids too, so they load unchanged.
+local function cue_output_layout_id(mode)
+  mode = tostring(mode or ""):lower()
+  if mode == "mono sum" or mode == "sum" then return "mono" end
+  return Layouts.by_id(mode) and mode or "stereo"
+end
+
+local function cue_output_layout(cue)
+  return Layouts.by_id(cue_output_layout_id(cue and cue.record and cue.record.output_mode)) or Layouts.by_id("stereo")
+end
+
+local function cue_output_mode_label(mode)
+  local layout = Layouts.by_id(cue_output_layout_id(mode)) or Layouts.by_id("stereo")
+  if layout.channels == 1 then return "Mono Sum" end
+  return layout.label
+end
+
+local function cue_output_mode_options()
+  local options = {}
+  for _, layout in ipairs(Layouts.layouts) do options[#options + 1] = layout.id end
+  return options
+end
+
 local function cue_outputs(settings)
   local cues = {}
   local records = type(settings.cue_outputs) == "table" and settings.cue_outputs or {}
   for index, record in ipairs(records) do
     local track = track_by_guid(record.guid)
-    local target = valid_track(track) and monitor_send_target(track, 0) or nil
+    local layout = Layouts.by_id(cue_output_layout_id(record.output_mode)) or Layouts.by_id("stereo")
+    local target = valid_track(track) and monitor_send_target(track, 0, layout.channels) or nil
     cues[#cues + 1] = {
       index = index,
       record = record,
       track = track,
+      layout = layout.id,
       target = target,
       name = target and target.name or "No cue output"
     }
@@ -600,18 +747,8 @@ local function write_cue_alias(app, settings, cue, value)
   return true
 end
 
-local function cue_output_mode_key(mode)
-  mode = tostring(mode or ""):lower()
-  if mode == "mono" or mode == "mono sum" or mode == "sum" then return "mono" end
-  return "stereo"
-end
-
-local function cue_output_mode_label(mode)
-  return CUE_OUTPUT_MODE_LABELS[cue_output_mode_key(mode)] or CUE_OUTPUT_MODE_LABELS.stereo
-end
-
 local function cue_output_mode(cue)
-  return cue_output_mode_key(cue and cue.record and cue.record.output_mode)
+  return cue_output_layout(cue).id
 end
 
 local function first_cue_target(settings, targets)
@@ -1013,14 +1150,19 @@ end
 
 local function write_cue_output_mode(app, cue, mode)
   if not cue or not cue.record or not valid_track(cue.track) or not r.SetTrackSendInfo_Value then return false end
-  mode = cue_output_mode_key(mode)
+  local layout = Layouts.by_id(cue_output_layout_id(mode)) or Layouts.by_id("stereo")
+  grow_track_channel_count(cue.track, layout.channels, "Control Room: Widen cue track")
   local ok = write_with_undo("Control Room: Cue output mode", function()
     local index = ensure_cue_send(cue.track, nil)
     if not index then return false end
-    return r.SetTrackSendInfo_Value(cue.track, 1, index, "B_MONO", mode == "mono" and 1 or 0)
+    -- Mono is a sum of the stereo feed rather than a one channel source.
+    local src_layout = layout.channels == 1 and Layouts.by_id("stereo") or layout
+    local src_ok = r.SetTrackSendInfo_Value(cue.track, 1, index, "I_SRCCHAN", Layouts.encode_src(0, src_layout))
+    local mono_ok = r.SetTrackSendInfo_Value(cue.track, 1, index, "B_MONO", layout.channels == 1 and 1 or 0)
+    return src_ok ~= false and mono_ok ~= false
   end)
   if not ok then return false end
-  cue.record.output_mode = mode
+  cue.record.output_mode = layout.id
   if app and app.save_settings then app.save_settings() end
   return true
 end
@@ -1046,90 +1188,234 @@ local function write_monitor_destination(master, index, target)
   end)
 end
 
-local function monitor_source_value(target)
-  local value = math.max(0, math.floor(tonumber(target.channel) or 0))
-  if target.mono then value = value | 1024 end
-  return value
-end
-
-local function write_monitor_source(master, index, target)
-  if not valid_track(master) or not index or not target or not r.SetTrackSendInfo_Value then return false end
-  return write_with_undo("Control Room: Monitor source", function()
-    return r.SetTrackSendInfo_Value(master, 1, index, "I_SRCCHAN", monitor_source_value(target))
-  end)
-end
-
-local function monitor_mode_key(mode)
-  mode = tostring(mode or ""):lower()
-  if mode == "mono sum" or mode == "sum" then return "mono" end
-  if mode == "left" or mode == "l" or mode == "left source" or mode == "l source" then return "left_source" end
-  if mode == "right" or mode == "r" or mode == "right source" or mode == "r source" then return "right_source" end
-  if mode == "left speaker" or mode == "l speaker" then return "left_speaker" end
-  if mode == "right speaker" or mode == "r speaker" then return "right_speaker" end
-  for _, item in ipairs(MONITOR_MODES) do if mode == item then return item end end
-  return "stereo"
-end
-
-local function monitor_mode_label(mode)
-  return MONITOR_MODE_LABELS[monitor_mode_key(mode)] or MONITOR_MODE_LABELS.stereo
-end
-
-local function get_monitor_mode(settings, target)
+-- A monitor's format is remembered rather than inferred, because a soloed
+-- speaker leaves a mono send behind that no longer reveals the group it
+-- belongs to. Falls back to whatever the send currently says.
+local function monitor_format(settings, target, source)
   local key = monitor_target_key(target)
-  local modes = settings and settings.monitor_modes or nil
-  return monitor_mode_key(key and type(modes) == "table" and modes[key] or nil)
+  local formats = type(settings and settings.monitor_formats) == "table" and settings.monitor_formats or {}
+  local record = key and formats[key] or nil
+  local layout = record and Layouts.by_id(record.layout) or nil
+  if not layout and source and source.layout then layout = Layouts.by_id(source.layout) end
+  layout = layout or Layouts.by_id(settings and settings.master_layout) or Layouts.by_id("stereo")
+  local base = record and tonumber(record.base) or (source and tonumber(source.channel)) or 0
+  base = math.max(0, math.floor(base))
+  if layout.channels > 1 and base % 2 == 1 then base = base - 1 end
+  return layout, base
 end
 
-local function set_monitor_mode(app, settings, target, mode)
+local function set_monitor_format(app, settings, target, layout, base)
   local key = monitor_target_key(target)
-  if not key then return false end
-  settings.monitor_modes = type(settings.monitor_modes) == "table" and settings.monitor_modes or {}
-  settings.monitor_modes[key] = monitor_mode_key(mode)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  if not key or not layout then return false end
+  settings.monitor_formats = type(settings.monitor_formats) == "table" and settings.monitor_formats or {}
+  settings.monitor_formats[key] = { layout = layout.id, base = math.max(0, math.floor(tonumber(base) or 0)) }
   if app and app.save_settings then app.save_settings() end
   return true
 end
 
-local function monitor_source_pair_channel(source)
-  local channel = source and tonumber(source.channel) or 0
-  if not channel or channel < 0 then return 0 end
-  channel = math.floor(channel)
-  if source and source.mono then return channel - (channel % 2) end
-  return channel
+local function find_fold_fx(track)
+  if not valid_track(track) or not r.TrackFX_GetCount or not r.TrackFX_GetFXName then return nil end
+  for index = 0, (r.TrackFX_GetCount(track) or 0) - 1 do
+    local ok, name = r.TrackFX_GetFXName(track, index, "")
+    if ok and tostring(name or ""):find(FOLD_PLUGIN_MATCH, 1, true) then return index end
+  end
+  return nil
 end
 
-local function monitor_mode_source_target(mode, source)
-  mode = monitor_mode_key(mode)
-  local base = monitor_source_pair_channel(source)
-  if mode == "left_source" then return { channel = base, mono = true } end
-  if mode == "right_source" then return { channel = base + 1, mono = true } end
-  if mode == "mono" then return { channel = base, mono = false } end
-  return { channel = base, mono = false }
+-- The fold pair lives on the first even channel past the bed, so the surround
+-- feed to the main outputs is left untouched.
+local function fold_offset_for(layout, base)
+  local offset = math.max(0, math.floor(tonumber(base) or 0)) + (layout and layout.channels or 2)
+  if offset % 2 == 1 then offset = offset + 1 end
+  return offset
+end
+
+local function set_fold_param(track, fx_index, param, value)
+  if not r.TrackFX_GetParam or not r.TrackFX_SetParam then return end
+  -- Only the first return value: TrackFX_GetParam also yields min and max, and
+  -- passing those on turns tonumber into its two argument base form.
+  local raw = r.TrackFX_GetParam(track, fx_index, param)
+  local current = tonumber(raw)
+  if current and math.abs(current - value) < 0.001 then return end
+  r.TrackFX_SetParam(track, fx_index, param, value)
+end
+
+-- Returns the fold pair's base channel, or nil plus a status message.
+local function ensure_fold_bus(app, settings, master, layout, base, install)
+  if not valid_track(master) then return nil, "No master track" end
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  if layout.channels <= 2 then return nil, "Fold-down needs a multichannel format" end
+  local index = find_fold_fx(master)
+  if not index then
+    if not install or not r.TrackFX_AddByName then return nil, "Downmix JSFX not installed" end
+    for _, name in ipairs(FOLD_PLUGIN_NAMES) do
+      local added = r.TrackFX_AddByName(master, name, false, -1)
+      if added and added >= 0 then index = added; break end
+    end
+    if not index then return nil, "TK_Control_Room_Downmix.jsfx not found" end
+  end
+  local offset = fold_offset_for(layout, base)
+  grow_track_channel_count(master, offset + 2, "Control Room: Widen master for fold-down")
+  set_fold_param(master, index, FOLD_PARAMS.layout, Layouts.jsfx_layout_index[layout.id] or 3)
+  set_fold_param(master, index, FOLD_PARAMS.source, base)
+  set_fold_param(master, index, FOLD_PARAMS.fold, offset)
+  set_fold_param(master, index, FOLD_PARAMS.center, tonumber(settings.fold_center_db) or defaults.fold_center_db)
+  set_fold_param(master, index, FOLD_PARAMS.surround, tonumber(settings.fold_surround_db) or defaults.fold_surround_db)
+  set_fold_param(master, index, FOLD_PARAMS.lfe_on, settings.fold_lfe == true and 1 or 0)
+  set_fold_param(master, index, FOLD_PARAMS.lfe, tonumber(settings.fold_lfe_db) or defaults.fold_lfe_db)
+  set_fold_param(master, index, FOLD_PARAMS.trim, tonumber(settings.fold_trim_db) or defaults.fold_trim_db)
+  set_fold_param(master, index, FOLD_PARAMS.run, 1)
+  return offset, nil
+end
+
+local function remove_fold_bus(master)
+  local index = find_fold_fx(master)
+  if not index or not r.TrackFX_Delete then return false end
+  return write_with_undo("Control Room: Remove fold-down", function()
+    return r.TrackFX_Delete(master, index)
+  end)
+end
+
+local function monitor_mode_key(mode, layout)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  mode = tostring(mode or ""):lower()
+  mode = LEGACY_MONITOR_MODES[mode] or mode
+  local speaker = mode:match("^speaker:(%d+)$")
+  if speaker then
+    local index = tonumber(speaker) or 0
+    if index >= layout.channels then return "full" end
+    return "speaker:" .. tostring(index)
+  end
+  if mode == "mono" then return layout.channels > 1 and "mono" or "full" end
+  if mode == "fold_stereo" then return layout.channels > 2 and "fold_stereo" or "full" end
+  if mode == "left_speaker" or mode == "right_speaker" then
+    return layout.channels == 2 and mode or "full"
+  end
+  return "full"
+end
+
+local function monitor_mode_label(mode, layout)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  local key = monitor_mode_key(mode, layout)
+  local speaker = key:match("^speaker:(%d+)$")
+  if speaker then return Layouts.speaker(layout, tonumber(speaker)) .. " Only" end
+  if key == "full" then return layout.label end
+  return MONITOR_MODE_LABELS[key] or layout.label
+end
+
+local function monitor_mode_options(layout)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  local options = { "full" }
+  if layout.channels > 1 then options[#options + 1] = "mono" end
+  if layout.channels > 2 then options[#options + 1] = "fold_stereo" end
+  if layout.channels > 1 then
+    for index = 0, layout.channels - 1 do options[#options + 1] = "speaker:" .. tostring(index) end
+  end
+  if layout.channels == 2 then
+    options[#options + 1] = "left_speaker"
+    options[#options + 1] = "right_speaker"
+  end
+  return options
+end
+
+local function get_monitor_mode(settings, target, layout)
+  local key = monitor_target_key(target)
+  local modes = settings and settings.monitor_modes or nil
+  return monitor_mode_key(key and type(modes) == "table" and modes[key] or nil, layout)
+end
+
+local function set_monitor_mode(app, settings, target, mode, layout)
+  local key = monitor_target_key(target)
+  if not key then return false end
+  settings.monitor_modes = type(settings.monitor_modes) == "table" and settings.monitor_modes or {}
+  settings.monitor_modes[key] = monitor_mode_key(mode, layout)
+  if app and app.save_settings then app.save_settings() end
+  return true
 end
 
 local function monitor_mode_pan(mode)
-  mode = monitor_mode_key(mode)
   if mode == "left_speaker" then return -1 end
   if mode == "right_speaker" then return 1 end
   return 0
 end
 
-local function apply_monitor_mode(master, index, mode, source)
-  if not valid_track(master) or not index or not r.SetTrackSendInfo_Value then return false end
-  mode = monitor_mode_key(mode)
-  source = source or monitor_send_source(master, index)
-  local target = monitor_mode_source_target(mode, source)
-  return write_with_undo("Control Room: Monitor mode", function()
-    local source_ok = r.SetTrackSendInfo_Value(master, 1, index, "I_SRCCHAN", monitor_source_value(target))
+local function apply_monitor_mode(app, settings, master, index, mode, layout, base)
+  if not valid_track(master) or not index or not r.SetTrackSendInfo_Value then return false, nil end
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  base = math.max(0, math.floor(tonumber(base) or 0))
+  mode = monitor_mode_key(mode, layout)
+  local src_channel, src_layout = base, layout
+  local speaker = mode:match("^speaker:(%d+)$")
+  if speaker then
+    src_channel = base + (tonumber(speaker) or 0)
+    src_layout = Layouts.by_id("mono")
+  elseif mode == "fold_stereo" then
+    -- There is one fold bus per project, derived from the master bed, so every
+    -- monitor set to fold-down listens to the same pair.
+    local bed = Layouts.by_id(settings and settings.master_layout) or layout
+    local offset, status = ensure_fold_bus(app, settings, master, bed, 0, true)
+    if not offset then return false, status end
+    src_channel = offset
+    src_layout = Layouts.by_id("stereo")
+  end
+  local ok = write_with_undo("Control Room: Monitor mode", function()
+    local source_ok = r.SetTrackSendInfo_Value(master, 1, index, "I_SRCCHAN", Layouts.encode_src(src_channel, src_layout))
     local mono_ok = r.SetTrackSendInfo_Value(master, 1, index, "B_MONO", mode == "mono" and 1 or 0)
     local pan_ok = r.SetTrackSendInfo_Value(master, 1, index, "D_PAN", monitor_mode_pan(mode))
     return source_ok ~= false and mono_ok ~= false and pan_ok ~= false
   end)
+  return ok, nil
 end
 
-local function write_monitor_mode(app, settings, master, index, target, mode, source)
-  mode = monitor_mode_key(mode)
-  if not apply_monitor_mode(master, index, mode, source) then return false end
-  return set_monitor_mode(app, settings, target, mode)
+local function write_monitor_mode(app, settings, master, index, target, mode, layout, base)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  mode = monitor_mode_key(mode, layout)
+  local ok, status = apply_monitor_mode(app, settings, master, index, mode, layout, base)
+  state.fold_status = status
+  if not ok then return false end
+  -- Persist the format alongside the mode: a soloed speaker leaves a mono send
+  -- behind, and without the record the monitor would collapse to mono for good.
+  set_monitor_format(app, settings, target, layout, base)
+  return set_monitor_mode(app, settings, target, mode, layout)
+end
+
+-- Applies a format to a monitor: widens the master if needed, rewrites the
+-- send and re-applies the current mode against the new layout.
+local function write_monitor_layout(app, settings, master, index, target, layout, base)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  if not layout then return false end
+  base = math.max(0, math.floor(tonumber(base) or 0))
+  grow_track_channel_count(master, base + layout.channels, "Control Room: Widen master")
+  if not set_monitor_format(app, settings, target, layout, base) then return false end
+  local mode = get_monitor_mode(settings, target, layout)
+  return write_monitor_mode(app, settings, master, index, target, mode, layout, base)
+end
+
+local function fold_bus_in_use(settings, master)
+  if not valid_track(master) then return false end
+  for _, output in ipairs(monitor_outputs(master)) do
+    local layout = monitor_format(settings, output.target, output.source)
+    if get_monitor_mode(settings, output.target, layout) == "fold_stereo" then return true end
+  end
+  return false
+end
+
+-- Switching the last monitor away from Fold to Stereo leaves the downmix in
+-- place, where it would keep overwriting the fold pair on the master. Park it
+-- instead of deleting it: the user may have tuned the levels, and Setup has an
+-- explicit Remove button for real cleanup.
+local function sync_fold_bus_run(settings, master)
+  if not valid_track(master) then return end
+  local index = find_fold_fx(master)
+  if not index then return end
+  set_fold_param(master, index, FOLD_PARAMS.run, fold_bus_in_use(settings, master) and 1 or 0)
 end
 
 local function add_monitor_output(master, outputs, targets)
@@ -1242,12 +1528,13 @@ local function build_lanes(app, settings)
   end
   if settings.show_master then
     local master_value = read_track_volume(master)
+    local master_layout = Layouts.by_id(settings.master_layout) or Layouts.by_id("stereo")
     lanes[#lanes + 1] = {
       id = "master",
       label = "Master",
-      subtitle = "Main output",
+      subtitle = master_layout.channels > 2 and ("Main output | " .. master_layout.label) or "Main output",
       value = master_value or 1,
-      meter = smoothed_meter("master", read_track_peak(master), settings),
+      meter = smoothed_meter("master", read_track_peak(master, 0, master_layout.channels), settings),
       enabled = master_value ~= nil,
       status = master_value and nil or "Unavailable",
       write = function(value) return write_track_volume(master, value, "Control Room: Master volume") end
@@ -1272,15 +1559,26 @@ local function build_lanes(app, settings)
         local monitor_value = read_monitor_volume(master, send_index)
         local monitor_muted = read_monitor_mute(master, send_index)
         local alias = monitor_alias(settings, output.target)
-        local mode = get_monitor_mode(settings, output.target)
-        local mode_label = monitor_mode_label(mode)
+        local layout, base = monitor_format(settings, output.target, output.source)
+        local mode = get_monitor_mode(settings, output.target, layout)
+        local mode_label = monitor_mode_label(mode, layout)
         local lane_id = "monitor_" .. tostring(send_index)
+        -- Meter what this monitor is actually feeding: the whole bed, or the
+        -- single channel when a speaker is soloed.
+        local meter_base, meter_count = base, layout.channels
+        local soloed = mode:match("^speaker:(%d+)$")
+        if soloed then
+          meter_base, meter_count = base + (tonumber(soloed) or 0), 1
+        elseif mode == "fold_stereo" then
+          meter_base = fold_offset_for(Layouts.by_id(settings.master_layout) or layout, 0)
+          meter_count = 2
+        end
         lanes[#lanes + 1] = {
           id = lane_id,
           label = alias or (#outputs > 1 and ("Monitor " .. tostring(send_index + 1)) or "Monitor"),
           subtitle = tostring(output.name or "Hardware Out") .. " | " .. mode_label,
           value = monitor_value or 1,
-          meter = smoothed_meter(lane_id, read_track_peak(master), settings),
+          meter = smoothed_meter(lane_id, read_track_peak(master, meter_base, meter_count), settings),
           enabled = monitor_value ~= nil,
           status = monitor_value and nil or "Monitor unavailable",
           led_state = monitor_muted == false,
@@ -1294,8 +1592,9 @@ local function build_lanes(app, settings)
           solo_off_tooltip = "Select this speaker",
           mode = mode,
           mode_menu_title = "Monitor Mode",
-          mode_options = MONITOR_MODES,
-          set_mode = function(next_mode) return write_monitor_mode(app, settings, master, send_index, output.target, next_mode, monitor_send_source(master, send_index)) end,
+          mode_options = monitor_mode_options(layout),
+          mode_label = function(next_mode) return monitor_mode_label(next_mode, layout) end,
+          set_mode = function(next_mode) return write_monitor_mode(app, settings, master, send_index, output.target, next_mode, layout, base) end,
           write = function(value) return write_monitor_volume(master, send_index, value) end
         }
       end
@@ -1310,12 +1609,13 @@ local function build_lanes(app, settings)
       local cue_enabled = cue_value ~= nil
       local lane_id = "cue_" .. tostring(cue.index)
       local output_mode = cue_output_mode(cue)
+      local cue_layout = cue_output_layout(cue)
       lanes[#lanes + 1] = {
         id = lane_id,
         label = cue_label(cue),
         subtitle = tostring(cue.name or "Cue Output") .. " | " .. cue_output_mode_label(output_mode),
         value = cue_value or 1,
-        meter = smoothed_meter(lane_id, read_track_peak(track), settings),
+        meter = smoothed_meter(lane_id, read_track_peak(track, 0, cue_layout.channels), settings),
         enabled = cue_enabled,
         status = cue_value and nil or "Cue track missing",
         led_state = cue_enabled and cue_muted == false,
@@ -1325,7 +1625,8 @@ local function build_lanes(app, settings)
         led_off_tooltip = "Unmute cue",
         mode = output_mode,
         mode_menu_title = "Cue Output Mode",
-        mode_options = CUE_OUTPUT_MODES,
+        mode_options = cue_output_mode_options(),
+        mode_label = cue_output_mode_label,
         set_mode = function(next_mode) return write_cue_output_mode(app, cue, next_mode) end,
         handle_color = native_color_to_u32(valid_track(track) and r.GetTrackColor(track) or 0, 0xFF) or Theme.colors.warning,
         write = cue_enabled and function(value) return write_track_volume(track, value, "Control Room: Cue volume") end or function() return false end
@@ -1371,13 +1672,28 @@ local function shift_key_down(ctx)
   return false
 end
 
+local function meter_source_entry(id, label, track, layout)
+  layout = type(layout) == "string" and Layouts.by_id(layout) or layout
+  layout = layout or Layouts.by_id("stereo")
+  return {
+    id = id,
+    label = label,
+    track = track,
+    layout = layout.id,
+    layout_index = Layouts.jsfx_layout_index[layout.id] or MeterEngine.default_layout_index
+  }
+end
+
 local function meter_sources(app, settings)
   local sources = {}
-  sources[#sources + 1] = { id = "master", label = "Master", track = r.GetMasterTrack(0) }
+  sources[#sources + 1] = meter_source_entry("master", "Master", r.GetMasterTrack(0), settings.master_layout)
   local track = selected_track(app)
-  sources[#sources + 1] = { id = "selected", label = "Selected", track = track }
+  local track_layout = valid_track(track) and Layouts.by_channels(math.min(track_channel_count(track), 8)) or Layouts.by_id("stereo")
+  sources[#sources + 1] = meter_source_entry("selected", "Selected", track, track_layout)
   for _, cue in ipairs(cue_outputs(settings)) do
-    if valid_track(cue.track) then sources[#sources + 1] = { id = "cue:" .. tostring(cue_guid_value(cue) or cue.index), label = cue_label(cue), track = cue.track } end
+    if valid_track(cue.track) then
+      sources[#sources + 1] = meter_source_entry("cue:" .. tostring(cue_guid_value(cue) or cue.index), cue_label(cue), cue.track, cue_output_layout(cue))
+    end
   end
   return sources
 end
@@ -1605,9 +1921,10 @@ local function draw_lane(app, lane, settings, width, height)
   r.ImGui_Dummy(ctx, width, height)
   if lane.mode_options and lane.set_mode and r.ImGui_BeginPopupContextItem and r.ImGui_BeginPopupContextItem(ctx, "##control_room_lane_mode") then
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(lane.mode_menu_title or "Mode"))
+    local mode_label = lane.mode_label or tostring
     for _, mode in ipairs(lane.mode_options) do
-      local selected = monitor_mode_key(lane.mode) == mode
-      if r.ImGui_Selectable(ctx, monitor_mode_label(mode), selected) then lane.set_mode(mode) end
+      local selected = lane.mode == mode
+      if r.ImGui_Selectable(ctx, mode_label(mode), selected) then lane.set_mode(mode) end
       if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
     end
     r.ImGui_EndPopup(ctx)
@@ -1723,10 +2040,10 @@ end
 
 local function queue_meter_reset(source)
   if not source then return end
-  state.pending_meter_reset = { source_id = source.id, track_guid = track_guid(source.track) }
-  state.meter_peaks[source.id or "none"] = { left = 0, right = 0 }
-  state.meters["meter_l:" .. tostring(source.id or "none")] = 0
-  state.meters["meter_r:" .. tostring(source.id or "none")] = 0
+  local key = source.id or "none"
+  state.pending_meter_reset = { source_id = source.id, track_guid = track_guid(source.track), layout_index = source.layout_index }
+  state.meter_peaks[key] = nil
+  for index = 1, 8 do state.meters["meter_" .. tostring(index) .. ":" .. tostring(key)] = 0 end
 end
 
 local function draw_header(app, lanes)
@@ -1776,15 +2093,23 @@ local function draw_meter_panel(app, settings, footer_height)
       end
       r.ImGui_EndCombo(ctx)
     end
-    local left_raw, right_raw = read_track_peaks(source and source.track or nil)
-    local left_value = smoothed_meter("meter_l:" .. tostring(source and source.id or "none"), left_raw, settings)
-    local right_value = smoothed_meter("meter_r:" .. tostring(source and source.id or "none"), right_raw, settings)
-    state.meter_peaks = type(state.meter_peaks) == "table" and state.meter_peaks or {}
+    local layout = Layouts.by_id(source and source.layout) or Layouts.by_id("stereo")
+    local channel_count = math.max(1, layout.channels)
     local peak_key = source and source.id or "none"
-    local peak = state.meter_peaks[peak_key] or { left = 0, right = 0 }
-    peak.left = math.max(peak.left or 0, left_raw or 0)
-    peak.right = math.max(peak.right or 0, right_raw or 0)
-    state.meter_peaks[peak_key] = peak
+    local raw_peaks = read_channel_peaks(source and source.track or nil, 0, channel_count)
+    state.meter_peaks = type(state.meter_peaks) == "table" and state.meter_peaks or {}
+    local peak = state.meter_peaks[peak_key]
+    if type(peak) ~= "table" or #peak ~= channel_count then
+      peak = {}
+      for index = 1, channel_count do peak[index] = 0 end
+      state.meter_peaks[peak_key] = peak
+    end
+    local values = {}
+    for index = 1, channel_count do
+      local raw = raw_peaks[index] or 0
+      values[index] = smoothed_meter("meter_" .. tostring(index) .. ":" .. tostring(peak_key), raw, settings)
+      if raw > (peak[index] or 0) then peak[index] = raw end
+    end
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_SetCursorScreenPos(ctx, panel_x, select(2, r.ImGui_GetCursorScreenPos(ctx)))
     local meter_x, meter_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -1803,13 +2128,26 @@ local function draw_meter_panel(app, settings, footer_height)
     local bottom_y = meter_y + meter_h
     draw_meter_scale(ctx, draw_list, meter_x + UIScale.round(2), meter_x + panel_w - UIScale.round(2), meter_y + UIScale.round(6), bottom_y - UIScale.round(4), settings)
     local scale_margin = panel_w >= UIScale.round(180) and UIScale.round(36) or UIScale.round(28)
-    local bar_gap = math.max(UIScale.round(4), math.min(UIScale.round(16), panel_w * 0.04))
-    local bar_w = math.max(UIScale.round(10), (panel_w - scale_margin * 2 - bar_gap) * 0.5)
+    local gaps = math.max(1, channel_count - 1)
+    local bar_gap = math.max(UIScale.round(2), math.min(UIScale.round(16), (panel_w * 0.08) / gaps))
+    local bar_w = math.max(UIScale.round(6), (panel_w - scale_margin * 2 - bar_gap * gaps) / channel_count)
     local bar_left = meter_x + scale_margin
-    local reset_left = draw_meter_channel(ctx, draw_list, bar_left, bar_left + bar_w, meter_y + UIScale.round(6), bottom_y - UIScale.round(4), left_value, peak.left, "L " .. format_db(peak.left or 0, settings), settings)
-    local reset_right = draw_meter_channel(ctx, draw_list, bar_left + bar_w + bar_gap, bar_left + bar_w * 2 + bar_gap, meter_y + UIScale.round(6), bottom_y - UIScale.round(4), right_value, peak.right, "R " .. format_db(peak.right or 0, settings), settings)
-    if reset_left then peak.left = 0 end
-    if reset_right then peak.right = 0 end
+    local bar_top = meter_y + UIScale.round(6)
+    local bar_bottom = bottom_y - UIScale.round(4)
+    for index = 1, channel_count do
+      local left_edge = bar_left + (index - 1) * (bar_w + bar_gap)
+      local speaker = Layouts.speaker(layout, index - 1)
+      -- Narrow bars only get the speaker name; the value badge would not fit.
+      local badge = nil
+      if bar_w >= UIScale.round(46) then
+        badge = speaker .. " " .. format_db(peak[index] or 0, settings)
+      elseif bar_w >= UIScale.round(18) then
+        badge = speaker
+      end
+      if draw_meter_channel(ctx, draw_list, left_edge, left_edge + bar_w, bar_top, bar_bottom, values[index], peak[index], badge, settings) then
+        peak[index] = 0
+      end
+    end
     if #info_items > 0 then
       local divider_y = meter_y + meter_h + divider_gap_top
       r.ImGui_DrawList_AddLine(draw_list, panel_x, divider_y, panel_x + panel_w, divider_y, color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0xAA), UIScale.px(1))
@@ -1890,7 +2228,8 @@ end
 local function monitor_mode_text(output)
   local target = output and output.target or nil
   if not target then return "Unknown" end
-  local mode = target.mono and "Mono" or "Stereo"
+  local width = math.max(1, math.floor(tonumber(target.width) or 2))
+  local mode = target.mono and "Mono" or (width == 2 and "Stereo" or (tostring(width) .. " ch"))
   if target.rearoute then mode = "ReaRoute " .. mode end
   return mode
 end
@@ -2018,8 +2357,9 @@ local function draw_setup_popup(app, settings)
   if r.ImGui_Separator then r.ImGui_Separator(ctx) end
   local master = r.GetMasterTrack(0)
   local outputs = monitor_outputs(master)
-  local targets = available_output_targets(outputs)
-  local source_targets = available_source_targets(master)
+  -- Destination lists depend on send width, so the shared list is the stereo
+  -- one and the monitor and cue rows build their own.
+  local targets = available_output_targets(outputs, "stereo")
   local cues = cue_outputs(settings)
   state.setup_tab = state.setup_tab or "monitors"
   local tab_avail = r.ImGui_GetContentRegionAvail(ctx)
@@ -2033,6 +2373,88 @@ local function draw_setup_popup(app, settings)
   if draw_setup_section_button(ctx, "Targets", "control_room_setup_targets", state.setup_tab == "targets", tab_w) then state.setup_tab = "targets" end
   if r.ImGui_Separator then r.ImGui_Separator(ctx) end
   if state.setup_tab == "monitors" then
+      local master_layout = Layouts.by_id(settings.master_layout) or Layouts.by_id("stereo")
+      local master_channels = track_channel_count(master)
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Master format")
+      r.ImGui_SameLine(ctx, UIScale.round(90))
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+      if r.ImGui_BeginCombo(ctx, "##control_room_master_layout", master_layout.label) then
+        for _, layout in ipairs(Layouts.layouts) do
+          local selected = layout.id == master_layout.id
+          if r.ImGui_Selectable(ctx, layout.label .. " (" .. tostring(layout.channels) .. " ch)", selected) then
+            settings.master_layout = layout.id
+            grow_track_channel_count(master, layout.channels, "Control Room: Widen master")
+            if app.save_settings then app.save_settings() end
+          end
+          if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+        end
+        r.ImGui_EndCombo(ctx)
+      end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Format of the main mix. Drives the master meter, the fold-down and the default for new monitors.\nEach monitor keeps its own format below.") end
+      r.ImGui_SameLine(ctx)
+      r.ImGui_TextColored(ctx, master_channels >= master_layout.channels and Theme.colors.text_dim or Theme.colors.warning, "Master track " .. tostring(master_channels) .. " ch")
+      if master_channels < master_layout.channels then
+        r.ImGui_SameLine(ctx)
+        local widen_label = "Widen to " .. tostring(master_layout.channels)
+        if r.ImGui_Button(ctx, widen_label .. "##control_room_widen_master", UIScale.text_button_w(ctx, widen_label, 118, 10), 0) then
+          grow_track_channel_count(master, master_layout.channels, "Control Room: Widen master")
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The master track needs at least " .. tostring(master_layout.channels) .. " channels for this format") end
+      end
+      if master_layout.channels > 2 then
+        local fold_index = find_fold_fx(master)
+        local fold_base = fold_offset_for(master_layout, 0)
+        local fold_active = fold_index and fold_bus_in_use(settings, master) or false
+        local fold_text = "Not installed"
+        if fold_index then
+          fold_text = "Master " .. Layouts.channel_span(fold_base, { channels = 2 }) .. (fold_active and "" or " (idle)")
+        end
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Fold-down")
+        r.ImGui_SameLine(ctx, UIScale.round(90))
+        r.ImGui_TextColored(ctx, fold_index and (fold_active and Theme.colors.text_dim or Theme.colors.warning) or Theme.colors.warning, fold_text)
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, fold_active and "A monitor is listening to the fold pair" or (fold_index and "Installed but stopped: no monitor is set to Fold to Stereo.\nIt writes nothing until one is." or "A monitor set to Fold to Stereo installs the downmix and reads this pair"))
+        end
+        if fold_index then
+          r.ImGui_SameLine(ctx)
+          if r.ImGui_Button(ctx, "Remove##control_room_fold_remove", UIScale.text_button_w(ctx, "Remove", 78, 8), 0) then remove_fold_bus(master) end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Remove the downmix JSFX from the master") end
+        end
+        local fold_changed = false
+        local fold_slider_theme = push_setup_slider_theme(ctx)
+        r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+        local center_changed, center_value = r.ImGui_SliderDouble(ctx, "Center##control_room_fold_center", tonumber(settings.fold_center_db) or defaults.fold_center_db, -12, 0, "%.1f dB")
+        if center_changed then settings.fold_center_db = center_value; fold_changed = true end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+        local surround_changed, surround_value = r.ImGui_SliderDouble(ctx, "Surround##control_room_fold_surround", tonumber(settings.fold_surround_db) or defaults.fold_surround_db, -12, 0, "%.1f dB")
+        if surround_changed then settings.fold_surround_db = surround_value; fold_changed = true end
+        pop_setup_slider_theme(ctx, fold_slider_theme)
+        local lfe_changed, lfe_value = r.ImGui_Checkbox(ctx, "Include LFE##control_room_fold_lfe", settings.fold_lfe == true)
+        if lfe_changed then settings.fold_lfe = lfe_value == true; fold_changed = true end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Most delivery specs discard LFE on fold-down") end
+        if settings.fold_lfe == true then
+          r.ImGui_SameLine(ctx)
+          local lfe_slider_theme = push_setup_slider_theme(ctx)
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+          local lfe_db_changed, lfe_db_value = r.ImGui_SliderDouble(ctx, "LFE##control_room_fold_lfe_db", tonumber(settings.fold_lfe_db) or defaults.fold_lfe_db, -24, 10, "%.1f dB")
+          if lfe_db_changed then settings.fold_lfe_db = lfe_db_value; fold_changed = true end
+          pop_setup_slider_theme(ctx, lfe_slider_theme)
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "LFE is reproduced 10 dB above the other channels.\n+10 matches what a surround listener hears; 0 keeps the fold-down safer.") end
+        end
+        local trim_slider_theme = push_setup_slider_theme(ctx)
+        r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+        local trim_changed, trim_value = r.ImGui_SliderDouble(ctx, "Output trim##control_room_fold_trim", tonumber(settings.fold_trim_db) or defaults.fold_trim_db, -12, 12, "%.1f dB")
+        if trim_changed then settings.fold_trim_db = trim_value; fold_changed = true end
+        pop_setup_slider_theme(ctx, trim_slider_theme)
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Level of the folded stereo pair. Pull down if summing pushes it into clipping.") end
+        if fold_changed then
+          if fold_index then ensure_fold_bus(app, settings, master, master_layout, 0, false) end
+          if app.save_settings then app.save_settings() end
+        end
+      end
+      if state.fold_status then r.ImGui_TextColored(ctx, Theme.colors.warning, tostring(state.fold_status)) end
+      if r.ImGui_Separator then r.ImGui_Separator(ctx) end
       r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
       local slider_theme_count = push_setup_slider_theme(ctx)
       local dim_changed, dim_value = r.ImGui_SliderDouble(ctx, "Dim dB##control_room_dim_db", tonumber(settings.dim_db) or defaults.dim_db, -30, -3, "%.0f dB")
@@ -2051,12 +2473,15 @@ local function draw_setup_popup(app, settings)
           r.ImGui_PushID(ctx, "setup_monitor_" .. tostring(output.index))
           local volume = read_monitor_volume(master, output.index)
           local muted = read_monitor_mute(master, output.index)
-          local source = monitor_send_source(master, output.index)
-          local mode = get_monitor_mode(settings, output.target)
+          local source = output.source or monitor_send_source(master, output.index)
+          local layout, base = monitor_format(settings, output.target, source)
+          local monitor_targets = available_output_targets(outputs, layout)
+          local source_targets = available_source_targets(master, layout)
+          local mode = get_monitor_mode(settings, output.target, layout)
           local alias = monitor_alias(settings, output.target) or ""
           r.ImGui_TextColored(ctx, Theme.colors.text, "Monitor " .. tostring(output.index + 1))
           r.ImGui_SameLine(ctx)
-          r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(output.name or "Hardware Out") .. " | " .. monitor_mode_text(output) .. " | " .. monitor_mode_label(mode) .. " | " .. tostring(source.name or "Master 1 / 2") .. " | " .. format_db(volume or 1, settings))
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(output.name or "Hardware Out") .. " | " .. monitor_mode_text(output) .. " | " .. monitor_mode_label(mode, layout) .. " | " .. tostring(source.name or "Master 1 / 2") .. " | " .. format_db(volume or 1, settings))
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Alias")
           r.ImGui_SameLine(ctx, UIScale.round(64))
           r.ImGui_SetNextItemWidth(ctx, UIScale.round(310))
@@ -2065,14 +2490,28 @@ local function draw_setup_popup(app, settings)
           r.ImGui_SameLine(ctx)
           if r.ImGui_Button(ctx, "Clear##monitor_alias_clear", UIScale.text_button_w(ctx, "Clear", 54, 8), 0) then clear_monitor_alias(app, settings, output.target) end
           if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear monitor alias") end
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Format")
+          r.ImGui_SameLine(ctx, UIScale.round(64))
+          r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
+          if r.ImGui_BeginCombo(ctx, "##monitor_layout", layout.label) then
+            for _, next_layout in ipairs(Layouts.layouts) do
+              local selected = next_layout.id == layout.id
+              if r.ImGui_Selectable(ctx, next_layout.label .. " (" .. tostring(next_layout.channels) .. " ch)", selected) then
+                write_monitor_layout(app, settings, master, output.index, output.target, next_layout, base)
+              end
+              if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+            end
+            r.ImGui_EndCombo(ctx)
+          end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Send width. Widens the master track when the format needs more channels.") end
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Output")
           r.ImGui_SameLine(ctx, UIScale.round(64))
           r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
-          if #targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_destination", tostring(output.name or "Hardware Out")) then
-            for _, target in ipairs(targets) do
+          if #monitor_targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_destination", tostring(output.name or "Hardware Out")) then
+            for _, target in ipairs(monitor_targets) do
               local selected = target_matches_output(target, output)
               if r.ImGui_Selectable(ctx, tostring(target.name or "Output"), selected) then
-                if write_monitor_destination(master, output.index, target) then write_monitor_mode(app, settings, master, output.index, target, mode, source) end
+                if write_monitor_destination(master, output.index, target) then write_monitor_mode(app, settings, master, output.index, target, mode, layout, base) end
               end
               if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
             end
@@ -2081,29 +2520,29 @@ local function draw_setup_popup(app, settings)
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Source")
           r.ImGui_SameLine(ctx, UIScale.round(64))
           r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
-          if #source_targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_source", tostring(source.name or "Master 1 / 2")) then
+          if #source_targets > 0 and r.ImGui_BeginCombo(ctx, "##monitor_source", source_target_name(base, layout)) then
             for _, target in ipairs(source_targets) do
-              local selected = source_targets_match(source, target)
+              local selected = target.channel == base
               if r.ImGui_Selectable(ctx, tostring(target.name or "Source"), selected) then
-                if write_monitor_source(master, output.index, target) then write_monitor_mode(app, settings, master, output.index, output.target, mode, target) end
+                write_monitor_layout(app, settings, master, output.index, output.target, layout, target.channel)
               end
               if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
             end
             r.ImGui_EndCombo(ctx)
           end
-          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose the master channel pair feeding this monitor") end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Master channels feeding this monitor") end
           r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Mode")
           r.ImGui_SameLine(ctx, UIScale.round(64))
           r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
-          if r.ImGui_BeginCombo(ctx, "##monitor_mode", monitor_mode_label(mode)) then
-            for _, next_mode in ipairs(MONITOR_MODES) do
+          if r.ImGui_BeginCombo(ctx, "##monitor_mode", monitor_mode_label(mode, layout)) then
+            for _, next_mode in ipairs(monitor_mode_options(layout)) do
               local selected = mode == next_mode
-              if r.ImGui_Selectable(ctx, monitor_mode_label(next_mode), selected) then write_monitor_mode(app, settings, master, output.index, output.target, next_mode, source) end
+              if r.ImGui_Selectable(ctx, monitor_mode_label(next_mode, layout), selected) then write_monitor_mode(app, settings, master, output.index, output.target, next_mode, layout, base) end
               if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
             end
             r.ImGui_EndCombo(ctx)
           end
-          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose stereo, mono sum, source check or physical speaker side") end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Full format, mono sum, fold-down or a single speaker") end
           if r.ImGui_Button(ctx, muted and "Unmute##monitor_setup_mute" or "Mute##monitor_setup_mute", UIScale.text_button_w(ctx, muted and "Unmute" or "Mute", 82, 8), 0) then write_monitor_mute(master, output.index, muted == false) end
           r.ImGui_SameLine(ctx)
           if r.ImGui_Button(ctx, "Remove##monitor_setup_remove", UIScale.text_button_w(ctx, "Remove", 82, 8), 0) then remove_monitor_output(master, output.index) end
@@ -2131,6 +2570,8 @@ local function draw_setup_popup(app, settings)
           local volume = read_track_volume(track)
           local feed_count = cue_feed_count(settings, track)
           local output_mode = cue_output_mode(cue)
+          local cue_layout = cue_output_layout(cue)
+          local cue_targets = available_output_targets(outputs, cue_layout)
           local alias = clean_alias(cue.record and cue.record.alias) or ""
           r.ImGui_TextColored(ctx, Theme.colors.text, cue_label(cue))
           r.ImGui_SameLine(ctx)
@@ -2147,8 +2588,8 @@ local function draw_setup_popup(app, settings)
             r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Output")
             r.ImGui_SameLine(ctx, UIScale.round(64))
             r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
-            if #targets > 0 and r.ImGui_BeginCombo(ctx, "##cue_destination", tostring(cue.name or "Cue Output")) then
-              for _, target in ipairs(targets) do
+            if #cue_targets > 0 and r.ImGui_BeginCombo(ctx, "##cue_destination", tostring(cue.name or "Cue Output")) then
+              for _, target in ipairs(cue_targets) do
                 local selected = target_matches_output(target, cue)
                 if r.ImGui_Selectable(ctx, tostring(target.name or "Output"), selected) then
                   if write_cue_destination(track, target) then write_cue_output_mode(app, cue, output_mode) end
@@ -2161,14 +2602,14 @@ local function draw_setup_popup(app, settings)
             r.ImGui_SameLine(ctx, UIScale.round(64))
             r.ImGui_SetNextItemWidth(ctx, UIScale.round(392))
             if r.ImGui_BeginCombo(ctx, "##cue_output_mode", cue_output_mode_label(output_mode)) then
-              for _, mode in ipairs(CUE_OUTPUT_MODES) do
+              for _, mode in ipairs(cue_output_mode_options()) do
                 local selected = output_mode == mode
                 if r.ImGui_Selectable(ctx, cue_output_mode_label(mode), selected) then write_cue_output_mode(app, cue, mode) end
                 if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
               end
               r.ImGui_EndCombo(ctx)
             end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Choose stereo or mono-summed cue output") end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Cue output format. Widens the cue track when needed.") end
             if r.ImGui_Button(ctx, muted and "Unmute##cue_setup_mute" or "Mute##cue_setup_mute", UIScale.text_button_w(ctx, muted and "Unmute" or "Mute", 82, 8), 0) then write_track_mute(track, muted == false, "Control Room: Cue mute") end
             r.ImGui_SameLine(ctx)
             if r.ImGui_Button(ctx, "Sync##cue_setup_sync", UIScale.text_button_w(ctx, "Sync", 82, 8), 0) then sync_cue_output(settings, cue) end
@@ -2323,12 +2764,28 @@ local function draw_setup_popup(app, settings)
   end
   draw_apply_send_mode_popup(app, settings)
   if state.setup_tab == "targets" then
-      if #targets == 0 then
+      state.targets_layout = state.targets_layout or (Layouts.by_id(settings.master_layout) or Layouts.by_id("stereo")).id
+      local preview_layout = Layouts.by_id(state.targets_layout) or Layouts.by_id("stereo")
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Format")
+      r.ImGui_SameLine(ctx, UIScale.round(64))
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(180))
+      if r.ImGui_BeginCombo(ctx, "##control_room_targets_layout", preview_layout.label) then
+        for _, layout in ipairs(Layouts.layouts) do
+          local selected = layout.id == preview_layout.id
+          if r.ImGui_Selectable(ctx, layout.label .. " (" .. tostring(layout.channels) .. " ch)", selected) then state.targets_layout = layout.id end
+          if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+        end
+        r.ImGui_EndCombo(ctx)
+      end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Destination options available at this send width") end
+      local preview_targets = available_output_targets(outputs, preview_layout)
+      if #preview_targets == 0 then
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No device outputs found.")
       elseif r.ImGui_BeginChild(ctx, "##control_room_setup_targets", 0, 0, 0) then
-        for _, target in ipairs(targets) do
+        for _, target in ipairs(preview_targets) do
           local kind = target.rearoute and "ReaRoute" or "Hardware"
-          r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(target.name or "Output") .. " | " .. kind .. " " .. (target.mono and "Mono" or "Stereo"))
+          local width = target.mono and "Mono sum" or (target.width == 2 and "Stereo" or (tostring(target.width) .. " ch"))
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(target.name or "Output") .. " | " .. kind .. " " .. width)
         end
         r.ImGui_EndChild(ctx)
       end
@@ -2371,11 +2828,16 @@ function M.draw(app)
   settings.min_db = tonumber(settings.min_db) or defaults.min_db
   settings.max_db = tonumber(settings.max_db) or defaults.max_db
   if settings.max_db <= settings.min_db then settings.max_db = settings.min_db + 12 end
+  local now = r.time_precise and r.time_precise() or os.clock()
+  if now - (state.fold_sync_time or 0) > 0.5 then
+    state.fold_sync_time = now
+    sync_fold_bus_run(settings, r.GetMasterTrack(0))
+  end
   if state.pending_meter_reset then
     local pending = state.pending_meter_reset
     state.pending_meter_reset = nil
     local track = pending.source_id == "master" and r.GetMasterTrack(0) or track_by_guid(pending.track_guid)
-    local ok, err = pcall(MeterEngine.reset_source, { id = pending.source_id, track = track }, settings)
+    local ok, err = pcall(MeterEngine.reset_source, { id = pending.source_id, track = track, layout_index = pending.layout_index }, settings)
     if not ok and app then app.status = "Meter reset failed: " .. tostring(err) end
   end
   local lanes = build_lanes(app, settings)
