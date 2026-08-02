@@ -1,8 +1,10 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.12
+-- @version 3.2.13
 -- @changelog:
 --[[ 
+    v3.2.13:
+        + TK Notes: line colors can now be applied to multiple lines at once - select several lines (for example a whole chorus) and pick a color from the palette, the overflow menu or the new "Line color" submenu in the editor right-click menu. Resetting works on the whole selection too.
     v3.2.12:
         + Custom images: assign your own artwork to a plugin via the right-click menu ("Set Custom Image..."), handy for JSFX and other plugins that don't capture well. The image is copied to the CustomImages folder, scaled down to a max width and used everywhere instead of the captured screenshot; "Remove Custom Image" brings the screenshot back.
         + Custom images settings (SCREENSHOTS tab): on/off toggle, max width, "Open Custom Images Folder" and "Rescan Custom Images" - dropping a file named after the plugin straight into that folder works too, no need to assign it from the menu.

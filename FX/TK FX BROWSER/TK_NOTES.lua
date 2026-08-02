@@ -1,7 +1,10 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.6.3
+-- @version 2.6.4
 -- @changelog
+-- 2.6.4
+--   + Line colors: select multiple lines and apply a color to all of them in one action (color palette, overflow menu and the new "Line color" submenu in the editor right-click menu)
+--   + Line colors: reset now also works on all selected lines at once
 -- 2.6.3
 --   + Per-selection text size: larger text now sits on the same baseline as the rest of the line (baseline-aligned) instead of floating higher
 --   + Per-selection text size: fixed erratic A- / A+ behaviour (increase/decrease could do nothing or jump); the current size is now read reliably and the selection stays active for repeated presses
@@ -2544,6 +2547,18 @@ local function GetSelectionRange(editor)
     return start_pos, end_pos
 end
 
+function GetColorTargetLines(editor)
+    local caret_line = GetSourceLineFromCaret(state.text, editor and editor.caret or 0)
+    local sel_start, sel_end = GetSelectionRange(editor)
+    if not sel_start then return caret_line, caret_line end
+    local first_line = GetSourceLineFromByte(state.text, sel_start)
+    local last_line = GetSourceLineFromByte(state.text, sel_end)
+    if state.text:byte(sel_end) == 10 then
+        last_line = math.max(first_line, last_line - 1)
+    end
+    return first_line, last_line
+end
+
 local function ClearSelection(editor, pos)
     if not editor then return end
     local caret = ClampToText(pos or editor.caret or 0)
@@ -4164,7 +4179,7 @@ local function DrawMenuBar()
         end
         r.ImGui_PopStyleColor(ctx, 3)
         if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Text color palette\nSet color for current line or all text")
+            r.ImGui_SetTooltip(ctx, "Text color palette\nSet color for the current line, all selected lines, or all text")
         end
     else
         table.insert(overflow_items, "color")
@@ -4184,10 +4199,14 @@ local function DrawMenuBar()
             end
         end
         r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Color Current Line")
         local editor_lc = EnsureEditorState()
-        local cur_src_line = GetSourceLineFromCaret(state.text, editor_lc.caret)
-        local cur_line_col = state.line_colors[cur_src_line]
+        local lc_first, lc_last = GetColorTargetLines(editor_lc)
+        local lc_count = lc_last - lc_first + 1
+        r.ImGui_Text(ctx, lc_count > 1 and string.format("Color Selected Lines (%d)", lc_count) or "Color Current Line")
+        local cur_line_col = nil
+        for ln = lc_first, lc_last do
+            if state.line_colors[ln] then cur_line_col = state.line_colors[ln] break end
+        end
         for i, preset in ipairs(TEXT_COLOR_PRESETS) do
             if i > 1 and (i - 1) % 6 ~= 0 then
                 r.ImGui_SameLine(ctx)
@@ -4197,7 +4216,7 @@ local function DrawMenuBar()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), preset.hex)
             local btn_size = 24
             if r.ImGui_Button(ctx, "##lc_preset_" .. i, btn_size, btn_size) then
-                state.line_colors[cur_src_line] = preset.hex
+                for ln = lc_first, lc_last do state.line_colors[ln] = preset.hex end
                 state.dirty = true
                 state.last_edit_time = r.time_precise()
             end
@@ -4208,8 +4227,8 @@ local function DrawMenuBar()
         end
         r.ImGui_Separator(ctx)
         if cur_line_col then
-            if r.ImGui_MenuItem(ctx, "Reset current line") then
-                state.line_colors[cur_src_line] = nil
+            if r.ImGui_MenuItem(ctx, lc_count > 1 and "Reset selected lines" or "Reset current line") then
+                for ln = lc_first, lc_last do state.line_colors[ln] = nil end
                 state.dirty = true
                 state.last_edit_time = r.time_precise()
             end
@@ -4678,19 +4697,25 @@ local function DrawMenuBar()
                     end
                     r.ImGui_Separator(ctx)
                     local editor_ov = EnsureEditorState()
-                    local ov_src_line = GetSourceLineFromCaret(state.text, editor_ov.caret)
+                    local ov_first, ov_last = GetColorTargetLines(editor_ov)
+                    local ov_count = ov_last - ov_first + 1
+                    local ov_suffix = ov_count > 1 and string.format(" (%d lines)", ov_count) or " (line)"
+                    local ov_has_color = false
+                    for ln = ov_first, ov_last do
+                        if state.line_colors[ln] then ov_has_color = true break end
+                    end
                     for _, preset in ipairs(TEXT_COLOR_PRESETS) do
-                        local is_set = state.line_colors[ov_src_line] == preset.hex
-                        if r.ImGui_MenuItem(ctx, preset.name .. " (line)", nil, is_set) then
-                            state.line_colors[ov_src_line] = preset.hex
+                        local is_set = state.line_colors[ov_first] == preset.hex
+                        if r.ImGui_MenuItem(ctx, preset.name .. ov_suffix, nil, is_set) then
+                            for ln = ov_first, ov_last do state.line_colors[ln] = preset.hex end
                             state.dirty = true
                             state.last_edit_time = r.time_precise()
                         end
                     end
-                    if state.line_colors[ov_src_line] then
+                    if ov_has_color then
                         r.ImGui_Separator(ctx)
-                        if r.ImGui_MenuItem(ctx, "Reset line color") then
-                            state.line_colors[ov_src_line] = nil
+                        if r.ImGui_MenuItem(ctx, ov_count > 1 and "Reset line colors" or "Reset line color") then
+                            for ln = ov_first, ov_last do state.line_colors[ln] = nil end
                             state.dirty = true
                             state.last_edit_time = r.time_precise()
                         end
@@ -5498,6 +5523,32 @@ local function DrawEditor()
             end
             if r.ImGui_MenuItem(ctx, "Redo", "Ctrl+Y", false, #state.redo_stack > 0) then
                 PerformRedo()
+            end
+            r.ImGui_Separator(ctx)
+            local ctx_first, ctx_last = GetColorTargetLines(editor)
+            local ctx_count = ctx_last - ctx_first + 1
+            if r.ImGui_BeginMenu(ctx, ctx_count > 1 and string.format("Line color (%d lines)", ctx_count) or "Line color") then
+                for _, preset in ipairs(TEXT_COLOR_PRESETS) do
+                    local is_set = state.line_colors[ctx_first] == preset.hex
+                    if r.ImGui_MenuItem(ctx, preset.name, nil, is_set) then
+                        for ln = ctx_first, ctx_last do state.line_colors[ln] = preset.hex end
+                        state.dirty = true
+                        state.last_edit_time = r.time_precise()
+                    end
+                end
+                local ctx_has_color = false
+                for ln = ctx_first, ctx_last do
+                    if state.line_colors[ln] then ctx_has_color = true break end
+                end
+                if ctx_has_color then
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, ctx_count > 1 and "Reset line colors" or "Reset line color") then
+                        for ln = ctx_first, ctx_last do state.line_colors[ln] = nil end
+                        state.dirty = true
+                        state.last_edit_time = r.time_precise()
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
             end
             r.ImGui_Separator(ctx)
             if r.ImGui_MenuItem(ctx, "Select All", "Ctrl+A", false, #state.text > 0) then
