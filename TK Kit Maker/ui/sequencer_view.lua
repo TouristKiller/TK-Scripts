@@ -40,6 +40,195 @@ local L_CYCLE, L_SPEED, L_SOLO, L_MODE, L_RETRIG, L_NOTE, L_OBEY, L_DIRECTION = 
 local L_ECHO_ON, L_ECHO_COUNT, L_ECHO_MODE, L_ECHO_STEP, L_ECHO_RATE = 8, 9, 10, 11, 12
 local L_ON, L_VEL, L_GATE, L_LEN, L_SUB, L_PROB, L_PITCH = 16, 32, 48, 64, 80, 96, 112
 local ECHO_MAX_COUNT = 4
+
+-- Groove: where a lane's timing comes from when it is not the plain grid.
+--
+-- The gmem map is appended ABOVE the lanes rather than squeezed into them. A
+-- lane block is exactly 128 slots and every one is taken -- 16 for controls and
+-- seven blocks of 16 steps -- so there is not one spare, and widening the lane
+-- stride would move every existing index in two files at once.
+--
+--   HDR   : 4 slots per lane -- on/off, amount, step count, spare
+--   TABLE : 64 slots per lane -- 32 offsets then 32 velocities
+--
+-- Per lane rather than a shared pool of grooves: it costs a few hundred floats
+-- and removes an indirection that the audio thread would otherwise have to
+-- follow on every step.
+-- One table rather than two locals: the main chunk sits close to Lua's limit of
+-- 200 locals per function, and it has been hit here before.
+local GRV = {
+  lib = require("core.groove"),
+  HDR = 2176, HDR_STRIDE = 4,
+  BASE = 2304, STRIDE = 64, MAX_STEPS = 32,
+  dir = nil, names = nil, cache = {},
+}
+
+function GRV.folder()
+  if not GRV.dir then
+    GRV.dir = r.GetResourcePath() .. "/TK_Kit_Maker/grooves"
+    r.RecursiveCreateDirectory(GRV.dir, 0)
+  end
+  return GRV.dir
+end
+
+-- The MIDI files on disk, by name. Scanned once and on demand: this runs from
+-- a draw call, and hitting the filesystem every frame would be felt.
+--
+-- The walking and the naming live in core.groove, where they can be tested
+-- against a folder tree made up on the spot; this only supplies REAPER's two
+-- enumerators and remembers the answer.
+function GRV.list(force)
+  if GRV.names and not force then return GRV.names end
+
+  local function files(dir)
+    local out, i = {}, 0
+    while true do
+      local fn = r.EnumerateFiles(dir, i)
+      if not fn then break end
+      out[#out + 1] = fn
+      i = i + 1
+    end
+    return out
+  end
+
+  local function dirs(dir)
+    local out, i = {}, 0
+    while true do
+      local dn = r.EnumerateSubdirectories(dir, i)
+      if not dn then break end
+      out[#out + 1] = dn
+      i = i + 1
+    end
+    return out
+  end
+
+  local scanned = GRV.lib.scan(GRV.folder(), files, dirs,
+    { builtins = GRV.lib.builtin_names() })
+  GRV.names = scanned.names
+  GRV.paths = scanned.paths
+  GRV.tree = scanned.tree
+  return GRV.names
+end
+
+-- Where a listed groove actually came from, or nil for a built-in. Builds the
+-- list first if nothing has asked for it yet: a preset can name a groove before
+-- any picker has been drawn.
+function GRV.path_of(name)
+  if not GRV.paths then GRV.list() end
+  return GRV.paths and GRV.paths[name] or nil
+end
+
+-- Re-reads the folder. The parsed grooves go with it: without that, a file
+-- dropped in to replace one that failed would stay broken, because the failure
+-- is remembered.
+function GRV.rescan()
+  GRV.names = nil
+  GRV.paths = nil
+  GRV.tree = nil
+  GRV.cache = {}
+  return GRV.list(true)
+end
+
+-- The groove list as a menu: a folder on disk is a submenu you open, not a
+-- name with a slash through it.
+--
+-- Flattened, a pack of thirty grooves put thirty near-identical lines in one
+-- scrolling list -- "TR707 / TR707 16 swing 02", over and over, with the part
+-- that differs at the far end of each one. The folder is the useful division,
+-- so it is the one the menu is built on.
+--
+-- What is stored is still the full name. The tree carries both, so the menu can
+-- draw "Swing 62" while the lane keeps "MPC60 / Swing 62" -- a saved pattern has
+-- to be able to find the same file again.
+--
+-- Returns the chosen groove's full name, or nil if nothing was picked.
+function GRV.draw_tree(ctx, node, chosen, id, depth)
+  local picked = nil
+  depth = depth or 0
+
+  for _, folder in ipairs(node.folders or {}) do
+    -- Depth in the id, so two folders of the same name at different levels do
+    -- not share one open/closed state.
+    if r.ImGui_BeginMenu(ctx, folder.name .. "##grvdir_" .. id .. "_" .. depth .. "_" .. folder.name) then
+      local got = GRV.draw_tree(ctx, folder, chosen, id, depth + 1)
+      if got then picked = got end
+      r.ImGui_EndMenu(ctx)
+    end
+  end
+
+  for _, f in ipairs(node.files or {}) do
+    if r.ImGui_MenuItem(ctx, f.name .. "##grvfile_" .. id .. "_" .. f.label,
+        nil, chosen == f.label) then
+      picked = f.label
+    end
+  end
+
+  return picked
+end
+
+-- The built-ins, which are not files and so are not in the tree. They lead, in
+-- their own order -- 54, 58, 62, 66 is a scale of increasing swing.
+function GRV.draw_builtins(ctx, chosen, id)
+  local picked = nil
+  for _, n in ipairs(GRV.lib.builtin_names()) do
+    -- Skipped when a file of the same name has taken its place, or the list
+    -- would offer the same name twice and mean different things by it.
+    if not GRV.path_of(n) then
+      if r.ImGui_MenuItem(ctx, n .. "##grvbuiltin_" .. id .. "_" .. n, nil, chosen == n) then
+        picked = n
+      end
+    end
+  end
+  return picked
+end
+
+-- The two entries at the foot of every groove combo.
+--
+-- The list is read once and cached, so a groove dropped in while Kit Maker is
+-- open would not show up until the script was restarted -- and the moment you
+-- want a new groove is precisely when you are sitting in this menu. Opening the
+-- folder is next to it because that is the other half of the same errand.
+function GRV.draw_footer(ctx, id)
+  r.ImGui_Separator(ctx)
+  if r.ImGui_Selectable(ctx, "Rescan grooves##grv_rescan_" .. id, false) then
+    GRV.rescan()
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Re-read the grooves folder, including its subfolders.\nUse this after dropping new .mid files in.")
+  end
+  if r.CF_ShellExecute and r.ImGui_Selectable(ctx, "Open grooves folder##grv_open_" .. id, false) then
+    r.CF_ShellExecute(GRV.folder())
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, GRV.folder())
+  end
+end
+
+-- Parsed once per file. `false` marks one that failed, so a broken file is not
+-- reopened on every frame either.
+function GRV.get(name)
+  if not name or name == "" then return nil end
+  local hit = GRV.cache[name]
+  if hit ~= nil then return hit or nil end
+  -- A file of the same name wins over the built-in, so a groove dropped in the
+  -- folder replaces one that shipped rather than being unreachable.
+  local groove, err
+  local path = GRV.path_of(name)
+  if path then
+    groove, err = GRV.lib.load(path, STEPS_PER_BAR)
+  end
+  if not groove then
+    groove = GRV.lib.builtin(name)
+    if groove then err = nil end
+  end
+  GRV.cache[name] = groove or false
+  if not groove then GRV.cache[name .. "__err"] = err end
+  return groove
+end
+
+function GRV.error(name)
+  return name and GRV.cache[name .. "__err"] or nil
+end
 local engine_attached = false
 local engine_installed = false
 local engine_reinstalled = false
@@ -1374,6 +1563,8 @@ local function new_sequence()
       echo_vel_mode = "flat",
       echo_vel_step = 6,
       echo_rate = "1/16",
+      groove = nil,
+      groove_amount = 0,
       step_mode_mask = "xxxx",
       param_mode = "velocity",
       pitch_rand_level = 0,
@@ -1462,6 +1653,11 @@ local function sanitize_sequence(data)
           echo_vel_mode = normalize_lane_echo_mode(src.echo_vel_mode),
           echo_vel_step = normalize_lane_echo_step(src.echo_vel_step),
           echo_rate = normalize_lane_echo_rate(src.echo_rate),
+          -- The groove is stored by NAME, not by index: a list of .mid files
+          -- reorders itself the moment one is added, and an index would then
+          -- point at a different feel with nothing to show for it.
+          groove = (type(src.groove) == "string" and src.groove ~= "") and src.groove or nil,
+          groove_amount = clamp(tonumber(src.groove_amount) or 0, 0, 1),
           step_mode_mask = M.normalize_step_mode_mask(src.step_mode_mask),
           param_mode = (src.param_mode == "substeps" or src.param_mode == "gate" or src.param_mode == "length" or src.param_mode == "pitch" or src.param_mode == "pan" or src.param_mode == "volume") and src.param_mode or "velocity",
           pitch_rand_level = clamp(math.floor(tonumber(src.pitch_rand_level) or 0), 0, 3),
@@ -2291,6 +2487,37 @@ local function engine_write_pattern(seq, solo_map, total_steps, lane_tracks, lan
     local loop_len, loop_bits = M.step_mode_mask_to_bits(cfg.step_mode_mask)
     r.gmem_write(LB + 13, loop_len)
     r.gmem_write(LB + 14, loop_bits)
+
+    -- Groove. Written every time the pattern is pushed, which is also every
+    -- time the amount knob moves -- that is what makes it audible while it
+    -- plays rather than on the next restart.
+    --
+    -- The header is cleared even when there is no groove, so switching one off
+    -- actually switches it off instead of leaving the last table in memory.
+    local GH = GRV.HDR + (lane - 1) * GRV.HDR_STRIDE
+    local amount = clamp(tonumber(cfg.groove_amount) or 0, 0, 1)
+    local groove = amount > 0 and GRV.get(cfg.groove) or nil
+    if groove then
+      local steps = math.min(groove.steps, GRV.MAX_STEPS)
+      local GB = GRV.BASE + (lane - 1) * GRV.STRIDE
+      for i = 1, GRV.MAX_STEPS do
+        local o = (i <= steps) and (groove.offset[i] or 0) or 0
+        local v = (i <= steps) and (groove.velocity[i] or 1) or 1
+        r.gmem_write(GB + (i - 1), o)
+        r.gmem_write(GB + GRV.MAX_STEPS + (i - 1), v)
+      end
+      r.gmem_write(GH + 0, 1)
+      r.gmem_write(GH + 1, amount)
+      r.gmem_write(GH + 2, steps)
+      -- How far ahead a step can be pulled, worked out here so the audio thread
+      -- never has to scan the table to find out.
+      r.gmem_write(GH + 3, GRV.lib.max_lead(groove, amount))
+    else
+      r.gmem_write(GH + 0, 0)
+      r.gmem_write(GH + 1, 0)
+      r.gmem_write(GH + 2, 0)
+      r.gmem_write(GH + 3, 0)
+    end
     local pattern_lane = seq.pattern and seq.pattern[lane] or nil
     for step = 1, STEPS_PER_BAR do
       local on = (not muted and pattern_lane and pattern_lane[step] == 1) and 1 or 0
@@ -3049,6 +3276,11 @@ local function export_sequence_to_midi(track, seq, opts)
     local events = {}
     local triggers = {}
     local step_mode_mask = M.normalize_step_mode_mask(cfg.step_mode_mask)
+    -- The groove has to be applied here as well as in the engine, or the export
+    -- becomes the one place it goes missing: you would hear a shuffle, write it
+    -- out, and get a straight pattern back with nothing on screen to say why.
+    local grv_amount = clamp(tonumber(cfg.groove_amount) or 0, 0, 1)
+    local grv_groove = grv_amount > 0 and GRV.get(cfg.groove) or nil
 
     local lane_tick = math.max(0, math.floor(tonumber(phase and phase.tick_index) or 0))
     local lane_step_start = tonumber(phase and phase.next_step_start) or 0
@@ -3063,6 +3295,22 @@ local function export_sequence_to_midi(track, seq, opts)
         local step_prob = clamp(math.floor(tonumber(table_step_value(cfg.step_probability, lane_step, 100)) or 100), 0, 100)
         local chance_ok = step_prob >= 100 or (step_prob > 0 and (math.random() * 100) <= step_prob)
         if chance_ok then
+          -- One shifted start, from which substeps, echoes and the gate end all
+          -- follow -- the same shape the engine has, where everything hangs off
+          -- a single time. The grid position itself is untouched, so the next
+          -- step still comes when it should.
+          --
+          -- A fraction of a LANE step, matching the engine: a lane at half speed
+          -- swings by proportionally more, and the feel stays the feel.
+          local grv_start = lane_step_start
+          if grv_groove then
+            grv_start = grv_start + GRV.lib.step_offset(grv_groove, lane_step, grv_amount) * lane_period_steps
+            -- A pushed note on the first step would land before the item, where
+            -- REAPER cannot put it. It sits on the boundary instead: one note
+            -- per section, and the alternative is losing it.
+            if grv_start < 0 then grv_start = 0 end
+            step_vel = clamp(math.floor(step_vel * GRV.lib.step_velocity(grv_groove, lane_step, grv_amount) + 0.5), 1, 127)
+          end
           local sub_period_steps = lane_period_steps / step_substeps
           local gate_steps = step_substeps > 1 and (sub_period_steps * (step_gate / 100)) or (step_len * (step_gate / 100))
           local pitch_offset = seq_step_pitch(cfg, lane, lane_step)
@@ -3071,7 +3319,7 @@ local function export_sequence_to_midi(track, seq, opts)
           end
 
           for sub_idx = 1, step_substeps do
-            local start_steps = lane_step_start + ((sub_idx - 1) * sub_period_steps)
+            local start_steps = grv_start + ((sub_idx - 1) * sub_period_steps)
             if start_steps < (section_steps - step_epsilon) then
               if (not rs5k_note_off) or mode == "oneshot" then
                 triggers[#triggers + 1] = {
@@ -3096,7 +3344,7 @@ local function export_sequence_to_midi(track, seq, opts)
 
           if echo_enabled then
             for echo_idx = 1, echo_count do
-              local echo_start = lane_step_start + (echo_idx * echo_interval_steps)
+              local echo_start = grv_start + (echo_idx * echo_interval_steps)
               if echo_start < (section_steps - step_epsilon) then
                 local echo_vel = echo_velocity_for_index(step_vel, echo_idx, echo_vel_mode, echo_vel_step)
                 if (not rs5k_note_off) or mode == "oneshot" then
@@ -4663,7 +4911,119 @@ local function draw_step(app)
           r.ImGui_PopStyleVar(ctx)
         end
 
-        local controls_bottom = echo_controls_y + btn_h
+        -- Groove, on a row of its own. The echo row above is packed with
+        -- widths worked out to fill it exactly; anything added there would push
+        -- the last control off the edge. A fresh row cannot.
+        local grv_y = echo_controls_y + btn_h + 4
+        r.ImGui_SetCursorPosX(ctx, row_x)
+        r.ImGui_SetCursorPosY(ctx, grv_y)
+        local grv_name = lane_cfg.groove
+        local grv_amt = clamp(tonumber(lane_cfg.groove_amount) or 0, 0, 1)
+        local grv_on = grv_name ~= nil and grv_amt > 0
+        if lane_toggle_button(ctx, "tk_seq_lane_groove_" .. tostring(lane), "Groove", btn6_w, btn_h, grv_on) then
+          if grv_on then
+            lane_cfg.groove_amount = 0
+          else
+            -- Turning it on with nothing chosen picks the first groove there
+            -- is, so the button does something rather than nothing.
+            if not lane_cfg.groove then
+              local names = GRV.list()
+              lane_cfg.groove = names[1]
+            end
+            if lane_cfg.groove then lane_cfg.groove_amount = 0.5 end
+          end
+          save_sequence(parent, seq)
+          if state.playing then refresh_playback_params(state, guid) end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          local names = GRV.list()
+          if #names == 0 then
+            r.ImGui_SetTooltip(ctx, "No grooves yet.\nDrop .mid groove files into:\n" .. GRV.folder()
+              .. "\n\nSubfolders are read too, and named after them:\nMPC60 / Swing 62")
+          else
+            r.ImGui_SetTooltip(ctx, "Groove on/off for this lane")
+          end
+        end
+
+        -- Same frame padding the echo combos use, and for the same reason: a
+        -- combo sizes itself to its text plus padding, which is shorter than a
+        -- button. Without this the groove row would sit lower than everything
+        -- above it. The echo row pops this style just before we get here, so it
+        -- has to be pushed again rather than carried over.
+        local grv_pad_y = 2
+        if r.ImGui_GetTextLineHeight and r.ImGui_PushStyleVar and r.ImGui_StyleVar_FramePadding then
+          local grv_line_h = tonumber(r.ImGui_GetTextLineHeight(ctx)) or 14
+          grv_pad_y = math.max(1, math.floor((btn_h - grv_line_h) * 0.5))
+          r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, grv_pad_y)
+        end
+
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        r.ImGui_SetNextItemWidth(ctx, btn7_w + btn8_w + btn_gap)
+        local grv_label = grv_name or "(none)"
+        if r.ImGui_BeginCombo(ctx, "##tk_seq_lane_groove_pick_" .. tostring(lane), grv_label) then
+          if r.ImGui_Selectable(ctx, "(none)", grv_name == nil) then
+            lane_cfg.groove = nil
+            lane_cfg.groove_amount = 0
+            save_sequence(parent, seq)
+            if state.playing then refresh_playback_params(state, guid) end
+          end
+          local names = GRV.list()
+          local picked = GRV.draw_builtins(ctx, grv_name, "lane")
+          local from_tree = GRV.tree and GRV.draw_tree(ctx, GRV.tree, grv_name, "lane") or nil
+          picked = from_tree or picked
+          if picked then
+            lane_cfg.groove = picked
+            if (tonumber(lane_cfg.groove_amount) or 0) <= 0 then
+              lane_cfg.groove_amount = 0.5
+            end
+            save_sequence(parent, seq)
+            if state.playing then refresh_playback_params(state, guid) end
+          end
+          if #names == 0 then
+            r.ImGui_TextColored(ctx, Theme.colors.text_faint, "no .mid files found")
+          end
+          GRV.draw_footer(ctx, "lane")
+          r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          local g = GRV.get(grv_name)
+          if g then
+            -- The shape is spelled out because the commonest surprise is a
+            -- groove that appears to do nothing: swing moves the off-beats, so
+            -- a lane playing on the beat comes out identical however far the
+            -- amount is turned up.
+            r.ImGui_SetTooltip(ctx, grv_name .. "\n" .. GRV.lib.summary(g)
+              .. "\n\n" .. GRV.lib.shape(g)
+              .. "\n> late    < early    . not moved"
+              .. "\n\nA lane that only plays where the dots are will not change.")
+          elseif grv_name then
+            r.ImGui_SetTooltip(ctx, grv_name .. "\ncould not be read: " .. tostring(GRV.error(grv_name)))
+          else
+            r.ImGui_SetTooltip(ctx, "Which groove drives this lane's timing")
+          end
+        end
+
+        r.ImGui_SameLine(ctx, 0, btn_gap)
+        r.ImGui_SetNextItemWidth(ctx, btn9_w * 2)
+        r.ImGui_BeginDisabled(ctx, grv_name == nil)
+        local amt_changed, amt_value = r.ImGui_SliderInt(ctx,
+          "##tk_seq_lane_groove_amt_" .. tostring(lane),
+          math.floor(grv_amt * 100 + 0.5), 0, 100, "Amount %d%%")
+        if amt_changed then
+          lane_cfg.groove_amount = clamp(amt_value / 100, 0, 1)
+          save_sequence(parent, seq)
+          if state.playing then refresh_playback_params(state, guid) end
+        end
+        r.ImGui_EndDisabled(ctx)
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "0% = dead on the grid, 100% = the groove's own feel.\nMoves timing and velocity together.")
+        end
+
+        if r.ImGui_PopStyleVar then
+          r.ImGui_PopStyleVar(ctx)
+        end
+
+        local controls_bottom = grv_y + btn_h
         local bottom_divider_y = controls_bottom + 10
         local _, echo_row_max_y = r.ImGui_GetItemRectMax(ctx)
         local bottom_divider_screen_y = echo_row_max_y + 4
@@ -5281,6 +5641,8 @@ function euclid_new()
       echo_vel_mode = "flat",
       echo_vel_step = 6,
       echo_rate = "1/16",
+      groove = nil,
+      groove_amount = 0,
       step_mode_mask = "xxxx",
       mode = "gate",
       retrigger = true,
@@ -5327,6 +5689,8 @@ function euclid_empty_lane()
     echo_vel_mode = "flat",
     echo_vel_step = 6,
     echo_rate = "1/16",
+    groove = nil,
+    groove_amount = 0,
     step_mode_mask = "xxxx",
     mode = "gate",
     retrigger = true,
@@ -5387,6 +5751,13 @@ function euclid_sanitize(data)
           echo_vel_mode = normalize_lane_echo_mode(s.echo_vel_mode),
           echo_vel_step = normalize_lane_echo_step(s.echo_vel_step),
           echo_rate = normalize_lane_echo_rate(s.echo_rate),
+          -- Euclid keeps its own lanes and copies a chosen few fields into the
+          -- shared lane settings on every sync. Anything not listed there is
+          -- inherited from whatever the Step page last left behind, so a new
+          -- per-lane setting has to be carried explicitly or the two pages
+          -- quietly share one value.
+          groove = (type(s.groove) == "string" and s.groove ~= "") and s.groove or nil,
+          groove_amount = clamp(tonumber(s.groove_amount) or 0, 0, 1),
           step_mode_mask = M.normalize_step_mode_mask(s.step_mode_mask),
           mode = tostring(s.mode or "gate") == "oneshot" and "oneshot" or "gate",
           retrigger = s.retrigger ~= false,
@@ -5478,6 +5849,8 @@ function euclid_build_seq(edata)
       echo_vel_mode = "flat",
       echo_vel_step = 6,
       echo_rate = "1/16",
+      groove = nil,
+      groove_amount = 0,
       mode = "gate",
       retrigger = true,
       muted = false,
@@ -5541,6 +5914,8 @@ function euclid_build_seq(edata)
     seq.lane_settings[lane].echo_vel_mode = normalize_lane_echo_mode(L.echo_vel_mode)
     seq.lane_settings[lane].echo_vel_step = normalize_lane_echo_step(L.echo_vel_step)
     seq.lane_settings[lane].echo_rate = normalize_lane_echo_rate(L.echo_rate)
+    seq.lane_settings[lane].groove = (type(L.groove) == "string" and L.groove ~= "") and L.groove or nil
+    seq.lane_settings[lane].groove_amount = clamp(tonumber(L.groove_amount) or 0, 0, 1)
     seq.lane_settings[lane].step_mode_mask = M.normalize_step_mode_mask(L.step_mode_mask)
     seq.lane_settings[lane].mode = tostring(L.mode or "gate") == "oneshot" and "oneshot" or "gate"
     seq.lane_settings[lane].retrigger = L.retrigger ~= false
@@ -5993,7 +6368,9 @@ function draw_euclid(app)
       local volume_rand_level = clamp(math.floor(tonumber(L.volume_rand_level) or ((tonumber(L.volume_human) or 0) <= 0 and 0 or ((tonumber(L.volume_human) or 0) >= 9 and 3 or ((tonumber(L.volume_human) or 0) >= 4 and 2 or 1)))), 0, 3)
       local volume_rand_seed = math.max(0, math.floor(tonumber(L.volume_rand_seed) or euclid_default_seed()))
       local echo_enabled = L.echo_enabled == true
-      local echo_popup_id = "Echo settings##tk_euclid_echo_popup_" .. tostring(selected_lane)
+      -- The title is what the user reads; everything after ## is the id, so this
+      -- can be renamed without breaking the popup it opens.
+      local echo_popup_id = "Echo & Groove##tk_euclid_echo_popup_" .. tostring(selected_lane)
       local step_popup_id = "Step mode##tk_euclid_step_popup_" .. tostring(selected_lane)
       local step_mode_mask = M.normalize_step_mode_mask(L.step_mode_mask)
       local direction_label = lane_direction_label(L.direction)
@@ -6366,7 +6743,7 @@ end
         "Echo",
         "",
         echo_enabled,
-        "Open echo settings"
+        "Open echo and groove settings"
       )
       if cecho then
         r.ImGui_OpenPopup(ctx, echo_popup_id)
@@ -6492,6 +6869,60 @@ end
           L.echo_enabled = not popup_echo_enabled
           popup_changed = true
         end
+
+        -- Groove sits in this popup rather than in the knob row, which is full,
+        -- and it belongs with Echo: both are lane-wide, both change how a lane
+        -- sits in time rather than what it plays.
+        r.ImGui_Separator(ctx)
+        Theme.label(ctx, "Groove")
+        local eg_name = L.groove
+        local eg_amt = clamp(tonumber(L.groove_amount) or 0, 0, 1)
+
+        r.ImGui_SetNextItemWidth(ctx, 200)
+        if r.ImGui_BeginCombo(ctx, "##tk_euclid_groove_pick", eg_name or "(none)") then
+          if r.ImGui_Selectable(ctx, "(none)##tk_euclid_groove_none", eg_name == nil) then
+            L.groove = nil
+            L.groove_amount = 0
+            popup_changed = true
+          end
+          local gnames = GRV.list()
+          local picked = GRV.draw_builtins(ctx, eg_name, "euclid")
+          local from_tree = GRV.tree and GRV.draw_tree(ctx, GRV.tree, eg_name, "euclid") or nil
+          picked = from_tree or picked
+          if picked then
+            L.groove = picked
+            if (tonumber(L.groove_amount) or 0) <= 0 then L.groove_amount = 0.5 end
+            popup_changed = true
+          end
+          if #gnames == 0 then
+            r.ImGui_TextColored(ctx, Theme.colors.text_faint, "no grooves found")
+          end
+          GRV.draw_footer(ctx, "euclid")
+          r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          local eg = GRV.get(eg_name)
+          if eg then
+            r.ImGui_SetTooltip(ctx, eg_name .. "\n" .. GRV.lib.summary(eg)
+              .. "\n\n" .. GRV.lib.shape(eg)
+              .. "\n> late    < early    . not moved"
+              .. "\n\nA lane that only plays where the dots are will not change.")
+          else
+            r.ImGui_SetTooltip(ctx, "Pulls this lane off the grid.\nDrop .mid grooves into " .. GRV.folder()
+              .. "\nSubfolders are read too.")
+          end
+        end
+
+        r.ImGui_SetNextItemWidth(ctx, 200)
+        r.ImGui_BeginDisabled(ctx, eg_name == nil)
+        local eg_changed, eg_value = r.ImGui_SliderInt(ctx, "##tk_euclid_groove_amt",
+          math.floor(eg_amt * 100 + 0.5), 0, 100, "Amount %d%%")
+        if eg_changed then
+          L.groove_amount = clamp(eg_value / 100, 0, 1)
+          popup_changed = true
+        end
+        r.ImGui_EndDisabled(ctx)
+        r.ImGui_Separator(ctx)
 
         r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_SetNextItemWidth(ctx, 120)

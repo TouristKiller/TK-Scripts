@@ -3,6 +3,7 @@
 -- in binary mode -- cross-platform, no shell required.
 
 local r = reaper
+local Stitcher = require("core.stitcher")
 
 local M = {}
 
@@ -93,6 +94,26 @@ function M.copy(src, dest_dir, filename)
   return final_name
 end
 
+-- Like copy(), but writes out only the part of the file the pad actually plays.
+--
+-- A sliced pad is two RS5K offsets, which live in the REAPER project. A kit
+-- folder has nowhere to put them: it is a folder of samples, and whatever loads
+-- it next -- a hardware sampler, another DAW, someone else's session -- sees
+-- files only. So for a trimmed pad the trim has to be baked in, or sixteen pads
+-- chopped out of one break all export as sixteen copies of the whole break.
+--
+-- Returns nil and a reason rather than half a file, so the caller can fall back
+-- to copying whole: an untrimmed sample is a nuisance, a truncated one is a
+-- broken kit.
+--
+-- On success the second return describes what was written, for the sources log.
+function M.copy_slice(src, dest_dir, filename, start01, stop01)
+  local final_name = unique_filename(dest_dir, filename)
+  local ok, info = Stitcher.write_slice(src, dest_dir .. "/" .. final_name, start01, stop01)
+  if not ok then return nil, info or "could not write the slice" end
+  return final_name, info
+end
+
 -- results: array of { slot = Slot, pool = Pool, sample = "src/path.wav", out_name = "..." }
 
 -- REAPER's note-name file format: one "<note> <name>" line per instrument, so
@@ -136,6 +157,14 @@ function M.write_sourcelog(dest_dir, kit_name, results, recipe)
   f:write("\n")
   for _, res in ipairs(results) do
     f:write(res.out_name .. "\n    " .. res.sample .. "\n")
+    -- Without this line the entry reads as "this file came from that file",
+    -- which for a sliced pad is not true: only part of it did, and the log is
+    -- the only place left that knows which part.
+    local t = res.trim
+    if t and t.seconds and t.start_seconds and t.source_seconds then
+      f:write(string.format("    trimmed: %.3f s starting at %.3f s (source is %.3f s)\n",
+        t.seconds, t.start_seconds, t.source_seconds))
+    end
   end
   f:close()
 end

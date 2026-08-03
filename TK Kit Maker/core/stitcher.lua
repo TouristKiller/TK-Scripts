@@ -42,7 +42,10 @@ local function read_wav(path)
         -- WAVE_FORMAT_EXTENSIBLE: real format tag = first 2 bytes of SubFormat GUID
         audio_format = string.unpack("<I2", body, 25)
       end
-      fmt = { format = audio_format, channels = channels, rate = rate, bits = bits }
+      fmt = { format = audio_format, channels = channels, rate = rate, bits = bits,
+              -- Kept verbatim so a slice can reproduce the header exactly
+              -- rather than rebuild it and risk describing the audio wrongly.
+              raw = body }
       if size % 2 == 1 then f:seek("cur", 1) end
     elseif id == "data" then
       data = f:read(size)
@@ -58,6 +61,67 @@ local function read_wav(path)
   if not fmt then return nil, "no fmt chunk found" end
   if not data or #data == 0 then return nil, "no audio data found" end
   return fmt, data
+end
+
+-- Writes part of a WAV out as its own file.
+--
+-- This is what makes a sliced rack survive leaving REAPER. On the pads a slice
+-- is two numbers on an RS5K -- instant, and adjustable -- but "Save kit" copies
+-- files, so sixteen pads sharing one loop produced sixteen identical copies of
+-- the whole thing. Correct inside the project, silently wrong the moment the
+-- kit is opened anywhere else.
+--
+-- The audio is not decoded. A range of frames is a range of BYTES, so the
+-- sliced region is copied out untouched and the original fmt chunk is written
+-- back verbatim. That keeps every bit depth, sample rate and channel count
+-- exactly as it was -- there is no conversion step to get wrong, and a 24-bit
+-- file stays 24-bit.
+function M.write_slice(src, dest, start01, stop01)
+  local fmt, data = read_wav(src)
+  if not fmt then return false, "not a readable WAV" end
+  if not fmt.raw or not fmt.channels or not fmt.bits then return false, "unreadable WAV header" end
+
+  local frame_bytes = fmt.channels * math.floor(fmt.bits / 8)
+  if frame_bytes <= 0 then return false, "unsupported WAV format" end
+
+  local frames = math.floor(#data / frame_bytes)
+  if frames <= 0 then return false, "no audio in the file" end
+
+  start01 = math.max(0, math.min(1, tonumber(start01) or 0))
+  stop01 = math.max(0, math.min(1, tonumber(stop01) or 1))
+  if stop01 <= start01 then return false, "the slice has no length" end
+
+  -- Snapped to frame boundaries. Cutting mid-frame would offset every channel
+  -- against the others and turn the tail of the file into noise.
+  local from = math.floor(start01 * frames) * frame_bytes
+  local to = math.floor(stop01 * frames) * frame_bytes
+  if to <= from then return false, "the slice is shorter than one frame" end
+
+  local body = data:sub(from + 1, to)
+  -- RIFF chunks are word-aligned, and the pad is a zero byte, not whitespace.
+  local PAD = string.char(0)
+  local fmt_chunk = "fmt " .. string.pack("<I4", #fmt.raw) .. fmt.raw
+  if #fmt.raw % 2 == 1 then fmt_chunk = fmt_chunk .. PAD end
+  local data_chunk = "data" .. string.pack("<I4", #body) .. body
+  if #body % 2 == 1 then data_chunk = data_chunk .. PAD end
+
+  local riff = "WAVE" .. fmt_chunk .. data_chunk
+  local f = io.open(dest, "wb")
+  if not f then return false, "cannot write " .. tostring(dest) end
+  f:write("RIFF" .. string.pack("<I4", #riff) .. riff)
+  f:close()
+
+  -- Reported back so the sources log can say what was actually written. A log
+  -- that lists an output name and a source path with the trim left out reads as
+  -- if the whole file had been exported.
+  local rate = (fmt.rate and fmt.rate > 0) and fmt.rate or nil
+  local sliced = (to - from) / frame_bytes
+  return true, {
+    frames = sliced,
+    seconds = rate and sliced / rate or nil,
+    start_seconds = rate and (from / frame_bytes) / rate or nil,
+    source_seconds = rate and frames / rate or nil,
+  }
 end
 
 local SAMPLE_SPECS = {

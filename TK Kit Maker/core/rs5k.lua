@@ -53,6 +53,88 @@ end
 
 -- FX index of the first RS5K on the track, or -1. Record-input FX are searched
 -- too, since a rack pad may carry its sampler there.
+-- Parameter lookup by name, cached per instance.
+--
+-- RS5K's parameter numbers are not a promise, so they are found by name and
+-- remembered. The names are matched loosely because they have been spelled
+-- differently across versions, and a wrong index would set some other control
+-- entirely -- pitch, or volume -- with no error to show for it.
+local param_cache = {}
+
+-- Exact name first, and only then a loose match -- because RS5K has more than
+-- one parameter whose name ends in "start offset":
+--
+--     Sample start offset    0.000        <- a fraction of the file
+--     Loop start offset      0.00 ms      <- a time
+--
+-- A loose search for "start offs" matches both, and today it happens to find
+-- the right one only because that one is listed first. Setting the other would
+-- put a fraction into a millisecond field and leave the slice where it was,
+-- with nothing to show that anything went wrong.
+function M.param_index(track, fx, exact, loose)
+  if not track or not fx or fx < 0 then return -1 end
+  if not r.TrackFX_GetNumParams or not r.TrackFX_GetParamName then return -1 end
+  local key = tostring(track) .. "#" .. tostring(fx) .. "#" .. exact
+  local hit = param_cache[key]
+  if hit ~= nil then return hit end
+
+  local names = {}
+  local count = r.TrackFX_GetNumParams(track, fx) or 0
+  for i = 0, count - 1 do
+    local ok, name = r.TrackFX_GetParamName(track, fx, i, "")
+    names[i] = ok and tostring(name):lower() or ""
+  end
+
+  local found = -1
+  for i = 0, count - 1 do
+    if names[i] == exact then found = i break end
+  end
+  if found < 0 and loose then
+    -- The fallback still refuses anything about looping, which is the one
+    -- family of names this could collide with.
+    for i = 0, count - 1 do
+      if names[i]:find(loose, 1, true) and not names[i]:find("loop", 1, true) then
+        found = i
+        break
+      end
+    end
+  end
+
+  param_cache[key] = found
+  return found
+end
+
+-- Where in the file a pad starts and stops, as 0..1.
+--
+-- This is what makes slicing a loop cost nothing: the same file goes on every
+-- pad and only these two numbers differ. They stay adjustable afterwards, which
+-- is the point -- a loop with swing never lands on an even division, so the
+-- slice has to be movable by hand after the fact.
+function M.set_range(track, fx, start01, stop01)
+  local a = M.param_index(track, fx, "sample start offset", "start offs")
+  local b = M.param_index(track, fx, "sample end offset", "end offs")
+  if a < 0 or b < 0 then return false, "this RS5K has no start/end offset parameters" end
+  if not r.TrackFX_SetParamNormalized then return false, "cannot set FX parameters" end
+
+  start01 = math.max(0, math.min(1, tonumber(start01) or 0))
+  stop01 = math.max(0, math.min(1, tonumber(stop01) or 1))
+  if stop01 <= start01 then return false, "the slice has no length" end
+
+  -- End first. Moving the start past the old end would be rejected or clamped
+  -- by the plugin, and the pad would come out silent.
+  r.TrackFX_SetParamNormalized(track, fx, b, stop01)
+  r.TrackFX_SetParamNormalized(track, fx, a, start01)
+  return true
+end
+
+function M.get_range(track, fx)
+  local a = M.param_index(track, fx, "sample start offset", "start offs")
+  local b = M.param_index(track, fx, "sample end offset", "end offs")
+  if a < 0 or b < 0 or not r.TrackFX_GetParamNormalized then return nil end
+  return r.TrackFX_GetParamNormalized(track, fx, a),
+         r.TrackFX_GetParamNormalized(track, fx, b)
+end
+
 function M.find(track)
   if not track then return -1 end
 

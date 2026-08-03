@@ -88,7 +88,36 @@ function M.load(name)
 end
 
 function M.delete(name)
-  return os.remove(presets_dir() .. "/" .. sanitize_name(name) .. ".json")
+  return os.remove(M.path(name))
+end
+
+function M.path(name)
+  return presets_dir() .. "/" .. sanitize_name(name) .. ".json"
+end
+
+-- The file as it stands, and putting one back byte for byte.
+--
+-- Deleting a preset removes a file, which no amount of snapshotting the pools
+-- in memory can undo -- so the undo history keeps the bytes instead and writes
+-- them back. Raw rather than decoded and re-encoded: a preset written by a
+-- newer version may hold fields this one does not know, and re-saving through
+-- the loader would quietly drop them.
+function M.read_raw(name)
+  local f = io.open(M.path(name), "rb")
+  if not f then return nil end
+  local data = f:read("*a")
+  f:close()
+  return data
+end
+
+function M.write_raw(name, data)
+  if not data then return false end
+  r.RecursiveCreateDirectory(presets_dir(), 0)
+  local f = io.open(M.path(name), "wb")
+  if not f then return false end
+  f:write(data)
+  f:close()
+  return true
 end
 
 return M

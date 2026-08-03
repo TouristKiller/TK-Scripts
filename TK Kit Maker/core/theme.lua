@@ -223,7 +223,22 @@ function M.push(ctx)
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_CellPadding(), 8, 5)
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 1)
 
-  return { colors = 27, vars = 14 }
+  -- ImGui draws a rectangle around whatever its own keyboard navigation has
+  -- focused. Kit Maker moves the selection itself, so that rectangle sits next
+  -- to the real selection saying something different -- two highlights, one of
+  -- which means nothing here. It is turned off rather than restyled.
+  --
+  -- Counted separately because the name changed: newer Dear ImGui calls it
+  -- NavCursor, older ones NavHighlight, and a push that did not happen with a
+  -- pop that does would unbalance the whole stack.
+  local extra = 0
+  local nav = r.ImGui_Col_NavCursor or r.ImGui_Col_NavHighlight
+  if nav then
+    r.ImGui_PushStyleColor(ctx, nav(), 0x00000000)
+    extra = 1
+  end
+
+  return { colors = 27 + extra, vars = 14 }
 end
 
 function M.pop(ctx, stack)

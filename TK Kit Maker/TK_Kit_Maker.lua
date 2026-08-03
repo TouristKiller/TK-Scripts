@@ -1,7 +1,305 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.39
+-- @version 0.2.47
 -- @changelog:
+--   0.2.47
+--   + Group your collections. Right-click a pack, pick Group, and file it under
+--     a name -- the packs from one vendor end up under one collapsible heading
+--     instead of scattered through a list you have to read twice. The name of
+--     the folder the pack sits in is offered ready-made, because sample
+--     libraries are already laid out that way, so filing a pack is usually one
+--     click. Works in both the list and the tile view, and the folded state
+--     survives a restart.
+--   + A Groups button in the top bar turns the headings off again, for when you
+--     would rather have the plain list. The filing is kept either way -- it
+--     ignores the groups, it does not undo them, or looking would be
+--     destructive and nothing would have said so. The button appears only once
+--     something has been filed; before that it would switch between two
+--     identical lists.
+--   # A group is a name written on the collection itself -- no tree, no second
+--     list to keep in step. A library that never uses one draws exactly the
+--     list it always did.
+--   # Group names match case-insensitively. "Samples from Mars" beside "Samples
+--     From Mars" would be two headings that look identical, each holding half of
+--     what you were looking for, with nothing to say they were different.
+--   # Pinned collections stay at the very top. Pinning is about reach, so it
+--     cannot depend on scrolling to a group and unfolding it -- which is what
+--     putting a pinned pack only inside its group would come to.
+--   # A pinned pack that belongs to a group is listed in both places: pinning
+--     is a shortcut, not a move, and a group that quietly stopped counting what
+--     you filed under it would be lying about what is in it. A pinned pack with
+--     no group is listed once, at the top -- there is no second place for it to
+--     be, and repeating it below would be a duplicate that says nothing.
+--   # An "Ungrouped" heading marks where the groups stop. A group's contents
+--     end where the next heading begins, so without it the collections
+--     belonging to no group run straight on from the last group as though they
+--     were part of it -- and in the tile view a row of loose tiles is
+--     indistinguishable from another row of the group's own, there being no
+--     rows to count and no indent to read. It is drawn like a group's heading
+--     but carries a bullet instead of an arrow, because it does not fold: a
+--     folded one would hide nearly the whole library while you are still
+--     sorting it. It appears only once a group exists.
+--   # The headings sit closer together than the theme's usual item spacing, so
+--     three folded groups read as one stack rather than as three things that
+--     happen to be near each other. In the tile view they were a further gap
+--     apart again: the spacer that kept a heading off the end of a tile row was
+--     not needed -- a tile ends with its label, so the cursor is already on a
+--     fresh line -- and it was buying a second helping of spacing.
+--   # The cover tiles no longer shake when the panel is a hair from fitting
+--     them. Tiles are square and sized to fill the width, so the scrollbar
+--     appearing took width away, which made every tile narrower and therefore
+--     shorter -- the content then fitted, the scrollbar went, the width came
+--     back and the tiles grew into needing it again. The scrollbar cancelled
+--     its own cause, so it flickered on and off and the tiles jumped with it,
+--     and only at the one panel width where the content landed within a row of
+--     fitting -- which is why it looked like a rounding fault rather than a
+--     loop. The tiles are now laid out in the width the panel has WITH a
+--     scrollbar, measured off the window rather than off the content region,
+--     which is the quantity that was moving. A layout that does not depend on
+--     its own outcome cannot oscillate. No scrollbar is shown when everything
+--     fits; the tiles simply leave one's width of margin on the right. The list
+--     needs none of this: its rows are full width and their height does not
+--     follow it.
+--   # The top row keeps all its buttons on one line at the narrowest window.
+--     The four that change their label to show which state they are in were
+--     given a width typed in by hand, which meant guessing at text drawn in the
+--     system sans-serif -- roomy on one machine, tight on the next. They now
+--     measure the widest label they can show, which took about fifty pixels of
+--     slack out of the row.
+--   # The window's minimum width follows that row rather than being a number of
+--     its own. Adding the Groups button was enough to push the last one onto a
+--     second line, and any future button or a wider font would do it again --
+--     so the row measures itself as it draws and the floor cannot be dragged
+--     below its own toolbar. Filing your first pack makes the Groups button
+--     appear, so on a window already at its narrowest that will nudge it wider.
+--   # Analysis is one button in the sample list's control row, beside the sort
+--     button, instead of a strip of its own. It was a progress track, a
+--     readout, an Analyse button and a second button for the options, all on
+--     screen for ever -- and analysing is something you do once per collection,
+--     so most of the time that strip was spending a row of the panel repeating
+--     a job you had already finished.
+--   # The button carries the state in its label: Analyse with how far it has
+--     got, Stop while it runs, and "Analysed" with the count when the
+--     collection is done. Progress is drawn along the foot of the button while
+--     a job runs and is gone the moment it ends -- inside the button rather
+--     than beside it, so nothing appears and disappears and shoves the row
+--     about while you are watching it.
+--   # The options are on the right-click, and on the left-click too once
+--     everything is measured. Greying the button out at that point would have
+--     taken re-analyse and the cache options down with it, which is exactly
+--     when you want them.
+--   # It stays put in the heatmap view, where the sort and folder buttons do
+--     not: the heatmap is built out of measured samples and shows nothing
+--     without them, so that is precisely where it has to be reachable.
+--   # Its width is measured rather than typed. The widest label carries a
+--     number, so it depends on the font and on how big the collection is, and a
+--     count with its last digit cut off is worse than no count.
+--   + Groove files in subfolders are found, and each folder is a submenu you
+--     open. Packs arrive sorted into a folder per machine, so you can drop one
+--     in as it came -- and a pack of thirty grooves is thirty entries behind
+--     one heading rather than thirty near-identical lines in a scrolling list,
+--     each of them "TR707 / TR707 16 swing 02" with the part that differs at
+--     the far end. Three levels deep, which covers a folder per vendor with
+--     the machines inside it.
+--   # Flattening a pack by hand also cost you where each groove came from, and
+--     swing 62 on an MPC60 is not swing 62 on an SP1200. Two packs can now each
+--     ship a Swing 62 without one of them silently winning and the other
+--     vanishing from the list.
+--   # What a lane stores is still the full name -- "MPC60 / Swing 62" -- so a
+--     saved pattern finds the same file again. The menu draws the short name
+--     and keeps the long one, rather than taking the long one apart on its
+--     slashes: a groove whose own filename has a slash in it would otherwise
+--     come apart into folders that do not exist.
+--   + Rescan grooves, at the foot of every groove picker, with the folder
+--     itself beside it. The list was read once and cached, so a groove dropped
+--     in while Kit Maker was open did not appear until the script was
+--     restarted -- and the moment you want a new groove is exactly when you are
+--     sitting in that menu. A rescan drops the parsed grooves too, or a file
+--     put there to replace a broken one would stay broken.
+--   # A .midi file could be picked but never played. The list accepted both
+--     .mid and .midi, and the loader rebuilt the path by putting ".mid" back on
+--     the end of the name -- so a .midi sat in the menu, did nothing every time
+--     it was chosen, and said nothing about why. The path each file was found
+--     at is now kept, which is the same thing that makes subfolders possible.
+--   # Move Up and Move Down move a collection within the run it is drawn in.
+--     They swapped it with its neighbour in storage, which for a grouped
+--     library is often something drawn somewhere else entirely -- so the list
+--     did not visibly change and the button looked broken. They also lift the
+--     collection out and put it back rather than swapping two slots: the pinned
+--     block's members are scattered through storage, and a swap would quietly
+--     reshuffle whichever group happened to lie between them.
+--
+--   0.2.46
+--   + Sort the sample list: by name or by length, either direction, from the
+--     A-Z button beside the folder controls. Numbered names count rather than
+--     spell, so Kick 2 comes before Kick 10 and 909 sits after 808 -- plain
+--     alphabetical puts 10 in the middle of the ones, which reads as the sort
+--     having given up.
+--   + Sorting by length reads the lengths a few files at a time while you
+--     watch, rather than freezing the window to measure a whole pack in one go.
+--     Files not measured yet wait at the end of the list instead of pretending
+--     to be the shortest, which is where treating "unknown" as zero would put
+--     them the moment you asked for longest-first.
+--   # The order is a copy, for the list alone. Seeds pick samples by position
+--     in the scan order, so if the display sort reached that, the same seed
+--     over the same pack would build a different kit depending on how you had
+--     the list sorted -- on your machine and on someone else's, with nothing on
+--     screen to explain it.
+--   # Folder headers follow the same order as the names inside them, so Z-A
+--     does not leave the folders running A-Z over reversed lists.
+--   # Seven messages in the Browser and the Kit Manager were still in Dutch.
+--
+--   0.2.45
+--   + Save kit writes out sliced pads as the slice, not as the whole file. A
+--     pad that plays part of a loop is two RS5K offsets, which live in the
+--     REAPER project -- so a break chopped across sixteen pads used to export
+--     as sixteen copies of the whole break. Right in REAPER, wrong the moment
+--     the folder is loaded anywhere else, and nothing said so.
+--   # The audio is not re-encoded. The frames are copied out as bytes and the
+--     original format chunk is written back unchanged, so bit depth, sample
+--     rate and channel count come through exactly as they were.
+--   # Only WAV can be trimmed this way. An mp3 or a flac is copied whole and
+--     Save kit says which pads that happened to, because the exported kit will
+--     not sound like the rack it came from.
+--   # The sources log records the trim -- length, where it starts, and how long
+--     the original was. Without it the entry reads as though the whole file had
+--     been exported.
+--
+--   0.2.44
+--   + Undo in the Builder, for the handful of things that replace your work in
+--     one go: deleting a pool, building slots from a pattern, the quick layout,
+--     and loading a preset over what you had. Ctrl+Z, or the button beside
+--     "+ Pool" -- which names what it will put back, since "Undo" alone leaves
+--     you guessing whether it means the pool or the slots. The last eight are
+--     kept. Editing a field is not undoable: that is a different design, and
+--     this exists for the step you just regretted.
+--   + Deleting a preset is undoable too. That one removes a file, which no
+--     snapshot of the pools can bring back, so the history keeps the bytes and
+--     writes them back -- raw, not decoded and re-encoded, or a preset saved by
+--     a newer version would quietly lose whatever fields this one does not know.
+--   # The Undo button only appears when there is something to undo, and looks
+--     like an action rather than a label. It was a dim ghost button, greyed out
+--     most of the time, and a permanently dim button in a corner is one you
+--     learn to stop seeing -- so when it finally mattered it was not findable.
+--
+--   0.2.43
+--   + Walk the sample list with the keyboard: arrows step, Page Up and Down
+--     move by what the list can show, Home and End go to the ends. With Auto on
+--     each one plays as you land on it.
+--   # Auto-audition only ever fired on a mouse click. ImGui's own navigation
+--     moves a focus rectangle but never fires the Selectable that audition
+--     hangs off, so the arrows appeared to work while nothing was selected and
+--     nothing played. Kit Maker now moves the selection itself, which is what
+--     audition, the tags panel and the slice strip all read.
+--   # The selection is kept centred while stepping, instead of sticking to the
+--     bottom edge or scrolling out of view. In the flat list that has to be
+--     worked out from the position rather than asked for, because the list is
+--     clipped: a row off screen is not drawn, and a row that is not drawn
+--     cannot scroll itself into view -- so stepping past the edge did nothing
+--     at all.
+--
+--   0.2.42
+--   + The slicer lives in the strip under the sample list, the one the tags
+--     panel uses -- a button beside Audition and Stop switches between them. It
+--     began as a modal dialog and then a window of its own, and both were wrong
+--     the same way: slicing is not a form you confirm, it is something you
+--     listen to, adjust and listen to again. In the strip, choosing a sample,
+--     hearing it and cutting it are one place instead of three, and nothing
+--     repeats a button the browser already has.
+--   + The waveform, with the cut points drawn on it. Alt+drag one to move it,
+--     Alt+double-click to add or remove one -- the same modifier TK Media
+--     Browser uses. All four modes produce the same thing, a list of
+--     boundaries, so editing works in every one rather than being a feature of
+--     one of them.
+--   + Transient slicing, with a sensitivity slider and one offset for the lot.
+--     Detection is systematically late rather than randomly wrong -- a peak has
+--     to rise before it can stand out from its own average -- so every point is
+--     off by about the same amount, and one slider fixes them all where
+--     dragging them one at a time does not.
+--   # The waveform draws every boundary in the file, not only the sixteen that
+--     fit on pads. It used to show what fitted, so a file with fifty transients
+--     looked like sixteen cuts crammed into the first second and nothing after,
+--     as though detection had given up. The pads are a rack limit, not a
+--     detection limit.
+--   # It zooms to the section on screen once a loop needs more than one rack's
+--     worth: sixty-four cut points across one window is a picket fence you
+--     cannot aim at, the same sixteen are pads.
+--   # The waveform is scaled against the whole file rather than against the part
+--     on screen, so a quiet passage still looks quiet when you zoom into it.
+--   # Sensitivity now reaches a usable low end. The retrigger gap was fixed at
+--     50 ms whatever the setting, which caps nothing -- twenty slices a second
+--     is still eighty on a four-second loop -- so turning it down changed which
+--     hits were found and hardly how many. A threshold cannot fix that on dense
+--     material, because the rolling average falls away between hits and makes
+--     every one look enormous. The gap now widens as the setting drops, to
+--     250 ms at zero, which is about sixteen slices on a four-second loop.
+--   # The start of the file counts towards that spacing. A loop opening with a
+--     hit at 100 ms used to get a slice of its own regardless, leaving a stub of
+--     a first pad beside fifteen full-length ones.
+--   # Boundaries given in seconds were rounded down to whole numbers, which is
+--     right for cue frames and fatal for a quarter of a second: every boundary
+--     in a file under a second long collapsed onto zero, so every pad played the
+--     whole file and the panel reported there was nothing to slice.
+--
+--   0.2.41
+--   + Slice a loop across the pads. Right-click a sample in the Browser for
+--     "Slice to rack...". Nothing is written to disk: every pad gets the same
+--     file and its own start/end offset, which is how hardware has always done
+--     it -- instant, and the cut points stay adjustable afterwards, which they
+--     have to be, because a loop with any swing does not land on even
+--     divisions. That also makes "sample offset per pad" the same knob rather
+--     than a second feature.
+--   + Three ways to cut. Equal parts ignores how long the loop is, so a one-bar
+--     and a four-bar loop both come out in sixteen; bars-and-grid puts the
+--     length back in and reports the tempo the bar count implies, which is the
+--     one number that catches a wrong bar count. And when the file carries its
+--     own cue points those are used instead, and are the default.
+--   + Cue slicing is what makes a stitched kit work. Sixteen one-shots end to
+--     end are not the same length -- a 400 ms kick beside an 80 ms hat -- so
+--     equal division lands on none of the boundaries and every pad plays the
+--     tail of one sound and the head of the next. The boundaries are written
+--     into the file, so a kit stitched by Kit Maker slices back apart exactly,
+--     each pad named by the cue it came from.
+--
+--   0.2.40
+--   + Export to MIDI carries the groove. It is applied a second time on the
+--     Lua side, because the engine only shifts what it plays -- so without
+--     this the export was the one place the groove went missing: you would
+--     hear a shuffle, write it out, and get a straight pattern back with
+--     nothing on screen to say why. Substeps, echoes and the note ends all
+--     follow the shifted start, as they do at playback.
+--   + Groove on the Euclid page too, in the lane popup beside Echo -- both are
+--     lane-wide and both change how a lane sits in time. Euclid keeps its own
+--     lanes and copies a chosen few fields into the shared settings on every
+--     sync, so without carrying it explicitly the two pages would have
+--     silently shared one groove between them.
+--   + The groove picker shows which steps a groove actually moves, as a row of
+--     marks under its name. Swing moves the off-beats only, so a lane playing on
+--     the beat is unchanged however far the amount is turned up -- which reads
+--     as a broken feature until you can see the gaps line up with the steps you
+--     are playing.
+--   + Groove per lane, in the Step sequencer. Pick a groove, turn the amount up,
+--     and the lane stops playing dead on the grid -- timing and velocity
+--     together, since half of what a sampled groove is, is how hard it was hit.
+--     The pattern itself never moves: the groove is applied on the way out, so
+--     the knob works while it plays and turning it back down leaves the grid
+--     exactly as it was.
+--   + Grooves are read from ordinary MIDI files, dropped into
+--     REAPER/TK_Kit_Maker/grooves. That is what the groove libraries ship, so an
+--     MPC 60 pack works as it comes; the reader takes format 0 and 1, running
+--     status and all, and refuses anything it cannot read rather than guessing
+--     -- a groove that loads wrong has no symptom beyond a kit that feels off.
+--   + Seven grooves are built in, so the list is not empty on a fresh install:
+--     four swings, an 8th-note shuffle, and a laid-back and a pushed feel. The
+--     swing amounts follow the Akai scale, where 66% is a full triplet, and the
+--     label carries the actual shift because that percentage means a different
+--     amount in Ableton and Reason than it does in Akai and Cubase.
+--   # Engine version 20. A step is now consumed when its shifted time arrives
+--     rather than when its grid time does, which is what lets a note sound in a
+--     later audio block than the one it was scheduled in. Without that, half of
+--     a swung pattern would have been pinned to the edge of a buffer -- a
+--     stutter locked to the audio settings rather than a groove.
+--
 --   0.2.39
 --   + The Kit Maker wordmark in the header, in place of the word. It is decoded
 --     once and drawn as a texture after that, which costs less per frame than

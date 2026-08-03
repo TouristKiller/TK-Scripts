@@ -78,9 +78,58 @@ button top-left shows which you are in and switches to the other:
   you are in; right-click it for the tile size. Drag the splitter to resize.
 - A second button cycles **Catalog → Split → Samples**, picking which panel gets
   the room on a narrow window; right-click steps back.
-- Right-click a collection for the full menu: **Rename**, **Pin**,
+- Right-click a collection for the full menu: **Rename**, **Pin**, **Group**,
   **Move Up/Down**, **Include subfolders**, **Set / Clear / Open Cover**,
   **Open Folder** and **Remove Collection**.
+
+#### Groups
+
+A library outgrows a flat list. **Group** files a collection under a name, and
+everything filed under that name gets one collapsible heading — so the dozen
+packs from one vendor sit together instead of scattered through a list you have
+to read twice.
+
+- The **Group** submenu offers every group already in use, so filing a pack is
+  picking a name rather than typing one. It also offers **the name of the folder
+  the pack sits in** — sample libraries are already laid out that way, so for
+  most packs that is the answer and it is one click. The field at the bottom is
+  for a name that does not exist yet; it commits on **Enter**.
+- **Right-click a heading** to rename it (also on Enter) or to **Ungroup these**,
+  which empties the group without touching a single collection.
+- Groups work in both the **List** and the **Tiles** view, and a folded heading
+  stays folded across restarts.
+- The **Groups** button in the top bar turns the headings off when you would
+  rather have the plain list. It ignores the groups rather than undoing them, so
+  everything you filed is still filed and comes back when you switch it on. The
+  button only appears once you have a group — before that it would switch
+  between two identical lists.
+- Once you have a group, an **Ungrouped** heading marks where the groups stop.
+  A group's contents end where the next heading begins, so without it the
+  collections you have not filed run straight on from the last group as though
+  they belonged to it — which in the tile view they certainly would look to:
+  there are no rows to count and no indent to read, just tiles. It is drawn like
+  a group's heading but carries a bullet instead of an arrow, because it does not
+  fold; a folded one would hide nearly your whole library while you are still
+  sorting it.
+- **Pinned** collections stay at the very top. Pinning is about *reach*, so it
+  cannot depend on scrolling to a group and unfolding it — which is what putting
+  a pinned pack only inside its group would come to.
+
+  A pinned pack that belongs to a group appears in **both** places: at the top,
+  and under its group. Pinning is a shortcut, not a
+  move, and a group that quietly stopped counting what you filed under it would
+  be lying about its contents. A pinned pack with *no* group appears once, at the
+  top — there is no second place for it to be.
+- **Move Up / Move Down** move a collection within the run it is drawn in — its
+  group, or the pinned block.
+
+> Group names match regardless of capitalisation. *Samples from Mars* beside
+> *Samples From Mars* would give two headings that look identical, each holding
+> half of what you were looking for. The first spelling you used is the one that
+> shows.
+
+A collection with no group behaves exactly as before, so a library that never
+uses this looks unchanged.
 
 ### Auditioning & using samples (right panel)
 
@@ -88,9 +137,35 @@ button top-left shows which you are in and switches to the other:
   grouping and shows every sample in one run — useful once a tag filter has cut
   the collection down to a handful spread over many folders. **Folders** puts
   the grouping back, with **Expand / Collapse** for the headers.
+- **Sort** — the button showing **A–Z** (or **Z–A**, **Short–Long**,
+  **Long–Short**) orders the list by **Name** or by **Length**, either
+  direction. It is labelled with the order you are looking at rather than with
+  the word "Sort", so the row tells you how the list is arranged without being
+  opened. Folder headers follow the same order as the names inside them.
+
+  Numbers in names are read as numbers: *Kick 2* comes before *Kick 10*, and
+  *909* sits after *808*. Sorted alphabetically, 10 lands in the middle of the
+  ones and the sort looks broken.
+
+  Sorting by **Length** reads the lengths a few files at a time while you watch
+  — measuring a large pack in one go would freeze the window. Files not measured
+  yet wait at the end of the list, in either direction, rather than pretending
+  to be the shortest. Hover the button to see how far it has got.
+
+> **The sort is for the list only.** Seeds pick samples by their position in the
+> scan order, so the sorted list is a copy kept on the side. If it were not, the
+> same seed over the same pack would build a different kit depending on how you
+> had the browser sorted — on your machine and on someone else's, with nothing
+> on screen to explain the difference. **Export filtered as kit** does follow the
+> sort, because pad 1 should be the row at the top.
 - Preview with **Audition** / **Stop**, a **volume** slider, and an **Auto**
   toggle that plays a sample the moment you click it (double-click always
   plays).
+- **Walk the list from the keyboard**: arrows step one at a time, **Page Up /
+  Down** move by a screenful, **Home / End** jump to the ends. With **Auto** on,
+  each one plays as you land on it, and the selection stays centred so you can
+  see what is coming rather than reading it off the bottom edge. The arrows go
+  back to the text field whenever you are typing in one.
 - Right-click a sample to **Load to RS5K on selected track**, drop it into a
   specific **rack slot**, or **Show in Explorer**.
 - **Drag** a sample onto a REAPER track or a Kit Manager pad to load it into
@@ -107,18 +182,27 @@ Kit Maker can measure what a sample actually *sounds* like and tag it — its
 frequency band, how sharp its attack is, how long it rings out, and whether it
 is noise or pitched.
 
-Analysis never starts on its own. Under the filter box sits a progress bar with
-an **Analyse** button that measures the selected collection:
+Analysis never starts on its own. One **Analyse** button in the control row,
+beside the sort button, measures the selected collection:
 
+- The label says where you are: **Analyse** with how far it has got, **Stop**
+  while it is running, and **Analysed** with the count once the collection is
+  done. Progress is drawn along the foot of the button while a job runs and is
+  gone as soon as it ends.
 - It runs in the background while you keep browsing, **pauses entirely while
   REAPER is recording** and eases off during playback.
 - **Stop** at any moment — every sample measured so far is kept, and pressing
   Analyse again simply carries on with what is left.
-- Results are cached per file, so a pack is only ever measured once. The **⋯**
-  menu holds *Re-analyse this collection*, *Re-analyse changed files*, the
-  *Show tags panel* toggle and *Clear analysis cache*.
-- When a run finishes the line reports how long each sample took, so you can
-  tell a slow drive or format from a fast one.
+- Results are cached per file, so a pack is only ever measured once.
+  **Right-click** the button for *Re-analyse this collection*, *Re-analyse
+  changed files*, the *Show tags panel* toggle and *Clear analysis cache*. Once
+  everything is measured a plain click opens the same menu, since there is
+  nothing left to start.
+- The button stays put in the **Heatmap** view, where the sort and folder
+  buttons do not — the heatmap is built out of measured samples and shows
+  nothing without them.
+- Hover it to see how long each sample took, so you can tell a slow drive or
+  format from a fast one.
 
 *Re-analyse changed files* compares every sample with the file on disk and only
 re-measures the ones that were edited or replaced. The sample you click on is
@@ -282,6 +366,70 @@ Right-click the button to re-read the rack after changing it. Samples the rack
 uses that were never analysed are measured on the spot — sixteen files is a
 moment's work.
 
+### Slicing a loop across the pads
+
+Select a sample and press **Slice** — the button beside Audition and Stop. The
+strip under the list swaps from the tags panel to the slicer, and swaps back
+with the same button. Right-clicking a sample and choosing **Slice to rack…**
+does the same thing in one step.
+
+It shares that strip on purpose. Slicing is not a form you fill in and confirm:
+you listen, move a line, listen again. Keeping it there means choosing a sample,
+auditioning it and cutting it are one place rather than three, and the transport
+you already have does the listening.
+
+**Nothing is written to disk.** Every pad gets the same file and its own start
+and end point, the way a hardware sampler has always done it. That makes it
+instant, and it means the cut points stay adjustable afterwards — which they
+have to be, because a loop played with any swing does not put its hits on even
+divisions.
+
+Four ways to cut:
+
+| Mode | When |
+|------|------|
+| **Cues** | The file carries its own slice points. Used by default when it does. |
+| **Transients** | Find the hits and cut in front of each one. For anything played rather than programmed. |
+| **Parts** | 2–64 equal pieces, whatever the length of the loop. |
+| **Bars+grid** | Say how many bars and how fine a grid; the length is put back in. |
+
+The **waveform** shows where the cuts land, with the slices as alternating
+panels and each one numbered. That is the only way to answer the question you
+actually have — *is this landing on the hits?* — and on a loop with any swing the
+answer is usually no.
+
+In **Transients** mode there are two sliders. **Sens** decides how quiet a hit
+has to be before it counts; turn it down and the slices thin out. **Ofs** shifts
+every detected point together, and is usually worth a few milliseconds negative:
+a hit is only found once it has risen, so the cut lands slightly behind the
+attack it was aiming at. That error is the same on every point, which is why one
+slider fixes it and dragging them one at a time does not.
+
+**Alt+drag** a cut point to move it, **Alt+double-click** to add one or take one
+away. Every mode ends up as the same list of boundaries, so this works in all of
+them — set a grid, then nudge the two lines that landed wrong.
+
+Faint lines mark every boundary in the file, while the shaded panels are the
+sixteen that will reach the pads. A long file has more boundaries than a rack
+has pads, and the **Which 16** slider picks which of them go on; without it the
+rest of the loop would be unreachable. Once a loop is paged like that the
+waveform **zooms to the section you are looking at**, because sixty-four cut
+points across one window is a picket fence rather than something you can aim at.
+
+**Bars+grid** also reports the tempo your bar count implies. Call a four-second
+loop four bars and it reads 240 BPM with a warning — the loop is probably one
+bar, or it has silence on the end. It is the one number that catches a wrong bar
+count.
+
+**Slice to rack** builds the rack, and sits at the right of the mode buttons.
+
+> **Cue points are what make a stitched kit work.** A stitched file is sixteen
+> one-shots end to end, and they are not the same length — a 400 ms kick beside
+> an 80 ms hat. Cut into sixteen equal parts, not one boundary lands right and
+> every pad plays the tail of one sound and the head of the next. Those
+> boundaries are written into the file, so a kit Kit Maker stitched slices back
+> apart exactly, with each pad named after the cue it came from.
+
 ### Sending a collection onward
 
 - From a **PACKS** collection (or its right-click menu): **Use for
@@ -414,6 +562,25 @@ building a kit.
 - **Load** restores a preset; **Delete** removes it. Presets also appear on the
   empty-start screen.
 
+### Undo
+
+**Ctrl+Z**, or the button beside **+ Pool**, puts back what the last change
+replaced. It covers the handful of actions that take your work away in one go:
+
+- deleting a pool
+- building slots from a pattern
+- the quick 128-slot layout
+- loading a preset over what you had
+- deleting a preset — the file is written back exactly as it was
+
+The button appears beside **+ Pool** only when there is something to undo, and
+it names what that is — so you are not guessing whether it means the pool you
+just deleted or the slots you replaced before that. The last eight changes are
+kept.
+
+Editing a field is *not* undoable — retyping an alias is not the mistake this is
+for. It exists for the step you immediately regretted.
+
 ### Step 1 — Pools
 
 A **pool** is a named group of one or more sample folders.
@@ -502,6 +669,31 @@ Racks name their MIDI notes after the instrument, so the piano roll reads
 rules recognise nothing, no name is set and REAPER goes on showing the pad
 track's own name — the sample filename — so those rows never come up blank.
 
+### Save kit
+
+**Save kit** writes the rack out as a kit folder: the samples, the cover, and
+the MIDI and sources logs. Pick the destination once and it is remembered.
+
+Pads that play only part of their file — anything built with **Slice to rack**,
+or trimmed by hand afterwards — are written out as that part, not as the whole
+file. Inside REAPER a slice is two RS5K offsets and costs nothing, but a kit
+folder has nowhere to put them: whatever loads it next sees files. Without this
+a break chopped across sixteen pads would export as sixteen copies of the whole
+break, correct in the project it came from and wrong everywhere else.
+
+The audio is not re-encoded. The frames are copied out and the original format
+header is written back unchanged, so bit depth, sample rate and channel count
+come through exactly as they were.
+
+> **Only WAV can be trimmed.** Trimming an mp3 or a flac would mean decoding and
+> re-encoding it. Those are copied whole instead, and Save kit tells you which
+> pads that happened to — in the exported kit they will play more than they do
+> on the rack.
+
+The **Sources log** records the trim for each pad: how long the slice is, where
+in the original it starts, and how long the original was. That is what lets you
+find your way back to the source file later.
+
 ---
 
 ## 6. Step sequencer
@@ -539,6 +731,75 @@ Open a lane (click its name; right-click toggles the editor) and pick a
 | **Echo** | Built-in repeats with adjustable rate, count and velocity mode/delta. |
 | **Copy / Paste / Clear** | Move lanes around; auto-name labels lanes from their samples. |
 
+### Groove
+
+Each lane can be pulled off the grid by a **groove**: pick one, turn **Amount**
+up, and the lane stops playing dead straight. Timing and velocity move together,
+because half of what a sampled groove is, is how hard it was hit.
+
+The pattern itself never moves. The groove is applied on the way out, so the
+knob works while it plays and turning it back to 0% leaves your grid exactly as
+it was — nothing to undo.
+
+Seven grooves are built in:
+
+| Groove | What it does |
+|--------|--------------|
+| **Swing 54 / 58 / 62 / 66** | 16ths, from barely there to a full triplet |
+| **Shuffle 8ths** | only the off-beats; the 16ths stay straight |
+| **Laid back** | the whole bar a shade behind |
+| **Pushed** | the whole bar a shade ahead |
+
+The swing figures follow the Akai scale, where 50% is straight and 66% is a
+triplet — the same convention as Cubase, Logic and FL. Ableton and Reason run
+swing from 0 to 100 instead, so the same number means a different amount there.
+That is why each label also carries the actual shift: **+32%** of a step means
+one thing everywhere.
+
+**Your own grooves** go in `REAPER/TK_Kit_Maker/grooves` as ordinary `.mid` or
+`.midi` files, and appear in the list under the built-in ones. That is the
+format the groove libraries ship — an MPC 60 pack works as it comes. A file that
+shares a name with a built-in replaces it.
+
+The folder is created the first time Kit Maker looks at it, which is when you
+first open a groove picker.
+
+- **Subfolders are submenus.** Drop a pack in as it came and its folder becomes
+  a heading you open — thirty grooves behind *TR707* rather than thirty
+  near-identical lines in one scrolling list. Three levels are read, so a folder
+  per vendor with the machines inside it also works.
+- You keep track of where each groove came from, which matters because swing 62
+  on an MPC 60 is not swing 62 on an SP-1200. Two packs can each carry a
+  *Swing 62* without one of them quietly winning. The name that gets stored is
+  the full one, `MPC60 / Swing 62`, so a saved pattern finds the same file again
+  — that is what the picker shows once one is chosen.
+- **Rescan grooves** sits at the foot of every groove picker, with *Open grooves
+  folder* beside it. The list is read once and remembered, so use this after
+  dropping new files in rather than restarting the script.
+
+> **Why a groove can seem to do nothing.** Swing moves the *off-beats* — steps
+> 2, 4, 6, 8 and so on. Steps 1, 5, 9 and 13 do not move at all, because that is
+> what swing is. So a lane playing a kick on the beat comes out identical however
+> far you turn the amount up, while a hi-hat on all sixteen steps shuffles hard.
+> Hover the groove name to see which steps it moves: `>` is late, `<` is early,
+> `.` is not moved. **Laid back** and **Pushed** are the two that move every
+> step, so they change any pattern at all.
+
+Some things worth knowing:
+
+- The offsets are read as a *fraction of a step*, not as milliseconds, so a
+  groove keeps its feel at any tempo and on a lane running at half or double
+  speed.
+- Only the first bar of a groove file is read. These packs are often four bars
+  where the last one is a fill, and averaging that in would take the life out of
+  the groove.
+- **Export to MIDI carries the groove.** The exported notes sit where you hear
+  them, not on the grid — so a shuffled pattern stays shuffled once it is an
+  item in the arrange view.
+- Built-in grooves are timing only. Velocity is what separates a groove someone
+  played from a mathematical one, so a `.mid` brings dynamics and a built-in
+  does not.
+
 ### Pattern pages, presets & playback
 
 - Four **pattern pages** per kit; **copy** / **paste** a whole page. They work
@@ -574,6 +835,10 @@ Select a lane to reveal its knob row.
 
 - Lane buttons mirror the Step page: **Solo**, **Mute**, **One-shot**,
   **Retrig**, **Note-off**.
+- **Echo & Groove** opens the lane's popup, holding the echo settings and the
+  same per-lane **groove** the Step page has — see *Groove* above. Each page
+  keeps its own, so a Euclid lane can shuffle while the same lane on the Step
+  page stays straight.
 - Its own preset library (**New**, **Save**, **Rename**, **Delete**), plus
   **Host** sync, **Export**, and a lane connection-lines toggle.
 

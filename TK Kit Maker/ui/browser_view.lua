@@ -11,6 +11,12 @@ local Analyzer = require("core.analyzer")
 local Heatmap = require("core.heatmap")
 local RS5K = require("core.rs5k")
 local Engine = require("core.engine")
+local Slice = require("core.slice")
+local Duration = require("core.duration")
+local Sort = require("core.sortlist")
+local Groups = require("core.colgroups")
+local WavCues = require("core.wavcues")
+local Peaks = require("core.peaks")
 
 local M = {}
 
@@ -217,14 +223,18 @@ local function export_kit_folder(app, slots, kit_name)
   return true, note
 end
 
--- Everything the file list is showing, in the order it shows it: the tag filter
--- and the filename filter have already done their work, so this writes out
--- exactly what is on screen.
+-- Everything the file list is showing, in the order it shows it: the tag
+-- filter, the filename filter and the sort have already done their work, so
+-- this writes out exactly what is on screen.
+--
+-- The sorted list, therefore, and not the scan order -- pad 1 has to be the row
+-- at the top. Reading the scan order here would put the samples on the pads in
+-- an order you never asked for and can see is not the one in front of you.
 local function export_filtered_as_kit(app)
   local state = app.browser
   local col = selected_collection(app)
   local slots = {}
-  for i, path in ipairs(state.filtered_files or {}) do
+  for i, path in ipairs(state.display_files or state.filtered_files or {}) do
     slots[#slots + 1] = {
       number = i,
       midi_note = math.min(127, RS5K_BASE_NOTE + i - 1),
@@ -334,13 +344,67 @@ local function cover_texture(state, path)
   return cached
 end
 
+-- Only lengths already in the cache. Duration.seconds would go and read the
+-- file, and asking it for ten thousand files in one frame would lock the window
+-- up -- the prefetch below fills the cache a few at a time instead, and the
+-- order settles as the answers arrive.
+local function cached_seconds(path)
+  if Duration.is_cached(path) then return Duration.seconds(path) end
+  return nil
+end
+
+-- Builds the list you look at.
+--
+-- state.filtered_files keeps the scan order and is what the heatmap and the
+-- seeded pickers read; this is a sorted copy on the side. Keeping them apart is
+-- the whole point -- see the note at the top of core/sortlist.lua.
+local function refresh_sort(app, force)
+  local state = app.browser
+  local files = state.filtered_files or {}
+  local mode = state.sort_mode or "name"
+  local desc = state.sort_desc == true
+
+  -- Sorting by length can only place a file whose length is known, and the
+  -- cache fills in the background. Counting the cache in blocks re-sorts as the
+  -- answers come in without redoing it on every single one.
+  local progress = (mode == "length") and math.floor(Duration.cache_size() / 128) or 0
+  local key = table.concat({ mode, tostring(desc), tostring(#files), tostring(progress) }, "|")
+  if not force and state.sort_key == key then return end
+
+  state.sort_key = key
+  state.display_files = Sort.apply(files, mode, desc, mode == "length" and cached_seconds or nil)
+end
+
+-- Reads a few lengths per frame while length sorting is on, so a pack that has
+-- never been measured settles into order over a second or two instead of
+-- freezing the window while it is measured in one go.
+local function step_duration_prefetch(app)
+  local state = app.browser
+  if state.sort_mode ~= "length" then
+    state.duration_prefetch = nil
+    return
+  end
+  local pf = state.duration_prefetch
+  if not pf then
+    pf = Duration.new_prefetch(state.filtered_files or {})
+    state.duration_prefetch = pf
+  end
+  if pf.index < pf.total then pf:step(32) end
+end
+
 local function apply_filter(app)
   local state = app.browser
   local col = selected_collection(app)
   -- The export note names a count from the set that is about to change.
   state.export_note = nil
+  -- The set is about to change, so what was measured for the old one no longer
+  -- describes it.
+  state.duration_prefetch = nil
+
   if not col then
     state.filtered_files = {}
+    state.display_files = {}
+    state.sort_key = nil
     state.selected_file = nil
     state.last_scan_label = nil
     return
@@ -391,6 +455,7 @@ local function apply_filter(app)
   end
 
   state.filtered_files = filtered
+  refresh_sort(app, true)
   state.last_scan_label = tostring(#filtered) .. " / " .. tostring(#files)
   state.analysis_count = Tags.count_analyzed(files)
   state.tag_facets, state.tag_unmeasured = Tags.filter_facets(by_name, state.tag_filter)
@@ -405,7 +470,9 @@ local function apply_filter(app)
     end
   end
   if not keep then
-    state.selected_file = filtered[1]
+    -- The first row on screen, which under a sort is not the first file in the
+    -- scan order.
+    state.selected_file = (state.display_files or filtered)[1]
   end
 end
 
@@ -425,6 +492,9 @@ refresh_collection = function(app, force_scan)
   if not col then
     state.files = {}
     state.filtered_files = {}
+    state.display_files = {}
+    state.sort_key = nil
+    state.duration_prefetch = nil
     state.selected_file = nil
     state.last_scan_label = nil
     return
@@ -762,7 +832,10 @@ local function append_child_track_to_folder(parent)
   return child
 end
 
-local function load_sample_into_rs5k(track, sample_path, midi_note)
+-- `range` is { start01, stop01 }: which part of the file this pad plays. Only
+-- slicing passes it. Set here rather than afterwards because the fx index is
+-- already in hand, and looking it up again is the sort of thing that drifts.
+local function load_sample_into_rs5k(track, sample_path, midi_note, range)
   local fx = find_rs5k_fx(track)
   if fx < 0 then
     fx = r.TrackFX_AddByName(track, "ReaSamplOmatic5000 (Cockos)", false, -1)
@@ -776,6 +849,9 @@ local function load_sample_into_rs5k(track, sample_path, midi_note)
       local normalized = note / 127
       r.TrackFX_SetParamNormalized(track, fx, 3, normalized)
       r.TrackFX_SetParamNormalized(track, fx, 4, normalized)
+    end
+    if range then
+      RS5K.set_range(track, fx, range[1], range[2])
     end
   end
   return ok == true
@@ -1055,7 +1131,7 @@ local function build_rs5k_rack(rack_name, mapped_by_slot, rack_slots, undo_label
     local midi_note = RS5K_BASE_NOTE + (slot - 1)
     if item then
       r.GetSetMediaTrackInfo_String(tr, "P_NAME", item.sample_name, true)
-      load_sample_into_rs5k(tr, item.sample_path, midi_note)
+      load_sample_into_rs5k(tr, item.sample_path, midi_note, item.range)
       RS5K.set_note_name(folder_track, midi_note, role_of(item.sample_path))
     else
       r.GetSetMediaTrackInfo_String(tr, "P_NAME", string.format("Pad %02d", slot), true)
@@ -1069,6 +1145,68 @@ local function build_rs5k_rack(rack_name, mapped_by_slot, rack_slots, undo_label
   r.UpdateArrange()
   r.Undo_EndBlock(undo_label, -1)
   return folder_track
+end
+
+-- Slicing a loop across the pads.
+--
+-- Every pad gets the SAME file and its own start/end offset, so nothing is
+-- written to disk and the cut points stay adjustable afterwards -- which they
+-- have to be, because a loop played with any swing does not put its hits on
+-- even divisions.
+local function slice_to_rack(app, sample_path, opts)
+  local state = app.browser
+  if not sample_path or sample_path == "" then return false end
+
+  local dur = Duration.seconds(sample_path)
+  if not dur or dur <= 0 then
+    state.preview_error = "Could not read the length of that sample."
+    return false
+  end
+
+  opts = opts or {}
+  opts.pads = KIT_RACK_SLOTS
+  opts.duration = dur
+
+  local plan, err
+  if opts.mode == "cues" then
+    -- The file's own boundaries, which is the only thing that works on a
+    -- stitched kit: sixteen one-shots of different lengths, where equal
+    -- division lands on none of them.
+    local info = WavCues.read(sample_path)
+    if not info then
+      state.preview_error = "Cannot slice on cues: no cue points in this file."
+      return false
+    end
+    plan, err = Slice.from_cues(info.cues, info.frames, opts)
+  else
+    plan, err = Slice.plan(dur, opts)
+  end
+  if not plan then
+    state.preview_error = "Cannot slice: " .. tostring(err)
+    return false
+  end
+
+  local leaf = file_stem(sample_path)
+  local mapped = {}
+  for _, sl in ipairs(plan.slices) do
+    -- A cue's own label beats a number: slicing a stitched kit back apart puts
+    -- "01 Kick" on the pad rather than "01 My Kit - Stitched".
+    local name = sl.label and sl.label ~= "" and sl.label or leaf
+    mapped[sl.pad] = {
+      sample_path = sample_path,
+      sample_name = string.format("%02d %s", sl.index, name),
+      range = { sl.start01, sl.stop01 },
+    }
+  end
+
+  build_rs5k_rack(leaf .. " Slices", mapped, KIT_RACK_SLOTS,
+    "TK Kit Maker: Slice loop to RS5K rack")
+
+  state.preview_error = nil
+  -- Deliberately says nothing afterwards. The dialog shows the same summary
+  -- before you commit, so repeating it over the list would only be a line that
+  -- costs height and never goes away -- the rack itself is the answer.
+  return true
 end
 
 local function create_rs5k_drum_rack_from_collection(app)
@@ -1384,9 +1522,9 @@ local function draw_existing_pool_menu(app, uid, folder_path)
         if r.ImGui_MenuItem(ctx, (pool.alias or pool_id) .. "##pool_target_" .. uid .. "_" .. pool_id) then
           local ok, err = add_folder_to_existing_pool(app, pool_id, folder_path)
           if ok then
-            state.preview_error = "Folder toegevoegd aan pool: " .. tostring(pool.alias or pool_id)
+            state.preview_error = "Folder added to pool: " .. tostring(pool.alias or pool_id)
           else
-            state.preview_error = err or "Kon folder niet toevoegen aan pool."
+            state.preview_error = err or "Could not add that folder to the pool."
           end
         end
       end
@@ -1423,18 +1561,10 @@ local function use_folder_as_explosion_source(app, folder_path, recursive)
   return true
 end
 
-local function collection_index_by_id(collections, id)
-  for i, c in ipairs(collections) do
-    if c.id == id then return i end
-  end
-  return nil
-end
-
 local function draw_collection_context_menu(app, col)
   local ctx = app.ctx
   local state = app.browser
   local collections = active_collections(state)
-  local idx = collection_index_by_id(collections, col.id)
   local is_packs = state.browser_mode == "packs"
   local rename_key = "rename##" .. col.id
 
@@ -1455,6 +1585,65 @@ local function draw_collection_context_menu(app, col)
       save(app)
     end
 
+    -- Filing this collection under a group.
+    --
+    -- The menu comes first because it is the path that cannot go wrong: picking
+    -- an existing name spells it the same way it was spelled before. The field
+    -- below is for a name that does not exist yet, and commits on Enter rather
+    -- than per keystroke -- typed live, the collection would hop into a new
+    -- group on every letter and walk out from under the menu that is editing it.
+    local group_names = Groups.names(collections)
+    local suggestion = Groups.suggest(col.path)
+    local in_group = Groups.key_of(col.group)
+    if r.ImGui_BeginMenu(ctx, "Group##grpmenu_" .. col.id) then
+      if suggestion ~= "" and Groups.key_of(suggestion) ~= in_group then
+        local known = false
+        for _, n in ipairs(group_names) do
+          if Groups.key_of(n) == Groups.key_of(suggestion) then known = true break end
+        end
+        -- The folder the pack sits in is nearly always the answer, so it is
+        -- offered by name rather than left to be typed.
+        if not known and r.ImGui_MenuItem(ctx, "New: " .. suggestion .. "##grpsug_" .. col.id) then
+          col.group = suggestion
+          save(app)
+        end
+        if not known and #group_names > 0 then r.ImGui_Separator(ctx) end
+      end
+
+      for _, n in ipairs(group_names) do
+        if r.ImGui_MenuItem(ctx, n .. "##grppick_" .. col.id .. "_" .. Groups.key_of(n),
+            nil, Groups.key_of(n) == in_group) then
+          col.group = n
+          save(app)
+        end
+      end
+
+      if #group_names > 0 or suggestion ~= "" then r.ImGui_Separator(ctx) end
+      if r.ImGui_MenuItem(ctx, "No group##grpnone_" .. col.id, nil, in_group == "") then
+        col.group = nil
+        save(app)
+      end
+
+      r.ImGui_Separator(ctx)
+      r.ImGui_SetNextItemWidth(ctx, 200)
+      local flags = r.ImGui_InputTextFlags_EnterReturnsTrue
+        and r.ImGui_InputTextFlags_EnterReturnsTrue() or 0
+      local g_changed, g_value = r.ImGui_InputTextWithHint(ctx,
+        "New##grpnew_" .. col.id, "name, then Enter", state.group_buffer or "", flags)
+      if g_changed then
+        local clean = Groups.trim(g_value)
+        if clean ~= "" then
+          col.group = clean
+          state.group_buffer = ""
+          save(app)
+        end
+      elseif g_value ~= nil then
+        state.group_buffer = g_value
+      end
+
+      r.ImGui_EndMenu(ctx)
+    end
+
     if is_packs then
       local r_changed, r_value = r.ImGui_Checkbox(ctx, "Include subfolders##" .. col.id, col.recursive ~= false)
       if r_changed then
@@ -1466,17 +1655,19 @@ local function draw_collection_context_menu(app, col)
       end
     end
 
-    r.ImGui_BeginDisabled(ctx, not idx or idx <= 1)
+    -- Moves within the run this collection is drawn in -- its group, or the
+    -- pinned block. Swapping with the neighbour in storage would step over
+    -- collections that are drawn somewhere else entirely, so the list would not
+    -- visibly change and the button would look broken.
+    r.ImGui_BeginDisabled(ctx, not Groups.can_move(collections, col.id, -1))
     if r.ImGui_MenuItem(ctx, "Move Up##" .. col.id) then
-      collections[idx], collections[idx - 1] = collections[idx - 1], collections[idx]
-      save(app)
+      if Groups.move(collections, col.id, -1) then save(app) end
     end
     r.ImGui_EndDisabled(ctx)
 
-    r.ImGui_BeginDisabled(ctx, not idx or idx >= #collections)
+    r.ImGui_BeginDisabled(ctx, not Groups.can_move(collections, col.id, 1))
     if r.ImGui_MenuItem(ctx, "Move Down##" .. col.id) then
-      collections[idx], collections[idx + 1] = collections[idx + 1], collections[idx]
-      save(app)
+      if Groups.move(collections, col.id, 1) then save(app) end
     end
     r.ImGui_EndDisabled(ctx)
 
@@ -1584,7 +1775,31 @@ local function draw_sample_row(app, file_path)
   local leaf = file_leaf(file_path)
   local selected = state.selected_file == file_path
 
-  if r.ImGui_Selectable(ctx, leaf .. "##" .. file_path, selected) then
+  -- Bring the selection into view when the keyboard moved it. Centred rather
+  -- than merely visible: stepping through a list with the selection pinned to
+  -- the bottom edge shows you nothing of where you are going.
+  if selected and state.scroll_to_selected then
+    state.scroll_to_selected = nil
+    if r.ImGui_SetScrollHereY then r.ImGui_SetScrollHereY(ctx, 0.5) end
+  end
+
+  -- The theme's header colour is nearly the background, which is fine for a
+  -- tree node and far too quiet for the row you are stepping through with the
+  -- arrow keys. The selected row gets the accent at partial alpha instead --
+  -- taken from the theme, so it stays right in all six of them.
+  local tinted = false
+  if selected then
+    local c = Theme.colors
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Header(), (c.accent & 0xFFFFFF00) | 0x66)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_HeaderHovered(), (c.accent & 0xFFFFFF00) | 0x88)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
+    tinted = true
+  end
+
+  local clicked = r.ImGui_Selectable(ctx, leaf .. "##" .. file_path, selected)
+  if tinted then r.ImGui_PopStyleColor(ctx, 3) end
+
+  if clicked then
     state.selected_file = file_path
     if state.auto_audition then
       play_preview(app, file_path)
@@ -1652,6 +1867,20 @@ sample_menu_items = function(app, file_path)
     if r.ImGui_MenuItem(ctx, "Load to RS5K on selected track##" .. file_path) then
       load_sample_to_selected_rs5k(app, file_path)
     end
+    if r.ImGui_MenuItem(ctx, "Slice to rack...##slice_" .. file_path) then
+      local st = app.browser
+      st.selected_file = file_path
+      st.detail_view = "slice"
+      st.show_tags = true
+      st.slice_mode = st.slice_mode or "parts"
+      st.slice_parts = st.slice_parts or 16
+      st.slice_bars = st.slice_bars or 1
+      st.slice_division = st.slice_division or "1/16"
+      st.slice_from = 1
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Cut this loop across the pads of a new rack.\nNothing is written to disk -- every pad plays its own\npart of the same file, and the cut points stay adjustable.")
+    end
     local rack_parent = get_selected_rack_parent_track()
     if rack_parent and r.ImGui_BeginMenu(ctx, "Load to RS5K rack slot...") then
       local used, max_used = collect_rack_slot_usage(rack_parent)
@@ -1690,8 +1919,20 @@ end
 local function draw_samples_list(app)
   local ctx = app.ctx
   local state = app.browser
-  local items = state.filtered_files
+  -- The sorted copy, not the scan order. refresh_sort only does work when
+  -- something it depends on has moved, so calling it every frame is what keeps
+  -- a length sort settling as the measurements come in.
+  step_duration_prefetch(app)
+  refresh_sort(app)
+  local items = state.display_files or state.filtered_files or {}
   local col = selected_collection(app)
+
+  -- What the arrow keys walk. It cannot be the filtered list on its own: with
+  -- folder grouping the rows are ordered by folder and a collapsed folder shows
+  -- none of them, so stepping down would jump to something that is not on the
+  -- screen. Grouped mode therefore records what it actually drew; the flat list
+  -- is its own order and says so directly.
+  state.nav_order = nil
 
   if #items == 0 then
     if col and col.path and col.path ~= "" and not Relink.dir_exists(col.path) then
@@ -1763,8 +2004,19 @@ local function draw_samples_list(app)
       groups[key].files[#groups[key].files + 1] = f
     end
 
+    -- Folders follow the same ordering as the names inside them, so choosing
+    -- Z-A does not leave the headers running A-Z with reversed lists under
+    -- them. Natural order here too: "909" belongs after "808", not after
+    -- "1000". A length sort leaves the headers alone -- a folder has a name and
+    -- nothing else to sort by.
+    local dir_key = {}
+    for _, k in ipairs(order) do dir_key[k] = Sort.natural_key(groups[k].dir) end
+    local dirs_desc = state.sort_desc == true and state.sort_mode ~= "length"
     table.sort(order, function(a, b)
-      return groups[a].dir:lower() < groups[b].dir:lower()
+      local ka, kb = dir_key[a], dir_key[b]
+      if ka == kb then return a < b end
+      if dirs_desc then return ka > kb end
+      return ka < kb
     end)
 
     local force_action = state.folder_header_action
@@ -1780,7 +2032,9 @@ local function draw_samples_list(app)
       end
       local folder_open = r.ImGui_CollapsingHeader(ctx, label)
       if folder_open then
+        state.nav_order = state.nav_order or {}
         for _, f in ipairs(group.files) do
+          state.nav_order[#state.nav_order + 1] = f
           draw_sample_row(app, f)
         end
       end
@@ -1802,7 +2056,7 @@ local function draw_samples_list(app)
         if r.ImGui_MenuItem(ctx, "Use for Explosion##folder_explosion_" .. tostring(i)) then
           local ok = use_folder_as_explosion_source(app, folder_path, true)
           if not ok then
-            state.preview_error = "Kon folder niet als Explosion bron instellen."
+            state.preview_error = "Could not set that folder as the Explosion source."
           end
         end
 
@@ -1811,9 +2065,9 @@ local function draw_samples_list(app)
         if r.ImGui_MenuItem(ctx, "Add as Builder Pool##folder_pool_new_" .. tostring(i)) then
           local ok = add_folder_as_pool(app, folder_path, folder_alias)
           if ok then
-            state.preview_error = "Folder toegevoegd als nieuwe Builder pool: " .. tostring(folder_alias)
+            state.preview_error = "Folder added as a new Builder pool: " .. tostring(folder_alias)
           else
-            state.preview_error = "Kon folder niet als pool toevoegen."
+            state.preview_error = "Could not add that folder as a pool."
           end
         end
 
@@ -1824,6 +2078,39 @@ local function draw_samples_list(app)
     end
     state.folder_header_action = nil
     return
+  end
+
+  state.nav_order = items
+
+  -- Centring the selection in a clipped list takes two passes, which is how TK
+  -- Media Browser does it and why this is not one line.
+  --
+  -- Only the rows on screen exist, so a row that is off screen cannot scroll
+  -- itself into view -- stepping past the edge did nothing at all. This is the
+  -- coarse jump: it puts the scroll close enough that the clipper will draw the
+  -- row. The exact centring happens in draw_sample_row, on the row itself, once
+  -- it exists.
+  --
+  -- The flag is deliberately NOT cleared here. Clearing it left the selection
+  -- wherever this estimate happened to land, which is only as good as the row
+  -- height -- and that is measured rather than assumed, because a row is a
+  -- Selectable with the theme's padding, not a line of text.
+  if state.scroll_to_selected and r.ImGui_SetScrollY then
+    local idx = nil
+    for i = 1, #items do
+      if items[i] == state.selected_file then idx = i break end
+    end
+    if idx then
+      local view_h = math.max(1, as_number(r.ImGui_GetWindowHeight(ctx)) or 200)
+      local row_h = as_number(r.ImGui_GetTextLineHeightWithSpacing(ctx)) or 18
+      local most = r.ImGui_GetScrollMaxY and (as_number(r.ImGui_GetScrollMaxY(ctx)) or 0) or 0
+      if #items > 0 and most > 0 then
+        local measured = (most + view_h) / #items
+        if measured > 1 then row_h = measured end
+      end
+      local target = ((idx - 1) * row_h) + (row_h * 0.5) - (view_h * 0.5)
+      r.ImGui_SetScrollY(ctx, math.max(0, target))
+    end
   end
 
   if r.ImGui_CreateListClipper and r.ImGui_ListClipper_Begin and r.ImGui_ListClipper_Step and r.ImGui_ListClipper_GetDisplayRange and r.ImGui_ListClipper_End then
@@ -1846,36 +2133,199 @@ local function draw_samples_list(app)
   end
 end
 
+-- The gap left under a collection heading.
+--
+-- The theme spaces items 8 apart, which is right for controls that need to be
+-- told apart and too much for headings that are meant to read as one stack --
+-- fold three groups shut and they float rather than stack. Pushed only around
+-- the heading itself: what follows a group's last row keeps the normal gap, so
+-- the contents still separate from the next heading.
+local HEADER_GAP_Y = 3
+
+local function push_header_gap(ctx)
+  if not r.ImGui_StyleVar_ItemSpacing then return false end
+  -- Only the vertical gap changes; the horizontal one is read back so the theme
+  -- keeps deciding it. The 9 is that theme's value, used only if this build has
+  -- no way to ask.
+  local x = 9
+  if r.ImGui_GetStyleVar then
+    x = as_number(r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())) or x
+  end
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), x, HEADER_GAP_Y)
+  return true
+end
+
+-- A group header, and the fold state behind it.
+--
+-- ImGui keeps its own open/closed state per id, which would forget everything
+-- the moment the window is rebuilt and would not survive a restart. So the
+-- header is forced from our own state every frame and the click is read back
+-- out of the return value -- CollapsingHeader hands back the toggled value in
+-- the same frame it is clicked, so the two never fight.
+--
+-- Returns whether to draw the contents.
+local function draw_group_header(app, group, id_suffix)
+  local ctx = app.ctx
+  local state = app.browser
+  state.collapsed_groups = state.collapsed_groups or {}
+
+  local folded = state.collapsed_groups[group.key] == true
+  local label = truncate_text(group.name, 40) .. " (" .. tostring(#group.items) .. ")"
+    .. "##colgrp_" .. tostring(id_suffix) .. "_" .. group.key
+
+  local forced = r.ImGui_SetNextItemOpen and r.ImGui_Cond_Always
+  if forced then
+    r.ImGui_SetNextItemOpen(ctx, not folded, r.ImGui_Cond_Always())
+  end
+  local gapped = push_header_gap(ctx)
+  local open = r.ImGui_CollapsingHeader(ctx, label)
+  if gapped then r.ImGui_PopStyleVar(ctx) end
+  -- Only read the click back when we set the state in the first place. Without
+  -- the forcing this compares against ImGui's own idea of open, and the first
+  -- frame would toggle a group the user never touched.
+  if forced and open == folded then
+    state.collapsed_groups[group.key] = (not open) or nil
+    save(app)
+  end
+
+  if r.ImGui_BeginPopupContextItem(ctx, "##colgrp_ctx_" .. tostring(id_suffix) .. "_" .. group.key) then
+    Theme.label(ctx, group.name)
+
+    -- Committed on Enter, not per keystroke. This popup's id is built from the
+    -- group name, so renaming live would change the id under the field and the
+    -- menu would shut itself after the first letter -- and every member would
+    -- be rewritten once per character on the way.
+    if state.group_rename_key ~= group.key then
+      state.group_rename_key = group.key
+      state.group_rename_buffer = group.name
+    end
+    r.ImGui_SetNextItemWidth(ctx, 220)
+    local flags = r.ImGui_InputTextFlags_EnterReturnsTrue
+      and r.ImGui_InputTextFlags_EnterReturnsTrue() or 0
+    local changed, value = r.ImGui_InputTextWithHint(ctx, "Rename##colgrp_rn_" .. group.key,
+      "name, then Enter", state.group_rename_buffer or "", flags)
+    if value ~= nil then state.group_rename_buffer = value end
+    if changed then
+      local clean = Groups.trim(value)
+      if clean ~= "" then
+        -- The fold state travels with it, or a group you had shut would spring
+        -- open for no reason you could see.
+        local was_folded = state.collapsed_groups[group.key]
+        Groups.rename(active_collections(state), group.name, clean)
+        state.collapsed_groups[group.key] = nil
+        if was_folded then state.collapsed_groups[Groups.key_of(clean)] = true end
+        state.group_rename_key = nil
+        save(app)
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+    end
+    -- Named for what it does to the collections, not to the group: nothing is
+    -- deleted here, and a menu item that reads "Delete group" next to a list of
+    -- packs is one nobody presses without flinching.
+    if r.ImGui_MenuItem(ctx, "Ungroup these##colgrp_del_" .. group.key) then
+      Groups.rename(active_collections(state), group.name, "")
+      state.collapsed_groups[group.key] = nil
+      save(app)
+    end
+    r.ImGui_EndPopup(ctx)
+  end
+
+  return open
+end
+
+-- A heading that looks like a group's but does not fold.
+--
+-- The pinned block and the ungrouped remainder are sections too, and drawing
+-- them as anything lighter than the group headings left the panel reading as
+-- "headings, then some leftovers" -- which is exactly what made the loose
+-- collections under the last group look as though they belonged to it.
+--
+-- Neither of these may fold. A folded Pinned block is pinning that does
+-- nothing, and a folded Ungrouped block hides every collection you have not
+-- filed yet -- most of them, for anyone who has just started.
+local function draw_static_header(app, text, id)
+  local ctx = app.ctx
+  local flags = 0
+  local leaf = false
+  if r.ImGui_TreeNodeFlags_Leaf then
+    flags = flags | r.ImGui_TreeNodeFlags_Leaf()
+    leaf = true
+  end
+  -- A bullet where the others have an arrow: it fills the same space, so the
+  -- text still lines up with the group names, and it reads as "this one does
+  -- not open" rather than as a heading that is broken.
+  if r.ImGui_TreeNodeFlags_Bullet then flags = flags | r.ImGui_TreeNodeFlags_Bullet() end
+  if not leaf and r.ImGui_SetNextItemOpen and r.ImGui_Cond_Always then
+    -- No Leaf flag on this build; forcing it open is the next best thing.
+    r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Always())
+  end
+  local gapped = push_header_gap(ctx)
+  r.ImGui_CollapsingHeader(ctx, text .. "##colstatic_" .. id, nil, flags)
+  if gapped then r.ImGui_PopStyleVar(ctx) end
+end
+
 local function draw_collections_panel(app, panel_h)
   local ctx = app.ctx
   local state = app.browser
+  local collections = active_collections(state)
   local ordered = ordered_collections(state)
+  local built = Groups.build(collections, state.collapsed_groups, state.collections_flat == true)
+
+  local function draw_row(c)
+    local selected = state.selected_id == c.id
+    local prefix = c.pinned and "* " or "  "
+    local cover = c.cover_path and " [cover]" or ""
+    local label = prefix .. truncate_text(c.name, 40) .. cover .. "##" .. c.id
+    if r.ImGui_Selectable(ctx, label, selected) then
+      state.selected_id = c.id
+      save(app)
+      refresh_collection(app, false)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      local tip = c.name .. "\n" .. c.path
+      if c.group then tip = tip .. "\nGroup: " .. c.group end
+      if c.cover_path then tip = tip .. "\nCover: " .. c.cover_path end
+      r.ImGui_SetTooltip(ctx, tip)
+    end
+    if r.ImGui_BeginPopupContextItem(ctx, "##col_ctx_" .. c.id) then
+      r.ImGui_EndPopup(ctx)
+    end
+    draw_collection_context_menu(app, c)
+  end
 
   local function draw_list()
     if #ordered == 0 then
       Theme.label(ctx, state.browser_mode == "kits" and "No kits added yet." or "No sample packs added yet.")
     end
 
-    for _, c in ipairs(ordered) do
-      local selected = state.selected_id == c.id
-      local prefix = c.pinned and "* " or "  "
-      local cover = c.cover_path and " [cover]" or ""
-      local label = prefix .. truncate_text(c.name, 40) .. cover .. "##" .. c.id
-      if r.ImGui_Selectable(ctx, label, selected) then
-        state.selected_id = c.id
-        save(app)
-        refresh_collection(app, false)
-      end
-      if r.ImGui_IsItemHovered(ctx) then
-        local tip = c.name .. "\n" .. c.path
-        if c.cover_path then tip = tip .. "\nCover: " .. c.cover_path end
-        r.ImGui_SetTooltip(ctx, tip)
-      end
-      if r.ImGui_BeginPopupContextItem(ctx, "##col_ctx_" .. c.id) then
-        r.ImGui_EndPopup(ctx)
-      end
-      draw_collection_context_menu(app, c)
+    -- Each run gets its own id namespace. A pinned collection that belongs to a
+    -- group is drawn twice, and two rows carrying the same id are one row as
+    -- far as ImGui is concerned -- clicking the lower one would answer as the
+    -- upper, and both would share a single context menu.
+    local function draw_run(list, run_id)
+      r.ImGui_PushID(ctx, run_id)
+      for _, c in ipairs(list) do draw_row(c) end
+      r.ImGui_PopID(ctx)
     end
+
+    -- Pinned collections open the panel with no heading of their own, exactly as
+    -- they always have.
+    draw_run(built.pinned, "run_pinned")
+
+    for _, g in ipairs(built.groups) do
+      if draw_group_header(app, g, "list") then
+        draw_run(g.items, "run_" .. g.key)
+      end
+    end
+
+    -- The one heading that has to exist: a group's contents end where the next
+    -- heading begins, and without this the collections belonging to no group
+    -- would run straight on from the last group as though they were part of it.
+    -- Only once a group exists -- otherwise there is nothing to tell apart.
+    if #built.groups > 0 and #built.ungrouped > 0 then
+      draw_static_header(app, string.format("Ungrouped (%d)", #built.ungrouped), "list_loose")
+    end
+    draw_run(built.ungrouped, "run_loose")
   end
 
   local function draw_tiles()
@@ -1884,7 +2334,50 @@ local function draw_collections_panel(app, panel_h)
       return
     end
 
-    local panel_w = as_number(r.ImGui_GetContentRegionAvail(ctx)) or 0
+    -- The width the tiles are laid out in, worked out so that it does not
+    -- depend on whether the scrollbar is currently showing.
+    --
+    -- Otherwise the layout feeds back on itself and the panel shakes. Tiles are
+    -- square and sized to fill the width, so the scrollbar appearing takes
+    -- width away, which makes every tile narrower and therefore SHORTER. The
+    -- content then fits, the scrollbar goes, the width comes back, the tiles
+    -- grow and it needs scrolling again. The scrollbar cancels its own cause,
+    -- so it flickers and the tiles jump with it -- and only at the one panel
+    -- width where the content lands within a row of fitting, which is why it
+    -- looks like a rounding fault rather than a loop.
+    --
+    -- GetContentRegionAvail is exactly the quantity that moves, so the base is
+    -- the window width, which does not. Taking the scrollbar off it unasked
+    -- gives the width the panel has WITH a scrollbar, whether or not one is
+    -- there: with it the tiles fill the row exactly, without it they leave a
+    -- scrollbar's worth of margin on the right. A layout that does not depend
+    -- on its own outcome cannot oscillate.
+    --
+    -- The list view needs none of this -- its rows are full width and their
+    -- height does not follow the width at all.
+    local avail_w = as_number(r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local panel_w = avail_w
+    do
+      local win_w = as_number(r.ImGui_GetWindowWidth(ctx))
+      local pad_x, sb = 8, 14
+      if r.ImGui_GetStyleVar and r.ImGui_StyleVar_WindowPadding then
+        local px = as_number(r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_WindowPadding()))
+        if px then pad_x = px end
+      end
+      if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ScrollbarSize then
+        local s = as_number(r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize()))
+        if s and s > 0 then sb = s end
+      end
+      if win_w and win_w > 0 then
+        -- Never wider than what is actually there. If the padding guess above
+        -- were too small the tiles would overrun the panel and bring on a
+        -- horizontal scrollbar, which is a worse fault than the one being
+        -- fixed; when the estimate is right the two agree and this changes
+        -- nothing.
+        panel_w = math.min(avail_w, win_w - (pad_x * 2) - sb)
+      end
+    end
+    panel_w = math.max(1, panel_w)
     local gap = 10
     local min_tile = TILE_SIZES[state.tile_size] or TILE_SIZES.normal
     local cols = math.max(1, math.floor((panel_w + gap) / (min_tile + gap)))
@@ -1897,7 +2390,13 @@ local function draw_collections_panel(app, panel_h)
       tile_flags = tile_flags | r.ImGui_WindowFlags_NoScrollWithMouse()
     end
 
-    for i, c in ipairs(ordered) do
+    -- One run of tiles. Each run counts its own columns, so a group starts on a
+    -- fresh line instead of continuing the row above it -- otherwise the first
+    -- tile of a group would sit beside the last of the previous one and the
+    -- header would point at the wrong tiles.
+    local function draw_tile_run(list, run_id)
+    r.ImGui_PushID(ctx, run_id)
+    for i, c in ipairs(list) do
       local col_index = ((i - 1) % cols)
       if col_index > 0 then
         r.ImGui_SameLine(ctx, nil, gap)
@@ -1952,7 +2451,7 @@ local function draw_collections_panel(app, panel_h)
               state.cover_cache[cover_path] = false
             end
             c.cover_path = nil
-            state.preview_error = "Cover image kon niet worden geladen en is verwijderd."
+            state.preview_error = "Cover image could not be loaded, and has been removed."
             save(app)
           end
         end
@@ -2013,6 +2512,28 @@ local function draw_collections_panel(app, panel_h)
 
       r.ImGui_PopID(ctx)
     end
+    r.ImGui_PopID(ctx)
+    end
+
+    draw_tile_run(built.pinned, "run_pinned")
+
+    -- No spacer before a heading. A tile ends with its label inside the group,
+    -- so the cursor is already on a fresh line -- an empty Dummy there only
+    -- bought a second helping of item spacing, which is what made the headings
+    -- drift apart.
+    for _, g in ipairs(built.groups) do
+      if draw_group_header(app, g, "tiles") then
+        draw_tile_run(g.items, "run_" .. g.key)
+      end
+    end
+
+    -- It matters more here than in the list: a row of loose tiles under a
+    -- group's tiles is indistinguishable from another row of that group's own,
+    -- there being no rows to count and no indent to read, just tiles.
+    if #built.groups > 0 and #built.ungrouped > 0 then
+      draw_static_header(app, string.format("Ungrouped (%d)", #built.ungrouped), "tiles_loose")
+    end
+    draw_tile_run(built.ungrouped, "run_loose")
   end
 
   if r.ImGui_BeginChild(ctx, "##browser_collections", 0, panel_h or 0, 1) then
@@ -2042,8 +2563,51 @@ end
 local TAG_POPUP_W = 430      -- fixed width of the tag filter popup; chips wrap
 local GRID_MIN_CELL = 44     -- smallest heatmap cell; below this the panel scrolls
 local TAG_BODY_H = 90        -- drawn content of the tags panel
-local TAG_PADDING = 6        -- its own window padding: the theme's 14 is too costly here
-local ANALYSIS_PANEL_H = TAG_BODY_H + TAG_PADDING * 2 + 2
+-- The strip's own window padding: the theme's 14 is too costly here.
+--
+-- Split top from bottom, which ImGui will not do on its own -- WindowPadding is
+-- one number for both. So the padding is set to the small figure and the rest
+-- of the top is added by the panels themselves. The content ends up sitting
+-- lower in the strip with almost nothing left under it, which is where the
+-- slack was: an even gap looks bottom-heavy when everything above it is a row
+-- of controls.
+local TAG_PADDING = 1
+local TAG_TOP_LEAD = 4       -- added inside each panel, on top of the padding
+local ANALYSIS_PANEL_H = TAG_BODY_H + TAG_PADDING + TAG_TOP_LEAD + 2
+-- Waveform, its locator strip, two rows of controls and the summary.
+-- The slice strip. It was 264 -- two and a half times the tags panel -- and all
+-- of that went on chrome: two rows of buttons, a parameter row, a hint line and
+-- a summary, each on a line of its own.
+--
+-- The saving comes out of the chrome and never out of the waveform. The
+-- controls are two fixed rows now, the hint moved into a tooltip, and the
+-- summary shares a line. The waveform keeps its height and grows if the strip
+-- is given more.
+local SLICE_ROW_H = 20        -- one row of controls
+local SLICE_WAVE_MIN = 124    -- never squeezed below this
+local SLICE_GAP = 8           -- the theme's item spacing between them
+local SLICE_ACTION_W = 104    -- "Slice to rack", right of the mode buttons
+-- Kept clear of the edge. Aligning to the content region exactly puts the last
+-- pixels of the button under the clip, which only shows at the narrowest width
+-- -- where there is no slack to hide it.
+local SLICE_EDGE = 5
+
+-- Added up rather than typed in.
+--
+-- This number was set by hand five times in one afternoon as the panel gained
+-- and lost parts, and the last time it came out seventeen pixels short. That
+-- does not look like a layout error: the waveform refuses to go below its
+-- minimum, so instead of everything shrinking a little, the last item is pushed
+-- out of the strip -- and the last item is the button that does the actual
+-- work. No warning, no gap, just no way to send the slices anywhere.
+--
+-- Written as a sum, the parts cannot drift apart from the number again.
+local SLICE_PANEL_H =
+  TAG_PADDING + TAG_TOP_LEAD          -- the strip's own top
+  + SLICE_ROW_H + SLICE_GAP           -- mode buttons, and the action beside them
+  + SLICE_ROW_H + SLICE_GAP           -- the mode's setting
+  + SLICE_WAVE_MIN                    -- waveform, and nothing under it
+  + TAG_PADDING
 local CHILD_SPACING = 8      -- StyleVar_ItemSpacing y, see core/theme.lua
 
 local function fmt_eta(seconds)
@@ -2075,100 +2639,116 @@ local function start_analysis(app, force)
   if state.analysis_job.total == 0 then state.analysis_job = nil end
 end
 
-local function draw_analysis_bar(app)
+-- Analysis, as one button.
+--
+-- It used to be a row of its own: a progress track, a readout, the Analyse
+-- button and a second button for the options -- all of it on screen for ever.
+-- Only the progress is worth a permanent place while it is happening, and
+-- analysing is something you do once per collection, so most of the time that
+-- row was spending a strip of the panel repeating a job you had already
+-- finished.
+--
+-- One control says the same things. The label carries the state, the progress
+-- is drawn into the button and only while there is any, and the settings are on
+-- the right-click, where this panel already keeps its second-order controls.
+--
+-- It is never disabled while there is something to say. A button greyed out the
+-- moment everything is measured would take the re-analyse and cache options
+-- down with it -- which is exactly when you want them -- so once the collection
+-- is done, clicking opens the same menu the right-click does.
+local function draw_analysis_button(app, width, compact)
   local ctx = app.ctx
   local state = app.browser
   local c = Theme.colors
   local job = state.analysis_job
+  local hover_disabled = r.ImGui_HoveredFlags_AllowWhenDisabled
+    and r.ImGui_HoveredFlags_AllowWhenDisabled() or nil
 
   if not Analyzer.available() then
-    local pushed = Theme.push_small(ctx)
-    r.ImGui_TextColored(ctx, c.text_faint, "Sample analysis needs a newer REAPER build.")
-    Theme.pop_font(ctx, pushed)
+    r.ImGui_BeginDisabled(ctx, true)
+    Theme.ghost_button(ctx, "Analyse##analysis_button", width, 0)
+    r.ImGui_EndDisabled(ctx)
+    if r.ImGui_IsItemHovered(ctx, hover_disabled) then
+      r.ImGui_SetTooltip(ctx, "Sample analysis needs a newer REAPER build.")
+    end
     return
   end
 
   local total = #(state.files or {})
   local done = state.analysis_count or 0
-  local btn_w = 74
-
-  -- Room for the count/ETA text, the Analyse/Stop button, the options button
-  -- and the spacing between them.
-  local avail = as_number(r.ImGui_GetContentRegionAvail(ctx)) or 300
-  local bar_w = math.max(60, avail - btn_w - 172)
-
-  -- Progress track. Doubles as the "how much of this pack is measured" readout
-  -- when no job is running, so the state is always visible at a glance.
-  local x, y = r.ImGui_GetCursorScreenPos(ctx)
-  local dl = r.ImGui_GetWindowDrawList(ctx)
-  local h = 8
-  local cy = y + math.floor((r.ImGui_GetFrameHeight(ctx) - h) * 0.5)
   local frac = total > 0 and (done / total) or 0
   if job and job.total > 0 then
     frac = total > 0 and ((total - job.total + job.index) / total) or 0
   end
   if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
+  local pct = math.floor(frac * 100)
 
-  r.ImGui_DrawList_AddRectFilled(dl, x, cy, x + bar_w, cy + h, c.frame_bg, h * 0.5)
-  if frac > 0 then
-    local fill = job and c.accent or (done >= total and c.success or c.accent_soft)
-    r.ImGui_DrawList_AddRectFilled(dl, x, cy, x + bar_w * frac, cy + h, fill, h * 0.5)
-  end
-  r.ImGui_Dummy(ctx, bar_w, r.ImGui_GetFrameHeight(ctx))
-
-  r.ImGui_SameLine(ctx)
-  local label
+  -- The narrow labels drop the figures rather than being clipped: on its own
+  -- row this button shares the width with three others, and half a number is
+  -- worse than none.
+  local label, tip, action
   if job then
-    label = string.format("%d / %d  %s", done + job.index, total, fmt_eta(job:eta()))
+    action = "stop"
+    label = compact and "Stop" or string.format("Stop  %d%%", pct)
+    tip = string.format("Analysing: %d / %d   %s\n\nClick to stop. Everything measured so far is kept --\nrestarting picks up where it left off.",
+      done + job.index, total, fmt_eta(job:eta()))
   elseif total == 0 then
-    label = "No samples"
+    action = nil
+    label = "Analyse"
+    tip = "No samples in this collection."
   elseif done >= total then
-    label = string.format("%d analysed%s", total,
-      state.analysis_rate_ms and string.format("  \226\128\148  %.0f ms each", state.analysis_rate_ms) or "")
+    action = "menu"
+    label = compact and "Analysed" or string.format("Analysed  %d", total)
+    tip = string.format("All %d samples measured.%s\n\nClick for re-analysis and cache options.",
+      total,
+      state.analysis_rate_ms and string.format("\n%.0f ms each.", state.analysis_rate_ms) or "")
   else
-    label = string.format("%d / %d analysed", done, total)
-  end
-  local pushed = Theme.push_small(ctx)
-  r.ImGui_AlignTextToFramePadding(ctx)
-  r.ImGui_TextColored(ctx, job and c.accent or c.text_dim,
-    (not job and state.analysis_note) or label)
-  Theme.pop_font(ctx, pushed)
-  if not job and state.analysis_note and r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, label)
+    action = "start"
+    label = compact and "Analyse" or string.format("Analyse  %d%%", pct)
+    tip = string.format("%d of %d samples measured.\n\nClick to measure the rest. It runs in the background, pauses\nwhile REAPER records, and can be stopped at any time.\n\nRight click for options.",
+      done, total)
   end
 
-  r.ImGui_SameLine(ctx)
+  r.ImGui_BeginDisabled(ctx, action == nil)
+  local pressed = Theme.ghost_button(ctx, label .. "##analysis_button", width, 0)
+  r.ImGui_EndDisabled(ctx)
+
+  -- Progress, drawn along the foot of the button while a job runs and gone the
+  -- moment it ends. Inside the button rather than beside it, so nothing appears
+  -- and disappears and shoves the row about while you are watching it.
   if job then
-    if Theme.ghost_button(ctx, "Stop##analysis_stop", btn_w, 0) then
+    local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+    local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+    x1, y1 = as_number(x1) or 0, as_number(y1) or 0
+    x2, y2 = as_number(x2) or 0, as_number(y2) or 0
+    local track_w = math.max(0, x2 - x1 - 2)
+    if track_w > 0 and frac > 0 then
+      local dl = r.ImGui_GetWindowDrawList(ctx)
+      r.ImGui_DrawList_AddRectFilled(dl, x1 + 1, y2 - 4, x1 + 1 + track_w * frac, y2 - 1, c.accent, 1)
+    end
+  end
+
+  if r.ImGui_IsItemHovered(ctx, hover_disabled) then
+    r.ImGui_SetTooltip(ctx, tip)
+  end
+
+  if pressed then
+    if action == "stop" then
       if job.index > 0 and job.elapsed > 0 then
         state.analysis_rate_ms = job.elapsed / job.index * 1000
       end
       job:cancel()
       state.analysis_job = nil
       state.analysis_count = Tags.count_analyzed(state.files)
-    end
-    if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, "Stop analysing.\nEverything measured so far is kept -- restarting picks up where this left off.")
-    end
-  else
-    local can = total > 0 and done < total
-    r.ImGui_BeginDisabled(ctx, not can)
-    if Theme.ghost_button(ctx, "Analyse##analysis_start", btn_w, 0) then
+    elseif action == "start" then
       start_analysis(app, false)
-    end
-    r.ImGui_EndDisabled(ctx)
-    if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, can
-        and "Measure every sample in this collection.\nRuns in the background, pauses while REAPER records, and can be stopped at any time."
-        or "Every sample in this collection has been measured.")
+    elseif action == "menu" then
+      r.ImGui_OpenPopup(ctx, "##analysis_menu")
     end
   end
-
-  r.ImGui_SameLine(ctx)
-  if Theme.ghost_button(ctx, "\226\139\175", 26, 0) then
+  if action and r.ImGui_IsItemClicked(ctx, 1) then
     r.ImGui_OpenPopup(ctx, "##analysis_menu")
   end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Analysis options") end
 
   if r.ImGui_BeginPopup(ctx, "##analysis_menu") then
     if r.ImGui_MenuItem(ctx, "Re-analyse this collection") then
@@ -2215,6 +2795,58 @@ end
 -- for the noise hats should give the noise hats. Only labels that occur in the
 -- collection are offered, with faceted counts, so the list never offers AIR on
 -- a pack of kicks.
+
+-- The order menu behind the A-Z button.
+--
+-- Two lists rather than one of four combinations: the thing you are sorting by
+-- and the direction you want it in are separate decisions, and pairing them up
+-- would mean four entries now and six as soon as another key is added.
+local function draw_sort_popup(app)
+  local ctx = app.ctx
+  local state = app.browser
+  if not r.ImGui_BeginPopup(ctx, "##sample_sort_popup") then return end
+
+  local mode = state.sort_mode or "name"
+  local desc = state.sort_desc == true
+  local changed = false
+
+  Theme.label(ctx, "Sort by")
+  for _, m in ipairs(Sort.MODES) do
+    if r.ImGui_MenuItem(ctx, m.label .. "##sort_mode_" .. m.id, nil, mode == m.id) then
+      state.sort_mode = m.id
+      changed = true
+    end
+  end
+
+  r.ImGui_Separator(ctx)
+
+  -- Named after what you get, not "Ascending" -- which of A-Z and Z-A is
+  -- "ascending" is obvious for names and a coin flip for lengths.
+  Theme.label(ctx, "Order")
+  local up_label = (mode == "length") and "Shortest first" or "A to Z"
+  local down_label = (mode == "length") and "Longest first" or "Z to A"
+  if r.ImGui_MenuItem(ctx, up_label .. "##sort_asc", nil, not desc) then
+    state.sort_desc = false
+    changed = true
+  end
+  if r.ImGui_MenuItem(ctx, down_label .. "##sort_desc", nil, desc) then
+    state.sort_desc = true
+    changed = true
+  end
+
+  if changed then
+    save(app)
+    -- Forced, because the list itself has not changed -- only the way it is
+    -- being read -- and the cached key would otherwise say there is nothing
+    -- to do.
+    refresh_sort(app, true)
+    -- Whatever is selected should stay selected and stay visible; under a new
+    -- order it is somewhere else entirely.
+    state.scroll_to_selected = true
+  end
+
+  r.ImGui_EndPopup(ctx)
+end
 
 local function draw_tag_filter(app)
   local ctx = app.ctx
@@ -2345,6 +2977,7 @@ local function draw_rail(ctx, dl, x, y, w, value, name, value_label)
 end
 
 local function draw_tag_panel(app)
+  r.ImGui_SetCursorPosY(app.ctx, r.ImGui_GetCursorPosY(app.ctx) + TAG_TOP_LEAD)
   local ctx = app.ctx
   local state = app.browser
   local c = Theme.colors
@@ -2502,6 +3135,11 @@ local function ensure_grid(app)
   }, "|")
 
   if state.grid_key ~= key then
+    -- The scan order, deliberately, not the sorted list. Cells hold their
+    -- samples in the order they were handed over, and "Make rack" picks from
+    -- that -- so building from the display order would mean the same collection
+    -- and the same seed producing a different kit depending on how you happened
+    -- to have the list sorted.
     state.grid = Heatmap.build(state.filtered_files or {}, {
       size = state.grid_size, x = state.grid_x, y = state.grid_y,
     })
@@ -3242,6 +3880,618 @@ local function draw_heatmap(app)
   Theme.pop_font(ctx, pushed_note)
 end
 
+-- The slice dialog.
+--
+-- Two ways of saying how many pieces, because "16 equal parts" says nothing
+-- about how long the loop is -- a one-bar and a four-bar loop both come out in
+-- sixteen. Naming the bars and a grid puts the length back in, and the implied
+-- tempo underneath is the one number that tells you whether the bar count was
+-- right: call a 4-second loop four bars and it reads 240 BPM.
+local SLICE_WAVE_W = 460
+
+-- The waveform, with the cut points drawn on it.
+--
+-- Numbers alone do not answer the question you actually have -- "is this
+-- landing on the hits?" -- and on a loop with any swing the answer is usually
+-- no. Seeing the lines against the peaks is the whole point, and it is the only
+-- way transient slicing can be judged at all.
+--
+-- Alternating slice backgrounds rather than lines alone: sixteen thin lines on
+-- a busy waveform are hard to tell apart, while sixteen alternating panels read
+-- as sixteen pads at a glance.
+-- `view` is { from01, to01 }: the part of the file on screen. Everything drawn
+-- here is mapped through it, so zooming in is one transform rather than a
+-- special case in every loop.
+local function draw_slice_waveform(app, path, plan, all_points, width, view, height)
+  local ctx = app.ctx
+  local c = Theme.colors
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+
+  local SLICE_WAVE_W = math.max(240, math.floor(tonumber(width) or 460))
+  local SLICE_WAVE_H = math.max(SLICE_WAVE_MIN, math.floor(tonumber(height) or SLICE_WAVE_MIN))
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local v0 = view and view[1] or 0
+  local v1 = view and view[2] or 1
+  local span = math.max(0.000001, v1 - v0)
+  local function tx(t) return x + ((t - v0) / span) * SLICE_WAVE_W end
+  -- A button rather than a spacer, so the boundaries can be grabbed. Alt is the
+  -- modifier because that is what TK Media Browser uses for the same job, and a
+  -- plain click here should stay free for auditioning later.
+  r.ImGui_InvisibleButton(ctx, "##slice_wave", SLICE_WAVE_W, SLICE_WAVE_H)
+  local wave_hovered = r.ImGui_IsItemHovered(ctx)
+
+  local x2, y2 = x + SLICE_WAVE_W, y + SLICE_WAVE_H
+  r.ImGui_DrawList_AddRectFilled(dl, x, y, x2, y2, c.frame_bg, 4)
+
+  local shape = Peaks.outline(path, SLICE_WAVE_W, v0, v1)
+  local mid = y + SLICE_WAVE_H * 0.5
+  local half = SLICE_WAVE_H * 0.44
+
+  -- Slice regions first, so the waveform sits on top of them rather than under.
+  if plan then
+    for i, sl in ipairs(plan.slices) do
+      local a = tx(sl.start01)
+      local b = tx(sl.stop01)
+      if i % 2 == 0 then
+        r.ImGui_DrawList_AddRectFilled(dl, a, y + 1, b, y2 - 1, c.frame_hover)
+      end
+    end
+  end
+
+  -- Every boundary the file actually has, before the rack's sixteen pads get
+  -- to have an opinion. Without this the waveform showed only what fitted, so
+  -- a file with fifty transients looked like sixteen cuts crammed into the
+  -- first second and nothing after -- as if detection had given up. The pads
+  -- are a rack limit, not a detection limit, and the picture has to say so.
+  if all_points then
+    for _, t in ipairs(all_points) do
+      local px = tx(t)
+      -- Half-height and grey: present, clearly secondary to the sixteen that
+      -- are actually going somewhere.
+      r.ImGui_DrawList_AddLine(dl, px, y2 - 14, px, y2 - 1, 0x7F7F7FC0, 1)
+    end
+  end
+
+  if shape then
+    for i = 1, shape.n do
+      local v = shape[i] or 0
+      if v > 0.002 then
+        local px = x + i - 0.5
+        r.ImGui_DrawList_AddLine(dl, px, mid - v * half, px, mid + v * half, c.text_dim, 1)
+      end
+    end
+  else
+    local pushed = Theme.push_small(ctx)
+    r.ImGui_DrawList_AddText(dl, x + 8, mid - 6, c.text_faint, "no waveform available")
+    Theme.pop_font(ctx, pushed)
+  end
+
+  -- Cut points on top of everything.
+  --
+  -- A one-pixel line in the theme's accent disappears against a busy waveform,
+  -- and how badly depends on the theme -- which is no way to mark the thing the
+  -- whole window is about. So each boundary is drawn three times: a dark line
+  -- underneath, the bright line over it, and a solid flag at the top. The dark
+  -- pass is what makes it readable on a light theme and the bright pass on a
+  -- dark one, so it no longer depends on which is in use.
+  if plan then
+    local pushed_num = Theme.push_small(ctx)
+    for _, sl in ipairs(plan.slices) do
+      local a = tx(sl.start01)
+      r.ImGui_DrawList_AddLine(dl, a + 1, y + 1, a + 1, y2 - 1, 0x000000A0, 2)
+      r.ImGui_DrawList_AddLine(dl, a, y + 1, a, y2 - 1, 0xFFFFFFFF, 2)
+
+      -- A filled flag reads at a glance where a hairline does not, and gives
+      -- the number something to sit on.
+      local flag_w, flag_h = 15, 13
+      if ((sl.stop01 - sl.start01) / span) * SLICE_WAVE_W > flag_w + 2 then
+        r.ImGui_DrawList_AddRectFilled(dl, a, y + 1, a + flag_w, y + 1 + flag_h, 0xFFFFFFFF, 2)
+        r.ImGui_DrawList_AddText(dl, a + 4, y + 2, 0x111111FF, tostring(sl.index))
+      else
+        r.ImGui_DrawList_AddRectFilled(dl, a, y + 1, a + 3, y + 1 + flag_h, 0xFFFFFFFF, 1)
+      end
+    end
+    Theme.pop_font(ctx, pushed_num)
+  end
+
+  r.ImGui_DrawList_AddRect(dl, x, y, x2, y2, c.border, 4, 0, 1)
+
+  -- Length in the corner of the picture it belongs to, rather than on a line of
+  -- its own above it. It is a fact about the file, not a control.
+  if shape and shape.length then
+    local pushed_len = Theme.push_small(ctx)
+    local label = string.format("%.2f s", shape.length)
+    local lw = as_number(r.ImGui_CalcTextSize(ctx, label)) or 40
+    r.ImGui_DrawList_AddText(dl, x2 - lw - 6, y2 - 15, c.text_faint, label)
+    Theme.pop_font(ctx, pushed_len)
+  end
+
+  if wave_hovered then
+    -- The hint lives here rather than on a line of its own: it was costing a
+    -- row of the strip to say something you need once.
+    r.ImGui_SetTooltip(ctx, "Alt+drag a cut point to move it\nAlt+double-click to add one or take one away")
+  end
+
+  -- Editing. Positions are fractions of the file, so nothing here needs to know
+  -- the sample rate or the tempo.
+  local edit = nil
+  if wave_hovered and SLICE_WAVE_W > 0 then
+    local mx = r.ImGui_GetMousePos(ctx)
+    -- Back into file coordinates, so a dragged boundary means the same thing
+    -- whatever is zoomed in on.
+    local t = math.max(0, math.min(1, v0 + ((mx - x) / SLICE_WAVE_W) * span))
+    local alt = false
+    if r.ImGui_GetKeyMods and r.ImGui_Mod_Alt then
+      alt = (r.ImGui_GetKeyMods(ctx) & r.ImGui_Mod_Alt()) ~= 0
+    end
+    edit = { t = t, alt = alt, grab = (6 / SLICE_WAVE_W) * span }
+    if alt then
+      -- A crosshair would be better; ReaImGui has no cursor for it, so the
+      -- guide line under the pointer says "this is where it would go".
+      r.ImGui_DrawList_AddLine(dl, tx(t), y + 1, tx(t), y2 - 1, c.warning, 1)
+    end
+  end
+  return edit
+end
+
+-- The slice view, drawn in the strip under the sample list -- the same strip the
+-- tags panel uses.
+--
+-- It began as a modal dialog, then a window of its own, and both were wrong for
+-- the same reason: slicing is not a form you confirm, it is something you do
+-- while listening. The strip already shows detail about the selected sample and
+-- already sits above the transport, so auditioning, choosing a sample and
+-- cutting it are one place rather than three. Nothing here repeats a button the
+-- browser already has.
+-- One of the four mode buttons. The active one is coloured rather than prefixed
+-- with an arrow: the prefix cost two characters of width on a row that has to
+-- fit four buttons at the window's minimum, and it matched nothing else in the
+-- program -- the Slice toggle in the transport already says "on" with colour.
+local function slice_mode_button(ctx, id, label, active, width, height)
+  if active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.accent) end
+  local clicked = Theme.ghost_button(ctx, label .. "##" .. id, width, height or 0)
+  if active then r.ImGui_PopStyleColor(ctx) end
+  return clicked
+end
+
+local function draw_slice_panel(app)
+  r.ImGui_SetCursorPosY(app.ctx, r.ImGui_GetCursorPosY(app.ctx) + TAG_TOP_LEAD)
+  local state = app.browser
+  local path = state.selected_file
+  local ctx = app.ctx
+  local c = Theme.colors
+
+  if not path or path == "" then
+    r.ImGui_TextColored(ctx, c.text_faint, "Select a sample to slice it.")
+    return
+  end
+
+  -- Looked up once per selected file, not per frame: this opens the file and
+  -- walks its chunk table.
+  if state.slice_cue_path ~= path then
+    state.slice_cue_path = path
+    local info = WavCues.read(path)
+    state.slice_cues = info and #info.cues or 0
+    -- A file that carries its own boundaries almost always wants them used, so
+    -- that becomes the default rather than something to go and find.
+    if state.slice_cues > 1 then state.slice_mode = "cues" end
+  end
+  local has_cues = (state.slice_cues or 0) > 1
+
+  local dur = Duration.seconds(path)
+  if not dur or dur <= 0 then
+    r.ImGui_TextColored(ctx, c.danger, "Could not read the length of this sample.")
+    return
+  end
+
+  local by_parts = state.slice_mode ~= "grid" and state.slice_mode ~= "cues"
+    and state.slice_mode ~= "transients"
+
+  -- The theme's frame padding is 9 by 6, which makes every control 26 high.
+  -- Asking a button for 20 does not shrink it: the label still starts below six
+  -- pixels of padding and drops through the bottom edge, which is exactly how
+  -- it looked. Narrowing the padding is what actually makes a short row, and it
+  -- takes the sliders down with it so the whole strip lines up.
+  local slim = false
+  if r.ImGui_PushStyleVar and r.ImGui_StyleVar_FramePadding then
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 8, 3)
+    slim = true
+  end
+
+  -- Row one: the four modes on the left, the action on the right.
+  --
+  -- The button used to sit under the waveform, which put something below the
+  -- one thing that should be the bottom of the strip. Up here it costs no row
+  -- of its own -- and at the window's minimum width there is only room for both
+  -- if the mode buttons give way, so they are sized from what is left rather
+  -- than fixed. Their labels are short for the same reason.
+  local pushed_row = Theme.push_small(ctx)
+  local row_avail = as_number(r.ImGui_GetContentRegionAvail(ctx)) or 416
+  local mode_n = has_cues and 4 or 3
+  local mode_w = math.max(58,
+    math.floor((row_avail - SLICE_ACTION_W - SLICE_GAP - SLICE_EDGE
+      - (mode_n - 1) * 4) / mode_n))
+  if slice_mode_button(ctx, "slice_m_tr", "Transients",
+      state.slice_mode == "transients", mode_w) then
+    state.slice_mode = "transients"
+    state.slice_from = 1
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Find the hits and cut in front of each one.\nFor material that was played rather than programmed,\nwhere no grid lines up with it.")
+  end
+  r.ImGui_SameLine(ctx, 0, 4)
+
+  if has_cues then
+    if slice_mode_button(ctx, "slice_m_cues",
+        string.format("Cues (%d)", state.slice_cues),
+        state.slice_mode == "cues", mode_w) then
+      state.slice_mode = "cues"
+      state.slice_from = 1
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "This file carries its own slice points.\nUse them and every piece is exactly what it was --\nwhich equal division cannot do when the pieces\nare not the same length, as in a stitched kit.")
+    end
+    r.ImGui_SameLine(ctx, 0, 4)
+  end
+
+  if slice_mode_button(ctx, "slice_m_parts", "Parts", by_parts, mode_w) then
+    state.slice_mode = "parts"
+    state.slice_from = 1
+  end
+  r.ImGui_SameLine(ctx, 0, 4)
+  if slice_mode_button(ctx, "slice_m_grid", "Bars+grid",
+      state.slice_mode == "grid", mode_w) then
+    state.slice_mode = "grid"
+    state.slice_from = 1
+  end
+  -- Right-aligned, so it sits against the edge however wide the window is.
+  r.ImGui_SameLine(ctx)
+  local left = as_number(r.ImGui_GetContentRegionAvail(ctx)) or 0
+  if left > SLICE_ACTION_W + SLICE_EDGE then
+    r.ImGui_SetCursorPosX(ctx,
+      r.ImGui_GetCursorPosX(ctx) + (left - SLICE_ACTION_W - SLICE_EDGE))
+  end
+  local can_slice = (state.slice_points ~= nil) and (#state.slice_points > 0)
+  r.ImGui_BeginDisabled(ctx, not can_slice)
+  if Theme.primary_button(ctx, "Slice to rack##slice_go", SLICE_ACTION_W, 0) then
+    state.slice_go = true
+  end
+  r.ImGui_EndDisabled(ctx)
+  Theme.pop_font(ctx, pushed_row)
+
+  -- Row two: whatever the chosen mode needs, on one line and always present --
+  -- an empty row when the mode has no setting. That is the point: the waveform
+  -- below must not jump up and down as the mode changes, and reserving the row
+  -- costs twenty pixels against a picture that moves under the pointer.
+  local pushed_p = Theme.push_small(ctx)
+  local param_w = 150
+  if state.slice_mode == "transients" then
+    r.ImGui_SetNextItemWidth(ctx, param_w * 0.78)
+    local ch, v = r.ImGui_SliderInt(ctx, "##slice_sens",
+      math.floor((tonumber(state.slice_sens) or 0.5) * 100 + 0.5), 0, 100, "Sens %d%%")
+    if ch then state.slice_sens = v / 100 end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Higher finds quieter hits -- ghost notes as well as\nthe loud ones. Watch the lines on the waveform.")
+    end
+
+    -- One offset for the lot, because detection is systematically late rather
+    -- than randomly wrong: a peak has to rise before it can stand out from its
+    -- own average, so the cut lands just behind the attack it was aiming at.
+    -- Moving every point by the same few milliseconds fixes them all at once,
+    -- which dragging them one by one does not.
+    r.ImGui_SameLine(ctx, 0, 4)
+    r.ImGui_SetNextItemWidth(ctx, param_w * 0.78)
+    local oc, ov = r.ImGui_SliderInt(ctx, "##slice_off",
+      math.floor(tonumber(state.slice_offset) or 0), -50, 50, "Ofs %+d ms")
+    if oc then state.slice_offset = ov end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Shifts every detected point together.\nNegative starts each slice earlier, which is usually what\nyou want: a hit is only found once it has risen, so the\ncut lands a little behind the attack.")
+    end
+  elseif state.slice_mode == "cues" then
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_TextColored(ctx, c.text_dim, "Lengths come from the file")
+  elseif by_parts then
+    r.ImGui_SetNextItemWidth(ctx, param_w)
+    local ch, v = r.ImGui_SliderInt(ctx, "##slice_parts",
+      math.floor(tonumber(state.slice_parts) or 16), 2, 64, "%d parts")
+    if ch then state.slice_parts = v end
+  else
+    r.ImGui_SetNextItemWidth(ctx, param_w * 0.55)
+    local ch, v = r.ImGui_SliderInt(ctx, "##slice_bars",
+      math.floor(tonumber(state.slice_bars) or 1), 1, 8, "%d bars")
+    if ch then state.slice_bars = v end
+    r.ImGui_SameLine(ctx, 0, 4)
+    r.ImGui_SetNextItemWidth(ctx, param_w * 0.42)
+    if r.ImGui_BeginCombo(ctx, "##slice_div", tostring(state.slice_division)) then
+      for _, d in ipairs(Slice.DIVISIONS) do
+        if r.ImGui_Selectable(ctx, d.label .. "##slice_div_" .. d.label, state.slice_division == d.label) then
+          state.slice_division = d.label
+        end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+  end
+  Theme.pop_font(ctx, pushed_p)
+
+  local opts = {
+    mode = state.slice_mode,
+    parts = state.slice_parts,
+    bars = state.slice_bars,
+    division = state.slice_division,
+    pads = KIT_RACK_SLOTS,
+    from = state.slice_from or 1,
+  }
+
+  -- More slices than pads is the normal case for a long loop, so the rest has
+  -- to be reachable rather than simply lost.
+  -- Detection is cached on the file and the sensitivity, so dragging the
+  -- slider re-reads nothing: only the arithmetic runs again.
+  local hits = nil
+  if state.slice_mode == "transients" then
+    local key = table.concat({ path, tostring(state.slice_sens or 0.5),
+      tostring(state.slice_offset or 0) }, "|")
+    if state.slice_hits_key ~= key then
+      state.slice_hits_key = key
+      local found = Peaks.transients(path, state.slice_sens or 0.5)
+      local shift = (tonumber(state.slice_offset) or 0) / 1000
+      if found and shift ~= 0 then
+        local moved = {}
+        for i, t in ipairs(found) do
+          -- Clamped rather than dropped: a point pushed off the front belongs
+          -- at the start of the file, and losing it would quietly cost a pad.
+          moved[i] = math.max(0, math.min(dur, t + shift))
+        end
+        found = moved
+      end
+      state.slice_hits = found
+    end
+    hits = state.slice_hits
+  end
+
+
+  -- Every mode ends up as the same thing: a list of boundaries as fractions of
+  -- the file. Unifying them here is what lets the same dragging work in all
+  -- four, instead of editing being a feature of one of them.
+  --
+  -- Recomputed only when the settings change, because an edited list has to
+  -- survive a redraw -- otherwise a dragged line would snap back sixty times a
+  -- second.
+  local key = table.concat({ path, tostring(state.slice_mode), tostring(state.slice_parts),
+    tostring(state.slice_bars), tostring(state.slice_division), tostring(state.slice_sens),
+    tostring(state.slice_offset) }, "|")
+  if state.slice_key ~= key then
+    state.slice_key = key
+    local pts = {}
+    if state.slice_mode == "transients" and hits then
+      for i, t in ipairs(hits) do pts[i] = t / dur end
+    elseif state.slice_mode == "cues" then
+      local info = WavCues.read(path)
+      if info and info.frames then
+        for i, cue in ipairs(info.cues) do pts[i] = cue.frame / info.frames end
+      end
+    else
+      local n = Slice.count(opts)
+      for i = 1, n do pts[i] = (i - 1) / n end
+    end
+    state.slice_points = pts
+    state.slice_from = 1
+    state.slice_edited = false
+    state.slice_drag = nil
+  end
+
+  local all_points = state.slice_points
+  local total = all_points and #all_points or 0
+
+  -- Placed after the list is built, so it counts what is actually there --
+  -- including lines you added or removed by hand. Computing it from the mode
+  -- instead would drift the moment the list was edited.
+  if total > KIT_RACK_SLOTS then
+    r.ImGui_SameLine(ctx, 0, 8)
+    local pushed_pg = Theme.push_small(ctx)
+    r.ImGui_SetNextItemWidth(ctx, 118)
+    local pages = math.ceil(total / KIT_RACK_SLOTS)
+    local page = math.floor(((state.slice_from or 1) - 1) / KIT_RACK_SLOTS) + 1
+    local ch, v = r.ImGui_SliderInt(ctx, "Which 16##slice_page", page, 1, pages,
+      "%d of " .. tostring(pages))
+    if ch then state.slice_from = (v - 1) * KIT_RACK_SLOTS + 1 end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, string.format(
+        "%d slices, and a rack holds %d.\nThis picks which sixteen go on the pads --\nthe rest of the file is still there.",
+        total, KIT_RACK_SLOTS))
+    end
+    opts.from = state.slice_from or 1
+    Theme.pop_font(ctx, pushed_pg)
+  else
+    state.slice_from = 1
+    opts.from = 1
+  end
+
+  -- Built here and nowhere earlier: it needs the boundary list AND the page the
+  -- slider settled on. It used to sit above both, so all_points was still nil
+  -- every frame and the answer was always "nothing to slice".
+  opts.duration = dur
+  local plan = nil
+  if all_points and #all_points > 0 then
+    local secs = {}
+    for i, t in ipairs(all_points) do secs[i] = t * dur end
+    plan = Slice.from_times(secs, dur, opts)
+    -- Labels only survive where they mean something: cue names belong to cue
+    -- points, and a dragged line is no longer the cue it started as.
+    if plan and state.slice_mode == "cues" and not state.slice_edited then
+      local info = WavCues.read(path)
+      if info then
+        for _, sl in ipairs(plan.slices) do
+          local cue = info.cues[sl.index]
+          if cue then sl.label = cue.label end
+        end
+      end
+    end
+  end
+
+  -- What to show. With everything on pads there is nothing to zoom into, so the
+  -- whole file it is. Once it is paged, the view is the span the page actually
+  -- covers -- taken from the slices themselves rather than from an even
+  -- division, because in cue and transient mode they are not evenly spaced.
+  local view = nil
+  if plan and total > KIT_RACK_SLOTS and #plan.slices > 0 then
+    local a0 = plan.slices[1].start01
+    local a1 = plan.slices[#plan.slices].stop01
+    local pad = (a1 - a0) * 0.02
+    view = { math.max(0, a0 - pad), math.min(1, a1 + pad) }
+  end
+
+  -- No spacer here. A Dummy gets item spacing on both sides of it, so four
+  -- pixels of filler cost twenty -- two and a half times the gap between the
+  -- two rows above, which is what made this one look wrong. Plain item spacing
+  -- is what the rows already use.
+  local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
+  -- What is left after the two control rows, less the action button under it
+  -- and the locator when there is one. Never below the minimum: a squeezed
+  -- waveform is the one thing this strip cannot afford, since aiming at it is
+  -- the whole job.
+  -- The tempo warning belongs on the settings row, beside the bar count it is
+  -- about. It had drifted below the waveform, where its SameLine would have
+  -- put it against the picture instead. Nothing else is reported: the waveform
+  -- already shows how many slices there are.
+  if plan and plan.bpm and (plan.bpm < 60 or plan.bpm > 200) then
+    r.ImGui_SameLine(ctx, 0, 10)
+    local pushed_sum = Theme.push_small(ctx)
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_TextColored(ctx, c.warning, string.format("%.0f BPM?", plan.bpm))
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "That tempo looks unlikely -- check the bar count.")
+    end
+    Theme.pop_font(ctx, pushed_sum)
+  end
+
+  -- Everything that is left. The waveform is the last thing in the strip, so
+  -- there is nothing below it to keep room for -- which is also why the action
+  -- button moved up beside the mode buttons.
+  local wave_h = tonumber(avail_h) or 0
+  -- Acted on here rather than where the button is: the button is drawn before
+  -- the plan exists, so it can only ask.
+  if state.slice_go then
+    state.slice_go = nil
+    if plan then slice_to_rack(app, path, opts) end
+  end
+
+  local edit = draw_slice_waveform(app, path, plan, all_points,
+    (tonumber(avail_w) or 460) - 4, view, wave_h)
+
+  r.ImGui_Dummy(ctx, 0, 4)
+
+  if edit and all_points then
+    local function nearest(t, within)
+      local best, dist = nil, within
+      for i, v in ipairs(all_points) do
+        local d = math.abs(v - t)
+        if d <= dist then best, dist = i, d end
+      end
+      return best
+    end
+
+    if edit.alt and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+      -- On a line: remove it. On bare waveform: add one. The first boundary is
+      -- the start of the file and is not a slice point you can take away.
+      local hit_i = nearest(edit.t, edit.grab * 2)
+      if hit_i and hit_i > 1 then
+        table.remove(all_points, hit_i)
+      elseif not hit_i then
+        all_points[#all_points + 1] = edit.t
+        table.sort(all_points)
+      end
+      state.slice_drag = nil
+      state.slice_edited = true
+    elseif edit.alt and r.ImGui_IsMouseClicked(ctx, 0) then
+      local hit_i = nearest(edit.t, edit.grab * 2)
+      if hit_i and hit_i > 1 then state.slice_drag = hit_i end
+    end
+  end
+
+  -- Dragging continues while the button is held, even once the pointer has
+  -- left the waveform, which is how every other drag behaves.
+  if state.slice_drag and all_points then
+    if r.ImGui_IsMouseDown(ctx, 0) and edit then
+      all_points[state.slice_drag] = math.max(0, math.min(1, edit.t))
+      table.sort(all_points)
+      state.slice_edited = true
+    else
+      state.slice_drag = nil
+    end
+  end
+
+  if slim then r.ImGui_PopStyleVar(ctx) end
+end
+
+-- Walking the sample list from the keyboard.
+--
+-- ImGui's own navigation moves a focus rectangle but never fires the
+-- Selectable, and auto-audition hangs off that click -- so the arrows appeared
+-- to work while nothing was selected and nothing played. This does the moving
+-- itself: it sets the selection, which is what audition, the tags panel and the
+-- slice strip all read.
+--
+-- It must not take the arrows away from a text field. The filename filter is
+-- one, and losing the arrow keys while typing in it would be a far worse bug
+-- than the one being fixed -- hence the check for an active item, which covers
+-- every field and every slider in the window.
+local function handle_list_keys(app)
+  local state = app.browser
+  local order = state.nav_order
+  if not order or #order == 0 then return end
+  if not r.ImGui_IsKeyPressed or not r.ImGui_Key_DownArrow then return end
+
+  local ctx = app.ctx
+  if r.ImGui_IsAnyItemActive and r.ImGui_IsAnyItemActive(ctx) then return end
+  if r.ImGui_IsWindowFocused and r.ImGui_FocusedFlags_RootAndChildWindows then
+    if not r.ImGui_IsWindowFocused(ctx, r.ImGui_FocusedFlags_RootAndChildWindows()) then
+      return
+    end
+  end
+
+  local at = nil
+  for i = 1, #order do
+    if order[i] == state.selected_file then at = i break end
+  end
+
+  -- A page is what the list can show, not a fixed ten: on a tall window ten
+  -- rows is a nudge, on a short one it is a leap past everything you can see.
+  local rows = 10
+  if r.ImGui_GetTextLineHeightWithSpacing then
+    local row_h = as_number(r.ImGui_GetTextLineHeightWithSpacing(ctx)) or 18
+    if row_h > 0 and state.list_view_h then
+      rows = math.max(1, math.floor(state.list_view_h / row_h) - 1)
+    end
+  end
+
+  local function press(key)
+    return key and r.ImGui_IsKeyPressed(ctx, key(), true)
+  end
+
+  local target = nil
+  if press(r.ImGui_Key_DownArrow) then
+    target = at and math.min(#order, at + 1) or 1
+  elseif press(r.ImGui_Key_UpArrow) then
+    target = at and math.max(1, at - 1) or 1
+  elseif press(r.ImGui_Key_PageDown) then
+    target = at and math.min(#order, at + rows) or 1
+  elseif press(r.ImGui_Key_PageUp) then
+    target = at and math.max(1, at - rows) or 1
+  elseif press(r.ImGui_Key_Home) then
+    target = 1
+  elseif press(r.ImGui_Key_End) then
+    target = #order
+  end
+
+  if not target or order[target] == state.selected_file then return end
+
+  state.selected_file = order[target]
+  state.scroll_to_selected = true
+  if state.auto_audition then
+    play_preview(app, state.selected_file)
+  end
+end
+
 local function draw_samples_panel(app)
   local ctx = app.ctx
   local state = app.browser
@@ -3291,7 +4541,7 @@ local function draw_samples_panel(app)
       r.ImGui_SetTooltip(ctx, "Samples shown / samples in this collection")
     end
   end
-  if can_group and not grid_mode then
+  do
     -- Measured against where the previous item actually ended, rather than
     -- against a fixed panel width: that threshold was set before the view and
     -- tag buttons joined this row, which is why the wrap came too late.
@@ -3302,8 +4552,28 @@ local function draw_samples_panel(app)
 
     local flat = state.list_flat == true
     local gap = 6
-    local flat_w, exp_w, col_w = 76, 86, 92
-    local needed = 9 + flat_w + (flat and 0 or (gap + exp_w + gap + col_w))
+    local sort_w, flat_w, exp_w, col_w = 82, 76, 86, 92
+
+    -- The analysis button's width is measured, not typed. Its widest label
+    -- carries a number -- "Analysed  12345" -- so it depends on both the font
+    -- and how big the collection is, and a count with its last digit cut off is
+    -- worse than no count at all.
+    local ana_w
+    do
+      local counted = "Analysed  " .. tostring(#(state.files or {}))
+      local a = as_number(r.ImGui_CalcTextSize(ctx, counted)) or 0
+      local b = as_number(r.ImGui_CalcTextSize(ctx, "Analyse  100%")) or 0
+      ana_w = math.ceil(math.max(a, b) + 22)
+    end
+    -- The list controls belong to the list. Analysis does not: the heatmap is
+    -- built out of measured samples and shows nothing without them, so that is
+    -- precisely where the button has to stay reachable.
+    local listing = not grid_mode
+    local folding = listing and can_group and not flat
+    local needed = 9 + ana_w
+      + (listing and (gap + sort_w) or 0)
+      + (listing and can_group and (gap + flat_w) or 0)
+      + (folding and (gap + exp_w + gap + col_w) or 0)
     local compact = (last_x2 + needed) > right_edge
 
     -- On their own row the buttons share its full width. The widths have to be
@@ -3313,26 +4583,53 @@ local function draw_samples_panel(app)
     if compact then
       r.ImGui_Dummy(ctx, 0, 0)
       local row_w = as_number(r.ImGui_GetContentRegionAvail(ctx)) or 240
-      local n = flat and 1 or 3
+      local n = 1
+        + (listing and 1 or 0)
+        + (listing and can_group and 1 or 0)
+        + (folding and 2 or 0)
       local w = math.max(52, math.floor((row_w - gap * (n - 1)) / n))
-      flat_w, exp_w, col_w = w, w, w
+      sort_w, ana_w, flat_w, exp_w, col_w = w, w, w, w, w
     else
       r.ImGui_SameLine(ctx)
     end
 
-    local flat_label = flat and "Folders" or (compact and "Flat" or "Flat list")
-    if Theme.ghost_button(ctx, flat_label .. "##list_flat", flat_w, 0) then
-      state.list_flat = not flat
-      save(app)
+    if listing then
+      -- Labelled with the order you are looking at rather than with the word
+      -- "Sort", so the row says how the list is arranged without being opened.
+      local sort_label = Sort.button_label(state.sort_mode, state.sort_desc)
+      if Theme.ghost_button(ctx, sort_label .. "##sample_sort", sort_w, 0) then
+        r.ImGui_OpenPopup(ctx, "##sample_sort_popup")
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        local tip = "How the sample list is ordered."
+        local pf = state.duration_prefetch
+        if state.sort_mode == "length" and pf and pf.total > 0 and pf.index < pf.total then
+          tip = tip .. string.format("\nReading lengths: %d / %d", pf.index, pf.total)
+        end
+        r.ImGui_SetTooltip(ctx, tip)
+      end
+      draw_sort_popup(app)
+      r.ImGui_SameLine(ctx, 0, gap)
     end
-    if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, flat
-        and "Group the samples by folder again."
-        or "Show every sample in one list, ignoring folders.")
+
+    draw_analysis_button(app, ana_w, compact)
+
+    if listing and can_group then
+      r.ImGui_SameLine(ctx, 0, gap)
+      local flat_label = flat and "Folders" or (compact and "Flat" or "Flat list")
+      if Theme.ghost_button(ctx, flat_label .. "##list_flat", flat_w, 0) then
+        state.list_flat = not flat
+        save(app)
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, flat
+          and "Group the samples by folder again."
+          or "Show every sample in one list, ignoring folders.")
+      end
     end
 
     -- Expand/Collapse only mean something while there are folders to fold.
-    if not flat then
+    if folding then
       r.ImGui_SameLine(ctx, 0, gap)
       if Theme.ghost_button(ctx, (compact and "Expand" or "Expand all") .. "##fold_expand", exp_w, 0) then
         state.folder_header_action = "expand"
@@ -3344,12 +4641,15 @@ local function draw_samples_panel(app)
     end
   end
 
-  draw_analysis_bar(app)
-
   if state.preview_error and state.preview_error ~= "" then
     r.ImGui_TextColored(ctx, 0xFFB454FF, state.preview_error)
   elseif state.export_note then
     r.ImGui_TextColored(ctx, Theme.colors.success, state.export_note)
+  elseif state.analysis_note then
+    -- Said by "Re-analyse changed files", which otherwise reports nothing at
+    -- all when nothing has changed -- and a menu item that appears to do
+    -- nothing is one you press again.
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, state.analysis_note)
   end
 
   local _, avail_h = r.ImGui_GetContentRegionAvail(ctx)
@@ -3359,10 +4659,19 @@ local function draw_samples_panel(app)
 
   -- The transport keeps its place: rather than pushing it off the bottom, the
   -- tags panel steps aside when the window is too short to hold both.
+  -- Slicing needs more of the strip than tags do -- a waveform worth aiming at,
+  -- its locator and a row of controls. It gets that when the window can spare
+  -- it, and falls back to the tag panel's height rather than pushing the
+  -- transport off the bottom.
+  local want_h = (state.detail_view == "slice") and SLICE_PANEL_H or ANALYSIS_PANEL_H
   local tags_h = 0
   if state.show_tags ~= false then
-    local needed = min_list_h + ANALYSIS_PANEL_H + transport_h + CHILD_SPACING * 2
-    if avail_h >= needed then tags_h = ANALYSIS_PANEL_H end
+    local needed = min_list_h + want_h + transport_h + CHILD_SPACING * 2
+    if avail_h >= needed then
+      tags_h = want_h
+    elseif avail_h >= min_list_h + ANALYSIS_PANEL_H + transport_h + CHILD_SPACING * 2 then
+      tags_h = ANALYSIS_PANEL_H
+    end
   end
 
   local gaps = (tags_h > 0 and 2 or 1) * CHILD_SPACING
@@ -3376,6 +4685,7 @@ local function draw_samples_panel(app)
   end
   -- The grid panel stays scrollable: on a very short window the cells hit their
   -- minimum size and the footer would otherwise be clipped out of reach.
+  state.list_view_h = list_h
   if r.ImGui_BeginChild(ctx, "##browser_samples", 0, list_h, 1, 0) then
     if grid_mode then
       draw_heatmap(app)
@@ -3384,25 +4694,48 @@ local function draw_samples_panel(app)
     end
     r.ImGui_EndChild(ctx)
   end
+  -- After the list, because it walks the order that drawing just recorded.
+  if not grid_mode then handle_list_keys(app) end
 
   if tags_h > 0 then
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 12, TAG_PADDING)
     local tags_visible = r.ImGui_BeginChild(ctx, "##browser_tags", 0, tags_h, 0, transport_flags)
     r.ImGui_PopStyleVar(ctx)
     if tags_visible then
-      draw_tag_panel(app)
+      if state.detail_view == "slice" then
+        draw_slice_panel(app)
+      else
+        draw_tag_panel(app)
+      end
       r.ImGui_EndChild(ctx)
     end
   end
 
   if r.ImGui_BeginChild(ctx, "##browser_transport", 0, transport_h, 0, transport_flags) then
     r.ImGui_Separator(ctx)
-    if Theme.ghost_button(ctx, "Audition", 90, 0) and state.selected_file then
+    if Theme.ghost_button(ctx, "Audition", 74, 0) and state.selected_file then
       play_preview(app, state.selected_file)
     end
     r.ImGui_SameLine(ctx)
-    if Theme.ghost_button(ctx, "Stop", 70, 0) then
+    if Theme.ghost_button(ctx, "Stop", 56, 0) then
       stop_preview(state)
+    end
+    r.ImGui_SameLine(ctx)
+    -- Next to the transport because that is what it belongs with: pick a
+    -- sample, listen to it, cut it. It switches the strip above rather than
+    -- opening anything.
+    local slicing = state.detail_view == "slice"
+    if slicing then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.accent) end
+    if Theme.ghost_button(ctx, slicing and "Tags" or "Slice", 60, 0) then
+      state.detail_view = slicing and "tags" or "slice"
+      state.show_tags = true
+      save(app)
+    end
+    if slicing then r.ImGui_PopStyleColor(ctx) end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, slicing
+        and "Back to the tags panel."
+        or "Show the waveform and cut this sample across a rack's pads.")
     end
     r.ImGui_SameLine(ctx)
     local auto_changed, auto_value = r.ImGui_Checkbox(ctx, "Auto", state.auto_audition ~= false)
@@ -3411,8 +4744,11 @@ local function draw_samples_panel(app)
       save(app)
     end
     r.ImGui_SameLine(ctx)
+    -- Whatever is left of the row, and no minimum. A floor here does not make
+    -- the slider usable on a narrow window -- it makes it overflow the window,
+    -- which is worse: the rest of the row goes with it.
     local vol_avail = as_number(r.ImGui_GetContentRegionAvail(ctx)) or 120
-    r.ImGui_SetNextItemWidth(ctx, math.max(120, vol_avail))
+    r.ImGui_SetNextItemWidth(ctx, math.max(40, vol_avail))
     local vol_changed, vol_value = r.ImGui_SliderDouble(ctx, "##browser_preview_vol", state.preview_volume or 1.0, 0, 2.0, "%.2f")
     if vol_changed then
       state.preview_volume = vol_value
@@ -3441,7 +4777,30 @@ local function draw_top_controls(app, col, narrow)
   local state = app.browser
   local _ = col
 
+  -- The width of the widest label a button can end up showing.
+  --
+  -- Four of these buttons change their label to say which state they are in, so
+  -- they need a width that does not move as you click them -- otherwise the
+  -- whole row shifts sideways under the pointer. That width used to be typed in
+  -- by hand, which meant guessing at the text: the font is the system
+  -- sans-serif, so the same number is generous on one machine and too tight on
+  -- another, and on a narrow window the slack was enough to push the last
+  -- button onto a second row.
+  local function widest(...)
+    local w = 0
+    for _, s in ipairs({ ... }) do
+      w = math.max(w, as_number(r.ImGui_CalcTextSize(ctx, s)) or 0)
+    end
+    -- The same allowance the measured path below uses: the theme's frame
+    -- padding either side, plus a little air.
+    return math.ceil(w + 22)
+  end
+
   local first = true
+  -- What this row would need on one line, reported to the window so it cannot
+  -- be dragged narrower than its own toolbar. Counted whether or not the button
+  -- ends up wrapping -- the point is what it would take not to.
+  local needed = 0
   local function place(label, primary, fixed_w)
     local w
     if fixed_w then
@@ -3450,6 +4809,7 @@ local function draw_top_controls(app, col, narrow)
       local tw = as_number(r.ImGui_CalcTextSize(ctx, label)) or 60
       w = math.ceil(tw + 22)
     end
+    needed = needed + w + (first and 0 or 6)
     if not first then
       local last_x2 = as_number(r.ImGui_GetItemRectMax(ctx)) or 0
       local win_x = as_number(r.ImGui_GetWindowPos(ctx)) or 0
@@ -3473,7 +4833,7 @@ local function draw_top_controls(app, col, narrow)
   -- label, so a filled accent button would only claim the visual weight that
   -- belongs to the actions -- and it is the same kind of control as the
   -- Heatmap and Flat list toggles further down.
-  if place(kits_mode and "KITS" or "PACKS", false, 74) then
+  if place(kits_mode and "KITS" or "PACKS", false, widest("PACKS", "KITS")) then
     switch_browser_mode(app, kits_mode and "packs" or "kits")
   end
   if r.ImGui_IsItemHovered(ctx) then
@@ -3526,7 +4886,7 @@ local function draw_top_controls(app, col, narrow)
   -- Two mutually exclusive states, so one button that shows where you are and
   -- steps to the other -- the pair took twice the width to say the same thing.
   local tiles = state.collection_view == "tiles"
-  if place(tiles and "Tiles" or "List", false, 72) then
+  if place(tiles and "Tiles" or "List", false, widest("Tiles", "List")) then
     state.collection_view = tiles and "list" or "tiles"
     save(app)
   end
@@ -3539,6 +4899,24 @@ local function draw_top_controls(app, col, narrow)
         .. tostring(state.tile_size or "normal") .. "\nRight click: change tile size")
       or "Collections as a list. Click for cover tiles.\nRight click: tile size")
   end
+  -- Only offered once something has been filed. With no groups anywhere the
+  -- button would switch between two identical lists, which is a control that
+  -- appears to do nothing.
+  if #Groups.names(active_collections(state)) > 0 then
+    -- Shows where you are and steps to the other, like the List/Tiles button
+    -- beside it.
+    local cols_flat = state.collections_flat == true
+    if place(cols_flat and "Flat" or "Groups", false, widest("Groups", "Flat")) then
+      state.collections_flat = not cols_flat
+      save(app)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, cols_flat
+        and "Collections in one list, groups ignored. Click to show the groups."
+        or "Collections under their group headings. Click for one plain list.\nEither way the filing is kept.")
+    end
+  end
+
   if r.ImGui_BeginPopup(ctx, "##tile_size_menu") then
     Theme.label(ctx, "Tile size")
     r.ImGui_Separator(ctx)
@@ -3569,7 +4947,7 @@ local function draw_top_controls(app, col, narrow)
     save(app)
   end
 
-  if place(FOCUS_LABEL[focus] or "Split", false, 86) then
+  if place(FOCUS_LABEL[focus] or "Split", false, widest("Catalog", "Split", "Samples")) then
     step_focus(1)
   end
   if r.ImGui_IsItemClicked(ctx, 1) then
@@ -3580,6 +4958,11 @@ local function draw_top_controls(app, col, narrow)
       .. "\nCatalog \226\134\146 Split \226\134\146 Samples"
       .. "\nRight click: step back")
   end
+
+  -- Read by main_window on the next frame, where the window's minimum width is
+  -- set. The Groups button comes and goes with whether anything is filed, so
+  -- this is not a constant.
+  state.top_row_w = needed
 end
 
 local function draw_split(app)
@@ -3696,6 +5079,8 @@ function M.init(app)
   app.browser = {
     collections = loaded.collections,
     kit_collections = loaded.kit_collections or {},
+    collapsed_groups = loaded.collapsed_groups or {},
+    collections_flat = loaded.collections_flat == true,
     selected_id = loaded.selected_id,
     sample_selected_id = loaded.sample_selected_id or loaded.selected_id,
     kit_selected_id = loaded.kit_selected_id,
@@ -3740,6 +5125,7 @@ function M.init(app)
     drag_native_pending_tries = 0,
     cover_cache = {},
     show_tags = loaded.show_tags ~= false,
+    detail_view = loaded.detail_view == "slice" and "slice" or "tags",
     analysis_job = nil,
     analysis_count = 0,
     analysis_rate_ms = nil,
@@ -3752,6 +5138,11 @@ function M.init(app)
     tag_unmeasured = 0,
     sample_view = loaded.sample_view or "list",
     list_flat = loaded.list_flat == true,
+    sort_mode = (loaded.sort_mode == "length") and "length" or "name",
+    sort_desc = loaded.sort_desc == true,
+    display_files = {},
+    sort_key = nil,
+    duration_prefetch = nil,
     grid_x = loaded.grid_x or "tone",
     grid_y = loaded.grid_y or "decay",
     grid_size = loaded.grid_size or 4,

@@ -12,6 +12,7 @@ local Theme   = require("core.theme")
 local Categories = require("core.categories")
 local Relink  = require("core.relink")
 local Store   = require("core.browser_store")
+local Undo    = require("core.undo")
 local Bias    = require("core.bias")
 local Tags    = require("core.tags")
 local Naming  = require("core.naming")
@@ -47,6 +48,7 @@ function M.init(app)
     next_pool_n = 1,
     pool_order = {},
     pool_pending_delete = nil,
+    undo = Undo.new(),
     preset_name = "",
     preset_status = nil,
     loaded_preset = nil,
@@ -75,6 +77,9 @@ end
 local function load_preset(app, name)
   local kitdef, pools = Presets.load(name)
   if kitdef then
+    -- Loading replaces pools and slots at once, which is the same kind of
+    -- "oops" as deleting one -- especially over work that was never saved.
+    Undo.push(app.builder.undo, app, "load preset")
     -- Presets written before character bias existed have no config at all, and
     -- one written by a future version may have a partial one; normalise both.
     kitdef.export = kitdef.export or {}
@@ -193,6 +198,29 @@ local function draw_pools(app)
   r.ImGui_Indent(ctx, 6)
 
   if Theme.primary_button(ctx, "+ Pool##builder_add_pool", 96, 0) then add_pool(app) end
+
+  -- Undo appears only when there is something to undo, and looks like an action
+  -- rather than a label.
+  --
+  -- It was a ghost button, greyed out whenever the history was empty -- which is
+  -- most of the time. A permanently dim button in a corner is one you learn to
+  -- stop seeing, so when it finally mattered it was not findable. Now the row
+  -- simply has nothing there until it does, and then it is the brightest thing
+  -- in it.
+  --
+  -- It names what it will put back: a bare "Undo" leaves you guessing whether
+  -- it means the pool you just deleted or the slots you replaced before that.
+  local label = Undo.label(app.builder.undo)
+  if label then
+    r.ImGui_SameLine(ctx)
+    if Theme.primary_button(ctx, "Undo " .. label .. "##builder_undo", 190, 0) then
+      Undo.pop(app.builder.undo, app)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Ctrl+Z -- puts back what was there before you " .. label .. ".")
+    end
+  end
+
   Theme.help(ctx, "A pool points to one or more sample folders. Link slots to it; on export each slot gets a random sample from its pool.")
 
   if #app.builder.pool_order == 0 then
@@ -347,6 +375,8 @@ local function draw_pools(app)
   end
 
   if app.builder.pool_pending_delete then
+    -- Taken before, not after: what you want back is the state you had.
+    Undo.push(app.builder.undo, app, "delete pool")
     local id = app.builder.pool_pending_delete
     app.pools[id] = nil
     for i, pid in ipairs(app.builder.pool_order) do
@@ -743,6 +773,7 @@ draw_pattern_slots_popup = function(app)
 
   r.ImGui_BeginDisabled(ctx, #specs == 0)
   if Theme.primary_button(ctx, "Create slots##slot_pattern_go", 150, 0) then
+    Undo.push(app.builder.undo, app, "slots from pattern")
     local slots = {}
     for i = 1, b.slot_pattern_count do
       local idx = ((i - 1) % #specs) + 1
@@ -793,6 +824,7 @@ draw_quick_layout_popup = function(app)
   local can_generate = app.builder.quick_white_a and app.builder.quick_white_b and app.builder.quick_black
   r.ImGui_BeginDisabled(ctx, not can_generate)
   if Theme.primary_button(ctx, "Generate 128 slots##qp_generate", 180, 0) then
+    Undo.push(app.builder.undo, app, "quick layout")
     local layout = Engine.quick_preview_kitdef(
       app.builder.quick_white_a, app.builder.quick_white_b, app.builder.quick_black,
       { destination = app.kitdef.export.destination, naming = app.kitdef.naming, export = app.kitdef.export }
@@ -849,9 +881,21 @@ local function draw_presets_body(app)
     r.ImGui_SameLine(ctx)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), c.danger)
     if r.ImGui_SmallButton(ctx, "Delete##delpreset") then
+      -- Read before removing, so undo has something to write back. A preset is
+      -- a file, and the snapshot the other actions take -- pools and slots in
+      -- memory -- cannot bring a file back.
+      local raw = Presets.read_raw(name)
+      local was_loaded = app.builder.loaded_preset == name
       Presets.delete(name)
-      if app.builder.loaded_preset == name then app.builder.loaded_preset = nil end
+      if was_loaded then app.builder.loaded_preset = nil end
       app.builder.presets_list = Presets.list()
+      if raw then
+        Undo.push_action(app.builder.undo, "delete preset", function()
+          Presets.write_raw(name, raw)
+          if was_loaded then app.builder.loaded_preset = name end
+          app.builder.presets_list = Presets.list()
+        end)
+      end
     end
     r.ImGui_PopStyleColor(ctx)
     r.ImGui_PopID(ctx)
@@ -927,6 +971,18 @@ function M.draw(app)
   end
 
   local ctx = app.ctx
+
+  -- Ctrl+Z, with the same guard the sample list uses: while a field or a slider
+  -- is active the keys belong to it. Taking Ctrl+Z off a text box would be a
+  -- worse bug than the one this feature exists to soften.
+  if r.ImGui_IsKeyPressed and r.ImGui_Key_Z and r.ImGui_Mod_Ctrl then
+    local typing = r.ImGui_IsAnyItemActive and r.ImGui_IsAnyItemActive(ctx)
+    local ctrl = r.ImGui_GetKeyMods and ((r.ImGui_GetKeyMods(ctx) & r.ImGui_Mod_Ctrl()) ~= 0)
+    if ctrl and not typing and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Z(), false) then
+      Undo.pop(app.builder.undo, app)
+    end
+  end
+
   draw_preset_bar(app)
   draw_pools(app)
 

@@ -1,6 +1,6 @@
 local M = {}
 
-M.version = 19
+M.version = 20
 M.filename = "TK_Kit_Maker_Sequencer.jsfx"
 M.add_name = "TK_Kit_Maker_Sequencer"
 
@@ -10,7 +10,7 @@ M.source = [==[desc:TK Kit Maker Sequencer
 // Sample-accurate step sequencer engine for TK Kit Maker.
 // Reads its pattern from shared memory (gmem) written by the Lua UI and
 // emits MIDI note-ons/offs in the audio thread for rock-solid timing.
-// TK_ENGINE_VERSION:19
+// TK_ENGINE_VERSION:20
 // One instance runs on a dedicated MIDI bus track that routes MIDI (via
 // MIDI-only sends) to every RS5k lane track. It plays all lanes at once;
 // each RS5k filters to its own note. Reads the pattern from gmem.
@@ -22,6 +22,10 @@ G_EPOCH=0; G_RUN=1; G_SYNC=2; G_TEMPO=3; G_TOTAL=4; G_SOLO=5; G_RESTART=6; G_NLA
 G_AUD_TARGET=10; G_AUD_NOTE=11; G_AUD_VEL=12; G_AUD_GATE=13; G_AUD_OBEY=14; G_AUD_TOKEN=15; G_AUD_CH=19;
 G_ALIVE=16; G_PH=17; G_NOTES=18; G_LANEPH=32;
 LANE_BASE=128; LANE_STRIDE=128;
+// Groove lives ABOVE the lanes, because a lane block is exactly full: 16 slots
+// of controls and seven blocks of 16 steps is 128 of 128. Header per lane is
+// on/amount/steps/lead; the table is 32 offsets then 32 velocities.
+GRV_HDR=2176; GRV_HDR_STRIDE=4; GRV_BASE=2304; GRV_STRIDE=64; GRV_STEPS=32;
 L_CYCLE=0; L_SPEED=1; L_SOLO=2; L_MODE=3; L_RETRIG=4; L_NOTE=5; L_OBEY=6; L_DIRECTION=7;
 L_ECHO_ON=8; L_ECHO_COUNT=9; L_ECHO_MODE=10; L_ECHO_STEP=11; L_ECHO_RATE=12;
 L_LOOP_LEN=13; L_LOOP_MASK=14;
@@ -162,6 +166,11 @@ active ? (
     obey=gmem[LB+L_OBEY]>=0.5;
     note=gmem[LB+L_NOTE]|0; note<0 ? note=0; note>127 ? note=127;
     lane_solo=gmem[LB+L_SOLO]>=0.5;
+    GHB=GRV_HDR+i*GRV_HDR_STRIDE;
+    grv_n=gmem[GHB+2]|0;
+    grv_amt=gmem[GHB+1];
+    grv_on=(gmem[GHB]>=0.5 && grv_amt>0 && grv_n>0) ? 1 : 0;
+    GTB=GRV_BASE+i*GRV_STRIDE;
     loop_len=gmem[LB+L_LOOP_LEN]|0; loop_len<1 ? loop_len=1; loop_len>8 ? loop_len=8;
     loop_mask=gmem[LB+L_LOOP_MASK]|0;
     muted=(any_solo>=0.5 && !lane_solo) ? 1 : 0;
@@ -225,7 +234,13 @@ active ? (
     );
 
     guard=0;
-    while(clk_time[i]<t1 && guard<256) (
+    // The clock still ticks on the grid; only the moment a step SOUNDS moves.
+    // So a step is not consumed until its shifted time falls inside this block,
+    // and the loop simply stops early when the next one is still ahead. That
+    // replaces a queue of pending notes, works for early and late alike, and
+    // leaves gate, echo and substeps hanging off the shifted time as they
+    // should -- they all read et.
+    while(guard<256) (
       et=clk_time[i];
       tick=clk_step[i]|0;
       dir==1 ? (
@@ -236,6 +251,15 @@ active ? (
       ) : (
         st=(tick%cyc)+1;
       );
+      grv_on ? (
+        // A fraction of THIS lane's step, not of the master step: a lane at
+        // half speed swings its own grid, which is what makes the amount mean
+        // the same thing on every lane.
+        et += gmem[GTB+((st-1)%grv_n)]*grv_amt*lane_period;
+      );
+      et>=t1 ? (
+        guard=256;
+      ) : (
       cycle_idx=floor(tick/cyc);
       slot=cycle_idx%loop_len;
       allow=(loop_mask&(1<<slot))!=0;
@@ -246,6 +270,13 @@ active ? (
         chance_ok=(prob>=100) || (prob>0 && rand(100)<prob);
         chance_ok ? (
           vel=gmem[LB+L_VEL+(st-1)]|0; vel<1 ? vel=1; vel>127 ? vel=127;
+          grv_on ? (
+            // Half the feel of a sampled groove is how hard it was hit, so the
+            // one knob moves both. A groove with no dynamics stores 1 and this
+            // leaves the velocity alone.
+            vel=floor(vel*(1+(gmem[GTB+GRV_STEPS+((st-1)%grv_n)]-1)*grv_amt)+0.5);
+            vel<1 ? vel=1; vel>127 ? vel=127;
+          );
           gate=gmem[LB+L_GATE+(st-1)]; gate<1 ? gate=1; gate>100 ? gate=100;
           len=gmem[LB+L_LEN+(st-1)]|0; len<1 ? len=1;
           pitch_off=gmem[LB+L_PITCH+(st-1)]|0;
@@ -328,6 +359,7 @@ active ? (
       clk_time[i]+=lane_period;
       clk_step[i]=tick+1;
       guard+=1;
+      );
     );
 
     gmem[G_LANEPH+i]=disp_step[i];

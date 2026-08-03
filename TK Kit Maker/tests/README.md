@@ -37,6 +37,18 @@ pip install lupa
 | `test_fixedpool.lua` | A heatmap-cell pool keeping its files through a scan and a preset round-trip. |
 | `test_channels.lua` | The MONO/STEREO filter axis reaching the filter, the counts and the popup. |
 | `test_seed.lua` | Seeded generation: reproducibility, the frozen sequence, and that neighbouring seeds are unrelated. |
+| `test_groovescan.lua` | Finding groove files: subfolders and their names, depth, built-ins, and that the extension is kept rather than assumed. |
+| `test_groove.lua` | Reading a groove out of a real MIDI file: swing, pushes, running status, refusals. |
+| `test_gmemmap.lua` | That the shared-memory map in sequencer_view.lua and the JSFX engine still agree. |
+| `test_groovesched.lua` | A model of the engine's groove scheduling, against block boundaries and buffer sizes. |
+| `test_slice.lua` | Slicing a loop across pads: seams, bar counts, truncation and the nudge limits. |
+| `test_rs5kparams.lua` | Finding RS5K parameters by name against its real list, including the two that collide. |
+| `test_undo.lua` | The Builder undo: snapshots that do not share tables, and restores that keep references. |
+| `test_wavcues.lua` | Reading cue points out of a WAV, and slicing on them instead of evenly. |
+| `test_sliceexport.lua` | Writing a trimmed pad out as its own WAV: frame alignment, headers kept, and what it refuses. |
+| `test_sortlist.lua` | Ordering the sample list: numbered names, unmeasured lengths, a stable order, and that the scan order survives. |
+| `test_colgroups.lua` | Grouping collections: one heading however it is spelled, pinned staying on top, and Move Up acting on what is on screen. |
+| `test_peaks.lua` | Transient detection: hits found once each, level independence, and that a steady tone is not sliced. |
 | `test_stale.lua` | Detecting an edited sample, and that a cache without the stamp still loads. |
 
 ## Why these two extra checks

@@ -15,6 +15,13 @@ local function default_state()
   return {
     collections = {},
     kit_collections = {},
+    -- Whether the collections panel shows its group headings at all. The
+    -- filing is kept either way -- switching this off ignores the groups, it
+    -- does not undo them.
+    collections_flat = false,
+    -- Which collection groups are folded shut, keyed by lower-cased name so a
+    -- group renamed to a different capitalisation stays as you left it.
+    collapsed_groups = {},
     selected_id = nil,
     sample_selected_id = nil,
     kit_selected_id = nil,
@@ -26,8 +33,16 @@ local function default_state()
     tile_size = "normal",
     auto_audition = true,
     show_tags = true,
+    -- Which of the two the strip under the list is showing: the tags of the
+    -- selected sample, or its waveform with the slice points on it.
+    detail_view = "tags",
     sample_view = "list",
     list_flat = false,
+    -- How the sample list is ordered. Persisted, unlike the tag filter: an
+    -- order you forgot about still shows you everything, so it cannot leave you
+    -- staring at a pack that looks half empty.
+    sort_mode = "name",
+    sort_desc = false,
     grid_x = "tone",
     grid_y = "decay",
     grid_size = 4,
@@ -61,8 +76,12 @@ local function sanitize(state)
   end
   out.auto_audition = state.auto_audition ~= false
   out.show_tags = state.show_tags ~= false
+  out.detail_view = (state.detail_view == "slice") and "slice" or "tags"
   out.sample_view = (state.sample_view == "grid") and "grid" or "list"
   out.list_flat = state.list_flat == true
+  out.collections_flat = state.collections_flat == true
+  out.sort_mode = (state.sort_mode == "length") and "length" or "name"
+  out.sort_desc = state.sort_desc == true
   if state.grid_x == "tone" or state.grid_x == "decay" or state.grid_x == "transient" then
     out.grid_x = state.grid_x
   end
@@ -113,6 +132,7 @@ local function sanitize(state)
       local path = normalize(type(c.path) == "string" and c.path or "")
       local recursive = c.recursive ~= false
       local pinned = c.pinned == true
+      local group = type(c.group) == "string" and c.group:gsub("^%s+", ""):gsub("%s+$", "") or ""
       local cover_path = normalize(type(c.cover_path) == "string" and c.cover_path or "")
       if path ~= "" then
         local key = path:lower()
@@ -124,6 +144,7 @@ local function sanitize(state)
             path = path,
             recursive = recursive,
             pinned = pinned,
+            group = group ~= "" and group or nil,
             cover_path = cover_path ~= "" and cover_path or nil,
           }
         end
@@ -138,6 +159,7 @@ local function sanitize(state)
       local path = normalize(type(c.path) == "string" and c.path or "")
       local recursive = c.recursive ~= false
       local pinned = c.pinned == true
+      local group = type(c.group) == "string" and c.group:gsub("^%s+", ""):gsub("%s+$", "") or ""
       local cover_path = normalize(type(c.cover_path) == "string" and c.cover_path or "")
       if path ~= "" then
         local key = path:lower()
@@ -149,6 +171,7 @@ local function sanitize(state)
             path = path,
             recursive = recursive,
             pinned = pinned,
+            group = group ~= "" and group or nil,
             cover_path = cover_path ~= "" and cover_path or nil,
           }
         end
@@ -184,6 +207,23 @@ local function sanitize(state)
     out.selected_id = out.kit_selected_id or out.selected_id
   else
     out.selected_id = out.sample_selected_id or out.selected_id
+  end
+
+  -- Only names that are still in use. Folding a group shut and then emptying
+  -- it would otherwise leave an entry behind for ever, and a group recreated
+  -- under the same name months later would come back mysteriously collapsed.
+  if type(state.collapsed_groups) == "table" then
+    local live = {}
+    for _, list in ipairs({ out.collections, out.kit_collections }) do
+      for _, c in ipairs(list) do
+        if c.group then live[c.group:lower()] = true end
+      end
+    end
+    for name, folded in pairs(state.collapsed_groups) do
+      if type(name) == "string" and folded == true and live[name:lower()] then
+        out.collapsed_groups[name:lower()] = true
+      end
+    end
   end
 
   return out

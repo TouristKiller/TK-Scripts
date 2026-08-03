@@ -10,6 +10,24 @@ local SequencerView = require("ui.sequencer_view")
 
 local M = {}
 
+-- What the browser's top row needs beyond the buttons and the gaps between
+-- them, worked out rather than guessed at:
+--
+--   +18  the row's own wrap test. It keeps 16 px clear on the right and adds 8
+--        before the button it is about to place, against the 6 px the gaps
+--        actually take -- so it demands 18 px more than the buttons occupy.
+--   +32  the main window's padding, 16 each side. The browser draws inside
+--        ##tk_body, a child with no padding of its own, so the child is exactly
+--        this much narrower than the window the user drags.
+--
+-- Two extra for luck, because the wrap test is a strict "<".
+local TOP_ROW_MARGIN = 18 + 32 + 2
+
+local function as_number(v)
+  if type(v) == "number" then return v end
+  return tonumber(v)
+end
+
 -- Read off the script's own @version header rather than kept as a constant
 -- here: that header is what ReaPack installs and upgrades against, so this is
 -- the one number that cannot drift out of step with what the user actually has.
@@ -333,7 +351,24 @@ function M.frame(app)
 
   r.ImGui_SetNextWindowSize(ctx, 900, 780, r.ImGui_Cond_FirstUseEver())
   if r.ImGui_SetNextWindowSizeConstraints then
-    r.ImGui_SetNextWindowSizeConstraints(ctx, 410, 480, 100000, 100000)
+    -- 440 rather than 410: the browser's transport row is the widest thing that
+    -- has to fit on one line -- audition, stop, slice, the auto toggle and a
+    -- volume slider -- and at 410 the slider was squeezed to nothing.
+    --
+    -- The browser's top row can want more than that, and how much depends on
+    -- the font: it is the system sans-serif, so the same six labels are one
+    -- width here and another on a Mac, and a number typed in now would be
+    -- roomy on one machine and one button short on the next. So the row
+    -- measures itself as it draws and the floor follows it -- the window cannot
+    -- be dragged narrower than its own toolbar, whatever it is set in.
+    --
+    -- Last frame's measurement, necessarily: constraints are set before the
+    -- window exists, and the row is inside it. It cannot oscillate, because
+    -- what it measures depends on the font and not on the width it produces.
+    local min_w = 440
+    local row_w = app.browser and as_number(app.browser.top_row_w)
+    if row_w and row_w + TOP_ROW_MARGIN > min_w then min_w = row_w + TOP_ROW_MARGIN end
+    r.ImGui_SetNextWindowSizeConstraints(ctx, min_w, 480, 100000, 100000)
   end
 
   local theme_stack = Theme.push(ctx)

@@ -1079,6 +1079,22 @@ local function draw_rename_popup(app, parent, rows)
   r.ImGui_EndPopup(ctx)
 end
 
+-- How far a pad's start/end offsets must sit from the ends before the pad
+-- counts as trimmed. RS5K hands these back as floats, so an untouched pad is
+-- not reliably exactly 0 and 1; a thousandth of a two-second file is two
+-- milliseconds, well below anything worth writing a separate file for.
+local TRIM_EPSILON = 0.001
+
+-- Returns the pad's range, or nil when it plays its file whole.
+local function trimmed_range(row)
+  if not row.track or not row.has_rs5k or not row.fx or row.fx < 0 then return nil end
+  local start01, stop01 = RS5K.get_range(row.track, row.fx)
+  if not start01 or not stop01 then return nil end
+  if stop01 <= start01 then return nil end
+  if start01 <= TRIM_EPSILON and stop01 >= 1 - TRIM_EPSILON then return nil end
+  return start01, stop01
+end
+
 local function save_current_kit(app, parent, rows)
   local state = app.rs5k_manager
   if not state or not parent then return false end
@@ -1098,13 +1114,41 @@ local function save_current_kit(app, parent, rows)
   local dest_dir, final_name = Exporter.make_folder(destination, safe_filename(kit_name))
   local saved = 0
   local results = {}
+  local trimmed = 0
+  local warnings = {}
 
   for _, row in ipairs(rows or {}) do
     if row.sample_path and row.sample_path ~= "" then
       local base = row.track_name ~= "" and row.track_name or file_stem(row.sample_path)
       local prefix = row.grid_slot and string.format("%03d_", row.grid_slot) or ""
-      local filename = prefix .. safe_filename(base) .. file_ext(row.sample_path)
-      local out_name = Exporter.copy(row.sample_path, dest_dir, filename)
+      local ext = file_ext(row.sample_path)
+      local filename = prefix .. safe_filename(base) .. ext
+
+      -- A pad playing part of its file gets that part written out; everything
+      -- else is copied byte for byte, as it always was.
+      local out_name, trim
+      local start01, stop01 = trimmed_range(row)
+      if start01 and ext:lower() == ".wav" then
+        -- Second return is what got written on success, and why not on failure.
+        local info
+        out_name, info = Exporter.copy_slice(row.sample_path, dest_dir, filename, start01, stop01)
+        if out_name then
+          trimmed = trimmed + 1
+          trim = info
+        else
+          warnings[#warnings + 1] = base .. ": " .. tostring(info) .. ", copied whole"
+        end
+      elseif start01 then
+        -- Only WAV can be trimmed here; trimming an mp3 or a flac would mean
+        -- decoding and re-encoding it, which is a different job and a lossy
+        -- one. Copied whole, and said out loud -- the pad will sound different
+        -- in the exported kit than it does on the rack.
+        warnings[#warnings + 1] = base .. " (" .. ext .. "): only WAV can be trimmed, copied whole"
+      end
+      if not out_name then
+        out_name = Exporter.copy(row.sample_path, dest_dir, filename)
+      end
+
       if out_name then
         saved = saved + 1
         results[#results + 1] = {
@@ -1115,6 +1159,7 @@ local function save_current_kit(app, parent, rows)
           },
           sample = row.sample_path,
           out_name = out_name,
+          trim = trim,
         }
       end
     end
@@ -1128,6 +1173,23 @@ local function save_current_kit(app, parent, rows)
   if #results > 0 then
     Exporter.write_midilog(dest_dir, final_name, results)
     Exporter.write_sourcelog(dest_dir, final_name, results)
+  end
+
+  -- Said before the folder opens, or Explorer takes the focus and the warning
+  -- ends up behind it. Silence on a clean save is deliberate: the folder
+  -- opening is the confirmation, and a box on every save would train the habit
+  -- of clicking it away.
+  if #warnings > 0 and r.ShowMessageBox then
+    local text = string.format("Saved %d sample%s to:\n%s\n\n",
+      saved, saved == 1 and "" or "s", dest_dir)
+    if trimmed > 0 then
+      text = text .. string.format("%d pad%s exported as trimmed slice%s.\n\n",
+        trimmed, trimmed == 1 and "" or "s", trimmed == 1 and "" or "s")
+    end
+    text = text .. string.format(
+      "%d pad%s could not be trimmed, and play the whole file in the exported kit:\n\n%s",
+      #warnings, #warnings == 1 and "" or "s", table.concat(warnings, "\n"))
+    r.ShowMessageBox(text, "Save kit", 0)
   end
 
   if saved > 0 then
@@ -2118,7 +2180,7 @@ function M.draw(app)
           end
           clear_collection_cover_by_path(app, cover_path)
           if app.browser then
-            app.browser.preview_error = "Cover image kon niet worden geladen en is verwijderd."
+            app.browser.preview_error = "Cover image could not be loaded, and has been removed."
           end
         end
       end
