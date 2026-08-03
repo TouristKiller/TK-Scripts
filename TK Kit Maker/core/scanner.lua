@@ -72,6 +72,70 @@ local function scan_dir(path, recursive, results)
   end
 end
 
+-- The direct subfolders of `root` that are worth adding as collections.
+--
+-- One level, deliberately. Working out by itself which folder in a tree is "a
+-- pack" cannot be done: one library keeps them two deep, the next puts the
+-- audio another two levels down under WAV/Kicks, and a rule that fits one is
+-- wrong for the other. The person who owns the library is the only one who
+-- knows, and picking the folder whose children are the packs IS them saying so.
+-- So this asks no questions of the tree beyond "is there audio under here".
+--
+-- The enumerators are passed in, so this knows nothing about REAPER.
+--
+--   files(dir) -> array of filenames
+--   dirs(dir)  -> array of subfolder names
+--
+-- Returns an array of { path, name, count }, sorted by name. `opts.skip` is a
+-- set of already-taken paths, lower-cased, so a second run over the same parent
+-- offers only what is new.
+function M.subfolder_packs(root, files, dirs, opts)
+  opts = opts or {}
+  local skip = opts.skip or {}
+  -- Deep enough for a pack that buries its audio under WAV/24bit/Kicks, and
+  -- short of walking somebody's whole drive.
+  local max_depth = opts.max_depth or 6
+  root = normalize(root)
+
+  local function count_audio(dir, depth)
+    local n = 0
+    for _, fn in ipairs(files(dir) or {}) do
+      if is_audio_file(fn) then n = n + 1 end
+    end
+    if depth < max_depth then
+      for _, dn in ipairs(dirs(dir) or {}) do
+        n = n + count_audio(dir .. "/" .. dn, depth + 1)
+      end
+    end
+    return n
+  end
+
+  local out = {}
+  for _, dn in ipairs(dirs(root) or {}) do
+    local path = root .. "/" .. dn
+    -- Counted through the whole subtree, not just the top: a pack whose samples
+    -- sit in a WAV folder would otherwise look empty and be skipped.
+    --
+    -- Folders with no audio at all are left out on purpose. Packs routinely
+    -- ship a Documentation or MIDI folder beside the samples, and those are
+    -- subfolders too -- adding them would mean a handful of empty collections
+    -- to delete by hand every time.
+    if not skip[path:lower()] then
+      local n = count_audio(path, 1)
+      if n > 0 then
+        out[#out + 1] = { path = path, name = dn, count = n }
+      end
+    end
+  end
+
+  table.sort(out, function(a, b)
+    local la, lb = a.name:lower(), b.name:lower()
+    if la ~= lb then return la < lb end
+    return a.name < b.name
+  end)
+  return out
+end
+
 -- Scans all folders configured on the pool and refreshes pool.files in place.
 -- Returns the file list (also stored on pool.files).
 function M.scan_pool(pool)

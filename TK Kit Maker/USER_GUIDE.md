@@ -71,9 +71,22 @@ button top-left shows which you are in and switches to the other:
 ### Managing collections (left panel)
 
 - **+ Folder** adds a collection; **Rescan** refreshes its file list.
-  Right-click **+ Folder** to set a **start folder** — once one is set, every
-  browse dialog opens there instead of wherever you last browsed. Clear it from
-  the same menu to hand control back to the recent folders.
+  Right-click **+ Folder** for two more things: **Add subfolders as
+  collections…** (below), and a **start folder** — once one is set, every browse
+  dialog opens there instead of wherever you last browsed. Clear it from the
+  same menu to hand control back to the recent folders.
+- **Add subfolders as collections…** brings in a whole shelf at once. Pick the
+  folder whose *subfolders* are your packs and each one arrives as its own
+  collection, filed under a group named after the folder you picked.
+
+  It goes one level and makes no attempt to work out which folder in your tree
+  counts as "a pack" — that differs in every library, so your pick is the
+  answer. Subfolders with no audio anywhere below them are skipped, so the
+  Documentation and MIDI folders that ship beside the samples do not come in as
+  empty collections; and the audio is counted through the whole subtree, so a
+  pack that keeps its samples in a `WAV` folder is not mistaken for an empty
+  one. It asks before adding, naming the count, and running it again over the
+  same folder offers only what is new.
 - One button toggles between the **List** and cover **Tiles** — it shows which
   you are in; right-click it for the tile size. Drag the splitter to resize.
 - A second button cycles **Catalog → Split → Samples**, picking which panel gets

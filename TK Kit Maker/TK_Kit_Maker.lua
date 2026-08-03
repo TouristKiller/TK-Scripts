@@ -1,7 +1,32 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.47
+-- @version 0.2.48
 -- @changelog:
+--   0.2.48
+--   + Add a whole shelf of packs at once: right-click "+ Folder" for "Add
+--     subfolders as collections". Pick the folder whose subfolders are your
+--     packs and each one comes in as its own collection, filed under a group
+--     named after the folder you picked -- which is the tidying you would
+--     otherwise do twenty times by hand straight afterwards.
+--   # One level, and no attempt to work out by itself which folder in a tree is
+--     "a pack". That cannot be done: one library keeps them two deep, the next
+--     buries the audio under WAV/24bit/Kicks, and a rule that fits one is wrong
+--     for the next. Only the person who owns the library knows, and picking the
+--     folder whose children are the packs is them saying so -- so the pick is
+--     the answer, and the tree is only asked whether there is audio under each
+--     child.
+--   # Counted through the whole subtree, so a pack that keeps its samples in a
+--     WAV folder is not mistaken for an empty one and quietly left out of a
+--     list of twenty.
+--   # Subfolders with no audio anywhere below them are skipped. Packs routinely
+--     ship a Documentation or MIDI folder beside the samples, and those are
+--     subfolders too -- adding them would mean a handful of empty collections
+--     to delete by hand every time.
+--   # It asks first, naming the count and the first few by name. There is no
+--     undo in the Browser, and one click that quietly adds forty collections is
+--     a long job to take back. Running it again over the same folder offers
+--     only what is new.
+--
 --   0.2.47
 --   + Group your collections. Right-click a pack, pick Group, and file it under
 --     a name -- the packs from one vendor end up under one collapsible heading

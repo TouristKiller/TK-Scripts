@@ -47,6 +47,7 @@ pip install lupa
 | `test_wavcues.lua` | Reading cue points out of a WAV, and slicing on them instead of evenly. |
 | `test_sliceexport.lua` | Writing a trimmed pad out as its own WAV: frame alignment, headers kept, and what it refuses. |
 | `test_sortlist.lua` | Ordering the sample list: numbered names, unmeasured lengths, a stable order, and that the scan order survives. |
+| `test_subfolders.lua` | Adding a folder's subfolders as collections: audio counted through the subtree, non-pack folders skipped, and a second run offering only what is new. |
 | `test_colgroups.lua` | Grouping collections: one heading however it is spelled, pinned staying on top, and Move Up acting on what is on screen. |
 | `test_peaks.lua` | Transient detection: hits found once each, level independence, and that a steady tone is not sliced. |
 | `test_stale.lua` | Detecting an edited sample, and that a cache without the stamp still loads. |

@@ -1304,34 +1304,131 @@ local function create_rs5k_drum_rack_from_collection(app)
   return true
 end
 
-local function add_collection(app)
-  local folder = Dialogs.browse_folder("Select sample folder", "", "source")
-  if not folder then return end
-
+-- Adds one folder as a collection and hands back its id, or nil when that path
+-- is already in the list -- in which case the id of the one that was already
+-- there comes back instead, so the caller can select it rather than adding a
+-- duplicate.
+local function make_collection(app, path, group)
   local state = app.browser
-  local norm = Scanner.normalize(folder)
-  for _, c in ipairs(state.collections) do
-    if c.path:lower() == norm:lower() then
-      state.selected_id = c.id
-      refresh_collection(app, false)
-      save(app)
-      return
-    end
+  local norm = Scanner.normalize(path)
+  if norm == "" then return nil end
+
+  local collections = active_collections(state)
+  for _, c in ipairs(collections) do
+    if c.path:lower() == norm:lower() then return c.id, false end
   end
 
   local name = norm:match("([^/]+)$") or norm
-  local id = "col_" .. tostring(math.floor((r.time_precise and r.time_precise() or os.clock()) * 1000)) .. "_" .. tostring(#state.collections + 1)
-  local cover_path = detect_folder_cover(norm)
-  local collections = active_collections(state)
+  local id = "col_" .. tostring(math.floor((r.time_precise and r.time_precise() or os.clock()) * 1000))
+    .. "_" .. tostring(#collections + 1)
   collections[#collections + 1] = {
     id = id,
     name = name,
     path = norm,
     recursive = true,
     pinned = false,
-    cover_path = cover_path,
+    group = (group and group ~= "") and group or nil,
+    cover_path = detect_folder_cover(norm),
   }
-  set_selected_collection(state, id)
+  return id, true
+end
+
+local function add_collection(app)
+  local folder = Dialogs.browse_folder("Select sample folder", "", "source")
+  if not folder then return end
+
+  local id = make_collection(app, folder)
+  if not id then return end
+  set_selected_collection(app.browser, id)
+  save(app)
+  refresh_collection(app, false)
+end
+
+-- Adds every subfolder of a chosen folder as its own collection.
+--
+-- One level, and no attempt to work out which folder in a tree is "a pack".
+-- That cannot be done: one library keeps them two deep, the next buries the
+-- audio under WAV/Kicks, and a rule that fits one is wrong for the next. Only
+-- the person who owns the library knows, and picking the folder whose children
+-- are the packs is them saying so. So the pick is the answer, and this only
+-- asks the tree whether there is any audio under each child.
+--
+-- They all land in a group named after the folder that was picked, which is the
+-- thing you would otherwise do twenty times by hand straight afterwards.
+local function add_subfolders_as_collections(app)
+  local state = app.browser
+  local folder = Dialogs.browse_folder(
+    "Select the folder whose subfolders are your packs", "", "source")
+  if not folder then return end
+
+  local root = Scanner.normalize(folder)
+
+  local function files(dir)
+    local out, i = {}, 0
+    while true do
+      local fn = r.EnumerateFiles(dir, i)
+      if not fn then break end
+      out[#out + 1] = fn
+      i = i + 1
+    end
+    return out
+  end
+  local function dirs(dir)
+    local out, i = {}, 0
+    while true do
+      local dn = r.EnumerateSubdirectories(dir, i)
+      if not dn then break end
+      out[#out + 1] = dn
+      i = i + 1
+    end
+    return out
+  end
+
+  -- Already-added folders are left out, so running this a second time over the
+  -- same parent offers what is new rather than a pile of duplicates.
+  local skip = {}
+  for _, c in ipairs(active_collections(state)) do skip[c.path:lower()] = true end
+
+  local found = Scanner.subfolder_packs(root, files, dirs, { skip = skip })
+
+  if #found == 0 then
+    state.preview_error =
+      "No new subfolders with samples in them were found in " .. (root:match("([^/]+)$") or root) .. "."
+    return
+  end
+
+  -- Asked before rather than reported after: there is no undo in the Browser,
+  -- and one click that quietly adds forty collections is a long job to take
+  -- back by hand.
+  if r.ShowMessageBox then
+    local preview = {}
+    for i = 1, math.min(8, #found) do
+      preview[#preview + 1] = string.format("  %s  (%d)", found[i].name, found[i].count)
+    end
+    if #found > #preview then
+      preview[#preview + 1] = string.format("  ... and %d more", #found - #preview)
+    end
+    local answer = r.ShowMessageBox(
+      string.format("Add %d subfolder%s of %s as collections?\n\n%s",
+        #found, #found == 1 and "" or "s", root:match("([^/]+)$") or root,
+        table.concat(preview, "\n")),
+      "Add subfolders as collections", 1)
+    if answer ~= 1 then return end
+  end
+
+  local group = root:match("([^/]+)$") or ""
+  local added, first = 0, nil
+  for _, e in ipairs(found) do
+    local id, is_new = make_collection(app, e.path, group)
+    if id and is_new then
+      added = added + 1
+      first = first or id
+    end
+  end
+
+  if first then set_selected_collection(state, first) end
+  state.preview_error = string.format("Added %d collection%s under \"%s\".",
+    added, added == 1 and "" or "s", group)
   save(app)
   refresh_collection(app, false)
 end
@@ -4867,6 +4964,19 @@ local function draw_top_controls(app, col, narrow)
       and "Every browse dialog opens here, whatever you browsed last."
       or "Set one and every browse dialog opens there; without one they reopen on the folder you used last.")
     Theme.pop_font(ctx, pushed)
+    r.ImGui_Separator(ctx)
+
+    if r.ImGui_MenuItem(ctx, "Add subfolders as collections\226\128\166##add_subfolders") then
+      add_subfolders_as_collections(app)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx,
+        "Pick the folder whose subfolders are your packs -- each one comes in as its own"
+        .. "\ncollection, filed under a group named after the folder you picked."
+        .. "\n\nOne level only: which folder counts as a pack is different in every library,"
+        .. "\nso your pick is the answer rather than something Kit Maker tries to work out."
+        .. "\nSubfolders with no audio anywhere below them are skipped.")
+    end
     r.ImGui_Separator(ctx)
 
     if r.ImGui_MenuItem(ctx, "Set start folder\226\128\166##set_base") then

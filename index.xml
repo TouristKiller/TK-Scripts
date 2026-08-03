@@ -440,7 +440,7 @@
 
 <category name="TK Kit Maker">
     <reapack name="TK_Kit_Maker.lua" type="script" desc="TK Kit Maker">
-        <version name="0.2.47" author="TouristKiller &amp; Flurmechanik" time="2026-08-03T17:00:00Z">
+        <version name="0.2.48" author="TouristKiller &amp; Flurmechanik" time="2026-08-03T23:55:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/TK_Kit_Maker.lua</source>
             <source file="core/analyzer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/analyzer.lua</source>
             <source file="core/bias.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/core/bias.lua</source>
@@ -491,6 +491,13 @@
             <source file="ui/sequencer_view.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/ui/sequencer_view.lua</source>
             <source file="USER_GUIDE.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Kit%20Maker/USER_GUIDE.pdf</source>
             <changelog><![CDATA[
+v0.2.48
++ Add a whole shelf of packs at once: right-click "+ Folder" for "Add subfolders as collections". Pick the folder whose subfolders are your packs and each one comes in as its own collection, filed under a group named after the folder you picked - which is the tidying you would otherwise do twenty times by hand straight afterwards.
+# One level, and no attempt to work out by itself which folder in a tree is "a pack". That cannot be done: one library keeps them two deep, the next buries the audio under WAV/24bit/Kicks, and a rule that fits one is wrong for the next. Only the person who owns the library knows, and picking the folder whose children are the packs is them saying so.
+# Counted through the whole subtree, so a pack that keeps its samples in a WAV folder is not mistaken for an empty one and quietly left out of a list of twenty.
+# Subfolders with no audio anywhere below them are skipped - packs routinely ship a Documentation or MIDI folder beside the samples.
+# It asks first, naming the count. There is no undo in the Browser, and one click that quietly adds forty collections is a long job to take back. Running it again over the same folder offers only what is new.
+
 v0.2.47
 + Group your collections. Right-click a pack, pick Group, and file it under a name - the packs from one vendor end up under one collapsible heading instead of scattered through a list you have to read twice. The name of the folder the pack sits in is offered ready-made, because sample libraries are already laid out that way, so filing a pack is usually one click. Works in both the list and the tile view, and the folded state survives a restart.
 + A Groups button in the top bar turns the headings off again, for when you would rather have the plain list. The filing is kept either way - it ignores the groups, it does not undo them, or looking would be destructive and nothing would have said so. The button appears only once something has been filed; before that it would switch between two identical lists.
