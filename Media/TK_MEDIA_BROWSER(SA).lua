@@ -1,8 +1,15 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.94
+-- @version 0.9.95
 -- @changelog:
 --[[
+v0.9.95:
++ Fixed dragging samples onto floating plugin windows (Groove Agent, Battery, ReaSamplOmatic5000, ...) doing nothing since 0.9.8: those windows are owned by REAPER's main window, so they were mistaken for a drop on the main window and the native drag was skipped
++ Dragging onto docked windows now works as well: ReaImGui script windows (RS5k manager, other script samplers) and FX chains docked into the main window; the arrange, track panel, ruler and mixer keep using the script's own insert
++ A native drag now only starts once the cursor rests on the target window for a moment, so crossing a plugin or docker window on the way to the arrange no longer hands the drag over to Windows halfway
++ Added "Load to selected RS5K Manager pad" to the file right-click menu: loads straight into the pad that is selected in MPL's RS5k manager (also when the manager is pinned to a device with "stick to parent"), instead of picking it from the pad submenu; a selected pad that is still empty is created
++ Fixed pads filled from this browser staying nameless and without waveform in MPL's RS5k manager until it happened to refresh for another reason: the manager is now asked to refresh after loading, creating or deleting a pad
+
 v0.9.94:
 + The file list now keeps the selected file centred while auditioning with the arrow keys (also Page Up/Down, Home/End and random play), instead of letting it stick to the bottom edge or scroll out of view
 + Removed the blue keyboard-navigation frame in the file list, so only the accent colour of the actually selected/playing file remains
@@ -520,6 +527,8 @@ local insert_state = {
     drop_new_lane = false,
     is_midi = false,
     native_drag_started = false,
+    native_hover_hwnd = nil,
+    native_hover_since = nil,
     win_rect = nil
 }
 
@@ -7362,23 +7371,34 @@ function render_lufs_folder_context_menu(folder_path)
     r.ImGui_Separator(ctx)
 end
 
+-- Grouped in one table on purpose: the main chunk is close to Lua's 200 local limit.
+local tkmb_drag = {
+    WS_CHILD = 0x40000000,
+    -- How long the cursor has to rest on the same window before a native drag is started.
+    -- Without it, merely crossing a plugin or docker window on the way to the arrange would
+    -- hand the drag over to Windows and REAPER's own import would take over on release.
+    HOVER_DELAY = 0.15
+}
+
 local function tkmb_native_drag_available()
     return r.TK_StartFileDrag ~= nil
 end
 
-local function tkmb_point_over_arrange(mx, my)
-    if not (r.JS_Window_FromPoint and r.GetMainHwnd and r.JS_Window_FindChildByID) then return true end
-    local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
-    if not arrange then return true end
-    local w = r.JS_Window_FromPoint(mx, my)
-    if not w then return false end
-    local guard = 0
-    while w and guard < 64 do
-        if w == arrange then return true end
-        w = r.JS_Window_GetParent(w)
-        guard = guard + 1
-    end
-    return false
+function tkmb_drag.is_child_window(hwnd)
+    if not r.JS_Window_GetLong then return true end
+    local style = tonumber(r.JS_Window_GetLong(hwnd, "STYLE")) or 0
+    if style < 0 then style = style + 4294967296 end
+    return (math.floor(style / tkmb_drag.WS_CHILD) % 2) == 1
+end
+
+function tkmb_drag.window_class(hwnd)
+    if not r.JS_Window_GetClassName then return "" end
+    return r.JS_Window_GetClassName(hwnd) or ""
+end
+
+function tkmb_drag.window_title(hwnd)
+    if not r.JS_Window_GetTitle then return "" end
+    return r.JS_Window_GetTitle(hwnd) or ""
 end
 
 local function tkmb_point_over_main_window(mx, my)
@@ -7390,10 +7410,41 @@ local function tkmb_point_over_main_window(mx, my)
     local guard = 0
     while w and guard < 64 do
         if w == main then return true end
+        -- ReaImGui script windows (RS5k manager, samplers, ...) keep their own class
+        -- name when docked, so they remain a native drop target inside the main window.
+        if tkmb_drag.window_class(w) == "ImGuiWindow" then return false end
+        -- An FX chain docked *into* the main window keeps its own "FX: <track>" window
+        -- between the plugin GUI and the docker, so plugins stay reachable there too.
+        -- Keyed on the FX window itself, not on the surrounding "REAPER_dock": a docked
+        -- mixer sits in that same docker and must keep using the script's own insert.
+        if tkmb_drag.window_title(w):match("^FX: ") then return false end
+        -- Floating FX/plugin windows are top-level windows *owned* by the main
+        -- window, and GetParent() reports the owner for those, so walking all the
+        -- way up would flag them as "main window" and block the native drag.
+        -- Stop as soon as we leave the child chain: only real children of the
+        -- main window (arrange, track panel, ruler, mixer) count as main window.
+        if not tkmb_drag.is_child_window(w) then return false end
         w = r.JS_Window_GetParent(w)
         guard = guard + 1
     end
     return false
+end
+
+function tkmb_drag.clear_hover()
+    insert_state.native_hover_hwnd = nil
+    insert_state.native_hover_since = nil
+end
+
+function tkmb_drag.hover_settled(mx, my)
+    if not r.JS_Window_FromPoint then return true end
+    local hwnd = r.JS_Window_FromPoint(mx, my)
+    local now = r.time_precise()
+    if hwnd ~= insert_state.native_hover_hwnd or not insert_state.native_hover_since then
+        insert_state.native_hover_hwnd = hwnd
+        insert_state.native_hover_since = now
+        return false
+    end
+    return (now - insert_state.native_hover_since) >= tkmb_drag.HOVER_DELAY
 end
 
 local function tkmb_try_native_drag(mx, my)
@@ -7404,9 +7455,17 @@ local function tkmb_try_native_drag(mx, my)
     local rect = insert_state.win_rect
     if rect then
         local inside_browser = mx >= rect.x and mx <= rect.x + rect.w and my >= rect.y and my <= rect.y + rect.h
-        if inside_browser then return false end
+        if inside_browser then
+            tkmb_drag.clear_hover()
+            return false
+        end
     end
-    if tkmb_point_over_main_window(mx, my) then return false end
+    if tkmb_point_over_main_window(mx, my) then
+        tkmb_drag.clear_hover()
+        return false
+    end
+    if not tkmb_drag.hover_settled(mx, my) then return false end
+    tkmb_drag.clear_hover()
     insert_state.native_drag_started = true
     if insert_state.saved_cursor_pos then
         r.SetEditCurPos(insert_state.saved_cursor_pos, false, false)
@@ -7474,6 +7533,7 @@ local function handle_reaper_drop()
         insert_state.drop_lane = nil
         insert_state.drop_new_lane = false
         insert_state.saved_cursor_pos = nil
+        tkmb_drag.clear_hover()
     end
 end
 
@@ -7772,6 +7832,15 @@ function get_rs5k_instances_on_track(track)
     return instances
 end
 
+-- MPL's RS5k manager only rebuilds its rack data when something tells it to, so a pad
+-- filled from outside stays empty (no name, no waveform) until the manager refreshes for
+-- another reason. gmem 1025 = 10 is its "refresh rack" action.
+function refresh_mpl_rs5k_manager()
+    if not (r.gmem_attach and r.gmem_write) then return end
+    r.gmem_attach("RS5K_manager")
+    r.gmem_write(1025, 10)
+end
+
 function load_sample_to_rs5k_pad(file_path, track, fx_idx, note)
     if not file_path or not track then return false end
     
@@ -7821,6 +7890,7 @@ function load_sample_to_rs5k_pad(file_path, track, fx_idx, note)
     r.PreventUIRefresh(-1)
     r.UpdateArrange()
     r.Undo_EndBlock("Load sample to RS5K pad", -1)
+    refresh_mpl_rs5k_manager()
     return true
 end
 
@@ -8154,6 +8224,7 @@ function delete_rs5k_pad(pad)
     
     r.PreventUIRefresh(-1)
     r.Undo_EndBlock("Delete RS5K pad", -1)
+    refresh_mpl_rs5k_manager()
     return true
 end
 
@@ -8344,6 +8415,7 @@ function create_rs5k_pad_track(file_path, parent_track, note)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
     r.Undo_EndBlock("Create RS5K pad: " .. midi_note_to_name(note), -1)
+    refresh_mpl_rs5k_manager()
     tkmb_stop_preview_after_insert()
     return true
 end
@@ -8392,6 +8464,167 @@ function create_empty_rs5k_rack()
     r.UpdateArrange()
     r.Undo_EndBlock("Create RS5K Rack", -1)
     return true
+end
+
+function find_track_by_guid(guid)
+    if not guid or guid == "" then return nil end
+    local wanted = guid:gsub("%p+", "")
+    for i = 0, r.CountTracks(0) - 1 do
+        local track = r.GetTrack(0, i)
+        if track then
+            local _, track_guid = r.GetSetMediaTrackInfo_String(track, "GUID", "", false)
+            if track_guid and track_guid:gsub("%p+", "") == wanted then return track end
+        end
+    end
+    return nil
+end
+
+-- Resolve the rack the RS5k manager is showing, the same way the manager itself does:
+-- a device pinned with "stick to parent" wins, otherwise the selected track (or its parent).
+function get_mpl_manager_parent_track()
+    local _, stuck_guid = r.GetProjExtState(0, "MPLRS5KMAN", "STICKPARENTGUID")
+    if stuck_guid and stuck_guid ~= "" then
+        local track = find_track_by_guid(stuck_guid)
+        if track then return track end
+    end
+    local sel = r.GetSelectedTrack(0, 0)
+    if not sel then return nil end
+    local parent, is_mpl_parent = get_mpl_rs5k_track_and_parent(sel)
+    if is_mpl_parent then return parent end
+    return nil
+end
+
+function get_mpl_selected_pad_note(parent_track)
+    if not parent_track then return nil end
+    local _, note_str = r.GetSetMediaTrackInfo_String(parent_track, "P_EXT:MPLRS5KMAN_LASTACTIVENOTE", "", false)
+    local note = tonumber(note_str)
+    if not note then return nil end
+    note = math.floor(note)
+    if note < 0 or note > 127 then return nil end
+    return note
+end
+
+function load_sample_to_selected_mpl_pad(file_path, parent_track, note)
+    if not (file_path and parent_track and note) then return false end
+    local pad = find_pad_by_note(get_mpl_filled_pads(parent_track), note)
+    if pad then
+        return load_sample_to_rs5k_pad(file_path, pad.track, pad.fx_idx, nil)
+    end
+    return create_rs5k_pad_track(file_path, parent_track, note)
+end
+
+function render_rs5k_sampler_menu(file_path)
+    local ext = file_path:match("%.([^%.]+)$")
+    if not ext then return end
+    ext = ext:lower()
+    if ext == "mid" or ext == "midi" then return end
+
+    if r.ImGui_MenuItem(ctx, "Add to new track with ReaSamplomatic5000") then
+        insert_with_reasamplomatic(file_path)
+    end
+    if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
+        replace_reasamplomatic_sample(file_path)
+    end
+    if r.ImGui_MenuItem(ctx, "Add to new track with Cartridge") then
+        create_track_with_cartridge(file_path)
+    end
+    if r.ImGui_MenuItem(ctx, "Load sample to focused Cartridge") then
+        load_sample_to_cartridge_focused(file_path)
+    end
+
+    local manager_parent = get_mpl_manager_parent_track()
+    local selected_note = manager_parent and get_mpl_selected_pad_note(manager_parent)
+    if selected_note then
+        local label = "Load to selected RS5K Manager pad (" .. midi_note_to_name(selected_note) .. ")"
+        if r.ImGui_MenuItem(ctx, label) then
+            load_sample_to_selected_mpl_pad(file_path, manager_parent, selected_note)
+        end
+    end
+
+    local track = r.GetSelectedTrack(0, 0)
+    if track then
+        local actual_track, is_mpl_parent = get_mpl_rs5k_track_and_parent(track)
+
+        if is_mpl_parent then
+            local filled_pads = get_mpl_filled_pads(actual_track)
+            if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                if #filled_pads > 0 then
+                    for _, pad in ipairs(filled_pads) do
+                        local pad_label = midi_note_to_name(pad.note)
+                        if pad.sample_name ~= "" then
+                            pad_label = pad_label .. " - " .. pad.sample_name
+                        end
+                        if r.ImGui_MenuItem(ctx, pad_label) then
+                            load_sample_to_rs5k_pad(file_path, pad.track, pad.fx_idx, nil)
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                end
+                for _, range in ipairs(RS5K_PAD_RANGES) do
+                    local range_label = range.label
+                    if r.ImGui_BeginMenu(ctx, range_label) then
+                        for note = range.start_note, range.end_note do
+                            local existing_pad = find_pad_by_note(filled_pads, note)
+                            if not existing_pad then
+                                if r.ImGui_MenuItem(ctx, midi_note_to_name(note)) then
+                                    create_rs5k_pad_track(file_path, actual_track, note)
+                                end
+                            end
+                        end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+            if #filled_pads > 0 then
+                if r.ImGui_BeginMenu(ctx, "Delete RS5K Pad...") then
+                    for _, pad in ipairs(filled_pads) do
+                        local pad_label = midi_note_to_name(pad.note)
+                        if pad.sample_name ~= "" then
+                            pad_label = pad_label .. " - " .. pad.sample_name
+                        end
+                        if r.ImGui_MenuItem(ctx, pad_label) then
+                            delete_rs5k_pad(pad)
+                        end
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
+            end
+        else
+            local rs5k_instances = get_rs5k_instances_on_track(track)
+            if #rs5k_instances > 0 then
+                if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
+                    for _, inst in ipairs(rs5k_instances) do
+                        local pad_label = inst.note_name
+                        if inst.sample_name ~= "" then
+                            pad_label = pad_label .. " - " .. inst.sample_name
+                        end
+                        if r.ImGui_MenuItem(ctx, pad_label) then
+                            load_sample_to_rs5k_pad(file_path, track, inst.fx_idx, nil)
+                        end
+                    end
+                    r.ImGui_Separator(ctx)
+                    if r.ImGui_MenuItem(ctx, "+ Add new RS5K instance") then
+                        local next_note = 36
+                        if #rs5k_instances > 0 then
+                            next_note = rs5k_instances[#rs5k_instances].note_start + 1
+                            if next_note > 127 then next_note = 127 end
+                        end
+                        load_sample_to_rs5k_pad(file_path, track, nil, next_note)
+                    end
+                    r.ImGui_EndMenu(ctx)
+                end
+            else
+                if r.ImGui_MenuItem(ctx, "Create RS5K pad (C2)") then
+                    create_rs5k_pad_track(file_path, actual_track, 36)
+                end
+            end
+        end
+    end
+    if r.ImGui_MenuItem(ctx, "Create empty RS5K Rack") then
+        create_empty_rs5k_rack()
+    end
+    r.ImGui_Separator(ctx)
 end
 
 function get_audio_file_info(file_path)
@@ -8631,111 +8864,9 @@ function draw_file_list()
                                     render_lufs_context_menu(file_path, { file_path }, insert_track)
 
                                     render_remove_from_collection_menu(file_path, nil)
-                                    
-                                    local ext = file_path:match("%.([^%.]+)$")
-                                    if ext then
-                                        ext = ext:lower()
-                                        if ext ~= "mid" and ext ~= "midi" then
-                                            if r.ImGui_MenuItem(ctx, "Add to new track with ReaSamplomatic5000") then
-                                                insert_with_reasamplomatic(file_path)
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
-                                                replace_reasamplomatic_sample(file_path)
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Add to new track with Cartridge") then
-                                                create_track_with_cartridge(file_path)
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Load sample to focused Cartridge") then
-                                                load_sample_to_cartridge_focused(file_path)
-                                            end
-                                            
-                                            local track = r.GetSelectedTrack(0, 0)
-                                            if track then
-                                                local actual_track, is_mpl_parent = get_mpl_rs5k_track_and_parent(track)
-                                                
-                                                if is_mpl_parent then
-                                                    local filled_pads = get_mpl_filled_pads(actual_track)
-                                                    if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
-                                                        if #filled_pads > 0 then
-                                                            for _, pad in ipairs(filled_pads) do
-                                                                local pad_label = midi_note_to_name(pad.note)
-                                                                if pad.sample_name ~= "" then
-                                                                    pad_label = pad_label .. " - " .. pad.sample_name
-                                                                end
-                                                                if r.ImGui_MenuItem(ctx, pad_label) then
-                                                                    load_sample_to_rs5k_pad(file_path, pad.track, pad.fx_idx, nil)
-                                                                end
-                                                            end
-                                                            r.ImGui_Separator(ctx)
-                                                        end
-                                                        for _, range in ipairs(RS5K_PAD_RANGES) do
-                                                            local range_label = range.label
-                                                            if r.ImGui_BeginMenu(ctx, range_label) then
-                                                                for note = range.start_note, range.end_note do
-                                                                    local existing_pad = find_pad_by_note(filled_pads, note)
-                                                                    if not existing_pad then
-                                                                        if r.ImGui_MenuItem(ctx, midi_note_to_name(note)) then
-                                                                            create_rs5k_pad_track(file_path, actual_track, note)
-                                                                        end
-                                                                    end
-                                                                end
-                                                                r.ImGui_EndMenu(ctx)
-                                                            end
-                                                        end
-                                                        r.ImGui_EndMenu(ctx)
-                                                    end
-                                                    if #filled_pads > 0 then
-                                                        if r.ImGui_BeginMenu(ctx, "Delete RS5K Pad...") then
-                                                            for _, pad in ipairs(filled_pads) do
-                                                                local pad_label = midi_note_to_name(pad.note)
-                                                                if pad.sample_name ~= "" then
-                                                                    pad_label = pad_label .. " - " .. pad.sample_name
-                                                                end
-                                                                if r.ImGui_MenuItem(ctx, pad_label) then
-                                                                    delete_rs5k_pad(pad)
-                                                                end
-                                                            end
-                                                            r.ImGui_EndMenu(ctx)
-                                                        end
-                                                    end
-                                                else
-                                                    local rs5k_instances = get_rs5k_instances_on_track(track)
-                                                    if #rs5k_instances > 0 then
-                                                        if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
-                                                            for _, inst in ipairs(rs5k_instances) do
-                                                                local pad_label = inst.note_name
-                                                                if inst.sample_name ~= "" then
-                                                                    pad_label = pad_label .. " - " .. inst.sample_name
-                                                                end
-                                                                if r.ImGui_MenuItem(ctx, pad_label) then
-                                                                    load_sample_to_rs5k_pad(file_path, track, inst.fx_idx, nil)
-                                                                end
-                                                            end
-                                                            r.ImGui_Separator(ctx)
-                                                            if r.ImGui_MenuItem(ctx, "+ Add new RS5K instance") then
-                                                                local next_note = 36
-                                                                if #rs5k_instances > 0 then
-                                                                    next_note = rs5k_instances[#rs5k_instances].note_start + 1
-                                                                    if next_note > 127 then next_note = 127 end
-                                                                end
-                                                                load_sample_to_rs5k_pad(file_path, track, nil, next_note)
-                                                            end
-                                                            r.ImGui_EndMenu(ctx)
-                                                        end
-                                                    else
-                                                        if r.ImGui_MenuItem(ctx, "Create RS5K pad (C2)") then
-                                                            create_rs5k_pad_track(file_path, actual_track, 36)
-                                                        end
-                                                    end
-                                                end
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Create empty RS5K Rack") then
-                                                create_empty_rs5k_rack()
-                                            end
-                                            r.ImGui_Separator(ctx)
-                                        end
-                                    end
-                                    
+
+                                    render_rs5k_sampler_menu(file_path)
+
                                     r.ImGui_Text(ctx, "Add to Collection:")
                                     r.ImGui_Separator(ctx)
                                     render_add_to_collection_menu(file_path, nil)
@@ -9347,111 +9478,9 @@ function draw_file_list()
                                     render_lufs_context_menu(file.full_path, files_to_process, insert_track)
 
                                     render_remove_from_collection_menu(file.full_path, files_to_process)
-                                    
-                                    local ext = file.full_path:match("%.([^%.]+)$")
-                                    if ext then
-                                        ext = ext:lower()
-                                        if ext ~= "mid" and ext ~= "midi" then
-                                            if r.ImGui_MenuItem(ctx, "Add to new track with ReaSamplomatic5000") then
-                                                insert_with_reasamplomatic(file.full_path)
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Replace or add sample on selected track") then
-                                                replace_reasamplomatic_sample(file.full_path)
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Add to new track with Cartridge") then
-                                                create_track_with_cartridge(file.full_path)
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Load sample to focused Cartridge") then
-                                                load_sample_to_cartridge_focused(file.full_path)
-                                            end
-                                            
-                                            local track = r.GetSelectedTrack(0, 0)
-                                            if track then
-                                                local actual_track, is_mpl_parent = get_mpl_rs5k_track_and_parent(track)
-                                                
-                                                if is_mpl_parent then
-                                                    local filled_pads = get_mpl_filled_pads(actual_track)
-                                                    if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
-                                                        if #filled_pads > 0 then
-                                                            for _, pad in ipairs(filled_pads) do
-                                                                local pad_label = midi_note_to_name(pad.note)
-                                                                if pad.sample_name ~= "" then
-                                                                    pad_label = pad_label .. " - " .. pad.sample_name
-                                                                end
-                                                                if r.ImGui_MenuItem(ctx, pad_label) then
-                                                                    load_sample_to_rs5k_pad(file.full_path, pad.track, pad.fx_idx, nil)
-                                                                end
-                                                            end
-                                                            r.ImGui_Separator(ctx)
-                                                        end
-                                                        for _, range in ipairs(RS5K_PAD_RANGES) do
-                                                            local range_label = range.label
-                                                            if r.ImGui_BeginMenu(ctx, range_label) then
-                                                                for note = range.start_note, range.end_note do
-                                                                    local existing_pad = find_pad_by_note(filled_pads, note)
-                                                                    if not existing_pad then
-                                                                        if r.ImGui_MenuItem(ctx, midi_note_to_name(note)) then
-                                                                            create_rs5k_pad_track(file.full_path, actual_track, note)
-                                                                        end
-                                                                    end
-                                                                end
-                                                                r.ImGui_EndMenu(ctx)
-                                                            end
-                                                        end
-                                                        r.ImGui_EndMenu(ctx)
-                                                    end
-                                                    if #filled_pads > 0 then
-                                                        if r.ImGui_BeginMenu(ctx, "Delete RS5K Pad...") then
-                                                            for _, pad in ipairs(filled_pads) do
-                                                                local pad_label = midi_note_to_name(pad.note)
-                                                                if pad.sample_name ~= "" then
-                                                                    pad_label = pad_label .. " - " .. pad.sample_name
-                                                                end
-                                                                if r.ImGui_MenuItem(ctx, pad_label) then
-                                                                    delete_rs5k_pad(pad)
-                                                                end
-                                                            end
-                                                            r.ImGui_EndMenu(ctx)
-                                                        end
-                                                    end
-                                                else
-                                                    local rs5k_instances = get_rs5k_instances_on_track(track)
-                                                    if #rs5k_instances > 0 then
-                                                        if r.ImGui_BeginMenu(ctx, "Load to RS5K Pad...") then
-                                                            for _, inst in ipairs(rs5k_instances) do
-                                                                local pad_label = inst.note_name
-                                                                if inst.sample_name ~= "" then
-                                                                    pad_label = pad_label .. " - " .. inst.sample_name
-                                                                end
-                                                                if r.ImGui_MenuItem(ctx, pad_label) then
-                                                                    load_sample_to_rs5k_pad(file.full_path, track, inst.fx_idx, nil)
-                                                                end
-                                                            end
-                                                            r.ImGui_Separator(ctx)
-                                                            if r.ImGui_MenuItem(ctx, "+ Add new RS5K instance") then
-                                                                local next_note = 36
-                                                                if #rs5k_instances > 0 then
-                                                                    next_note = rs5k_instances[#rs5k_instances].note_start + 1
-                                                                    if next_note > 127 then next_note = 127 end
-                                                                end
-                                                                load_sample_to_rs5k_pad(file.full_path, track, nil, next_note)
-                                                            end
-                                                            r.ImGui_EndMenu(ctx)
-                                                        end
-                                                    else
-                                                        if r.ImGui_MenuItem(ctx, "Create RS5K pad (C2)") then
-                                                            create_rs5k_pad_track(file.full_path, actual_track, 36)
-                                                        end
-                                                    end
-                                                end
-                                            end
-                                            if r.ImGui_MenuItem(ctx, "Create empty RS5K Rack") then
-                                                create_empty_rs5k_rack()
-                                            end
-                                            r.ImGui_Separator(ctx)
-                                        end
-                                    end
-                                    
+
+                                    render_rs5k_sampler_menu(file.full_path)
+
                                     r.ImGui_Text(ctx, "Add to Collection:")
                                     r.ImGui_Separator(ctx)
                                     render_add_to_collection_menu(file.full_path, files_to_process)
