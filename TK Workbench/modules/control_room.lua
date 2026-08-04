@@ -98,7 +98,8 @@ local MONITOR_MODE_LABELS = {
   mid = "Mid (M)", side = "Side (S)", low = "Low Band", high = "High Band"
 }
 -- Modes fed by the downmix JSFX, in the order their output pairs are laid out
--- past the bed. One instance per mode, so two monitors can check two things.
+-- past the bed. One instance serves all of them, a pair each, so two monitors
+-- can check two different things without a second plugin.
 local MONITOR_BUS_MODES = { "fold_stereo", "mid", "side", "low", "high" }
 -- Modes stored by earlier versions, mapped onto the layout aware names.
 local LEGACY_MONITOR_MODES = {
@@ -118,7 +119,8 @@ local FOLD_PLUGIN_NAMES = {
   "JS: TK Control Room Downmix",
   "JS: TK_Control_Room_Downmix"
 }
-local FOLD_PARAMS = { layout = 0, source = 1, fold = 2, center = 3, surround = 4, lfe_on = 5, lfe = 6, trim = 7, run = 8, process = 9, crossover = 10 }
+-- enable is the first of five on/off sliders, one per mode in MONITOR_BUS_MODES.
+local FOLD_PARAMS = { layout = 0, source = 1, fold = 2, center = 3, surround = 4, lfe_on = 5, lfe = 6, trim = 7, run = 8, enable = 9, crossover = 14 }
 local MAX_TRACK_CHANNELS = 128
 
 function cr_bus_index(mode)
@@ -1237,32 +1239,42 @@ local function set_monitor_format(app, settings, target, layout, base)
   return true
 end
 
--- Process is slider 10, added in JSFX 0.2. An instance still running 0.1 does
--- not have it and can only ever be the fold-down, so it reads as mode 0.
-function cr_bus_fx_process(track, index)
-  if not r.TrackFX_GetParamName or not r.TrackFX_GetParam then return 0 end
-  local named, name = r.TrackFX_GetParamName(track, index, FOLD_PARAMS.process, "")
-  if not named or not tostring(name):find("Process", 1, true) then return 0 end
-  local raw = r.TrackFX_GetParam(track, index, FOLD_PARAMS.process)
-  return math.floor((tonumber(raw) or 0) + 0.5)
-end
-
-function cr_bus_fx_supports_process(track, index)
+-- The five pair switches arrived in JSFX 0.3. An instance still running an
+-- older build only has the fold-down, and says so here.
+function cr_bus_fx_supports_pairs(track, index)
   if not r.TrackFX_GetParamName then return false end
-  local named, name = r.TrackFX_GetParamName(track, index, FOLD_PARAMS.process, "")
-  return named == true and tostring(name):find("Process", 1, true) ~= nil
+  local named, name = r.TrackFX_GetParamName(track, index, FOLD_PARAMS.crossover, "")
+  return named == true and tostring(name):find("Crossover", 1, true) ~= nil
 end
 
-local function find_fold_fx(track, mode)
+function cr_bus_enable_param(mode)
+  return FOLD_PARAMS.enable + (cr_bus_index(mode) or 0)
+end
+
+local function find_fold_fx(track)
   if not valid_track(track) or not r.TrackFX_GetCount or not r.TrackFX_GetFXName then return nil end
-  local wanted = cr_bus_index(mode or "fold_stereo") or 0
   for index = 0, (r.TrackFX_GetCount(track) or 0) - 1 do
     local ok, name = r.TrackFX_GetFXName(track, index, "")
     if ok and tostring(name or ""):find(FOLD_PLUGIN_MATCH, 1, true) then
-      if cr_bus_fx_process(track, index) == wanted then return index end
+      return index
     end
   end
   return nil
+end
+
+-- The master needs one downmix, not one per check picked.
+function cr_drop_extra_bus_fx(track, keep)
+  if not r.TrackFX_Delete or not keep then return keep end
+  for index = (r.TrackFX_GetCount(track) or 0) - 1, 0, -1 do
+    if index ~= keep then
+      local ok, name = r.TrackFX_GetFXName(track, index, "")
+      if ok and tostring(name or ""):find(FOLD_PLUGIN_MATCH, 1, true) then
+        r.TrackFX_Delete(track, index)
+        if index < keep then keep = keep - 1 end
+      end
+    end
+  end
+  return keep
 end
 
 -- Each mode gets its own pair, laid out on the first even channel past the bed,
@@ -1291,39 +1303,40 @@ local function ensure_fold_bus(app, settings, master, layout, base, install, mod
   layout = layout or Layouts.by_id("stereo")
   mode = mode or "fold_stereo"
   if mode == "fold_stereo" and layout.channels <= 2 then return nil, "Fold-down needs a multichannel format" end
-  local index = find_fold_fx(master, mode)
+  local index = find_fold_fx(master)
   if not index then
-    if not install or not r.TrackFX_AddByName then return nil, MONITOR_MODE_LABELS[mode] .. " JSFX is not on the master" end
+    if not install or not r.TrackFX_AddByName then return nil, "The downmix JSFX is not on the master" end
     for _, name in ipairs(FOLD_PLUGIN_NAMES) do
       local added = r.TrackFX_AddByName(master, name, false, -1)
       if added and added >= 0 then index = added; break end
     end
     if not index then return nil, "TK_Control_Room_Downmix.jsfx not found - reinstall TK Workbench in ReaPack and restart REAPER" end
-    if mode ~= "fold_stereo" and not cr_bus_fx_supports_process(master, index) then
-      if r.TrackFX_Delete then r.TrackFX_Delete(master, index) end
-      return nil, "The downmix JSFX on this system is still 0.1 - update TK Workbench in ReaPack, then reload the plugin"
-    end
+  end
+  index = cr_drop_extra_bus_fx(master, index)
+  local pairs_ok = cr_bus_fx_supports_pairs(master, index)
+  if mode ~= "fold_stereo" and not pairs_ok then
+    return nil, "The downmix JSFX on the master is an older build - remove it and pick the mode again"
   end
   local offset = fold_offset_for(layout, base, mode)
   grow_track_channel_count(master, offset + 2, "Control Room: Widen master for monitoring")
   set_fold_param(master, index, FOLD_PARAMS.layout, Layouts.jsfx_layout_index[layout.id] or 3)
   set_fold_param(master, index, FOLD_PARAMS.source, base)
-  set_fold_param(master, index, FOLD_PARAMS.fold, offset)
+  set_fold_param(master, index, FOLD_PARAMS.fold, fold_offset_for(layout, base, "fold_stereo"))
   set_fold_param(master, index, FOLD_PARAMS.center, tonumber(settings.fold_center_db) or defaults.fold_center_db)
   set_fold_param(master, index, FOLD_PARAMS.surround, tonumber(settings.fold_surround_db) or defaults.fold_surround_db)
   set_fold_param(master, index, FOLD_PARAMS.lfe_on, settings.fold_lfe == true and 1 or 0)
   set_fold_param(master, index, FOLD_PARAMS.lfe, tonumber(settings.fold_lfe_db) or defaults.fold_lfe_db)
   set_fold_param(master, index, FOLD_PARAMS.trim, tonumber(settings.fold_trim_db) or defaults.fold_trim_db)
-  if cr_bus_fx_supports_process(master, index) then
-    set_fold_param(master, index, FOLD_PARAMS.process, cr_bus_index(mode) or 0)
+  if pairs_ok then
+    set_fold_param(master, index, cr_bus_enable_param(mode), 1)
     set_fold_param(master, index, FOLD_PARAMS.crossover, tonumber(settings.monitor_crossover_hz) or defaults.monitor_crossover_hz)
   end
   set_fold_param(master, index, FOLD_PARAMS.run, 1)
   return offset, nil
 end
 
-local function remove_fold_bus(master, mode)
-  local index = find_fold_fx(master, mode)
+local function remove_fold_bus(master)
+  local index = find_fold_fx(master)
   if not index or not r.TrackFX_Delete then return false end
   return write_with_undo("Control Room: Remove monitor processing", function()
     return r.TrackFX_Delete(master, index)
@@ -1479,16 +1492,22 @@ local function fold_bus_in_use(settings, master, mode)
   return false
 end
 
--- Switching the last monitor away from a processed mode leaves its instance in
--- place, where it would keep overwriting a pair on the master. Park it instead
--- of deleting it: the user may have tuned the levels, and Setup has an explicit
--- Remove button for real cleanup.
+-- Switching the last monitor away from a processed mode leaves the instance in
+-- place, where its pair would keep overwriting channels on the master. Switch
+-- that pair off instead of deleting the plugin: the user may have tuned the
+-- levels, and Setup has an explicit Remove button for real cleanup.
 local function sync_fold_bus_run(settings, master)
   if not valid_track(master) then return end
+  local index = find_fold_fx(master)
+  if not index then return end
+  local any = false
+  local pairs_ok = cr_bus_fx_supports_pairs(master, index)
   for _, mode in ipairs(MONITOR_BUS_MODES) do
-    local index = find_fold_fx(master, mode)
-    if index then set_fold_param(master, index, FOLD_PARAMS.run, fold_bus_in_use(settings, master, mode) and 1 or 0) end
+    local used = fold_bus_in_use(settings, master, mode)
+    if used then any = true end
+    if pairs_ok then set_fold_param(master, index, cr_bus_enable_param(mode), used and 1 or 0) end
   end
+  set_fold_param(master, index, FOLD_PARAMS.run, any and 1 or 0)
 end
 
 local function add_monitor_output(master, outputs, targets)
@@ -2565,15 +2584,14 @@ end
 
 local CHANNEL_MAP_COLUMNS = 8
 
--- The processed modes each keep an instance on the master. They cost nothing
--- while parked, but there is no reason to leave one behind either.
+-- One downmix on the master serves every check, a pair each, so what shows here
+-- is which of those pairs is being listened to.
 function cr_draw_monitor_processing(ctx, app, settings, master, master_layout)
-  local names, idle = {}, 0
-  for _, mode in ipairs(MONITOR_BUS_MODES) do
-    if mode ~= "fold_stereo" and find_fold_fx(master, mode) then
-      local active = fold_bus_in_use(settings, master, mode)
-      if not active then idle = idle + 1 end
-      names[#names + 1] = (MONITOR_MODE_LABELS[mode] or mode) .. (active and "" or " (idle)")
+  local index = find_fold_fx(master)
+  local names = {}
+  if index then
+    for _, mode in ipairs(MONITOR_BUS_MODES) do
+      if fold_bus_in_use(settings, master, mode) then names[#names + 1] = MONITOR_MODE_LABELS[mode] or mode end
     end
   end
   local theme_count = push_setup_slider_theme(ctx)
@@ -2583,25 +2601,14 @@ function cr_draw_monitor_processing(ctx, app, settings, master, master_layout)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Split point of the Low Band and High Band monitor modes") end
   if changed then
     settings.monitor_crossover_hz = value
-    if find_fold_fx(master, "low") then ensure_fold_bus(app, settings, master, master_layout, 0, false, "low") end
-    if find_fold_fx(master, "high") then ensure_fold_bus(app, settings, master, master_layout, 0, false, "high") end
+    if index then set_fold_param(master, index, FOLD_PARAMS.crossover, value) end
     if app.save_settings then app.save_settings() end
   end
-  if #names > 0 then
+  if index then
     r.ImGui_SameLine(ctx)
-    r.ImGui_TextColored(ctx, idle > 0 and Theme.colors.warning or Theme.colors.text_dim, table.concat(names, ", "))
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Monitor processing running on the master.\n(idle) means no monitor is set to it.") end
-    if idle > 0 then
-      r.ImGui_SameLine(ctx)
-      if r.ImGui_Button(ctx, "Clear idle##control_room_bus_clear", UIScale.text_button_w(ctx, "Clear idle", 84, 8), 0) then
-        for _, mode in ipairs(MONITOR_BUS_MODES) do
-          if mode ~= "fold_stereo" and find_fold_fx(master, mode) and not fold_bus_in_use(settings, master, mode) then
-            remove_fold_bus(master, mode)
-          end
-        end
-      end
-      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Take the processing nothing is listening to off the master") end
-    end
+    local idle = #names == 0
+    r.ImGui_TextColored(ctx, idle and Theme.colors.text_dim or Theme.colors.text, idle and "Downmix idle" or table.concat(names, ", "))
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, idle and "The downmix is on the master but no monitor is set to a check" or "Checks the downmix is feeding a monitor") end
   end
 end
 
@@ -2621,8 +2628,8 @@ end
 -- overlapping setup can be seen instead of worked out.
 function cr_channel_map_usage(settings, master, outputs, bed)
   local bus_bases = {}
-  for _, mode in ipairs(MONITOR_BUS_MODES) do
-    if find_fold_fx(master, mode) then bus_bases[mode] = fold_offset_for(bed, 0, mode) end
+  if find_fold_fx(master) then
+    for _, mode in ipairs(MONITOR_BUS_MODES) do bus_bases[mode] = fold_offset_for(bed, 0, mode) end
   end
   local master_channels = track_channel_count(master)
   local source_users, hardware_users, issues = {}, {}, {}
