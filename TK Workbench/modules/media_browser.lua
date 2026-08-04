@@ -1746,6 +1746,11 @@ local function clear_drag()
   state.drag_target_lane = nil
   state.drag_saved_cursor = nil
   state.drag_cursor_position = nil
+  -- TK drag protocol: stop advertising the drag (see update_drag)
+  if r.DeleteExtState then
+    r.DeleteExtState("TK_DRAG", "path", false)
+    r.DeleteExtState("TK_DRAG", "heartbeat", false)
+  end
 end
 
 local function mouse_screen_position()
@@ -3255,6 +3260,67 @@ function Sampler.mpl_track_and_parent(track)
   return track, false
 end
 
+-- Resolve the rack the RS5k manager is showing, the way the manager itself does: a device
+-- pinned with "stick to parent" wins, otherwise the selected track (or its parent).
+function Sampler.mpl_manager_parent()
+  local _, stuck_guid = r.GetProjExtState(0, "MPLRS5KMAN", "STICKPARENTGUID")
+  if stuck_guid and stuck_guid ~= "" then
+    for track_index = 0, r.CountTracks(0) - 1 do
+      local candidate = r.GetTrack(0, track_index)
+      if candidate and Sampler.track_guid(candidate):gsub("%p+", "") == stuck_guid:gsub("%p+", "") then
+        return candidate
+      end
+    end
+  end
+  local selected = r.GetSelectedTrack(0, 0)
+  if not selected then return nil end
+  local parent, is_mpl = Sampler.mpl_track_and_parent(selected)
+  if is_mpl then return parent end
+  return nil
+end
+
+function Sampler.mpl_selected_pad_note(parent_track)
+  if not parent_track then return nil end
+  local _, note_str = r.GetSetMediaTrackInfo_String(parent_track, "P_EXT:MPLRS5KMAN_LASTACTIVENOTE", "", false)
+  local note = tonumber(note_str)
+  if not note then return nil end
+  note = math.floor(note)
+  if note < 0 or note > 127 then return nil end
+  return note
+end
+
+-- MPL's RS5k manager cannot be taught the TK drag protocol from here, and while docked it
+-- receives no OS drop either. Releasing anywhere on its window therefore loads the sample
+-- into the pad selected there - the same target the right-click menu uses.
+function Sampler.point_over_rs5k_manager(mx, my)
+  if not (r.JS_Window_FromPoint and r.JS_Window_GetClassName and mx and my) then return false end
+  local w = r.JS_Window_FromPoint(mx, my)
+  local guard = 0
+  while w and guard < 8 do
+    local class = r.JS_Window_GetClassName(w) or ""
+    if class == "ImGuiWindow" or class:match("^reaper_imgui") then
+      local title = (r.JS_Window_GetTitle and r.JS_Window_GetTitle(w) or ""):lower()
+      return title:match("^rs5k manager") ~= nil
+    end
+    w = r.JS_Window_GetParent(w)
+    guard = guard + 1
+  end
+  return false
+end
+
+function Sampler.try_drop_on_rs5k_manager(app, file)
+  if not file or not Sampler.compatible(file) then return false end
+  local mx, my = mouse_screen_position()
+  if not Sampler.point_over_rs5k_manager(mx, my) then return false end
+  local parent = Sampler.mpl_manager_parent()
+  if not parent then return false end
+  local note = Sampler.mpl_selected_pad_note(parent)
+  if not note then return false end
+  local pad = Sampler.find_mpl_pad(Sampler.filled_mpl_pads(parent), note)
+  if pad then return Sampler.load_rs5k_pad(app, file, pad.track, pad.fx, nil) end
+  return Sampler.create_rs5k_manager_pad(app, file, parent, note)
+end
+
 function Sampler.find_mpl_midi_bus(parent_track, parent_guid)
   local parent_index = math.floor(r.GetMediaTrackInfo_Value(parent_track, "IP_TRACKNUMBER") or 0) - 1
   for track_index = parent_index + 1, r.CountTracks(0) - 1 do
@@ -3546,15 +3612,23 @@ local function native_drag_available()
   return r.TK_StartFileDrag ~= nil
 end
 
-local function point_over_arrange(mx, my)
-  if not (r.JS_Window_FromPoint and r.GetMainHwnd and r.JS_Window_FindChildByID) then return true end
-  local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
-  if not arrange then return true end
+local function point_over_main_window(mx, my)
+  if not (r.JS_Window_FromPoint and r.GetMainHwnd) then return true end
+  local main = r.GetMainHwnd()
+  if not main then return true end
   local w = r.JS_Window_FromPoint(mx, my)
   if not w then return false end
   local guard = 0
   while w and guard < 64 do
-    if w == arrange then return true end
+    if w == main then return true end
+    -- Stop at the first top-level window. Floating plugin windows are owned by the main
+    -- window, so GetParent() reports the main window for those as well; without this the
+    -- walk would flag them as "inside REAPER" and skip the native drag.
+    if r.JS_Window_GetLong then
+      local style = tonumber(r.JS_Window_GetLong(w, "STYLE")) or 0
+      if style < 0 then style = style + 4294967296 end
+      if math.floor(style / 0x40000000) % 2 == 0 then return false end
+    end
     w = r.JS_Window_GetParent(w)
     guard = guard + 1
   end
@@ -3572,7 +3646,7 @@ local function try_native_drag(file, mx, my)
   if not file or not file.path then return false end
   if not mx or not my then return false end
   if point_inside_browser(mx, my) then return false end
-  if point_over_arrange(mx, my) then return false end
+  if point_over_main_window(mx, my) then return false end
   if state.drag_saved_cursor then
     r.SetEditCurPos(state.drag_saved_cursor, false, false)
   end
@@ -3608,6 +3682,13 @@ local function update_drag(app)
         clear_drag()
         return
       end
+      -- TK drag protocol: advertise the drag so other TK scripts can pick it up themselves.
+      -- An OS drag never reaches a docked ReaImGui window, so for docked targets this is the
+      -- only route. The heartbeat lets a receiver ignore state left behind by a crash.
+      if r.SetExtState then
+        r.SetExtState("TK_DRAG", "path", state.dragging_file.path or "", false)
+        r.SetExtState("TK_DRAG", "heartbeat", tostring(r.time_precise()), false)
+      end
     end
     local track, lane = track_under_mouse()
     state.drag_target_track = track
@@ -3637,8 +3718,11 @@ local function update_drag(app)
           target_lane = math.floor(r.GetMediaTrackInfo_Value(track, "I_NUMFIXEDLANES") or 0)
         end
         insert_file_on_track(app, state.dragging_file, track, target_lane)
-      elseif state.drag_saved_cursor then
-        r.SetEditCurPos(state.drag_saved_cursor, false, false)
+      else
+        Sampler.try_drop_on_rs5k_manager(app, state.dragging_file)
+        if state.drag_saved_cursor then
+          r.SetEditCurPos(state.drag_saved_cursor, false, false)
+        end
       end
       clear_drag()
     end

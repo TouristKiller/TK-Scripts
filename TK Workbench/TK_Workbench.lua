@@ -1,7 +1,12 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.69
+-- @version 0.6.70
 -- @changelog:
+-- v0.6.70
+--   + Media browser: dragging a sample onto a window docked inside REAPER no longer hands the drag to the operating system. A docked window cannot receive an OS drop, so Windows passed it to the main window instead and the sample landed in the arrange
+--   + Media browser: a drag is now advertised to other TK scripts while it lasts, so they can pick it up themselves. Dropping a sample on a TK Kit Maker rack pad therefore works with Kit Maker docked, which an OS drag can never do
+--   + Media browser: releasing a dragged sample anywhere on MPL's RS5k manager window loads it into the pad selected there. Aiming at the pad itself is not possible while the manager is docked (it receives no drop at all then), so the selected pad stands in for it - the same target the right-click menu uses
+--
 -- v0.6.69
 --   + Send Studio: A send can be given a name of its own. REAPER has no name field for a send - every list one appears in is labelled with the destination track - so three sends from one instrument to one sampler bus read as three identical rows, which is precisely what a template that switches articulation by MIDI channel is built out of. The name is typed in the "..." menu, or on a right-click of the name plate in strip view, and it is kept on the send itself, so it is saved with the project and stays with the send when the routing is reordered. Clearing it hands the track name back. It shows in Send Studio only - REAPER's own mixer goes on naming the track, as there is nothing in the send for it to read
 --   + Send Studio: The channel button carries the MIDI channel. It only ever showed the audio pair, so a MIDI-only send read "MIDI > MIDI" no matter where it went, and the one number that told a set of sends apart was a popup away. It now reads "MIDI 1>3", or "1/2 > 1/2 | MIDI 1" when the send carries both, or "Off" when it carries neither

@@ -1021,9 +1021,38 @@ local function load_sample_to_track(track, sample_path)
   return false
 end
 
+-- TK drag protocol: another TK script advertises "I am dragging this file" in ExtState and
+-- refreshes a heartbeat every frame. Adopting it here means a drop works even while this
+-- window is docked, which an OS drag never manages because a docked ReaImGui window is not
+-- a drop target. Stale state from a crashed sender expires with the heartbeat.
+local TK_DRAG_SECTION = "TK_DRAG"
+local TK_DRAG_TIMEOUT = 0.5
+
+local function external_drag_path()
+  if not r.GetExtState then return nil end
+  local path = r.GetExtState(TK_DRAG_SECTION, "path")
+  if not path or path == "" then return nil end
+  local heartbeat = tonumber(r.GetExtState(TK_DRAG_SECTION, "heartbeat") or "")
+  if not heartbeat then return nil end
+  if (r.time_precise() - heartbeat) > TK_DRAG_TIMEOUT then return nil end
+  return path
+end
+
 function M.update_drag_drop(app)
   local state = app.browser
-  if not state or not state.drag_sample_path then return end
+  if not state then return end
+
+  if not state.drag_sample_path then
+    local external = external_drag_path()
+    if external then
+      state.drag_sample_path = external
+      state.drag_external = true
+      state.drag_release_seen = false
+      state.drag_native_mode = false
+    end
+  end
+
+  if not state.drag_sample_path then return end
 
   local mouse_down = false
   if r.JS_Mouse_GetState then
@@ -1076,6 +1105,18 @@ function M.commit_track_drop(app)
   end
 
   if not state.drag_sample_path or not state.drag_release_seen then return end
+
+  -- An adopted drag belongs to the sending script, which handles its own track drop; the
+  -- pads already had their chance earlier this frame in RS5KManagerView.draw. So only drop
+  -- our copy here instead of inserting the sample a second time.
+  if state.drag_external then
+    state.drag_sample_path = nil
+    state.drag_release_seen = false
+    state.drag_mouse_was_down = false
+    state.drag_track_target = nil
+    state.drag_external = false
+    return
+  end
 
   local sample_path = tostring(state.drag_sample_path or "")
   local track = state.drag_track_target or r.GetSelectedTrack(0, 0)
@@ -1927,6 +1968,7 @@ local function draw_sample_row(app, file_path)
       state.drag_sample_path = file_path
       state.drag_release_seen = false
       state.drag_mouse_was_down = true
+      state.drag_external = false
 
       local native_drag = false
       if r.ImGui_GetKeyMods and r.ImGui_Mod_Alt then
@@ -5223,6 +5265,7 @@ function M.init(app)
     native_drag_file = nil,
     drag_sample_path = nil,
     drag_release_seen = false,
+    drag_external = false,
     drag_mouse_was_down = false,
     drag_track_target = nil,
     drag_native_mode = false,

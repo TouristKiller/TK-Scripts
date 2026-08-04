@@ -1,7 +1,13 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.48
+-- @version 0.2.49
 -- @changelog:
+--   0.2.49
+--   + Rack pads now accept a sample dragged in from another TK script (the TK
+--     Workbench media browser) while the Kit Maker window is docked. A docked
+--     window is not an operating-system drop target, so the drag is picked up
+--     from the sending script directly instead of from the OS
+--
 --   0.2.48
 --   + Add a whole shelf of packs at once: right-click "+ Folder" for "Add
 --     subfolders as collections". Pick the folder whose subfolders are your

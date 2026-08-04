@@ -1,8 +1,12 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.96
+-- @version 0.9.97
 -- @changelog:
 --[[
+v0.9.97:
++ A drag is now advertised to other TK scripts while it lasts, so they can pick it up themselves. Dropping a sample on a TK Kit Maker rack pad therefore works with Kit Maker docked, which an OS drag can never do
++ Releasing a dragged sample anywhere on MPL's RS5k manager window loads it into the pad selected there. Aiming at the pad itself is not possible while the manager is docked (it receives no drop at all then), so the selected pad stands in for it - the same target the right-click menu uses
+
 v0.9.96:
 + Docked script windows (RS5k manager and other ReaImGui windows) are now explicitly left to the script's own insert: while docked they do not accept an OS file drop, so a native drag there would be handed to REAPER's main window and the sample would land in the arrange. Drag onto a floating manager, or use "Load to selected RS5K Manager pad" from the right-click menu
 
@@ -7434,6 +7438,50 @@ local function tkmb_point_over_main_window(mx, my)
     return false
 end
 
+-- TK drag protocol: advertise the drag so other TK scripts can pick it up themselves. An OS
+-- drag never reaches a docked ReaImGui window, so for docked targets this is the only route.
+-- The heartbeat lets a receiver ignore state left behind by a crash.
+function tkmb_drag.publish(path)
+    if not r.SetExtState then return end
+    r.SetExtState("TK_DRAG", "path", path or "", false)
+    r.SetExtState("TK_DRAG", "heartbeat", tostring(r.time_precise()), false)
+end
+
+function tkmb_drag.unpublish()
+    if not r.DeleteExtState then return end
+    r.DeleteExtState("TK_DRAG", "path", false)
+    r.DeleteExtState("TK_DRAG", "heartbeat", false)
+end
+
+-- MPL's RS5k manager cannot be taught the TK drag protocol from here, and while docked it
+-- receives no OS drop either. Releasing anywhere on its window therefore loads the sample
+-- into the pad that is selected in the manager - the same target the right-click menu uses.
+function tkmb_drag.point_over_rs5k_manager(mx, my)
+    if not (r.JS_Window_FromPoint and mx and my) then return false end
+    local w = r.JS_Window_FromPoint(mx, my)
+    local guard = 0
+    while w and guard < 8 do
+        local class = tkmb_drag.window_class(w)
+        if class == "ImGuiWindow" or class:match("^reaper_imgui") then
+            return tkmb_drag.window_title(w):lower():match("^rs5k manager") ~= nil
+        end
+        w = r.JS_Window_GetParent(w)
+        guard = guard + 1
+    end
+    return false
+end
+
+function tkmb_drag.try_drop_on_rs5k_manager(file_path)
+    if not file_path then return false end
+    local mx, my = r.GetMousePosition()
+    if not tkmb_drag.point_over_rs5k_manager(mx, my) then return false end
+    local parent = get_mpl_manager_parent_track()
+    if not parent then return false end
+    local note = get_mpl_selected_pad_note(parent)
+    if not note then return false end
+    return load_sample_to_selected_mpl_pad(file_path, parent, note) == true
+end
+
 function tkmb_drag.clear_hover()
     insert_state.native_hover_hwnd = nil
     insert_state.native_hover_since = nil
@@ -7482,6 +7530,7 @@ local function tkmb_try_native_drag(mx, my)
     insert_state.drop_new_lane = false
     insert_state.saved_cursor_pos = nil
     insert_state.native_drag_started = false
+    tkmb_drag.unpublish()
     return true
 end
 
@@ -7497,6 +7546,7 @@ local function handle_reaper_drop()
         if tkmb_try_native_drag(mx, my) then
             return
         end
+        tkmb_drag.publish(insert_state.drop_file)
         local track, info = r.GetTrackFromPoint(mx, my)
         insert_state.drop_track = track
         insert_state.drop_lane = nil
@@ -7518,6 +7568,9 @@ local function handle_reaper_drop()
             end
         end
     elseif mouse_state == 0 and insert_state.is_dragging then
+        if insert_state.drop_file and not insert_state.drop_track then
+            tkmb_drag.try_drop_on_rs5k_manager(insert_state.drop_file)
+        end
         if insert_state.drop_file and insert_state.drop_track then
             local target_lane = insert_state.drop_lane
             if insert_state.drop_new_lane then
@@ -7538,6 +7591,7 @@ local function handle_reaper_drop()
         insert_state.drop_new_lane = false
         insert_state.saved_cursor_pos = nil
         tkmb_drag.clear_hover()
+        tkmb_drag.unpublish()
     end
 end
 
