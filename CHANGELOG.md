@@ -2,6 +2,19 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.6.69] - 2026-08-04
+
+### TK Workbench
+#### Toegevoegd
+- **Send Studio eigen naam per send**: Een send kan een eigen naam krijgen. REAPER heeft geen naamveld voor een send - overal wordt de bestemmingstrack als label gebruikt - waardoor drie sends van hetzelfde instrument naar dezelfde bus als drie identieke regels lezen. Precies de opzet van een template die articulaties per MIDI-kanaal schakelt. De naam wordt getypt in het "..."-menu, of via rechtermuisklik op de naamplaat in strip-weergave, en wordt op de send zelf bewaard: hij gaat mee in het project en blijft bij de send als de routing verschuift. Leegmaken geeft de tracknaam terug. Alleen zichtbaar in Send Studio - REAPER's eigen mixer blijft de track noemen.
+- **Send Studio MIDI-kanaal op de lane**: De kanaalknop toont nu ook het MIDI-kanaal. Voorheen stond er alleen het audiopaar, waardoor een MIDI-only send altijd "MIDI > MIDI" las en het enige onderscheidende getal een popup diep zat. Nu "MIDI 1>3", of "1/2 > 1/2 | MIDI 1" bij audio en MIDI samen, of "Off".
+
+#### Gewijzigd
+- **Send Studio extras vanuit strip-weergave**: De extras-popup - volume en pan van de returntrack, en nu ook de rename - is bereikbaar via rechtermuisklik op de naamplaat. Die zat alleen in de lijstweergave, dus de strips hadden er geen enkele ingang naartoe.
+
+#### Bugfixes
+- **Send Studio kopieer/plak MIDI-routing**: Bij het kopiëren van sends ging de MIDI-routing verloren. Beide audiokanaalvelden werden overgenomen maar `I_MIDIFLAGS` niet, waardoor het plakken van een set kanaal-per-articulatie sends op het volgende instrument wel het juiste aantal sends opleverde, maar zonder de kanaaltoewijzing die ze onderscheidt. Custom namen gaan nu ook mee.
+
 ## [TK Workbench 0.6.49] - 2026-07-24
 
 ### TK Workbench

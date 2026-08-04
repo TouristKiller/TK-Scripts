@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.68" author="TouristKiller" time="2026-08-04T09:40:00Z">
+    <version name="0.6.69" author="TouristKiller" time="2026-08-04T13:22:21Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -121,6 +121,12 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.6.69
+            + Send Studio: A send can be given a name of its own. REAPER has no name field for a send - every list one appears in is labelled with the destination track - so three sends from one instrument to one sampler bus read as three identical rows, which is precisely what a template that switches articulation by MIDI channel is built out of. The name is typed in the "..." menu, or on a right-click of the name plate in strip view, and it is kept on the send itself, so it is saved with the project and stays with the send when the routing is reordered. Clearing it hands the track name back. It shows in Send Studio only - REAPER's own mixer goes on naming the track, as there is nothing in the send for it to read
+            + Send Studio: The channel button carries the MIDI channel. It only ever showed the audio pair, so a MIDI-only send read "MIDI > MIDI" no matter where it went, and the one number that told a set of sends apart was a popup away. It now reads "MIDI 1>3", or "1/2 > 1/2 | MIDI 1" when the send carries both, or "Off" when it carries neither
+            + Send Studio: Fixed copying sends losing their MIDI routing. Both audio channel fields were carried across but I_MIDIFLAGS was not, so pasting a channel-per-articulation set onto the next instrument gave the right number of sends with the channel mapping - the only thing separating them - stripped off. Custom names travel with the copy as well
+            + Send Studio: The extras popup - the return track's volume and pan, and now the rename - can be reached from the strip view as well, on a right-click of the name plate. It lived in the list view only, so the strips had no route to it at all
+
             v0.6.68
             + Control Room: Four checks added to the monitor modes - Mid, Side, Low Band and High Band. Mid is what sits in the centre of the mix on both speakers, Side the difference between them decoded back to a pair rather than summed, so a wide element keeps its position instead of collapsing to the middle, and Low Band and High Band are the two halves of a crossover you set yourself. A multichannel bed is folded down first, so the check is the same one whatever the main mix is
             + Control Room: The checks all come off one downmix on the master rather than an instance each. It writes a pair per check onto spare master channels - fold-down, mid, side, low band, high band, in that order past the bed - and a pair nobody listens to is switched off rather than removed, so the ones in use never shift channel and the FX chain holds one plugin however many checks are running. Setup > Monitors names the pairs being listened to and carries the crossover frequency, and the Channel map names every pair

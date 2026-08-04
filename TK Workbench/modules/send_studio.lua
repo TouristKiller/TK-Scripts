@@ -30,6 +30,8 @@ local state = {
   picker_filter = "",
   bus_open = false,
   bus_name = "FX Bus",
+  label_edit_id = nil,        -- lane id whose custom name is being typed
+  label_edit_text = "",
   clipboard = nil             -- copied sends: list of routing snapshots
 }
 
@@ -284,6 +286,28 @@ local function send_other_track(track, category, index)
   return nil
 end
 
+-- Custom send name. REAPER has no name field for a send -- the UI always shows
+-- the destination track -- but a send does carry persistent extension data, so
+-- we keep our own label there. It lives on the send itself (saved with the
+-- project, moves with the send) and reads back identically from either side,
+-- so a receive shows the same name as the matching send.
+local SEND_LABEL_EXT_KEY = "P_EXT:TK_SEND_STUDIO_LABEL"
+
+local function read_send_label(track, category, index)
+  if not valid_track(track) or not index or not r.GetSetTrackSendInfo_String then return "" end
+  local ok, _, value = pcall(r.GetSetTrackSendInfo_String, track, category, index, SEND_LABEL_EXT_KEY, "", false)
+  if ok and type(value) == "string" then return value end
+  return ""
+end
+
+local function write_send_label(track, category, index, text)
+  if not valid_track(track) or not r.GetSetTrackSendInfo_String then return false end
+  text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  return write_with_undo("Send Studio: Rename send", function()
+    return r.GetSetTrackSendInfo_String(track, category, index, SEND_LABEL_EXT_KEY, text, true)
+  end)
+end
+
 local function write_send_volume(track, category, index, value)
   if not valid_track(track) or not r.SetTrackSendInfo_Value then return false end
   value = clamp(value, 0, 4)
@@ -393,6 +417,30 @@ end
 -- next 5 bits = destination channel (0 = same as source, 1-16). Other bits kept.
 local function midi_src_channel(flags) return math.floor(flags) & 0x1F end
 local function midi_dst_channel(flags) return (math.floor(flags) >> 5) & 0x1F end
+
+-- Channel 31 in both halves is REAPER's "this send carries no MIDI".
+local MIDI_CHAN_OFF = 31
+
+-- "MIDI 1>3" style summary, or nil when the send carries no MIDI.
+local function midi_chan_text(midi_flags)
+  local src = midi_src_channel(midi_flags or 0)
+  local dst = midi_dst_channel(midi_flags or 0)
+  if src == MIDI_CHAN_OFF or dst == MIDI_CHAN_OFF then return nil end
+  local src_text = src == 0 and "all" or tostring(src)
+  if dst == 0 or dst == src then return "MIDI " .. src_text end
+  return "MIDI " .. src_text .. ">" .. tostring(dst)
+end
+
+-- Face text for the channel button: audio pair, MIDI channel, or both. The MIDI
+-- channel is what a template using channel-per-articulation actually routes on,
+-- so it belongs on the lane instead of only inside the routing popup.
+local function lane_chan_text(lane)
+  local midi = midi_chan_text(lane.midi_flags)
+  if chan_parse(lane.src_raw).none then return midi or "Off" end
+  local audio = chan_label(lane.src_raw) .. " > " .. chan_label(lane.dst_raw)
+  if midi then return audio .. " | " .. midi end
+  return audio
+end
 
 local function write_send_midi_src(track, category, index, channel)
   if not valid_track(track) or not r.SetTrackSendInfo_Value or not r.GetTrackSendInfo_Value then return false end
@@ -814,13 +862,16 @@ local function build_rows(app, track, category, settings, pinned, sources)
     local src_track = category == -1 and other or track
     local dst_track = category == -1 and track or other
     local other_name = valid_track(other) and track_name(other) or "Missing track"
+    local custom_label = read_send_label(track, category, index)
     local prefix = category == -1 and "recv" or "send"
     local lane_id = prefix .. "_" .. tostring(index) .. "_" .. tostring(track_guid(other) or index)
     rows[#rows + 1] = {
       id = lane_id,
       category = category,
       index = index,
-      label = other_name,
+      label = custom_label ~= "" and custom_label or other_name,
+      track_label = other_name,
+      custom_label = custom_label,
       other = other,
       subtitle = (category == -1 and "Receive" or "Send") .. " | " .. send_mode_label(mode),
       value = volume,
@@ -847,6 +898,7 @@ local function build_rows(app, track, category, settings, pinned, sources)
       write_mode = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "mode", mode, v) end,
       write_phase = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "phase", phase, v) end,
       write_mono = function(v) return write_lane_value(app, settings, pinned, sources, track, category, index, other, "mono", (send_value(track, category, index, "B_MONO") or 0) == 1, v) end,
+      write_label = function(v) return write_send_label(track, category, index, v) end,
       write_srcchan = function(v) return write_send_srcchan(track, category, index, v) end,
       write_dstchan = function(v) return write_send_dstchan(track, category, index, v) end,
       write_midi_src = function(ch) return write_send_midi_src(track, category, index, ch) end,
@@ -951,7 +1003,9 @@ local function copy_sends(track)
         phase = (send_value(track, 0, index, "B_PHASE") or 0) == 1,
         mono = (send_value(track, 0, index, "B_MONO") or 0) == 1,
         src_raw = math.floor(send_value(track, 0, index, "I_SRCCHAN") or 0),
-        dst_raw = math.floor(send_value(track, 0, index, "I_DSTCHAN") or 0)
+        dst_raw = math.floor(send_value(track, 0, index, "I_DSTCHAN") or 0),
+        midi_flags = math.floor(send_value(track, 0, index, "I_MIDIFLAGS") or 0),
+        label = read_send_label(track, 0, index)
       }
     end
   end
@@ -978,6 +1032,12 @@ local function paste_sends(sources, clip)
               r.SetTrackSendInfo_Value(track, 0, index, "B_MONO", entry.mono and 1 or 0)
               r.SetTrackSendInfo_Value(track, 0, index, "I_SRCCHAN", entry.src_raw)
               r.SetTrackSendInfo_Value(track, 0, index, "I_DSTCHAN", entry.dst_raw)
+              -- MIDI channel mapping is the point of a channel-per-articulation
+              -- template, so it has to survive a copy just like the audio side.
+              if entry.midi_flags then r.SetTrackSendInfo_Value(track, 0, index, "I_MIDIFLAGS", entry.midi_flags) end
+              if entry.label and entry.label ~= "" and r.GetSetTrackSendInfo_String then
+                r.GetSetTrackSendInfo_String(track, 0, index, SEND_LABEL_EXT_KEY, entry.label, true)
+              end
               pasted = true
             end
           end
@@ -1317,10 +1377,42 @@ local function draw_lane_fx_popup(ctx, other, popup_id)
   r.ImGui_EndPopup(ctx)
 end
 
--- Extra ("Alt-click") functions for a lane: return-only listen, solo defeat and
--- the destination (return) track's own volume/pan.
+-- Custom-name editor. Typing writes to a buffer; only Enter / Apply commits, so
+-- a rename is one undo point instead of one per keystroke.
+local function draw_lane_rename(ctx, lane)
+  if not lane.write_label then return end
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Name")
+  if state.label_edit_id ~= lane.id then
+    state.label_edit_id = lane.id
+    state.label_edit_text = lane.custom_label or ""
+  end
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
+  local changed, value = r.ImGui_InputTextWithHint(ctx, "##send_studio_label", lane.track_label or "Track name", state.label_edit_text or "")
+  if changed then state.label_edit_text = value end
+  local commit = r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx)
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(4))
+  if r.ImGui_SmallButton(ctx, "Apply##send_studio_label_apply") then commit = true end
+  if commit then
+    lane.write_label(state.label_edit_text or "")
+    state.label_edit_id = nil
+  end
+  if (lane.custom_label or "") ~= "" then
+    r.ImGui_SameLine(ctx, 0, UIScale.gap(4))
+    if r.ImGui_SmallButton(ctx, "Reset##send_studio_label_reset") then
+      lane.write_label("")
+      state.label_edit_id = nil
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear the custom name and show " .. (lane.track_label or "the track name") .. " again") end
+  end
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Shown in Send Studio only -- REAPER's own mixer keeps showing the track name")
+  r.ImGui_Separator(ctx)
+end
+
+-- Extra ("Alt-click") functions for a lane: the custom send name, return-only
+-- listen, solo defeat and the destination (return) track's own volume/pan.
 local function draw_lane_extras(ctx, lane, settings)
   local other = lane.other
+  draw_lane_rename(ctx, lane)
   if not valid_track(other) then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Track missing"); return end
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Return track")
   local min_db, max_db = settings.min_db, settings.max_db
@@ -1349,7 +1441,11 @@ end
 
 local function draw_lane_extras_popup(app, lane, settings, popup_id)
   local ctx = app.ctx
-  if not r.ImGui_BeginPopup or not r.ImGui_BeginPopup(ctx, popup_id) then return end
+  if not r.ImGui_BeginPopup or not r.ImGui_BeginPopup(ctx, popup_id) then
+    -- Popup closed: drop this lane's rename buffer so it re-seeds next time.
+    if state.label_edit_id == lane.id then state.label_edit_id = nil end
+    return
+  end
   draw_lane_extras(ctx, lane, settings)
   r.ImGui_EndPopup(ctx)
 end
@@ -1505,10 +1601,10 @@ local function draw_strip(app, lane, settings, width, height)
   -- Row 4: Audio channel routing (source -> destination)
   local r4t = r3b + gap
   local r4b = r4t + button_h
-  local chan_text = chan_label(lane.src_raw) .. " > " .. chan_label(lane.dst_raw)
+  local chan_text = lane_chan_text(lane)
   local chan_clicked, chan_hov = strip_button(ctx, draw_list, x0, r4t, x1, r4b, chan_text, false, nil, mouse_x, mouse_y)
   if chan_clicked and interact then r.ImGui_OpenPopup(ctx, "##send_studio_chan") end
-  if chan_hov then r.ImGui_SetTooltip(ctx, "Source > destination audio channel") end
+  if chan_hov then r.ImGui_SetTooltip(ctx, "Audio and MIDI routing (click to edit)") end
 
   -- Name label (colour of destination track) at the bottom
   local name_h = UIScale.round(16)
@@ -1523,6 +1619,11 @@ local function draw_strip(app, lane, settings, width, height)
   r.ImGui_DrawList_AddText(draw_list, (x0 + x1 - name_text_w) * 0.5, (name_y0 + name_y1 - name_text_h) * 0.5, name_text_color, name_label)
   local name_hovered = mouse_x >= x0 and mouse_x <= x1 and mouse_y >= name_y0 and mouse_y <= name_y1
   if name_hovered and interact and r.ImGui_IsMouseClicked(ctx, 0) then lane.select_other() end
+  if name_hovered and interact and r.ImGui_IsMouseClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##send_studio_more") end
+  if name_hovered and enabled then
+    local hint = (lane.custom_label or "") ~= "" and (lane.label .. "  (" .. (lane.track_label or "") .. ")") or lane.label
+    r.ImGui_SetTooltip(ctx, hint .. "\nClick: select track | Right-click: rename send")
+  end
 
   -- dB value above the name label, flanked by -1 dB / +1 dB nudge buttons
   local value_text = enabled and format_db(lane.value, settings) or "--"
@@ -1624,6 +1725,7 @@ local function draw_strip(app, lane, settings, width, height)
 
   if not enabled and hovered then r.ImGui_SetTooltip(ctx, "Destination track missing") end
   draw_channel_popup(app, lane, "##send_studio_chan")
+  draw_lane_extras_popup(app, lane, settings, "##send_studio_more")
   r.ImGui_PopID(ctx)
 end
 
@@ -1687,13 +1789,15 @@ local function draw_list_row(app, lane, settings)
   r.ImGui_SameLine(ctx, 0, 0)
   r.ImGui_AlignTextToFramePadding(ctx)
   r.ImGui_TextColored(ctx, enabled and Theme.colors.text or Theme.colors.text_dim, ellipsize_text(ctx, lane.label, math.max(UIScale.round(40), avail - swatch_w - UIScale.round(6))))
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, lane.label) end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, (lane.custom_label or "") ~= "" and (lane.label .. "  (" .. (lane.track_label or "") .. ")") or lane.label)
+  end
 
   -- Control widths for the wrapping flow below (buttons fixed, sliders capped to the pane)
   local mute_w = UIScale.text_button_w(ctx, "M", 30, 6)
   local toggle_w = UIScale.text_button_w(ctx, "S", 26, 6)
   local mode_w = UIScale.text_button_w(ctx, "Pre-Fader", 74, 6)
-  local chan_w = UIScale.text_button_w(ctx, "MIDI > Mono 1", 90, 6)
+  local chan_w = UIScale.text_button_w(ctx, "1/2 > 1/2 | MIDI 1>3", 90, 6)
   local fx_w = UIScale.text_button_w(ctx, "FX", 30, 6)
   local more_w = UIScale.text_button_w(ctx, "...", 26, 6)
   local rm_w = UIScale.text_button_w(ctx, "x", 26, 6)
@@ -1788,17 +1892,17 @@ local function draw_list_row(app, lane, settings)
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Send mode (click to cycle)") end
   end }
   items[#items + 1] = { w = chan_w, draw = function()
-    local chan_text = chan_label(lane.src_raw) .. " > " .. chan_label(lane.dst_raw)
+    local chan_text = lane_chan_text(lane)
     if r.ImGui_Button(ctx, chan_text .. "##chan", chan_w, 0) then r.ImGui_OpenPopup(ctx, "##send_studio_chan") end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Source > destination audio channel") end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Audio and MIDI routing (click to edit)") end
   end }
   items[#items + 1] = { w = fx_w, draw = function()
     if r.ImGui_Button(ctx, "FX##fx", fx_w, 0) then r.ImGui_OpenPopup(ctx, "##send_studio_fx") end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "View / open the FX on " .. lane.label) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "View / open the FX on " .. (lane.track_label or lane.label)) end
   end }
   items[#items + 1] = { w = more_w, draw = function()
     if r.ImGui_Button(ctx, "...##more", more_w, 0) then r.ImGui_OpenPopup(ctx, "##send_studio_more") end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Return track volume / pan") end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Rename send | return track volume / pan") end
   end }
   items[#items + 1] = { w = rm_w, draw = function()
     if r.ImGui_Button(ctx, "x##remove", rm_w, 0) then lane.remove() end
