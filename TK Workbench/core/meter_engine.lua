@@ -49,8 +49,32 @@ M.sliders = {
   time = { index = 9, min = 0, max = 86400 },
   momentary = { index = 10, min = -100, max = 12 },
   sample_peak = { index = 11, min = -100, max = 12 },
-  layout = { index = 12, min = 0, max = 4 }
+  layout = { index = 12, min = 0, max = 4 },
+  rms_window = { index = 13, min = 50, max = 2000 }
 }
+
+-- Channel RMS lives on slider15..slider22 of the JSFX, so index 14 upwards.
+M.rms_slider_base = 14
+M.rms_slider_count = 8
+M.rms_floor_db = -100
+
+-- Bar sources: peak and RMS are per channel, the LUFS readings are a single
+-- BS.1770 weighted value for the whole bed and therefore draw as one bar.
+M.bar_sources = {
+  { id = "peak", label = "Peak", per_channel = true },
+  { id = "rms", label = "RMS", per_channel = true },
+  { id = "momentary", label = "LUFS-M", per_channel = false },
+  { id = "short_term", label = "LUFS-S", per_channel = false },
+  { id = "integrated", label = "LUFS-I", per_channel = false }
+}
+M.default_bar_source = "peak"
+
+function M.bar_source(id)
+  for _, source in ipairs(M.bar_sources) do
+    if source.id == id then return source end
+  end
+  return M.bar_sources[1]
+end
 
 -- Mirrors the Channel Layout slider of TK_Control_Room_Meter.jsfx.
 M.default_layout_index = 1
@@ -196,6 +220,41 @@ end
 source_uses_engine = function(source)
   if not source or not source.id then return false end
   return source.id == "master" or tostring(source.id):match("^cue:") ~= nil
+end
+
+function M.uses_engine(source)
+  return source_uses_engine(source)
+end
+
+function M.read_value(track, key, options)
+  local spec = M.sliders[key]
+  if not spec then return nil end
+  options = type(options) == "table" and options or {}
+  local fx_index = M.ensure_meter_fx(track, options.auto_install == true)
+  if not fx_index then return nil end
+  return read_slider(track, fx_index, spec)
+end
+
+-- Returns nil when the installed JSFX predates the RMS sliders, so the caller
+-- can fall back to peak instead of reading parameters that do not exist. The
+-- parameter name is the only reliable test: an instance that was already loaded
+-- keeps running the old code, and reading past its last slider yields zero,
+-- which would otherwise draw as a full bar sitting at 0 dB.
+function M.read_channel_rms(track, channel_count, options)
+  options = type(options) == "table" and options or {}
+  local fx_index = M.ensure_meter_fx(track, options.auto_install == true)
+  if not fx_index or not r.TrackFX_GetParam or not r.TrackFX_GetParamName then return nil end
+  local named, name = r.TrackFX_GetParamName(track, fx_index, M.rms_slider_base, "")
+  if not named or not tostring(name):find("RMS", 1, true) then return nil end
+  channel_count = math.max(1, math.min(M.rms_slider_count, math.floor(tonumber(channel_count) or 2)))
+  local values = {}
+  for index = 1, channel_count do
+    -- TrackFX_GetParam returns value, min, max: keep only the first, or tonumber
+    -- receives a second argument and switches to its base-conversion form.
+    local raw = r.TrackFX_GetParam(track, fx_index, M.rms_slider_base + index - 1)
+    values[index] = tonumber(raw) or M.rms_floor_db
+  end
+  return values
 end
 
 local function format_meter_value(value)

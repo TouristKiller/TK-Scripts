@@ -1,11 +1,13 @@
 desc:TK Control Room Downmix
 author:TouristKiller
-version:0.1
+version:0.2
 
-// Folds a multichannel bed down to a stereo pair on spare channels of the same
-// track. The Control Room installs this on the master so a fold-down check can
-// be monitored without altering the surround bed feeding the main outputs.
-// The fold offset must sit outside the source bed or the output feeds back.
+// Writes a stereo monitoring pair onto spare channels of the same track, so a
+// check can be listened to without altering the bed feeding the main outputs.
+// Process picks what that pair carries: the fold-down of a multichannel bed,
+// the mid or the side of it, or its low or high band. The Control Room runs one
+// instance per mode in use, each with its own pair.
+// The output offset must sit outside the source bed or the output feeds back.
 
 in_pin:1
 in_pin:2
@@ -51,6 +53,8 @@ slider6:0<0,1,1{Off,On}>Include LFE
 slider7:0<-24,10,0.1>LFE Level (dB)
 slider8:0<-12,12,0.1>Output Trim (dB)
 slider9:1<0,1,1{Off,On}>Run
+slider10:0<0,4,1{Fold-down,Mid,Side,Low,High}>Process
+slider11:120<40,1000,1>Crossover (Hz)
 
 @init
 c_gain = 0.707945784;
@@ -60,7 +64,34 @@ trim = 1;
 lay = 3;
 src = 0;
 dst = 6;
+proc = 0;
 valid = 0;
+
+function reset_filter()
+(
+  xl1 = xl2 = yl1 = yl2 = 0;
+  xr1 = xr2 = yr1 = yr2 = 0;
+);
+
+// RBJ biquad at Q = 1/sqrt(2), enough to tell a band apart by ear.
+function set_filter(freq, highpass) local(w0, cs, sn, alpha, a0)
+(
+  w0 = 2 * $pi * min(max(freq, 20), srate * 0.45) / srate;
+  cs = cos(w0);
+  sn = sin(w0);
+  alpha = sn / 1.41421356;
+  a0 = 1 + alpha;
+  highpass ? (
+    f_b0 = ((1 + cs) * 0.5) / a0;
+    f_b1 = -(1 + cs) / a0;
+  ) : (
+    f_b0 = ((1 - cs) * 0.5) / a0;
+    f_b1 = (1 - cs) / a0;
+  );
+  f_b2 = f_b0;
+  f_a1 = (-2 * cs) / a0;
+  f_a2 = (1 - alpha) / a0;
+);
 
 @slider
 lay = min(4, max(0, floor(slider1)));
@@ -70,8 +101,11 @@ c_gain = pow(10, slider4 / 20);
 s_gain = pow(10, slider5 / 20);
 lfe_gain = slider6 >= 0.5 ? pow(10, slider7 / 20) : 0;
 trim = pow(10, slider8 / 20);
+proc = min(4, max(0, floor(slider10)));
+proc >= 3 ? set_filter(slider11, proc == 4);
+reset_filter();
 lay == 0 ? width = 1 : lay == 1 ? width = 2 : lay == 2 ? width = 4 : lay == 3 ? width = 6 : width = 8;
-// Refuse to run when the fold pair overlaps the bed it reads from.
+// Refuse to run when the output pair overlaps the bed it reads from.
 valid = (dst >= src + width || dst + 2 <= src) && (dst + 2 <= num_ch);
 
 @sample
@@ -93,6 +127,23 @@ valid = (dst >= src + width || dst + 2 <= src) && (dst + 2 <= num_ch);
     dl = spl(src);
     dr = spl(src);
   );
-  spl(dst) = dl * trim;
-  spl(dst + 1) = dr * trim;
+  proc == 1 ? (
+    out_l = (dl + dr) * 0.5;
+    out_r = out_l;
+  ) : proc == 2 ? (
+    // Side decoded back to a pair rather than summed, so a wide element keeps
+    // its position instead of collapsing to the middle.
+    out_l = (dl - dr) * 0.5;
+    out_r = -out_l;
+  ) : proc >= 3 ? (
+    out_l = f_b0 * dl + f_b1 * xl1 + f_b2 * xl2 - f_a1 * yl1 - f_a2 * yl2;
+    xl2 = xl1; xl1 = dl; yl2 = yl1; yl1 = out_l;
+    out_r = f_b0 * dr + f_b1 * xr1 + f_b2 * xr2 - f_a1 * yr1 - f_a2 * yr2;
+    xr2 = xr1; xr1 = dr; yr2 = yr1; yr1 = out_r;
+  ) : (
+    out_l = dl;
+    out_r = dr;
+  );
+  spl(dst) = out_l * trim;
+  spl(dst + 1) = out_r * trim;
 );

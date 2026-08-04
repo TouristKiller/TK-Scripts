@@ -1,6 +1,6 @@
 desc:TK Control Room Meter
 author:TouristKiller
-version:0.3
+version:0.4
 
 in_pin:Left
 in_pin:Right
@@ -32,6 +32,15 @@ slider10:0<0,86400,1>-Time (s)
 slider11:-100<-100,12,0.1>-Momentary (LUFS)
 slider12:-100<-100,12,0.1>-Sample Peak (dB)
 slider13:1<0,4,1{Mono,Stereo,Quad,5.1,7.1}>Channel Layout
+slider14:300<50,2000,10>RMS Window (ms)
+slider15:-100<-100,12,0.1>-RMS 1 (dB)
+slider16:-100<-100,12,0.1>-RMS 2 (dB)
+slider17:-100<-100,12,0.1>-RMS 3 (dB)
+slider18:-100<-100,12,0.1>-RMS 4 (dB)
+slider19:-100<-100,12,0.1>-RMS 5 (dB)
+slider20:-100<-100,12,0.1>-RMS 6 (dB)
+slider21:-100<-100,12,0.1>-RMS 7 (dB)
+slider22:-100<-100,12,0.1>-RMS 8 (dB)
 
 @init
 floor_db = -100;
@@ -154,6 +163,7 @@ function init_buffers()
   filt_base = lra_count_base + num_bins + 16;
   tp_base = filt_base + max_ch * 4 + 16;
   weight_base = tp_base + max_ch * 3 + 16;
+  rms_base = weight_base + max_ch + 16;
   memset(momentary_base, 0, momentary_size);
   memset(short_base, 0, short_size);
   memset(integrated_count_base, 0, num_bins);
@@ -162,6 +172,16 @@ function init_buffers()
   memset(filt_base, 0, max_ch * 4);
   memset(tp_base, 0, max_ch * 3);
   memset(weight_base, 0, max_ch);
+  memset(rms_base, 0, max_ch);
+);
+
+// One-pole averager rather than a ring buffer: an RMS bar is a slow reading and
+// eight windows of a second each would be a lot of memory for nothing.
+function set_rms_window()
+  local(tau)
+(
+  tau = max(0.01, min(2, slider14 * 0.001));
+  rms_coeff = 1 - exp(-1 / (srate * tau));
 );
 
 // Power weights per ITU-R BS.1770-4: front channels 1.0, surround and back
@@ -210,6 +230,7 @@ function reset_meter()
   init_buffers();
   init_filters();
   apply_layout();
+  set_rms_window();
   momentary_sum = 0;
   short_sum = 0;
   momentary_pos = 0;
@@ -237,6 +258,14 @@ function reset_meter()
   slider10 = 0;
   slider11 = floor_db;
   slider12 = floor_db;
+  slider15 = floor_db;
+  slider16 = floor_db;
+  slider17 = floor_db;
+  slider18 = floor_db;
+  slider19 = floor_db;
+  slider20 = floor_db;
+  slider21 = floor_db;
+  slider22 = floor_db;
 );
 
 function add_integrated_window(db, power)
@@ -324,6 +353,11 @@ function calculate_lra()
   );
 );
 
+function channel_rms_db(idx)
+(
+  idx < active_ch ? amp_to_db(sqrt(rms_base[idx])) : floor_db;
+);
+
 function update_outputs()
   local(m_power s_power tp_db sample_db)
 (
@@ -358,6 +392,22 @@ function update_outputs()
   sliderchange(slider10);
   sliderchange(slider11);
   sliderchange(slider12);
+  slider15 = channel_rms_db(0);
+  slider16 = channel_rms_db(1);
+  slider17 = channel_rms_db(2);
+  slider18 = channel_rms_db(3);
+  slider19 = channel_rms_db(4);
+  slider20 = channel_rms_db(5);
+  slider21 = channel_rms_db(6);
+  slider22 = channel_rms_db(7);
+  sliderchange(slider15);
+  sliderchange(slider16);
+  sliderchange(slider17);
+  sliderchange(slider18);
+  sliderchange(slider19);
+  sliderchange(slider20);
+  sliderchange(slider21);
+  sliderchange(slider22);
 );
 
 reset_meter();
@@ -371,6 +421,7 @@ slider4 = 3000;
   reset_needed = 1;
 );
 (last_layout != min(4, max(0, floor(slider13)))) ? reset_needed = 1;
+set_rms_window();
 slider2 >= 0.5 ? reset_needed = 1;
 last_reset = slider2;
 reset_needed ? (
@@ -398,6 +449,7 @@ slider1 >= 0.5 ? (
     ax > sample_peak ? sample_peak = ax;
     tp = channel_true_peak(ch, x);
     tp > true_peak ? true_peak = tp;
+    rms_base[ch] += rms_coeff * (x * x - rms_base[ch]);
     w = weight_base[ch];
     w > 0 ? (
       k = highpass_process(ch, shelf_process(ch, x));

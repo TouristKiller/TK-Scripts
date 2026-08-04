@@ -4453,6 +4453,20 @@ function M.init(app)
   refresh_locations(settings)
 end
 
+function M.preview_level(app)
+  local settings = ensure_settings(app)
+  return tonumber(settings.preview_volume) or defaults.preview_volume
+end
+
+function M.set_preview_level(app, volume)
+  local settings = ensure_settings(app)
+  settings.preview_volume = math.max(0, math.min(2, tonumber(volume) or defaults.preview_volume))
+  if state.preview and r.CF_Preview_SetValue then r.CF_Preview_SetValue(state.preview, "D_VOLUME", settings.preview_volume) end
+  if state.preview_track_playback and validate_track(state.preview_track) then r.SetMediaTrackInfo_Value(state.preview_track, "D_VOL", settings.preview_volume) end
+  if app.save_settings then app.save_settings() end
+  return true
+end
+
 function M.update(app)
   local settings = ensure_settings(app)
   local active = app.settings and app.settings.active_module == M.id
