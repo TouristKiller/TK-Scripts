@@ -1,11 +1,13 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.95
+-- @version 0.9.96
 -- @changelog:
 --[[
+v0.9.96:
++ Dropping onto a docked script window (RS5k manager and other ReaImGui windows) no longer starts a native drag: those are not an OS drop target while docked, so Windows handed the drop to the main window and the sample ended up in the arrange instead. Needs TK Native Helper 1.1.0 for the reliable check; without it docked script windows simply keep using the script's own insert
+
 v0.9.95:
 + Fixed dragging samples onto floating plugin windows (Groove Agent, Battery, ReaSamplOmatic5000, ...) doing nothing since 0.9.8: those windows are owned by REAPER's main window, so they were mistaken for a drop on the main window and the native drag was skipped
-+ Dragging onto docked windows now works as well: ReaImGui script windows (RS5k manager, other script samplers) and FX chains docked into the main window; the arrange, track panel, ruler and mixer keep using the script's own insert
 + A native drag now only starts once the cursor rests on the target window for a moment, so crossing a plugin or docker window on the way to the arrange no longer hands the drag over to Windows halfway
 + Added "Load to selected RS5K Manager pad" to the file right-click menu: loads straight into the pad that is selected in MPL's RS5k manager (also when the manager is pinned to a device with "stick to parent"), instead of picking it from the pad submenu; a selected pad that is still empty is created
 + Fixed pads filled from this browser staying nameless and without waveform in MPL's RS5k manager until it happened to refresh for another reason: the manager is now asked to refresh after loading, creating or deleting a pad
@@ -7410,9 +7412,11 @@ local function tkmb_point_over_main_window(mx, my)
     local guard = 0
     while w and guard < 64 do
         if w == main then return true end
-        -- ReaImGui script windows (RS5k manager, samplers, ...) keep their own class
-        -- name when docked, so they remain a native drop target inside the main window.
-        if tkmb_drag.window_class(w) == "ImGuiWindow" then return false end
+        -- Deliberately no exception for docked ReaImGui windows (class
+        -- "reaper_imgui_context"): while docked they are not registered as an OS drop
+        -- target, so the drop falls through to REAPER's main window and the sample ends
+        -- up in the arrange. Blocking here keeps the script's own insert in charge.
+
         -- An FX chain docked *into* the main window keeps its own "FX: <track>" window
         -- between the plugin GUI and the docker, so plugins stay reachable there too.
         -- Keyed on the FX window itself, not on the surrounding "REAPER_dock": a docked
@@ -7428,6 +7432,15 @@ local function tkmb_point_over_main_window(mx, my)
         guard = guard + 1
     end
     return false
+end
+
+-- Safety net (TK Native Helper 1.1.0+): even when the rules above allow a drag, the window
+-- under the cursor may not be a registered OS drop target. Windows then hands the drop to
+-- the first ancestor that is one, which is REAPER's main window, and the sample silently
+-- lands in the arrange. Older helper versions lack the call and keep the previous behaviour.
+function tkmb_drag.drop_would_fall_through()
+    if not r.TK_DropAtCursorHitsMainWindow then return false end
+    return r.TK_DropAtCursorHitsMainWindow() == true
 end
 
 function tkmb_drag.clear_hover()
@@ -7461,6 +7474,10 @@ local function tkmb_try_native_drag(mx, my)
         end
     end
     if tkmb_point_over_main_window(mx, my) then
+        tkmb_drag.clear_hover()
+        return false
+    end
+    if tkmb_drag.drop_would_fall_through() then
         tkmb_drag.clear_hover()
         return false
     end

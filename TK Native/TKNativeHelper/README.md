@@ -15,7 +15,18 @@ only expose the drag-to-plugin feature when the extension is present.
   - Returns `true` when the file was dropped on a target.
   - Windows (OLE), macOS (NSDraggingSession) and Linux (XDND) are implemented.
 
-Scripts guard the feature with `if reaper.TK_StartFileDrag then ... end`.
+- `reaper.TK_DropAtCursorHitsMainWindow()` -> `boolean` (1.1.0+)
+  - Returns `true` when a drop at the current cursor position would be handled by
+    REAPER's main window instead of by the window under the cursor.
+  - Not every window is a registered drop target. A docked ReaImGui window, for
+    instance, is not: Windows then walks up to the first ancestor that is one, which is
+    REAPER's main window, and the file silently lands in the arrange. Scripts call this
+    before starting a drag so they can keep their own insert logic in charge instead.
+  - Windows only. Returns `false` on macOS and Linux, and `false` when no drop target
+    can be determined, so callers fall back to their own policy.
+
+Scripts guard each function with `if reaper.TK_StartFileDrag then ... end` and
+`if reaper.TK_DropAtCursorHitsMainWindow then ... end`.
 
 ## Build outputs
 
