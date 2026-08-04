@@ -4,7 +4,7 @@
 -- @changelog:
 --[[
 v0.9.96:
-+ Dropping onto a docked script window (RS5k manager and other ReaImGui windows) no longer starts a native drag: those are not an OS drop target while docked, so Windows handed the drop to the main window and the sample ended up in the arrange instead. Needs TK Native Helper 1.1.0 for the reliable check; without it docked script windows simply keep using the script's own insert
++ Docked script windows (RS5k manager and other ReaImGui windows) are now explicitly left to the script's own insert: while docked they do not accept an OS file drop, so a native drag there would be handed to REAPER's main window and the sample would land in the arrange. Drag onto a floating manager, or use "Load to selected RS5K Manager pad" from the right-click menu
 
 v0.9.95:
 + Fixed dragging samples onto floating plugin windows (Groove Agent, Battery, ReaSamplOmatic5000, ...) doing nothing since 0.9.8: those windows are owned by REAPER's main window, so they were mistaken for a drop on the main window and the native drag was skipped
@@ -7434,15 +7434,6 @@ local function tkmb_point_over_main_window(mx, my)
     return false
 end
 
--- Safety net (TK Native Helper 1.1.0+): even when the rules above allow a drag, the window
--- under the cursor may not be a registered OS drop target. Windows then hands the drop to
--- the first ancestor that is one, which is REAPER's main window, and the sample silently
--- lands in the arrange. Older helper versions lack the call and keep the previous behaviour.
-function tkmb_drag.drop_would_fall_through()
-    if not r.TK_DropAtCursorHitsMainWindow then return false end
-    return r.TK_DropAtCursorHitsMainWindow() == true
-end
-
 function tkmb_drag.clear_hover()
     insert_state.native_hover_hwnd = nil
     insert_state.native_hover_since = nil
@@ -7474,10 +7465,6 @@ local function tkmb_try_native_drag(mx, my)
         end
     end
     if tkmb_point_over_main_window(mx, my) then
-        tkmb_drag.clear_hover()
-        return false
-    end
-    if tkmb_drag.drop_would_fall_through() then
         tkmb_drag.clear_hover()
         return false
     end

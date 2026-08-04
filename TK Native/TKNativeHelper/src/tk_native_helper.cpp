@@ -157,55 +157,6 @@ bool startFileDragWin(const char* utf8_path)
 }
 #endif
 
-#ifdef _WIN32
-// RegisterDragDrop stores the IDropTarget as a window property, and OLE resolves a drop
-// by hit-testing the window under the cursor and walking up until it finds one. Mirroring
-// that walk tells us in advance which window would actually receive the drop.
-bool dropAtCursorHitsMainWindowWin()
-{
-    HWND mainHwnd = static_cast<HWND>(tknh_main_hwnd());
-    if (!mainHwnd) return false;
-
-    POINT pt;
-    if (!GetCursorPos(&pt)) return false;
-
-    HWND w = WindowFromPoint(pt);
-    int guard = 0;
-    while (w && guard++ < 64)
-    {
-        if (GetPropW(w, L"OleDropTargetInterface") || GetPropA(w, "OleDropTargetInterface"))
-            return w == mainHwnd;
-        // A top-level window ends the search: OLE does not cross the owner boundary either.
-        if (!(GetWindowLongPtr(w, GWL_STYLE) & WS_CHILD)) break;
-        w = GetParent(w);
-    }
-    return false; // nothing registered found: let the caller keep its own policy
-}
-#endif
-
-// Returns true when a native drop at the current cursor position would be handled by
-// REAPER's main window instead of by the window under the cursor. Scripts use this to
-// avoid handing a drag to the OS when it would silently fall through to the arrange.
-bool TK_DropAtCursorHitsMainWindow()
-{
-#if defined(_WIN32)
-    return dropAtCursorHitsMainWindowWin();
-#else
-    return false;
-#endif
-}
-
-void* __vararg_TK_DropAtCursorHitsMainWindow(void**, int)
-{
-    return reinterpret_cast<void*>(static_cast<intptr_t>(TK_DropAtCursorHitsMainWindow() ? 1 : 0));
-}
-
-const char __def_TK_DropAtCursorHitsMainWindow[] =
-    "bool\0\0\0"
-    "Returns true when a native file drop at the current cursor position would be handled by REAPER's main window "
-    "instead of by the window under the cursor, which means the drop would fall through and land in the arrange. "
-    "Windows only; returns false on other platforms and when no drop target can be determined.";
-
 bool TK_StartFileDrag(const char* file_path)
 {
 #if defined(_WIN32)
@@ -240,23 +191,6 @@ bool registerApi(reaper_plugin_info_t* rec)
         return false;
     }
     rec->Register("APIdef_TK_StartFileDrag", const_cast<char*>(__def_TK_StartFileDrag));
-
-    // Optional companion: scripts guard on its presence, so a failure here is not fatal.
-    if (rec->Register("API_TK_DropAtCursorHitsMainWindow",
-                      reinterpret_cast<void*>(TK_DropAtCursorHitsMainWindow)))
-    {
-        if (rec->Register("APIvararg_TK_DropAtCursorHitsMainWindow",
-                          reinterpret_cast<void*>(__vararg_TK_DropAtCursorHitsMainWindow)))
-        {
-            rec->Register("APIdef_TK_DropAtCursorHitsMainWindow",
-                          const_cast<char*>(__def_TK_DropAtCursorHitsMainWindow));
-        }
-        else
-        {
-            rec->Register("-API_TK_DropAtCursorHitsMainWindow",
-                          reinterpret_cast<void*>(TK_DropAtCursorHitsMainWindow));
-        }
-    }
     return true;
 }
 
@@ -265,10 +199,6 @@ void unregisterApi()
     if (!g_rec) return;
     g_rec->Register("-API_TK_StartFileDrag", reinterpret_cast<void*>(TK_StartFileDrag));
     g_rec->Register("-APIvararg_TK_StartFileDrag", reinterpret_cast<void*>(__vararg_TK_StartFileDrag));
-    g_rec->Register("-API_TK_DropAtCursorHitsMainWindow",
-                    reinterpret_cast<void*>(TK_DropAtCursorHitsMainWindow));
-    g_rec->Register("-APIvararg_TK_DropAtCursorHitsMainWindow",
-                    reinterpret_cast<void*>(__vararg_TK_DropAtCursorHitsMainWindow));
 }
 }
 
