@@ -60,14 +60,59 @@ M.rms_floor_db = -100
 
 -- Bar sources: peak and RMS are per channel, the LUFS readings are a single
 -- BS.1770 weighted value for the whole bed and therefore draw as one bar.
+-- `unit` decides what the coloured zones and the target line mean: "dbfs" is a
+-- headroom scale where 0 is the ceiling, "lufs" is a loudness scale where the
+-- interesting boundary is the target. Drawing a LUFS target across a dBFS bar
+-- compares two different things, so the line is only shown on "lufs" modes.
+local LUFS_ISM = {
+  { key = "integrated", label = "I" },
+  { key = "short_term", label = "S" },
+  { key = "momentary", label = "M" }
+}
+
 M.bar_sources = {
-  { id = "peak", label = "Peak", per_channel = true },
-  { id = "rms", label = "RMS", per_channel = true },
-  { id = "momentary", label = "LUFS-M", per_channel = false },
-  { id = "short_term", label = "LUFS-S", per_channel = false },
-  { id = "integrated", label = "LUFS-I", per_channel = false }
+  { id = "peak", label = "Peak", per_channel = true, unit = "dbfs" },
+  { id = "rms", label = "RMS", per_channel = true, unit = "dbfs" },
+  { id = "momentary", label = "LUFS-M", per_channel = false, unit = "lufs" },
+  { id = "short_term", label = "LUFS-S", per_channel = false, unit = "lufs" },
+  { id = "integrated", label = "LUFS-I", per_channel = false, unit = "lufs" },
+  { id = "lufs_ism", label = "LUFS I/S/M", per_channel = false, unit = "lufs", metrics = LUFS_ISM },
+  -- Loudness and headroom answer different questions and you want both while
+  -- finishing a mix, so these draw them as two groups on the one scale.
+  {
+    id = "peak_lufs_ism", label = "Peak + LUFS I/S/M", per_channel = true, unit = "mixed",
+    groups = {
+      { kind = "peak", unit = "dbfs" },
+      { kind = "metrics", unit = "lufs", metrics = LUFS_ISM }
+    }
+  },
+  {
+    id = "rms_lufs_ism", label = "RMS + LUFS I/S/M", per_channel = true, unit = "mixed",
+    groups = {
+      { kind = "rms", unit = "dbfs" },
+      { kind = "metrics", unit = "lufs", metrics = LUFS_ISM }
+    }
+  }
 }
 M.default_bar_source = "peak"
+
+-- Every bar source is one or more groups. A group shares a unit, and therefore
+-- shares its colour zones and whether a target line applies to it. The simple
+-- sources are normalised into a single group so the drawing code has one shape
+-- to deal with.
+function M.bar_groups(source)
+  source = source or M.bar_source(M.default_bar_source)
+  if source.groups then return source.groups end
+  if source.metrics then return { { kind = "metrics", unit = source.unit, metrics = source.metrics } } end
+  if source.id == "peak" or source.id == "rms" then return { { kind = source.id, unit = source.unit } } end
+  return { { kind = "value", unit = source.unit, key = source.id, label = source.label } }
+end
+
+-- Headroom thresholds for the dBFS bars, and how far above the target a
+-- loudness bar has to sit before it counts as over rather than merely hot.
+M.dbfs_warning_db = -18
+M.dbfs_danger_db = 0
+M.lufs_danger_margin = 3
 
 function M.bar_source(id)
   for _, source in ipairs(M.bar_sources) do
@@ -233,6 +278,19 @@ function M.read_value(track, key, options)
   local fx_index = M.ensure_meter_fx(track, options.auto_install == true)
   if not fx_index then return nil end
   return read_slider(track, fx_index, spec)
+end
+
+-- Several readings off one instance. The JSFX updates every slider in the same
+-- pass, so reading three of them costs no more than reading one.
+function M.read_values(track, keys, options)
+  options = type(options) == "table" and options or {}
+  local fx_index = M.ensure_meter_fx(track, options.auto_install == true)
+  if not fx_index then return nil end
+  local values = {}
+  for index, key in ipairs(keys or {}) do
+    values[index] = read_slider(track, fx_index, M.sliders[key])
+  end
+  return values
 end
 
 -- Returns nil when the installed JSFX predates the RMS sliders, so the caller

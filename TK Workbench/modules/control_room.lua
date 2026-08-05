@@ -32,7 +32,6 @@ local defaults = {
   monitor_aliases = {},
   monitor_modes = {},
   meter_open = false,
-  meter_compact = true,
   meter_adaptive_height = true,
   meter_source = "master",
   meter_fx_auto_install = true,
@@ -1870,7 +1869,19 @@ local function meter_value_y(value, top_y, bottom_y, settings)
   return bottom_y - normalized * (bottom_y - top_y)
 end
 
-local function draw_meter_channel(ctx, draw_list, left_x, right_x, top_y, bottom_y, value, peak_value, peak_text, settings)
+-- Where the bar changes colour. On a headroom scale that is fixed; on a loudness
+-- scale it follows the target, because -18 means nothing to a bar reading LUFS
+-- against a -14 target.
+local function meter_zone_thresholds(settings, unit)
+  if unit == "lufs" then
+    local target = tonumber(settings.meter_target_lufs) or MeterEngine.default_target_lufs
+    local tolerance = math.max(0, tonumber(settings.meter_target_tolerance) or defaults.meter_target_tolerance)
+    return target + tolerance, target + tolerance + MeterEngine.lufs_danger_margin
+  end
+  return MeterEngine.dbfs_warning_db, MeterEngine.dbfs_danger_db
+end
+
+local function draw_meter_channel(ctx, draw_list, left_x, right_x, top_y, bottom_y, value, peak_value, caption, settings, unit)
   local reset_clicked = false
   local inset = UIScale.px(2)
   local corner = UIScale.px(2)
@@ -1878,8 +1889,9 @@ local function draw_meter_channel(ctx, draw_list, left_x, right_x, top_y, bottom
   r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, right_x, bottom_y, Theme.colors.border, corner, 0, UIScale.px(0.8))
   local fill_top = meter_value_y(value, top_y, bottom_y, settings)
   if value > 0.000001 then
-    local warning_value = db_to_linear(-18, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db)
-    local danger_value = db_to_linear(0, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db)
+    local warning_db, danger_db = meter_zone_thresholds(settings, unit)
+    local warning_value = db_to_linear(warning_db, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db)
+    local danger_value = db_to_linear(danger_db, settings.min_db or defaults.min_db, settings.max_db or defaults.max_db)
     local warning_y = meter_value_y(warning_value, top_y, bottom_y, settings)
     local danger_y = meter_value_y(danger_value, top_y, bottom_y, settings)
     if value > danger_value then
@@ -1898,30 +1910,57 @@ local function draw_meter_channel(ctx, draw_list, left_x, right_x, top_y, bottom
     local peak_color = peak_value >= 1 and Theme.colors.danger or Theme.colors.warning
     r.ImGui_DrawList_AddLine(draw_list, left_x + UIScale.px(1), peak_y, right_x - UIScale.px(1), peak_y, peak_color, UIScale.px(1.4))
   end
-  if peak_text and bottom_y - top_y >= UIScale.round(44) then
-    local text = ellipsize_text(ctx, peak_text, math.max(0, right_x - left_x - UIScale.round(6)))
+  local min_db = settings.min_db or defaults.min_db
+  local function reading(level, compact)
+    local db = linear_to_db(level or 0, min_db)
+    if db <= min_db + 0.05 then return "-inf" end
+    if compact then return string.format("%.1f", db) end
+    if unit == "lufs" then return string.format("%.1f LUFS", db) end
+    return format_db(level or 0, settings)
+  end
+  local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+  local bar_hovered = mouse_x >= left_x and mouse_x <= right_x and mouse_y >= top_y and mouse_y <= bottom_y
+  local width = right_x - left_x
+  caption = tostring(caption or "")
+  -- Three tiers of badge. Below the widest one the number is worth more than the
+  -- caption, since position already says which bar this is.
+  local badge_text = nil
+  if width >= UIScale.round(46) then
+    badge_text = caption ~= "" and (caption .. " " .. reading(peak_value, false)) or reading(peak_value, false)
+  elseif width >= UIScale.round(26) then
+    badge_text = reading(peak_value, true)
+  elseif width >= UIScale.round(14) then
+    badge_text = caption ~= "" and caption or nil
+  end
+  if badge_text and bottom_y - top_y >= UIScale.round(44) then
+    local text = ellipsize_text(ctx, badge_text, math.max(0, width - UIScale.round(6)))
     local text_w = calc_text_width(ctx, text)
     local clipped = peak_value and peak_value >= 1
-    local badge_w = math.min(right_x - left_x - UIScale.round(6), text_w + UIScale.round(10))
+    local badge_w = math.min(width - UIScale.round(6), text_w + UIScale.round(10))
     local badge_h = UIScale.round(18)
-    local badge_x = left_x + ((right_x - left_x) - badge_w) * 0.5
+    local badge_x = left_x + (width - badge_w) * 0.5
     local badge_y = bottom_y - badge_h - UIScale.round(4)
     local text_x = badge_x + math.max(0, (badge_w - text_w) * 0.5)
     local text_y = badge_y + UIScale.round(2)
     local text_color = clipped and Theme.colors.danger or 0xFFFFFFFF
     local badge_border = clipped and Theme.colors.danger or 0xFFFFFF33
-    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-    local badge_hovered = mouse_x >= badge_x and mouse_x <= badge_x + badge_w and mouse_y >= badge_y and mouse_y <= badge_y + badge_h
     r.ImGui_DrawList_PushClipRect(draw_list, left_x + inset, top_y + inset, right_x - inset, bottom_y - inset, true)
     r.ImGui_DrawList_AddRectFilled(draw_list, badge_x + UIScale.px(1), badge_y + UIScale.px(1), badge_x + badge_w + UIScale.px(1), badge_y + badge_h + UIScale.px(1), 0x00000066, UIScale.px(4))
-    r.ImGui_DrawList_AddRectFilled(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, badge_hovered and 0x151515EE or 0x050505CC, UIScale.px(4))
-    r.ImGui_DrawList_AddRect(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, badge_hovered and 0xFFFFFFFF or badge_border, UIScale.px(4), 0, badge_hovered and UIScale.px(1.1) or (clipped and UIScale.px(1.2) or UIScale.px(0.8)))
+    r.ImGui_DrawList_AddRectFilled(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, bar_hovered and 0x151515EE or 0x050505CC, UIScale.px(4))
+    r.ImGui_DrawList_AddRect(draw_list, badge_x, badge_y, badge_x + badge_w, badge_y + badge_h, bar_hovered and 0xFFFFFFFF or badge_border, UIScale.px(4), 0, bar_hovered and UIScale.px(1.1) or (clipped and UIScale.px(1.2) or UIScale.px(0.8)))
     r.ImGui_DrawList_AddText(draw_list, text_x, text_y, text_color, text)
     r.ImGui_DrawList_PopClipRect(draw_list)
-    if badge_hovered then
-      r.ImGui_SetTooltip(ctx, "Click to reset peak")
-      reset_clicked = r.ImGui_IsMouseClicked(ctx, 0)
-    end
+  end
+  -- The whole bar is the hover and click target, so a narrow lane with no room
+  -- for a badge can still be read and reset.
+  if bar_hovered then
+    local lines = {}
+    if caption ~= "" then lines[#lines + 1] = caption end
+    lines[#lines + 1] = "Now  " .. reading(value, false)
+    lines[#lines + 1] = (unit == "lufs" and "Max  " or "Peak  ") .. reading(peak_value, false)
+    lines[#lines + 1] = "Click to reset the hold"
+    r.ImGui_SetTooltip(ctx, table.concat(lines, "\n"))
+    reset_clicked = r.ImGui_IsMouseClicked(ctx, 0)
   end
   return reset_clicked
 end
@@ -1947,24 +1986,46 @@ local function draw_meter_scale(ctx, draw_list, left_x, right_x, top_y, bottom_y
   end
 end
 
-function cr_draw_meter_target(ctx, draw_list, left_x, right_x, top_y, bottom_y, settings)
+-- The line sits on top of the bar fill, so it has to contrast with the zone
+-- colours rather than with the panel background. Deriving it keeps it readable
+-- in the REAPER-derived themes too, where the accent can be any colour at all.
+local function meter_target_color()
+  return Theme.text_for_backgrounds(
+    { Theme.colors.accent, Theme.colors.warning, Theme.colors.danger, Theme.colors.frame_bg },
+    Theme.colors.text, nil, 4.5)
+end
+
+local function draw_dashed_line(draw_list, left_x, right_x, y, color, thickness, dash, gap)
+  local x = left_x
+  while x < right_x do
+    local segment = math.min(dash, right_x - x)
+    r.ImGui_DrawList_AddLine(draw_list, x, y, x + segment, y, color, thickness)
+    x = x + dash + gap
+  end
+end
+
+function cr_draw_meter_target(ctx, draw_list, left_x, right_x, top_y, bottom_y, settings, unit)
   if settings.meter_show_target == false then return end
+  -- A LUFS target across a dBFS bar compares two different scales: a -14 LUFS
+  -- programme peaks nowhere near -14 dBFS, so the line stays over its own group.
+  if unit ~= "lufs" then return end
   local min_db = settings.min_db or defaults.min_db
   local max_db = settings.max_db or defaults.max_db
   local target_db = tonumber(settings.meter_target_lufs) or MeterEngine.default_target_lufs
   if target_db >= max_db or target_db <= min_db then return end
   local tolerance = math.max(0, tonumber(settings.meter_target_tolerance) or defaults.meter_target_tolerance)
+  local color = meter_target_color()
   local y = meter_value_y(db_to_linear(target_db, min_db, max_db), top_y, bottom_y, settings)
   if tolerance > 0 then
     local upper = meter_value_y(db_to_linear(math.min(max_db, target_db + tolerance), min_db, max_db), top_y, bottom_y, settings)
     local lower = meter_value_y(db_to_linear(math.max(min_db, target_db - tolerance), min_db, max_db), top_y, bottom_y, settings)
-    r.ImGui_DrawList_AddRectFilled(draw_list, left_x, upper, right_x, lower, color_with_alpha(Theme.colors.accent, 0x26), 0)
+    r.ImGui_DrawList_AddRectFilled(draw_list, left_x, upper, right_x, lower, color_with_alpha(color, 0x1E), 0)
   end
-  r.ImGui_DrawList_AddLine(draw_list, left_x, y, right_x, y, color_with_alpha(Theme.colors.accent, 0xCC), UIScale.px(1.6))
+  draw_dashed_line(draw_list, left_x, right_x, y, color_with_alpha(color, 0xEE), UIScale.px(1.6), UIScale.round(6), UIScale.round(4))
   local text = string.format("%.0f", target_db)
   local text_w = calc_text_width(ctx, text)
   local text_x = left_x + math.max(0, (right_x - left_x - text_w) * 0.5)
-  r.ImGui_DrawList_AddText(draw_list, text_x, y - UIScale.round(14), color_with_alpha(Theme.colors.accent, 0xEE), text)
+  r.ImGui_DrawList_AddText(draw_list, text_x, y - UIScale.round(14), color_with_alpha(color, 0xEE), text)
 end
 
 local function get_meter_value_font(ctx, font_size)
@@ -2096,7 +2157,7 @@ local function draw_meter_settings_popup(app, settings)
     settings.meter_show_target = target_show_value == true
     if app.save_settings then app.save_settings() end
   end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Draw the target level as a line across the bars") end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Draw the target level as a line across the bars.\nOnly on the LUFS bar sources: Peak and RMS read dBFS, where a loudness target marks nothing.") end
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Target LUFS")
   r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
   local target_changed, target_value = r.ImGui_SliderDouble(ctx, "##control_room_meter_target", tonumber(settings.meter_target_lufs) or MeterEngine.default_target_lufs, -24, -6, "%.1f")
@@ -2269,7 +2330,8 @@ local function set_meter_open(app, settings, open)
   open = open == true
   state.meter_open = open
   settings.meter_open = open
-  if open then state.setup_open = false end
+  -- Setup is reachable from the footer in both views now, so opening the meter
+  -- no longer closes it.
   if app.save_settings then app.save_settings() end
 end
 
@@ -2290,26 +2352,61 @@ local function draw_header(app, lanes)
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(active_count) .. "/" .. tostring(#lanes) .. " active")
 end
 
-function cr_meter_bar_values(source, settings, channel_count)
+-- Returns a flat list of bars, each carrying the unit and group it belongs to,
+-- plus the mode it ended up drawing. Groups that need the meter JSFX are simply
+-- left out when it is unavailable rather than dragging the whole view down to
+-- peak, so "Peak + LUFS I/S/M" still shows its peaks on a source without one.
+function cr_meter_bar_values(source, settings, layout, channel_count)
   local mode = MeterEngine.bar_source(settings.meter_bar_source or defaults.meter_bar_source)
   local track = source and source.track or nil
   local min_db = settings.min_db or defaults.min_db
   local max_db = settings.max_db or defaults.max_db
-  if mode.id ~= "peak" and MeterEngine.uses_engine(source) then
-    local options = { auto_install = settings.meter_fx_auto_install ~= false }
-    if mode.id == "rms" then
-      local levels = MeterEngine.read_channel_rms(track, channel_count, options)
-      if levels then
-        local values = {}
-        for index = 1, channel_count do values[index] = db_to_linear(levels[index] or min_db, min_db, max_db) end
-        return values, mode
-      end
-    else
-      local level = MeterEngine.read_value(track, mode.id, options)
-      if level then return { db_to_linear(level, min_db, max_db) }, mode end
+  local engine = MeterEngine.uses_engine(source)
+  local options = { auto_install = settings.meter_fx_auto_install ~= false }
+  local bars = {}
+  local group = 0
+
+  local function add_peaks(unit)
+    local peaks = read_channel_peaks(track, 0, channel_count)
+    for index = 1, channel_count do
+      bars[#bars + 1] = { value = peaks[index] or 0, caption = Layouts.speaker(layout, index - 1), unit = unit, group = group }
     end
   end
-  return read_channel_peaks(track, 0, channel_count), MeterEngine.bar_source("peak")
+
+  for _, spec in ipairs(MeterEngine.bar_groups(mode)) do
+    group = group + 1
+    if spec.kind == "peak" then
+      add_peaks(spec.unit)
+    elseif spec.kind == "rms" and engine then
+      local levels = MeterEngine.read_channel_rms(track, channel_count, options)
+      if levels then
+        for index = 1, channel_count do
+          bars[#bars + 1] = { value = db_to_linear(levels[index] or min_db, min_db, max_db), caption = Layouts.speaker(layout, index - 1), unit = spec.unit, group = group }
+        end
+      end
+    elseif spec.kind == "metrics" and engine then
+      local keys = {}
+      for index, metric in ipairs(spec.metrics) do keys[index] = metric.key end
+      local levels = MeterEngine.read_values(track, keys, options)
+      if levels then
+        for index, metric in ipairs(spec.metrics) do
+          bars[#bars + 1] = { value = db_to_linear(levels[index] or min_db, min_db, max_db), caption = metric.label, unit = spec.unit, group = group }
+        end
+      end
+    elseif spec.kind == "value" and engine then
+      local level = MeterEngine.read_value(track, spec.key, options)
+      if level then
+        bars[#bars + 1] = { value = db_to_linear(level, min_db, max_db), caption = spec.label, unit = spec.unit, group = group }
+      end
+    end
+  end
+
+  if #bars == 0 then
+    group = 1
+    add_peaks("dbfs")
+    return bars, MeterEngine.bar_source("peak")
+  end
+  return bars, mode
 end
 
 local function draw_meter_panel(app, settings, footer_height)
@@ -2325,18 +2422,9 @@ local function draw_meter_panel(app, settings, footer_height)
     r.ImGui_SetCursorScreenPos(ctx, panel_x, start_y)
     local source, sources = active_meter_source(app, settings)
     if source and source.id ~= settings.meter_source and valid_track(source.track) then settings.meter_source = source.id end
-    local button_gap = UIScale.gap(6)
-    local settings_button_w = UIScale.text_button_w(ctx, "...", 34, 6)
-    local main_button_w = math.max(UIScale.round(44), (panel_w - settings_button_w - button_gap * 2) / 2)
-    if r.ImGui_Button(ctx, "Reset##control_room_meter_reset", main_button_w, 0) then queue_meter_reset(source) end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Reset meter history") end
-    r.ImGui_SameLine(ctx, 0, button_gap)
-    if r.ImGui_Button(ctx, "Back##control_room_meter_back", main_button_w, 0) then set_meter_open(app, settings, false) end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Back to Control Room") end
-    r.ImGui_SameLine(ctx, 0, button_gap)
-    if r.ImGui_Button(ctx, "...##control_room_meter_settings", settings_button_w, 0) then state.meter_settings_open = true end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Meter settings") end
-    r.ImGui_SetCursorScreenPos(ctx, panel_x, select(2, r.ImGui_GetCursorScreenPos(ctx)))
+    -- Reset, the meter settings and the way back all sit in the shared footer.
+    -- What is left here is the source picker, which is this view's header the
+    -- way the lane count is the header of the other one.
     r.ImGui_SetNextItemWidth(ctx, panel_w)
     if r.ImGui_BeginCombo(ctx, "##control_room_meter_source", source and source.label or "Master") then
       for _, item in ipairs(sources) do
@@ -2352,8 +2440,8 @@ local function draw_meter_panel(app, settings, footer_height)
     end
     local layout = Layouts.by_id(source and source.layout) or Layouts.by_id("stereo")
     local channel_count = math.max(1, layout.channels)
-    local raw_values, bar_mode = cr_meter_bar_values(source, settings, channel_count)
-    local bar_count = math.max(1, #raw_values)
+    local bars, bar_mode = cr_meter_bar_values(source, settings, layout, channel_count)
+    local bar_count = math.max(1, #bars)
     local peak_key = tostring(source and source.id or "none") .. ":" .. tostring(bar_mode.id)
     state.meter_peaks = type(state.meter_peaks) == "table" and state.meter_peaks or {}
     local peak = state.meter_peaks[peak_key]
@@ -2364,7 +2452,7 @@ local function draw_meter_panel(app, settings, footer_height)
     end
     local values = {}
     for index = 1, bar_count do
-      local raw = raw_values[index] or 0
+      local raw = (bars[index] or {}).value or 0
       values[index] = smoothed_meter("meter_" .. tostring(index) .. ":" .. tostring(peak_key), raw, settings)
       if raw > (peak[index] or 0) then peak[index] = raw end
     end
@@ -2378,7 +2466,18 @@ local function draw_meter_panel(app, settings, footer_height)
     local info_gap = UIScale.round(5)
     local info_scale = clamp(tonumber(settings.meter_info_scale) or defaults.meter_info_scale, 0.6, 1.8)
     local info_box_h = UIScale.round(58 * info_scale)
-    local info_h = #info_items * info_box_h + math.max(0, #info_items - 1) * info_gap
+    -- Lay the value boxes out in a grid rather than one tall column: six of them
+    -- stacked pushes the bars into a sliver on anything but a very tall pane.
+    -- The column count follows the width so a narrow pane still gets a column.
+    local info_min_w = UIScale.round(104 * info_scale)
+    local info_max_columns = math.max(1, math.min(#info_items, math.floor((panel_w + info_gap) / (info_min_w + info_gap))))
+    -- Take the fewest rows the width allows, then spread the boxes back out over
+    -- that many rows, so six items become three by two instead of five and a
+    -- lone straggler.
+    local info_rows = math.ceil(#info_items / info_max_columns)
+    local info_columns = math.max(1, math.ceil(#info_items / math.max(1, info_rows)))
+    local info_box_w = (panel_w - info_gap * (info_columns - 1)) / info_columns
+    local info_h = info_rows * info_box_h + math.max(0, info_rows - 1) * info_gap
     local details_h = #info_items > 0 and (divider_gap_top + UIScale.round(1) + divider_gap_bottom + info_h + UIScale.round(4)) or 0
     local available_meter_h = (meter_avail_h or UIScale.round(220)) - details_h
     local meter_h = settings.meter_adaptive_height ~= false and available_meter_h or math.min(UIScale.round(360), available_meter_h)
@@ -2390,27 +2489,48 @@ local function draw_meter_panel(app, settings, footer_height)
     local gaps = math.max(1, bar_count - 1)
     local bar_scale = clamp(tonumber(settings.meter_bar_scale) or defaults.meter_bar_scale, 0.4, 1)
     local bar_gap = math.max(UIScale.round(2), math.min(UIScale.round(16), (panel_w * 0.08) / gaps))
-    local bar_w = math.max(UIScale.round(6), (panel_w - scale_margin * 2 - bar_gap * gaps) / bar_count) * bar_scale
-    local bars_w = bar_w * bar_count + bar_gap * gaps
+    -- Groups get extra air between them so peaks and loudness do not read as one
+    -- continuous set of channels.
+    local group_gap = UIScale.round(12)
+    local group_breaks = 0
+    for index = 2, bar_count do
+      if bars[index].group ~= bars[index - 1].group then group_breaks = group_breaks + 1 end
+    end
+    local spacing = bar_gap * gaps + group_gap * group_breaks
+    local bar_w = math.max(UIScale.round(6), (panel_w - scale_margin * 2 - spacing) / bar_count) * bar_scale
+    local bars_w = bar_w * bar_count + spacing
     local bar_left = meter_x + scale_margin + math.max(0, (panel_w - scale_margin * 2 - bars_w) * 0.5)
     local bar_top = meter_y + UIScale.round(6)
     local bar_bottom = bottom_y - UIScale.round(4)
+    local spans = {}
+    local left_edge = bar_left
     for index = 1, bar_count do
-      local left_edge = bar_left + (index - 1) * (bar_w + bar_gap)
-      local caption = bar_mode.per_channel and Layouts.speaker(layout, index - 1) or bar_mode.label
-      -- Narrow bars only get the speaker name; the value badge would not fit.
-      local badge = nil
-      if bar_w >= UIScale.round(46) then
-        local reading = bar_mode.per_channel and format_db(peak[index] or 0, settings) or string.format("%.1f LUFS", linear_to_db(peak[index] or 0, settings.min_db or defaults.min_db))
-        badge = caption .. " " .. reading
-      elseif bar_w >= UIScale.round(18) then
-        badge = caption
+      local bar = bars[index]
+      if index > 1 then
+        left_edge = left_edge + bar_w + bar_gap
+        if bar.group ~= bars[index - 1].group then
+          -- A hairline centred in the combined gap, so the split is visible even
+          -- when the two groups happen to sit at similar heights.
+          local divider_x = left_edge + (group_gap - bar_gap) * 0.5
+          r.ImGui_DrawList_AddLine(draw_list, divider_x, bar_top, divider_x, bar_bottom, color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0x88), UIScale.px(1))
+          left_edge = left_edge + group_gap
+        end
       end
-      if draw_meter_channel(ctx, draw_list, left_edge, left_edge + bar_w, bar_top, bar_bottom, values[index], peak[index], badge, settings) then
+      local caption = bar.caption or bar_mode.label
+      if draw_meter_channel(ctx, draw_list, left_edge, left_edge + bar_w, bar_top, bar_bottom, values[index], peak[index], caption, settings, bar.unit) then
         peak[index] = 0
       end
+      local span = spans[bar.group]
+      if span then
+        span.right = left_edge + bar_w
+      else
+        spans[bar.group] = { left = left_edge, right = left_edge + bar_w, unit = bar.unit }
+      end
     end
-    cr_draw_meter_target(ctx, draw_list, bar_left, bar_left + bars_w, bar_top, bar_bottom, settings)
+    -- One target line per group, spanning only that group's bars.
+    for _, span in pairs(spans) do
+      cr_draw_meter_target(ctx, draw_list, span.left, span.right, bar_top, bar_bottom, settings, span.unit)
+    end
     if #info_items > 0 then
       local divider_y = meter_y + meter_h + divider_gap_top
       r.ImGui_DrawList_AddLine(draw_list, panel_x, divider_y, panel_x + panel_w, divider_y, color_with_alpha(Theme.colors.border or Theme.colors.text_dim, 0xAA), UIScale.px(1))
@@ -2418,88 +2538,119 @@ local function draw_meter_panel(app, settings, footer_height)
       local info_x, info_y = r.ImGui_GetCursorScreenPos(ctx)
       r.ImGui_Dummy(ctx, panel_w, info_h)
       for index, item in ipairs(info_items) do
-        draw_meter_info_box(ctx, draw_list, info_x, info_y + (index - 1) * (info_box_h + info_gap), panel_w, info_box_h, item.label, item.value, item.unit, item.color, info_scale)
+        local column = (index - 1) % info_columns
+        local row = math.floor((index - 1) / info_columns)
+        draw_meter_info_box(ctx, draw_list,
+          info_x + column * (info_box_w + info_gap),
+          info_y + row * (info_box_h + info_gap),
+          info_box_w, info_box_h, item.label, item.value, item.unit, item.color, info_scale)
       end
     end
     r.ImGui_EndChild(ctx)
   end
 end
 
+-- A fixed two by three grid: the buttons never move and never disappear, so the
+-- same action is always in the same place whichever view is open. One that does
+-- not apply right now is disabled rather than dropped, which would shift the
+-- rest along. The three columns share the full width, so the labels normally fit
+-- unabbreviated and only fall back to a short form when they genuinely cannot.
+local FOOTER_COLUMNS = 3
+local FOOTER_ROWS = 2
+
+local function cr_footer_metrics(ctx)
+  local width = r.ImGui_GetContentRegionAvail(ctx)
+  local pad = UIScale.round(8)
+  local gap = UIScale.gap(6)
+  local button_h = r.ImGui_GetFrameHeight(ctx)
+  local button_w = math.max(UIScale.round(28), ((width or 0) - pad * 2 - gap * (FOOTER_COLUMNS - 1)) / FOOTER_COLUMNS)
+  local height = button_h * FOOTER_ROWS + gap + UIScale.round(14)
+  return { width = width, pad = pad, gap = gap, button_w = button_w, button_h = button_h, height = height }
+end
+
+local function cr_control_footer_height(ctx)
+  return cr_footer_metrics(ctx).height
+end
+
+-- Returns true only on a real click, so a disabled button can never fire.
+local function cr_footer_button(ctx, id, label, short_label, metrics, options)
+  options = options or {}
+  local text = label
+  if short_label and calc_text_width(ctx, label) + UIScale.round(12) > metrics.button_w then text = short_label end
+  local pushed = false
+  if options.active then
+    local active_text = Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), options.warn and Theme.colors.warning or Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), options.warn and Theme.colors.warning or Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), options.warn and Theme.colors.accent or Theme.colors.warning)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_text)
+    pushed = true
+  end
+  local disabled = options.enabled == false
+  if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
+  local clicked = r.ImGui_Button(ctx, text .. "##" .. id, metrics.button_w, metrics.button_h)
+  if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+  if pushed then r.ImGui_PopStyleColor(ctx, 4) end
+  local hovered
+  if r.ImGui_HoveredFlags_AllowWhenDisabled then
+    hovered = r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled())
+  else
+    hovered = r.ImGui_IsItemHovered(ctx)
+  end
+  if hovered and options.tooltip then r.ImGui_SetTooltip(ctx, options.tooltip) end
+  return clicked and not disabled
+end
+
 local function draw_control_footer(app, settings)
   local ctx = app.ctx
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local left_x, top_y = r.ImGui_GetCursorScreenPos(ctx)
-  local width = r.ImGui_GetContentRegionAvail(ctx)
-  local footer_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(14)
-  local meter_compact = state.meter_open and settings.meter_compact == true
-  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, left_x + width, top_y + footer_h, 0x00000033, UIScale.px(4))
-  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, left_x + width, top_y + footer_h, Theme.colors.border, UIScale.px(4), 0, UIScale.px(0.8))
-  r.ImGui_SetCursorScreenPos(ctx, left_x + UIScale.round(8), top_y + UIScale.round(7))
-  local button_h = r.ImGui_GetFrameHeight(ctx)
-  local active_button_text = Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5)
-  if not meter_compact then
-    if state.dim_enabled then
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-    end
-    local dim_clicked = r.ImGui_Button(ctx, "DIM##control_room_dim", UIScale.text_button_w(ctx, "DIM", 46, 6), button_h)
-    if state.dim_enabled then r.ImGui_PopStyleColor(ctx, 4) end
-    if dim_clicked then toggle_monitor_dim(settings) end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.dim_enabled and "Restore monitor levels" or "Dim monitor outputs") end
-    r.ImGui_SameLine(ctx)
-    local mono_active, mono_total = cr_monitor_mono_state(settings, r.GetMasterTrack(0))
-    if mono_active then
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.warning)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.accent)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-    end
-    local mono_clicked = r.ImGui_Button(ctx, "MONO##control_room_mono", UIScale.text_button_w(ctx, "MONO", 56, 6), button_h)
-    if mono_active then r.ImGui_PopStyleColor(ctx, 4) end
-    if mono_clicked and mono_total > 0 then toggle_monitor_mono(app, settings) end
-    if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx, mono_total == 0 and "No monitor wide enough to sum" or (mono_active and "Give every monitor its own mode back" or "Sum every monitor to mono"))
-    end
-    r.ImGui_SameLine(ctx)
-    if state.speaker_select_index ~= nil then
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-      local all_clicked = r.ImGui_Button(ctx, "ALL##control_room_speaker_all", UIScale.text_button_w(ctx, "ALL", 38, 6), button_h)
-      r.ImGui_PopStyleColor(ctx, 4)
-      if all_clicked then restore_speaker_select() end
-      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Restore all speaker mutes") end
-      r.ImGui_SameLine(ctx)
-    end
-    if state.setup_open then
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-      r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-    end
-    local setup_clicked = r.ImGui_Button(ctx, "Setup##control_room_setup", UIScale.text_button_w(ctx, "Setup", 62, 8), button_h)
-    if state.setup_open then r.ImGui_PopStyleColor(ctx, 4) end
-    if setup_clicked then state.setup_open = not state.setup_open end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Monitor routing setup") end
-    r.ImGui_SameLine(ctx)
-  end
-  if state.meter_open then
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active_button_text)
-  end
-  local compact_footer = width < UIScale.round(210)
-  local meter_label = compact_footer and "Mtr" or "Meter"
-  local meter_clicked = r.ImGui_Button(ctx, meter_label .. "##control_room_meter", UIScale.text_button_w(ctx, meter_label, compact_footer and 42 or 58, 8), button_h)
-  if state.meter_open then r.ImGui_PopStyleColor(ctx, 4) end
-  if meter_clicked then set_meter_open(app, settings, not state.meter_open) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.meter_open and "Hide meter" or "Show meter") end
+  local metrics = cr_footer_metrics(ctx)
+  local width = metrics.width
+  r.ImGui_DrawList_AddRectFilled(draw_list, left_x, top_y, left_x + width, top_y + metrics.height, 0x00000033, UIScale.px(4))
+  r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, left_x + width, top_y + metrics.height, Theme.colors.border, UIScale.px(4), 0, UIScale.px(0.8))
+
+  local master = r.GetMasterTrack(0)
+  local mono_active, mono_total = cr_monitor_mono_state(settings, master)
+  local has_monitors = (r.GetTrackNumSends and (r.GetTrackNumSends(master, 1) or 0) or 0) > 0
+
+  local row_y = top_y + UIScale.round(7)
+  r.ImGui_SetCursorScreenPos(ctx, left_x + metrics.pad, row_y)
+  if cr_footer_button(ctx, "control_room_dim", "DIM", "DIM", metrics, {
+    active = state.dim_enabled, warn = true, enabled = has_monitors,
+    tooltip = not has_monitors and "No monitor output to dim"
+      or (state.dim_enabled and "Restore monitor levels" or "Dim monitor outputs")
+  }) then toggle_monitor_dim(settings) end
+  r.ImGui_SameLine(ctx, 0, metrics.gap)
+  if cr_footer_button(ctx, "control_room_mono", "MONO", "MON", metrics, {
+    active = mono_active, warn = true, enabled = mono_total > 0,
+    tooltip = mono_total == 0 and "No monitor wide enough to sum"
+      or (mono_active and "Give every monitor its own mode back" or "Sum every monitor to mono")
+  }) then toggle_monitor_mono(app, settings) end
+  r.ImGui_SameLine(ctx, 0, metrics.gap)
+  if cr_footer_button(ctx, "control_room_setup", "Setup", "Set", metrics, {
+    active = state.setup_open, tooltip = "Monitor routing setup"
+  }) then state.setup_open = not state.setup_open end
+
+  row_y = row_y + metrics.button_h + metrics.gap
+  r.ImGui_SetCursorScreenPos(ctx, left_x + metrics.pad, row_y)
+  if cr_footer_button(ctx, "control_room_meter", "Meter", "Mtr", metrics, {
+    active = state.meter_open,
+    tooltip = state.meter_open and "Back to the monitor lanes" or "Show meter"
+  }) then set_meter_open(app, settings, not state.meter_open) end
+  r.ImGui_SameLine(ctx, 0, metrics.gap)
+  if cr_footer_button(ctx, "control_room_meter_reset", "Reset", "Rst", metrics, {
+    enabled = state.meter_open,
+    tooltip = state.meter_open and "Reset meter history" or "Open the meter to reset it"
+  }) then queue_meter_reset((active_meter_source(app, settings))) end
+  r.ImGui_SameLine(ctx, 0, metrics.gap)
+  if cr_footer_button(ctx, "control_room_meter_settings", "...", nil, metrics, {
+    enabled = state.meter_open,
+    tooltip = state.meter_open and "Meter settings" or "Open the meter to change its settings"
+  }) then state.meter_settings_open = true end
+
   r.ImGui_SetCursorScreenPos(ctx, left_x, top_y)
-  r.ImGui_Dummy(ctx, width, footer_h + UIScale.round(4))
+  r.ImGui_Dummy(ctx, width, metrics.height + UIScale.round(4))
 end
 
 local function monitor_mode_text(output)
@@ -3328,7 +3479,10 @@ function M.draw(app)
     if not ok and app then app.status = "Meter reset failed: " .. tostring(err) end
   end
   local lanes = build_lanes(app, settings)
-  local footer_height = state.meter_open and 0 or (r.ImGui_GetFrameHeight(ctx) + UIScale.round(22))
+  -- One layout for both views: header, body, then the same footer in the same
+  -- place. The footer used to be skipped in the meter view, which moved its
+  -- controls to the top and left DIM, MONO and Setup unreachable from there.
+  local footer_height = cr_control_footer_height(ctx) + UIScale.round(8)
   if not state.meter_open then
     draw_header(app, lanes)
     r.ImGui_Dummy(ctx, UIScale.round(1), UIScale.round(4))
@@ -3338,13 +3492,9 @@ function M.draw(app)
   else
     draw_lanes(app, settings, lanes, footer_height)
   end
-  if not state.meter_open then
-    draw_control_footer(app, settings)
-    draw_setup_popup(app, settings)
-    draw_meter_settings_popup(app, settings)
-  else
-    draw_meter_settings_popup(app, settings)
-  end
+  draw_control_footer(app, settings)
+  draw_setup_popup(app, settings)
+  draw_meter_settings_popup(app, settings)
 end
 
 return M
