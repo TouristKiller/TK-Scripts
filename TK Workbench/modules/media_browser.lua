@@ -18,6 +18,13 @@ local peak_debug_path = resource_path .. "/Scripts/TK_Workbench_media_peak_debug
 local PROJECT_FILES_LOCATION = "::current_project_files::"
 
 local defaults = {
+  auto_key_enabled = false,
+  auto_key_tonic = 0,
+  auto_key_mode = "minor",
+  auto_key_skip_percussive = true,
+  auto_key_from_filename = true,
+  auto_key_bare_letters = false,
+  auto_key_audition = true,
   search_term = "",
   current_location = "",
   last_browse_location = "",
@@ -111,6 +118,7 @@ local state = {
   waveform_vertical_zoom = 1.0,
   silence_trim_cache = {},
   preview = nil,
+  auto_key_hot = false,
   preview_source = nil,
   preview_path = nil,
   preview_kind = nil,
@@ -1516,6 +1524,387 @@ local function read_embedded_bpm(source)
   return nil
 end
 
+-- Auto Key -------------------------------------------------------------------
+-- The same feature as in the standalone TK Media Browser: pick a target key on a
+-- small keyboard and everything previewed or inserted is transposed onto it. The
+-- three decisions behind it are the same and deliberate:
+--   * The tonic decides the shift and the mode does not. Pick C and every
+--     sample's root ends up on C, so the same click always means the same thing.
+--   * The shift takes the shortest way round the octave, never more than six
+--     semitones, so A minor to C minor is +3 rather than -9.
+--   * A file whose key cannot be established is left alone rather than guessed
+--     at. A wrongly transposed sample is worse than an untransposed one.
+--
+-- State lives in the module's settings table so it persists through the normal
+-- Workbench mechanism; only the detection cache is kept here. If a fix lands in
+-- either copy of M.auto_key.parse / M.auto_key.from_name, it belongs in the other one too.
+-- Hung off the module table rather than given a local of its own: this file's
+-- main chunk is on Lua's ceiling of 200 locals, and one more refuses to load.
+M.auto_key = {
+  cache = {},
+  note_names = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" },
+  pitch_class = {
+    c = 0, ["c#"] = 1, db = 1, d = 2, ["d#"] = 3, eb = 3, e = 4, ["e#"] = 5, fb = 4,
+    f = 5, ["f#"] = 6, gb = 6, g = 7, ["g#"] = 8, ab = 8, a = 9, ["a#"] = 10,
+    bb = 10, b = 11, cb = 11, ["b#"] = 0
+  },
+  white_pc = { 0, 2, 4, 5, 7, 9, 11 },
+  white_name = { "C", "D", "E", "F", "G", "A", "B" },
+  black = { { after = 1, pc = 1 }, { after = 2, pc = 3 }, { after = 4, pc = 6 }, { after = 5, pc = 8 }, { after = 6, pc = 10 } },
+  percussive = {}
+}
+
+-- Whole words only: a substring test would call "custom" percussive because it
+-- contains "tom", and "Ambient" a key because it starts on A.
+for _, word in ipairs({
+  "drum", "drums", "drumloop", "perc", "percs", "percussion", "kick", "kicks",
+  "snare", "snares", "hat", "hats", "hihat", "hihats", "openhat", "closedhat",
+  "clap", "claps", "cymbal", "cymbals", "crash", "ride", "tom", "toms", "rim",
+  "rimshot", "shaker", "shakers", "tambourine", "conga", "bongo", "cowbell",
+  "woodblock", "riser", "downlifter", "uplifter", "impact", "whoosh", "noise",
+  "fx", "sfx", "foley", "click", "tick", "beep", "sweep", "transition"
+}) do M.auto_key.percussive[word] = true end
+
+function M.auto_key.label(tonic, mode)
+  local name = M.auto_key.note_names[(math.floor(tonic or 0) % 12) + 1] or "C"
+  return mode == "minor" and (name .. "m") or name
+end
+
+-- Accepts "Am", "A min", "F#minor", "Bb maj", "C", "Ebm". Anything it does not
+-- fully understand returns nil, so "Am7" and "A dorian" are refused.
+function M.auto_key.parse(text)
+  if type(text) ~= "string" then return nil end
+  local cleaned = text:gsub("\226\153\175", "#"):gsub("\226\153\173", "b")
+  cleaned = cleaned:gsub("^%s+", ""):gsub("%s+$", "")
+  if cleaned == "" then return nil end
+  local letter, rest = cleaned:match("^([A-Ga-g][#b]?)%s*(.*)$")
+  if not letter then return nil end
+  local tonic = M.auto_key.pitch_class[letter:lower()]
+  if not tonic then return nil end
+  rest = rest:gsub("[%s%-_]", "")
+  local lowered = rest:lower()
+  local mode
+  if rest == "" then mode = "major"
+  elseif lowered:match("^min") then mode = "minor"
+  elseif lowered:match("^maj") then mode = "major"
+  elseif rest == "m" then mode = "minor"
+  elseif rest == "M" then mode = "major"
+  else return nil end
+  return tonic, mode
+end
+
+-- Returns tonic, mode, assumed. `assumed` means no mode was written down and
+-- major was filled in; harmless, since only the tonic moves the sample.
+function M.auto_key.from_name(name, bare_letters)
+  local base = tostring(name or ""):gsub("%.[^%.]+$", "")
+  -- A note in brackets is a key annotation and nothing else, so "(C)" and "(F#)"
+  -- are trusted even bare. "(Gtr)" and "(Dry)" start on a note letter but carry
+  -- no mode, so M.auto_key.parse refuses them.
+  for group in base:gmatch("[%(%[]([^%)%]]+)[%)%]]") do
+    local tonic, mode = M.auto_key.parse(group)
+    if tonic then
+      local bare = group:gsub("%s", ""):match("^[A-Ga-g][#b]?$") ~= nil
+      return tonic, mode, bare
+    end
+  end
+  base = base:gsub("[%s%-%(%)%[%]%.,]+", "_")
+  local tokens = {}
+  for token in base:gmatch("[^_]+") do tokens[#tokens + 1] = token end
+  for index, token in ipairs(tokens) do
+    local letter, rest = token:match("^([A-Ga-g][#b]?)(.*)$")
+    if letter then
+      if rest ~= "" then
+        local tonic, mode = M.auto_key.parse(token)
+        if tonic then return tonic, mode, false end
+      else
+        if tokens[index + 1] then
+          -- "Bb maj" and "F# minor" spell the mode as a word of its own
+          local tonic, mode = M.auto_key.parse(letter .. tokens[index + 1])
+          if tonic then return tonic, mode, false end
+        end
+        -- A standalone "F#" or "Bb" is safe; a bare "A" is a take letter at
+        -- least as often as a key, so that one waits to be asked for.
+        if #letter == 2 or bare_letters then
+          local tonic = M.auto_key.pitch_class[letter:lower()]
+          if tonic then return tonic, "major", true end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+function M.auto_key.is_percussive(path)
+  for word in tostring(path or ""):lower():gmatch("%a+") do
+    if M.auto_key.percussive[word] then return true end
+  end
+  return false
+end
+
+function M.auto_key.read_embedded_key(source)
+  if not source or not r.GetMediaFileMetadata then return nil end
+  local keys = { "ACID:key", "ID3:TKEY", "VORBIS:KEY", "XMP:dm/key", "RIFF:IKEY", "key" }
+  for _, key in ipairs(keys) do
+    local ok, value = r.GetMediaFileMetadata(source, key)
+    if ok and ok ~= 0 and value and value ~= "" then return value end
+  end
+  return nil
+end
+
+-- Metadata first, then the filename, then the folder that holds it. Cached per
+-- path because reading metadata opens the file and this is asked every frame.
+function M.auto_key.source_key(settings, path)
+  if not path or path == "" then return nil end
+  local cached = M.auto_key.cache[path]
+  if cached ~= nil then
+    if cached == false then return nil end
+    return cached.tonic, cached.mode, cached.origin, cached.assumed
+  end
+  local tonic, mode, origin, assumed
+  local source = r.PCM_Source_CreateFromFile and r.PCM_Source_CreateFromFile(path) or nil
+  if source then
+    tonic, mode = M.auto_key.parse(M.auto_key.read_embedded_key(source))
+    if tonic then origin = "metadata" end
+    if r.PCM_Source_Destroy then r.PCM_Source_Destroy(source) end
+  end
+  if not tonic and settings.auto_key_from_filename ~= false then
+    local bare = settings.auto_key_bare_letters == true
+    tonic, mode, assumed = M.auto_key.from_name(path:match("([^/\\]+)$") or path, bare)
+    if tonic then origin = "filename" end
+    if not tonic then
+      -- Libraries are often filed as Loops/C/bass.wav
+      local folder = path:match("([^/\\]+)[/\\][^/\\]+$")
+      if folder then
+        tonic, mode, assumed = M.auto_key.from_name(folder, bare)
+        if tonic then origin = "folder" end
+      end
+    end
+  end
+  if tonic then
+    M.auto_key.cache[path] = { tonic = tonic, mode = mode, origin = origin, assumed = assumed }
+    return tonic, mode, origin, assumed
+  end
+  M.auto_key.cache[path] = false
+  return nil
+end
+
+function M.auto_key.offset(settings, path)
+  if not settings or settings.auto_key_enabled ~= true then return 0 end
+  local tonic = M.auto_key.source_key(settings, path)
+  if not tonic then return 0 end
+  if settings.auto_key_skip_percussive ~= false and M.auto_key.is_percussive(path) then return 0 end
+  local target = math.floor(tonumber(settings.auto_key_tonic) or 0) % 12
+  local delta = (target - tonic) % 12
+  if delta > 6 then delta = delta - 12 end
+  return delta
+end
+
+function M.auto_key.status(settings, path)
+  if not settings or settings.auto_key_enabled ~= true then return "off" end
+  if not path or path == "" then return "no file" end
+  local tonic, mode, origin, assumed = M.auto_key.source_key(settings, path)
+  if not tonic then return "key unknown, left alone" end
+  local target = math.floor(tonumber(settings.auto_key_tonic) or 0) % 12
+  local target_mode = settings.auto_key_mode == "major" and "major" or "minor"
+  if settings.auto_key_skip_percussive ~= false and M.auto_key.is_percussive(path) then
+    return M.auto_key.label(tonic, mode) .. " - percussive, skipped"
+  end
+  local note = M.auto_key.label(tonic, mode) .. " -> " .. M.auto_key.label(target, target_mode)
+  note = note .. string.format("  %+d st", M.auto_key.offset(settings, path))
+  if assumed then
+    note = note .. "  (mode not stated)"
+  elseif mode ~= target_mode then
+    note = note .. "  (mode differs)"
+  end
+  -- Only say where the key came from when that is not obvious: nearly nothing
+  -- carries key metadata, so "filename" would be on almost every file.
+  if origin == "metadata" then note = note .. "  (from metadata)"
+  elseif origin == "folder" then note = note .. "  (from folder name)" end
+  return note
+end
+
+-- One octave. The keys stay white and black because that is what makes it read
+-- as a keyboard; the selection and hover follow the theme accent. Black keys are
+-- drawn over the white ones and tested for a hit first, like a real keyboard.
+function M.auto_key.draw_selector(ctx, settings, width, height)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local x0, y0 = r.ImGui_GetCursorScreenPos(ctx)
+  width = math.max(UIScale.round(140), width or UIScale.round(240))
+  height = math.max(UIScale.round(40), height or UIScale.round(58))
+  local white_w = width / 7
+  local black_w = white_w * 0.62
+  local black_h = height * 0.62
+  local tonic = math.floor(tonumber(settings.auto_key_tonic) or 0) % 12
+  r.ImGui_InvisibleButton(ctx, "##media_auto_key_selector", width, height)
+  local active = r.ImGui_IsItemHovered(ctx)
+  local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+  local clicked = active and r.ImGui_IsMouseClicked(ctx, 0)
+  local hit = nil
+  for _, black in ipairs(M.auto_key.black) do
+    local bx = x0 + black.after * white_w - black_w * 0.5
+    if mouse_x >= bx and mouse_x <= bx + black_w and mouse_y >= y0 and mouse_y <= y0 + black_h then
+      hit = black.pc
+    end
+  end
+  if not hit and active then
+    local index = math.floor((mouse_x - x0) / white_w) + 1
+    hit = M.auto_key.white_pc[math.max(1, math.min(7, index))]
+  end
+  local accent = Theme.colors.accent
+  local accent_soft = Theme.colors.accent_soft or accent
+  for index = 1, 7 do
+    local wx = x0 + (index - 1) * white_w
+    local selected = tonic == M.auto_key.white_pc[index]
+    local hovered = active and hit == M.auto_key.white_pc[index]
+    local fill = selected and accent or (hovered and accent_soft or 0xEDEDEDFF)
+    r.ImGui_DrawList_AddRectFilled(draw_list, wx + 1, y0, wx + white_w - 1, y0 + height, fill, UIScale.px(3))
+    r.ImGui_DrawList_AddRect(draw_list, wx + 1, y0, wx + white_w - 1, y0 + height, 0x00000088, UIScale.px(3), 0, UIScale.px(1))
+    local name = M.auto_key.white_name[index]
+    local text_w = r.ImGui_CalcTextSize(ctx, name)
+    r.ImGui_DrawList_AddText(draw_list, wx + (white_w - text_w) * 0.5, y0 + height - UIScale.round(16),
+      selected and 0xFFFFFFFF or 0x444444FF, name)
+  end
+  for _, black in ipairs(M.auto_key.black) do
+    local bx = x0 + black.after * white_w - black_w * 0.5
+    local selected = tonic == black.pc
+    local hovered = active and hit == black.pc
+    local fill = selected and accent or (hovered and accent_soft or 0x1A1A1AFF)
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, y0, bx + black_w, y0 + black_h, fill, UIScale.px(2))
+    r.ImGui_DrawList_AddRect(draw_list, bx, y0, bx + black_w, y0 + black_h, 0x000000FF, UIScale.px(2), 0, UIScale.px(1))
+  end
+  if clicked and hit then
+    settings.auto_key_tonic = hit
+    return true
+  end
+  return false
+end
+
+function M.auto_key.draw_popup(ctx, app, settings)
+  if not r.ImGui_BeginPopup or not r.ImGui_BeginPopup(ctx, "Media Auto Key") then return end
+  local dirty = false
+  local enabled_changed, enabled_value = r.ImGui_Checkbox(ctx, "Auto Key", settings.auto_key_enabled == true)
+  if enabled_changed then settings.auto_key_enabled = enabled_value == true; dirty = true end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Transpose previews and inserts onto the chosen key")
+  end
+  r.ImGui_Separator(ctx)
+  if M.auto_key.draw_selector(ctx, settings, UIScale.round(252), UIScale.round(60)) then
+    dirty = true
+    -- Clicking a key is a request to hear that key, so switch Auto Key on rather
+    -- than leaving the click silent. The checkbox above shows it happening.
+    if settings.auto_key_audition ~= false then
+      settings.auto_key_enabled = true
+      if M.auto_key.audition then M.auto_key.audition(app, settings) end
+    end
+  end
+  r.ImGui_Dummy(ctx, 0, UIScale.round(4))
+  local minor = settings.auto_key_mode ~= "major"
+  if r.ImGui_RadioButton(ctx, "Minor", minor) then settings.auto_key_mode = "minor"; dirty = true end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_RadioButton(ctx, "Major", not minor) then settings.auto_key_mode = "major"; dirty = true end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.accent,
+    "= " .. M.auto_key.label(settings.auto_key_tonic, minor and "minor" or "major"))
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "The mode is shown and reported, but only the tonic sets how far a sample moves")
+  end
+  r.ImGui_Separator(ctx)
+  local skip_changed, skip_value = r.ImGui_Checkbox(ctx, "Leave percussion alone", settings.auto_key_skip_percussive ~= false)
+  if skip_changed then settings.auto_key_skip_percussive = skip_value == true; dirty = true end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Skips files whose name reads as drums, percussion or effects")
+  end
+  local name_changed, name_value = r.ImGui_Checkbox(ctx, "Read the key from the name", settings.auto_key_from_filename ~= false)
+  if name_changed then
+    settings.auto_key_from_filename = name_value == true
+    M.auto_key.cache = {}
+    dirty = true
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Used when the file carries no key metadata. Also checks the folder the file sits in.\nF# and Bb on their own are always read, and so are Am, F#min and (C)")
+  end
+  local bare_changed, bare_value = r.ImGui_Checkbox(ctx, "Trust a bare letter like _C_", settings.auto_key_bare_letters == true)
+  if bare_changed then
+    settings.auto_key_bare_letters = bare_value == true
+    M.auto_key.cache = {}
+    dirty = true
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Reads a lone C or A as a key. Turn this on if your library is filed that way.\nOff by default, because in a name like Drum_Loop_A_01 that letter is a variation")
+  end
+  local audition_changed, audition_value = r.ImGui_Checkbox(ctx, "Play the sample on a key click", settings.auto_key_audition ~= false)
+  if audition_changed then settings.auto_key_audition = audition_value == true; dirty = true end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Clicking a key auditions the selected sample in that key, and turns Auto Key on.\nAlready playing? The pitch moves without restarting")
+  end
+  r.ImGui_Separator(ctx)
+  if r.ImGui_Button(ctx, "Forget detected keys", UIScale.round(160), 0) then M.auto_key.cache = {} end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Re-reads every file's key on next use") end
+  if dirty and app and app.save_settings then app.save_settings() end
+  r.ImGui_EndPopup(ctx)
+end
+
+-- Sits in the bottom right of the waveform panel and opens the popup. Drawn onto
+-- the draw list rather than as a widget, so it cannot disturb the layout, and
+-- deliberately quiet while it is off.
+-- The label text and its box, in one place, so the hit test and the drawing can
+-- never disagree about where the badge is. Returns nil when it does not fit.
+function M.auto_key.rect(ctx, settings, x, y, w, h)
+  local enabled = settings.auto_key_enabled == true
+  local minor = settings.auto_key_mode ~= "major"
+  local text = enabled and M.auto_key.label(settings.auto_key_tonic, minor and "minor" or "major") or "key"
+  local pad_x, pad_y = UIScale.round(4), UIScale.round(1)
+  local box_w = r.ImGui_CalcTextSize(ctx, text) + pad_x * 2
+  local box_h = r.ImGui_GetTextLineHeight(ctx) + pad_y * 2
+  local box_x = x + w - box_w - UIScale.round(5)
+  local box_y = y + h - box_h - UIScale.round(5)
+  if box_x < x + UIScale.round(4) or box_h + UIScale.round(10) > h then return nil end
+  return box_x, box_y, box_w, box_h, text, pad_x, pad_y
+end
+
+-- IsMouseHoveringRect rather than IsWindowHovered plus a manual compare: the
+-- waveform lays an InvisibleButton over this whole area, and asking the window
+-- whether it is hovered gave the wrong answer once that item existed. This call
+-- is built for the job and respects the clip rect too.
+function M.auto_key.hovered(ctx, settings, x, y, w, h)
+  local box_x, box_y, box_w, box_h = M.auto_key.rect(ctx, settings, x, y, w, h)
+  if not box_x then return false end
+  if r.ImGui_IsMouseHoveringRect then
+    local ok, inside = pcall(r.ImGui_IsMouseHoveringRect, ctx, box_x, box_y, box_x + box_w, box_y + box_h)
+    if ok then return inside == true end
+  end
+  local mouse_x, mouse_y = mouse_position(ctx)
+  if not mouse_x then return false end
+  return mouse_x >= box_x and mouse_x <= box_x + box_w and mouse_y >= box_y and mouse_y <= box_y + box_h
+end
+
+function M.auto_key.draw_overlay(ctx, app, settings, draw_list, x, y, w, h)
+  local enabled = settings.auto_key_enabled == true
+  local box_x, box_y, box_w, box_h, text, pad_x, pad_y = M.auto_key.rect(ctx, settings, x, y, w, h)
+  if not box_x then M.auto_key.draw_popup(ctx, app, settings) return end
+  -- Hover comes from the geometric test taken before the waveform was drawn, so
+  -- its interaction handler could stand aside for this click in the same frame.
+  local hovered = state.auto_key_hot == true
+  local clicked = hovered and mouse_clicked(ctx, "Left", 0)
+  local label_color
+  if enabled then
+    label_color = hovered and Theme.colors.text or Theme.colors.accent
+  else
+    label_color = hovered and Theme.colors.text or Theme.colors.text_dim
+  end
+  if hovered then
+    r.ImGui_DrawList_AddRectFilled(draw_list, box_x, box_y, box_x + box_w, box_y + box_h, 0x00000066, UIScale.px(3))
+  end
+  r.ImGui_DrawList_AddText(draw_list, box_x + pad_x, box_y + pad_y, label_color, text)
+  if hovered then
+    local tip = "Auto Key: transpose previews and inserts onto a chosen key"
+    if enabled then tip = tip .. "\n" .. M.auto_key.status(settings, state.preview_path or (state.selected_file and state.selected_file.path)) end
+    r.ImGui_SetTooltip(ctx, tip)
+  end
+  if clicked and r.ImGui_OpenPopup then r.ImGui_OpenPopup(ctx, "Media Auto Key") end
+  M.auto_key.draw_popup(ctx, app, settings)
+end
+
 local function effective_playrate(source, kind, settings)
   local rate = tonumber(settings.preview_rate) or defaults.preview_rate
   if kind == "audio" and settings.tempo_sync then
@@ -1537,9 +1926,13 @@ local function tape_speed_pitch_offset(rate)
   return 12 * (math.log(rate) / math.log(2))
 end
 
-local function effective_preview_pitch(settings, rate)
+-- Auto Key is folded in here rather than at the ten call sites, so preview and
+-- insert can never drift apart. `path` defaults to whatever is previewing; the
+-- insert paths pass the file they are actually placing.
+local function effective_preview_pitch(settings, rate, path)
   local pitch = tonumber(settings.preview_pitch) or defaults.preview_pitch
   if settings.preview_tape_speed == true then pitch = pitch + tape_speed_pitch_offset(rate) end
+  pitch = pitch + M.auto_key.offset(settings, path or state.preview_path)
   return math.max(-48, math.min(48, pitch))
 end
 
@@ -1844,7 +2237,7 @@ local function start_track_preview(settings, file)
   if source_length <= 0 then source_length = 5 end
   local rate = effective_playrate(source, file.kind, settings)
   if r.SetMediaItemTakeInfo_Value then
-    r.SetMediaItemTakeInfo_Value(take, "D_PITCH", effective_preview_pitch(settings, rate))
+    r.SetMediaItemTakeInfo_Value(take, "D_PITCH", effective_preview_pitch(settings, rate, file and file.path))
     r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
   end
   local length = source_length / rate
@@ -1926,7 +2319,9 @@ local function start_preview(settings, file)
   if r.CF_Preview_SetValue then
     r.CF_Preview_SetValue(preview, "D_VOLUME", fade_in > 0 and 0 or target_volume)
     r.CF_Preview_SetValue(preview, "B_LOOP", settings.loop_preview and 1 or 0)
-    r.CF_Preview_SetValue(preview, "D_PITCH", effective_preview_pitch(settings, rate))
+    -- The path has to be handed in here: state.preview_path is only updated
+    -- further down, so the fallback would still name the previous file.
+    r.CF_Preview_SetValue(preview, "D_PITCH", effective_preview_pitch(settings, rate, file and file.path))
     r.CF_Preview_SetValue(preview, "D_PLAYRATE", rate)
   end
   if output_track then r.CF_Preview_SetOutputTrack(preview, 0, output_track) end
@@ -2129,6 +2524,27 @@ local function preview_is_active()
   return state.preview ~= nil or state.preview_track_playback or state.preview_paused
 end
 
+-- Clicking a key on the keyboard should be audible straight away. Assigned onto
+-- the table rather than called directly, because the Auto Key popup is defined
+-- above this point and would otherwise resolve these locals to nil globals.
+function M.auto_key.audition(app, settings)
+  local file = state.selected_file
+  if not file or not can_preview_file(file) then return end
+  if preview_is_active() and state.preview_path == file.path then
+    -- Already playing: move the pitch rather than restarting, so clicking through
+    -- keys is a smooth audition instead of a stutter of retriggers.
+    local rate = state.preview_source and effective_playrate(state.preview_source, state.preview_kind, settings) or 1
+    local pitch = effective_preview_pitch(settings, rate, file.path)
+    if state.preview and r.CF_Preview_SetValue then r.CF_Preview_SetValue(state.preview, "D_PITCH", pitch) end
+    if state.preview_track_playback and take_pointer_valid(state.preview_take) and r.SetMediaItemTakeInfo_Value then
+      r.SetMediaItemTakeInfo_Value(state.preview_take, "D_PITCH", pitch)
+      if state.preview_item then r.UpdateItemInProject(state.preview_item) end
+    end
+  else
+    start_preview(settings, file)
+  end
+end
+
 local function preview_finished(settings)
   if state.preview_paused then return false end
   if not preview_is_active() or settings.loop_preview then return false end
@@ -2240,6 +2656,7 @@ local function draw_waveform_selection(draw_list, file, x, y, width, height)
 end
 
 local function handle_waveform_interaction(ctx, file, x, y, width, height)
+  if state.auto_key_hot then return end
   if not file or file.kind ~= "audio" then return end
   local hovered = item_hovered(ctx)
   local mouse_x = mouse_x_position(ctx)
@@ -2880,7 +3297,7 @@ local function insert_file_on_track(app, file, track, target_lane)
       if apply_silence_trim_selection then apply_silence_trim_selection(file, settings, false) end
       local selection_start, selection_end = waveform_selection_range(file, display_length)
       r.SetMediaItemTakeInfo_Value(take, "D_VOL", settings.preview_volume or defaults.preview_volume)
-      r.SetMediaItemTakeInfo_Value(take, "D_PITCH", effective_preview_pitch(settings, rate))
+      r.SetMediaItemTakeInfo_Value(take, "D_PITCH", effective_preview_pitch(settings, rate, file and file.path))
       r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
       if selection_start and selection_end then
         r.SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", selection_start * rate)
@@ -4598,7 +5015,13 @@ function M.draw(app)
   end
   local shown = draw_file_list(app, settings, avail_w or UIScale.round(320), list_h)
   r.ImGui_Spacing(ctx)
-  draw_waveform(ctx, state.selected_file, math.max(UIScale.round(80), (avail_w or UIScale.round(320)) - UIScale.round(2)), wave_h)
+  local wave_x, wave_y = r.ImGui_GetCursorScreenPos(ctx)
+  local wave_w = math.max(UIScale.round(80), (avail_w or UIScale.round(320)) - UIScale.round(2))
+  -- Settled before the waveform is drawn, so its interaction handler can stand
+  -- aside for this click rather than seeking as well.
+  state.auto_key_hot = M.auto_key.hovered(ctx, settings, wave_x, wave_y, wave_w, wave_h)
+  draw_waveform(ctx, state.selected_file, wave_w, wave_h)
+  M.auto_key.draw_overlay(ctx, app, settings, r.ImGui_GetWindowDrawList(ctx), wave_x, wave_y, wave_w, wave_h)
   local can_preview = can_preview_file(state.selected_file)
   local preview_active = preview_is_active()
   local transport_size = math.min(UIScale.round(20), math.max(UIScale.round(18), button_h))

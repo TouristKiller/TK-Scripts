@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.71
+-- @version 0.6.72
 -- @changelog:
+-- v0.6.72
+--   + Media Browser: New: Auto Key, the same feature the standalone TK Media Browser has. Pick a target key on a small keyboard and everything you preview or insert is transposed onto it, so a library in mixed keys lines up with the track. The current key sits in the bottom right of the waveform panel - click it to open the options
+--   + Media Browser: Auto Key - clicking a key on the keyboard auditions the selected sample in that key straight away, and switches Auto Key on rather than leaving the click silent. If something is already playing the pitch moves without restarting, so you can click through keys and hear it change instead of retriggering each time. There is a switch for anyone who would rather a click stayed quiet
+--   + Media Browser: Auto Key - the tonic decides the shift and the mode does not, so picking C puts every sample's root on C and the same click always means the same thing. The shift takes the shortest way round the octave and never exceeds six semitones, so A minor to C minor is +3 rather than -9
+--   + Media Browser: Auto Key - the source key comes from metadata first, and from the name second: the filename, and the folder it sits in, since libraries are often filed as Loops/C/bass.wav. Reading names is deliberately strict - "Am", "F#min", "Bb maj" and "(C)" are read, while "Ambient", "Feminine" and "(Gtr)" all start on a note letter and are refused. A loose "_C_" sits behind its own switch, off by default. A file whose key cannot be established is left alone rather than guessed at
+--   + Media Browser: Auto Key - percussion is left alone by default, matched on whole words so that "custom" is not read as a tom. Transposition goes to the take's pitch rather than its playrate, so length and tempo sync are untouched, and the whole thing hangs off one function that preview and insert already shared - they cannot drift apart
 -- v0.6.71
 --   + Control Room: New meter bar sources. LUFS I/S/M draws integrated, short-term and momentary side by side instead of making you pick one, and Peak + LUFS I/S/M and RMS + LUFS I/S/M draw headroom and loudness together as two groups on the one scale - which is what you actually want while finishing a mix, since one tells you whether you are on level and the other whether you are about to clip. Reading three values off the meter JSFX costs no more than reading one, because it updates every slider in the same pass
 --   + Control Room: Fixed the meter drawing a LUFS target line across bars reading dBFS. Peak and loudness are different scales - a -14 LUFS programme peaks nowhere near -14 dBFS - so on Peak and RMS the line marked nothing at all. It now belongs to the bar group it applies to, and stays away from the ones it does not

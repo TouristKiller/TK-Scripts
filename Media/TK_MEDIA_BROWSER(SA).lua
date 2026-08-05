@@ -1,8 +1,18 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.97
+-- @version 0.9.98
 -- @changelog:
 --[[
+v0.9.98:
++ New: Auto Key. Pick a target key on a small keyboard and everything you preview or insert is transposed onto it, so a library in mixed keys lines up with the track. The current key sits in the bottom right of the oscilloscope - click it to open the options
++ Auto Key: the tonic decides the shift and the mode does not, so picking C puts every sample's root on C and the same click always means the same thing. The shift takes the shortest way round the octave and never exceeds six semitones, so A minor to C minor is +3 rather than -9; nine semitones of pitch shift does not sound like music
++ Auto Key: the source key comes from metadata first (XMP, ID3, RIFF, Vorbis and ACID tags were already being read for the key column) and from the name second - the filename, and the folder it sits in, since libraries are often filed as Loops/C/bass.wav. A file whose key cannot be established is left alone rather than guessed at, because a wrongly transposed sample is worse than an untransposed one
++ Auto Key: name reading is deliberately strict. "Am", "F#min", "Cmaj", "Bb maj" and "A minor" are read, and so are "F#" and "Bb" standing alone, which nothing but a key ever looks like. A note in brackets is trusted too - "(C)" and "(F#)" are annotations, never take letters - while "Ambient", "Feminine", "Custom", "(Gtr)" and "(Dry)" all start on a note letter and are refused. A loose "_C_" sits behind its own switch, off by default, because in "Drum_Loop_A_01" that letter is a variation
++ Auto Key: percussion is left alone by default, matched on whole words in the category and the name so that "custom" is not read as a tom. Transposition goes to the take's pitch rather than its playrate, so length and tempo sync are untouched
++ Auto Key: the readout names the source key, the target, the shift in semitones and any caveat - whether the mode was never stated, whether it differs from the target, or whether the key came from metadata or a folder rather than the filename. It only says where the key came from when that is not obvious: almost nothing carries key metadata, so naming the filename every time told you nothing you could not read yourself
++ Auto Key: clicking a key on the keyboard auditions the selected sample in that key straight away, and switches Auto Key on rather than leaving the click silent. If something is already playing the pitch moves without restarting, so you can click through keys and hear it change instead of retriggering each time. There is a switch for anyone who would rather a click stayed quiet
++ Auto Key: the badge and the keyboard follow the theme - the accent colour and the text brightness you have set, rather than fixed colours - and the badge stays deliberately quiet while Auto Key is off, so it reads as a label on the scope rather than a button competing with the waveform. It steps aside when the cover art thumbnail is in that same corner
+
 v0.9.97:
 + A drag is now advertised to other TK scripts while it lasts, so they can pick it up themselves. Dropping a sample on a TK Kit Maker rack pad therefore works with Kit Maker docked, which an OS drag can never do
 + Releasing a dragged sample anywhere on MPL's RS5k manager window loads it into the pad selected there. Aiming at the pad itself is not possible while the manager is docked (it receives no drop at all then), so the selected pad stands in for it - the same target the right-click menu uses
@@ -1806,6 +1816,389 @@ local function get_file_metadata(file_path)
     return metadata
 end
 
+-- Auto Key -------------------------------------------------------------------
+-- Pick a target key on the little keyboard and everything you preview or insert
+-- is transposed to land on it, so a library in mixed keys lines up with the
+-- track. Three decisions are baked in on purpose:
+--   * The tonic decides the shift and the mode does not. Pick C and every
+--     sample's root ends up on C, which is predictable; letting the mode alter
+--     the amount would make the same click mean different things per file.
+--   * The shift always takes the shortest way round the octave, never more than
+--     six semitones, so A minor to C minor is +3 rather than -9. Nine semitones
+--     of pitch shift does not sound like music.
+--   * A file whose key cannot be established is left alone rather than guessed
+--     at. A wrongly transposed sample is worse than an untransposed one.
+--
+-- Everything lives on this one table on purpose: the main chunk of this file is
+-- close to Lua's ceiling of 200 locals, so a dozen loose ones would break the
+-- script outright. AK.save is filled in further down, once save_options exists.
+local AK = {
+    enabled = false,
+    tonic = 0,
+    mode = "minor",
+    skip_percussive = true,
+    from_filename = true,
+    bare_letters = false,
+    audition_on_click = true,
+    cache = {},
+    save = nil,
+    note_names = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" },
+    pitch_class = {
+        c = 0, ["c#"] = 1, db = 1, d = 2, ["d#"] = 3, eb = 3, e = 4, ["e#"] = 5, fb = 4,
+        f = 5, ["f#"] = 6, gb = 6, g = 7, ["g#"] = 8, ab = 8, a = 9, ["a#"] = 10,
+        bb = 10, b = 11, cb = 11, ["b#"] = 0
+    },
+    white_pc = { 0, 2, 4, 5, 7, 9, 11 },
+    white_name = { "C", "D", "E", "F", "G", "A", "B" },
+    black = { { after = 1, pc = 1 }, { after = 2, pc = 3 }, { after = 4, pc = 6 }, { after = 5, pc = 8 }, { after = 6, pc = 10 } },
+    percussive = {}
+}
+
+-- Whole words only: a substring test would call "custom" percussive because it
+-- contains "tom", and "Ambient" a key because it starts with A.
+for _, word in ipairs({
+    "drum", "drums", "drumloop", "perc", "percs", "percussion", "kick", "kicks",
+    "snare", "snares", "hat", "hats", "hihat", "hihats", "openhat", "closedhat",
+    "clap", "claps", "cymbal", "cymbals", "crash", "ride", "tom", "toms", "rim",
+    "rimshot", "shaker", "shakers", "tambourine", "conga", "bongo", "cowbell",
+    "woodblock", "riser", "downlifter", "uplifter", "impact", "whoosh", "noise",
+    "fx", "sfx", "foley", "click", "tick", "beep", "sweep", "transition"
+}) do AK.percussive[word] = true end
+
+function AK.label(tonic, mode)
+    local name = AK.note_names[(math.floor(tonic or 0) % 12) + 1] or "C"
+    return mode == "minor" and (name .. "m") or name
+end
+
+-- Accepts "Am", "A min", "F#minor", "Bb maj", "C", "Ebm". Returns tonic, mode.
+-- Anything it does not fully understand returns nil, so "Am7" and "A dorian" are
+-- refused rather than half read.
+function AK.parse(text)
+    if type(text) ~= "string" then return nil end
+    local cleaned = text:gsub("\226\153\175", "#"):gsub("\226\153\173", "b")
+    cleaned = cleaned:gsub("^%s+", ""):gsub("%s+$", "")
+    if cleaned == "" then return nil end
+    local letter, rest = cleaned:match("^([A-Ga-g][#b]?)%s*(.*)$")
+    if not letter then return nil end
+    local tonic = AK.pitch_class[letter:lower()]
+    if not tonic then return nil end
+    rest = rest:gsub("[%s%-_]", "")
+    local lowered = rest:lower()
+    local mode
+    if rest == "" then mode = "major"
+    elseif lowered:match("^min") then mode = "minor"
+    elseif lowered:match("^maj") then mode = "major"
+    elseif rest == "m" then mode = "minor"
+    elseif rest == "M" then mode = "major"
+    else return nil end
+    return tonic, mode
+end
+
+-- Returns tonic, mode, assumed. `assumed` means the mode was not written down
+-- and got filled in as major; harmless, since only the tonic moves the sample.
+--
+-- A standalone note is the awkward case. "F#" or "Bb" on its own is safe, because
+-- nothing else in a filename looks like that. A bare "A" is not: it is a take or
+-- a variation letter at least as often as a key, and guessing wrong transposes
+-- the sample. So accidentals are always read and plain letters only when asked.
+function AK.from_name(name)
+    local base = tostring(name or ""):gsub("%.[^%.]+$", "")
+    -- A note in brackets is a key annotation and nothing else, so "(C)" and "(F#)"
+    -- are trusted even as bare letters where a loose "_C_" is not. Anything in
+    -- there that is not a key still falls through: "(Bass)", "(Dry)" and "(Gtr)"
+    -- all start on a note letter but carry no mode, so AK.parse refuses them.
+    for group in base:gmatch("[%(%[]([^%)%]]+)[%)%]]") do
+        local tonic, mode = AK.parse(group)
+        if tonic then
+            local bare = group:gsub("%s", ""):match("^[A-Ga-g][#b]?$") ~= nil
+            return tonic, mode, bare
+        end
+    end
+    base = base:gsub("[%s%-%(%)%[%]%.,]+", "_")
+    local tokens = {}
+    for token in base:gmatch("[^_]+") do tokens[#tokens + 1] = token end
+    for index, token in ipairs(tokens) do
+        local letter, rest = token:match("^([A-Ga-g][#b]?)(.*)$")
+        if letter then
+            if rest ~= "" then
+                local tonic, mode = AK.parse(token)
+                if tonic then return tonic, mode, false end
+            else
+                -- "Bb maj" and "F# minor" spell the mode as a word of its own
+                if tokens[index + 1] then
+                    local tonic, mode = AK.parse(letter .. tokens[index + 1])
+                    if tonic then return tonic, mode, false end
+                end
+                if #letter == 2 or AK.bare_letters then
+                    local tonic = AK.pitch_class[letter:lower()]
+                    if tonic then return tonic, "major", true end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+function AK.is_percussive(path, meta)
+    local text = ((meta and meta.category or "") .. " " .. tostring(path or "")):lower()
+    for word in text:gmatch("%a+") do
+        if AK.percussive[word] then return true end
+    end
+    return false
+end
+
+-- Metadata first, filename second. Cached per path because reading metadata
+-- opens the file, and this gets asked every frame while a preview runs.
+function AK.source_key(path, meta)
+    if not path or path == "" then return nil end
+    local cached = AK.cache[path]
+    if cached ~= nil then
+        if cached == false then return nil end
+        return cached.tonic, cached.mode, cached.origin, cached.assumed
+    end
+    meta = meta or get_file_metadata(path)
+    local tonic, mode = AK.parse(meta and meta.key)
+    local origin, assumed = tonic and "metadata" or nil, false
+    if not tonic and AK.from_filename then
+        tonic, mode, assumed = AK.from_name(path:match("([^/\\]+)$") or path)
+        if tonic then origin = "filename" end
+        if not tonic then
+            -- Libraries are often filed as Loops/C/bass.wav, so the folder the
+            -- file sits in is worth a look once its own name came up empty.
+            local folder = path:match("([^/\\]+)[/\\][^/\\]+$")
+            if folder then
+                tonic, mode, assumed = AK.from_name(folder)
+                if tonic then origin = "folder" end
+            end
+        end
+    end
+    if tonic then
+        AK.cache[path] = { tonic = tonic, mode = mode, origin = origin, assumed = assumed }
+        return tonic, mode, origin, assumed
+    end
+    AK.cache[path] = false
+    return nil
+end
+
+function AK.offset(path, meta)
+    if not AK.enabled then return 0 end
+    local tonic = AK.source_key(path, meta)
+    if not tonic then return 0 end
+    if AK.skip_percussive and AK.is_percussive(path, meta) then return 0 end
+    local delta = (AK.tonic - tonic) % 12
+    if delta > 6 then delta = delta - 12 end
+    return delta
+end
+
+-- Preview reads this through tkmb_applied_pitch; the insert paths read it here so
+-- every one of them picks up Auto Key without repeating the sum.
+function AK.insert_pitch(path)
+    return (playback.current_pitch or 0) + AK.offset(path)
+end
+
+-- Why a file is being left alone, for the readout next to the button.
+function AK.status(path, meta)
+    if not AK.enabled then return "off" end
+    if not path or path == "" then return "no file" end
+    local tonic, mode, origin, assumed = AK.source_key(path, meta)
+    if not tonic then return "key unknown, left alone" end
+    if AK.skip_percussive and AK.is_percussive(path, meta) then
+        return AK.label(tonic, mode) .. " - percussive, skipped"
+    end
+    local note = AK.label(tonic, mode) .. " -> " .. AK.label(AK.tonic, AK.mode)
+    note = note .. string.format("  %+d st", AK.offset(path, meta))
+    if assumed then
+        note = note .. "  (mode not stated)"
+    elseif mode ~= AK.mode then
+        note = note .. "  (mode differs)"
+    end
+    -- Only say where the key came from when that is not obvious. Nearly nothing
+    -- carries key metadata, so "filename" was on almost every file and told the
+    -- reader nothing they could not see in the name itself.
+    if origin == "metadata" then
+        note = note .. "  (from metadata)"
+    elseif origin == "folder" then
+        note = note .. "  (from folder name)"
+    end
+    return note
+end
+
+-- One octave. White keys are a plain row; the black keys are drawn over them and
+-- tested for a hit first, the way a real keyboard behaves.
+function AK.draw_selector(ctx, width, height)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local x0, y0 = r.ImGui_GetCursorScreenPos(ctx)
+    width = math.max(140, width or 220)
+    height = math.max(40, height or 58)
+    local white_w = width / 7
+    local black_w = white_w * 0.62
+    local black_h = height * 0.62
+    r.ImGui_InvisibleButton(ctx, "##tkmb_key_selector", width, height)
+    local active = r.ImGui_IsItemHovered(ctx)
+    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+    local clicked = active and r.ImGui_IsMouseClicked(ctx, 0)
+    local hit = nil
+    for _, black in ipairs(AK.black) do
+        local bx = x0 + black.after * white_w - black_w * 0.5
+        if mouse_x >= bx and mouse_x <= bx + black_w and mouse_y >= y0 and mouse_y <= y0 + black_h then
+            hit = black.pc
+        end
+    end
+    if not hit and active then
+        local index = math.floor((mouse_x - x0) / white_w) + 1
+        hit = AK.white_pc[math.max(1, math.min(7, index))]
+    end
+    -- The keys stay white and black, because that is what makes it read as a
+    -- keyboard; the selection and the hover are what follow the theme accent.
+    local accent = hsv_to_color(ui_settings.accent_hue, 0.8, 0.9)
+    local accent_soft = hsv_to_color(ui_settings.accent_hue, 0.45, 0.95)
+    local accent_dark = hsv_to_color(ui_settings.accent_hue, 0.6, 0.45)
+    for index = 1, 7 do
+        local wx = x0 + (index - 1) * white_w
+        local selected = AK.tonic == AK.white_pc[index]
+        local hovered = active and hit == AK.white_pc[index]
+        local fill = selected and accent or (hovered and accent_soft or 0xEDEDEDFF)
+        r.ImGui_DrawList_AddRectFilled(draw_list, wx + 1, y0, wx + white_w - 1, y0 + height, fill, 3)
+        r.ImGui_DrawList_AddRect(draw_list, wx + 1, y0, wx + white_w - 1, y0 + height, 0x00000088, 3, 0, 1)
+        local name = AK.white_name[index]
+        local text_w = r.ImGui_CalcTextSize(ctx, name)
+        r.ImGui_DrawList_AddText(draw_list, wx + (white_w - text_w) * 0.5, y0 + height - 16,
+            selected and 0xFFFFFFFF or 0x444444FF, name)
+    end
+    for _, black in ipairs(AK.black) do
+        local bx = x0 + black.after * white_w - black_w * 0.5
+        local selected = AK.tonic == black.pc
+        local hovered = active and hit == black.pc
+        local fill = selected and accent or (hovered and accent_dark or 0x1A1A1AFF)
+        r.ImGui_DrawList_AddRectFilled(draw_list, bx, y0, bx + black_w, y0 + black_h, fill, 2)
+        r.ImGui_DrawList_AddRect(draw_list, bx, y0, bx + black_w, y0 + black_h, 0x000000FF, 2, 0, 1)
+    end
+    if clicked and hit then
+        AK.tonic = hit
+        return true
+    end
+    return false
+end
+
+function AK.draw_popup(ctx)
+    if not r.ImGui_BeginPopup(ctx, "TKMB Auto Key") then return end
+    local dirty = false
+    local enabled_changed, enabled_value = r.ImGui_Checkbox(ctx, "Auto Key", AK.enabled)
+    if enabled_changed then AK.enabled = enabled_value; dirty = true end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Transpose previews and inserts onto the chosen key")
+    end
+    r.ImGui_Separator(ctx)
+    if AK.draw_selector(ctx, 252, 60) then
+        dirty = true
+        -- Clicking a key is a request to hear that key, so switch Auto Key on
+        -- rather than leaving the click silent. The checkbox above shows it.
+        if AK.audition_on_click ~= false then
+            AK.enabled = true
+            if AK.audition then AK.audition() end
+        end
+    end
+    r.ImGui_Dummy(ctx, 0, 4)
+    local minor = AK.mode == "minor"
+    if r.ImGui_RadioButton(ctx, "Minor", minor) then AK.mode = "minor"; dirty = true end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_RadioButton(ctx, "Major", not minor) then AK.mode = "major"; dirty = true end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_TextColored(ctx, hsv_to_color(ui_settings.accent_hue, 0.8, 0.95), "= " .. AK.label(AK.tonic, AK.mode))
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "The mode is shown and reported, but only the tonic sets how far a sample moves")
+    end
+    r.ImGui_Separator(ctx)
+    local skip_changed, skip_value = r.ImGui_Checkbox(ctx, "Leave percussion alone", AK.skip_percussive)
+    if skip_changed then AK.skip_percussive = skip_value; dirty = true end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Skips files whose category or name reads as drums, percussion or effects")
+    end
+    local name_changed, name_value = r.ImGui_Checkbox(ctx, "Read the key from the filename", AK.from_filename)
+    if name_changed then
+        AK.from_filename = name_value
+        AK.cache = {}
+        dirty = true
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Used when the file carries no key metadata. Also checks the folder the file sits in.\nF# and Bb on their own are always read, and so are Am and F#min")
+    end
+    local bare_changed, bare_value = r.ImGui_Checkbox(ctx, "Trust a bare letter like _C_", AK.bare_letters)
+    if bare_changed then
+        AK.bare_letters = bare_value
+        AK.cache = {}
+        dirty = true
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Reads a lone C or A as a key. Turn this on if your library is filed that way.\nOff by default, because in a name like Drum_Loop_A_01 that letter is a variation rather than a key")
+    end
+    local audition_changed, audition_value = r.ImGui_Checkbox(ctx, "Play the sample on a key click", AK.audition_on_click ~= false)
+    if audition_changed then AK.audition_on_click = audition_value; dirty = true end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Clicking a key auditions the selected sample in that key, and turns Auto Key on.\nAlready playing? The pitch moves without restarting")
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_Button(ctx, "Forget detected keys", 160, 0) then AK.cache = {} end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Re-reads every file's key on next use") end
+    if dirty and AK.save then AK.save() end
+    r.ImGui_EndPopup(ctx)
+end
+
+-- Sits in the bottom right of the oscilloscope canvas and opens the popup. Drawn
+-- straight onto the scope's draw list rather than as a widget, because the canvas
+-- has not been consumed by its Dummy yet and a real button would shove it around.
+-- `art_shown` steps the badge aside when the cover art thumbnail is in that
+-- corner; the box expression has to match the one in draw_cover_art_overlay.
+function AK.draw_overlay(ctx, draw_list, x, y, w, h, art_shown)
+    -- Deliberately quiet: no fill and no border while it is off, so it reads as a
+    -- label on the scope rather than a button competing with the waveform. The
+    -- accent only appears once Auto Key is actually doing something.
+    local text = AK.enabled and AK.label(AK.tonic, AK.mode) or "key"
+    local text_w = r.ImGui_CalcTextSize(ctx, text)
+    local pad_x, pad_y = 4, 1
+    local box_w = text_w + pad_x * 2
+    local box_h = r.ImGui_GetTextLineHeight(ctx) + pad_y * 2
+    local right = x + w - 5
+    if art_shown then
+        local art = math.min(64, math.max(32, math.min(w * 0.24, h - 10)))
+        right = right - art - 5
+    end
+    local box_x = right - box_w
+    local box_y = y + h - box_h - 5
+    if box_x < x + 4 or box_h + 10 > h then return end
+    -- IsMouseHoveringRect rather than IsWindowHovered plus a manual compare: it is
+    -- built for exactly this and respects the clip rect.
+    local hovered = false
+    if r.ImGui_IsMouseHoveringRect then
+        local ok, inside = pcall(r.ImGui_IsMouseHoveringRect, ctx, box_x, box_y, box_x + box_w, box_y + box_h)
+        if ok then hovered = inside == true end
+    else
+        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+        hovered = mouse_x >= box_x and mouse_x <= box_x + box_w
+            and mouse_y >= box_y and mouse_y <= box_y + box_h
+    end
+    local clicked = hovered and r.ImGui_IsMouseClicked(ctx, 0)
+    local dim = math.max(0, math.min(1, (ui_settings.text_brightness or 1) * 0.55))
+    local label_color
+    if AK.enabled then
+        label_color = hsv_to_color(ui_settings.accent_hue, hovered and 1.0 or 0.8, hovered and 1.0 or 0.9)
+    else
+        local level = hovered and math.min(1, dim * 1.7) or dim
+        label_color = r.ImGui_ColorConvertDouble4ToU32(level, level, level, 1.0)
+    end
+    if hovered then
+        r.ImGui_DrawList_AddRectFilled(draw_list, box_x, box_y, box_x + box_w, box_y + box_h, 0x00000066, 3)
+    end
+    r.ImGui_DrawList_AddText(draw_list, box_x + pad_x, box_y + pad_y, label_color, text)
+    if hovered then
+        local tip = "Auto Key: transpose previews and inserts onto a chosen key"
+        if AK.enabled then tip = tip .. "\n" .. AK.status(playback and playback.current_playing_file) end
+        r.ImGui_SetTooltip(ctx, tip)
+    end
+    if clicked then r.ImGui_OpenPopup(ctx, "TKMB Auto Key") end
+    AK.draw_popup(ctx)
+end
+
 local save_fast_cache
 
 local function save_file_cache_progressive(location, files, start_index)
@@ -2958,12 +3351,20 @@ local function save_options()
             pitch_update_interval_sec = ui_settings.pitch_update_interval_sec,
             pitch_consistency_tolerance = ui_settings.pitch_consistency_tolerance,
             pitch_history_size = ui_settings.pitch_history_size,
-            pitch_note_change_tolerance = ui_settings.pitch_note_change_tolerance
+            pitch_note_change_tolerance = ui_settings.pitch_note_change_tolerance,
+            auto_key_enabled = AK.enabled,
+            auto_key_tonic = AK.tonic,
+            auto_key_mode = AK.mode,
+            auto_key_skip_percussive = AK.skip_percussive,
+            auto_key_from_filename = AK.from_filename,
+            auto_key_bare_letters = AK.bare_letters,
+            auto_key_audition = AK.audition_on_click
         }
         file:write(serialize(options))
         file:close()
     end
 end
+AK.save = save_options
 
 function apply_filter_change()
     search_filter.cached_flat_files = {}
@@ -3204,6 +3605,13 @@ local function load_options()
             if options.pitch_consistency_tolerance ~= nil then ui_settings.pitch_consistency_tolerance = options.pitch_consistency_tolerance end
             if options.pitch_history_size          ~= nil then ui_settings.pitch_history_size          = options.pitch_history_size          end
             if options.pitch_note_change_tolerance ~= nil then ui_settings.pitch_note_change_tolerance = options.pitch_note_change_tolerance end
+            if options.auto_key_enabled ~= nil then AK.enabled = options.auto_key_enabled and true or false end
+            if tonumber(options.auto_key_tonic) then AK.tonic = math.floor(tonumber(options.auto_key_tonic)) % 12 end
+            if options.auto_key_mode == "major" or options.auto_key_mode == "minor" then AK.mode = options.auto_key_mode end
+            if options.auto_key_skip_percussive ~= nil then AK.skip_percussive = options.auto_key_skip_percussive and true or false end
+            if options.auto_key_from_filename ~= nil then AK.from_filename = options.auto_key_from_filename and true or false end
+            if options.auto_key_bare_letters ~= nil then AK.bare_letters = options.auto_key_bare_letters and true or false end
+            if options.auto_key_audition ~= nil then AK.audition_on_click = options.auto_key_audition and true or false end
             if options.current_view_mode ~= "collections" and options.current_view_mode ~= "auto" then
                 file_location.flat_view = options.flat_view ~= nil and options.flat_view or false
             end
@@ -6350,7 +6758,7 @@ local function tkmb_embedded_bpm_rate(source)
 end
 
 local function tkmb_applied_pitch()
-    local pitch = playback.current_pitch or 0
+    local pitch = (playback.current_pitch or 0) + AK.offset(playback.current_playing_file)
     if playback.tape_speed then
         local rate = playback.effective_playrate or 1.0
         if rate > 0 then
@@ -6584,7 +6992,7 @@ local function start_playback(file_path)
     end
     r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", playback.preview_volume)
     r.CF_Preview_SetValue(playback.playing_preview, "B_LOOP", playback.loop_play and 1 or 0)
-    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", playback.current_pitch)
+    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
     
     local ext = file_path:match("%.([^%.]+)$")
     if ext then ext = ext:lower() end
@@ -6947,6 +7355,25 @@ local function play_media(file_path)
         waveform.selection_active = false
     end
     start_playback(file_path)
+end
+
+-- Assigned down here rather than written inside the Auto Key block above, which
+-- cannot see these locals. Clicking a key should be audible at once.
+function AK.audition()
+    if playback.playing_preview and not playback.is_paused and playback.current_playing_file ~= "" then
+        -- Already playing: move the pitch instead of restarting, so clicking
+        -- through keys auditions smoothly rather than retriggering each time.
+        if r.CF_Preview_SetValue then
+            r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
+        end
+        return
+    end
+    -- Same resolution the Play button uses: what is playing, else what was last
+    -- shown, else whatever is selected in the list.
+    local path = playback.current_playing_file ~= "" and playback.current_playing_file
+        or (playback.last_displayed_file ~= "" and playback.last_displayed_file
+        or (ui.selected_index > 0 and ui.visible_files[ui.selected_index] and ui.visible_files[ui.selected_index].path) or "")
+    if path ~= "" then play_media(path) end
 end
 
 local function get_random_visible_file_index(current_index)
@@ -7349,7 +7776,7 @@ function render_lufs_context_menu(file_path, files_to_process, insert_track)
         if cached_lufs then
             local lufs_gain, gain_db = calculate_lufs_gain(cached_lufs)
             if r.ImGui_MenuItem(ctx, string.format("Insert normalized to %.1f LUFS (%.1f dB)", playback.lufs_normalize_target or -18.0, gain_db)) then
-                insert_media_on_track(file_path, insert_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch, lufs_gain)
+                insert_media_on_track(file_path, insert_track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(file_path), lufs_gain)
             end
         else
             r.ImGui_BeginDisabled(ctx, true)
@@ -7580,7 +8007,7 @@ local function handle_reaper_drop()
                 end
                 target_lane = math.floor(r.GetMediaTrackInfo_Value(insert_state.drop_track, "I_NUMFIXEDLANES") or 0)
             end
-            insert_media_on_track(insert_state.drop_file, insert_state.drop_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch, nil, target_lane)
+            insert_media_on_track(insert_state.drop_file, insert_state.drop_track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(insert_state.drop_file), nil, target_lane)
         elseif insert_state.saved_cursor_pos then
             r.SetEditCurPos(insert_state.saved_cursor_pos, false, false)
         end
@@ -8914,7 +9341,7 @@ function draw_file_list()
                                     local insert_track = r.GetSelectedTrack(0, 0)
                                     if insert_track then
                                         if r.ImGui_MenuItem(ctx, "Insert at Edit Cursor") then
-                                            insert_media_on_track(file_path, insert_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
+                                            insert_media_on_track(file_path, insert_track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(file_path))
                                         end
                                         r.ImGui_Separator(ctx)
                                     end
@@ -9461,7 +9888,7 @@ function draw_file_list()
                                     if shift_pressed then
                                         local track = r.GetSelectedTrack(0, 0)
                                         if track then
-                                            insert_media_on_track(file.full_path, track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
+                                            insert_media_on_track(file.full_path, track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(file.full_path))
                                         end
                                     elseif ctrl_pressed then
                                         toggle_file_selection(file.full_path)
@@ -9528,7 +9955,7 @@ function draw_file_list()
                                     local insert_track = r.GetSelectedTrack(0, 0)
                                     if insert_track then
                                         if r.ImGui_MenuItem(ctx, "Insert at Edit Cursor") then
-                                            insert_media_on_track(file.full_path, insert_track, playback.use_original_speed, playback.current_playrate, playback.current_pitch)
+                                            insert_media_on_track(file.full_path, insert_track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(file.full_path))
                                         end
                                         r.ImGui_Separator(ctx)
                                     end
@@ -12935,7 +13362,8 @@ function loop()
                     r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x888888FF, text)
                 end
             end
-            draw_cover_art_for_preview(draw_list, pos_x, pos_y, width, height)
+            local art_shown = draw_cover_art_for_preview(draw_list, pos_x, pos_y, width, height)
+            AK.draw_overlay(ctx, draw_list, pos_x, pos_y, width, height, art_shown)
             r.ImGui_Dummy(ctx, width, height)
         end
         do
