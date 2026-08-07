@@ -1,7 +1,16 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.72
+-- @version 0.6.73
 -- @changelog:
+-- v0.6.73
+--   + Control Room: The listening checks - Mid, Side, Low, High and Fold to Stereo - have moved out of Setup and onto the footer, where DIM and MONO already were. They are things you reach for while mixing, not things you configure once, and hunting for them in a settings window was the wrong place for that. Suggested by Bogdan
+--   + Control Room: They act on one monitor rather than the whole room, which is the point of them: dimming or mono-ing everything at once is what you want, but hearing the Side component of a drummer's cue feed is not. A row of monitor buttons above them picks which one, showing the alias you gave it, and ALL brings every monitor back - the same selector the S button on a lane always was, now in the open. With a single monitor there is nothing to choose and it is simply the target
+--   + Control Room: Each check is its own off switch - pressing the mode a monitor is already in puts it back to Full - and a check that does not apply is disabled with a tooltip saying why, rather than vanishing and shifting the row along. Fold to Stereo is greyed out on a stereo monitor, the checks are greyed out until a monitor is picked, and ALL is greyed out while nothing is soloed
+--   + Control Room: ALL is back on a fixed spot in the footer, having disappeared when the row became a fixed two by three grid
+--   + Project Browser: A tile view, so the cover art a project already has is worth looking at. One "Tile size" slider does it: all the way down is the list exactly as it was, and above that the number is roughly how wide a tile wants to be, with the column count following from the width of the pane. Requested by a user
+--   + Project Browser: Folders keep their own full width rows above the tiles rather than becoming tiles themselves, which keeps navigating and browsing visually separate. Tiles behave like the rows always did - click selects, double-click opens, right-click gives the same menu - and the arrow keys learned the grid: left and right walk one item, up and down step a whole row. In the list the column count is one, so the arrows do exactly what they always did
+--   + Project Browser: A "Min depth" setting next to Max depth, for hiding projects that sit loose in the scan root and keeping only what lives inside a folder. It counts the same way Max depth does, but it filters what is shown rather than what is scanned, so unlike Max depth it applies straight away instead of on the next scan
+--   + Project Browser: A project without cover art now gets a centred "No image" in its tile instead of the initial of its name in the corner, stepping down to a shorter label and then to that initial when the tile is too small to fit it
 -- v0.6.72
 --   + Media Browser: New: Auto Key, the same feature the standalone TK Media Browser has. Pick a target key on a small keyboard and everything you preview or insert is transposed onto it, so a library in mixed keys lines up with the track. The current key sits in the bottom right of the waveform panel - click it to open the options
 --   + Media Browser: Auto Key - clicking a key on the keyboard auditions the selected sample in that key straight away, and switches Auto Key on rather than leaving the click silent. If something is already playing the pitch moves without restarting, so you can click through keys and hear it change instead of retriggering each time. There is a switch for anyone who would rather a click stayed quiet

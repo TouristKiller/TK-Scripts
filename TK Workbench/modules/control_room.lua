@@ -2550,33 +2550,85 @@ local function draw_meter_panel(app, settings, footer_height)
   end
 end
 
--- A fixed two by three grid: the buttons never move and never disappear, so the
--- same action is always in the same place whichever view is open. One that does
--- not apply right now is disabled rather than dropped, which would shift the
--- rest along. The three columns share the full width, so the labels normally fit
--- unabbreviated and only fall back to a short form when they genuinely cannot.
-local FOOTER_COLUMNS = 3
-local FOOTER_ROWS = 2
+-- A fixed grid: the buttons never move and never disappear, so the same action is
+-- always in the same place whichever view is open. One that does not apply right
+-- now is disabled rather than dropped, which would shift the rest along.
+--
+-- Four rows, grouped by what they act on:
+--   DIM / MONO / Setup      the whole room
+--   Meter / Reset / ...     the meter view
+--   monitors + ALL          which monitor the row below listens to
+--   MID SIDE LOW HIGH FOLD  a check on that one monitor
+--
+-- The checks are per monitor on purpose. Dimming or mono-ing everything at once
+-- is what you want; hearing the Side component of a drummer's cue feed is not.
+local FOOTER_ROWS = 4
+local CR_CHECK_MODES = {
+  { id = "mid", label = "MID" },
+  { id = "side", label = "SIDE" },
+  { id = "low", label = "LOW" },
+  { id = "high", label = "HIGH" },
+  { id = "fold_stereo", label = "FOLD" }
+}
 
 local function cr_footer_metrics(ctx)
   local width = r.ImGui_GetContentRegionAvail(ctx)
   local pad = UIScale.round(8)
   local gap = UIScale.gap(6)
   local button_h = r.ImGui_GetFrameHeight(ctx)
-  local button_w = math.max(UIScale.round(28), ((width or 0) - pad * 2 - gap * (FOOTER_COLUMNS - 1)) / FOOTER_COLUMNS)
-  local height = button_h * FOOTER_ROWS + gap + UIScale.round(14)
-  return { width = width, pad = pad, gap = gap, button_w = button_w, button_h = button_h, height = height }
+  local inner = math.max(0, (width or 0) - pad * 2)
+  return {
+    width = width, pad = pad, gap = gap, button_h = button_h, inner = inner,
+    height = button_h * FOOTER_ROWS + gap * (FOOTER_ROWS - 1) + UIScale.round(14)
+  }
+end
+
+local function cr_footer_cell_w(metrics, columns)
+  columns = math.max(1, columns)
+  return math.max(UIScale.round(24), (metrics.inner - metrics.gap * (columns - 1)) / columns)
 end
 
 local function cr_control_footer_height(ctx)
   return cr_footer_metrics(ctx).height
 end
 
+-- Which monitor the check row acts on. With one monitor there is nothing to
+-- choose, so it is the target without being selected first.
+local function cr_mode_target(outputs)
+  if state.speaker_select_index then
+    for _, output in ipairs(outputs) do
+      if output.index == state.speaker_select_index then return output end
+    end
+  end
+  if #outputs == 1 then return outputs[1] end
+  return nil
+end
+
+local function cr_mode_available(settings, output, mode)
+  if not output then return false end
+  local layout = monitor_format(settings, output.target, output.source)
+  local bed = Layouts.by_id(settings.master_layout) or layout
+  for _, id in ipairs(monitor_mode_options(layout, bed)) do
+    if id == mode then return true end
+  end
+  return false
+end
+
+-- Pressing the mode a monitor is already in puts it back to Full, so every button
+-- is its own off switch.
+local function cr_toggle_check_mode(app, settings, master, output, mode)
+  local layout, base = monitor_format(settings, output.target, output.source)
+  local current = get_monitor_mode(settings, output.target, layout)
+  local next_mode = current == mode and "full" or mode
+  return write_monitor_mode(app, settings, master, output.index, output.target, next_mode, layout, base)
+end
+
 -- Returns true only on a real click, so a disabled button can never fire.
 local function cr_footer_button(ctx, id, label, short_label, metrics, options)
   options = options or {}
+  local cell_w = options.width or cr_footer_cell_w(metrics, 3)
   local text = label
-  if short_label and calc_text_width(ctx, label) + UIScale.round(12) > metrics.button_w then text = short_label end
+  if short_label and calc_text_width(ctx, label) + UIScale.round(12) > cell_w then text = short_label end
   local pushed = false
   if options.active then
     local active_text = Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5)
@@ -2588,7 +2640,7 @@ local function cr_footer_button(ctx, id, label, short_label, metrics, options)
   end
   local disabled = options.enabled == false
   if disabled and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx) end
-  local clicked = r.ImGui_Button(ctx, text .. "##" .. id, metrics.button_w, metrics.button_h)
+  local clicked = r.ImGui_Button(ctx, text .. "##" .. id, cell_w, metrics.button_h)
   if disabled and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
   if pushed then r.ImGui_PopStyleColor(ctx, 4) end
   local hovered
@@ -2611,43 +2663,107 @@ local function draw_control_footer(app, settings)
   r.ImGui_DrawList_AddRect(draw_list, left_x, top_y, left_x + width, top_y + metrics.height, Theme.colors.border, UIScale.px(4), 0, UIScale.px(0.8))
 
   local master = r.GetMasterTrack(0)
+  local outputs = monitor_outputs(master)
   local mono_active, mono_total = cr_monitor_mono_state(settings, master)
-  local has_monitors = (r.GetTrackNumSends and (r.GetTrackNumSends(master, 1) or 0) or 0) > 0
+  local has_monitors = #outputs > 0
+  local target = cr_mode_target(outputs)
+  local trio = cr_footer_cell_w(metrics, 3)
 
   local row_y = top_y + UIScale.round(7)
+  local function next_row()
+    row_y = row_y + metrics.button_h + metrics.gap
+    r.ImGui_SetCursorScreenPos(ctx, left_x + metrics.pad, row_y)
+  end
   r.ImGui_SetCursorScreenPos(ctx, left_x + metrics.pad, row_y)
+
   if cr_footer_button(ctx, "control_room_dim", "DIM", "DIM", metrics, {
-    active = state.dim_enabled, warn = true, enabled = has_monitors,
+    width = trio, active = state.dim_enabled, warn = true, enabled = has_monitors,
     tooltip = not has_monitors and "No monitor output to dim"
       or (state.dim_enabled and "Restore monitor levels" or "Dim monitor outputs")
   }) then toggle_monitor_dim(settings) end
   r.ImGui_SameLine(ctx, 0, metrics.gap)
   if cr_footer_button(ctx, "control_room_mono", "MONO", "MON", metrics, {
-    active = mono_active, warn = true, enabled = mono_total > 0,
+    width = trio, active = mono_active, warn = true, enabled = mono_total > 0,
     tooltip = mono_total == 0 and "No monitor wide enough to sum"
       or (mono_active and "Give every monitor its own mode back" or "Sum every monitor to mono")
   }) then toggle_monitor_mono(app, settings) end
   r.ImGui_SameLine(ctx, 0, metrics.gap)
   if cr_footer_button(ctx, "control_room_setup", "Setup", "Set", metrics, {
-    active = state.setup_open, tooltip = "Monitor routing setup"
+    width = trio, active = state.setup_open, tooltip = "Monitor routing setup"
   }) then state.setup_open = not state.setup_open end
 
-  row_y = row_y + metrics.button_h + metrics.gap
-  r.ImGui_SetCursorScreenPos(ctx, left_x + metrics.pad, row_y)
+  next_row()
   if cr_footer_button(ctx, "control_room_meter", "Meter", "Mtr", metrics, {
-    active = state.meter_open,
+    width = trio, active = state.meter_open,
     tooltip = state.meter_open and "Back to the monitor lanes" or "Show meter"
   }) then set_meter_open(app, settings, not state.meter_open) end
   r.ImGui_SameLine(ctx, 0, metrics.gap)
   if cr_footer_button(ctx, "control_room_meter_reset", "Reset", "Rst", metrics, {
-    enabled = state.meter_open,
+    width = trio, enabled = state.meter_open,
     tooltip = state.meter_open and "Reset meter history" or "Open the meter to reset it"
   }) then queue_meter_reset((active_meter_source(app, settings))) end
   r.ImGui_SameLine(ctx, 0, metrics.gap)
   if cr_footer_button(ctx, "control_room_meter_settings", "...", nil, metrics, {
-    enabled = state.meter_open,
+    width = trio, enabled = state.meter_open,
     tooltip = state.meter_open and "Meter settings" or "Open the meter to change its settings"
   }) then state.meter_settings_open = true end
+
+  -- Monitor picker. Selecting one listens to it on its own, the way a control
+  -- room monitor selector does; ALL brings the rest back.
+  next_row()
+  local monitor_columns = math.max(2, #outputs + 1)
+  local monitor_w = cr_footer_cell_w(metrics, monitor_columns)
+  if #outputs == 0 then
+    if cr_footer_button(ctx, "control_room_monitor_none", "No monitors", "None", metrics, {
+      width = cr_footer_cell_w(metrics, 2), enabled = false,
+      tooltip = "Add a monitor output in Setup"
+    }) then end
+    r.ImGui_SameLine(ctx, 0, metrics.gap)
+  end
+  for index, output in ipairs(outputs) do
+    local alias = monitor_alias(settings, output.target)
+    local label = alias or ("M" .. tostring(index))
+    local selected = state.speaker_select_index == output.index
+    local is_target = target and target.index == output.index
+    if cr_footer_button(ctx, "control_room_monitor_" .. tostring(output.index), label, "M" .. tostring(index), metrics, {
+      width = monitor_w, active = selected,
+      tooltip = (alias or tostring(output.name or "Monitor")) ..
+        (selected and "\nListening to this one only - click to bring the rest back"
+          or (is_target and "\nThe checks below act on this one" or "\nListen to this monitor on its own"))
+    }) then toggle_speaker_select(output.index) end
+    r.ImGui_SameLine(ctx, 0, metrics.gap)
+  end
+  if cr_footer_button(ctx, "control_room_monitor_all", "ALL", "ALL", metrics, {
+    width = monitor_w, enabled = state.speaker_select_index ~= nil,
+    tooltip = state.speaker_select_index ~= nil and "Unmute every monitor again"
+      or "Every monitor is already unmuted"
+  }) then restore_speaker_select() end
+
+  -- The checks themselves, on whichever monitor is selected above.
+  next_row()
+  local check_w = cr_footer_cell_w(metrics, #CR_CHECK_MODES)
+  local target_layout = target and monitor_format(settings, target.target, target.source) or nil
+  -- The bed has to come along: without it monitor_mode_label reads fold_stereo
+  -- against the monitor's own width and calls it Stereo.
+  local check_bed = Layouts.by_id(settings.master_layout) or target_layout
+  local target_mode = target and get_monitor_mode(settings, target.target, target_layout) or nil
+  local target_name = target and (monitor_alias(settings, target.target) or tostring(target.name or "the monitor")) or nil
+  for index, check in ipairs(CR_CHECK_MODES) do
+    local available = cr_mode_available(settings, target, check.id)
+    local active = target_mode == check.id
+    local tip
+    if not target then
+      tip = "Pick a monitor above first"
+    elseif not available then
+      tip = monitor_mode_label(check.id, target_layout, check_bed) .. " does not apply to " .. target_name
+    else
+      tip = (active and "Back to full on " or (monitor_mode_label(check.id, target_layout, check_bed) .. " on ")) .. target_name
+    end
+    if cr_footer_button(ctx, "control_room_check_" .. check.id, check.label, check.label, metrics, {
+      width = check_w, active = active, enabled = available, tooltip = tip
+    }) then cr_toggle_check_mode(app, settings, master, target, check.id) end
+    if index < #CR_CHECK_MODES then r.ImGui_SameLine(ctx, 0, metrics.gap) end
+  end
 
   r.ImGui_SetCursorScreenPos(ctx, left_x, top_y)
   r.ImGui_Dummy(ctx, width, metrics.height + UIScale.round(4))

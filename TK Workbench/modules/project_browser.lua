@@ -36,9 +36,15 @@ local defaults = {
   recursive = true,
   folder_view = true,
   compact_list = false,
+  -- 0 keeps the list. Anything above the floor switches to tiles of about this
+  -- width, with the column count following from however wide the pane is.
+  tile_size = 0,
   preview_volume = 1.0,
   folder_paths = {},
   max_depth = 5,
+  -- Hides anything shallower. 0 shows everything; 1 drops the projects lying
+  -- loose in the scan root and keeps only what sits inside a folder.
+  min_depth = 0,
   max_scan_projects = 5000,
   open_new_tab_on_double_click = false,
   sort_by = "name",
@@ -157,6 +163,7 @@ local function ensure_settings(app)
     end
   end
   settings.max_depth = math.max(0, math.min(12, math.floor(tonumber(settings.max_depth) or defaults.max_depth)))
+  settings.min_depth = math.max(0, math.min(settings.max_depth, math.floor(tonumber(settings.min_depth) or 0)))
   settings.max_scan_projects = math.max(50, math.min(50000, math.floor(tonumber(settings.max_scan_projects) or defaults.max_scan_projects)))
   settings.recursive = settings.recursive ~= false
   settings.folder_view = settings.folder_view ~= false
@@ -417,6 +424,17 @@ local function sort_projects(list, settings)
   end)
 end
 
+-- How far below the scan root a project sits: 0 for one lying loose in the root
+-- itself, 1 one folder down, and so on. Same counting as max_depth uses while
+-- scanning, so the two settings mean the same thing by the same numbers.
+local function project_depth(project)
+  local rel = clean_relative_folder(project.rel_dir or "")
+  if rel == "" then return 0 end
+  local depth = 1
+  for _ in rel:gmatch("/") do depth = depth + 1 end
+  return depth
+end
+
 local function apply_filter(settings)
   state.filtered = {}
   state.visible_entries = {}
@@ -426,11 +444,13 @@ local function apply_filter(settings)
   local folder_view = settings.folder_view == true and term == ""
   local current_folder = get_mode_folder_path(settings, mode)
   local folder_map = {}
+  local min_depth = math.max(0, math.floor(tonumber(settings.min_depth) or 0))
   for _, project in ipairs(state.projects) do
+    project.rel_dir = project.rel_dir or relative_folder(project.path, state.scan_location)
+    local deep_enough = min_depth == 0 or project_depth(project) >= min_depth
     local haystack = table.concat({ project.name or "", project.path or "", project.folder or "" }, " ")
-    if fuzzy_find(haystack, term) then
+    if deep_enough and fuzzy_find(haystack, term) then
       if folder_view then
-        project.rel_dir = project.rel_dir or relative_folder(project.path, state.scan_location)
         local child_name = direct_child_folder(project.rel_dir, current_folder)
         if child_name then
           local child_path = current_folder == "" and child_name or (current_folder .. "/" .. child_name)
@@ -1085,11 +1105,20 @@ local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, 
     x2 = x1 + box_size
     y2 = y1 + box_size
     r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, UIScale.px(5))
-    local label = "No image"
-    local text_w = 0
+    -- Step down as the box gets smaller rather than letting the label run over
+    -- its edge, which is what a small tile would otherwise do.
     local text_h = r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx) or UIScale.round(14)
-    if r.ImGui_CalcTextSize then text_w = r.ImGui_CalcTextSize(ctx, label) or 0 end
-    r.ImGui_DrawList_AddText(draw_list, x1 + ((x2 - x1) - text_w) * 0.5, y1 + ((y2 - y1) - text_h) * 0.5, Theme.colors.text_dim, label)
+    local room = (x2 - x1) - UIScale.round(6)
+    local label, text_w = nil, 0
+    for _, candidate in ipairs({ "No image", "No img", fallback_text and fallback_text:sub(1, 1):upper() or "" }) do
+      if candidate ~= "" then
+        local width = r.ImGui_CalcTextSize and (r.ImGui_CalcTextSize(ctx, candidate) or 0) or #candidate * 7
+        if width <= room then label, text_w = candidate, width break end
+      end
+    end
+    if label then
+      r.ImGui_DrawList_AddText(draw_list, x1 + ((x2 - x1) - text_w) * 0.5, y1 + ((y2 - y1) - text_h) * 0.5, Theme.colors.text_dim, label)
+    end
   elseif fallback_text and fallback_text ~= "" then
     r.ImGui_DrawList_AddText(draw_list, x1 + UIScale.round(13), y1 + UIScale.round(10), Theme.colors.text_dim, fallback_text:sub(1, 1):upper())
   end
@@ -1126,9 +1155,12 @@ local function navigate_folder(app, settings, folder_path)
   if app.save_settings then app.save_settings() end
 end
 
-local function visible_range(ctx, count, row_h, overscan, height)
+-- `offset` is how much was already drawn above the rows being virtualised, so a
+-- grid with folder rows over it still lines up once the pane is scrolled.
+local function visible_range(ctx, count, row_h, overscan, height, offset)
   if count <= 0 then return 1, 0, 0, 0 end
   local scroll_y = r.ImGui_GetScrollY and r.ImGui_GetScrollY(ctx) or 0
+  scroll_y = math.max(0, scroll_y - (tonumber(offset) or 0))
   local first = math.max(1, math.floor(scroll_y / row_h) + 1 - overscan)
   local visible = math.ceil((height or 400) / row_h) + overscan * 2
   local last = math.min(count, first + visible)
@@ -1184,17 +1216,29 @@ local function project_list_window_active(ctx)
   return state.project_list_keyboard_focus == true
 end
 
-local function handle_project_list_keyboard(app, settings, row_h)
+-- `columns` is 1 in the list and the tile column count in the grid. Up and down
+-- then step a whole row where that is what a row means, and left and right walk
+-- one item either way - which in the list is the same thing as up and down, so
+-- the arrows keep working the way they always did.
+local function handle_project_list_keyboard(app, settings, row_h, columns)
   local ctx = app.ctx
   if #state.visible_entries == 0 or not project_list_window_active(ctx) or not keyboard_input_available(ctx) then return false end
   local index = state.selected_index
+  local count = #state.visible_entries
+  columns = math.max(1, math.floor(tonumber(columns) or 1))
+  -- A folder occupies its own full width row even in the grid, so stepping by a
+  -- column count only makes sense once the selection is among the tiles.
+  local step = columns
+  if columns > 1 and index and state.visible_entries[index] and state.visible_entries[index].kind ~= "project" then step = 1 end
   local target_index = nil
-  if key_pressed(ctx, "UpArrow") then target_index = index and math.max(1, index - 1) or 1
-  elseif key_pressed(ctx, "DownArrow") then target_index = index and math.min(#state.visible_entries, index + 1) or 1
-  elseif key_pressed(ctx, "PageUp") then target_index = index and math.max(1, index - 10) or 1
-  elseif key_pressed(ctx, "PageDown") then target_index = index and math.min(#state.visible_entries, index + 10) or 1
+  if key_pressed(ctx, "UpArrow") then target_index = index and math.max(1, index - step) or 1
+  elseif key_pressed(ctx, "DownArrow") then target_index = index and math.min(count, index + step) or 1
+  elseif key_pressed(ctx, "LeftArrow") then target_index = index and math.max(1, index - 1) or 1
+  elseif key_pressed(ctx, "RightArrow") then target_index = index and math.min(count, index + 1) or 1
+  elseif key_pressed(ctx, "PageUp") then target_index = index and math.max(1, index - 10 * step) or 1
+  elseif key_pressed(ctx, "PageDown") then target_index = index and math.min(count, index + 10 * step) or 1
   elseif key_pressed(ctx, "Home") then target_index = 1
-  elseif key_pressed(ctx, "End") then target_index = #state.visible_entries end
+  elseif key_pressed(ctx, "End") then target_index = count end
   if target_index then
     local entry = state.visible_entries[target_index]
     if entry then
@@ -1324,6 +1368,140 @@ local function draw_project_row(app, settings, project, index, width)
   r.ImGui_PopID(ctx)
 end
 
+-- Tiles. Returns nil while the setting is below the floor, which is what keeps
+-- the list the default: one setting instead of a separate list/grid switch.
+local TILE_MIN = 64
+
+local function tile_text_w(ctx, text)
+  if not r.ImGui_CalcTextSize then return #tostring(text or "") * 7 end
+  local w = r.ImGui_CalcTextSize(ctx, tostring(text or ""))
+  return tonumber(w) or 0
+end
+
+local function tile_metrics(ctx, settings, width)
+  local size = math.floor(tonumber(settings.tile_size) or 0)
+  if size < TILE_MIN then return nil end
+  size = UIScale.round(size)
+  local gap = UIScale.round(8)
+  local columns = math.max(1, math.floor((width + gap) / (size + gap)))
+  local tile_w = math.max(UIScale.round(48), (width - gap * (columns - 1)) / columns)
+  local line_h = r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx) or UIScale.round(14)
+  local caption_h = line_h * 2 + UIScale.round(10)
+  return { columns = columns, w = tile_w, h = tile_w + caption_h, gap = gap, caption_h = caption_h, line_h = line_h }
+end
+
+-- Two lines, breaking on the last space that still fits so a name splits between
+-- words rather than mid-syllable. The second line is ellipsised if it overruns.
+local function tile_caption_lines(ctx, text, max_w)
+  text = tostring(text or "")
+  if tile_text_w(ctx, text) <= max_w then return text, nil end
+  local break_at = nil
+  for pos in text:gmatch("()%s") do
+    if tile_text_w(ctx, text:sub(1, pos - 1)) <= max_w then break_at = pos else break end
+  end
+  if not break_at then
+    local cut = #text
+    while cut > 1 and tile_text_w(ctx, text:sub(1, cut)) > max_w do cut = cut - 1 end
+    break_at = cut + 1
+  end
+  local first = text:sub(1, break_at - 1)
+  local second = text:sub(break_at + 1)
+  if tile_text_w(ctx, second) > max_w then
+    while #second > 1 and tile_text_w(ctx, second .. "...") > max_w do second = second:sub(1, -2) end
+    second = second .. "..."
+  end
+  return first, second
+end
+
+-- Mirrors draw_project_row: same selection, same double click, same context menu.
+-- Only the arrangement differs.
+local function draw_project_tile(app, settings, project, index, tile)
+  local ctx = app.ctx
+  local mode_def = modes[project.mode or "projects"] or modes.projects
+  r.ImGui_PushID(ctx, "project_tile_" .. tostring(index))
+  local clicked = r.ImGui_InvisibleButton(ctx, "##tile", tile.w, tile.h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local double_clicked = hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0)
+  local x, y = r.ImGui_GetItemRectMin(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local selected = state.selected_project and state.selected_project.path == project.path
+  local bg = selected and 0x7AA2F730 or (hovered and 0xFFFFFF12 or 0x00000000)
+  if bg ~= 0x00000000 then
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + tile.w, y + tile.h, bg, UIScale.px(5))
+  end
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + tile.w, y + tile.h,
+    selected and Theme.colors.accent or Theme.colors.border, UIScale.px(5), 0,
+    selected and UIScale.px(1.4) or UIScale.px(0.7))
+  local inset = UIScale.round(4)
+  local cover = load_cover(ctx, project)
+  draw_cover(ctx, draw_list, cover, x + inset, y + inset, x + tile.w - inset, y + tile.w - inset, project.name, { no_image_box = true })
+  local text_w = tile.w - inset * 2
+  local first, second = tile_caption_lines(ctx, project.name, text_w)
+  r.ImGui_DrawList_PushClipRect(draw_list, x + inset, y + tile.w, x + tile.w - inset, y + tile.h, true)
+  r.ImGui_DrawList_AddText(draw_list, x + inset, y + tile.w + UIScale.round(3), Theme.colors.text, first)
+  if second then
+    r.ImGui_DrawList_AddText(draw_list, x + inset, y + tile.w + UIScale.round(3) + tile.line_h, Theme.colors.text_dim, second)
+  end
+  r.ImGui_DrawList_PopClipRect(draw_list)
+  if clicked then select_project(project, index) end
+  if double_clicked then open_project(app, project, settings.open_new_tab_on_double_click) end
+  if r.ImGui_BeginPopupContextItem(ctx, "##project_tile_context") then
+    if project.mode == "track_templates" then
+      if r.ImGui_MenuItem(ctx, "Insert track template") then open_project(app, project, false) end
+    else
+      if r.ImGui_MenuItem(ctx, "Open " .. mode_def.item_label .. " in current tab") then open_project(app, project, false) end
+      if r.ImGui_MenuItem(ctx, "Open " .. mode_def.item_label .. " in new tab") then open_project(app, project, true) end
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Copy path") and r.CF_SetClipboard then r.CF_SetClipboard(project.path) end
+    r.ImGui_EndPopup(ctx)
+  end
+  if hovered then r.ImGui_SetTooltip(ctx, project.name .. "\n" .. project.path) end
+  if selected and state.scroll_selected_project and r.ImGui_SetScrollHereY then
+    local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
+    if ok then state.scroll_selected_project = false end
+  end
+  r.ImGui_PopID(ctx)
+end
+
+-- Folders keep their full width rows above the tiles. apply_filter always emits
+-- folders first and projects after, never interleaved, so the two can simply be
+-- drawn one after the other.
+local function draw_project_grid(app, settings, width, height, tile)
+  local ctx = app.ctx
+  local entries = state.visible_entries
+  local first_project = nil
+  for index, entry in ipairs(entries) do
+    if entry.kind == "folder" and entry.folder then
+      draw_folder_row(app, settings, entry.folder, index, width)
+    elseif entry.kind == "project" then
+      first_project = index
+      break
+    end
+  end
+  if not first_project then return end
+  -- Whatever the folder rows just consumed, so the tile maths below knows where
+  -- it actually starts within the scrolled content.
+  local consumed = r.ImGui_GetCursorPosY and r.ImGui_GetCursorPosY(ctx) or 0
+  local count = #entries - first_project + 1
+  local rows = math.ceil(count / tile.columns)
+  local row_h = tile.h + tile.gap
+  local first_row, last_row, top_pad, bottom_pad = visible_range(ctx, rows, row_h, 2, height, consumed)
+  if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
+  for row = first_row, last_row do
+    for column = 1, tile.columns do
+      local offset = (row - 1) * tile.columns + column
+      local index = first_project + offset - 1
+      local entry = entries[index]
+      if entry and entry.kind == "project" and entry.project then
+        if column > 1 then r.ImGui_SameLine(ctx, 0, tile.gap) end
+        draw_project_tile(app, settings, entry.project, index, tile)
+      end
+    end
+  end
+  if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
+end
+
 local function draw_project_list(app, settings, width, height)
   local ctx = app.ctx
   local _, mode_def = active_mode(settings)
@@ -1339,7 +1517,9 @@ local function draw_project_list(app, settings, width, height)
   end
   local child_visible = r.ImGui_BeginChild(ctx, "##project_list", 0, height, 0, child_flags)
   if child_visible then
-    handle_project_list_keyboard(app, settings, row_h)
+    local inner_w = math.max(UIScale.round(80), width - UIScale.round(12))
+    local tile = tile_metrics(ctx, settings, inner_w)
+    handle_project_list_keyboard(app, settings, tile and (tile.h + tile.gap) or row_h, tile and tile.columns or 1)
     if #state.locations == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Add a " .. mode_def.item_label .. " location")
     elseif state.scanning then
@@ -1347,20 +1527,24 @@ local function draw_project_list(app, settings, width, height)
     elseif #state.visible_entries == 0 then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No " .. mode_def.plural .. " found")
     end
-    local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
-    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), UIScale.round(8), 0) end
-    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.visible_entries, row_h, UIScale.round(6), height)
-    if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
-    for index = first, last do
-      local entry = state.visible_entries[index]
-      if entry and entry.kind == "folder" and entry.folder then
-        draw_folder_row(app, settings, entry.folder, index, math.max(UIScale.round(80), width - UIScale.round(12)))
-      elseif entry and entry.kind == "project" and entry.project then
-        draw_project_row(app, settings, entry.project, index, math.max(UIScale.round(80), width - UIScale.round(12)))
+    if tile then
+      draw_project_grid(app, settings, inner_w, height, tile)
+    else
+      local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
+      if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), UIScale.round(8), 0) end
+      local first, last, top_pad, bottom_pad = visible_range(ctx, #state.visible_entries, row_h, UIScale.round(6), height)
+      if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
+      for index = first, last do
+        local entry = state.visible_entries[index]
+        if entry and entry.kind == "folder" and entry.folder then
+          draw_folder_row(app, settings, entry.folder, index, inner_w)
+        elseif entry and entry.kind == "project" and entry.project then
+          draw_project_row(app, settings, entry.project, index, inner_w)
+        end
       end
+      if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
+      if compact_spacing then r.ImGui_PopStyleVar(ctx, 1) end
     end
-    if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
-    if compact_spacing then r.ImGui_PopStyleVar(ctx, 1) end
   end
   r.ImGui_EndChild(ctx)
 end
@@ -1599,8 +1783,33 @@ local function draw_settings_popup(app, settings)
     c, v = r.ImGui_Checkbox(ctx, "Compact list view", settings.compact_list == true)
     if c then settings.compact_list = v; if app.save_settings then app.save_settings() end end
     if r.ImGui_SliderInt then
+      -- One slider rather than a list/grid switch: all the way down is the list,
+      -- and above that the number is roughly how wide a tile wants to be, with
+      -- the column count following from the width of the pane.
+      local tile_size = math.floor(tonumber(settings.tile_size) or 0)
+      c, v = r.ImGui_SliderInt(ctx, "Tile size", tile_size, 0, 240, tile_size < 64 and "List" or "%d px")
+      if c then
+        settings.tile_size = v < 64 and 0 or v
+        if app.save_settings then app.save_settings() end
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Drag right for cover art tiles, all the way left for the list.\nFolders keep their own full width rows above the tiles")
+      end
       c, v = r.ImGui_SliderInt(ctx, "Max depth", settings.max_depth, 0, 12)
       if c then settings.max_depth = v; if app.save_settings then app.save_settings() end end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "How far down the scan goes. Takes effect on the next scan")
+      end
+      local min_depth = math.floor(tonumber(settings.min_depth) or 0)
+      c, v = r.ImGui_SliderInt(ctx, "Min depth", min_depth, 0, settings.max_depth, min_depth == 0 and "All" or "%d")
+      if c then
+        settings.min_depth = v
+        state.filter_dirty = true
+        if app.save_settings then app.save_settings() end
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Hides anything shallower than this. 1 drops the projects lying loose in the scan root and keeps only what sits inside a folder.\nFilters what is shown, so unlike Max depth it applies straight away")
+      end
       c, v = r.ImGui_SliderInt(ctx, "Max items", settings.max_scan_projects, 50, 50000)
       if c then settings.max_scan_projects = v; if app.save_settings then app.save_settings() end end
     end
