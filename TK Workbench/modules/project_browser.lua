@@ -45,6 +45,8 @@ local defaults = {
   -- Hides anything shallower. 0 shows everything; 1 drops the projects lying
   -- loose in the scan root and keeps only what sits inside a folder.
   min_depth = 0,
+  show_recent = false,
+  recent_count = 15,
   max_scan_projects = 5000,
   open_new_tab_on_double_click = false,
   sort_by = "name",
@@ -71,6 +73,8 @@ local state = {
   filter_dirty = true,
   search_changed_at = 0,
   metadata_cache = {},
+  recent_cache = nil,
+  recent_cache_limit = nil,
   cover_path_cache = {},
   preview_path_cache = {},
   preview_length_cache = {},
@@ -164,6 +168,8 @@ local function ensure_settings(app)
   end
   settings.max_depth = math.max(0, math.min(12, math.floor(tonumber(settings.max_depth) or defaults.max_depth)))
   settings.min_depth = math.max(0, math.min(settings.max_depth, math.floor(tonumber(settings.min_depth) or 0)))
+  settings.recent_count = math.max(1, math.min(50, math.floor(tonumber(settings.recent_count) or defaults.recent_count)))
+  settings.show_recent = settings.show_recent == true
   settings.max_scan_projects = math.max(50, math.min(50000, math.floor(tonumber(settings.max_scan_projects) or defaults.max_scan_projects)))
   settings.recursive = settings.recursive ~= false
   settings.folder_view = settings.folder_view ~= false
@@ -427,6 +433,41 @@ end
 -- How far below the scan root a project sits: 0 for one lying loose in the root
 -- itself, 1 one folder down, and so on. Same counting as max_depth uses while
 -- scanning, so the two settings mean the same thing by the same numbers.
+-- REAPER keeps its recent files in reaper.ini under [Recent], newest first as
+-- recent01. Entries pointing at something that no longer exists are dropped
+-- rather than shown as dead rows. Cached, because apply_filter runs on every
+-- keystroke in the search box and this reads a file.
+local function read_recent_projects(limit)
+  limit = math.max(1, math.floor(tonumber(limit) or 15))
+  if state.recent_cache and state.recent_cache_limit == limit then return state.recent_cache end
+  local ini = r.get_ini_file and r.get_ini_file() or nil
+  if not ini or ini == "" then ini = r.GetResourcePath() .. "/reaper.ini" end
+  local list = {}
+  local file = io.open(ini, "r")
+  if file then
+    local found = {}
+    local in_section = false
+    for line in file:lines() do
+      local header = line:match("^%s*%[(.-)%]%s*$")
+      if header then
+        in_section = header:lower() == "recent"
+      elseif in_section then
+        local key, value = line:match("^%s*(recent%d+)%s*=%s*(.-)%s*$")
+        if key and value and value ~= "" then found[#found + 1] = { key = key, path = value } end
+      end
+    end
+    file:close()
+    table.sort(found, function(a, b) return a.key < b.key end)
+    for _, entry in ipairs(found) do
+      if #list >= limit then break end
+      if file_exists(entry.path) then list[#list + 1] = make_project(entry.path, "projects", "") end
+    end
+  end
+  state.recent_cache = list
+  state.recent_cache_limit = limit
+  return list
+end
+
 local function project_depth(project)
   local rel = clean_relative_folder(project.rel_dir or "")
   if rel == "" then return 0 end
@@ -441,11 +482,15 @@ local function apply_filter(settings)
   state.folder_entries = {}
   local term = tostring(settings.search_term or "")
   local mode = active_mode(settings)
-  local folder_view = settings.folder_view == true and term == ""
+  -- Recent is a flat list from REAPER's own history, so neither the folder view
+  -- nor the depth filter mean anything while it is on.
+  local recent = settings.show_recent == true
+  local source = recent and read_recent_projects(settings.recent_count) or state.projects
+  local folder_view = settings.folder_view == true and term == "" and not recent
   local current_folder = get_mode_folder_path(settings, mode)
   local folder_map = {}
-  local min_depth = math.max(0, math.floor(tonumber(settings.min_depth) or 0))
-  for _, project in ipairs(state.projects) do
+  local min_depth = recent and 0 or math.max(0, math.floor(tonumber(settings.min_depth) or 0))
+  for _, project in ipairs(source) do
     project.rel_dir = project.rel_dir or relative_folder(project.path, state.scan_location)
     local deep_enough = min_depth == 0 or project_depth(project) >= min_depth
     local haystack = table.concat({ project.name or "", project.path or "", project.folder or "" }, " ")
@@ -1812,6 +1857,19 @@ local function draw_settings_popup(app, settings)
       end
       c, v = r.ImGui_SliderInt(ctx, "Max items", settings.max_scan_projects, 50, 50000)
       if c then settings.max_scan_projects = v; if app.save_settings then app.save_settings() end end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Ceiling on how many items one scan collects. Reaching it stops the scan and the status line adds \"limited\".\nA safety brake for large drives: raise it only if you actually hit it")
+      end
+      c, v = r.ImGui_SliderInt(ctx, "Recent count", settings.recent_count, 1, 50)
+      if c then
+        settings.recent_count = v
+        state.recent_cache = nil
+        state.filter_dirty = true
+        if app.save_settings then app.save_settings() end
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "How many entries the Rec button shows. REAPER keeps at most 50")
+      end
     end
     if mode ~= "track_templates" then
       c, v = r.ImGui_Checkbox(ctx, "Double-click opens in new tab", settings.open_new_tab_on_double_click == true)
@@ -1837,7 +1895,7 @@ local function draw_toolbar(app, settings)
   local button_w = UIScale.round(28)
   local spacing = UIScale.gap(6)
   local mode_w = math.min(UIScale.round(126), math.max(UIScale.round(92), avail_w * 0.28))
-  local combo_w = math.max(UIScale.round(70), avail_w - mode_w - (button_w * 2) - (spacing * 3))
+  local combo_w = math.max(UIScale.round(70), avail_w - mode_w - (button_w * 3) - (spacing * 4))
   r.ImGui_SetNextItemWidth(ctx, mode_w)
   if r.ImGui_BeginCombo(ctx, "##project_browser_mode", mode_def.short) then
     for _, item in ipairs(mode_order) do
@@ -1865,7 +1923,27 @@ local function draw_toolbar(app, settings)
     r.ImGui_EndCombo(ctx)
   end
   r.ImGui_SameLine(ctx, 0, spacing)
-  if r.ImGui_Button(ctx, "R", button_w, 0) then start_scan(app, settings) end
+  local recent_on = settings.show_recent == true
+  if recent_on then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), Theme.colors.warning)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_backgrounds({ Theme.colors.accent, Theme.colors.warning }, Theme.colors.text, nil, 4.5))
+  end
+  local recent_clicked = r.ImGui_Button(ctx, "Rec", button_w, 0)
+  if recent_on then r.ImGui_PopStyleColor(ctx, 4) end
+  if recent_clicked then
+    settings.show_recent = not recent_on
+    -- Re-read on every switch on, so it reflects what you have opened since.
+    state.recent_cache = nil
+    state.filter_dirty = true
+    if app.save_settings then app.save_settings() end
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Recently opened projects, straight from REAPER's own history.\nIgnores the location, the folder view and the depth settings.\nHow many it shows is under Settings")
+  end
+  r.ImGui_SameLine(ctx, 0, spacing)
+  if r.ImGui_Button(ctx, "R", button_w, 0) then state.recent_cache = nil; start_scan(app, settings) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Refresh") end
   r.ImGui_SameLine(ctx, 0, spacing)
   if r.ImGui_Button(ctx, "...", button_w, 0) then state.settings_popup = true end
