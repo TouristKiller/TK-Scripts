@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.78
+-- @version 0.6.80
 -- @changelog:
+-- v0.6.80
+--   + Navigator: A module of its own. The bird's-eye map of the arrange was only available as a card inside Transport, and the block layout is one list for the whole module - so you could not have a full Transport in one place and a Navigator on its own in the other. Now it sits in the module list like any other and goes wherever you put it, the split view included. Requested by Halma
+--   + Navigator: As a module it fills the pane instead of a fixed strip, so a tall pane gives every track its own row rather than squeezing them all into 120 pixels. Everything else is the same - drag to pan in both directions, the edges and the wheel to zoom time, Ctrl+wheel for track heights, and the fit button with its three zoom slots
+--   + Navigator: It stays available as a Transport card, and both draw the same code from core/navigator rather than a copy each. Two copies of a thing this size drift apart, and the one that quietly misses a fix is the one nobody notices for months
 -- v0.6.78
 --   + Workbench: The smallest the window may be made no longer depends on auto-collapse. That floor was part of the auto-collapse code and disappeared along with it, so a window with the feature switched off could be dragged shut altogether - which is exactly the state that broke it. It belongs to the window rather than to that one feature, and applies either way now
 --   + Project Browser: Fixed the panels being laid out past the bottom of the pane in a short window. Each of the list, the info panel and the preview panel had a minimum of its own, with nothing checking that they still fit together - so in a small window with the split view on they asked for close to 300 pixels of a 180 pixel pane and the last one ended up entirely outside it. What is actually left is now shared out, bottom panel first, and a panel that would come out a sliver is dropped so its room goes to the list instead
@@ -599,6 +603,7 @@ local module_names = {
   "project_overview",
   "timepiece",
   "transport",
+  "navigator",
   "project_browser",
   "action_browser",
   "action_clipboard",
@@ -1155,6 +1160,11 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, cx, MY(-2), cx, B(14), color, W(3))
     r.ImGui_DrawList_AddLine(draw_list, MX(-5), MY(-2), cx, MY(-2), color, W(3))
     r.ImGui_DrawList_AddLine(draw_list, MX(-5), B(14), MX(5), B(14), color, W(3))
+  elseif id == "navigator" then
+    r.ImGui_DrawList_AddRect(draw_list, L(8), T(11), R(8), B(11), color, RD(2), 0, W(1.6))
+    r.ImGui_DrawList_AddLine(draw_list, L(8), T(15), R(8), T(15), color, W(1.2))
+    r.ImGui_DrawList_AddRectFilled(draw_list, MX(-6), MY(-1), MX(1), MY(3), color, RD(1))
+    r.ImGui_DrawList_AddRect(draw_list, MX(-2), T(16), R(11), B(14), color, RD(1.5), 0, W(1.6))
   elseif id == "timepiece" then
     r.ImGui_DrawList_AddCircle(draw_list, cx, cy, size * 0.34, color, 32, W(2))
     r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, RD(2.4), color, 12)

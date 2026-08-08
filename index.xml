@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.78" author="TouristKiller" time="2026-08-09T01:00:00Z">
+    <version name="0.6.80" author="TouristKiller" time="2026-08-09T01:40:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -66,6 +66,7 @@
      <source file="core/project_health.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/project_health.lua</source>
      <source file="core/selection.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/selection.lua</source>
      <source file="core/settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/settings.lua</source>
+     <source file="core/navigator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/navigator.lua</source>
      <source file="core/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/theme.lua</source>
      <source file="core/ui.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui.lua</source>
     <source file="core/ui_scale.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui_scale.lua</source>
@@ -115,12 +116,17 @@
     <source file="modules/project_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/project_browser.lua</source>
      <source file="modules/script_launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/script_launcher.lua</source>
     <source file="modules/timepiece.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/timepiece.lua</source>
+     <source file="modules/navigator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/navigator.lua</source>
      <source file="modules/transport.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/transport.lua</source>
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.6.80
+            + Navigator: A module of its own. The bird's-eye map of the arrange was only available as a card inside Transport, and the block layout is one list for the whole module - so you could not have a full Transport in one place and a Navigator on its own in the other. Now it sits in the module list like any other and goes wherever you put it, the split view included. Requested by Halma
+            + Navigator: As a module it fills the pane instead of a fixed strip, so a tall pane gives every track its own row rather than squeezing them all into 120 pixels. Everything else is the same - drag to pan in both directions, the edges and the wheel to zoom time, Ctrl+wheel for track heights, and the fit button with its three zoom slots
+            + Navigator: It stays available as a Transport card, and both draw the same code from core/navigator rather than a copy each. Two copies of a thing this size drift apart, and the one that quietly misses a fix is the one nobody notices for months
             v0.6.78
             + Workbench: The smallest the window may be made no longer depends on auto-collapse. That floor was part of the auto-collapse code and disappeared along with it, so a window with the feature switched off could be dragged shut altogether - which is exactly the state that broke it. It belongs to the window rather than to that one feature, and applies either way now
             + Project Browser: Fixed the panels being laid out past the bottom of the pane in a short window. Each of the list, the info panel and the preview panel had a minimum of its own, with nothing checking that they still fit together - so in a small window with the split view on they asked for close to 300 pixels of a 180 pixel pane and the last one ended up entirely outside it. What is actually left is now shared out, bottom panel first, and a panel that would come out a sliver is dropped so its room goes to the list instead
