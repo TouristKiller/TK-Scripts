@@ -2,6 +2,17 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Mixer 1.4.0] - 2026-08-08
+
+### TK Mixer
+#### Toegevoegd
+- **Meerdere mixerinstances**: Drie aanvullende actions maken het mogelijk om maximaal vier onafhankelijke TK Mixers tegelijk te gebruiken, bijvoorbeeld een vaste busmixer naast een mixer voor tracks die tijdens het werken worden toegevoegd.
+- **Eigen state per instance**: Iedere mixer bewaart afzonderlijk zijn tracks, verborgen tracks, snapshots, pinned parameters, layout, docking en vensterpositie.
+- **ESC sluiten**: De actieve TK Mixer kan met Escape worden gesloten zolang geen invoerveld actief is.
+
+#### Gewijzigd
+- **Betrouwbare action-toggle**: Dezelfde mixeraction opnieuw uitvoeren sluit alleen de bijbehorende actieve instance. De toolbar-toggle volgt de werkelijke runstate.
+
 ## [TK Workbench 0.6.69] - 2026-08-04
 
 ### TK Workbench

@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.74" author="TouristKiller" time="2026-08-07T18:00:00Z">
+    <version name="0.6.75" author="TouristKiller" time="2026-08-08T16:30:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -121,6 +121,31 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.6.75
+            + Control Room: Monitor presets. REAPER keeps hardware output sends in the project, so a new project starts with no monitors at all and the routing has to be built from scratch every time. A preset holds the sends themselves - output, source channels and format, level and mute - and puts them back on the master in one click. Requested by BogdanS
+            + Control Room: Presets are stored with the Workbench settings rather than in the project, which is the point of them: they have to exist before the project has any routing. Aliases and per-monitor formats travel with them, and a monitor captured while folded brings the fold plugin back with it, so it is not silently pointing at a pair nothing feeds
+            + Control Room: Picking a preset loads it there and then. Monitors already pointing at the same output are updated, the missing ones are created, and the rest of the master is left alone. "Load exact" goes further and leaves nothing on the master but the preset, removing hardware output sends it does not mention. Both are a single undo step
+            + Control Room: Presets - choosing one used to only aim a separate Apply button, so the panel still showed the previous rig - and since Save takes whatever is on the master, one stray click wrote the old routing straight over the preset just picked. Loading on pick removes that trap: Save can now only ever agree with the name in the box
+            + Control Room: Presets - the panel lists what the selected preset holds, monitor by monitor: alias, output, format, listening mode and which master channels feed it, with anything not yet on the master called out
+            + Control Room: Presets now carry the listening mode of each monitor - Full, Mid, Side, Low, High, Fold to Stereo or a soloed speaker. Modes are held per output channel, so without this two presets on the same output shared one mode and changing it in either changed it in both. What gets stored is the mode itself and not the source channel it produces, because a check bus sits wherever there was room on that project's master and that number means nothing on the next one
+            + Control Room: Applying a preset sets the modes after the sends exist, so the source is worked out afresh and the check bus is rebuilt if the mode needs one. Presets saved before this keep the plain source they were captured with rather than being guessed at, and the whole apply is still a single undo step
+            + Control Room: The Setup window can be resized. It was pinned to a fixed size every frame, which on a tall screen wasted the room and on a short one buried the monitor list. Every tab already keeps its list in a panel that fills whatever is left, so the lists simply scroll inside the height you give it - drag the edge and the monitors, cues, mix sources and targets all follow
+            + Control Room: The size is remembered along with the position, restored when Setup opens rather than forced on every frame, and it cannot be dragged smaller than the tab row and a usable list need
+            + Control Room: Master format reaches 16 channels. Alongside the existing formats there are now 7.1.2 (10 ch), 7.1.4 (12 ch) and 9.1.6 (16 ch), so an immersive bed can be monitored, metered and folded like any other. Requested by BogdanS
+            + Control Room: The meter JSFX carries sixteen channels rather than eight, with a per-channel RMS readout for each. Loudness weighting follows ITU-R BS.1770-4 where it applies - front 1.0, surround and back 1.41, LFE out of the sum but still peak metered - and since BS.1770-4 predates the immersive beds and lists no coefficient for height channels, they take the 1.0 its own rule gives anything unlisted, which is what the Atmos loudness implementations use. Wide channels are front positions and take 1.0 too
+            + Control Room: Fold-down understands the new beds. Height channels fold in at their own level, on a Height slider next to the existing Centre and Surround ones, and the wide pair of a 9.1.6 bed folds at the surround level because it is an off-axis front position. The downmix JSFX went from sixteen to thirty-two channels, which is what a 16 channel bed plus the five check pairs above it needs
+            + Control Room: A master still carrying a downmix plugin from before this update refuses a bed wider than 7.1 and says so, rather than clamping to 7.1 and quietly folding as though the height and wide channels were not there. The same goes for the meter: it reads what the loaded instance actually carries instead of reading past its last parameter
+            + Control Room: Fixed the meter loading a new copy of the TK Control Room Meter JSFX every frame, stacking up dozens of them and opening a window for each. REAPER names a JS plugin after its description line when it recognises it and after its file path when it was added that way, and that path spells it with underscores - so on installs where the path name came back, the search for an already loaded meter matched nothing and added another one on top. Both spellings are now folded onto one before comparing, and the same was done for the Downmix plugin the fold bus uses, which had the identical fault waiting to happen
+            + Control Room: A track that already carries a pile of those duplicates is cleaned up on the spot - the first meter is kept and the rest are removed - so the fix does not leave you to clear them out by hand
+            + Workbench: Split view - a pin on the splitter, which keeps one pane on the module it holds: everything you open from then on lands in the other pane. Pinning the top pane to Transport and browsing with the bottom one is what this was asked for, but it works either way round and in side by side just as well. Requested on the forum
+            + Workbench: Clicking the pin walks through keeping the first pane, keeping the second, and keeping neither. The splitter grows an accent edge along the side it is holding, so which pane is kept reads from the divider itself, and the same choice sits in the split menu as "Keep top pane" / "Keep bottom pane" - wording that follows the layout, so it reads left and right when the split is side by side
+            + Workbench: Swapping the panes takes the pin with it, so what you pinned stays pinned rather than the pin staying behind and grabbing whatever moved in. Going Home and back keeps it too: the pinned module is set aside and put back in its pane, with the module you pick on the way out opening in the other one
+            + Project Browser: Fixed "ImGui_Attach: exceeded maximum object attachment limit" filling the console, and the freeze that came with it, on locations holding a lot of projects with cover art. Destroying an image was not enough - while it stayed attached it kept occupying one of the context's attachment slots - so the slots leaked away until there were none left. Restarting REAPER cleared it only because that starts a fresh context
+            + Project Browser: Cover loading was rebuilt along the lines TK FX Browser settled on for its screenshots. Nothing is created while drawing and nothing is thrown away while drawing either: a pass at the top of the frame loads a handful and detaches whatever has gone unused, so a screenful of tiles fills in over a frame or two instead of attaching dozens at once, and a tile that stays on screen keeps its image. The old code cleared the whole cache the moment it grew past a limit, including images the frame it interrupted was still drawing with, which is the likely source of the "EndChild: Missing PopID()" that followed
+            + Project Browser: Opening a project, making a preview and confirming a preview deletion now happen just before the next frame is built rather than in the middle of the one being drawn. All three block while REAPER keeps pumping its message loop, which can re-enter the script while a row or tile still has an id pushed and leave that stack crooked. Costs a frame and nothing else
+            + Project Browser: The Manage list pops its id whatever happens to the row, so a failure there can no longer take the frame down with it and hide what actually went wrong
+            + Project Browser: Two switches to hide the project info panel and the preview panel. Hidden panels give their height to the list rather than leaving a gap, and hiding the preview panel stops anything it was playing. Requested by vik-tan
+
             v0.6.74
             + Control Room: The listening checks - Mid, Side, Low, High and Fold to Stereo - have moved out of Setup and onto the footer, where DIM and MONO already were. They are things you reach for while mixing, not things you configure once, and hunting for them in a settings window was the wrong place for that. Suggested by BogdanS
             + Control Room: They act on one monitor rather than the whole room, which is the point of them: dimming or mono-ing everything at once is what you want, but hearing the Side component of a drummer's cue feed is not. A row of monitor buttons above them picks which one, showing the alias you gave it, and ALL brings every monitor back - the same selector the S button on a lane always was, now in the open. With a single monitor there is nothing to choose and it is simply the target
@@ -674,8 +699,11 @@ v0.2.36
 
 <category name="Mixer">
     <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
-        <version name="1.3.7" author="TouristKiller" time="2026-07-04T13:00:00Z">
+        <version name="1.4.0" author="TouristKiller" time="2026-08-08T16:30:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
+            <source main="main" file="TK_Mixer Instance 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer%20Instance%202.lua</source>
+            <source main="main" file="TK_Mixer Instance 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer%20Instance%203.lua</source>
+            <source main="main" file="TK_Mixer Instance 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer%20Instance%204.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/json.lua</source>
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/icon_browser.lua</source>
             <source type="effect" file="TK_ChannelStrip.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_ChannelStrip.jsfx</source>
@@ -683,6 +711,12 @@ v0.2.36
             <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_VU_Meter.jsfx</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
             <changelog><![CDATA[
+            v1.4.0
+            + Instances: added three additional TK Mixer actions, allowing up to four independent mixers to run simultaneously
+            + Instance state: each mixer keeps its own tracks, hidden state, snapshots, pinned parameters, layout, docking and window position
+            + Window: press Escape to close the focused TK Mixer
+            + Action: running the same mixer action again reliably closes that instance
+
             v1.3.7
             + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
 

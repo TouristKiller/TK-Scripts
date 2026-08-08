@@ -12,19 +12,46 @@ M.width_shift = 10
 
 -- Power weights follow ITU-R BS.1770-4: 1.0 for front channels, 1.41 for
 -- surround and back channels, LFE excluded from the loudness sum.
+--
+-- BS.1770-4 predates the immersive beds and says nothing about height channels.
+-- They are weighted 1.0 here, which is what the standard's own rule for
+-- unlisted channels gives and what the Atmos loudness implementations do. Wide
+-- channels are front positions, so they are 1.0 as well. Only the horizontal
+-- surround and back positions carry the 1.41.
 local SURROUND_WEIGHT = 1.41
 
--- Listed in the order the setup UI offers them.
+-- Listed in the order the setup UI offers them. One layout per channel count:
+-- I_SRCCHAN records a width and not an arrangement, so two layouts of the same
+-- width would be indistinguishable once the routing is read back.
 M.layouts = {
   { id = "stereo", label = "Stereo", channels = 2, code = 0, speakers = { "L", "R" }, weights = { 1, 1 } },
   { id = "mono", label = "Mono", channels = 1, code = 1, speakers = { "M" }, weights = { 1 } },
   { id = "quad", label = "Quad", channels = 4, code = 2, speakers = { "L", "R", "Ls", "Rs" }, weights = { 1, 1, SURROUND_WEIGHT, SURROUND_WEIGHT } },
   { id = "surround_51", label = "5.1", channels = 6, code = 3, speakers = { "L", "R", "C", "LFE", "Ls", "Rs" }, weights = { 1, 1, 1, 0, SURROUND_WEIGHT, SURROUND_WEIGHT } },
-  { id = "surround_71", label = "7.1", channels = 8, code = 4, speakers = { "L", "R", "C", "LFE", "Ls", "Rs", "Lb", "Rb" }, weights = { 1, 1, 1, 0, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT } }
+  { id = "surround_71", label = "7.1", channels = 8, code = 4, speakers = { "L", "R", "C", "LFE", "Ls", "Rs", "Lb", "Rb" }, weights = { 1, 1, 1, 0, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT } },
+  { id = "surround_712", label = "7.1.2", channels = 10, code = 5,
+    speakers = { "L", "R", "C", "LFE", "Ls", "Rs", "Lb", "Rb", "Lts", "Rts" },
+    weights = { 1, 1, 1, 0, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, 1, 1 } },
+  { id = "surround_714", label = "7.1.4", channels = 12, code = 6,
+    speakers = { "L", "R", "C", "LFE", "Ls", "Rs", "Lb", "Rb", "Ltf", "Rtf", "Ltb", "Rtb" },
+    weights = { 1, 1, 1, 0, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, 1, 1, 1, 1 } },
+  { id = "surround_916", label = "9.1.6", channels = 16, code = 8,
+    speakers = { "L", "R", "C", "LFE", "Ls", "Rs", "Lb", "Rb", "Lw", "Rw", "Ltf", "Rtf", "Ltm", "Rtm", "Ltb", "Rtb" },
+    weights = { 1, 1, 1, 0, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, SURROUND_WEIGHT, 1, 1, 1, 1, 1, 1, 1, 1 } }
 }
 
--- Index passed to the meter and downmix JSFX so they know which pin is LFE.
-M.jsfx_layout_index = { mono = 0, stereo = 1, quad = 2, surround_51 = 3, surround_71 = 4 }
+-- Index passed to the meter and downmix JSFX so they know which pin is LFE and
+-- how the bed folds. Keep in step with the slider lists in both plugins.
+M.jsfx_layout_index = {
+  mono = 0,
+  stereo = 1,
+  quad = 2,
+  surround_51 = 3,
+  surround_71 = 4,
+  surround_712 = 5,
+  surround_714 = 6,
+  surround_916 = 7
+}
 
 M.default_id = "stereo"
 

@@ -45,6 +45,7 @@ local defaults = {
   setup_window = {},
   master_layout = "stereo",
   monitor_formats = {},
+  monitor_presets = {},
   fold_center_db = -3,
   fold_surround_db = -3,
   fold_lfe = false,
@@ -76,7 +77,9 @@ local state = {
   cue_names_synced = false,
   apply_send_mode_cue_guid = nil,
   fold_status = nil,
-  fold_sync_time = 0
+  fold_sync_time = 0,
+  preset_name = "",
+  preset_status = nil
 }
 
 local metronome_keys = {
@@ -109,6 +112,15 @@ local LEGACY_MONITOR_MODES = {
   ["right speaker"] = "right_speaker", ["r speaker"] = "right_speaker"
 }
 local FOLD_PLUGIN_MATCH = "TK Control Room Downmix"
+-- REAPER names a JS plugin after its desc line when it knows it and after the
+-- file path when it was added that way, and that path spells it with
+-- underscores. Fold both onto one spelling before comparing, or the lookup finds
+-- nothing and a second copy gets added on top of the first.
+local function cr_fx_name_matches(name, needle)
+  name = tostring(name or ""):gsub("[/\\]", " "):gsub("_", " "):lower()
+  needle = tostring(needle or ""):gsub("[/\\]", " "):gsub("_", " "):lower()
+  return name:find(needle, 1, true) ~= nil
+end
 -- Paths first, desc last, mirroring MeterEngine.plugin_names. The first entry is
 -- the ReaPack install path once this effect is added to index.xml; until then
 -- only the desc entries resolve.
@@ -119,8 +131,11 @@ local FOLD_PLUGIN_NAMES = {
   "JS: TK_Control_Room_Downmix"
 }
 -- enable is the first of five on/off sliders, one per mode in MONITOR_BUS_MODES.
-local FOLD_PARAMS = { layout = 0, source = 1, fold = 2, center = 3, surround = 4, lfe_on = 5, lfe = 6, trim = 7, run = 8, enable = 9, crossover = 14 }
+local FOLD_PARAMS = { layout = 0, source = 1, fold = 2, center = 3, surround = 4, lfe_on = 5, lfe = 6, trim = 7, run = 8, enable = 9, crossover = 14, height = 15 }
 local MAX_TRACK_CHANNELS = 128
+-- What the meter and downmix JSFX carry pins for. Raising it means adding pins
+-- there first, so the two are kept in step through this one number.
+local MAX_METER_CHANNELS = 16
 
 function cr_bus_index(mode)
   for index, id in ipairs(MONITOR_BUS_MODES) do
@@ -335,7 +350,7 @@ end
 
 local function read_track_peak(track, base, count)
   if not valid_track(track) then return 0 end
-  count = count or math.min(track_channel_count(track), 8)
+  count = count or math.min(track_channel_count(track), MAX_METER_CHANNELS)
   local highest = 0
   for _, value in ipairs(read_channel_peaks(track, base or 0, count)) do
     if value > highest then highest = value end
@@ -1246,6 +1261,16 @@ function cr_bus_fx_supports_pairs(track, index)
   return named == true and tostring(name):find("Crossover", 1, true) ~= nil
 end
 
+-- The beds wider than 7.1 arrived in JSFX 0.4, along with the height level the
+-- fold needs for them. An older instance clamps the layout to 7.1 and would fold
+-- a 9.1.6 bed as if the height and wide channels were not there - quietly, and
+-- the routing would look perfectly right. Better to refuse and say why.
+function cr_bus_fx_supports_wide(track, index)
+  if not r.TrackFX_GetParamName then return false end
+  local named, name = r.TrackFX_GetParamName(track, index, FOLD_PARAMS.height, "")
+  return named == true and tostring(name):find("Height", 1, true) ~= nil
+end
+
 function cr_bus_enable_param(mode)
   return FOLD_PARAMS.enable + (cr_bus_index(mode) or 0)
 end
@@ -1254,7 +1279,7 @@ local function find_fold_fx(track)
   if not valid_track(track) or not r.TrackFX_GetCount or not r.TrackFX_GetFXName then return nil end
   for index = 0, (r.TrackFX_GetCount(track) or 0) - 1 do
     local ok, name = r.TrackFX_GetFXName(track, index, "")
-    if ok and tostring(name or ""):find(FOLD_PLUGIN_MATCH, 1, true) then
+    if ok and cr_fx_name_matches(name, FOLD_PLUGIN_MATCH) then
       return index
     end
   end
@@ -1267,7 +1292,7 @@ function cr_drop_extra_bus_fx(track, keep)
   for index = (r.TrackFX_GetCount(track) or 0) - 1, 0, -1 do
     if index ~= keep then
       local ok, name = r.TrackFX_GetFXName(track, index, "")
-      if ok and tostring(name or ""):find(FOLD_PLUGIN_MATCH, 1, true) then
+      if ok and cr_fx_name_matches(name, FOLD_PLUGIN_MATCH) then
         r.TrackFX_Delete(track, index)
         if index < keep then keep = keep - 1 end
       end
@@ -1315,6 +1340,9 @@ local function ensure_fold_bus(app, settings, master, layout, base, install, mod
   local pairs_ok = cr_bus_fx_supports_pairs(master, index)
   if mode ~= "fold_stereo" and not pairs_ok then
     return nil, "The downmix JSFX on the master is an older build - remove it and pick the mode again"
+  end
+  if layout.channels > 8 and not cr_bus_fx_supports_wide(master, index) then
+    return nil, "The downmix JSFX on the master predates " .. tostring(layout.label) .. " - remove it and pick the mode again"
   end
   local offset = fold_offset_for(layout, base, mode)
   grow_track_channel_count(master, offset + 2, "Control Room: Widen master for monitoring")
@@ -1527,6 +1555,192 @@ local function remove_monitor_output(master, index)
   return write_with_undo("Control Room: Remove monitor output", function()
     return r.RemoveTrackSend(master, 1, index)
   end)
+end
+
+-- A monitor is a hardware output send on the master, and sends belong to the
+-- project - so however much the Control Room remembers about a monitor, a new
+-- project starts with none of them and the routing has to be built again. A
+-- preset holds the sends themselves, so a rig goes back onto a fresh project in
+-- one click. They live in the settings file rather than the project, which is
+-- the whole point: they have to be there before the project has anything.
+function cr_preset_list(settings)
+  if type(settings.monitor_presets) ~= "table" then settings.monitor_presets = {} end
+  return settings.monitor_presets
+end
+
+function cr_find_preset(settings, name)
+  name = tostring(name or "")
+  if name == "" then return nil, nil end
+  for index, preset in ipairs(cr_preset_list(settings)) do
+    if tostring(preset.name or "") == name then return preset, index end
+  end
+  return nil, nil
+end
+
+function cr_capture_monitor_preset(settings, master, name)
+  local monitors = {}
+  for _, output in ipairs(monitor_outputs(master)) do
+    local target = output.target
+    if target then
+      local source = output.source or monitor_send_source(master, output.index)
+      local layout, base = monitor_format(settings, target, source)
+      monitors[#monitors + 1] = {
+        channel = math.max(0, math.floor(tonumber(target.channel) or 0)),
+        mono = target.mono == true,
+        rearoute = target.rearoute == true,
+        src_channel = math.max(0, math.floor(tonumber(source.channel) or 0)),
+        src_layout = tostring(source.layout or "stereo"),
+        layout = layout and layout.id or nil,
+        base = base,
+        -- Listening modes are held per output channel too, so two presets on the
+        -- same output would otherwise share one. Stored as the mode rather than
+        -- as the source channel it produces: a check bus sits wherever there was
+        -- room on that project's master, and that is not a number worth keeping.
+        mode = get_monitor_mode(settings, target, layout),
+        alias = monitor_alias(settings, target),
+        volume = read_monitor_volume(master, output.index) or 1,
+        mute = read_monitor_mute(master, output.index) == true
+      }
+    end
+  end
+  return {
+    name = tostring(name or ""),
+    master_layout = tostring(settings.master_layout or "stereo"),
+    monitors = monitors
+  }
+end
+
+function cr_preset_entry_target(entry)
+  local layout = Layouts.by_id(entry.src_layout) or Layouts.by_id("stereo")
+  return {
+    channel = math.max(0, math.floor(tonumber(entry.channel) or 0)),
+    mono = entry.mono == true,
+    rearoute = entry.rearoute == true,
+    width = entry.mono and 1 or layout.channels
+  }
+end
+
+-- How wide the master has to be before any of this can be routed.
+function cr_preset_channels_needed(preset)
+  local layout = Layouts.by_id(preset.master_layout)
+  local needed = layout and layout.channels or 2
+  for _, entry in ipairs(type(preset.monitors) == "table" and preset.monitors or {}) do
+    local src = Layouts.by_id(entry.src_layout) or Layouts.by_id("stereo")
+    local reach = math.max(0, math.floor(tonumber(entry.src_channel) or 0)) + src.channels
+    if reach > needed then needed = reach end
+  end
+  return needed
+end
+
+-- replace also clears hardware sends the preset says nothing about. Off by
+-- default: those sends are somebody's routing, and adding what is missing is
+-- recoverable in a way that deleting is not.
+function cr_apply_monitor_preset(app, settings, master, preset, replace)
+  if not valid_track(master) then return false, "No master track" end
+  if type(preset) ~= "table" then return false, "No preset selected" end
+  local monitors = type(preset.monitors) == "table" and preset.monitors or {}
+  if #monitors == 0 then return false, "That preset has no monitors in it" end
+  if not r.CreateTrackSend or not r.SetTrackSendInfo_Value then return false, "Send API unavailable" end
+
+  grow_track_channel_count(master, cr_preset_channels_needed(preset), "Control Room: Widen master")
+
+  local wanted = {}
+  for _, entry in ipairs(monitors) do
+    local key = monitor_target_key(cr_preset_entry_target(entry))
+    if key then wanted[key] = entry end
+  end
+
+  local applied, added = 0, 0
+  local ok = write_with_undo("Control Room: Apply monitor preset", function()
+    -- Index existing sends by where they go, so a preset lands on the monitors
+    -- that are already there instead of doubling them.
+    local existing = {}
+    for _, output in ipairs(monitor_outputs(master)) do
+      local key = output.target and monitor_target_key(output.target) or nil
+      if key and not existing[key] then existing[key] = output.index end
+    end
+    for _, entry in ipairs(monitors) do
+      local target = cr_preset_entry_target(entry)
+      local key = monitor_target_key(target)
+      local index = key and existing[key] or nil
+      if not index then
+        index = r.CreateTrackSend(master, nil)
+        if index and index >= 0 then added = added + 1 else index = nil end
+      end
+      if index then
+        local src_layout = Layouts.by_id(entry.src_layout) or Layouts.by_id("stereo")
+        r.SetTrackSendInfo_Value(master, 1, index, "I_DSTCHAN", monitor_destination_value(target))
+        r.SetTrackSendInfo_Value(master, 1, index, "I_SRCCHAN", Layouts.encode_src(entry.src_channel, src_layout))
+        r.SetTrackSendInfo_Value(master, 1, index, "B_MONO", entry.mono and 1 or 0)
+        r.SetTrackSendInfo_Value(master, 1, index, "D_VOL", clamp(tonumber(entry.volume) or 1, 0, 4))
+        r.SetTrackSendInfo_Value(master, 1, index, "B_MUTE", entry.mute and 1 or 0)
+        applied = applied + 1
+      end
+    end
+    if replace and r.RemoveTrackSend then
+      -- Highest index first: removing a send shifts everything above it down.
+      local doomed = {}
+      for _, output in ipairs(monitor_outputs(master)) do
+        local key = output.target and monitor_target_key(output.target) or nil
+        if not key or not wanted[key] then doomed[#doomed + 1] = output.index end
+      end
+      table.sort(doomed, function(a, b) return a > b end)
+      for _, index in ipairs(doomed) do r.RemoveTrackSend(master, 1, index) end
+    end
+    return true
+  end)
+  if not ok then return false, "Could not write the routing" end
+
+  -- The per-monitor settings are keyed by target, so they can be restored
+  -- whether or not the send existed a moment ago.
+  local master_layout = Layouts.by_id(preset.master_layout)
+  if master_layout then settings.master_layout = master_layout.id end
+  for _, entry in ipairs(monitors) do
+    local target = cr_preset_entry_target(entry)
+    if entry.layout then set_monitor_format(app, settings, target, entry.layout, entry.base) end
+    -- Aliases are global, keyed by output channel, so a preset that has none has
+    -- to say so. Only writing the ones it has would leave the previous preset's
+    -- name sitting on the monitor and make the two look like one.
+    if entry.alias and entry.alias ~= "" then
+      write_monitor_alias(app, settings, target, entry.alias)
+    else
+      clear_monitor_alias(app, settings, target)
+    end
+  end
+  -- Modes go on last and in one block of their own. Setting a mode recomputes
+  -- the send's source and installs the check bus it needs, so it has to run
+  -- after the sends exist - and doing it here rather than in the loop above
+  -- means the whole preset is still a single undo step.
+  write_with_undo("Control Room: Apply monitor preset", function()
+    local index_by_key = {}
+    for _, output in ipairs(monitor_outputs(master)) do
+      local key = output.target and monitor_target_key(output.target) or nil
+      if key and not index_by_key[key] then index_by_key[key] = output.index end
+    end
+    for _, entry in ipairs(monitors) do
+      -- Presets saved before modes were stored have none. Leaving those alone
+      -- keeps the raw source they were captured with.
+      if entry.mode then
+        local target = cr_preset_entry_target(entry)
+        local index = index_by_key[monitor_target_key(target)]
+        if index then
+          write_monitor_mode(app, settings, master, index, target, entry.mode, entry.layout or entry.src_layout, entry.base)
+        end
+      end
+    end
+    return true
+  end)
+
+  -- A monitor captured while folded has its source pointing at the fold pair,
+  -- and on a fresh project the plugin that feeds that pair is not there yet.
+  -- Without this the routing looks right and the monitor stays silent.
+  if fold_bus_in_use(settings, master) and not find_fold_fx(master) then
+    local bed = Layouts.by_id(settings.master_layout) or Layouts.by_id("stereo")
+    local _, status = ensure_fold_bus(app, settings, master, bed, 0, true)
+    if status then state.fold_status = status end
+  end
+  if app and app.save_settings then app.save_settings() end
+  return true, "Applied " .. tostring(applied) .. " monitor" .. (applied == 1 and "" or "s") .. (added > 0 and (", " .. tostring(added) .. " new") or "")
 end
 
 local function monitor_dim_factor(settings)
@@ -1841,7 +2055,7 @@ local function meter_sources(app, settings)
   local sources = {}
   sources[#sources + 1] = meter_source_entry("master", "Master", r.GetMasterTrack(0), settings.master_layout)
   local track = selected_track(app)
-  local track_layout = valid_track(track) and Layouts.by_channels(math.min(track_channel_count(track), 8)) or Layouts.by_id("stereo")
+  local track_layout = valid_track(track) and Layouts.by_channels(math.min(track_channel_count(track), MAX_METER_CHANNELS)) or Layouts.by_id("stereo")
   sources[#sources + 1] = meter_source_entry("selected", "Selected", track, track_layout)
   for _, cue in ipairs(cue_outputs(settings)) do
     if valid_track(cue.track) then
@@ -2942,6 +3156,128 @@ function cr_channel_map_cell(ctx, id, label, tooltip, fill, text_color, width)
   if tooltip and tooltip ~= "" and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, tooltip) end
 end
 
+function cr_draw_monitor_presets(ctx, app, settings, master)
+  if r.ImGui_Separator then r.ImGui_Separator(ctx) end
+  local presets = cr_preset_list(settings)
+  local selected = cr_find_preset(settings, state.preset_name)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Presets")
+  r.ImGui_SameLine(ctx, UIScale.round(90))
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+  local combo_label = #presets == 0 and "No presets yet" or (selected and selected.name or "Select...")
+  -- Picking a preset loads it. Choosing one used to only aim the Apply button,
+  -- which left the panel showing the previous rig - and Save takes what is on
+  -- the master, so one stray click wrote the old routing over the preset you
+  -- had just picked. Loading on pick means Save can only ever agree with the
+  -- name in the box.
+  local pending_apply = nil
+  if r.ImGui_BeginCombo(ctx, "##control_room_preset_pick", combo_label) then
+    for _, preset in ipairs(presets) do
+      local is_selected = selected == preset
+      local count = type(preset.monitors) == "table" and #preset.monitors or 0
+      if r.ImGui_Selectable(ctx, tostring(preset.name) .. " (" .. tostring(count) .. " monitor" .. (count == 1 and "" or "s") .. ")", is_selected) then
+        state.preset_name = tostring(preset.name)
+        state.preset_status = nil
+        pending_apply = preset
+      end
+      if is_selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Saved monitor setups. Picking one loads it onto the master straight away.\nThey live with the Workbench settings rather than with the project,\nso they are there for a project that has no routing yet.") end
+  -- Run it after the combo has closed. Building sends and installing the fold
+  -- plugin from inside an open popup is the kind of thing that leaves the id
+  -- stack crooked if anything goes wrong halfway.
+  if pending_apply then
+    local ok, message = cr_apply_monitor_preset(app, settings, master, pending_apply, false)
+    state.preset_status = message or (ok and "Loaded" or "Could not load")
+  end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(140))
+  local name_changed, name_value = r.ImGui_InputTextWithHint(ctx, "##control_room_preset_name", "Preset name", tostring(state.preset_name or ""))
+  if name_changed then
+    state.preset_name = name_value
+    state.preset_status = nil
+  end
+  local name = tostring(state.preset_name or ""):match("^%s*(.-)%s*$") or ""
+  local outputs = monitor_outputs(master)
+
+  local can_save = name ~= "" and #outputs > 0
+  if not can_save then r.ImGui_BeginDisabled(ctx, true) end
+  if r.ImGui_Button(ctx, "Save##control_room_preset_save", UIScale.text_button_w(ctx, "Save", 54, 8), 0) then
+    local captured = cr_capture_monitor_preset(settings, master, name)
+    local existing, index = cr_find_preset(settings, name)
+    if existing then
+      presets[index] = captured
+      state.preset_status = "Updated preset " .. name
+    else
+      presets[#presets + 1] = captured
+      state.preset_status = "Saved preset " .. name
+    end
+    if app.save_settings then app.save_settings() end
+  end
+  if not can_save then r.ImGui_EndDisabled(ctx) end
+  if r.ImGui_IsItemHovered(ctx) then
+    if #outputs == 0 then
+      r.ImGui_SetTooltip(ctx, "Nothing to save - the master has no hardware output sends yet")
+    elseif name == "" then
+      r.ImGui_SetTooltip(ctx, "Type a name first")
+    else
+      r.ImGui_SetTooltip(ctx, "Store the current monitors under this name, overwriting one of the same name")
+    end
+  end
+
+  local target_preset = cr_find_preset(settings, name)
+  if not target_preset then r.ImGui_BeginDisabled(ctx, true) end
+  r.ImGui_SameLine(ctx)
+  -- Loading happens on pick, so what is left here is the destructive variant:
+  -- the same load, but ending with nothing on the master except this preset.
+  if r.ImGui_Button(ctx, "Load exact##control_room_preset_replace", UIScale.text_button_w(ctx, "Load exact", 84, 8), 0) then
+    local ok, message = cr_apply_monitor_preset(app, settings, master, target_preset, true)
+    state.preset_status = message or (ok and "Loaded" or "Could not load")
+  end
+  if r.ImGui_IsItemHovered(ctx) and target_preset then r.ImGui_SetTooltip(ctx, "Picking a preset already loads it, adding what is missing and leaving\nthe rest of the master alone. This goes further: the master ends up with\nexactly this preset, so hardware output sends it does not mention are removed.\nOne undo step, so Ctrl+Z puts it back.") end
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "Delete##control_room_preset_delete", UIScale.text_button_w(ctx, "Delete", 64, 8), 0) then
+    local existing, index = cr_find_preset(settings, name)
+    if existing then
+      table.remove(presets, index)
+      state.preset_status = "Deleted preset " .. name
+      state.preset_name = ""
+      if app.save_settings then app.save_settings() end
+    end
+  end
+  if r.ImGui_IsItemHovered(ctx) and target_preset then r.ImGui_SetTooltip(ctx, "Forget this preset. The routing on the master is left as it is.") end
+  if not target_preset then r.ImGui_EndDisabled(ctx) end
+  if state.preset_status then r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(state.preset_status)) end
+
+  -- What the selected preset holds. Without this the panel only ever shows the
+  -- live routing, so picking a preset appears to do nothing and two presets on
+  -- the same output look like one - the alias on screen is whichever was
+  -- written last, not the one belonging to the preset in the box.
+  if target_preset then
+    local entries = type(target_preset.monitors) == "table" and target_preset.monitors or {}
+    local master_label = (Layouts.by_id(target_preset.master_layout) or Layouts.by_id("stereo")).label
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Holds " .. tostring(#entries) .. " monitor" .. (#entries == 1 and "" or "s") .. ", master format " .. master_label .. ":")
+    local live = {}
+    for _, output in ipairs(outputs) do
+      local key = output.target and monitor_target_key(output.target) or nil
+      if key then live[key] = output end
+    end
+    for _, entry in ipairs(entries) do
+      local target = cr_preset_entry_target(entry)
+      local layout = Layouts.by_id(entry.layout) or Layouts.by_id(entry.src_layout) or Layouts.by_id("stereo")
+      local text = "  " .. (entry.alias and entry.alias ~= "" and entry.alias or "(no alias)")
+        .. "  ->  " .. output_target_name(target.channel, target.width, target.mono, target.rearoute)
+        .. "  |  " .. layout.label
+        .. "  |  " .. monitor_mode_label(entry.mode, layout, bed_layout(settings, layout))
+        .. "  |  from master " .. Layouts.channel_span(entry.src_channel, Layouts.by_id(entry.src_layout) or layout)
+      -- Dim the ones already in place, so what Apply would actually change stands out.
+      local present = live[monitor_target_key(target)] ~= nil
+      r.ImGui_TextColored(ctx, present and Theme.colors.text_dim or Theme.colors.text, text .. (present and "" or "   (not on the master yet)"))
+    end
+  end
+end
+
 function cr_draw_channel_map(ctx, settings, master, outputs, bed)
   if not r.ImGui_CollapsingHeader or not r.ImGui_CollapsingHeader(ctx, "Channel map##control_room_channel_map") then return end
   local source_users, hardware_users, issues, bus_bases = cr_channel_map_usage(settings, master, outputs, bed)
@@ -3019,8 +3355,22 @@ local function draw_setup_popup(app, settings)
   local ctx = app.ctx
   if not state.setup_open then return end
   local popup_w, popup_h = UIScale.window_size(560, 620)
+  local min_w, min_h = UIScale.window_size(430, 300)
   local saved_window = type(settings.setup_window) == "table" and settings.setup_window or {}
-  if r.ImGui_SetNextWindowSize then r.ImGui_SetNextWindowSize(ctx, popup_w, popup_h, r.ImGui_Cond_Always and r.ImGui_Cond_Always() or 0) end
+  -- The window used to be pinned to a fixed size every frame. Every tab keeps
+  -- its list in a child that fills what is left, so the height is free to be
+  -- whatever suits the screen and the lists scroll inside it. Restored on open
+  -- rather than forced each frame, or dragging the edge would spring back.
+  if r.ImGui_SetNextWindowSizeConstraints then
+    r.ImGui_SetNextWindowSizeConstraints(ctx, min_w, min_h, math.max(min_w, popup_w * 4), math.max(min_h, popup_h * 3))
+  end
+  if r.ImGui_SetNextWindowSize then
+    local saved_w = tonumber(saved_window.w)
+    local saved_h = tonumber(saved_window.h)
+    local width = saved_w and math.max(min_w, saved_w) or popup_w
+    local height = saved_h and math.max(min_h, saved_h) or popup_h
+    r.ImGui_SetNextWindowSize(ctx, width, height, r.ImGui_Cond_Appearing and r.ImGui_Cond_Appearing() or 0)
+  end
   if r.ImGui_SetNextWindowPos and r.ImGui_Cond_Appearing then
     local saved_x = tonumber(saved_window.x)
     local saved_y = tonumber(saved_window.y)
@@ -3038,7 +3388,7 @@ local function draw_setup_popup(app, settings)
       r.ImGui_SetNextWindowPos(ctx, window_x + math.max(0, (window_w - popup_w) * 0.5), window_y + math.max(0, (window_h - popup_h) * 0.5), r.ImGui_Cond_Appearing())
     end
   end
-  local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize()
+  local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse()
   local visible, open = r.ImGui_Begin(ctx, "Control Room Setup##control_room_setup_window", true, flags)
   if not open then state.setup_open = false end
   if not visible then return end
@@ -3195,6 +3545,7 @@ local function draw_setup_popup(app, settings)
         if app.save_settings then app.save_settings() end
       end
       if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Separate project busses, physical outputs and utility lanes with headings") end
+      cr_draw_monitor_presets(ctx, app, settings, master)
       cr_draw_channel_map(ctx, settings, master, outputs, master_layout)
       if #outputs == 0 then
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No master hardware outputs configured.")

@@ -45,6 +45,8 @@ local defaults = {
   -- Hides anything shallower. 0 shows everything; 1 drops the projects lying
   -- loose in the scan root and keeps only what sits inside a folder.
   min_depth = 0,
+  show_detail_panel = true,
+  show_playback_panel = true,
   show_recent = false,
   recent_count = 15,
   max_scan_projects = 5000,
@@ -73,6 +75,7 @@ local state = {
   filter_dirty = true,
   search_changed_at = 0,
   metadata_cache = {},
+  cover_queue = {},
   recent_cache = nil,
   recent_cache_limit = nil,
   cover_path_cache = {},
@@ -170,6 +173,8 @@ local function ensure_settings(app)
   settings.min_depth = math.max(0, math.min(settings.max_depth, math.floor(tonumber(settings.min_depth) or 0)))
   settings.recent_count = math.max(1, math.min(50, math.floor(tonumber(settings.recent_count) or defaults.recent_count)))
   settings.show_recent = settings.show_recent == true
+  settings.show_detail_panel = settings.show_detail_panel ~= false
+  settings.show_playback_panel = settings.show_playback_panel ~= false
   settings.max_scan_projects = math.max(50, math.min(50000, math.floor(tonumber(settings.max_scan_projects) or defaults.max_scan_projects)))
   settings.recursive = settings.recursive ~= false
   settings.folder_view = settings.folder_view ~= false
@@ -559,11 +564,25 @@ local function apply_filter(settings)
   state.filter_dirty = false
 end
 
-local function clear_cover_image_cache(ctx)
-  for path, entry in pairs(state.cover_image_cache) do
-    if entry and entry.image and r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
-    state.cover_image_cache[path] = nil
+-- Destroying an image is not enough: while it stays attached it keeps occupying
+-- one of the context's attachment slots, and running out of those is what threw
+-- "ImGui_Attach: exceeded maximum object attachment limit" once the tile view
+-- put dozens of covers on screen at once. Detach first, then destroy.
+local function release_cover_entry(ctx, path)
+  local entry = state.cover_image_cache[path]
+  if not entry then return end
+  state.cover_image_cache[path] = nil
+  if entry.image then
+    if r.ImGui_Detach then pcall(r.ImGui_Detach, ctx, entry.image) end
+    if r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
   end
+end
+
+local function clear_cover_image_cache(ctx)
+  for path in pairs(state.cover_image_cache) do
+    release_cover_entry(ctx, path)
+  end
+  state.cover_queue = {}
 end
 
 local function clear_project_cache(ctx)
@@ -1111,26 +1130,84 @@ local function project_cover_path(project)
   return nil
 end
 
+-- Cover loading follows what TK FX Browser settled on for its screenshots, after
+-- it hit these same two errors: nothing is created while drawing, and nothing is
+-- thrown away while drawing either.
+--
+-- Drawing only ever asks for a cover; a pass at the top of the frame creates a
+-- handful of them and detaches whatever has gone unused for a couple of seconds.
+-- So a screenful of new tiles fills in over a frame or two instead of attaching
+-- eighty images at once, and a tile that stays on screen keeps its image because
+-- asking for it is what marks it as still in use.
+local COVER_CACHE_MAX = 100
+local COVER_CACHE_MIN = 25
+local COVER_LOADS_PER_FRAME = 12
+local COVER_IDLE_SECONDS = 2
+
+local function cover_now()
+  return r.time_precise and r.time_precise() or os.clock()
+end
+
+-- Returns the entry when it is ready, otherwise nil plus true to say it is on its
+-- way - which lets the caller leave the box empty rather than flashing "No image"
+-- for the frame or two before it arrives.
 local function load_cover(ctx, project)
   if not project then return nil end
   local path = project_cover_path(project)
   if not path or not r.ImGui_CreateImage then return nil end
   local cached = state.cover_image_cache[path]
-  if cached then return cached end
-  local count = 0
-  for _ in pairs(state.cover_image_cache) do count = count + 1 end
-  if count > 80 then clear_cover_image_cache(ctx) end
-  local ok, image = pcall(r.ImGui_CreateImage, path)
-  if not ok or not image then state.cover_path_cache[project.path] = false; return nil end
-  if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, image) end
-  local width, height = 0, 0
-  if r.ImGui_Image_GetSize then
-    local size_ok, w, h = pcall(r.ImGui_Image_GetSize, image)
-    if size_ok then width, height = w or 0, h or 0 end
+  if cached then
+    cached.used = cover_now()
+    return cached
   end
-  local entry = { image = image, path = path, width = width, height = height }
-  state.cover_image_cache[path] = entry
-  return entry
+  state.cover_queue[path] = true
+  return nil, true
+end
+
+local function process_cover_queue(ctx)
+  if not r.ImGui_CreateImage then return end
+  local now = cover_now()
+  local size = 0
+  for _ in pairs(state.cover_image_cache) do size = size + 1 end
+  local loaded = 0
+  for path in pairs(state.cover_queue) do
+    if loaded >= COVER_LOADS_PER_FRAME or size >= COVER_CACHE_MAX then break end
+    state.cover_queue[path] = nil
+    if not state.cover_image_cache[path] then
+      local ok, image = pcall(r.ImGui_CreateImage, path)
+      if ok and image then
+        local attached = true
+        if r.ImGui_Attach then attached = pcall(r.ImGui_Attach, ctx, image) end
+        if attached then
+          local width, height = 0, 0
+          if r.ImGui_Image_GetSize then
+            local size_ok, w, h = pcall(r.ImGui_Image_GetSize, image)
+            if size_ok then width, height = w or 0, h or 0 end
+          end
+          state.cover_image_cache[path] = { image = image, path = path, width = width, height = height, used = now }
+          size = size + 1
+          loaded = loaded + 1
+        elseif r.ImGui_DestroyImage then
+          pcall(r.ImGui_DestroyImage, ctx, image)
+        end
+      end
+    end
+  end
+  -- Oldest first, never below the floor, and never anything asked for recently.
+  -- The floor is what stops a full screen of tiles from evicting each other.
+  if size > COVER_CACHE_MIN then
+    local order = {}
+    for path, entry in pairs(state.cover_image_cache) do
+      order[#order + 1] = { path = path, used = entry.used or 0 }
+    end
+    table.sort(order, function(a, b) return a.used < b.used end)
+    for _, item in ipairs(order) do
+      if size <= COVER_CACHE_MIN then break end
+      if now - item.used <= COVER_IDLE_SECONDS then break end
+      release_cover_entry(ctx, item.path)
+      size = size - 1
+    end
+  end
 end
 
 local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, options)
@@ -1170,7 +1247,7 @@ local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, 
   if options.no_frame ~= true then r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, Theme.colors.border, UIScale.px(5), 0, UIScale.px(0.8)) end
 end
 
-local function open_project(app, project, new_tab)
+local function open_project_now(app, project, new_tab)
   if not project or not project.path then return end
   if not r.Main_openProject then app.status = "Main_openProject is not available"; return end
   local mode_def = modes[project.mode or "projects"] or modes.projects
@@ -1187,6 +1264,17 @@ local function open_project(app, project, new_tab)
     r.Main_openProject(project.path)
   end
   app.status = "Opening " .. mode_def.item_label .. ": " .. project.name
+end
+
+-- Every caller sits inside the draw pass, most of them between a row or tile's
+-- PushID and its PopID. Main_openProject blocks and pumps REAPER's message loop
+-- while it works, which can re-enter this script mid-frame and leave that id
+-- stack crooked - the "EndChild: Missing PopID()" some people ran into. Queueing
+-- it costs one frame and nothing else, and M.update opens it before the next
+-- frame is built.
+local function open_project(app, project, new_tab)
+  if not project or not project.path then return end
+  state.pending_open_project = { project = project, new_tab = new_tab == true }
 end
 
 local function navigate_folder(app, settings, folder_path)
@@ -1478,8 +1566,10 @@ local function draw_project_tile(app, settings, project, index, tile)
     selected and Theme.colors.accent or Theme.colors.border, UIScale.px(5), 0,
     selected and UIScale.px(1.4) or UIScale.px(0.7))
   local inset = UIScale.round(4)
-  local cover = load_cover(ctx, project)
-  draw_cover(ctx, draw_list, cover, x + inset, y + inset, x + tile.w - inset, y + tile.w - inset, project.name, { no_image_box = true })
+  -- While a cover is still on its way the box stays blank; only a project that
+  -- genuinely has no artwork gets the label.
+  local cover, pending = load_cover(ctx, project)
+  draw_cover(ctx, draw_list, cover, x + inset, y + inset, x + tile.w - inset, y + tile.w - inset, project.name, { no_image_box = not pending })
   local text_w = tile.w - inset * 2
   local first, second = tile_caption_lines(ctx, project.name, text_w)
   r.ImGui_DrawList_PushClipRect(draw_list, x + inset, y + tile.w, x + tile.w - inset, y + tile.h, true)
@@ -1531,7 +1621,8 @@ local function draw_project_grid(app, settings, width, height, tile)
   local count = #entries - first_project + 1
   local rows = math.ceil(count / tile.columns)
   local row_h = tile.h + tile.gap
-  local first_row, last_row, top_pad, bottom_pad = visible_range(ctx, rows, row_h, 2, height, consumed)
+  -- One row of overscan, not two: every off-screen tile still loads a cover.
+  local first_row, last_row, top_pad, bottom_pad = visible_range(ctx, rows, row_h, 1, height, consumed)
   if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
   for row = first_row, last_row do
     for column = 1, tile.columns do
@@ -1691,9 +1782,12 @@ local function draw_project_preview_transport(app, settings, project, width)
   local action_button_w = math.max(1, (action_row_w - button_gap) * 0.5)
   if r.ImGui_Button(ctx, "Make Preview", action_button_w, 0) then r.ImGui_OpenPopup(ctx, "##project_preview_make") end
   if r.ImGui_BeginPopup(ctx, "##project_preview_make") then
-    if r.ImGui_MenuItem(ctx, "Full project") then make_project_preview(app, settings, project, "full") end
-    if r.ImGui_MenuItem(ctx, "Time selection") then make_project_preview(app, settings, project, "timesel") end
-    if r.ImGui_MenuItem(ctx, "Custom audio file...") then make_project_preview(app, settings, project, "custom") end
+    -- Noted rather than run: making a preview opens projects, puts up dialogs and
+    -- kicks off a render, and none of that belongs inside a half-drawn frame.
+    -- M.update picks it up before the next one is built.
+    if r.ImGui_MenuItem(ctx, "Full project") then state.pending_preview_make = { project = project, mode = "full" } end
+    if r.ImGui_MenuItem(ctx, "Time selection") then state.pending_preview_make = { project = project, mode = "timesel" } end
+    if r.ImGui_MenuItem(ctx, "Custom audio file...") then state.pending_preview_make = { project = project, mode = "custom" } end
     r.ImGui_EndPopup(ctx)
   end
   r.ImGui_SameLine(ctx, 0, button_gap)
@@ -1708,8 +1802,12 @@ local function draw_project_preview_transport(app, settings, project, width)
     r.ImGui_Text(ctx, "Previews: " .. target.name)
     r.ImGui_Separator(ctx)
     if #list == 0 then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "(no preview files)") end
-    for index, entry in ipairs(list) do
-      r.ImGui_PushID(ctx, index)
+    -- The row body runs inside its own pcall so the PopID below always happens.
+    -- This whole function is called through a pcall, and an error thrown while an
+    -- id was pushed left the stack unbalanced: the caller's EndChild then failed
+    -- with "Missing PopID()" and took the frame down with it, hiding whatever the
+    -- real error had been.
+    local function draw_manage_row(index, entry)
       local is_active = active == entry.name or (not active and index == 1)
       r.ImGui_TextColored(ctx, is_active and Theme.colors.accent or Theme.colors.text, (is_active and "* " or "  ") .. entry.name)
       local playing_this = state.preview_path and normalize_path(state.preview_path):lower() == normalize_path(entry.path):lower()
@@ -1723,10 +1821,19 @@ local function draw_project_preview_transport(app, settings, project, width)
       end
       r.ImGui_SameLine(ctx)
       if r.ImGui_Button(ctx, "Delete", UIScale.text_button_w(ctx, "Delete", 64), 0) then
-        local result = r.ShowMessageBox("Delete preview file?\n\n" .. entry.name, "Confirm", 4)
-        if result == 6 then delete_project_preview_file(app, target, entry) end
+        -- Only note it down. ShowMessageBox blocks, and blocking here means doing
+        -- it inside the ImGui frame with an id still pushed: REAPER keeps pumping
+        -- messages while that dialog is up, which can re-enter this script and
+        -- leave the id stack crooked. M.update runs before the frame is built, so
+        -- the question gets asked there instead.
+        state.pending_preview_delete = { project = target, entry = entry }
       end
+    end
+    for index, entry in ipairs(list) do
+      r.ImGui_PushID(ctx, index)
+      local row_ok, row_err = pcall(draw_manage_row, index, entry)
       r.ImGui_PopID(ctx)
+      if not row_ok then state.last_error = tostring(row_err) end
     end
     r.ImGui_Separator(ctx)
     if r.ImGui_Button(ctx, "Close", UIScale.text_button_w(ctx, "Close", 80), 0) then r.ImGui_CloseCurrentPopup(ctx) end
@@ -1757,7 +1864,8 @@ local function draw_project_detail(app, project, width, height)
       local cover_h = math.max(UIScale.round(52), available_h - cover_bottom_padding)
       local x, y = r.ImGui_GetCursorScreenPos(ctx)
       local draw_list = r.ImGui_GetWindowDrawList(ctx)
-      draw_cover(ctx, draw_list, load_cover(ctx, project), x, y, x + cover_w, y + cover_h, project.name, { no_frame = true, align_top_left = true, no_image_box = true })
+      local detail_cover, detail_pending = load_cover(ctx, project)
+      draw_cover(ctx, draw_list, detail_cover, x, y, x + cover_w, y + cover_h, project.name, { no_frame = true, align_top_left = true, no_image_box = not detail_pending })
       r.ImGui_Dummy(ctx, cover_w, cover_h)
       r.ImGui_SameLine(ctx, 0, gap)
       r.ImGui_BeginGroup(ctx)
@@ -1827,6 +1935,21 @@ local function draw_settings_popup(app, settings)
     if c then settings.folder_view = v; state.filter_dirty = true; if app.save_settings then app.save_settings() end end
     c, v = r.ImGui_Checkbox(ctx, "Compact list view", settings.compact_list == true)
     if c then settings.compact_list = v; if app.save_settings then app.save_settings() end end
+    c, v = r.ImGui_Checkbox(ctx, "Show project info panel", settings.show_detail_panel ~= false)
+    if c then settings.show_detail_panel = v; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "The metadata panel under the list. Hiding it gives its height to the list")
+    end
+    c, v = r.ImGui_Checkbox(ctx, "Show preview panel", settings.show_playback_panel ~= false)
+    if c then
+      settings.show_playback_panel = v
+      -- Stopping first, so a preview cannot keep playing with its controls gone.
+      if not v then stop_project_preview() end
+      if app.save_settings then app.save_settings() end
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "The Play, volume and Make Preview row. Hiding it stops any preview that is playing")
+    end
     if r.ImGui_SliderInt then
       -- One slider rather than a list/grid switch: all the way down is the list,
       -- and above that the number is roughly how wide a tile wants to be, with
@@ -1966,6 +2089,26 @@ end
 
 function M.update(app)
   local settings = ensure_settings(app)
+  -- Asked here rather than from the Manage list, because this runs before the
+  -- ImGui frame is built and a blocking dialog cannot disturb it from here.
+  local pending = state.pending_preview_delete
+  if pending then
+    state.pending_preview_delete = nil
+    if pending.entry and pending.entry.name then
+      local result = r.ShowMessageBox("Delete preview file?\n\n" .. pending.entry.name, "Confirm", 4)
+      if result == 6 then delete_project_preview_file(app, pending.project, pending.entry) end
+    end
+  end
+  local make = state.pending_preview_make
+  if make then
+    state.pending_preview_make = nil
+    if make.project then make_project_preview(app, settings, make.project, make.mode) end
+  end
+  local opening = state.pending_open_project
+  if opening then
+    state.pending_open_project = nil
+    open_project_now(app, opening.project, opening.new_tab)
+  end
   scan_step(settings)
   update_project_preview(app)
   if state.filter_dirty then
@@ -1976,30 +2119,46 @@ end
 
 function M.draw(app)
   local ctx = app.ctx
+  process_cover_queue(ctx)
   local settings = ensure_settings(app)
   local _, mode_def = active_mode(settings)
   draw_toolbar(app, settings)
   draw_settings_popup(app, settings)
   local width, height = r.ImGui_GetContentRegionAvail(ctx)
+  -- Hidden panels take no height at all and no spacing either, so whatever they
+  -- were using goes to the list rather than leaving a gap behind.
+  local show_detail = settings.show_detail_panel ~= false
+  local show_playback = settings.show_playback_panel ~= false
   local strip_h = (r.ImGui_GetFrameHeight and r.ImGui_GetFrameHeight(ctx) or UIScale.round(22)) + UIScale.round(18)
-  local detail_h = state.detail_panel_collapsed == true and strip_h or math.min(UIScale.round(166), math.max(UIScale.round(150), height * 0.25))
-  local playback_h = state.playback_panel_collapsed == true and strip_h or UIScale.round(112)
+  local detail_h = 0
+  if show_detail then
+    detail_h = state.detail_panel_collapsed == true and strip_h or math.min(UIScale.round(166), math.max(UIScale.round(150), height * 0.25))
+  end
+  local playback_h = 0
+  if show_playback then
+    playback_h = state.playback_panel_collapsed == true and strip_h or UIScale.round(112)
+  end
   local bottom_margin = 1
-  local spacing_h = UIScale.round(18) + bottom_margin
+  local panel_count = (show_detail and 1 or 0) + (show_playback and 1 or 0)
+  local spacing_h = UIScale.round(9) * panel_count + bottom_margin
   local list_h = height - detail_h - playback_h - spacing_h
   if list_h < UIScale.round(76) then
     local shortage = UIScale.round(76) - list_h
-    local detail_min = state.detail_panel_collapsed == true and strip_h or UIScale.round(132)
-    local playback_min = state.playback_panel_collapsed == true and strip_h or UIScale.round(96)
-    local detail_reduce = math.min(shortage, math.max(0, detail_h - detail_min))
-    detail_h = detail_h - detail_reduce
-    shortage = shortage - detail_reduce
-    if shortage > 0 then playback_h = math.max(playback_min, playback_h - shortage) end
+    if show_detail then
+      local detail_min = state.detail_panel_collapsed == true and strip_h or UIScale.round(132)
+      local detail_reduce = math.min(shortage, math.max(0, detail_h - detail_min))
+      detail_h = detail_h - detail_reduce
+      shortage = shortage - detail_reduce
+    end
+    if shortage > 0 and show_playback then
+      local playback_min = state.playback_panel_collapsed == true and strip_h or UIScale.round(96)
+      playback_h = math.max(playback_min, playback_h - shortage)
+    end
     list_h = math.max(UIScale.round(48), height - detail_h - playback_h - spacing_h)
   end
   draw_project_list(app, settings, width, list_h)
-  draw_project_detail(app, state.selected_project, width, detail_h)
-  draw_project_playback_panel(app, state.selected_project, width, playback_h)
+  if show_detail then draw_project_detail(app, state.selected_project, width, detail_h) end
+  if show_playback then draw_project_playback_panel(app, state.selected_project, width, playback_h) end
   r.ImGui_Dummy(ctx, 1, bottom_margin)
   local status = mode_def.label .. ": " .. tostring(#state.filtered)
   local mode = active_mode(settings)

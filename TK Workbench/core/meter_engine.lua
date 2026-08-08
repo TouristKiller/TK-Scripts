@@ -49,13 +49,15 @@ M.sliders = {
   time = { index = 9, min = 0, max = 86400 },
   momentary = { index = 10, min = -100, max = 12 },
   sample_peak = { index = 11, min = -100, max = 12 },
-  layout = { index = 12, min = 0, max = 4 },
+  layout = { index = 12, min = 0, max = 7 },
   rms_window = { index = 13, min = 50, max = 2000 }
 }
 
--- Channel RMS lives on slider15..slider22 of the JSFX, so index 14 upwards.
+-- Channel RMS lives on slider15..slider30 of the JSFX, so index 14 upwards.
+-- A meter still running JSFX 0.4 only has eight of them; reads are clamped to
+-- what the loaded instance actually carries rather than to this number.
 M.rms_slider_base = 14
-M.rms_slider_count = 8
+M.rms_slider_count = 16
 M.rms_floor_db = -100
 
 -- Bar sources: peak and RMS are per channel, the LUFS readings are a single
@@ -134,9 +136,17 @@ local function track_guid(track)
   return ok and guid or ""
 end
 
+-- REAPER names a JS plugin after its desc line ("TK Control Room Meter") when it
+-- knows it, but after the file path when it was added that way - and that path
+-- spells it "TK_Control_Room_Meter.jsfx". Matching only the spaced form meant the
+-- search found nothing on those installs, so ensure_meter_fx added another meter
+-- every single frame. Fold both spellings onto one before comparing.
+local function normalise_fx_name(name)
+  return tostring(name or ""):gsub("[/\\]", " "):gsub("_", " "):lower()
+end
+
 local function fx_name_matches(name)
-  name = tostring(name or "")
-  return name:find(M.plugin_match, 1, true) ~= nil
+  return normalise_fx_name(name):find(normalise_fx_name(M.plugin_match), 1, true) ~= nil
 end
 
 local function cache_key(track)
@@ -180,14 +190,24 @@ function M.find_meter_fx(track)
   local cached = cached_fx(track)
   if cached then return cached end
   local count = r.TrackFX_GetCount(track) or 0
+  local found = {}
   for index = 0, count - 1 do
     local ok, name = r.TrackFX_GetFXName(track, index, "")
     if ok and fx_name_matches(name) then
-      remember_fx(track, index)
-      return index
+      found[#found + 1] = index
     end
   end
-  return nil
+  if #found == 0 then return nil end
+  -- A version that failed to recognise its own meter stacked up a copy per frame,
+  -- so a track can come in carrying dozens of them. Keep the first and drop the
+  -- rest, highest index first so the lower ones do not shift out from under us.
+  if #found > 1 and r.TrackFX_Delete then
+    for i = #found, 2, -1 do
+      pcall(r.TrackFX_Delete, track, found[i])
+    end
+  end
+  remember_fx(track, found[1])
+  return found[1]
 end
 
 function M.ensure_meter_fx(track, auto_install)
@@ -305,6 +325,13 @@ function M.read_channel_rms(track, channel_count, options)
   local named, name = r.TrackFX_GetParamName(track, fx_index, M.rms_slider_base, "")
   if not named or not tostring(name):find("RMS", 1, true) then return nil end
   channel_count = math.max(1, math.min(M.rms_slider_count, math.floor(tonumber(channel_count) or 2)))
+  -- JSFX 0.4 stopped at eight RMS sliders. Asking a instance of that vintage for
+  -- the ninth reads past its last parameter and comes back as zero, which draws
+  -- as a bar pinned at 0 dB rather than as nothing.
+  if r.TrackFX_GetNumParams then
+    local available = (tonumber(r.TrackFX_GetNumParams(track, fx_index)) or 0) - M.rms_slider_base
+    if available < channel_count then channel_count = math.max(1, available) end
+  end
   local values = {}
   for index = 1, channel_count do
     -- TrackFX_GetParam returns value, min, max: keep only the first, or tonumber

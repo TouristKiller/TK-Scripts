@@ -1,6 +1,6 @@
 desc:TK Control Room Downmix
 author:TouristKiller
-version:0.3
+version:0.4
 
 // Writes monitoring pairs onto spare channels of the same track, so a check can
 // be listened to without altering the bed feeding the main outputs. One instance
@@ -26,6 +26,22 @@ in_pin:13
 in_pin:14
 in_pin:15
 in_pin:16
+in_pin:17
+in_pin:18
+in_pin:19
+in_pin:20
+in_pin:21
+in_pin:22
+in_pin:23
+in_pin:24
+in_pin:25
+in_pin:26
+in_pin:27
+in_pin:28
+in_pin:29
+in_pin:30
+in_pin:31
+in_pin:32
 out_pin:1
 out_pin:2
 out_pin:3
@@ -42,10 +58,26 @@ out_pin:13
 out_pin:14
 out_pin:15
 out_pin:16
+out_pin:17
+out_pin:18
+out_pin:19
+out_pin:20
+out_pin:21
+out_pin:22
+out_pin:23
+out_pin:24
+out_pin:25
+out_pin:26
+out_pin:27
+out_pin:28
+out_pin:29
+out_pin:30
+out_pin:31
+out_pin:32
 
-slider1:3<0,4,1{Mono,Stereo,Quad,5.1,7.1}>Source Layout
-slider2:0<0,14,1>Source Offset (ch)
-slider3:6<0,14,1>Fold Offset (ch)
+slider1:3<0,7,1{Mono,Stereo,Quad,5.1,7.1,7.1.2,7.1.4,9.1.6}>Source Layout
+slider2:0<0,30,1>Source Offset (ch)
+slider3:6<0,30,1>Fold Offset (ch)
 slider4:-3<-12,0,0.1>Center Level (dB)
 slider5:-3<-12,0,0.1>Surround Level (dB)
 slider6:0<0,1,1{Off,On}>Include LFE
@@ -60,11 +92,15 @@ slider12:0<0,1,1{Off,On}>Side Pair
 slider13:0<0,1,1{Off,On}>Low Pair
 slider14:0<0,1,1{Off,On}>High Pair
 slider15:120<40,1000,1>Crossover (Hz)
+// Height channels fold in at their own level. Appended after Crossover on
+// purpose: the parameter indices before it are addressed by name from Lua.
+slider16:-3<-12,0,0.1>Height Level (dB)
 
 @init
 c_gain = 0.707945784;
 s_gain = 0.707945784;
 lfe_gain = 0;
+h_gain = 0.707945784;
 trim = 1;
 lay = 3;
 src = 0;
@@ -98,14 +134,17 @@ function calc_biquad(freq, highpass) local(w0, cs, sn, alpha, a0)
 );
 
 @slider
-lay = min(4, max(0, floor(slider1)));
+lay = min(7, max(0, floor(slider1)));
 src = max(0, floor(slider2));
 dst = max(0, floor(slider3));
 c_gain = pow(10, slider4 / 20);
 s_gain = pow(10, slider5 / 20);
 lfe_gain = slider6 >= 0.5 ? pow(10, slider7 / 20) : 0;
 trim = pow(10, slider8 / 20);
-lay == 0 ? width = 1 : lay == 1 ? width = 2 : lay == 2 ? width = 4 : lay == 3 ? width = 6 : width = 8;
+h_gain = pow(10, slider16 / 20);
+lay == 0 ? width = 1 : lay == 1 ? width = 2 : lay == 2 ? width = 4 :
+lay == 3 ? width = 6 : lay == 4 ? width = 8 : lay == 5 ? width = 10 :
+lay == 6 ? width = 12 : width = 16;
 calc_biquad(slider15, 0);
 lp_b0 = q_b0; lp_b1 = q_b1; lp_b2 = q_b2; lp_a1 = q_a1; lp_a2 = q_a2;
 calc_biquad(slider15, 1);
@@ -128,9 +167,23 @@ active ? (
   lay >= 3 ? (
     dl = spl(src) + c_gain * spl(src + 2) + lfe_gain * spl(src + 3) + s_gain * spl(src + 4);
     dr = spl(src + 1) + c_gain * spl(src + 2) + lfe_gain * spl(src + 3) + s_gain * spl(src + 5);
-    lay == 4 ? (
+    // Back pair, from 7.1 up.
+    lay >= 4 ? (
       dl += s_gain * spl(src + 6);
       dr += s_gain * spl(src + 7);
+    );
+    // 7.1.2 carries one height pair at 8/9. 7.1.4 has two, at 8/9 and 10/11.
+    lay == 5 ? (
+      dl += h_gain * spl(src + 8);
+      dr += h_gain * spl(src + 9);
+    ) : lay == 6 ? (
+      dl += h_gain * (spl(src + 8) + spl(src + 10));
+      dr += h_gain * (spl(src + 9) + spl(src + 11));
+    ) : lay == 7 ? (
+      // 9.1.6: wides at 8/9 are off-axis front positions and fold at the
+      // surround level, then three height pairs from 10 up.
+      dl += s_gain * spl(src + 8) + h_gain * (spl(src + 10) + spl(src + 12) + spl(src + 14));
+      dr += s_gain * spl(src + 9) + h_gain * (spl(src + 11) + spl(src + 13) + spl(src + 15));
     );
   ) : lay == 2 ? (
     dl = spl(src) + s_gain * spl(src + 2);

@@ -1,6 +1,6 @@
 desc:TK Control Room Meter
 author:TouristKiller
-version:0.4
+version:0.5
 
 in_pin:Left
 in_pin:Right
@@ -10,6 +10,14 @@ in_pin:Surround L
 in_pin:Surround R
 in_pin:Back L
 in_pin:Back R
+in_pin:Wide L
+in_pin:Wide R
+in_pin:Top Front L
+in_pin:Top Front R
+in_pin:Top Mid L
+in_pin:Top Mid R
+in_pin:Top Back L
+in_pin:Top Back R
 out_pin:Left
 out_pin:Right
 out_pin:Center
@@ -18,6 +26,14 @@ out_pin:Surround L
 out_pin:Surround R
 out_pin:Back L
 out_pin:Back R
+out_pin:Wide L
+out_pin:Wide R
+out_pin:Top Front L
+out_pin:Top Front R
+out_pin:Top Mid L
+out_pin:Top Mid R
+out_pin:Top Back L
+out_pin:Top Back R
 
 slider1:1<0,1,1{Off,On}>Run
 slider2:0<0,1,1{Off,Reset}>Reset
@@ -31,7 +47,7 @@ slider9:-100<-100,12,0.1>-True Peak (dBTP)
 slider10:0<0,86400,1>-Time (s)
 slider11:-100<-100,12,0.1>-Momentary (LUFS)
 slider12:-100<-100,12,0.1>-Sample Peak (dB)
-slider13:1<0,4,1{Mono,Stereo,Quad,5.1,7.1}>Channel Layout
+slider13:1<0,7,1{Mono,Stereo,Quad,5.1,7.1,7.1.2,7.1.4,9.1.6}>Channel Layout
 slider14:300<50,2000,10>RMS Window (ms)
 slider15:-100<-100,12,0.1>-RMS 1 (dB)
 slider16:-100<-100,12,0.1>-RMS 2 (dB)
@@ -41,13 +57,21 @@ slider19:-100<-100,12,0.1>-RMS 5 (dB)
 slider20:-100<-100,12,0.1>-RMS 6 (dB)
 slider21:-100<-100,12,0.1>-RMS 7 (dB)
 slider22:-100<-100,12,0.1>-RMS 8 (dB)
+slider23:-100<-100,12,0.1>-RMS 9 (dB)
+slider24:-100<-100,12,0.1>-RMS 10 (dB)
+slider25:-100<-100,12,0.1>-RMS 11 (dB)
+slider26:-100<-100,12,0.1>-RMS 12 (dB)
+slider27:-100<-100,12,0.1>-RMS 13 (dB)
+slider28:-100<-100,12,0.1>-RMS 14 (dB)
+slider29:-100<-100,12,0.1>-RMS 15 (dB)
+slider30:-100<-100,12,0.1>-RMS 16 (dB)
 
 @init
 floor_db = -100;
 bins_per_db = 10;
 db_per_bin = 0.1;
 num_bins = 1024;
-max_ch = 8;
+max_ch = 16;
 surround_weight = 1.41;
 last_reset = slider2;
 last_srate = srate;
@@ -186,14 +210,23 @@ function set_rms_window()
 
 // Power weights per ITU-R BS.1770-4: front channels 1.0, surround and back
 // channels 1.41, LFE excluded from the loudness sum but still peak metered.
+//
+// BS.1770-4 predates the immersive beds and lists no coefficient for height
+// channels, so they take the 1.0 its own rule gives anything unlisted - which is
+// also what the Atmos loudness implementations use. Wide channels are front
+// positions and take 1.0 as well. From 7.1 up, everything above channel 8 is a
+// height or wide position, so the tail is simply filled with 1.0.
 function apply_layout()
-  local(lay)
+  local(lay i)
 (
-  lay = min(4, max(0, floor(slider13)));
+  lay = min(7, max(0, floor(slider13)));
   lay == 0 ? layout_ch = 1 :
   lay == 1 ? layout_ch = 2 :
   lay == 2 ? layout_ch = 4 :
-  lay == 3 ? layout_ch = 6 : layout_ch = 8;
+  lay == 3 ? layout_ch = 6 :
+  lay == 4 ? layout_ch = 8 :
+  lay == 5 ? layout_ch = 10 :
+  lay == 6 ? layout_ch = 12 : layout_ch = 16;
   memset(weight_base, 0, max_ch);
   lay == 0 ? (
     weight_base[0] = 1;
@@ -205,13 +238,6 @@ function apply_layout()
     weight_base[1] = 1;
     weight_base[2] = surround_weight;
     weight_base[3] = surround_weight;
-  ) : lay == 3 ? (
-    weight_base[0] = 1;
-    weight_base[1] = 1;
-    weight_base[2] = 1;
-    weight_base[3] = 0;
-    weight_base[4] = surround_weight;
-    weight_base[5] = surround_weight;
   ) : (
     weight_base[0] = 1;
     weight_base[1] = 1;
@@ -219,8 +245,15 @@ function apply_layout()
     weight_base[3] = 0;
     weight_base[4] = surround_weight;
     weight_base[5] = surround_weight;
-    weight_base[6] = surround_weight;
-    weight_base[7] = surround_weight;
+    lay >= 4 ? (
+      weight_base[6] = surround_weight;
+      weight_base[7] = surround_weight;
+      i = 8;
+      while (i < layout_ch) (
+        weight_base[i] = 1;
+        i += 1;
+      );
+    );
   );
   last_layout = lay;
 );
@@ -400,6 +433,14 @@ function update_outputs()
   slider20 = channel_rms_db(5);
   slider21 = channel_rms_db(6);
   slider22 = channel_rms_db(7);
+  slider23 = channel_rms_db(8);
+  slider24 = channel_rms_db(9);
+  slider25 = channel_rms_db(10);
+  slider26 = channel_rms_db(11);
+  slider27 = channel_rms_db(12);
+  slider28 = channel_rms_db(13);
+  slider29 = channel_rms_db(14);
+  slider30 = channel_rms_db(15);
   sliderchange(slider15);
   sliderchange(slider16);
   sliderchange(slider17);
@@ -408,6 +449,14 @@ function update_outputs()
   sliderchange(slider20);
   sliderchange(slider21);
   sliderchange(slider22);
+  sliderchange(slider23);
+  sliderchange(slider24);
+  sliderchange(slider25);
+  sliderchange(slider26);
+  sliderchange(slider27);
+  sliderchange(slider28);
+  sliderchange(slider29);
+  sliderchange(slider30);
 );
 
 reset_meter();
@@ -420,7 +469,7 @@ slider4 = 3000;
   last_srate = srate;
   reset_needed = 1;
 );
-(last_layout != min(4, max(0, floor(slider13)))) ? reset_needed = 1;
+(last_layout != min(7, max(0, floor(slider13)))) ? reset_needed = 1;
 set_rms_window();
 slider2 >= 0.5 ? reset_needed = 1;
 last_reset = slider2;

@@ -1,7 +1,31 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.74
+-- @version 0.6.75
 -- @changelog:
+-- v0.6.75
+--   + Control Room: Monitor presets. REAPER keeps hardware output sends in the project, so a new project starts with no monitors at all and the routing has to be built from scratch every time. A preset holds the sends themselves - output, source channels and format, level and mute - and puts them back on the master in one click. Requested by BogdanS
+--   + Control Room: Presets are stored with the Workbench settings rather than in the project, which is the point of them: they have to exist before the project has any routing. Aliases and per-monitor formats travel with them, and a monitor captured while folded brings the fold plugin back with it, so it is not silently pointing at a pair nothing feeds
+--   + Control Room: Picking a preset loads it there and then. Monitors already pointing at the same output are updated, the missing ones are created, and the rest of the master is left alone. "Load exact" goes further and leaves nothing on the master but the preset, removing hardware output sends it does not mention. Both are a single undo step
+--   + Control Room: Presets - choosing one used to only aim a separate Apply button, so the panel still showed the previous rig - and since Save takes whatever is on the master, one stray click wrote the old routing straight over the preset just picked. Loading on pick removes that trap: Save can now only ever agree with the name in the box
+--   + Control Room: Presets - the panel lists what the selected preset holds, monitor by monitor: alias, output, format, listening mode and which master channels feed it, with anything not yet on the master called out
+--   + Control Room: Presets now carry the listening mode of each monitor - Full, Mid, Side, Low, High, Fold to Stereo or a soloed speaker. Modes are held per output channel, so without this two presets on the same output shared one mode and changing it in either changed it in both. What gets stored is the mode itself and not the source channel it produces, because a check bus sits wherever there was room on that project's master and that number means nothing on the next one
+--   + Control Room: Applying a preset sets the modes after the sends exist, so the source is worked out afresh and the check bus is rebuilt if the mode needs one. Presets saved before this keep the plain source they were captured with rather than being guessed at, and the whole apply is still a single undo step
+--   + Control Room: The Setup window can be resized. It was pinned to a fixed size every frame, which on a tall screen wasted the room and on a short one buried the monitor list. Every tab already keeps its list in a panel that fills whatever is left, so the lists simply scroll inside the height you give it - drag the edge and the monitors, cues, mix sources and targets all follow
+--   + Control Room: The size is remembered along with the position, restored when Setup opens rather than forced on every frame, and it cannot be dragged smaller than the tab row and a usable list need
+--   + Control Room: Master format reaches 16 channels. Alongside the existing formats there are now 7.1.2 (10 ch), 7.1.4 (12 ch) and 9.1.6 (16 ch), so an immersive bed can be monitored, metered and folded like any other. Requested by BogdanS
+--   + Control Room: The meter JSFX carries sixteen channels rather than eight, with a per-channel RMS readout for each. Loudness weighting follows ITU-R BS.1770-4 where it applies - front 1.0, surround and back 1.41, LFE out of the sum but still peak metered - and since BS.1770-4 predates the immersive beds and lists no coefficient for height channels, they take the 1.0 its own rule gives anything unlisted, which is what the Atmos loudness implementations use. Wide channels are front positions and take 1.0 too
+--   + Control Room: Fold-down understands the new beds. Height channels fold in at their own level, on a Height slider next to the existing Centre and Surround ones, and the wide pair of a 9.1.6 bed folds at the surround level because it is an off-axis front position. The downmix JSFX went from sixteen to thirty-two channels, which is what a 16 channel bed plus the five check pairs above it needs
+--   + Control Room: A master still carrying a downmix plugin from before this update refuses a bed wider than 7.1 and says so, rather than clamping to 7.1 and quietly folding as though the height and wide channels were not there. The same goes for the meter: it reads what the loaded instance actually carries instead of reading past its last parameter
+--   + Control Room: Fixed the meter loading a new copy of the TK Control Room Meter JSFX every frame, stacking up dozens of them and opening a window for each. REAPER names a JS plugin after its description line when it recognises it and after its file path when it was added that way, and that path spells it with underscores - so on installs where the path name came back, the search for an already loaded meter matched nothing and added another one on top. Both spellings are now folded onto one before comparing, and the same was done for the Downmix plugin the fold bus uses, which had the identical fault waiting to happen
+--   + Control Room: A track that already carries a pile of those duplicates is cleaned up on the spot - the first meter is kept and the rest are removed - so the fix does not leave you to clear them out by hand
+--   + Workbench: Split view - a pin on the splitter, which keeps one pane on the module it holds: everything you open from then on lands in the other pane. Pinning the top pane to Transport and browsing with the bottom one is what this was asked for, but it works either way round and in side by side just as well. Requested on the forum
+--   + Workbench: Clicking the pin walks through keeping the first pane, keeping the second, and keeping neither. The splitter grows an accent edge along the side it is holding, so which pane is kept reads from the divider itself, and the same choice sits in the split menu as "Keep top pane" / "Keep bottom pane" - wording that follows the layout, so it reads left and right when the split is side by side
+--   + Workbench: Swapping the panes takes the pin with it, so what you pinned stays pinned rather than the pin staying behind and grabbing whatever moved in. Going Home and back keeps it too: the pinned module is set aside and put back in its pane, with the module you pick on the way out opening in the other one
+--   + Project Browser: Fixed "ImGui_Attach: exceeded maximum object attachment limit" filling the console, and the freeze that came with it, on locations holding a lot of projects with cover art. Destroying an image was not enough - while it stayed attached it kept occupying one of the context's attachment slots - so the slots leaked away until there were none left. Restarting REAPER cleared it only because that starts a fresh context
+--   + Project Browser: Cover loading was rebuilt along the lines TK FX Browser settled on for its screenshots. Nothing is created while drawing and nothing is thrown away while drawing either: a pass at the top of the frame loads a handful and detaches whatever has gone unused, so a screenful of tiles fills in over a frame or two instead of attaching dozens at once, and a tile that stays on screen keeps its image. The old code cleared the whole cache the moment it grew past a limit, including images the frame it interrupted was still drawing with, which is the likely source of the "EndChild: Missing PopID()" that followed
+--   + Project Browser: Opening a project, making a preview and confirming a preview deletion now happen just before the next frame is built rather than in the middle of the one being drawn. All three block while REAPER keeps pumping its message loop, which can re-enter the script while a row or tile still has an id pushed and leave that stack crooked. Costs a frame and nothing else
+--   + Project Browser: The Manage list pops its id whatever happens to the row, so a failure there can no longer take the frame down with it and hide what actually went wrong
+--   + Project Browser: Two switches to hide the project info panel and the preview panel. Hidden panels give their height to the list rather than leaving a gap, and hiding the preview panel stops anything it was playing. Requested by vik-tan
 -- v0.6.74
 --   + Control Room: The listening checks - Mid, Side, Low, High and Fold to Stereo - have moved out of Setup and onto the footer, where DIM and MONO already were. They are things you reach for while mixing, not things you configure once, and hunting for them in a settings window was the wrong place for that. Suggested by BogdanS
 --   + Control Room: They act on one monitor rather than the whole room, which is the point of them: dimming or mono-ing everything at once is what you want, but hearing the Side component of a drummer's cue feed is not. A row of monitor buttons above them picks which one, showing the alias you gave it, and ALL brings every monitor back - the same selector the S button on a lane always was, now in the open. With a single monitor there is nothing to choose and it is simply the target
@@ -761,7 +785,51 @@ local function is_home_active()
   return app.settings.active_module == HOME_MODULE_ID
 end
 
-local function set_active_view(id)
+-- A pinned pane keeps the module it holds, so opening anything while one is
+-- pinned has to land in the other pane. Only meaningful while the split is
+-- actually on screen: on Home there is one pane and pinning cannot mean anything.
+local function split_pin()
+  if app.settings.split_view_enabled ~= true then return nil end
+  if is_home_active() then return nil end
+  local pin = app.settings.split_pinned_pane
+  if pin == "primary" or pin == "secondary" then return pin end
+  return nil
+end
+
+-- Returns true when it has handled the request itself, which is how it can sit
+-- at the top of set_active_view without the two calling each other in circles.
+local function route_to_unpinned_pane(id)
+  if id == HOME_MODULE_ID or not app.modules_by_id[id] then return false end
+  -- Home occupies the same setting the primary pane's module lives in, so going
+  -- there forgets what was pinned. It is set aside on the way in and put back
+  -- here, on the first module opened on the way out - which then lands in the
+  -- other pane, exactly as it would have if Home had never happened.
+  if is_home_active() then
+    if app.settings.split_view_enabled ~= true or app.settings.split_pinned_pane ~= "primary" then return false end
+    local restore = app.settings.split_pinned_return
+    if not restore or restore == "" or restore == id or not app.modules_by_id[restore] then return false end
+    app.settings.split_pinned_return = ""
+    app.settings.active_module = restore
+    app.settings.split_module = id
+    save_settings()
+    return true
+  end
+  if split_pin() ~= "primary" then return false end
+  -- Clicking the pinned module itself: it is already on screen, and moving it
+  -- into the other pane would leave the same module twice.
+  if id == app.settings.active_module then return true end
+  app.settings.split_module = id
+  save_settings()
+  return true
+end
+
+-- keep_pane is for the few places that mean a specific pane rather than "open
+-- this module", such as swapping the two panes over.
+local function set_active_view(id, keep_pane)
+  if not keep_pane and route_to_unpinned_pane(id) then return end
+  if id == HOME_MODULE_ID and split_pin() == "primary" then
+    app.settings.split_pinned_return = app.settings.active_module
+  end
   local current = app.settings.active_module
   if id == "plugin_browser" and current == "instrument_rack" then
     app.cache.plugin_browser_return_module = "instrument_rack"
@@ -840,6 +908,15 @@ end
 
 local function set_split_module(id)
   if not id or id == "" or id == app.settings.active_module or not app.modules_by_id[id] then return false end
+  -- "Show in split view" means the other pane, and with the secondary pinned the
+  -- other pane is the primary one.
+  if split_pin() == "secondary" then
+    set_active_view(id)
+    app.settings.split_view_enabled = true
+    app.status = "Opened " .. tostring(app.modules_by_id[id].title or id)
+    save_settings()
+    return true
+  end
   app.settings.split_module = id
   app.settings.split_view_enabled = true
   app.status = "Split module: " .. tostring(app.modules_by_id[id].title or id)
@@ -847,12 +924,41 @@ local function set_split_module(id)
   return true
 end
 
+-- Which end of the window a pane sits at, so the wording follows the layout
+-- instead of talking about "primary" and "secondary" at the user.
+local function pane_label(slot)
+  if split_orientation() == "horizontal" then
+    return slot == "primary" and "left" or "right"
+  end
+  return slot == "primary" and "top" or "bottom"
+end
+
+local function toggle_pane_pin(slot)
+  local pinned = app.settings.split_pinned_pane == slot
+  app.settings.split_pinned_pane = pinned and "" or slot
+  app.settings.split_pinned_return = ""
+  if pinned then
+    app.status = "Pane unpinned"
+  else
+    app.status = "Pinned the " .. pane_label(slot) .. " pane - modules now open in the other one"
+  end
+  save_settings()
+end
+
 local function swap_split_modules()
   local split_module = get_split_module()
   local active_id = app.settings.active_module
   if not split_module or not active_id or active_id == HOME_MODULE_ID then return end
   app.settings.split_module = active_id
-  set_active_view(split_module.id)
+  set_active_view(split_module.id, true)
+  -- The pin travels with the module rather than staying on the pane, so a swap
+  -- moves what you pinned instead of pinning whatever landed there.
+  local pin = app.settings.split_pinned_pane
+  if pin == "primary" then
+    app.settings.split_pinned_pane = "secondary"
+  elseif pin == "secondary" then
+    app.settings.split_pinned_pane = "primary"
+  end
   app.settings.split_view_enabled = true
   app.status = "Split panes swapped"
   save_settings()
@@ -963,6 +1069,23 @@ local function draw_split_icon(draw_list, x, y, size, color)
   local mid = y + size * 0.5
   r.ImGui_DrawList_AddRect(draw_list, left, top, right, mid - 2, color, 2, 0, 2)
   r.ImGui_DrawList_AddRect(draw_list, left, mid + 2, right, bottom, color, 2, 0, 2)
+end
+
+-- A thumbtack: head, collar and needle. Filled once the pane is pinned so the
+-- state reads at a glance from across the window, outlined while it is only an
+-- offer to pin.
+local function draw_pin_icon(draw_list, cx, cy, size, color, filled)
+  local head = size * 0.30
+  local head_y = cy - size * 0.18
+  local collar = size * 0.34
+  if filled then
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, head_y, head, color, 12)
+    r.ImGui_DrawList_AddRectFilled(draw_list, cx - collar, head_y + head * 0.55, cx + collar, head_y + head * 0.55 + size * 0.13, color, 1)
+  else
+    r.ImGui_DrawList_AddCircle(draw_list, cx, head_y, head, color, 12, 1.3)
+    r.ImGui_DrawList_AddLine(draw_list, cx - collar, head_y + head * 0.9, cx + collar, head_y + head * 0.9, color, 1.3)
+  end
+  r.ImGui_DrawList_AddLine(draw_list, cx, head_y + head * 0.9, cx, cy + size * 0.5, color, filled and 1.8 or 1.3)
 end
 
 local function draw_module_icon(draw_list, module, cx, cy, size, color)
@@ -1310,6 +1433,13 @@ local function draw_top_bar()
         local selected = app.settings.split_module == candidate.id
         if r.ImGui_Selectable(ctx, candidate.title or candidate.id, selected) then set_split_module(candidate.id) end
         if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+      end
+    end
+    r.ImGui_Separator(ctx)
+    for _, slot in ipairs({ "primary", "secondary" }) do
+      local label = "Keep " .. pane_label(slot) .. " pane"
+      if r.ImGui_MenuItem(ctx, label, nil, app.settings.split_pinned_pane == slot, enabled) then
+        toggle_pane_pin(slot)
       end
     end
     r.ImGui_Separator(ctx)
@@ -2161,12 +2291,87 @@ local function draw_module_instance(module, pane_id)
   r.ImGui_PopID(ctx)
 end
 
+local function splitter_thickness()
+  return UIScale.round(14)
+end
+
+local function cycle_split_pin()
+  local pin = app.settings.split_pinned_pane
+  local next_pin = ""
+  if pin ~= "primary" and pin ~= "secondary" then
+    next_pin = "primary"
+  elseif pin == "primary" then
+    next_pin = "secondary"
+  end
+  app.settings.split_pinned_pane = next_pin
+  app.settings.split_pinned_return = ""
+  if next_pin == "" then
+    app.status = "Pane unpinned"
+  else
+    app.status = "Pinned the " .. pane_label(next_pin) .. " pane - modules now open in the other one"
+  end
+  save_settings()
+end
+
+-- The pin lives on the splitter rather than in a pane. A pane is a child window
+-- and modules fill it with child windows of their own, which take the mouse and
+-- draw over anything the pane itself put there - so a pin in the corner was both
+-- unreliable to click and easy to lose behind module content. The splitter
+-- belongs to the workbench, and nothing is ever on top of it.
+local function draw_split_pin(size)
+  local pin = app.settings.split_pinned_pane
+  local pinned = pin == "primary" or pin == "secondary"
+  local clicked = r.ImGui_InvisibleButton(ctx, "##tk_workbench_split_pin", size, size)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+  local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local color = Theme.colors.text_dim
+  if pinned then
+    color = Theme.colors.accent
+  elseif hovered then
+    color = Theme.colors.text
+  end
+  if pinned or hovered then
+    r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, Theme.colors.frame_bg, UIScale.px(3))
+  end
+  -- Which side is being kept is said by the accent edge along the splitter, not
+  -- by this glyph. At this size one clear shape reads and two do not.
+  draw_pin_icon(draw_list, (x1 + x2) * 0.5, (y1 + y2) * 0.5, size * 0.66, color, pinned)
+  if hovered then
+    local other = pane_label(pin == "primary" and "secondary" or "primary")
+    if pin == "primary" then
+      r.ImGui_SetTooltip(ctx, "Keeping the " .. pane_label("primary") .. " pane\nModules you open go to the " .. other .. " pane\nClick: keep the " .. other .. " pane instead")
+    elseif pin == "secondary" then
+      r.ImGui_SetTooltip(ctx, "Keeping the " .. pane_label("secondary") .. " pane\nModules you open go to the " .. other .. " pane\nClick: keep neither")
+    else
+      r.ImGui_SetTooltip(ctx, "Keep a pane\nA kept pane holds on to its module and everything you open lands in the other one\nClick: keep the " .. pane_label("primary") .. " pane")
+    end
+  end
+  if clicked then cycle_split_pin() end
+end
+
 local function draw_splitter(total, orientation)
   local horizontal = orientation == "horizontal"
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-  local thickness = UIScale.round(8)
-  local width = horizontal and thickness or avail_w
-  local height = horizontal and avail_h or thickness
+  local thickness = splitter_thickness()
+  local gap = UIScale.round(2)
+  -- The pin takes a square off one end and the drag zone gets the rest, so the
+  -- two never overlap and a click is only ever one of them. Item spacing goes to
+  -- zero for the duration: the gap is the explicit one below, and the automatic
+  -- spacing on top of it would push the group past the room the split gave it.
+  local spacing_pushed = false
+  if r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing then
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 0, 0)
+    spacing_pushed = true
+  end
+  r.ImGui_BeginGroup(ctx)
+  if horizontal then
+    draw_split_pin(thickness)
+    r.ImGui_Dummy(ctx, thickness, gap)
+  end
+  local width = horizontal and thickness or math.max(UIScale.round(20), (avail_w or 0) - thickness - gap)
+  local height = horizontal and math.max(UIScale.round(20), (avail_h or 0) - thickness - gap) or thickness
   r.ImGui_InvisibleButton(ctx, "##workbench_splitter", width, height)
   local hovered = r.ImGui_IsItemHovered(ctx)
   local active = r.ImGui_IsItemActive(ctx)
@@ -2195,7 +2400,36 @@ local function draw_splitter(total, orientation)
     r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1 + 1, x2, y2 - 1, rail_color, 3)
     r.ImGui_DrawList_AddRectFilled(draw_list, x1 + 8, y1 + 3, x2 - 8, y2 - 3, grip_color, 2)
   end
+  -- The kept pane gets an accent edge down the side of the splitter facing it,
+  -- running the whole length. That is what says which pane is held; the pin
+  -- itself only says whether one is.
+  local pin = app.settings.split_pinned_pane
+  if pin == "primary" or pin == "secondary" then
+    local edge = UIScale.px(2)
+    local first = pin == "primary"
+    if horizontal then
+      local ex = first and x1 or (x2 - edge)
+      r.ImGui_DrawList_AddRectFilled(draw_list, ex, y1, ex + edge, y2, Theme.colors.accent, 1)
+    else
+      local ey = first and y1 or (y2 - edge)
+      r.ImGui_DrawList_AddRectFilled(draw_list, x1, ey, x2, ey + edge, Theme.colors.accent, 1)
+    end
+  end
   if hovered or active then r.ImGui_SetTooltip(ctx, "Drag to resize split") end
+  if not horizontal then
+    r.ImGui_SameLine(ctx, 0, gap)
+    draw_split_pin(thickness)
+  end
+  r.ImGui_EndGroup(ctx)
+  if spacing_pushed then r.ImGui_PopStyleVar(ctx) end
+end
+
+local function draw_split_pane(module, slot, width, height, pane_flags)
+  local visible = r.ImGui_BeginChild(ctx, "##workbench_split_" .. slot, width, height, 0, pane_flags)
+  if visible then
+    draw_module_instance(module, slot)
+    r.ImGui_EndChild(ctx)
+  end
 end
 
 local function draw_module_canvas()
@@ -2211,7 +2445,7 @@ local function draw_module_canvas()
   local split_module = get_split_module()
   local available_w, available_h = r.ImGui_GetContentRegionAvail(ctx)
   local horizontal = split_orientation() == "horizontal"
-  local splitter_size = UIScale.round(8)
+  local splitter_size = splitter_thickness()
   local pane_flags = 0
   if r.ImGui_WindowFlags_NoScrollbar then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollbar() end
   if r.ImGui_WindowFlags_NoScrollWithMouse then pane_flags = pane_flags | r.ImGui_WindowFlags_NoScrollWithMouse() end
@@ -2227,19 +2461,11 @@ local function draw_module_canvas()
     local min_w = math.min(UIScale.round(220), math.floor(content_w * 0.45))
     local left_w = clamp(math.floor(content_w * ratio), min_w, math.max(min_w, content_w - min_w))
     local right_w = math.max(20, content_w - left_w)
-    local left_visible = r.ImGui_BeginChild(ctx, "##workbench_split_primary", left_w, 0, 0, pane_flags)
-    if left_visible then
-      draw_module_instance(module, "primary")
-      r.ImGui_EndChild(ctx)
-    end
+    draw_split_pane(module, "primary", left_w, 0, pane_flags)
     r.ImGui_SameLine(ctx, 0, 0)
     draw_splitter(content_w, "horizontal")
     r.ImGui_SameLine(ctx, 0, 0)
-    local right_visible = r.ImGui_BeginChild(ctx, "##workbench_split_secondary", right_w, 0, 0, pane_flags)
-    if right_visible then
-      draw_module_instance(split_module, "secondary")
-      r.ImGui_EndChild(ctx)
-    end
+    draw_split_pane(split_module, "secondary", right_w, 0, pane_flags)
     return
   end
   local total_h = math.max(40, available_h or 240)
@@ -2253,17 +2479,9 @@ local function draw_module_canvas()
   local top_h = math.floor(content_h * ratio)
   top_h = clamp(top_h, min_h, math.max(min_h, content_h - min_h))
   local bottom_h = math.max(20, content_h - top_h)
-  local primary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_primary", 0, top_h, 0, pane_flags)
-  if primary_visible then
-    draw_module_instance(module, "primary")
-    r.ImGui_EndChild(ctx)
-  end
+  draw_split_pane(module, "primary", 0, top_h, pane_flags)
   draw_splitter(content_h, "vertical")
-  local secondary_visible = r.ImGui_BeginChild(ctx, "##workbench_split_secondary", 0, bottom_h, 0, pane_flags)
-  if secondary_visible then
-    draw_module_instance(split_module, "secondary")
-    r.ImGui_EndChild(ctx)
-  end
+  draw_split_pane(split_module, "secondary", 0, bottom_h, pane_flags)
 end
 
 local function module_rail_width()
