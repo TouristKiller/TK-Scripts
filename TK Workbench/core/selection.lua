@@ -54,6 +54,27 @@ local function current_frame_rate(project)
   return 0, false
 end
 
+-- A pointer is only good for as long as the thing it names exists, and a
+-- project being opened or closed frees the lot. Everything handed out in the
+-- snapshot is checked here, so a consumer cannot be the one to find out.
+function M.valid_project(project)
+  if not project or project == 0 then return 0 end
+  if r.ValidatePtr2 and not r.ValidatePtr2(0, project, "ReaProject*") then return 0 end
+  return project
+end
+
+function M.valid_track(track)
+  if not track then return nil end
+  if r.ValidatePtr2 and not r.ValidatePtr2(0, track, "MediaTrack*") then return nil end
+  return track
+end
+
+function M.valid_item(item)
+  if not item then return nil end
+  if r.ValidatePtr2 and not r.ValidatePtr2(0, item, "MediaItem*") then return nil end
+  return item
+end
+
 function M.scan()
   local snapshot = {}
   local project, project_path = r.EnumProjects(-1, "")
@@ -104,7 +125,7 @@ function M.scan()
   local selected_track_count = r.CountSelectedTracks(0) or 0
   snapshot.selected_track_count = selected_track_count
   if selected_track_count > 0 then
-    local track = r.GetSelectedTrack(0, 0)
+    local track = M.valid_track(r.GetSelectedTrack(0, 0))
     snapshot.track = {
       pointer = track,
       name = track_name(track),
@@ -120,7 +141,7 @@ function M.scan()
     if selected_item then snapshot.selected_item_total_length = snapshot.selected_item_total_length + (r.GetMediaItemInfo_Value(selected_item, "D_LENGTH") or 0) end
   end
   if selected_item_count > 0 then
-    local item = r.GetSelectedMediaItem(0, 0)
+    local item = M.valid_item(r.GetSelectedMediaItem(0, 0))
     snapshot.item = {
       pointer = item,
       take_name = active_take_name(item),

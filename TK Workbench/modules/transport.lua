@@ -2,6 +2,7 @@ local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
+local Selection = require("core.selection")
 
 -- Optional: the marker strip offers Color Studio's active palette when colouring
 -- a marker or region. Soft dependency, so Transport keeps working without it.
@@ -1426,8 +1427,11 @@ end
 
 local function info_resolve(app, settings)
   local sel = app.selection or {}
-  local track = sel.track and sel.track.pointer or nil
-  local item = sel.item and sel.item.pointer or nil
+  -- Both are handed on to callers that feed them to the API, so they are checked
+  -- here rather than at each of those. A pointer left over from a project that
+  -- has been closed is still non-nil and only fails once it is used.
+  local track = Selection.valid_track(sel.track and sel.track.pointer or nil)
+  local item = Selection.valid_item(sel.item and sel.item.pointer or nil)
   local region = info_current_region()
   info_bump("track", track and tostring(track) or nil)
   info_bump("item", item and tostring(item) or nil)

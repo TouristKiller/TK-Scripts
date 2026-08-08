@@ -3,6 +3,7 @@ local Theme = require("core.theme")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
 local json = require("core.json")
+local Selection = require("core.selection")
 
 local M = {
   id = "notes",
@@ -330,11 +331,14 @@ end
 
 local function resolve_context(app, settings)
   local selection = app.selection or {}
-  local project = selection.project and selection.project.pointer or 0
+  local project = Selection.valid_project(selection.project and selection.project.pointer or 0)
   local proj_tag = tostring(project)
   local context = settings.active_context or "project"
-  local sel_item = selection.item and selection.item.pointer or nil
-  local sel_track = selection.track and selection.track.pointer or nil
+  -- Checked rather than trusted. A pointer that outlived the thing it names is
+  -- still a non-nil value, so "if item then" lets it straight through to
+  -- BR_GetMediaItemGUID, which rejects it by throwing.
+  local sel_item = Selection.valid_item(selection.item and selection.item.pointer or nil)
+  local sel_track = Selection.valid_track(selection.track and selection.track.pointer or nil)
   local region_hit = selected_marker_region(project)
   local item_sig = (sel_item and r.BR_GetMediaItemGUID) and r.BR_GetMediaItemGUID(sel_item) or nil
   local track_sig = (sel_track and r.GetTrackGUID) and r.GetTrackGUID(sel_track) or (sel_track and tostring(sel_track)) or nil
@@ -368,14 +372,14 @@ local function resolve_context(app, settings)
     return { id = "project|" .. proj_tag .. "|PROJECT", storage = "project", project = project, key = "PROJECT::blocks", label = project_label(selection), can_edit = true, kind = "project" }
   end
   if context == "track" then
-    local track = selection.track and selection.track.pointer or nil
+    local track = Selection.valid_track(selection.track and selection.track.pointer or nil)
     local guid = track and r.GetTrackGUID and r.GetTrackGUID(track) or nil
     if not guid or guid == "" then return { id = "track|none", storage = "project", project = project, key = "", label = "No track selected", can_edit = false, kind = "track" } end
     return { id = "track|" .. proj_tag .. "|" .. guid, storage = "track", project = project, key = guid .. "::blocks", label = track_label(selection), can_edit = true, kind = "track", track = track, context_color = track_color(track) }
   end
   if context == "item" then
     if not r.BR_GetMediaItemGUID then return { id = "item|nosws", storage = "project", project = project, key = "", label = "SWS required for item notes", can_edit = false, kind = "item" } end
-    local item = selection.item and selection.item.pointer or nil
+    local item = Selection.valid_item(selection.item and selection.item.pointer or nil)
     local guid = item and r.BR_GetMediaItemGUID(item) or nil
     if not guid or guid == "" then return { id = "item|none", storage = "project", project = project, key = "", label = "No item selected", can_edit = false, kind = "item" } end
     return { id = "item|" .. proj_tag .. "|" .. guid, storage = "project", project = project, key = "ITEM::" .. guid .. "::blocks", label = item_label(selection), can_edit = true, kind = "item", item = item, context_color = item_color(item) }
@@ -2363,7 +2367,7 @@ local TRACK_NOTE_MARKERS = { "\xE2\x80\xA2", "\xE2\x97\x8F", "*", "[note]", "\xE
 
 local function clear_all_track_markers(app, char)
   if not r.CountTracks or not r.GetTrack then return end
-  local proj = (app.selection and app.selection.project and app.selection.project.pointer) or 0
+  local proj = Selection.valid_project((app.selection and app.selection.project and app.selection.project.pointer) or 0)
   for i = 0, r.CountTracks(proj) - 1 do
     local track = r.GetTrack(proj, i)
     if track then apply_track_marker(track, false, false, char) end
@@ -2376,7 +2380,7 @@ local function sync_track_note_indicators(app, settings)
   local t = now()
   if t - last_track_marker_sync < 1.5 then return end
   last_track_marker_sync = t
-  local proj = (app.selection and app.selection.project and app.selection.project.pointer) or 0
+  local proj = Selection.valid_project((app.selection and app.selection.project and app.selection.project.pointer) or 0)
   local char = settings.track_note_char or defaults.track_note_char
   for i = 0, r.CountTracks(proj) - 1 do
     local track = r.GetTrack(proj, i)

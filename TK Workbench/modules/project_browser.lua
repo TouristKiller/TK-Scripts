@@ -1263,6 +1263,13 @@ local function open_project_now(app, project, new_tab)
   else
     r.Main_openProject(project.path)
   end
+  -- Everything in the project being replaced is freed by that call, and the
+  -- snapshot the frame started with is still pointing at it. Modules updating
+  -- after this one would read those pointers - and validating them is not enough,
+  -- because a freed address can be handed straight back out to an item in the
+  -- project just opened. It then passes every check while naming the wrong thing.
+  -- Dropping the snapshot is the only honest answer; the next frame rebuilds it.
+  app.selection = {}
   app.status = "Opening " .. mode_def.item_label .. ": " .. project.name
 end
 
@@ -1899,8 +1906,11 @@ local function draw_project_playback_panel(app, project, width, height)
     else
       local ok, err = pcall(draw_project_preview_transport, app, ensure_settings(app), project, width)
       if not ok then
+        -- Show what actually went wrong rather than a polite nothing. This is
+        -- the pcall that hid the cause while the broken id stack surfaced as an
+        -- EndChild failure further along, which is not where the fault was.
         state.last_error = tostring(err)
-        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Preview controls unavailable")
+        r.ImGui_TextColored(ctx, Theme.colors.warning, "Preview controls: " .. tostring(err):sub(1, 120))
       end
     end
   end

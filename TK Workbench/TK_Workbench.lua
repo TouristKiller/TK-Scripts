@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.75
+-- @version 0.6.76
 -- @changelog:
+-- v0.6.76
+--   + Workbench: Fixed the errors that follow opening a project while the Workbench is running - "BR_GetMediaItemGUID argument 1: expected MediaItem*", "CountProjectMarkers (ReaProject expected)", and the run of "expected a valid ImGui_Context*" that comes after them. Opening a project frees everything in the one being replaced, and the Workbench was still holding pointers to it from the snapshot it takes each frame
+--   + Workbench: A pointer that has outlived what it names is still a value, so a plain "if item then" hands it straight to the API, which throws. The selected project, track and item are now checked before they are handed out and again where they are used. Notes was the module tripping over them, in its update as much as in its drawing, which is why it did not need to be on screen to do it
+--   + Workbench: Checking a pointer is not by itself enough. A freed address can be handed straight back out to something in the project just opened, so the check passes while the pointer names the wrong item - which is why this showed up as an error only some of the time and as quietly wrong data the rest of it. Opening a project from the Project Browser now drops the snapshot outright instead, and the next frame builds a fresh one
+--   + Workbench: Only the first error in one of those runs is real. An assertion inside ImGui takes the context down with it, so everything printed afterwards - the PopID complaints, the page of Detach failures - is wreckage rather than cause. That is what sent the earlier attempts at this looking in the wrong place
+--   + Workbench: The selection snapshot is also taken after the modules have had their update rather than before it, so the drawing that follows works from the state the frame will actually show. That is a correctness fix in its own right and not what cures the above
+--   + Project Browser: The preview transport reports what actually failed instead of "Preview controls unavailable". That message was hiding the cause while the broken id stack surfaced somewhere else entirely
 -- v0.6.75
 --   + Control Room: Monitor presets. REAPER keeps hardware output sends in the project, so a new project starts with no monitors at all and the routing has to be built from scratch every time. A preset holds the sends themselves - output, source channels and format, level and mute - and puts them back on the master in one click. Requested by BogdanS
 --   + Control Room: Presets are stored with the Workbench settings rather than in the project, which is the point of them: they have to exist before the project has any routing. Aliases and per-monitor formats travel with them, and a monitor captured while folded brings the fold plugin back with it, so it is not silently pointing at a pair nothing feeds
@@ -2762,8 +2769,14 @@ local function draw_frame()
     app.cache.ui_font_ctx = nil
   end
   set_ui_scale(app.settings.ui_scale or 1.0)
-  app.selection = Selection.scan()
+  -- Scanned after the modules have had their update, not before. A module's
+  -- update is where the blocking work happens - the Project Browser opens a
+  -- project there - and opening one frees every item and track in the old one.
+  -- Snapshotting first left the pointers dangling for the drawing that follows,
+  -- and a module reading one of them throws from inside its pcall, which leaves
+  -- the id stack crooked and takes the next EndChild down with it.
   update_modules()
+  app.selection = Selection.scan()
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY, "true", false)
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_HEARTBEAT_KEY, tostring(r.time_precise and r.time_precise() or os.clock()), false)
   process_module_action_commands()
