@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.76
+-- @version 0.6.77
 -- @changelog:
+-- v0.6.77
+--   + Project Browser: A third switch next to the other two, for the name and path that follow the pointer over a project. Off, nothing appears on hover - in tile view the covers are labelled anyway, and in the list the name is already in the row. Folders keep their tooltip, since nothing else says where they lead. Requested by vik-tan
 -- v0.6.76
 --   + Workbench: Fixed the errors that follow opening a project while the Workbench is running - "BR_GetMediaItemGUID argument 1: expected MediaItem*", "CountProjectMarkers (ReaProject expected)", and the run of "expected a valid ImGui_Context*" that comes after them. Opening a project frees everything in the one being replaced, and the Workbench was still holding pointers to it from the snapshot it takes each frame
 --   + Workbench: A pointer that has outlived what it names is still a value, so a plain "if item then" hands it straight to the API, which throws. The selected project, track and item are now checked before they are handed out and again where they are used. Notes was the module tripping over them, in its update as much as in its drawing, which is why it did not need to be on screen to do it

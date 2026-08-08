@@ -47,6 +47,7 @@ local defaults = {
   min_depth = 0,
   show_detail_panel = true,
   show_playback_panel = true,
+  show_hover_info = true,
   show_recent = false,
   recent_count = 15,
   max_scan_projects = 5000,
@@ -175,6 +176,7 @@ local function ensure_settings(app)
   settings.show_recent = settings.show_recent == true
   settings.show_detail_panel = settings.show_detail_panel ~= false
   settings.show_playback_panel = settings.show_playback_panel ~= false
+  settings.show_hover_info = settings.show_hover_info ~= false
   settings.max_scan_projects = math.max(50, math.min(50000, math.floor(tonumber(settings.max_scan_projects) or defaults.max_scan_projects)))
   settings.recursive = settings.recursive ~= false
   settings.folder_view = settings.folder_view ~= false
@@ -1500,7 +1502,7 @@ local function draw_project_row(app, settings, project, index, width)
     if r.ImGui_MenuItem(ctx, "Copy path") and r.CF_SetClipboard then r.CF_SetClipboard(project.path) end
     r.ImGui_EndPopup(ctx)
   end
-  if hovered then r.ImGui_SetTooltip(ctx, project.path) end
+  if hovered and settings.show_hover_info ~= false then r.ImGui_SetTooltip(ctx, project.path) end
   if selected and state.scroll_selected_project and r.ImGui_SetScrollHereY then
     local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
     if ok then state.scroll_selected_project = false end
@@ -1598,7 +1600,7 @@ local function draw_project_tile(app, settings, project, index, tile)
     if r.ImGui_MenuItem(ctx, "Copy path") and r.CF_SetClipboard then r.CF_SetClipboard(project.path) end
     r.ImGui_EndPopup(ctx)
   end
-  if hovered then r.ImGui_SetTooltip(ctx, project.name .. "\n" .. project.path) end
+  if hovered and settings.show_hover_info ~= false then r.ImGui_SetTooltip(ctx, project.name .. "\n" .. project.path) end
   if selected and state.scroll_selected_project and r.ImGui_SetScrollHereY then
     local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
     if ok then state.scroll_selected_project = false end
@@ -1959,6 +1961,11 @@ local function draw_settings_popup(app, settings)
     end
     if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "The Play, volume and Make Preview row. Hiding it stops any preview that is playing")
+    end
+    c, v = r.ImGui_Checkbox(ctx, "Show hover info", settings.show_hover_info ~= false)
+    if c then settings.show_hover_info = v; if app.save_settings then app.save_settings() end end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "The name and path that follow the pointer over a project.\nFolders keep theirs, since there is nothing else naming where they lead")
     end
     if r.ImGui_SliderInt then
       -- One slider rather than a list/grid switch: all the way down is the list,

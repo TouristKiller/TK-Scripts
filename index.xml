@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.76" author="TouristKiller" time="2026-08-08T21:40:00Z">
+    <version name="0.6.77" author="TouristKiller" time="2026-08-08T21:40:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -121,6 +121,8 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.6.77
+            + Project Browser: A third switch next to the other two, for the name and path that follow the pointer over a project. Off, nothing appears on hover - in tile view the covers are labelled anyway, and in the list the name is already in the row. Folders keep their tooltip, since nothing else says where they lead. Requested by vik-tan
             v0.6.76
             + Workbench: Fixed the errors that follow opening a project while the Workbench is running - "BR_GetMediaItemGUID argument 1: expected MediaItem*", "CountProjectMarkers (ReaProject expected)", and the run of "expected a valid ImGui_Context*" that comes after them. Opening a project frees everything in the one being replaced, and the Workbench was still holding pointers to it from the snapshot it takes each frame
             + Workbench: A pointer that has outlived what it names is still a value, so a plain "if item then" hands it straight to the API, which throws. The selected project, track and item are now checked before they are handed out and again where they are used. Notes was the module tripping over them, in its update as much as in its drawing, which is why it did not need to be on screen to do it
