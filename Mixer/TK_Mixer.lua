@@ -1,8 +1,8 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.4.0
+-- @version 1.4.1
 --[[
-v1.4.0
+v1.4.1
     + Instances: added three additional TK Mixer actions, allowing up to four independent mixers to run simultaneously
     + Instance state: each mixer keeps its own tracks, hidden state, snapshots, pinned parameters, layout, docking and window position
     + Window: press Escape to close the focused TK Mixer
@@ -66,32 +66,35 @@ v1.2.4
   ]]--
 
 local r = setmetatable({}, { __index = reaper })
-local INSTANCE_ID = tostring(rawget(_G, "TK_MIXER_INSTANCE_ID") or "default"):gsub("[^%w_-]", "_")
-local INSTANCE_NAME = tostring(rawget(_G, "TK_MIXER_INSTANCE_NAME") or (INSTANCE_ID == "default" and "" or "Instance " .. INSTANCE_ID))
-local INSTANCE_STORAGE_SUFFIX = INSTANCE_ID == "default" and "" or "::instance:" .. INSTANCE_ID
-local INSTANCE_WINDOW_SUFFIX = INSTANCE_ID == "default" and "" or "##TK_Mixer_" .. INSTANCE_ID
-local function InstanceKey(key)
- return key .. INSTANCE_STORAGE_SUFFIX
+MIXER_INSTANCE = {}
+MIXER_INSTANCE.id = tostring(rawget(_G, "TK_MIXER_INSTANCE_ID") or "default"):gsub("[^%w_-]", "_")
+MIXER_INSTANCE.name = tostring(rawget(_G, "TK_MIXER_INSTANCE_NAME") or (MIXER_INSTANCE.id == "default" and "" or "Instance " .. MIXER_INSTANCE.id))
+MIXER_INSTANCE.storage_suffix = MIXER_INSTANCE.id == "default" and "" or "::instance:" .. MIXER_INSTANCE.id
+MIXER_INSTANCE.window_suffix = MIXER_INSTANCE.id == "default" and "" or "##TK_Mixer_" .. MIXER_INSTANCE.id
+MIXER_INSTANCE.runtime_section = "TK_MIXER_RUNTIME" .. (MIXER_INSTANCE.id == "default" and "" or "_" .. MIXER_INSTANCE.id)
+MIXER_INSTANCE.runtime_token = tostring({})
+MIXER_INSTANCE.action_context = { r.get_action_context() }
+
+function InstanceKey(key)
+ return key .. MIXER_INSTANCE.storage_suffix
 end
 
-local RUNTIME_SECTION = "TK_MIXER_RUNTIME" .. (INSTANCE_ID == "default" and "" or "_" .. INSTANCE_ID)
-local RUNTIME_HEARTBEAT_TIMEOUT = 2.0
-local runtime_token = tostring({})
-local runtime_now = r.time_precise()
-local runtime_owner = r.GetExtState(RUNTIME_SECTION, "owner")
-local runtime_heartbeat = tonumber(r.GetExtState(RUNTIME_SECTION, "heartbeat")) or 0
-if runtime_owner ~= "" and runtime_now - runtime_heartbeat < RUNTIME_HEARTBEAT_TIMEOUT then
- r.SetExtState(RUNTIME_SECTION, "close_request", runtime_owner, false)
- return
+do
+ local runtime_now = r.time_precise()
+ local runtime_owner = r.GetExtState(MIXER_INSTANCE.runtime_section, "owner")
+ local runtime_heartbeat = tonumber(r.GetExtState(MIXER_INSTANCE.runtime_section, "heartbeat")) or 0
+ if runtime_owner ~= "" and runtime_now - runtime_heartbeat < 2.0 then
+  r.SetExtState(MIXER_INSTANCE.runtime_section, "close_request", runtime_owner, false)
+  return
+ end
+ r.SetExtState(MIXER_INSTANCE.runtime_section, "owner", MIXER_INSTANCE.runtime_token, false)
+ r.SetExtState(MIXER_INSTANCE.runtime_section, "heartbeat", tostring(runtime_now), false)
+ r.DeleteExtState(MIXER_INSTANCE.runtime_section, "close_request", false)
 end
-r.SetExtState(RUNTIME_SECTION, "owner", runtime_token, false)
-r.SetExtState(RUNTIME_SECTION, "heartbeat", tostring(runtime_now), false)
-r.DeleteExtState(RUNTIME_SECTION, "close_request", false)
 
-local _, _, action_section_id, action_command_id = r.get_action_context()
-if action_section_id ~= -1 then
- r.SetToggleCommandState(action_section_id, action_command_id, 1)
- r.RefreshToolbar2(action_section_id, action_command_id)
+if MIXER_INSTANCE.action_context[3] ~= -1 then
+ r.SetToggleCommandState(MIXER_INSTANCE.action_context[3], MIXER_INSTANCE.action_context[4], 1)
+ r.RefreshToolbar2(MIXER_INSTANCE.action_context[3], MIXER_INSTANCE.action_context[4])
 end
 
 local _orig_GetTrackGUID = reaper.GetTrackGUID
@@ -171,7 +174,7 @@ local function ClearTrackGUIDFrameCache()
  _track_color_frame_cache = setmetatable({}, { __mode = "k" })
  _track_selected_frame_cache = setmetatable({}, { __mode = "k" })
 end
-local ctx = r.ImGui_CreateContext(INSTANCE_ID == "default" and "TK Mixer" or "TK Mixer " .. INSTANCE_NAME)
+local ctx = r.ImGui_CreateContext(MIXER_INSTANCE.id == "default" and "TK Mixer" or "TK Mixer " .. MIXER_INSTANCE.name)
 
 local _project_path_cache = { t = -1, val = nil }
 local function GetProjectPathCached()
@@ -231,7 +234,7 @@ local os_separator = package.config:sub(1, 1)
 local transport_path = script_path:gsub("[/\\]Mixer[/\\]$", os_separator .. "Transport" .. os_separator)
 package.path = script_path .. "?.lua;" .. transport_path .. "?.lua;"
 
-if INSTANCE_ID == "default" and r.AddRemoveReaScript then
+if MIXER_INSTANCE.id == "default" and r.AddRemoveReaScript then
  for instance_number = 2, 4 do
   local launcher_path = script_path .. "TK_Mixer Instance " .. instance_number .. ".lua"
   if r.file_exists(launcher_path) then
@@ -662,10 +665,10 @@ local function GetMixerSettingsFilename()
  local project_path = GetProjectPathCached()
  local project_name = r.GetProjectName(0, "")
  local base_name = project_name:gsub("%.rpp$", "")
- if INSTANCE_ID == "default" then
+ if MIXER_INSTANCE.id == "default" then
   return mixer_settings_path .. base_name .. "_mixer.json"
  end
- return mixer_settings_path .. base_name .. "_mixer_instance_" .. INSTANCE_ID .. ".json"
+ return mixer_settings_path .. base_name .. "_mixer_instance_" .. MIXER_INSTANCE.id .. ".json"
 end
 
 local mixer_settings_dirty = false
@@ -9414,7 +9417,7 @@ function DrawSettingsWindow()
  r.ImGui_SetNextWindowSize(ctx, 620, 560)
  PushSettingsTheme(ctx)
  local settings_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
- local visible, open = r.ImGui_Begin(ctx, "TK Mixer Settings" .. (INSTANCE_NAME ~= "" and " - " .. INSTANCE_NAME or "") .. INSTANCE_WINDOW_SUFFIX, true, settings_flags)
+ local visible, open = r.ImGui_Begin(ctx, "TK Mixer Settings" .. (MIXER_INSTANCE.name ~= "" and " - " .. MIXER_INSTANCE.name or "") .. MIXER_INSTANCE.window_suffix, true, settings_flags)
  if visible then
   if not font_settings_ui then
    font_settings_ui = r.ImGui_CreateFont('Arial', 0)
@@ -11684,7 +11687,7 @@ function DrawSimpleMixerWindow()
   r.ImGui_SetNextWindowDockID(mixer_ctx, mixer_state.pending_dock_id, r.ImGui_Cond_Always())
   mixer_state.pending_dock_id = nil
  end
- local visible, open = r.ImGui_Begin(mixer_ctx, "TK Mixer" .. (INSTANCE_NAME ~= "" and " - " .. INSTANCE_NAME or "") .. INSTANCE_WINDOW_SUFFIX, true, window_flags)
+ local visible, open = r.ImGui_Begin(mixer_ctx, "TK Mixer" .. (MIXER_INSTANCE.name ~= "" and " - " .. MIXER_INSTANCE.name or "") .. MIXER_INSTANCE.window_suffix, true, window_flags)
  if visible then
   UpdateExternalDragState(mixer_ctx)
   local main_window_dock_id = 0
@@ -13026,7 +13029,7 @@ function DrawMasterSeparateWindow()
   r.ImGui_SetNextWindowPos(ctx, sx, sy, r.ImGui_Cond_FirstUseEver())
  end
 
- local visible, open = r.ImGui_Begin(ctx, "TK Mixer Master" .. (INSTANCE_NAME ~= "" and " - " .. INSTANCE_NAME or "") .. INSTANCE_WINDOW_SUFFIX, true, flags)
+ local visible, open = r.ImGui_Begin(ctx, "TK Mixer Master" .. (MIXER_INSTANCE.name ~= "" and " - " .. MIXER_INSTANCE.name or "") .. MIXER_INSTANCE.window_suffix, true, flags)
  if visible then
   if font_simple_mixer then
    r.ImGui_PushFont(ctx, font_simple_mixer, settings.simple_mixer_font_size or 12)
@@ -13111,10 +13114,10 @@ _perf_spike_count = 0
 
 function Loop()
  local _t_start = r.time_precise()
- if r.GetExtState(RUNTIME_SECTION, "owner") ~= runtime_token or r.GetExtState(RUNTIME_SECTION, "close_request") == runtime_token then
+ if r.GetExtState(MIXER_INSTANCE.runtime_section, "owner") ~= MIXER_INSTANCE.runtime_token or r.GetExtState(MIXER_INSTANCE.runtime_section, "close_request") == MIXER_INSTANCE.runtime_token then
   settings.simple_mixer_window_open = false
  end
- r.SetExtState(RUNTIME_SECTION, "heartbeat", tostring(_t_start), false)
+ r.SetExtState(MIXER_INSTANCE.runtime_section, "heartbeat", tostring(_t_start), false)
  ClearTrackGUIDFrameCache()
  RunLightCachePrune(_t_start)
  if _perf_prev_t then
@@ -13151,7 +13154,7 @@ function Loop()
   if r.ImGui_SetNextWindowPos and r.ImGui_Cond_FirstUseEver then
    r.ImGui_SetNextWindowPos(ctx, 40, 40, r.ImGui_Cond_FirstUseEver())
   end
-    local visible = r.ImGui_Begin(ctx, "TK Mixer FPS##tkmixerfps_" .. INSTANCE_ID, true, flags)
+    local visible = r.ImGui_Begin(ctx, "TK Mixer FPS##tkmixerfps_" .. MIXER_INSTANCE.id, true, flags)
   if visible then
    local col = 0x66FF66FF
    if _perf_fps < 30 then col = 0xFFAA22FF end
@@ -13177,14 +13180,14 @@ r.atexit(function()
  if mixer_settings_dirty then
   WriteMixerSettingsToDisk()
  end
- if r.GetExtState(RUNTIME_SECTION, "owner") == runtime_token then
-  r.DeleteExtState(RUNTIME_SECTION, "owner", false)
-  r.DeleteExtState(RUNTIME_SECTION, "heartbeat", false)
-  r.DeleteExtState(RUNTIME_SECTION, "close_request", false)
+ if r.GetExtState(MIXER_INSTANCE.runtime_section, "owner") == MIXER_INSTANCE.runtime_token then
+  r.DeleteExtState(MIXER_INSTANCE.runtime_section, "owner", false)
+  r.DeleteExtState(MIXER_INSTANCE.runtime_section, "heartbeat", false)
+  r.DeleteExtState(MIXER_INSTANCE.runtime_section, "close_request", false)
  end
- if action_section_id ~= -1 then
-  r.SetToggleCommandState(action_section_id, action_command_id, 0)
-  r.RefreshToolbar2(action_section_id, action_command_id)
+ if MIXER_INSTANCE.action_context[3] ~= -1 then
+  r.SetToggleCommandState(MIXER_INSTANCE.action_context[3], MIXER_INSTANCE.action_context[4], 0)
+  r.RefreshToolbar2(MIXER_INSTANCE.action_context[3], MIXER_INSTANCE.action_context[4])
  end
 end)
 

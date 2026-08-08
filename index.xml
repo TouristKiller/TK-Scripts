@@ -699,7 +699,7 @@ v0.2.36
 
 <category name="Mixer">
     <reapack name="TK_Mixer.lua" type="script" desc="TK Mixer">
-        <version name="1.4.0" author="TouristKiller" time="2026-08-08T16:30:00Z">
+        <version name="1.4.1" author="TouristKiller" time="2026-08-08T16:40:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer.lua</source>
             <source main="main" file="TK_Mixer Instance 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer%20Instance%202.lua</source>
             <source main="main" file="TK_Mixer Instance 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_Mixer%20Instance%203.lua</source>
@@ -711,7 +711,7 @@ v0.2.36
             <source type="effect" file="TK_VU_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/TK_VU_Meter.jsfx</source>
             <source file="Images/knob01.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Mixer/Images/knob01.png</source>
             <changelog><![CDATA[
-            v1.4.0
+            v1.4.1
             + Instances: added three additional TK Mixer actions, allowing up to four independent mixers to run simultaneously
             + Instance state: each mixer keeps its own tracks, hidden state, snapshots, pinned parameters, layout, docking and window position
             + Window: press Escape to close the focused TK Mixer
