@@ -1,8 +1,8 @@
 -- @description TK_Mixer
 -- @author TouristKiller
--- @version 1.4.1
+-- @version 1.4.2
 --[[
-v1.4.1
+v1.4.2
     + Instances: added three additional TK Mixer actions, allowing up to four independent mixers to run simultaneously
     + Instance state: each mixer keeps its own tracks, hidden state, snapshots, pinned parameters, layout, docking and window position
     + Window: press Escape to close the focused TK Mixer
@@ -5933,13 +5933,13 @@ do
   IconBrowser = { show_window = false, SetBrowseMode = function(_) end, Show = function() end }
  end
 end
-local function GetMixerIconPath(track)
+function GetMixerIconPath(track)
  local _, ext_icon = r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. TCP_ICON_EXT_KEY, "", false)
  if ext_icon ~= "" then return ext_icon end
  local _, icon = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
  return icon ~= "" and icon or nil
 end
-local function ClearTrackIconCache(track)
+function ClearTrackIconCache(track)
  local guid = r.GetTrackGUID(track)
  if guid then
   simple_mixer_track_icon_cache[guid] = nil
@@ -5948,7 +5948,7 @@ local function ClearTrackIconCache(track)
 end
 
 local track_lock_cache = {}
-local function IsTrackLocked(track)
+function IsTrackLocked(track)
  local guid = r.GetTrackGUID(track)
  local now = r.time_precise()
  local entry = track_lock_cache[guid]
@@ -5967,13 +5967,13 @@ local function IsTrackLocked(track)
  return locked
 end
 
-local function _IsTrackGUIDAlive(guid)
+function _IsTrackGUIDAlive(guid)
  if type(guid) ~= "string" or guid == "" then return false end
  if not r.BR_GetMediaTrackByGUID then return true end
  return r.BR_GetMediaTrackByGUID(0, guid) ~= nil
 end
 
-local function _PruneMapChunk(map, st, cursor_key, max_steps, should_remove)
+function _PruneMapChunk(map, st, cursor_key, max_steps, should_remove)
  if type(map) ~= "table" then return 0 end
  st.cursors = st.cursors or {}
  local cur = st.cursors[cursor_key]
@@ -5993,7 +5993,7 @@ local function _PruneMapChunk(map, st, cursor_key, max_steps, should_remove)
  return n
 end
 
-local function RunLightCachePrune(now)
+function RunLightCachePrune(now)
  mixer_state.cache_prune_state = mixer_state.cache_prune_state or { last_run = 0, phase = 1, cursors = {} }
  local st = mixer_state.cache_prune_state
  if (now - (st.last_run or 0)) < 0.05 then return end
@@ -6063,7 +6063,7 @@ local function RunLightCachePrune(now)
  st.phase = (phase % 6) + 1
 end
 
-local function DrawLockIcon(draw_list, x, y, size, color)
+function DrawLockIcon(draw_list, x, y, size, color)
  local body_h = size * 0.55
  local body_w = size * 0.75
  local body_x = x + (size - body_w) / 2
@@ -6077,7 +6077,7 @@ local function DrawLockIcon(draw_list, x, y, size, color)
  r.ImGui_DrawList_PathStroke(draw_list, color, 0, thickness)
 end
 
-local function DrawFolderIcon(draw_list, x, y, size, color)
+function DrawFolderIcon(draw_list, x, y, size, color)
  local w = size * 0.95
  local h = size * 0.7
  local fx = x + (size - w) / 2
@@ -6088,7 +6088,7 @@ local function DrawFolderIcon(draw_list, x, y, size, color)
  r.ImGui_DrawList_AddRectFilled(draw_list, fx, fy + tab_h, fx + w, fy + h, color, 1)
 end
 
-local function DrawFolderEndIcon(draw_list, x, y, size, color)
+function DrawFolderEndIcon(draw_list, x, y, size, color)
  local w = size * 0.95
  local h = size * 0.7
  local fx = x + (size - w) / 2
@@ -6103,7 +6103,7 @@ local function DrawFolderEndIcon(draw_list, x, y, size, color)
  r.ImGui_DrawList_AddTriangleFilled(draw_list, ax - arrow_size * 0.5, ay - arrow_size * 0.4, ax + arrow_size * 0.5, ay - arrow_size * 0.4, ax, ay + arrow_size * 0.5, color)
 end
 
-local function GetSeparatorColorForTrack(track, fallback)
+function GetSeparatorColorForTrack(track, fallback)
  local brightness = settings.simple_mixer_track_separator_brightness or 1.0
  if settings.simple_mixer_track_separator_use_track_color and track then
   local tc = r.GetTrackColor(track)
@@ -6119,7 +6119,7 @@ local function GetSeparatorColorForTrack(track, fallback)
  return r.ImGui_ColorConvertDouble4ToU32(r_comp * brightness, g_comp * brightness, b_comp * brightness, 1.0)
 end
 
-local function GetTrackBlockEnd(start_idx)
+function GetTrackBlockEnd(start_idx)
  local depth = 0
  local total = r.CountTracks(0)
  local i = start_idx
@@ -6133,7 +6133,7 @@ local function GetTrackBlockEnd(start_idx)
  return total - 1
 end
 
-local function FindTrackByGUID(guid)
+function FindTrackByGUID(guid)
  if not guid or guid == "" then return nil, -1 end
  local total = r.CountTracks(0)
  for i = 0, total - 1 do
@@ -6143,7 +6143,7 @@ local function FindTrackByGUID(guid)
  return nil, -1
 end
 
-local function MoveTrackBlock(src_guid, target_track)
+function MoveTrackBlock(src_guid, target_track)
  local src_track, src_idx = FindTrackByGUID(src_guid)
  if not src_track or not target_track or not r.ValidatePtr(target_track, "MediaTrack*") then return end
  local tgt_idx = math.floor(r.GetMediaTrackInfo_Value(target_track, "IP_TRACKNUMBER")) - 1
@@ -6178,7 +6178,7 @@ local function MoveTrackBlock(src_guid, target_track)
  r.UpdateArrange()
 end
 
-local function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_slider_height, is_master, show_remove_button, show_fx_handle, folder_info)
+function DrawMixerChannel(ctx, track, track_name, idx, track_width, base_slider_height, is_master, show_remove_button, show_fx_handle, folder_info)
  local should_remove = false
  local should_delete = false
  local should_delete_selected = false
@@ -11580,7 +11580,7 @@ function DrawInstrumentRackShim(ctx, width, height)
  end
 end
 
-local function DrawMasterFaderChannel(mixer_ctx, track_width, base_slider_height, avail_height)
+function DrawMasterFaderChannel(mixer_ctx, track_width, base_slider_height, avail_height)
  local master = r.GetMasterTrack(0)
  if not master then return end
  local sx, sy = r.ImGui_GetCursorScreenPos(mixer_ctx)
