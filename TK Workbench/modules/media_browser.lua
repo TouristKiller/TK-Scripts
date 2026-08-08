@@ -15,6 +15,10 @@ local resource_path = r.GetResourcePath()
 local locations_path = resource_path .. "/Scripts/TK_media_browser_locations.txt"
 local cache_dir = resource_path .. "/Scripts/TK_Workbench_media_cache"
 local peak_debug_path = resource_path .. "/Scripts/TK_Workbench_media_peak_debug.txt"
+local ART_CACHE_MAX = 120
+local ART_CACHE_MIN = 30
+local ART_LOADS_PER_FRAME = 10
+local ART_IDLE_SECONDS = 2
 local PROJECT_FILES_LOCATION = "::current_project_files::"
 
 local defaults = {
@@ -31,6 +35,7 @@ local defaults = {
   location_view_mode = "folders",
   folder_browse = false,
   compact_list = false,
+  tile_size = 0,
   auto_selected_category = "All",
   show_audio = true,
   show_midi = true,
@@ -101,6 +106,8 @@ local state = {
   folder_art_image_cache = {},
   embedded_art_path_cache = {},
   embedded_art_image_cache = {},
+  folder_cover_map = {},
+  folder_cover_key = nil,
   waveform_cache = {},
   midi_note_cache = {},
   waveform_pending = {},
@@ -160,14 +167,14 @@ local state = {
   last_error = nil
 }
 
-local function copy_default(value)
+function copy_default(value)
   if type(value) ~= "table" then return value end
   local target = {}
   for key, child in pairs(value) do target[key] = copy_default(child) end
   return target
 end
 
-local function ensure_settings(app)
+function ensure_settings(app)
   app.settings.media_browser = app.settings.media_browser or {}
   local settings = app.settings.media_browser
   local changed = false
@@ -200,28 +207,30 @@ local function ensure_settings(app)
   if settings.location_view_mode ~= "auto" then settings.location_view_mode = "folders" end
   settings.folder_browse = settings.folder_browse == true
   settings.compact_list = settings.compact_list == true
+  settings.tile_size = math.max(0, math.min(320, math.floor(tonumber(settings.tile_size) or 0)))
+  if settings.tile_size > 0 and settings.tile_size < 64 then settings.tile_size = 64 end
   settings.folder_double_click_open = settings.folder_double_click_open == true
   settings.auto_selected_category = tostring(settings.auto_selected_category or defaults.auto_selected_category)
   if changed and app.save_settings then app.save_settings() end
   return settings
 end
 
-local function file_exists(path)
+function file_exists(path)
   local file = io.open(path, "rb")
   if file then file:close(); return true end
   return false
 end
 
-local function ensure_cache_dir()
+function ensure_cache_dir()
   if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(cache_dir, 0) end
 end
 
-local function normalize_path(path)
+function normalize_path(path)
   path = tostring(path or ""):gsub("\\", "/")
   return path:gsub("/+$", "")
 end
 
-local function read_locations()
+function read_locations()
   local result = {}
   local seen = {}
   local file = io.open(locations_path, "r")
@@ -238,7 +247,7 @@ local function read_locations()
   return result
 end
 
-local function write_locations(locations)
+function write_locations(locations)
   local file = io.open(locations_path, "w")
   if not file then return false end
   for _, path in ipairs(locations or {}) do file:write(path, "\n") end
@@ -246,12 +255,12 @@ local function write_locations(locations)
   return true
 end
 
-local function extension(path)
+function extension(path)
   local ext = tostring(path or ""):match("%.([^%./\\]+)$")
   return ext and ext:lower() or ""
 end
 
-local function file_kind(path)
+function file_kind(path)
   local ext = extension(path)
   if EXT.audio[ext] then return "audio" end
   if EXT.midi[ext] then return "midi" end
@@ -260,20 +269,20 @@ local function file_kind(path)
   return "other"
 end
 
-local function is_supported(path)
+function is_supported(path)
   local kind = file_kind(path)
   return kind == "audio" or kind == "midi" or kind == "video" or kind == "image"
 end
 
-local function filename(path)
+function filename(path)
   return tostring(path or ""):match("([^/\\]+)$") or tostring(path or "")
 end
 
-local function parent_folder(path)
+function parent_folder(path)
   return normalize_path(path):match("(.+)/[^/]+$") or ""
 end
 
-local function relative_folder(path, root)
+function relative_folder(path, root)
   root = normalize_path(root)
   local folder = parent_folder(path)
   if root == "" or folder == "" then return "" end
@@ -284,11 +293,11 @@ local function relative_folder(path, root)
   return folder
 end
 
-local function folder_parent(path)
+function folder_parent(path)
   return tostring(path or ""):match("(.+)/[^/]+$") or ""
 end
 
-local function format_file_size(path)
+function format_file_size(path)
   local file = io.open(path, "rb")
   if not file then return "" end
   local size = file:seek("end")
@@ -300,7 +309,7 @@ local function format_file_size(path)
   return string.format("%.2f GB", size / (1024 * 1024 * 1024))
 end
 
-local function format_duration(length)
+function format_duration(length)
   if not length or length <= 0 then return "" end
   if length < 60 then return string.format("%.2fs", length) end
   local mins = math.floor(length / 60)
@@ -308,7 +317,7 @@ local function format_duration(length)
   return string.format("%d:%02d", mins, secs)
 end
 
-local function file_metadata(file)
+function file_metadata(file)
   if not file then return {} end
   local cached = state.metadata_cache[file.path]
   if cached then return cached end
@@ -332,7 +341,7 @@ local function file_metadata(file)
   return meta
 end
 
-local function compact_tags(file)
+function compact_tags(file)
   local meta = file_metadata(file)
   local parts = {}
   local function add(value) if value and value ~= "" then parts[#parts + 1] = value end end
@@ -344,22 +353,79 @@ local function compact_tags(file)
   return table.concat(parts, " - ")
 end
 
-local function destroy_image(ctx, path)
-  local entry = state.image_cache[path]
-  if entry and entry.image and r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
-  state.image_cache[path] = nil
+-- Images follow what the Project Browser settled on after it hit the same two
+-- faults, because a grid asks for dozens at once where a single preview asked
+-- for one. Destroying an image is not enough on its own: while it stays attached
+-- it keeps occupying one of the context's attachment slots, and those run out.
+-- And nothing is thrown away while drawing - the old code emptied the whole
+-- cache the moment it passed a limit, including images the frame it interrupted
+-- was still drawing with.
+function mb_image_now()
+  return r.time_precise and r.time_precise() or os.clock()
 end
 
-local function clear_image_cache(ctx, keep_path)
+function mb_release_image(ctx, cache, path)
+  local entry = cache[path]
+  if type(entry) == "table" and entry.image then
+    if r.ImGui_Detach then pcall(r.ImGui_Detach, ctx, entry.image) end
+    if r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
+  end
+  cache[path] = nil
+end
+
+-- Oldest first, never below the floor, and never anything asked for recently.
+-- The floor is what stops a full screen of tiles from evicting each other.
+function mb_trim_image_cache(ctx, cache)
+  local now = mb_image_now()
+  local order = {}
+  for path, entry in pairs(cache) do
+    if type(entry) == "table" then order[#order + 1] = { path = path, used = entry.used or 0 } end
+  end
+  if #order <= ART_CACHE_MIN then return end
+  table.sort(order, function(a, b) return a.used < b.used end)
+  local size = #order
+  for _, item in ipairs(order) do
+    if size <= ART_CACHE_MIN then break end
+    if now - item.used <= ART_IDLE_SECONDS then break end
+    mb_release_image(ctx, cache, item.path)
+    size = size - 1
+  end
+end
+
+-- Run at the top of the frame, before anything asks for a picture.
+function mb_begin_image_frame(ctx)
+  state.image_loads_left = ART_LOADS_PER_FRAME
+  mb_trim_image_cache(ctx, state.image_cache)
+  mb_trim_image_cache(ctx, state.folder_art_image_cache)
+  mb_trim_image_cache(ctx, state.embedded_art_image_cache)
+end
+
+-- Returns false when this frame has created its share already, so the caller
+-- leaves the slot empty and picks it up again next frame instead of building a
+-- screenful at once.
+function mb_may_load_image(cache)
+  if (state.image_loads_left or 0) <= 0 then return false end
+  local size = 0
+  for _, entry in pairs(cache) do
+    if type(entry) == "table" then size = size + 1 end
+  end
+  if size >= ART_CACHE_MAX then return false end
+  state.image_loads_left = state.image_loads_left - 1
+  return true
+end
+
+function destroy_image(ctx, path)
+  mb_release_image(ctx, state.image_cache, path)
+end
+
+function clear_image_cache(ctx, keep_path)
   for path in pairs(state.image_cache) do
     if path ~= keep_path then destroy_image(ctx, path) end
   end
 end
 
 function destroy_folder_art(ctx, path)
-  local entry = state.folder_art_image_cache[path]
-  if entry and entry.image and r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
-  state.folder_art_image_cache[path] = nil
+  mb_release_image(ctx, state.folder_art_image_cache, path)
 end
 
 function clear_folder_art_cache(ctx)
@@ -388,10 +454,8 @@ function load_folder_art(ctx, folder)
   local path = folder_art_path(folder)
   if not path then return nil end
   local cached = state.folder_art_image_cache[path]
-  if cached then return cached end
-  local cache_count = 0
-  for _ in pairs(state.folder_art_image_cache) do cache_count = cache_count + 1 end
-  if cache_count > 80 then clear_folder_art_cache(ctx) end
+  if cached then cached.used = mb_image_now(); return cached end
+  if not mb_may_load_image(state.folder_art_image_cache) then return nil end
   local ok, image = pcall(r.ImGui_CreateImage, path)
   if not ok or not image then state.folder_art_path_cache[normalize_path(folder)] = false; return nil end
   if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, image) end
@@ -400,16 +464,19 @@ function load_folder_art(ctx, folder)
     local size_ok, w, h = pcall(r.ImGui_Image_GetSize, image)
     if size_ok then img_w, img_h = w or 0, h or 0 end
   end
-  local entry = { image = image, width = img_w, height = img_h, path = path }
+  local entry = { image = image, width = img_w, height = img_h, path = path, used = mb_image_now() }
   state.folder_art_image_cache[path] = entry
   return entry
 end
 
-local function load_image(ctx, file)
+function load_image(ctx, file)
   if not file or file.kind ~= "image" or not r.ImGui_CreateImage then return nil end
   local cached = state.image_cache[file.path]
-  if cached then return cached end
-  clear_image_cache(ctx, file.path)
+  if cached then cached.used = mb_image_now(); return cached end
+  -- This used to keep exactly one image and throw the rest away on the spot,
+  -- which was fine while only the preview panel asked for one. A grid asks for a
+  -- screenful, so it now lives under the same cap and idle eviction as the rest.
+  if not mb_may_load_image(state.image_cache) then return nil end
   local ok, image = pcall(r.ImGui_CreateImage, file.path)
   if not ok or not image then return nil end
   if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, image) end
@@ -418,40 +485,40 @@ local function load_image(ctx, file)
     local size_ok, w, h = pcall(r.ImGui_Image_GetSize, image)
     if size_ok then img_w, img_h = w or 0, h or 0 end
   end
-  local entry = { image = image, width = img_w, height = img_h }
+  local entry = { image = image, width = img_w, height = img_h, used = mb_image_now() }
   state.image_cache[file.path] = entry
   return entry
 end
 
-local function selected_location(settings)
+function selected_location(settings)
   if settings.current_location == PROJECT_FILES_LOCATION then return PROJECT_FILES_LOCATION end
   if settings.current_location ~= "" then return settings.current_location end
   return state.locations[1] or ""
 end
 
-local function is_project_files_location(path)
+function is_project_files_location(path)
   return path == PROJECT_FILES_LOCATION
 end
 
-local function location_label(path)
+function location_label(path)
   if is_project_files_location(path) then return "Project files" end
   return path ~= "" and filename(path) or "No location"
 end
 
-local function project_files_tooltip()
+function project_files_tooltip()
   local _, project_path = r.EnumProjects(-1, "")
   if project_path and project_path ~= "" then return project_path end
   return "Media files used in the current project"
 end
 
-local function cache_key(path)
+function cache_key(path)
   path = normalize_path(path)
   local hash = 5381
   for index = 1, #path do hash = (hash * 33 + path:byte(index)) % 2147483647 end
   return tostring(hash) .. "_" .. filename(path):gsub("[^%w_]", "_")
 end
 
-local function cache_path(location)
+function cache_path(location)
   return cache_dir .. "/media_" .. cache_key(location) .. ".idx"
 end
 
@@ -775,15 +842,11 @@ function embedded_art_path(file_path)
 end
 
 function destroy_embedded_art(ctx, path)
-  local entry = state.embedded_art_image_cache[path]
-  if entry and entry.image and r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
-  state.embedded_art_image_cache[path] = nil
+  mb_release_image(ctx, state.embedded_art_image_cache, path)
 end
 
 function clear_embedded_art_cache(ctx)
-  for _, entry in pairs(state.embedded_art_image_cache) do
-    if entry and entry.image and r.ImGui_DestroyImage then pcall(r.ImGui_DestroyImage, ctx, entry.image) end
-  end
+  for path in pairs(state.embedded_art_image_cache) do destroy_embedded_art(ctx, path) end
   state.embedded_art_image_cache = {}
 end
 
@@ -792,10 +855,9 @@ function load_embedded_art(ctx, file_path)
   local path = embedded_art_path(file_path)
   if not path then return nil end
   local cached = state.embedded_art_image_cache[path]
-  if cached ~= nil then return cached or nil end
-  local cache_count = 0
-  for _ in pairs(state.embedded_art_image_cache) do cache_count = cache_count + 1 end
-  if cache_count > 80 then clear_embedded_art_cache(ctx) end
+  if type(cached) == "table" then cached.used = mb_image_now(); return cached end
+  if cached ~= nil then return nil end
+  if not mb_may_load_image(state.embedded_art_image_cache) then return nil end
   local ok, image = pcall(r.ImGui_CreateImage, path)
   if not ok or not image then state.embedded_art_image_cache[path] = false; return nil end
   if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, image) end
@@ -804,24 +866,24 @@ function load_embedded_art(ctx, file_path)
     local size_ok, w, h = pcall(r.ImGui_Image_GetSize, image)
     if size_ok then img_w, img_h = w or 0, h or 0 end
   end
-  local entry = { image = image, width = img_w, height = img_h, path = path }
+  local entry = { image = image, width = img_w, height = img_h, path = path, used = mb_image_now() }
   state.embedded_art_image_cache[path] = entry
   return entry
 end
 
-local function legacy_cache_path(location)
+function legacy_cache_path(location)
   return cache_dir .. "/media_" .. cache_key(location) .. ".lua"
 end
 
-local function cache_escape(value)
+function cache_escape(value)
   return tostring(value or ""):gsub("%%", "%%25"):gsub("\t", "%%09"):gsub("\r", "%%0D"):gsub("\n", "%%0A")
 end
 
-local function cache_unescape(value)
+function cache_unescape(value)
   return tostring(value or ""):gsub("%%09", "\t"):gsub("%%0D", "\r"):gsub("%%0A", "\n"):gsub("%%25", "%%")
 end
 
-local function split_cache_line(line)
+function split_cache_line(line)
   line = tostring(line or "")
   local parts = {}
   local start_pos = 1
@@ -837,7 +899,7 @@ local function split_cache_line(line)
   return parts
 end
 
-local function save_location_cache(location, files)
+function save_location_cache(location, files)
   if not location or location == "" or is_project_files_location(location) then return false end
   ensure_cache_dir()
   local path = cache_path(location)
@@ -855,7 +917,7 @@ local function save_location_cache(location, files)
   return os.rename(temp_path, path) == true
 end
 
-local function load_location_cache(location)
+function load_location_cache(location)
   if not location or location == "" or is_project_files_location(location) then return nil end
   local file = io.open(cache_path(location), "r")
   if not file then return nil end
@@ -884,14 +946,14 @@ local function load_location_cache(location)
   return files, cache_time
 end
 
-local function delete_location_cache(location)
+function delete_location_cache(location)
   if not location or location == "" or is_project_files_location(location) then return end
   os.remove(cache_path(location))
   os.remove(cache_path(location) .. ".tmp")
   os.remove(legacy_cache_path(location))
 end
 
-local function browse_location(settings)
+function browse_location(settings)
   local start_folder = normalize_path(settings.last_browse_location)
   if start_folder == "" then start_folder = normalize_path(selected_location(settings)) end
   if r.JS_Dialog_BrowseForFolder then
@@ -904,7 +966,7 @@ local function browse_location(settings)
   return normalize_path(value)
 end
 
-local function refresh_locations(settings)
+function refresh_locations(settings)
   state.locations = read_locations()
   local current = normalize_path(settings.current_location)
   if settings.current_location == PROJECT_FILES_LOCATION then return end
@@ -915,7 +977,7 @@ local function refresh_locations(settings)
   if not found then settings.current_location = state.locations[1] or "" end
 end
 
-local function reset_scan()
+function reset_scan()
   state.files = {}
   state.filtered = {}
   state.filtered_file_count = 0
@@ -940,7 +1002,7 @@ end
 
 local clear_waveform_pending
 
-local function set_loaded_files(location, files, status)
+function set_loaded_files(location, files, status)
   clear_waveform_pending()
   reset_scan()
   state.files = files or {}
@@ -950,12 +1012,12 @@ local function set_loaded_files(location, files, status)
   state.last_filter_key = nil
 end
 
-local function project_files_signature()
+function project_files_signature()
   local change_count = r.GetProjectStateChangeCount and r.GetProjectStateChangeCount(0) or 0
   return tostring(change_count) .. "|" .. tostring(r.CountMediaItems(0) or 0)
 end
 
-local function media_source_file_path(source)
+function media_source_file_path(source)
   local current = source
   for _ = 1, 8 do
     if not current then return "" end
@@ -969,7 +1031,7 @@ local function media_source_file_path(source)
   return ""
 end
 
-local function add_project_file(path, seen)
+function add_project_file(path, seen)
   path = normalize_path(path)
   if path == "" or seen[path:lower()] or not is_supported(path) then return end
   seen[path:lower()] = true
@@ -977,7 +1039,7 @@ local function add_project_file(path, seen)
   state.files[#state.files + 1] = { path = path, name = filename(path), kind = kind, ext = extension(path), rel_dir = "" }
 end
 
-local function collect_project_files()
+function collect_project_files()
   local seen = {}
   local item_count = r.CountMediaItems(0) or 0
   for item_index = 0, item_count - 1 do
@@ -994,7 +1056,7 @@ local function collect_project_files()
   state.last_filter_key = nil
 end
 
-local function destroy_waveform_source(path)
+function destroy_waveform_source(path)
   local source = state.waveform_peak_sources[path]
   if source and r.PCM_Source_Destroy then r.PCM_Source_Destroy(source) end
   state.waveform_peak_sources[path] = nil
@@ -1007,14 +1069,14 @@ clear_waveform_pending = function()
   state.waveform_refresh_pending = {}
 end
 
-local function enqueue_folder(path)
+function enqueue_folder(path)
   path = normalize_path(path)
   if path == "" or state.scan_seen[path:lower()] then return end
   state.scan_seen[path:lower()] = true
   state.scan_queue[#state.scan_queue + 1] = path
 end
 
-local function start_scan(settings)
+function start_scan(settings)
   clear_waveform_pending()
   reset_scan()
   local path = selected_location(settings)
@@ -1035,14 +1097,14 @@ local function start_scan(settings)
   state.last_error = nil
 end
 
-local function add_file(path, root)
+function add_file(path, root)
   if not is_supported(path) then return end
   path = normalize_path(path)
   local kind = file_kind(path)
   state.files[#state.files + 1] = { path = path, name = filename(path), kind = kind, ext = extension(path), rel_dir = relative_folder(path, root) }
 end
 
-local function scan_step(settings)
+function scan_step(settings)
   if not state.scanning then return end
   local budget = 18
   local max_files = settings.max_scan_files or defaults.max_scan_files
@@ -1078,7 +1140,7 @@ local function scan_step(settings)
   end
 end
 
-local function load_or_scan_location(settings, force_refresh)
+function load_or_scan_location(settings, force_refresh)
   local path = selected_location(settings)
   if path == "" then state.last_error = "No media location"; return end
   if is_project_files_location(path) then
@@ -1148,7 +1210,7 @@ function folder_browse_active(settings)
   return settings.folder_browse == true and settings.location_view_mode ~= "auto" and not is_project_files_location(selected_location(settings))
 end
 
-local function add_folder_entry(folders, seen, path, count)
+function add_folder_entry(folders, seen, path, count)
   if not path or path == "" then return end
   local key = path:lower()
   local folder = seen[key]
@@ -1160,7 +1222,7 @@ local function add_folder_entry(folders, seen, path, count)
   folder.file_count = folder.file_count + (count or 1)
 end
 
-local function build_folder_filter(files)
+function build_folder_filter(files)
   local current = tostring(state.folder_path or "")
   local folders = {}
   local folder_seen = {}
@@ -1194,11 +1256,11 @@ local function build_folder_filter(files)
   return result
 end
 
-local function filter_key(settings)
+function filter_key(settings)
   return table.concat({ settings.search_term or "", tostring(settings.show_audio), tostring(settings.show_midi), tostring(settings.show_video), tostring(settings.show_image), tostring(settings.location_view_mode), tostring(settings.folder_browse), tostring(state.folder_path or ""), tostring(settings.auto_selected_category), tostring(#state.files), state.category_counts_key or "" }, "|")
 end
 
-local function refresh_filter(settings)
+function refresh_filter(settings)
   if settings.location_view_mode == "auto" then build_category_counts(settings) end
   local key = filter_key(settings)
   if key == state.last_filter_key then return end
@@ -1238,9 +1300,11 @@ local function refresh_filter(settings)
   end
 end
 
-local function visible_range(ctx, item_count, item_height, buffer)
+-- offset is how much was already drawn above this run of items, so folder rows
+-- sitting on top of a tile grid do not throw the arithmetic off by their height.
+function visible_range(ctx, item_count, item_height, buffer, offset)
   if item_count <= 0 then return 1, 0, 0, 0 end
-  local scroll_y = r.ImGui_GetScrollY(ctx)
+  local scroll_y = math.max(0, r.ImGui_GetScrollY(ctx) - (tonumber(offset) or 0))
   local window_h = r.ImGui_GetWindowHeight(ctx)
   local first = math.min(item_count, math.max(1, math.floor(scroll_y / item_height) + 1 - buffer))
   local last = math.min(item_count, math.ceil((scroll_y + window_h) / item_height) + buffer)
@@ -1248,50 +1312,50 @@ local function visible_range(ctx, item_count, item_height, buffer)
   return first, last, (first - 1) * item_height, math.max(0, (item_count - last) * item_height)
 end
 
-local function track_pointer_valid(track)
+function track_pointer_valid(track)
   if not track then return false end
   if r.ValidatePtr2 then return r.ValidatePtr2(0, track, "MediaTrack*") end
   if r.ValidatePtr then return r.ValidatePtr(track, "MediaTrack*") end
   return true
 end
 
-local function take_pointer_valid(take)
+function take_pointer_valid(take)
   if not take then return false end
   if r.ValidatePtr2 then return r.ValidatePtr2(0, take, "MediaItem_Take*") end
   if r.ValidatePtr then return r.ValidatePtr(take, "MediaItem_Take*") end
   return true
 end
 
-local function volume_to_db(volume)
+function volume_to_db(volume)
   volume = tonumber(volume) or 0
   if volume <= 0.000001 then return -60 end
   return 20 * (math.log(volume) / math.log(10))
 end
 
-local function db_to_volume(db)
+function db_to_volume(db)
   db = tonumber(db) or -60
   if db <= -60 then return 0 end
   return 10 ^ (db / 20)
 end
 
-local function clamp(value, minimum, maximum)
+function clamp(value, minimum, maximum)
   return math.max(minimum, math.min(maximum, value))
 end
 
-local function right_clicked(ctx)
+function right_clicked(ctx)
   if not r.ImGui_IsMouseClicked then return false end
   local button = r.ImGui_MouseButton_Right and r.ImGui_MouseButton_Right() or 1
   return r.ImGui_IsMouseClicked(ctx, button)
 end
 
-local function hovered_mouse_wheel(ctx, enabled)
+function hovered_mouse_wheel(ctx, enabled)
   if enabled == false or not r.ImGui_GetMouseWheel or not r.ImGui_IsItemHovered then return 0 end
   if not r.ImGui_IsItemHovered(ctx) then return 0 end
   local wheel = r.ImGui_GetMouseWheel(ctx)
   return tonumber(wheel) or 0
 end
 
-local function clear_waveform_selection()
+function clear_waveform_selection()
   state.waveform_selection_file = nil
   state.waveform_selection_start = 0
   state.waveform_selection_end = 0
@@ -1299,18 +1363,18 @@ local function clear_waveform_selection()
   state.waveform_selection_auto = false
 end
 
-local function waveform_selection_active(file)
+function waveform_selection_active(file)
   return file and file.kind == "audio" and state.waveform_selection_file == file.path and math.abs((state.waveform_selection_end or 0) - (state.waveform_selection_start or 0)) >= 0.01
 end
 
-local function waveform_selection_range(file, length)
+function waveform_selection_range(file, length)
   if not waveform_selection_active(file) or not length or length <= 0 then return nil, nil end
   local start_norm = math.min(state.waveform_selection_start or 0, state.waveform_selection_end or 0)
   local end_norm = math.max(state.waveform_selection_start or 0, state.waveform_selection_end or 0)
   return start_norm * length, end_norm * length
 end
 
-local function seek_audio_preview(position)
+function seek_audio_preview(position)
   position = math.max(0, tonumber(position) or 0)
   if state.preview and state.preview_kind == "audio" and r.CF_Preview_SetValue then
     r.CF_Preview_SetValue(state.preview, "D_POSITION", position)
@@ -1319,7 +1383,7 @@ local function seek_audio_preview(position)
   end
 end
 
-local function waveform_visible_range()
+function waveform_visible_range()
   state.waveform_zoom = clamp(tonumber(state.waveform_zoom) or 1.0, 1.0, 16.0)
   state.waveform_scroll = clamp(tonumber(state.waveform_scroll) or 0.0, 0.0, 1.0)
   local duration = 1.0 / state.waveform_zoom
@@ -1328,25 +1392,25 @@ local function waveform_visible_range()
   return start_norm, start_norm + duration, duration
 end
 
-local function waveform_view_to_norm(local_norm)
+function waveform_view_to_norm(local_norm)
   local start_norm, _, duration = waveform_visible_range()
   return clamp(start_norm + clamp(local_norm, 0, 1) * duration, 0, 1)
 end
 
-local function waveform_norm_to_view(normalized)
+function waveform_norm_to_view(normalized)
   local start_norm, end_norm, duration = waveform_visible_range()
   normalized = tonumber(normalized) or 0
   if normalized < start_norm or normalized > end_norm then return nil end
   return duration > 0 and (normalized - start_norm) / duration or 0
 end
 
-local function reset_waveform_zoom()
+function reset_waveform_zoom()
   state.waveform_zoom = 1.0
   state.waveform_scroll = 0.0
   state.waveform_vertical_zoom = 1.0
 end
 
-local function modifier_down(ctx, name)
+function modifier_down(ctx, name)
   local mod = r["ImGui_Mod_" .. name]
   if not r.ImGui_GetKeyMods or not mod then return false end
   local ok_mod, mod_value = pcall(mod)
@@ -1359,7 +1423,7 @@ local function modifier_down(ctx, name)
   return false
 end
 
-local function mouse_button(name, fallback)
+function mouse_button(name, fallback)
   local fn = r["ImGui_MouseButton_" .. name]
   if fn then
     local ok, value = pcall(fn)
@@ -1368,43 +1432,43 @@ local function mouse_button(name, fallback)
   return fallback
 end
 
-local function mouse_clicked(ctx, name, fallback)
+function mouse_clicked(ctx, name, fallback)
   if not r.ImGui_IsMouseClicked then return false end
   local ok, clicked = pcall(r.ImGui_IsMouseClicked, ctx, mouse_button(name, fallback))
   return ok and clicked == true
 end
 
-local function mouse_down(ctx, name, fallback)
+function mouse_down(ctx, name, fallback)
   if not r.ImGui_IsMouseDown then return false end
   local ok, down = pcall(r.ImGui_IsMouseDown, ctx, mouse_button(name, fallback))
   return ok and down == true
 end
 
-local function item_hovered(ctx)
+function item_hovered(ctx)
   if not r.ImGui_IsItemHovered then return false end
   local ok, hovered = pcall(r.ImGui_IsItemHovered, ctx)
   return ok and hovered == true
 end
 
-local function mouse_position(ctx)
+function mouse_position(ctx)
   if not r.ImGui_GetMousePos then return nil end
   local ok, mouse_x, mouse_y = pcall(r.ImGui_GetMousePos, ctx)
   if not ok then return nil end
   return tonumber(mouse_x), tonumber(mouse_y)
 end
 
-local function mouse_x_position(ctx)
+function mouse_x_position(ctx)
   local mouse_x = mouse_position(ctx)
   return mouse_x
 end
 
-local function mouse_wheel_delta(ctx)
+function mouse_wheel_delta(ctx)
   if not r.ImGui_GetMouseWheel then return 0 end
   local ok, wheel = pcall(r.ImGui_GetMouseWheel, ctx)
   return ok and (tonumber(wheel) or 0) or 0
 end
 
-local function key_pressed(ctx, name)
+function key_pressed(ctx, name)
   if not r.ImGui_IsKeyPressed then return false end
   local key = r["ImGui_Key_" .. name]
   if not key then return false end
@@ -1414,7 +1478,7 @@ local function key_pressed(ctx, name)
   return ok and pressed == true
 end
 
-local function keyboard_input_available(ctx)
+function keyboard_input_available(ctx)
   if r.ImGui_IsAnyItemActive then
     local ok, active = pcall(r.ImGui_IsAnyItemActive, ctx)
     if ok and active then return false end
@@ -1426,13 +1490,13 @@ local function keyboard_input_available(ctx)
   return true
 end
 
-local function waveform_reset_rect(ctx, x, y, height)
+function waveform_reset_rect(ctx, x, y, height)
   if math.abs((state.waveform_zoom or 1.0) - 1.0) < 0.001 and math.abs((state.waveform_vertical_zoom or 1.0) - 1.0) < 0.001 then return nil end
   local tw, th = r.ImGui_CalcTextSize(ctx, "RESET")
   return x + 8, y + height - th - 7, x + tw + 18, y + height - 4
 end
 
-local function waveform_reset_hovered(ctx, x, y, height)
+function waveform_reset_hovered(ctx, x, y, height)
   local x1, y1, x2, y2 = waveform_reset_rect(ctx, x, y, height)
   if not x1 then return false end
   local mx, my = mouse_position(ctx)
@@ -1440,7 +1504,7 @@ local function waveform_reset_hovered(ctx, x, y, height)
   return mx >= x1 and mx <= x2 and my >= y1 and my <= y2
 end
 
-local function push_slider_theme(ctx)
+function push_slider_theme(ctx)
   local count = 0
   if r.ImGui_Col_FrameBg then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), Theme.colors.frame_bg); count = count + 1 end
   if r.ImGui_Col_FrameBgHovered then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), Theme.colors.frame_hover); count = count + 1 end
@@ -1450,11 +1514,11 @@ local function push_slider_theme(ctx)
   return count
 end
 
-local function pop_slider_theme(ctx, count)
+function pop_slider_theme(ctx, count)
   if count and count > 0 then r.ImGui_PopStyleColor(ctx, count) end
 end
 
-local function draw_slider_value(ctx, text)
+function draw_slider_value(ctx, text)
   if not r.ImGui_GetItemRectMin or not r.ImGui_GetItemRectMax or not r.ImGui_GetWindowDrawList then return end
   local x1, y1 = r.ImGui_GetItemRectMin(ctx)
   local x2, y2 = r.ImGui_GetItemRectMax(ctx)
@@ -1466,7 +1530,7 @@ local function draw_slider_value(ctx, text)
   r.ImGui_DrawList_AddText(draw_list, tx, ty, Theme.colors.text, text)
 end
 
-local function draw_transport_button(ctx, id, icon, active, enabled, size)
+function draw_transport_button(ctx, id, icon, active, enabled, size)
   if not r.ImGui_InvisibleButton or not r.ImGui_GetWindowDrawList or not r.ImGui_GetCursorScreenPos then
     local clicked = r.ImGui_Button(ctx, id, size, size)
     return clicked and enabled ~= false, r.ImGui_IsItemHovered(ctx)
@@ -1504,14 +1568,14 @@ local function draw_transport_button(ctx, id, icon, active, enabled, size)
   return clicked and enabled ~= false, hovered
 end
 
-local function draw_text_transport_button(ctx, id, label, active, width, height)
+function draw_text_transport_button(ctx, id, label, active, width, height)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), active and Theme.colors.accent or Theme.colors.text_dim)
   local clicked = r.ImGui_Button(ctx, label .. id, width, height)
   r.ImGui_PopStyleColor(ctx)
   return clicked, r.ImGui_IsItemHovered(ctx)
 end
 
-local function read_embedded_bpm(source)
+function read_embedded_bpm(source)
   if not source or not r.GetMediaFileMetadata then return nil end
   local keys = { "ACID:tempo", "ID3:TBPM", "VORBIS:BPM", "VORBIS:TEMPO", "XMP:dm/tempo" }
   for _, key in ipairs(keys) do
@@ -1905,7 +1969,7 @@ function M.auto_key.draw_overlay(ctx, app, settings, draw_list, x, y, w, h)
   M.auto_key.draw_popup(ctx, app, settings)
 end
 
-local function effective_playrate(source, kind, settings)
+function effective_playrate(source, kind, settings)
   local rate = tonumber(settings.preview_rate) or defaults.preview_rate
   if kind == "audio" and settings.tempo_sync then
     local file_bpm = read_embedded_bpm(source)
@@ -1920,7 +1984,7 @@ local function effective_playrate(source, kind, settings)
   return math.max(0.25, math.min(8, rate))
 end
 
-local function tape_speed_pitch_offset(rate)
+function tape_speed_pitch_offset(rate)
   rate = tonumber(rate) or 1
   if rate <= 0 then return 0 end
   return 12 * (math.log(rate) / math.log(2))
@@ -1929,14 +1993,14 @@ end
 -- Auto Key is folded in here rather than at the ten call sites, so preview and
 -- insert can never drift apart. `path` defaults to whatever is previewing; the
 -- insert paths pass the file they are actually placing.
-local function effective_preview_pitch(settings, rate, path)
+function effective_preview_pitch(settings, rate, path)
   local pitch = tonumber(settings.preview_pitch) or defaults.preview_pitch
   if settings.preview_tape_speed == true then pitch = pitch + tape_speed_pitch_offset(rate) end
   pitch = pitch + M.auto_key.offset(settings, path or state.preview_path)
   return math.max(-48, math.min(48, pitch))
 end
 
-local function display_playrate(settings)
+function display_playrate(settings)
   if not settings.tempo_sync then return settings.preview_rate end
   if state.preview_source then return effective_playrate(state.preview_source, state.preview_kind, settings) end
   if state.selected_file and state.selected_file.kind == "audio" then
@@ -1950,7 +2014,7 @@ local function display_playrate(settings)
   return settings.preview_rate
 end
 
-local function apply_track_preview_rate(settings)
+function apply_track_preview_rate(settings)
   if not state.preview_track_playback or not take_pointer_valid(state.preview_take) or not r.SetMediaItemTakeInfo_Value then return end
   local rate = effective_playrate(state.preview_source, state.preview_kind, settings)
   r.SetMediaItemTakeInfo_Value(state.preview_take, "D_PLAYRATE", rate)
@@ -1964,7 +2028,7 @@ local function apply_track_preview_rate(settings)
   r.GetSet_LoopTimeRange(true, true, 0, length, false)
 end
 
-local function apply_preview_rate(settings)
+function apply_preview_rate(settings)
   if state.preview and r.CF_Preview_SetValue then
     local rate = effective_playrate(state.preview_source, state.preview_kind, settings)
     r.CF_Preview_SetValue(state.preview, "D_PLAYRATE", rate)
@@ -1978,7 +2042,7 @@ local function apply_preview_rate(settings)
   end
 end
 
-local function restore_solo_states()
+function restore_solo_states()
   if not state.saved_solo_states then return end
   for track_index, solo_state in pairs(state.saved_solo_states) do
     local track = r.GetTrack(0, track_index)
@@ -1987,7 +2051,7 @@ local function restore_solo_states()
   state.saved_solo_states = nil
 end
 
-local function apply_exclusive_solo(track)
+function apply_exclusive_solo(track)
   if not track_pointer_valid(track) then return end
   state.saved_solo_states = {}
   local track_count = r.CountTracks(0)
@@ -2001,16 +2065,16 @@ local function apply_exclusive_solo(track)
   r.SetMediaTrackInfo_Value(track, "I_SOLO", 1)
 end
 
-local function preview_fade_seconds(settings)
+function preview_fade_seconds(settings)
   if not r.CF_Preview_SetValue then return 0 end
   return math.max(0, math.min(0.25, (tonumber(settings and settings.preview_fade_ms) or defaults.preview_fade_ms) / 1000))
 end
 
-local function preview_restart_gap_seconds(settings)
+function preview_restart_gap_seconds(settings)
   return math.max(0, math.min(0.1, (tonumber(settings and settings.preview_restart_gap_ms) or defaults.preview_restart_gap_ms) / 1000))
 end
 
-local function retire_preview_source(source)
+function retire_preview_source(source)
   if not source or not r.PCM_Source_Destroy then return end
   state.retired_preview_sources[#state.retired_preview_sources + 1] = {
     source = source,
@@ -2018,7 +2082,7 @@ local function retire_preview_source(source)
   }
 end
 
-local function cleanup_retired_preview_sources(force)
+function cleanup_retired_preview_sources(force)
   if not r.PCM_Source_Destroy then state.retired_preview_sources = {}; return end
   local now = r.time_precise and r.time_precise() or os.clock()
   for index = #state.retired_preview_sources, 1, -1 do
@@ -2030,11 +2094,11 @@ local function cleanup_retired_preview_sources(force)
   end
 end
 
-local function set_preview_volume(volume)
+function set_preview_volume(volume)
   if state.preview and r.CF_Preview_SetValue then r.CF_Preview_SetValue(state.preview, "D_VOLUME", math.max(0, tonumber(volume) or 0)) end
 end
 
-local function destroy_preview_now(settings, from_transport)
+function destroy_preview_now(settings, from_transport)
   if settings and settings.link_transport and state.preview and not from_transport and r.CSurf_OnStop then r.CSurf_OnStop() end
   if state.preview and r.CF_Preview_Stop then r.CF_Preview_Stop(state.preview) end
   state.preview = nil
@@ -2085,7 +2149,7 @@ local function destroy_preview_now(settings, from_transport)
   state.saved_solo_states = nil
 end
 
-local function destroy_preview(settings, from_transport, immediate)
+function destroy_preview(settings, from_transport, immediate)
   if immediate or state.preview_track_playback or state.preview_paused or not state.preview or state.preview_kind ~= "audio" then
     destroy_preview_now(settings, from_transport)
     return
@@ -2112,7 +2176,7 @@ local function destroy_preview(settings, from_transport, immediate)
   }
 end
 
-local function stop_preview_after_insert(app)
+function stop_preview_after_insert(app)
   local settings = ensure_settings(app)
   if settings.stop_preview_on_insert == false then return end
   if state.preview or state.preview_paused or state.preview_track_playback then
@@ -2120,11 +2184,11 @@ local function stop_preview_after_insert(app)
   end
 end
 
-local function validate_track(track)
+function validate_track(track)
   return track_pointer_valid(track)
 end
 
-local function track_label(track)
+function track_label(track)
   if not validate_track(track) then return "No track" end
   local index = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 0)
   local _, name = r.GetTrackName(track)
@@ -2132,7 +2196,7 @@ local function track_label(track)
   return index > 0 and (tostring(index) .. " - " .. name) or name
 end
 
-local function clear_drag()
+function clear_drag()
   state.potential_drag_file = nil
   state.dragging_file = nil
   state.drag_target_track = nil
@@ -2146,12 +2210,12 @@ local function clear_drag()
   end
 end
 
-local function mouse_screen_position()
+function mouse_screen_position()
   if r.GetMousePosition then return r.GetMousePosition() end
   return nil, nil
 end
 
-local function track_under_mouse()
+function track_under_mouse()
   if not r.GetTrackFromPoint then return nil end
   local x, y = mouse_screen_position()
   if not x or not y then return nil end
@@ -2166,7 +2230,7 @@ local function track_under_mouse()
   return nil
 end
 
-local function arrange_time_under_mouse()
+function arrange_time_under_mouse()
   if not r.JS_Window_FindChildByID or not r.JS_Window_GetRect or not r.GetSet_ArrangeView2 then return nil end
   local x = mouse_screen_position()
   if not x then return nil end
@@ -2183,11 +2247,11 @@ local function arrange_time_under_mouse()
   return math.max(0, time)
 end
 
-local function is_video_window_open()
+function is_video_window_open()
   return r.GetToggleCommandStateEx and r.GetToggleCommandStateEx(0, 50125) == 1
 end
 
-local function create_preview_track(kind, volume)
+function create_preview_track(kind, volume)
   local track_count = r.CountTracks(0)
   r.InsertTrackAtIndex(track_count, false)
   local track = r.GetTrack(0, track_count)
@@ -2205,7 +2269,7 @@ local function create_preview_track(kind, volume)
   return track
 end
 
-local function start_track_preview(settings, file)
+function start_track_preview(settings, file)
   if not file or (file.kind ~= "midi" and file.kind ~= "video") then return false end
   destroy_preview(nil, nil, true)
   local source = r.PCM_Source_CreateFromFile(file.path)
@@ -2277,7 +2341,7 @@ end
 
 local apply_silence_trim_selection
 
-local function start_preview(settings, file)
+function start_preview(settings, file)
   if not file then return false end
   if file.kind == "midi" or file.kind == "video" then return start_track_preview(settings, file) end
   if file.kind ~= "audio" then return false end
@@ -2360,7 +2424,7 @@ local function start_preview(settings, file)
   return true
 end
 
-local function restart_audio_preview_at(settings, position)
+function restart_audio_preview_at(settings, position)
   if not state.preview_path or not r.CF_CreatePreview or not r.CF_Preview_Play then return false end
   local source = r.PCM_Source_CreateFromFile(state.preview_path)
   if not source then return false end
@@ -2404,7 +2468,7 @@ local function restart_audio_preview_at(settings, position)
   return true
 end
 
-local function track_preview_position()
+function track_preview_position()
   if r.GetPlayPosition then
     local position = r.GetPlayPosition()
     if position then return position end
@@ -2412,7 +2476,7 @@ local function track_preview_position()
   return r.GetCursorPosition() or 0
 end
 
-local function pause_preview(settings, from_transport)
+function pause_preview(settings, from_transport)
   if state.preview_track_playback then
     if state.preview_paused then
       r.Main_OnCommand(1007, 0)
@@ -2468,7 +2532,7 @@ local function pause_preview(settings, from_transport)
   end
 end
 
-local function update_preview_fades(settings)
+function update_preview_fades(settings)
   local fade = state.preview_fade
   if not fade then return end
   if not fade.preview or state.preview ~= fade.preview or not r.CF_Preview_SetValue then state.preview_fade = nil; return end
@@ -2503,7 +2567,7 @@ local function update_preview_fades(settings)
   end
 end
 
-local function update_pending_preview(settings)
+function update_pending_preview(settings)
   if not state.pending_preview_file then return end
   if state.preview_fade then return end
   local due = tonumber(state.pending_preview_due) or 0
@@ -2516,11 +2580,11 @@ local function update_pending_preview(settings)
   start_preview(pending_settings, file)
 end
 
-local function can_preview_file(file)
+function can_preview_file(file)
   return file and (file.kind == "audio" or file.kind == "midi" or file.kind == "video")
 end
 
-local function preview_is_active()
+function preview_is_active()
   return state.preview ~= nil or state.preview_track_playback or state.preview_paused
 end
 
@@ -2545,7 +2609,7 @@ function M.auto_key.audition(app, settings)
   end
 end
 
-local function preview_finished(settings)
+function preview_finished(settings)
   if state.preview_paused then return false end
   if not preview_is_active() or settings.loop_preview then return false end
   local now = r.time_precise and r.time_precise() or os.clock()
@@ -2570,7 +2634,7 @@ local function preview_finished(settings)
   return false
 end
 
-local function monitor_transport_link(settings)
+function monitor_transport_link(settings)
   if not r.GetPlayState then return end
   local current_state = r.GetPlayState()
   if not settings.link_transport then
@@ -2591,7 +2655,7 @@ local function monitor_transport_link(settings)
   state.last_transport_state = current_state
 end
 
-local function monitor_audio_selection(settings)
+function monitor_audio_selection(settings)
   if (settings.auto_play_next and settings.loop_preview ~= true) or state.preview_paused or state.preview_kind ~= "audio" or not state.preview or not r.CF_Preview_GetValue then return end
   local selection_start, selection_end = waveform_selection_range({ path = state.preview_path, kind = "audio" }, state.preview_length)
   if not selection_start or not selection_end then return end
@@ -2612,7 +2676,7 @@ local function monitor_audio_selection(settings)
   end
 end
 
-local function preview_progress(file)
+function preview_progress(file)
   if not file or state.preview_path ~= file.path then return nil end
   local length = state.preview_length or 0
   if length <= 0 then return nil end
@@ -2629,7 +2693,7 @@ local function preview_progress(file)
   return math.max(0, math.min(1, position / length))
 end
 
-local function draw_preview_cursor(draw_list, file, x, y, width, height)
+function draw_preview_cursor(draw_list, file, x, y, width, height)
   local progress = preview_progress(file)
   if not progress then return end
   local view_progress = file and file.kind == "audio" and waveform_norm_to_view(progress) or progress
@@ -2639,7 +2703,7 @@ local function draw_preview_cursor(draw_list, file, x, y, width, height)
   r.ImGui_DrawList_AddLine(draw_list, cursor_x, y + 1, cursor_x, y + height - 1, Theme.colors.accent, 2)
 end
 
-local function draw_waveform_selection(draw_list, file, x, y, width, height)
+function draw_waveform_selection(draw_list, file, x, y, width, height)
   if not waveform_selection_active(file) then return end
   local start_norm = math.min(state.waveform_selection_start or 0, state.waveform_selection_end or 0)
   local end_norm = math.max(state.waveform_selection_start or 0, state.waveform_selection_end or 0)
@@ -2655,7 +2719,7 @@ local function draw_waveform_selection(draw_list, file, x, y, width, height)
   r.ImGui_DrawList_AddLine(draw_list, end_x, y + 1, end_x, y + height - 1, Theme.colors.accent, 1.5)
 end
 
-local function handle_waveform_interaction(ctx, file, x, y, width, height)
+function handle_waveform_interaction(ctx, file, x, y, width, height)
   if state.auto_key_hot then return end
   if not file or file.kind ~= "audio" then return end
   local hovered = item_hovered(ctx)
@@ -2711,7 +2775,7 @@ end
 
 local select_file
 
-local function next_preview_file(path)
+function next_preview_file(path)
   if not path then return nil, nil end
   local start_index = nil
   for index, file in ipairs(state.filtered) do
@@ -2725,7 +2789,7 @@ local function next_preview_file(path)
   return nil, nil
 end
 
-local function random_preview_index(current_index)
+function random_preview_index(current_index)
   if #state.filtered < 2 then return nil end
   math.randomseed(math.floor((r.time_precise and r.time_precise() or os.clock()) * 1000000))
   local next_index = current_index
@@ -2741,7 +2805,7 @@ local function random_preview_index(current_index)
   return nil
 end
 
-local function play_filtered_index(app, settings, index, disable_auto_progress)
+function play_filtered_index(app, settings, index, disable_auto_progress)
   local file = state.filtered[index]
   if not can_preview_file(file) then return false end
   state.auto_advance_pending = false
@@ -2756,7 +2820,7 @@ local function play_filtered_index(app, settings, index, disable_auto_progress)
   return false
 end
 
-local function previous_preview_file(app, settings)
+function previous_preview_file(app, settings)
   local index = state.selected_index or 1
   for target = index - 1, 1, -1 do
     if play_filtered_index(app, settings, target, true) then return true end
@@ -2764,7 +2828,7 @@ local function previous_preview_file(app, settings)
   return false
 end
 
-local function advance_preview_file(app, settings)
+function advance_preview_file(app, settings)
   local next_index = nil
   if settings.random_play_next then
     next_index = random_preview_index(state.selected_index)
@@ -2777,14 +2841,14 @@ local function advance_preview_file(app, settings)
   return false
 end
 
-local function can_auto_advance(settings)
+function can_auto_advance(settings)
   local min_time = tonumber(settings.min_display_time) or 0
   if min_time <= 0 then return true end
   if not state.preview_started_at or state.preview_started_at <= 0 then return true end
   return ((r.time_precise and r.time_precise() or os.clock()) - state.preview_started_at) >= min_time
 end
 
-local function try_auto_advance(app, settings)
+function try_auto_advance(app, settings)
   if can_auto_advance(settings) then
     state.auto_advance_pending = false
     state.auto_advance_due = 0
@@ -2800,7 +2864,7 @@ local function try_auto_advance(app, settings)
   return false
 end
 
-local function process_pending_auto_advance(app, settings)
+function process_pending_auto_advance(app, settings)
   if not state.auto_advance_pending then return false end
   if state.preview_paused or settings.loop_preview or not settings.auto_play_next then
     state.auto_advance_pending = false
@@ -2816,17 +2880,17 @@ local function process_pending_auto_advance(app, settings)
   return false
 end
 
-local function update_auto_play(app, settings)
+function update_auto_play(app, settings)
   process_pending_auto_advance(app, settings)
   if not settings.auto_play_next or not preview_finished(settings) then return end
   try_auto_advance(app, settings)
 end
 
-local function peak_cache_key(path, width)
+function peak_cache_key(path, width)
   return path .. "|" .. tostring(math.max(24, math.floor(width or 0)))
 end
 
-local function read_source_peaks(source, peakrate, start_time, channels, count)
+function read_source_peaks(source, peakrate, start_time, channels, count)
   local buffer = r.new_array(count * channels * 2)
   buffer.clear()
   local ok = r.PCM_Source_GetPeaks(source, peakrate, start_time, channels, count, 0, buffer)
@@ -2844,11 +2908,11 @@ end
 
 local request_peak_build
 
-local function silence_trim_key(file, settings)
+function silence_trim_key(file, settings)
   return table.concat({ file.path or "", tostring(settings.trim_silence_threshold_db), tostring(settings.trim_silence_padding_ms) }, "|")
 end
 
-local function detect_silence_trim(file, settings)
+function detect_silence_trim(file, settings)
   if not file or file.kind ~= "audio" or not file.path or file.path == "" then return nil end
   local cache_key = silence_trim_key(file, settings)
   if state.silence_trim_cache[cache_key] ~= nil then return state.silence_trim_cache[cache_key] end
@@ -2918,7 +2982,7 @@ apply_silence_trim_selection = function(file, settings, force)
   return waveform_selection_active(file)
 end
 
-local function log_peak_miss(file, length, channels, samples, peakrate, ok, buffer)
+function log_peak_miss(file, length, channels, samples, peakrate, ok, buffer)
   if not file or not file.path or state.waveform_debug_logged[file.path] then return end
   state.waveform_debug_logged[file.path] = true
   local max_peak = 0
@@ -2944,7 +3008,7 @@ request_peak_build = function(source, path)
   end
 end
 
-local function generate_peak_file(path)
+function generate_peak_file(path)
   if not path or path == "" or not r.PCM_Source_BuildPeaks then return end
   local source = r.PCM_Source_CreateFromFile(path)
   if not source then return end
@@ -2952,7 +3016,7 @@ local function generate_peak_file(path)
   if r.PCM_Source_Destroy then r.PCM_Source_Destroy(source) end
 end
 
-local function invalidate_waveform_cache(path)
+function invalidate_waveform_cache(path)
   if not path or path == "" then return end
   for key in pairs(state.waveform_cache) do
     if key:sub(1, #path + 1) == path .. "|" then state.waveform_cache[key] = nil end
@@ -2962,7 +3026,7 @@ local function invalidate_waveform_cache(path)
   state.waveform_build_pending[path] = nil
 end
 
-local function mark_waveform_pending(path, samples)
+function mark_waveform_pending(path, samples)
   local now = r.time_precise and r.time_precise() or os.clock()
   local pending = state.waveform_pending[path]
   if pending then
@@ -2974,21 +3038,21 @@ local function mark_waveform_pending(path, samples)
   end
 end
 
-local function waveform_retry_due(path)
+function waveform_retry_due(path)
   local pending = state.waveform_pending[path]
   if not pending then return true end
   local now = r.time_precise and r.time_precise() or os.clock()
   return now >= (pending.time or 0)
 end
 
-local function waveform_refresh_due(path, samples)
+function waveform_refresh_due(path, samples)
   local refresh = state.waveform_refresh_pending[path]
   if not refresh or refresh.samples ~= samples then return false end
   local now = r.time_precise and r.time_precise() or os.clock()
   return now >= (refresh.time or 0)
 end
 
-local function schedule_waveform_refresh(source, path, samples)
+function schedule_waveform_refresh(source, path, samples)
   local now = r.time_precise and r.time_precise() or os.clock()
   local refresh = state.waveform_refresh_pending[path]
   if not refresh then
@@ -3005,7 +3069,7 @@ local function schedule_waveform_refresh(source, path, samples)
   request_peak_build(source, path)
 end
 
-local function load_waveform(file, width)
+function load_waveform(file, width)
   if not file or file.kind ~= "audio" then return nil end
   local zoom = clamp(tonumber(state.waveform_zoom) or 1.0, 1.0, 16.0)
   local samples = math.max(32, math.floor(width or 200))
@@ -3067,7 +3131,7 @@ local function load_waveform(file, width)
   return data
 end
 
-local function load_midi_notes(file)
+function load_midi_notes(file)
   if not file or file.kind ~= "midi" or not file.path or file.path == "" then return nil end
   local cached = state.midi_note_cache[file.path]
   if cached then return cached end
@@ -3123,7 +3187,7 @@ local function load_midi_notes(file)
   return state.midi_note_cache[file.path]
 end
 
-local function draw_midi_preview(ctx, draw_list, file, x, y, width, height)
+function draw_midi_preview(ctx, draw_list, file, x, y, width, height)
   local data = load_midi_notes(file)
   if not data or #data.notes == 0 then
     local text = "No MIDI notes"
@@ -3159,7 +3223,7 @@ local function draw_midi_preview(ctx, draw_list, file, x, y, width, height)
   r.ImGui_DrawList_AddText(draw_list, x + 8, y + 7, Theme.colors.text, label)
 end
 
-local function draw_waveform(ctx, file, width, height)
+function draw_waveform(ctx, file, width, height)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   r.ImGui_InvisibleButton(ctx, "##media_waveform", width, height)
@@ -3260,11 +3324,11 @@ local function draw_waveform(ctx, file, width, height)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Click seek | Drag select | Ctrl-wheel zoom | Ctrl-Alt-wheel height | Right-click clear") end
 end
 
-local function target_track()
+function target_track()
   return r.GetSelectedTrack(0, 0) or r.GetTrack(0, 0)
 end
 
-local function force_peaks_in_item(item, take)
+function force_peaks_in_item(item, take)
   if not item or not take then return end
   r.UpdateItemInProject(item)
   local position = r.GetMediaItemInfo_Value(item, "D_POSITION")
@@ -3276,7 +3340,7 @@ local function force_peaks_in_item(item, take)
   r.UpdateArrange()
 end
 
-local function insert_file_on_track(app, file, track, target_lane)
+function insert_file_on_track(app, file, track, target_lane)
   if not file then app.status = "No media selected"; return end
   if not track then app.status = "No target track"; return end
   if file.kind == "audio" then generate_peak_file(file.path) end
@@ -3358,7 +3422,7 @@ local function insert_file_on_track(app, file, track, target_lane)
   if source then stop_preview_after_insert(app) end
 end
 
-local function insert_file(app, file)
+function insert_file(app, file)
   insert_file_on_track(app, file, target_track())
 end
 
@@ -4010,12 +4074,12 @@ function Sampler.draw_context_menu(ctx, app, file)
   Sampler.draw_rs5k_pad_menu(ctx, app, file)
 end
 
-local function shift_down(ctx)
+function shift_down(ctx)
   if not r.ImGui_IsKeyDown then return false end
   return (r.ImGui_Key_LeftShift and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_LeftShift())) or (r.ImGui_Key_RightShift and r.ImGui_IsKeyDown(ctx, r.ImGui_Key_RightShift()))
 end
 
-local function register_drag_source(ctx, file, hovered)
+function register_drag_source(ctx, file, hovered)
   if not hovered or state.dragging_file then return end
   if r.ImGui_IsMouseClicked(ctx, 0) then
     local x, y = mouse_screen_position()
@@ -4025,11 +4089,11 @@ local function register_drag_source(ctx, file, hovered)
   end
 end
 
-local function native_drag_available()
+function native_drag_available()
   return r.TK_StartFileDrag ~= nil
 end
 
-local function point_over_main_window(mx, my)
+function point_over_main_window(mx, my)
   if not (r.JS_Window_FromPoint and r.GetMainHwnd) then return true end
   local main = r.GetMainHwnd()
   if not main then return true end
@@ -4052,13 +4116,13 @@ local function point_over_main_window(mx, my)
   return false
 end
 
-local function point_inside_browser(mx, my)
+function point_inside_browser(mx, my)
   local rect = state.win_rect
   if not rect then return false end
   return mx >= rect.x and mx <= rect.x + rect.w and my >= rect.y and my <= rect.y + rect.h
 end
 
-local function try_native_drag(file, mx, my)
+function try_native_drag(file, mx, my)
   if not native_drag_available() then return false end
   if not file or not file.path then return false end
   if not mx or not my then return false end
@@ -4071,7 +4135,7 @@ local function try_native_drag(file, mx, my)
   return true
 end
 
-local function update_drag(app)
+function update_drag(app)
   local ctx = app.ctx
   if not r.ImGui_IsMouseDown or not r.ImGui_IsMouseReleased or not r.GetTrackFromPoint then return end
   local mouse_down = r.ImGui_IsMouseDown(ctx, 0)
@@ -4148,7 +4212,7 @@ local function update_drag(app)
   end
 end
 
-local function draw_drag_overlay(app)
+function draw_drag_overlay(app)
   if not state.dragging_file or not r.ImGui_GetMousePos or not r.ImGui_GetMainViewport then return end
   local ctx = app.ctx
   local imx, imy = r.ImGui_GetMousePos(ctx)
@@ -4179,7 +4243,7 @@ local function draw_drag_overlay(app)
   end
 end
 
-local function draw_location_combo(ctx, settings, app, width)
+function draw_location_combo(ctx, settings, app, width)
   local current = selected_location(settings)
   if settings.location_view_mode == "auto" then
     build_category_counts(settings)
@@ -4250,7 +4314,7 @@ local function draw_location_combo(ctx, settings, app, width)
   r.ImGui_PopItemWidth(ctx)
 end
 
-local function add_location(settings, app)
+function add_location(settings, app)
   local path = browse_location(settings)
   if path == "" then return end
   settings.last_browse_location = path
@@ -4269,21 +4333,21 @@ local function add_location(settings, app)
   load_or_scan_location(settings, false)
 end
 
-local function select_location(settings, app, path)
+function select_location(settings, app, path)
   if not path or path == "" or settings.current_location == path then return end
   settings.current_location = path
   if app.save_settings then app.save_settings() end
   load_or_scan_location(settings, false)
 end
 
-local function save_location_order(settings, app, selected_path)
+function save_location_order(settings, app, selected_path)
   write_locations(state.locations)
   if selected_path and selected_path ~= "" then settings.current_location = selected_path end
   if settings.current_location == "" or not selected_location(settings) then settings.current_location = state.locations[1] or "" end
   if app.save_settings then app.save_settings() end
 end
 
-local function move_location(settings, app, index, direction)
+function move_location(settings, app, index, direction)
   local target = index + direction
   if target < 1 or target > #state.locations then return end
   local selected_path = selected_location(settings)
@@ -4291,7 +4355,7 @@ local function move_location(settings, app, index, direction)
   save_location_order(settings, app, selected_path)
 end
 
-local function remove_location(settings, app, index)
+function remove_location(settings, app, index)
   local removed = table.remove(state.locations, index)
   if not removed then return end
   if settings.current_location == removed then
@@ -4303,7 +4367,7 @@ local function remove_location(settings, app, index)
   end
 end
 
-local function draw_location_manager(app, settings)
+function draw_location_manager(app, settings)
   local ctx = app.ctx
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Locations")
@@ -4343,7 +4407,7 @@ local function draw_location_manager(app, settings)
   end
 end
 
-local function draw_media_settings_popup(app, settings)
+function draw_media_settings_popup(app, settings)
   local ctx = app.ctx
   if not r.ImGui_BeginPopup(ctx, "##media_browser_settings") then return end
   local changed = false
@@ -4410,6 +4474,21 @@ local function draw_media_settings_popup(app, settings)
   r.ImGui_Text(ctx, "Display")
   c, v = r.ImGui_Checkbox(ctx, "Compact list view", settings.compact_list == true)
   if c then settings.compact_list = v; changed = true end
+  if r.ImGui_SliderInt then
+    -- One slider rather than a list/grid switch, the same as the Project
+    -- Browser: all the way down is the list exactly as it was, and above that
+    -- the number is roughly how wide a tile wants to be.
+    r.ImGui_PushItemWidth(ctx, UIScale.round(170))
+    local tc, tv = r.ImGui_SliderInt(ctx, "Tile size", math.floor(tonumber(settings.tile_size) or 0), 0, 320, (tonumber(settings.tile_size) or 0) <= 0 and "List" or "%d px")
+    r.ImGui_PopItemWidth(ctx)
+    if tc then
+      settings.tile_size = tv <= 0 and 0 or math.max(64, tv)
+      changed = true
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Drag right for cover art tiles, all the way left for the list.\nFolders keep their own full width rows above the tiles")
+    end
+  end
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Scanning")
   r.ImGui_PushItemWidth(ctx, UIScale.round(170))
@@ -4455,7 +4534,7 @@ local function draw_media_settings_popup(app, settings)
   r.ImGui_EndPopup(ctx)
 end
 
-local function draw_toolbar(app, settings, width)
+function draw_toolbar(app, settings, width)
   local ctx = app.ctx
   local button_h = UIScale.button_h(ctx)
   local compact = width < UIScale.round(330)
@@ -4502,7 +4581,7 @@ local function draw_toolbar(app, settings, width)
   draw_media_settings_popup(app, settings)
 end
 
-local function draw_filter_icon(draw_list, kind, x, y, size, color)
+function draw_filter_icon(draw_list, kind, x, y, size, color)
   local cx = x + size * 0.5
   local cy = y + size * 0.5
   if kind == "audio" then
@@ -4532,7 +4611,7 @@ local function draw_filter_icon(draw_list, kind, x, y, size, color)
   end
 end
 
-local function draw_filter_toggle(ctx, kind, active, tooltip)
+function draw_filter_toggle(ctx, kind, active, tooltip)
   local button_size = UIScale.round(22)
   local icon_size = UIScale.round(16)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
@@ -4545,7 +4624,7 @@ local function draw_filter_toggle(ctx, kind, active, tooltip)
   return clicked
 end
 
-local function draw_filter_buttons(ctx, settings, app, width)
+function draw_filter_buttons(ctx, settings, app, width)
   local changed = false
   local row_w = width or r.ImGui_GetContentRegionAvail(ctx) or UIScale.round(320)
   local spacing_x = UIScale.round(4)
@@ -4585,7 +4664,7 @@ function select_file(app, file, index, autoplay)
   return true
 end
 
-local function scroll_selected_file_into_view(ctx, row_h)
+function scroll_selected_file_into_view(ctx, row_h)
   if not state.selected_index or not r.ImGui_GetScrollY or not r.ImGui_GetWindowHeight or not r.ImGui_SetScrollY then return end
   local top = (state.selected_index - 1) * row_h
   local bottom = top + row_h
@@ -4598,7 +4677,7 @@ local function scroll_selected_file_into_view(ctx, row_h)
   end
 end
 
-local function file_list_window_active(ctx)
+function file_list_window_active(ctx)
   if r.ImGui_IsWindowHovered then
     local ok, hovered = pcall(r.ImGui_IsWindowHovered, ctx)
     if ok and hovered then return true end
@@ -4610,7 +4689,7 @@ local function file_list_window_active(ctx)
   return state.file_list_keyboard_focus == true
 end
 
-local function open_folder_entry(app, entry)
+function open_folder_entry(app, entry)
   if not entry or (entry.kind ~= "folder" and entry.kind ~= "folder_up") then return false end
   state.folder_path = entry.kind == "folder_up" and (entry.path or "") or (entry.folder_path or entry.path or "")
   state.last_filter_key = nil
@@ -4624,7 +4703,7 @@ local function open_folder_entry(app, entry)
   return true
 end
 
-local function handle_file_list_keyboard(app, settings, row_h)
+function handle_file_list_keyboard(app, settings, row_h)
   local ctx = app.ctx
   if #state.filtered == 0 or not file_list_window_active(ctx) or not keyboard_input_available(ctx) then return false end
   local index = state.selected_index
@@ -4668,7 +4747,7 @@ local function handle_file_list_keyboard(app, settings, row_h)
   return false
 end
 
-local function draw_folder_row(app, settings, entry, index, width)
+function draw_folder_row(app, settings, entry, index, width)
   local ctx = app.ctx
   local compact = settings.compact_list == true
   local row_h = compact and UIScale.round(24) or UIScale.round(48)
@@ -4689,7 +4768,7 @@ local function draw_folder_row(app, settings, entry, index, width)
   local text_x = compact and x + UIScale.round(30) or x + UIScale.round(32)
   local folder_art = nil
   if not compact and entry.kind == "folder" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(entry.path or ""))) end
-  if not compact and entry.kind == "folder_up" and (state.folder_path or "") ~= "" then folder_art = load_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(state.folder_path or ""))) end
+  if not compact and entry.kind == "folder_up" and (state.folder_path or "") ~= "" then folder_art = mb_folder_art(ctx, normalize_path(selected_location(settings) .. "/" .. tostring(state.folder_path or ""))) end
   local drew_art = false
   if folder_art and folder_art.image and r.ImGui_DrawList_AddImage then
     local box_x, box_y, box_size = x + UIScale.round(7), y + UIScale.round(8), UIScale.round(32)
@@ -4737,7 +4816,7 @@ local function draw_folder_row(app, settings, entry, index, width)
   r.ImGui_PopID(ctx)
 end
 
-local function draw_file_row(app, settings, file, index, width)
+function draw_file_row(app, settings, file, index, width)
   local ctx = app.ctx
   local compact = settings.compact_list == true
   local row_h = compact and UIScale.round(24) or UIScale.round(48)
@@ -4823,7 +4902,215 @@ local function draw_file_row(app, settings, file, index, width)
   r.ImGui_PopID(ctx)
 end
 
-local function draw_file_list(app, settings, width, height)
+-- Tile view. The art area is square and the caption sits under it, so the grid
+-- stays regular whatever shape the cover happens to be. Everything a row does on
+-- click, drag and right-click it does too - the two are the same item in a
+-- different frame, and behaving differently would be the surprise.
+function mb_tile_metrics(ctx, settings, width)
+  local want = math.max(64, math.floor(tonumber(settings.tile_size) or 0))
+  local spacing = UIScale.round(6)
+  local avail = math.max(want, width - UIScale.round(12))
+  local columns = math.max(1, math.floor((avail + spacing) / (want + spacing)))
+  local size = math.max(UIScale.round(56), math.floor((avail - spacing * (columns - 1)) / columns))
+  local caption = UIScale.round(18)
+  return columns, size, size + caption, spacing
+end
+
+-- A folder gets a tile of its own, because in a music library the album is the
+-- folder and that is the thing carrying the cover. Only the "up" entry stays a
+-- row: it is navigation, not something to look at.
+function mb_draw_folder_tile(app, settings, entry, index, size, tile_h)
+  local ctx = app.ctx
+  r.ImGui_PushID(ctx, "media_folder_tile_" .. tostring(index))
+  local clicked = r.ImGui_InvisibleButton(ctx, "##ftile", size, tile_h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local x, y = r.ImGui_GetItemRectMin(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local radius = UIScale.px(5)
+  local art_bottom = y + size
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + size, art_bottom, Theme.colors.frame_bg, radius)
+
+  -- A folder entry carries a path relative to the scan location, while every
+  -- lookup on disk needs the whole thing. Files come with an absolute path, which
+  -- is why they found their art while the folder holding them did not.
+  local folder_abs = normalize_path(selected_location(settings) .. "/" .. tostring(entry.folder_path or entry.path or ""))
+  local art, art_source = mb_folder_art(ctx, folder_abs)
+  local drew = false
+  if art and art.image and r.ImGui_DrawList_AddImage then
+    local inset = UIScale.round(2)
+    local ok = pcall(r.ImGui_DrawList_AddImage, draw_list, art.image,
+      x + inset, y + inset, x + size - inset, art_bottom - inset, 0, 0, 1, 1, 0xFFFFFFFF)
+    if ok then
+      drew = true
+    elseif art.path then
+      if art_source == "embedded" then destroy_embedded_art(ctx, art.path) else destroy_folder_art(ctx, art.path) end
+    end
+  end
+  if not drew then
+    -- A folder glyph rather than a letter, so an album without a cover still
+    -- reads as a folder at a glance instead of as a file that failed to load.
+    local w = math.max(UIScale.round(18), math.floor(size * 0.34))
+    local h = math.floor(w * 0.74)
+    local bx, by = x + (size - w) * 0.5, y + (size - h) * 0.5
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by + h * 0.18, bx + w, by + h, 0xE0B252FF, UIScale.px(3))
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + w * 0.45, by + h * 0.3, 0xE0B252FF, UIScale.px(2))
+  end
+
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + size, y + tile_h, hovered and Theme.colors.accent or Theme.colors.border, radius, 0, hovered and UIScale.px(1.4) or UIScale.px(0.7))
+  r.ImGui_DrawList_PushClipRect(draw_list, x + UIScale.round(3), art_bottom, x + size - UIScale.round(3), y + tile_h, true)
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(4), art_bottom + UIScale.round(2), Theme.colors.text, entry.name or "")
+  r.ImGui_DrawList_PopClipRect(draw_list)
+
+  local double_clicked = hovered and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0)
+  -- Same bargain as the rows, including the "open on double-click" setting, so
+  -- switching to tiles does not quietly change what a click does.
+  if clicked or double_clicked then
+    if settings.folder_double_click_open == true then
+      state.selected_index = index
+      state.selected_file = nil
+      state.file_list_keyboard_focus = true
+      if double_clicked then open_folder_entry(app, entry) end
+    else
+      open_folder_entry(app, entry)
+    end
+  end
+  if hovered then
+    local count = tonumber(entry.file_count) or 0
+    r.ImGui_SetTooltip(ctx, folder_abs .. (count > 0 and ("\n" .. tostring(count) .. " media") or ""))
+  end
+  r.ImGui_PopID(ctx)
+end
+
+function mb_draw_file_tile(app, settings, file, index, size, tile_h)
+  local ctx = app.ctx
+  r.ImGui_PushID(ctx, "media_tile_" .. tostring(index))
+  local clicked = r.ImGui_InvisibleButton(ctx, "##tile", size, tile_h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local x, y = r.ImGui_GetItemRectMin(ctx)
+  local draw_list = r.ImGui_GetWindowDrawList(ctx)
+  local selected = state.selected_file and state.selected_file.path == file.path
+  local previewing = state.preview_path == file.path
+  local radius = UIScale.px(5)
+  local art_bottom = y + size
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + size, art_bottom, Theme.colors.frame_bg, radius)
+
+  local art, source
+  if file.kind == "image" then
+    art = load_image(ctx, file)
+  else
+    art, source = cover_art_for_file(ctx, file)
+  end
+  local drew = false
+  if art and art.image and r.ImGui_DrawList_AddImage then
+    local inset = UIScale.round(2)
+    local ok = pcall(r.ImGui_DrawList_AddImage, draw_list, art.image,
+      x + inset, y + inset, x + size - inset, art_bottom - inset, 0, 0, 1, 1, 0xFFFFFFFF)
+    if ok then
+      drew = true
+    elseif art.path then
+      -- A picture that will not draw is worse than none: drop it rather than
+      -- retry it every frame for as long as the tile is on screen.
+      if source == "embedded" then destroy_embedded_art(ctx, art.path) else destroy_folder_art(ctx, art.path) end
+    end
+  end
+  if not drew then
+    local kind_color = file.kind == "audio" and 0x48CFADFF or file.kind == "midi" and 0xFFCE54FF or file.kind == "video" and 0xED5565FF or 0x8F9AA8FF
+    local box = math.max(UIScale.round(14), math.floor(size * 0.28))
+    local bx, by = x + (size - box) * 0.5, y + (size - box) * 0.5
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + box, by + box, kind_color, UIScale.px(3))
+    r.ImGui_DrawList_AddText(draw_list, bx + box * 0.3, by + box * 0.2, 0x111111FF, file.kind:sub(1, 1):upper())
+  end
+
+  local border = (selected or previewing) and Theme.colors.accent or Theme.colors.border
+  r.ImGui_DrawList_AddRect(draw_list, x, y, x + size, y + tile_h, border, radius, 0, (selected or previewing) and UIScale.px(1.6) or UIScale.px(0.7))
+  if selected or previewing then
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, art_bottom, x + size, y + tile_h, selected and 0x7AA2F730 or 0x48CFAD24, radius)
+  end
+  r.ImGui_DrawList_PushClipRect(draw_list, x + UIScale.round(3), art_bottom, x + size - UIScale.round(3), y + tile_h, true)
+  r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(4), art_bottom + UIScale.round(2), Theme.colors.text, file.name)
+  r.ImGui_DrawList_PopClipRect(draw_list)
+
+  if clicked then
+    if shift_down(ctx) then
+      insert_file(app, file)
+    elseif not state.selected_file or state.selected_file.path ~= file.path then
+      select_file(app, file, index, true)
+    else
+      select_file(app, file, index, false)
+      if can_preview_file(file) and (settings.auto_play or state.preview_path == file.path) then start_preview(settings, file) end
+    end
+  end
+  register_drag_source(ctx, file, hovered)
+  if r.ImGui_BeginDragDropSource and r.ImGui_SetDragDropPayload and r.ImGui_BeginDragDropSource(ctx, 0) then
+    r.ImGui_SetDragDropPayload(ctx, "TK_WORKBENCH_MEDIA_FILE", file.path)
+    r.ImGui_Text(ctx, file.name)
+    r.ImGui_EndDragDropSource(ctx)
+  end
+  if r.ImGui_BeginPopupContextItem(ctx, "##media_tile_context") then
+    if r.ImGui_MenuItem(ctx, "Insert on selected track") then insert_file(app, file) end
+    if can_preview_file(file) and r.ImGui_MenuItem(ctx, "Preview") then start_preview(settings, file) end
+    if r.ImGui_MenuItem(ctx, "Show cover art") then
+      select_file(app, file, index, false)
+      state.cover_viewer_open = true
+    end
+    Sampler.draw_context_menu(ctx, app, file)
+    r.ImGui_EndPopup(ctx)
+  end
+  if hovered then r.ImGui_SetTooltip(ctx, file.path) end
+  r.ImGui_PopID(ctx)
+end
+
+-- Folders keep their own full width rows above the tiles rather than becoming
+-- tiles themselves, which keeps navigating and browsing visually apart. Only the
+-- tile rows in view are drawn; the space above and below them is padding, so a
+-- location with thousands of files costs the same as one with twenty.
+function mb_draw_file_grid(app, settings, width, row_h)
+  local ctx = app.ctx
+  -- Folders become tiles alongside the files, because in a media library the
+  -- album is the folder and that is what carries the cover. Only "up" stays a
+  -- row: it is navigation, and a tile of it would just be in the way.
+  local up, items = {}, {}
+  for index, entry in ipairs(state.filtered) do
+    if entry.kind == "folder_up" then
+      up[#up + 1] = { entry = entry, index = index }
+    else
+      items[#items + 1] = { entry = entry, index = index }
+    end
+  end
+
+  local start_y = r.ImGui_GetCursorPosY(ctx)
+  for _, item in ipairs(up) do
+    draw_folder_row(app, settings, item.entry, item.index, math.max(UIScale.round(80), width - UIScale.round(12)))
+  end
+  local consumed = r.ImGui_GetCursorPosY(ctx) - start_y
+
+  local files = items
+  if #files == 0 then return #up end
+  local columns, size, tile_h, spacing = mb_tile_metrics(ctx, settings, width)
+  local rows = math.ceil(#files / columns)
+  local stride = tile_h + spacing
+  local first_row, last_row, top_pad, bottom_pad = visible_range(ctx, rows, stride, 1, consumed)
+  if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
+  local drawn = 0
+  for row = first_row, last_row do
+    for column = 1, columns do
+      local item = files[(row - 1) * columns + column]
+      if item then
+        if column > 1 then r.ImGui_SameLine(ctx, 0, spacing) end
+        if item.entry.kind == "folder" then
+          mb_draw_folder_tile(app, settings, item.entry, item.index, size, tile_h)
+        else
+          mb_draw_file_tile(app, settings, item.entry, item.index, size, tile_h)
+        end
+        drawn = drawn + 1
+      end
+    end
+  end
+  if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
+  return #up + drawn
+end
+
+function draw_file_list(app, settings, width, height)
   local ctx = app.ctx
   local shown = 0
   local child_flags = 0
@@ -4839,26 +5126,67 @@ local function draw_file_list(app, settings, width, height)
     end
     local row_h = settings.compact_list == true and UIScale.round(24) or UIScale.round(48)
     handle_file_list_keyboard(app, settings, row_h)
-    local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
-    if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), UIScale.round(8), 0) end
-    local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_h, UIScale.round(8))
-    shown = math.max(0, last - first + 1)
-    if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
-    for index = first, last do
-      local entry = state.filtered[index]
-      if entry then
-        if entry.kind == "folder" or entry.kind == "folder_up" then
-          draw_folder_row(app, settings, entry, index, math.max(UIScale.round(80), width - UIScale.round(12)))
-        else
-          draw_file_row(app, settings, entry, index, math.max(UIScale.round(80), width - UIScale.round(12)))
+    if (tonumber(settings.tile_size) or 0) > 0 then
+      shown = mb_draw_file_grid(app, settings, width, row_h)
+    else
+      local compact_spacing = settings.compact_list == true and r.ImGui_PushStyleVar and r.ImGui_StyleVar_ItemSpacing
+      if compact_spacing then r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), UIScale.round(8), 0) end
+      local first, last, top_pad, bottom_pad = visible_range(ctx, #state.filtered, row_h, UIScale.round(8))
+      shown = math.max(0, last - first + 1)
+      if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
+      for index = first, last do
+        local entry = state.filtered[index]
+        if entry then
+          if entry.kind == "folder" or entry.kind == "folder_up" then
+            draw_folder_row(app, settings, entry, index, math.max(UIScale.round(80), width - UIScale.round(12)))
+          else
+            draw_file_row(app, settings, entry, index, math.max(UIScale.round(80), width - UIScale.round(12)))
+          end
         end
       end
+      if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
+      if compact_spacing then r.ImGui_PopStyleVar(ctx, 1) end
     end
-    if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
-    if compact_spacing then r.ImGui_PopStyleVar(ctx, 1) end
     r.ImGui_EndChild(ctx)
   end
   return shown
+end
+
+-- Which file a folder can borrow its cover from. Most tagged music carries the
+-- art inside the files and has no cover.jpg at all, so without this an album
+-- folder shows an empty tile while every track in it has a picture. Built in one
+-- pass over the scan and kept until the scan changes, because doing it per
+-- folder per frame would be a walk through every file each time.
+function mb_folder_cover_index()
+  -- Identity of the scan rather than its size alone, so switching to another
+  -- location that happens to hold the same number of files still rebuilds.
+  local count = #state.files
+  local key = tostring(count) .. "|" .. tostring(count > 0 and state.files[1].path or "") .. "|" .. tostring(count > 0 and state.files[count].path or "")
+  if state.folder_cover_key ~= key then
+    local index = {}
+    for _, file in ipairs(state.files) do
+      if file.kind == "audio" then
+        local folder = normalize_path(parent_folder(file.path))
+        if index[folder] == nil then index[folder] = file.path end
+      end
+    end
+    state.folder_cover_map = index
+    state.folder_cover_key = key
+  end
+  return state.folder_cover_map or {}
+end
+
+-- Returns entry, source. Folder art first, then whatever the first track inside
+-- happens to carry.
+function mb_folder_art(ctx, folder)
+  local art = load_folder_art(ctx, folder)
+  if art and art.image then return art, "folder" end
+  local file_path = mb_folder_cover_index()[normalize_path(folder or "")]
+  if file_path then
+    local embedded = load_embedded_art(ctx, file_path)
+    if embedded and embedded.image then return embedded, "embedded" end
+  end
+  return nil
 end
 
 function cover_art_for_file(ctx, file)
@@ -4893,7 +5221,9 @@ function draw_cover_viewer(app, settings)
   if r.ImGui_WindowFlags_AlwaysAutoResize then flags = flags | r.ImGui_WindowFlags_AlwaysAutoResize() end
   local visible, open = r.ImGui_Begin(ctx, "Cover art##media_cover_viewer", true, flags)
   if not open then state.cover_viewer_open = false end
-  if not visible then return end
+  -- Begin pushed the window whatever it returned, so End has to run even with
+  -- nothing to draw into it. Skipping it leaves the window stack one deep.
+  if not visible then r.ImGui_End(ctx); return end
   if r.ImGui_GetWindowPos then
     local current_x, current_y = r.ImGui_GetWindowPos(ctx)
     settings.cover_window = type(settings.cover_window) == "table" and settings.cover_window or {}
@@ -4989,6 +5319,7 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  mb_begin_image_frame(ctx)
   state.activated = true
   if r.ImGui_GetWindowPos and r.ImGui_GetWindowSize then
     local wx, wy = r.ImGui_GetWindowPos(ctx)

@@ -1,7 +1,21 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.77
+-- @version 0.6.78
 -- @changelog:
+-- v0.6.78
+--   + Workbench: The smallest the window may be made no longer depends on auto-collapse. That floor was part of the auto-collapse code and disappeared along with it, so a window with the feature switched off could be dragged shut altogether - which is exactly the state that broke it. It belongs to the window rather than to that one feature, and applies either way now
+--   + Project Browser: Fixed the panels being laid out past the bottom of the pane in a short window. Each of the list, the info panel and the preview panel had a minimum of its own, with nothing checking that they still fit together - so in a small window with the split view on they asked for close to 300 pixels of a 180 pixel pane and the last one ended up entirely outside it. What is actually left is now shared out, bottom panel first, and a panel that would come out a sliver is dropped so its room goes to the list instead
+--   + Workbench: Fixed the window becoming unusable after being collapsed or dragged very small, and the run of errors that came with it - "ImGui_EndChild: Missing PopID()", "ImGui_PopID: expected a valid ImGui_Context*", and then a page of "ImGui_Detach" failures. Worse, the size is remembered, so a window left in that state failed again the moment it was reopened and looked for all the world like a script that would not start
+--   + Workbench: ImGui hands back false from Begin when a window is collapsed or entirely off screen, meaning there is no point submitting anything to it - but it has pushed the window regardless and End still has to run. Three windows here skipped End on that path, and two more returned early without it, which leaves the window stack one deep and makes the next thing along report an error that has nothing to do with it. That is what sent every attempt at this chasing the Project Browser
+--   + Workbench: If a window is already stuck in that state, deleting its file from REAPER/ReaImGui clears the remembered size. Each context has one, named after a hash, and the right one is found by searching that folder for the window's title
+--   + Workbench: The error log says which instance wrote each line. Workbench and Workbench 2 share one workbench_errors.txt, so two of them running side by side read as one instance contradicting itself - and two lines a second apart look like cause and effect when they may be two unrelated faults in two different windows. That ambiguity was in the way of tracking down a crash report, which is a poor reason to lose a day
+--   + Workbench: Repeated errors are counted rather than dropped. Only the first of a repeating error was ever written, so one failure and a thousand looked identical in the file; the line is written again as the count passes ten, a hundred and a thousand, which says whether something happened once or is happening every frame without filling the file with copies
+--   + Workbench: A module can leave a note saying where it was, and an error that follows carries it. The Project Browser marks its list, tile grid, detail, playback, preview transport and settings popup, so a failure points at the panel that was drawing rather than only at the line that noticed. ImGui reports where it detects a broken id stack, which is not where the stack was broken
+--   + Media Browser: A tile view, so the cover art your library already carries is worth looking at. One "Tile size" slider does it: all the way down is the list exactly as it was, and above that the number is roughly how wide a tile wants to be, with the column count following from the width of the pane. Art comes from the file's own tags first and from cover.jpg or folder.jpg beside it second, image files show themselves, and anything without art falls back to the coloured kind marker. Requested by Do613_9
+--   + Media Browser: Folders are tiles too, because in a music library the album is the folder and that is the thing carrying the art. A folder shows its own cover.jpg where there is one, and otherwise borrows the art out of the first track inside it - most tagged music keeps the picture in the files and has no cover.jpg at all, so without that an album tile would sit empty while every track in it had one. The "up" entry does the same and stays a row, since it is navigation rather than something to look at. Tiles behave exactly like the rows always did - click, shift-click, drag and right-click all do the same things, and the "open folders on double-click" setting still applies - because they are the same item in a different frame. Only the tile rows in view are drawn, so a location with thousands of files costs what one with twenty costs
+--   + Media Browser: Cover art loading was rebuilt first, because a grid asks for dozens of pictures where a single preview asked for one. Destroying an image was not enough on its own - while it stayed attached it kept occupying one of the context's attachment slots - which is the leak that filled the Project Browser's console with "ImGui_Attach: exceeded maximum object attachment limit". Nothing is thrown away while drawing either: the old code emptied the whole cache the moment it passed a limit, including pictures the frame it interrupted was still drawing with
+--   + Media Browser: A screenful of new tiles now fills in over a frame or two rather than creating everything at once, and art that has gone unused for a couple of seconds is released, never below a floor that keeps what is on screen. The image preview used to keep exactly one picture and throw the rest away on the spot, which was fine for one panel and is not for a grid, so it lives under the same cap now
+--   + Media Browser: The module sat on Lua's ceiling of 200 local variables per file, with nothing to spare - adding a single one made it refuse to load, which is what happened twice while Auto Key was being built. Its top level functions are now declared the way 86 of them already were, which costs no local at all, leaving 19 in use and the rest free. Nothing about it behaves differently; it is room to work in
 -- v0.6.77
 --   + Project Browser: A third switch next to the other two, for the name and path that follow the pointer over a project. Off, nothing appears on hover - in tile view the covers are labelled anyway, and in the list the name is already in the row. Folders keep their tooltip, since nothing else says where they lead. Requested by vik-tan
 -- v0.6.76
@@ -564,6 +578,8 @@ local app = {
   modules = {},
   modules_by_id = {},
   module_errors = {},
+  error_counts = {},
+  breadcrumb = nil,
   cache = {},
   status = "Ready",
   close_requested = false,
@@ -684,16 +700,37 @@ end
 
 app.save_settings = save_settings
 
-local function append_error_log(key, err)
+-- Both Workbench and Workbench 2 write to this one file, so every line says
+-- which of them wrote it. Without that, two instances running side by side look
+-- like one instance contradicting itself, and a pair of lines a second apart
+-- reads as cause and effect when it may be two unrelated faults.
+local function append_error_log(key, err, count)
   local file = io.open(script_path .. "workbench_errors.txt", "a")
   if not file then return end
-  file:write(os.date("%Y-%m-%d %H:%M:%S") .. " | " .. tostring(key) .. " | " .. tostring(err) .. "\n")
+  local repeats = (tonumber(count) or 1) > 1 and (" | x" .. tostring(count)) or ""
+  file:write(os.date("%Y-%m-%d %H:%M:%S") .. " | " .. SCRIPT_NAME .. " | " .. tostring(key) .. " | " .. tostring(err) .. repeats .. "\n")
   file:close()
 end
 
+-- A repeat used to be dropped, so one failure and a thousand looked the same in
+-- the file. Counted now, and written again as the count passes each mark, which
+-- says whether something happened once or is happening every frame without
+-- filling the file with identical lines.
+local ERROR_LOG_MARKS = { [1] = true, [10] = true, [100] = true, [1000] = true, [10000] = true }
+
 local function record_module_error(key, err)
   local message = tostring(err)
-  if app.module_errors[key] ~= message then append_error_log(key, message) end
+  -- The breadcrumb says where the module was when it failed. It is the module's
+  -- own note, since the framework only ever sees the error, never the place.
+  if app.breadcrumb and app.breadcrumb ~= "" then message = message .. "  [at " .. tostring(app.breadcrumb) .. "]" end
+  if app.module_errors[key] ~= message then
+    app.error_counts[key] = 1
+    append_error_log(key, message, 1)
+  else
+    local count = (app.error_counts[key] or 0) + 1
+    app.error_counts[key] = count
+    if ERROR_LOG_MARKS[count] then append_error_log(key, message, count) end
+  end
   app.module_errors[key] = message
 end
 
@@ -2101,6 +2138,13 @@ local function apply_auto_collapse_window()
   if not available then
     app.cache.auto_collapse_collapsed = false
     app.cache.auto_collapse_force_restore = nil
+    -- The floor under the window size used to be part of auto-collapse and went
+    -- away with it, so a window with auto-collapse off could be dragged shut
+    -- entirely. It belongs to the window, not to that feature.
+    if r.ImGui_SetNextWindowSizeConstraints then
+      local min_w, min_h = expanded_window_min_size()
+      r.ImGui_SetNextWindowSizeConstraints(ctx, min_w, min_h, 100000, 100000)
+    end
     return
   end
   local collapsed = app.cache.auto_collapse_collapsed == true
@@ -2289,6 +2333,9 @@ local function draw_module_instance(module, pane_id)
   end
   r.ImGui_PushID(ctx, pane_id or module.id)
   if module.draw then
+    -- Cleared first, so a note left by whatever drew before this cannot be read
+    -- as belonging to this module's failure.
+    app.breadcrumb = nil
     local ok, err = pcall(module.draw, app)
     if ok then
       clear_module_error(module.id .. ".draw")
@@ -2296,6 +2343,9 @@ local function draw_module_instance(module, pane_id)
       record_module_error(module.id .. ".draw", err)
       draw_module_error(module, err)
     end
+    -- Deliberately not cleared here. The PopID below is outside the module's own
+    -- pcall, so when that is the thing that fails the note has to survive long
+    -- enough to be read - and that failure is exactly the one we are chasing.
   end
   r.ImGui_PopID(ctx)
 end
@@ -2758,8 +2808,8 @@ local function draw_missing_extensions_popup()
       end
       app.cache.missing_ext_open = false
     end
-    r.ImGui_End(ctx)
   end
+  r.ImGui_End(ctx)
 end
 
 local function draw_frame()
@@ -2819,8 +2869,8 @@ local function draw_frame()
     end
     save_expanded_window_size(docked)
     update_auto_collapse_state(workbench_window_hovered(), docked)
-    r.ImGui_End(ctx)
   end
+  r.ImGui_End(ctx)
   draw_preferences_settings()
   draw_missing_extensions_popup()
   UI.end_tooltip_frame(app)

@@ -3391,7 +3391,10 @@ local function draw_setup_popup(app, settings)
   local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse()
   local visible, open = r.ImGui_Begin(ctx, "Control Room Setup##control_room_setup_window", true, flags)
   if not open then state.setup_open = false end
-  if not visible then return end
+  -- Begin pushed the window whatever it returned, so End has to run even when
+  -- there is nothing to draw into. Returning early without it leaves the window
+  -- stack one deep, and everything after that is somebody else's error message.
+  if not visible then r.ImGui_End(ctx); return end
   if r.ImGui_GetWindowPos and r.ImGui_GetWindowSize then
     local current_x, current_y = r.ImGui_GetWindowPos(ctx)
     local current_w, current_h = r.ImGui_GetWindowSize(ctx)

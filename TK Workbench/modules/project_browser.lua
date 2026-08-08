@@ -1612,6 +1612,7 @@ end
 -- folders first and projects after, never interleaved, so the two can simply be
 -- drawn one after the other.
 local function draw_project_grid(app, settings, width, height, tile)
+  app.breadcrumb = "project_browser: tile grid"
   local ctx = app.ctx
   local entries = state.visible_entries
   local first_project = nil
@@ -1648,6 +1649,7 @@ local function draw_project_grid(app, settings, width, height, tile)
 end
 
 local function draw_project_list(app, settings, width, height)
+  app.breadcrumb = "project_browser: list"
   local ctx = app.ctx
   local _, mode_def = active_mode(settings)
   local row_h = settings.compact_list == true and UIScale.round(24) or UIScale.round(54)
@@ -1744,6 +1746,7 @@ local function draw_playback_placeholder(ctx, text)
 end
 
 local function draw_project_preview_transport(app, settings, project, width)
+  app.breadcrumb = "project_browser: preview transport"
   local ctx = app.ctx
   local preview_path = project_preview_path(project)
   local is_playing = state.preview_project_path == project.path and state.preview ~= nil
@@ -1851,6 +1854,7 @@ local function draw_project_preview_transport(app, settings, project, width)
 end
 
 local function draw_project_detail(app, project, width, height)
+  app.breadcrumb = "project_browser: detail"
   local ctx = app.ctx
   local detail_flags = 0
   if r.ImGui_WindowFlags_NoScrollbar then detail_flags = detail_flags | r.ImGui_WindowFlags_NoScrollbar() end
@@ -1895,6 +1899,7 @@ local function draw_project_detail(app, project, width, height)
 end
 
 local function draw_project_playback_panel(app, project, width, height)
+  app.breadcrumb = "project_browser: playback"
   local ctx = app.ctx
   local flags = 0
   if r.ImGui_WindowFlags_NoScrollbar then flags = flags | r.ImGui_WindowFlags_NoScrollbar() end
@@ -1920,6 +1925,7 @@ local function draw_project_playback_panel(app, project, width, height)
 end
 
 local function draw_settings_popup(app, settings)
+  app.breadcrumb = "project_browser: settings popup"
   local ctx = app.ctx
   local mode, mode_def = active_mode(settings)
   if state.settings_popup then
@@ -2173,6 +2179,29 @@ function M.draw(app)
     end
     list_h = math.max(UIScale.round(48), height - detail_h - playback_h - spacing_h)
   end
+  -- Each panel was floored on its own, with nothing checking that they still fit
+  -- together. In a short pane - a small window with the split on, say - they add
+  -- up to more than there is, and the last one is laid out past the bottom edge
+  -- where it cannot be drawn at all. Give away what is actually left, bottom
+  -- panel first, and drop a panel entirely rather than place it outside.
+  local over = (list_h + detail_h + playback_h + spacing_h) - height
+  if over > 0 then
+    local take = math.min(over, playback_h)
+    playback_h = playback_h - take
+    over = over - take
+    if over > 0 then
+      take = math.min(over, detail_h)
+      detail_h = detail_h - take
+      over = over - take
+    end
+    if over > 0 then list_h = math.max(0, list_h - over) end
+  end
+  -- Shaved to a sliver is worse than gone: it cannot show anything and it still
+  -- takes room off the list. Below the height of its own collapsed strip it goes.
+  if playback_h > 0 and playback_h < strip_h then list_h = list_h + playback_h; playback_h = 0 end
+  if detail_h > 0 and detail_h < strip_h then list_h = list_h + detail_h; detail_h = 0 end
+  show_detail = show_detail and detail_h > 0
+  show_playback = show_playback and playback_h > 0
   draw_project_list(app, settings, width, list_h)
   if show_detail then draw_project_detail(app, state.selected_project, width, detail_h) end
   if show_playback then draw_project_playback_panel(app, state.selected_project, width, playback_h) end
