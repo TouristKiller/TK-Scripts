@@ -1,8 +1,12 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.13
+-- @version 3.2.14
 -- @changelog:
 --[[ 
+    v3.2.14:
+        + Projects: added a responsive cover-art grid controlled by the Tile size slider in the columns menu; slide below 64 px to return to the table view.
+        + Project grid: selection, double-click open, tooltips and project context actions are available directly from each cover tile.
+        + Project grid performance: only visible rows are rendered, cover paths are cached and image loading is deferred and capped per frame for smooth scrolling with large project libraries.
     v3.2.13:
         + TK Notes: line colors can now be applied to multiple lines at once - select several lines (for example a whole chorus) and pick a color from the palette, the overflow menu or the new "Line color" submenu in the editor right-click menu. Resetting works on the whole selection too.
     v3.2.12:
@@ -1523,6 +1527,7 @@ function SetDefaultConfig()
         show_project_col_tags = false,
         project_sort_column = "name",
         project_sort_ascending = true,
+        project_tile_size = 0,
         show_project_cover = true,
         project_cover_align = "right",
         hide_main_window = false,
@@ -11784,6 +11789,197 @@ function LoadProjectCover(project_path)
     end
 end
 
+local project_grid_image_state = { covers = {}, queue = {} }
+
+function ClearProjectGridCovers()
+    for _, entry in pairs(project_grid_image_state.covers) do
+        if entry.image and r.ImGui_ValidatePtr(entry.image, 'ImGui_Image*') then
+            r.ImGui_Detach(ctx, entry.image)
+        end
+    end
+    project_grid_image_state.covers = {}
+    project_grid_image_state.queue = {}
+end
+
+function InvalidateProjectGridCoverPath(project_path)
+    for _, list in ipairs({ projects or {}, filtered_projects or {} }) do
+        for _, project in ipairs(list) do
+            if project.path == project_path then
+                project.cached_cover = nil
+                project.cached_cover_path = nil
+            end
+        end
+    end
+end
+
+function GetProjectGridCover(project)
+    if project.cached_cover_path == nil then
+        project.cached_cover_path = GetProjectCoverPath(project.path) or false
+    end
+    local path = project.cached_cover_path
+    if not path then return nil end
+    local entry = project_grid_image_state.covers[path]
+    if entry then
+        entry.used = r.time_precise()
+        return entry
+    end
+    project_grid_image_state.queue[path] = true
+    return nil
+end
+
+function ProcessProjectGridCoverQueue()
+    local loaded = 0
+    local queue = project_grid_image_state.queue
+    project_grid_image_state.queue = {}
+    for path in pairs(queue) do
+        if loaded >= 4 then break end
+        if not project_grid_image_state.covers[path] then
+            local image = r.ImGui_CreateImage(path)
+            if image then
+                r.ImGui_Attach(ctx, image)
+                local width, height = r.ImGui_Image_GetSize(image)
+                project_grid_image_state.covers[path] = { image = image, width = width, height = height, used = r.time_precise() }
+                loaded = loaded + 1
+            end
+        end
+    end
+    local count = 0
+    for _ in pairs(project_grid_image_state.covers) do count = count + 1 end
+    if count > 80 then
+        local oldest_path, oldest_time
+        for cached_path, cached in pairs(project_grid_image_state.covers) do
+            if (not oldest_time or cached.used < oldest_time) then
+                oldest_path, oldest_time = cached_path, cached.used
+            end
+        end
+        if oldest_path then
+            local oldest = project_grid_image_state.covers[oldest_path]
+            if oldest.image and r.ImGui_ValidatePtr(oldest.image, 'ImGui_Image*') then
+                r.ImGui_Detach(ctx, oldest.image)
+            end
+            project_grid_image_state.covers[oldest_path] = nil
+        end
+    end
+end
+
+function SelectProjectBrowserProject(project)
+    selected_project = project
+    config.last_selected_project_path = project.path
+    SaveConfig()
+    ReleaseCurrentPreview()
+    local preview_path = GetProjectPreviewPath(project.path)
+    if preview_path then
+        local source = r.PCM_Source_CreateFromFile(preview_path)
+        if source then
+            current_preview = r.CF_CreatePreview(source)
+            r.CF_Preview_SetValue(current_preview, "D_VOLUME", preview_volume)
+            current_source = source
+        end
+    end
+    current_project_info = {
+        path = project.path,
+        name = project.name,
+        has_preview = current_source ~= nil,
+        length = current_source and r.GetMediaSourceLength(current_source) or 0,
+        size = GetFileSize(project.path),
+        folder_files = CountProjectFolderFiles(project.path),
+        rpp_info = ParseRPPHeader(project.path)
+    }
+end
+
+function DrawProjectGridContextMenu(project)
+    if r.ImGui_MenuItem(ctx, "Open Project") then open_project(project.path) end
+    if r.ImGui_MenuItem(ctx, "Open in New Tab") then
+        r.Main_OnCommand(41929, 0)
+        r.Main_openProject(project.path)
+    end
+    if r.ImGui_MenuItem(ctx, "Edit Metadata...") then TKFXBProjectMeta.OpenEditor(project) end
+    if r.ImGui_BeginMenu(ctx, "Make Preview") then
+        if r.ImGui_MenuItem(ctx, "Full project") then DoMakeProjectPreview(project.path, "full") end
+        if r.ImGui_MenuItem(ctx, "Time selection") then DoMakeProjectPreview(project.path, "timesel") end
+        if r.ImGui_MenuItem(ctx, "Custom audio file...") then DoMakeProjectPreviewCustom(project.path) end
+        r.ImGui_EndMenu(ctx)
+    end
+    if r.ImGui_MenuItem(ctx, "Manage Previews...") then
+        manage_previews_target_path = project.path
+        manage_previews_open_request = true
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Set Cover Image...") then
+        SetProjectCover(project.path)
+        ClearProjectGridCovers()
+    end
+    if GetProjectCoverPath(project.path) and r.ImGui_MenuItem(ctx, "Remove Cover Image") then
+        local safe_name = (project.path:match("([^/\\]+)%.rpp$") or ""):gsub("[^%w%s-]", "_")
+        os.remove(project_covers_path .. safe_name .. ".png")
+        os.remove(project_covers_path .. safe_name .. ".jpg")
+        InvalidateProjectGridCoverPath(project.path)
+        project_cover_loaded_for = nil
+        project_cover_texture = nil
+        ClearProjectGridCovers()
+    end
+end
+
+function DrawProjectsGrid(tile_size)
+    ProcessProjectGridCoverQueue()
+    local available_width = r.ImGui_GetContentRegionAvail(ctx)
+    local gap = 8
+    local columns = math.max(1, math.floor((available_width + gap) / (tile_size + gap)))
+    local width = math.floor((available_width - gap * (columns - 1)) / columns)
+    local text_height = r.ImGui_GetTextLineHeightWithSpacing(ctx) * 2 + 8
+    local row_height = width + text_height + gap
+    local rows = math.ceil(#filtered_projects / columns)
+    local scroll_y = r.ImGui_GetScrollY(ctx)
+    local viewport_height = r.ImGui_GetWindowHeight(ctx)
+    local first_row = math.max(1, math.floor(scroll_y / row_height))
+    local last_row = math.min(rows, math.ceil((scroll_y + viewport_height) / row_height) + 1)
+    if first_row > 1 then r.ImGui_Dummy(ctx, 1, (first_row - 1) * row_height) end
+    for row = first_row, last_row do
+        for column = 1, columns do
+        local i = (row - 1) * columns + column
+        local project = filtered_projects[i]
+        if not project then break end
+        if column > 1 then r.ImGui_SameLine(ctx, 0, gap) end
+        r.ImGui_PushID(ctx, project.path)
+        local selected = selected_project and selected_project.path == project.path
+        if selected then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x7AA2F744) end
+        local clicked = r.ImGui_Button(ctx, "##ProjectTile", width, width + text_height)
+        if selected then r.ImGui_PopStyleColor(ctx) end
+        local hovered = r.ImGui_IsItemHovered(ctx)
+        local x, y = r.ImGui_GetItemRectMin(ctx)
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local cover = GetProjectGridCover(project)
+        local inset = 5
+        local image_size = width - inset * 2
+        r.ImGui_DrawList_AddRectFilled(draw_list, x + inset, y + inset, x + width - inset, y + width - inset, 0x181818FF, 4)
+        if cover then
+            local scale = math.min(image_size / math.max(cover.width, 1), image_size / math.max(cover.height, 1))
+            local image_width, image_height = cover.width * scale, cover.height * scale
+            local image_x = x + (width - image_width) * 0.5
+            local image_y = y + inset + (image_size - image_height) * 0.5
+            r.ImGui_DrawList_AddImage(draw_list, cover.image, image_x, image_y, image_x + image_width, image_y + image_height, 0, 0, 1, 1, 0xFFFFFFFF)
+        else
+            local label = "No Image"
+            local label_width = r.ImGui_CalcTextSize(ctx, label)
+            r.ImGui_DrawList_AddText(draw_list, x + (width - label_width) * 0.5, y + width * 0.5 - 7, 0x777777FF, label)
+        end
+        local name = project.name
+        while #name > 1 and r.ImGui_CalcTextSize(ctx, name .. "...") > width - inset * 2 do name = name:sub(1, -2) end
+        if name ~= project.name then name = name .. "..." end
+        r.ImGui_DrawList_AddText(draw_list, x + inset, y + width + 3, 0xFFFFFFFF, name)
+        if clicked then SelectProjectBrowserProject(project) end
+        if hovered and r.ImGui_IsMouseDoubleClicked(ctx, 0) then open_project(project.path) end
+        if r.ImGui_BeginPopupContextItem(ctx, "##ProjectGridContext") then
+            DrawProjectGridContextMenu(project)
+            r.ImGui_EndPopup(ctx)
+        end
+        if hovered then r.ImGui_SetTooltip(ctx, project.name .. "\n" .. project.path) end
+        r.ImGui_PopID(ctx)
+        end
+    end
+    if last_row < rows then r.ImGui_Dummy(ctx, 1, (rows - last_row) * row_height) end
+end
+
 function SetProjectCover(project_path)
     local rv, file = r.JS_Dialog_BrowseForOpenFiles("Choose Cover Image", "", "", "Image files\0*.png;*.jpg;*.jpeg\0All files\0*.*\0", false)
     if rv == 1 and file and file ~= "" then
@@ -11809,6 +12005,8 @@ function SetProjectCover(project_path)
             end
         end
         project_cover_loaded_for = nil
+        InvalidateProjectGridCoverPath(project_path)
+        ClearProjectGridCovers()
         LoadProjectCover(project_path)
     end
 end
@@ -21971,6 +22169,7 @@ function ShowScreenshotWindow()
                     for _, p in ipairs(projects) do
                         p.cached_rpp_info = nil
                         p.cached_cover = nil
+                        p.cached_cover_path = nil
                         p.cached_size = nil
                         p.cached_media = nil
                         p.cached_length = nil
@@ -21980,6 +22179,7 @@ function ShowScreenshotWindow()
                     end
                 end
                 project_cover_loaded_for = nil
+                ClearProjectGridCovers()
                 if TKFXBProjectMeta and TKFXBProjectMeta.InvalidateCache then
                     TKFXBProjectMeta.InvalidateCache()
                 end
@@ -21992,6 +22192,13 @@ function ShowScreenshotWindow()
             if r.ImGui_BeginPopup(ctx, "##ProjectColumnsMenu") then
                 local col_changed = false
                 local rv
+                local tile_size = math.floor(tonumber(config.project_tile_size) or 0)
+                rv, tile_size = r.ImGui_SliderInt(ctx, "Tile size", tile_size, 0, 240, tile_size < 64 and "List" or "%d px")
+                if rv then
+                    config.project_tile_size = tile_size < 64 and 0 or tile_size
+                    col_changed = true
+                end
+                r.ImGui_Separator(ctx)
                 rv, config.show_project_col_sizes = r.ImGui_Checkbox(ctx, "Size", config.show_project_col_sizes)
                 if rv then col_changed = true end
                 rv, config.show_project_col_lengths = r.ImGui_Checkbox(ctx, "Length", config.show_project_col_lengths)
@@ -22107,7 +22314,12 @@ function ShowScreenshotWindow()
             local current_y = r.ImGui_GetCursorPosY(ctx)
             local footer_height = config.show_project_info and 228 or 1
             local available_height = window_height - current_y - footer_height
-            r.ImGui_BeginChild(ctx, "ProjectsList", -1, available_height, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
+            local project_tile_size = math.floor(tonumber(config.project_tile_size) or 0)
+            local project_child_flags = project_tile_size >= 64 and 0 or r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+            r.ImGui_BeginChild(ctx, "ProjectsList", -1, available_height, 0, project_child_flags)
+                if project_tile_size >= 64 then
+                    DrawProjectsGrid(project_tile_size)
+                else
                 local num_columns = 3
                 if config.show_project_col_sizes then num_columns = num_columns + 1 end
                 if config.show_project_col_lengths then num_columns = num_columns + 1 end
@@ -22636,6 +22848,8 @@ function ShowScreenshotWindow()
                                 safe_name = safe_name:gsub("[^%w%s-]", "_")
                                 os.remove(project_covers_path .. safe_name .. ".png")
                                 os.remove(project_covers_path .. safe_name .. ".jpg")
+                                InvalidateProjectGridCoverPath(project.path)
+                                ClearProjectGridCovers()
                                 project_cover_loaded_for = nil
                                 project_cover_texture = nil
                             end
@@ -22646,6 +22860,7 @@ function ShowScreenshotWindow()
                     r.ImGui_PopID(ctx)
                 end
                 r.ImGui_EndTable(ctx)
+                end
                 end
             r.ImGui_EndChild(ctx)
 
