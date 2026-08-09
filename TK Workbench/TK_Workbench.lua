@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.80
+-- @version 0.6.81
 -- @changelog:
+-- v0.6.81
+--   + Control Room: Discrete actions for Dim, Mono, Fold to Stereo, Mid, Side, Low, High and All Monitors Full, so they can go on a key or a control surface instead of only on a button. They appear in the action list as "TK Workbench: Control Room - ..." once ReaPack has installed them
+--   + Control Room: Each action does exactly what its footer button does, toggling back off when fired again - two ways to reach one switch, never two switches. The listening checks act on the monitor picked in the footer, or the only one if there is just one, and say so rather than guessing when several are available and none is chosen
+--   + Workbench: The action bridge carries a verb now, not just "open this module". A script hands a module something to do and the module decides what it means, which is what makes key and control surface bindings possible for anything a module cares to expose. If the Workbench is not running the action starts it first, the same as the open actions always did
+--   + Project Browser: A project name that runs onto a second line under a tile is drawn in the same colour as the first. It used to be dimmed, which made "Author_Title" read as though the title mattered less than the author - it is one name, not two things. Reported by vik-tan
+--   + Project Browser: Search ignores capitals in Cyrillic and accented names, not only in English. Lua's own lowercase knows nothing beyond A-Z, so a Russian project only turned up when the capital was typed exactly as it appeared, which is not what a case-insensitive search is for. The Media Browser's filter goes through the same conversion. Reported by vik-tan
+--   + Workbench: The lowercase used for searching handles Cyrillic and the accented Latin of western Europe, worked out from the UTF-8 bytes rather than a table of thousands of mappings, so it stays quick enough for a filter that runs on every keystroke. Anything it does not know is passed through untouched rather than mangled
 -- v0.6.80
 --   + Navigator: A module of its own. The bird's-eye map of the arrange was only available as a card inside Transport, and the block layout is one list for the whole module - so you could not have a full Transport in one place and a Navigator on its own in the other. Now it sits in the module list like any other and goes wherever you put it, the split view included. Requested by Halma
 --   + Navigator: As a module it fills the pane instead of a fixed strip, so a tall pane gives every track its own row rather than squeezing them all into 120 pixels. Everything else is the same - drag to pan in both directions, the edges and the wheel to zoom time, Ctrl+wheel for track heights, and the fit button with its three zoom slots
@@ -919,6 +926,22 @@ local function process_module_action_commands()
   if command == "" then return end
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY, "", false)
   local action, target = command:match("^([%w_]+):(.+)$")
+  -- "run" hands a module a verb of its own instead of just bringing it forward,
+  -- so a single action script can dim the Control Room or fold a monitor. The
+  -- module says what it understands; this only delivers.
+  if action == "run" then
+    local module_id, verb = target:match("^([%w_]+):(.+)$")
+    local module = module_id and app.modules_by_id[module_id] or nil
+    if not module then
+      app.status = "Workbench module not found: " .. tostring(module_id)
+    elseif type(module.handle_action) ~= "function" then
+      app.status = tostring(module.title or module_id) .. " takes no actions"
+    else
+      local ok, err = pcall(module.handle_action, app, verb)
+      if not ok then record_module_error(module_id .. ".action", err) end
+    end
+    return
+  end
   if action ~= "open" or not target or target == "" then return end
   if target == HOME_MODULE_ID or app.modules_by_id[target] then
     set_active_view(target)

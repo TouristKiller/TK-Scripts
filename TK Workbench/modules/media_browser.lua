@@ -3,6 +3,7 @@ local Theme = require("core.theme")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
 local categorizer = require("core.media_categorizer")
+local Text = require("core.text")
 
 local M = {
   id = "media_browser",
@@ -1264,7 +1265,7 @@ function refresh_filter(settings)
   if settings.location_view_mode == "auto" then build_category_counts(settings) end
   local key = filter_key(settings)
   if key == state.last_filter_key then return end
-  local term = tostring(settings.search_term or ""):lower()
+  local term = Text.lower(tostring(settings.search_term or ""))
   local auto_scope = settings.location_view_mode == "auto" and auto_category_scope(settings) or ""
   local result = {}
   for _, file in ipairs(state.files) do
@@ -1277,7 +1278,9 @@ function refresh_filter(settings)
     if include and settings.location_view_mode == "auto" and settings.auto_selected_category ~= "All" then
       include = category_for_file(file) == settings.auto_selected_category
     end
-    if include and term ~= "" and not (file.name:lower():find(term, 1, true) or file.path:lower():find(term, 1, true)) then include = false end
+    -- Both sides through Text.lower, or a Cyrillic filename still only matches
+    -- when the capitals are typed exactly as they appear.
+    if include and term ~= "" and not (Text.lower(file.name):find(term, 1, true) or Text.lower(file.path):find(term, 1, true)) then include = false end
     if include then result[#result + 1] = file end
   end
   state.filtered_file_count = #result

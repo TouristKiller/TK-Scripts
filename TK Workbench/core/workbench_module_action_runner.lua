@@ -21,6 +21,25 @@ local function workbench_alive()
   return now() - heartbeat < 2.5
 end
 
+local function send(command)
+  r.SetExtState(EXT_SECTION, COMMAND_KEY, command, false)
+  if workbench_alive() then return true end
+  local path = root_path .. WORKBENCH_FILE
+  local file = io.open(path, "rb")
+  if not file then return false end
+  file:close()
+  dofile(path)
+  return true
+end
+
+-- Hands a module something to do rather than merely bringing it to the front,
+-- which is what lets an action be bound to a key or a control surface. The
+-- module decides what the verb means; this only carries it.
+function M.run(module_id, command)
+  if not module_id or module_id == "" or not command or command == "" then return false end
+  return send("run:" .. tostring(module_id) .. ":" .. tostring(command))
+end
+
 function M.open(module_id)
   if not module_id or module_id == "" then return false end
   r.SetExtState(EXT_SECTION, COMMAND_KEY, "open:" .. tostring(module_id), false)

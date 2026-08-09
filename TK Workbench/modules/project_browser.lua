@@ -3,6 +3,7 @@ local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
 local UI = require("core.ui")
 local json = require("core.json")
+local Text = require("core.text")
 
 local M = {
   id = "project_browser",
@@ -346,7 +347,7 @@ local function fuzzy_normalize(value)
   value = tostring(value or "")
   local cached = fuzzy_norm_cache[value]
   if cached then return cached end
-  local normalized = value:lower():gsub("[%-_%.%s]+", "")
+  local normalized = Text.lower(value):gsub("[%-_%.%s]+", "")
   fuzzy_norm_cache[value] = normalized
   return normalized
 end
@@ -354,8 +355,11 @@ end
 local function fuzzy_find(haystack, needle)
   if not needle or needle == "" then return true end
   if not haystack then return false end
-  local needle_lower = needle:lower()
-  local hay_lower = haystack:lower()
+  -- Text.lower rather than the plain one: string.lower only knows A-Z, so a
+  -- Cyrillic or accented name kept its capitals and the search quietly stopped
+  -- being case insensitive for anyone not typing in English.
+  local needle_lower = Text.lower(needle)
+  local hay_lower = Text.lower(haystack)
   if hay_lower:find(needle_lower, 1, true) then return true end
   if needle_lower:find("%s") then
     local hay_norm = fuzzy_normalize(haystack)
@@ -1584,7 +1588,10 @@ local function draw_project_tile(app, settings, project, index, tile)
   r.ImGui_DrawList_PushClipRect(draw_list, x + inset, y + tile.w, x + tile.w - inset, y + tile.h, true)
   r.ImGui_DrawList_AddText(draw_list, x + inset, y + tile.w + UIScale.round(3), Theme.colors.text, first)
   if second then
-    r.ImGui_DrawList_AddText(draw_list, x + inset, y + tile.w + UIScale.round(3) + tile.line_h, Theme.colors.text_dim, second)
+    -- Same colour as the first line: this is the rest of one name, not a second
+    -- lesser thing. Dimming it made "Author_Title" read as though the title
+    -- mattered less than the author.
+    r.ImGui_DrawList_AddText(draw_list, x + inset, y + tile.w + UIScale.round(3) + tile.line_h, Theme.colors.text, second)
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
   if clicked then select_project(project, index) end

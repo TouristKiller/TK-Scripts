@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.80" author="TouristKiller" time="2026-08-09T01:40:00Z">
+    <version name="0.6.81" author="TouristKiller" time="2026-08-09T15:40:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -67,11 +67,20 @@
      <source file="core/selection.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/selection.lua</source>
      <source file="core/settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/settings.lua</source>
      <source file="core/navigator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/navigator.lua</source>
+     <source file="core/text.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/text.lua</source>
      <source file="core/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/theme.lua</source>
      <source file="core/ui.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui.lua</source>
     <source file="core/ui_scale.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/ui_scale.lua</source>
     <source file="core/quick_fx_menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/quick_fx_menu.lua</source>
     <source file="core/workbench_module_action_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/workbench_module_action_runner.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_Dim.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Dim.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_Mono.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Mono.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_Fold_to_Stereo.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Fold_to_Stereo.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_Mid.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Mid.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_Side.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Side.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_Low.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Low.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_High.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_High.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Control_Room_All_Monitors_Full.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_All_Monitors_Full.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Action_Browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Action_Browser.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Action_Clipboard.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Action_Clipboard.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Automation_Item_Manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Automation_Item_Manager.lua</source>
@@ -123,6 +132,13 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.6.81
+            + Control Room: Discrete actions for Dim, Mono, Fold to Stereo, Mid, Side, Low, High and All Monitors Full, so they can go on a key or a control surface instead of only on a button. They appear in the action list as "TK Workbench: Control Room - ..." once ReaPack has installed them
+            + Control Room: Each action does exactly what its footer button does, toggling back off when fired again - two ways to reach one switch, never two switches. The listening checks act on the monitor picked in the footer, or the only one if there is just one, and say so rather than guessing when several are available and none is chosen
+            + Workbench: The action bridge carries a verb now, not just "open this module". A script hands a module something to do and the module decides what it means, which is what makes key and control surface bindings possible for anything a module cares to expose. If the Workbench is not running the action starts it first, the same as the open actions always did
+            + Project Browser: A project name that runs onto a second line under a tile is drawn in the same colour as the first. It used to be dimmed, which made "Author_Title" read as though the title mattered less than the author - it is one name, not two things. Reported by vik-tan
+            + Project Browser: Search ignores capitals in Cyrillic and accented names, not only in English. Lua's own lowercase knows nothing beyond A-Z, so a Russian project only turned up when the capital was typed exactly as it appeared, which is not what a case-insensitive search is for. The Media Browser's filter goes through the same conversion. Reported by vik-tan
+            + Workbench: The lowercase used for searching handles Cyrillic and the accented Latin of western Europe, worked out from the UTF-8 bytes rather than a table of thousands of mappings, so it stays quick enough for a filter that runs on every keystroke. Anything it does not know is passed through untouched rather than mangled
             v0.6.80
             + Navigator: A module of its own. The bird's-eye map of the arrange was only available as a card inside Transport, and the block layout is one list for the whole module - so you could not have a full Transport in one place and a Navigator on its own in the other. Now it sits in the module list like any other and goes wherever you put it, the split view included. Requested by Halma
             + Navigator: As a module it fills the pane instead of a fixed strip, so a tall pane gives every track its own row rather than squeezing them all into 120 pixels. Everything else is the same - drag to pan in both directions, the edges and the wheel to zoom time, Ctrl+wheel for track heights, and the fit button with its three zoom slots
@@ -756,6 +772,14 @@ v0.2.36
  </category>
 
  <category name="Media">
+    <reapack name="TK_PROJECT_CLIPS.lua" type="script" desc="TK Project Clips">
+        <version name="0.1.0" author="TouristKiller" time="2026-08-09T13:55:47Z">
+        <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS.lua</source>
+        <changelog><![CDATA[
+                + Initial preview release
+        ]]></changelog>
+        </version>
+    </reapack>
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
         <version name="0.9.98" author="TouristKiller" time="2026-08-05T23:30:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
