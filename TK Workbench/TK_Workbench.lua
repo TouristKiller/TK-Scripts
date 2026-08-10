@@ -1,8 +1,8 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.81
+-- @version 0.6.82
 -- @changelog:
--- v0.6.81
+-- v0.6.82
 --   + Control Room: Discrete actions for Dim, Mono, Fold to Stereo, Mid, Side, Low, High and All Monitors Full, so they can go on a key or a control surface instead of only on a button. They appear in the action list as "TK Workbench: Control Room - ..." once ReaPack has installed them. Requested by DanialDevost
 --   + Control Room: Each action does exactly what its footer button does, toggling back off when fired again - two ways to reach one switch, never two switches. The listening checks act on the monitor picked in the footer, or the only one if there is just one, and say so rather than guessing when several are available and none is chosen
 --   + Workbench: The action bridge carries a verb now, not just "open this module". A script hands a module something to do and the module decides what it means, which is what makes key and control surface bindings possible for anything a module cares to expose. If the Workbench is not running the action starts it first, the same as the open actions always did
