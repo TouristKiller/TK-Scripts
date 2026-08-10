@@ -1,7 +1,13 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.2.0
+-- @version 0.2.1
 -- @changelog:
+--   + Added smart clip-state filters and persistent sorting for Items and Source Media
+--   + Added preview volume, loop preview and optional hidden content scrollbar
+--   + Added Source Media selection of all uses, batch clip renaming and missing-media relinking
+--   + Improved compact toolbar, Settings layout, track collapse toggle and Escape-key closing
+--   + Added live missing-media detection and visual warnings for source and item cards
+--   + Fixed conflicting ImGui IDs in clip and source cards
 --   + Added standalone theme engine with presets, custom themes and UI scaling
 --   + Added Source Media view, item preview and arrange drag-and-drop
 --   + Added multi-selection with pooled MIDI, loop, mute, lock and delete actions
@@ -103,11 +109,23 @@ if saved_color_mode == "" then
     saved_color_mode = r.GetExtState(EXT_SECTION, "use_track_colors") == "0" and "type" or "peaks"
 end
 
+local saved_status_filter = r.GetExtState(EXT_SECTION, "status_filter")
+if not ({ all = true, pooled = true, looped = true, muted = true, locked = true })[saved_status_filter] then saved_status_filter = "all" end
+local saved_item_sort = r.GetExtState(EXT_SECTION, "item_sort")
+if not ({ position = true, name = true, length = true })[saved_item_sort] then saved_item_sort = "position" end
+local saved_source_sort = r.GetExtState(EXT_SECTION, "source_sort")
+if not ({ name = true, uses = true, length = true, type = true })[saved_source_sort] then saved_source_sort = "name" end
+
 local state = {
     open = true,
     view_mode = r.GetExtState(EXT_SECTION, "view_mode") == "sources" and "sources" or "items",
     search = "",
     filter = "all",
+    status_filter = saved_status_filter,
+    item_sort = saved_item_sort,
+    source_sort = saved_source_sort,
+    sort_descending = r.GetExtState(EXT_SECTION, "sort_descending") == "1",
+    hide_content_scrollbar = r.GetExtState(EXT_SECTION, "hide_content_scrollbar") == "1",
     selected_track_only = false,
     snap = true,
     color_mode = saved_color_mode,
@@ -120,6 +138,8 @@ local state = {
     midi_cache = {},
     signature = "",
     last_scan = 0,
+    media_availability_signature = "",
+    last_media_availability_check = 0,
     drag = nil,
     drag_active = false,
     drag_source_selected = false,
@@ -127,8 +147,11 @@ local state = {
     preview_start = nil,
     preview_end = nil,
     preview_saved_cursor = nil,
+    preview_base_volume = nil,
     preview_track_states = nil,
     preview_item_states = nil,
+    preview_volume = tonumber(r.GetExtState(EXT_SECTION, "preview_volume")) or 100,
+    loop_preview = r.GetExtState(EXT_SECTION, "loop_preview") == "1",
     suppress_drag_guid = nil,
     cache_budget = 0,
     status = "",
@@ -162,6 +185,7 @@ local function clamp(value, minimum, maximum)
 end
 
 state.ui_scale = clamp(state.ui_scale, 0.85, 2.0)
+state.preview_volume = clamp(state.preview_volume, 0, 200)
 
 for track_guid in r.GetExtState(EXT_SECTION, "collapsed_tracks"):gmatch("[^|]+") do
     state.collapsed_tracks[track_guid] = true
@@ -240,6 +264,17 @@ local function set_all_tracks_collapsed(collapsed)
         end
     end
     save_collapsed_tracks()
+end
+
+local function all_tracks_collapsed()
+    local track_count = r.CountTracks(0) or 0
+    if track_count == 0 then return false end
+    for track_index = 0, track_count - 1 do
+        local track = r.GetTrack(0, track_index)
+        local track_guid = track and r.GetTrackGUID(track) or nil
+        if track_guid and not state.collapsed_tracks[track_guid] then return false end
+    end
+    return true
 end
 
 local function get_scaled_font()
@@ -339,7 +374,16 @@ end
 local function source_identity(take, is_midi)
     local source = r.GetMediaItemTake_Source(take)
     if not source then return nil end
-    local path = r.GetMediaSourceFileName(source, "") or ""
+    local path = ""
+    local current_source = source
+    for _ = 1, 8 do
+        local ok, current_path = pcall(r.GetMediaSourceFileName, current_source, "")
+        if ok and current_path and current_path ~= "" and current_path:sub(1, 1) ~= "<" then path = current_path; break end
+        if not r.GetMediaSourceParent then break end
+        local parent_ok, parent = pcall(r.GetMediaSourceParent, current_source)
+        if not parent_ok or not parent or parent == current_source then break end
+        current_source = parent
+    end
     local source_type = r.GetMediaSourceType(source, "") or (is_midi and "MIDI" or "MEDIA")
     if is_midi then
         if r.BR_GetMidiTakePoolGUID then
@@ -351,6 +395,29 @@ local function source_identity(take, is_midi)
     end
     local key = path ~= "" and "file:" .. path:lower() or "source:" .. source_type .. ":" .. tostring(source)
     return key, path, source_type
+end
+
+local function media_file_exists(path)
+    if not path or path == "" then return true end
+    if r.file_exists then return r.file_exists(path) end
+    local file = io.open(path, "rb")
+    if not file then return false end
+    file:close()
+    return true
+end
+
+local function media_availability_signature()
+    local availability = {}
+    for item_index = 0, (r.CountMediaItems(0) or 0) - 1 do
+        local item = r.GetMediaItem(0, item_index)
+        local take = item and r.GetActiveTake(item) or nil
+        if take and not r.TakeIsMIDI(take) then
+            local _, path = source_identity(take, false)
+            if path and path ~= "" then availability[#availability + 1] = path:lower() .. "=" .. (media_file_exists(path) and "1" or "0") end
+        end
+    end
+    table.sort(availability)
+    return table.concat(availability, "|")
 end
 
 local function item_signature(item, take)
@@ -390,23 +457,36 @@ local function scan_project()
             local track_index = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 1) - 1
             local name = get_take_name(take, is_midi and "MIDI item" or "Audio item")
             local search_matches = search == "" or name:lower():find(search, 1, true) or get_track_name(track, track_index):lower():find(search, 1, true)
+            local looped = (r.GetMediaItemInfo_Value(item, "B_LOOPSRC") or 0) > 0.5
+            local pooled = pooled_midi_item(item, is_midi)
+            local muted = (r.GetMediaItemInfo_Value(item, "B_MUTE") or 0) > 0.5
+            local locked = (r.GetMediaItemInfo_Value(item, "C_LOCK") or 0) > 0.5
+            local source_key, source_path, source_type = source_identity(take, is_midi)
+            local source_missing = not is_midi and source_path ~= "" and not media_file_exists(source_path)
+            local status_matches = state.status_filter == "all"
+                or state.status_filter == "pooled" and pooled
+                or state.status_filter == "looped" and looped
+                or state.status_filter == "muted" and muted
+                or state.status_filter == "locked" and locked
             if type_matches and track_matches then
-                local source_key, source_path, source_type = source_identity(take, is_midi)
                 if source_key then
+                    local guid = r.BR_GetMediaItemGUID(item)
                     local source_entry = sources_by_key[source_key]
                     if source_entry then
                         source_entry.usage_count = source_entry.usage_count + 1
+                        source_entry.guids[#source_entry.guids + 1] = guid
                     else
                         local source = r.GetMediaItemTake_Source(take)
                         local source_length = source and select(1, r.GetMediaSourceLength(source)) or 0
                         local source_name = source_path ~= "" and (source_path:match("([^/\\]+)$") or name) or name
-                        local guid = r.BR_GetMediaItemGUID(item)
                         local track_native_color = r.GetTrackColor(track)
                         sources_by_key[source_key] = {
                             guid = guid,
+                            guids = { guid },
                             source_key = source_key,
                             name = source_name,
                             path = source_path,
+                            missing = source_missing,
                             source_type = source_type,
                             usage_count = 1,
                             is_midi = is_midi,
@@ -419,14 +499,14 @@ local function scan_project()
                             take_count = 1,
                             active_take = 1,
                             looped = false,
-                            pooled = pooled_midi_item(item, is_midi),
+                            pooled = pooled,
                             selected = false,
                             cache_key = "source|" .. source_key .. "|" .. item_signature(item, take),
                         }
                     end
                 end
             end
-            if type_matches and track_matches and search_matches then
+            if type_matches and track_matches and search_matches and status_matches then
                 local guid = r.BR_GetMediaItemGUID(item)
                 local track_name = get_track_name(track, track_index)
                 local track_guid = r.GetTrackGUID(track)
@@ -439,14 +519,19 @@ local function scan_project()
                     is_midi = is_midi,
                     track_index = track_index,
                     track_name = track_name,
+                    source_key = source_key,
+                    source_path = source_path,
+                    missing = source_missing,
                     track_color = track_color,
                     has_track_color = track_native_color ~= 0,
                     position = r.GetMediaItemInfo_Value(item, "D_POSITION") or 0,
                     length = r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0,
                     take_count = take_count,
                     active_take = math.floor((r.GetMediaItemInfo_Value(item, "I_CURTAKE") or 0) + 1.5),
-                    looped = (r.GetMediaItemInfo_Value(item, "B_LOOPSRC") or 0) > 0.5,
-                    pooled = pooled_midi_item(item, is_midi),
+                    looped = looped,
+                    pooled = pooled,
+                    muted = muted,
+                    locked = locked,
                     selected = r.IsMediaItemSelected(item),
                     cache_key = guid .. "|" .. item_signature(item, take),
                 }
@@ -463,12 +548,27 @@ local function scan_project()
     local ordered_groups = {}
     for _, group in pairs(groups) do ordered_groups[#ordered_groups + 1] = group end
     table.sort(ordered_groups, function(left, right) return left.index < right.index end)
+    for _, group in ipairs(ordered_groups) do
+        table.sort(group.items, function(left, right)
+            local left_value = state.item_sort == "name" and left.name:lower() or state.item_sort == "length" and left.length or left.position
+            local right_value = state.item_sort == "name" and right.name:lower() or state.item_sort == "length" and right.length or right.position
+            if left_value == right_value then return left.guid < right.guid end
+            if state.sort_descending then return left_value > right_value end
+            return left_value < right_value
+        end)
+    end
     local sources = {}
     for _, source_entry in pairs(sources_by_key) do
         local source_search = source_entry.name:lower() .. "\n" .. source_entry.path:lower() .. "\n" .. source_entry.source_type:lower()
         if search == "" or source_search:find(search, 1, true) then sources[#sources + 1] = source_entry end
     end
-    table.sort(sources, function(left, right) return left.name:lower() < right.name:lower() end)
+    table.sort(sources, function(left, right)
+        local left_value = state.source_sort == "uses" and left.usage_count or state.source_sort == "length" and left.length or state.source_sort == "type" and left.source_type:lower() or left.name:lower()
+        local right_value = state.source_sort == "uses" and right.usage_count or state.source_sort == "length" and right.length or state.source_sort == "type" and right.source_type:lower() or right.name:lower()
+        if left_value == right_value then return left.source_key < right.source_key end
+        if state.sort_descending then return left_value > right_value end
+        return left_value < right_value
+    end)
     state.items = items
     state.groups = ordered_groups
     state.sources = sources
@@ -478,7 +578,15 @@ local function refresh_if_needed()
     local now = r.time_precise()
     if now - state.last_scan < 0.2 then return end
     state.last_scan = now
-    local signature = project_signature() .. "|" .. state.search .. "|" .. state.filter .. "|" .. tostring(state.selected_track_only)
+    if now - state.last_media_availability_check >= 1 then
+        state.last_media_availability_check = now
+        local availability_signature = media_availability_signature()
+        if availability_signature ~= state.media_availability_signature then
+            state.media_availability_signature = availability_signature
+            state.signature = ""
+        end
+    end
+    local signature = table.concat({ project_signature(), state.search, state.filter, state.status_filter, state.item_sort, state.source_sort, tostring(state.sort_descending), tostring(state.selected_track_only) }, "|")
     if signature ~= state.signature then
         state.signature = signature
         scan_project()
@@ -656,6 +764,26 @@ local function select_and_reveal(entry)
     r.UpdateArrange()
 end
 
+local function select_all_source_uses(entry)
+    local selected_guids = {}
+    local earliest_position = math.huge
+    local selected_count = 0
+    r.SelectAllMediaItems(0, false)
+    for _, guid in ipairs(entry.guids or {}) do
+        local item = item_from_guid(guid)
+        if item then
+            r.SetMediaItemSelected(item, true)
+            selected_guids[guid] = true
+            earliest_position = math.min(earliest_position, r.GetMediaItemInfo_Value(item, "D_POSITION") or earliest_position)
+            selected_count = selected_count + 1
+        end
+    end
+    for _, current in ipairs(state.items) do current.selected = selected_guids[current.guid] == true end
+    if earliest_position < math.huge then r.SetEditCurPos(earliest_position, true, false) end
+    state.status = "Selected " .. tostring(selected_count) .. (selected_count == 1 and " source use" or " source uses")
+    r.UpdateArrange()
+end
+
 local function selected_entries()
     local entries = {}
     for _, entry in ipairs(state.items) do
@@ -698,7 +826,8 @@ local function isolate_item_preview(item)
     for item_index = 0, r.CountMediaItems(0) - 1 do
         local current_item = r.GetMediaItem(0, item_index)
         local muted = r.GetMediaItemInfo_Value(current_item, "B_MUTE") or 0
-        state.preview_item_states[#state.preview_item_states + 1] = { guid = r.BR_GetMediaItemGUID(current_item), muted = muted }
+        local volume = current_item == item and (r.GetMediaItemInfo_Value(current_item, "D_VOL") or 1) or nil
+        state.preview_item_states[#state.preview_item_states + 1] = { guid = r.BR_GetMediaItemGUID(current_item), muted = muted, volume = volume }
         local target_muted = current_item == item and 0 or 1
         if muted ~= target_muted then r.SetMediaItemInfo_Value(current_item, "B_MUTE", target_muted) end
     end
@@ -721,7 +850,10 @@ local function restore_item_preview_isolation()
     end
     for _, saved in ipairs(state.preview_item_states or {}) do
         local item = item_from_guid(saved.guid)
-        if item then r.SetMediaItemInfo_Value(item, "B_MUTE", saved.muted) end
+        if item then
+            r.SetMediaItemInfo_Value(item, "B_MUTE", saved.muted)
+            if saved.volume ~= nil then r.SetMediaItemInfo_Value(item, "D_VOL", saved.volume) end
+        end
     end
     r.PreventUIRefresh(-1)
     state.preview_track_states = nil
@@ -738,6 +870,14 @@ local function clear_item_preview(restore_cursor)
     state.preview_start = nil
     state.preview_end = nil
     state.preview_saved_cursor = nil
+    state.preview_base_volume = nil
+end
+
+local function apply_preview_volume()
+    local item = item_from_guid(state.preview_guid)
+    if not item or state.preview_base_volume == nil then return end
+    r.SetMediaItemInfo_Value(item, "D_VOL", state.preview_base_volume * state.preview_volume / 100)
+    r.UpdateArrange()
 end
 
 local function stop_item_preview()
@@ -756,6 +896,8 @@ local function start_item_preview(entry)
     end
     state.preview_saved_cursor = r.GetCursorPosition()
     state.preview_guid = entry.guid
+    state.preview_base_volume = r.GetMediaItemInfo_Value(item, "D_VOL") or 1
+    apply_preview_volume()
     local position = r.GetMediaItemInfo_Value(item, "D_POSITION") or entry.position
     local length = r.GetMediaItemInfo_Value(item, "D_LENGTH") or entry.length
     state.preview_start = position
@@ -777,7 +919,13 @@ local function update_item_preview()
         return
     end
     local play_position = r.GetPlayPosition and r.GetPlayPosition() or 0
-    if state.preview_end and play_position >= state.preview_end - 0.001 then stop_item_preview() end
+    if state.preview_end and play_position >= state.preview_end - 0.001 then
+        if state.loop_preview and state.preview_start then
+            r.SetEditCurPos(state.preview_start, false, true)
+        else
+            stop_item_preview()
+        end
+    end
 end
 
 local function open_item_editor(entry)
@@ -886,6 +1034,89 @@ local function batch_set_item_flag(entries, property, enabled, label)
     end
     r.Undo_EndBlock(label, -1)
     finish_batch(label)
+end
+
+local function batch_rename(entries)
+    if #entries == 0 then return end
+    local accepted, base_name = r.GetUserInputs("Rename selected clips", 1, "Base name:,extrawidth=220", entries[1].name or "Clip")
+    base_name = tostring(base_name or ""):match("^%s*(.-)%s*$") or ""
+    if not accepted or base_name == "" then return end
+    if state.preview_guid then stop_item_preview() end
+    local digits = math.max(2, #tostring(#entries))
+    r.Undo_BeginBlock()
+    for index, entry in ipairs(entries) do
+        local item = item_from_guid(entry.guid)
+        local take = item and r.GetActiveTake(item) or nil
+        if take then
+            local name = #entries == 1 and base_name or base_name .. " " .. string.format("%0" .. tostring(digits) .. "d", index)
+            r.GetSetMediaItemTakeInfo_String(take, "P_NAME", name, true)
+        end
+    end
+    r.Undo_EndBlock("Rename selected project clips", -1)
+    finish_batch("Renamed " .. tostring(#entries) .. (#entries == 1 and " clip" or " clips"))
+end
+
+local function relink_entries(entries, replacement_path)
+    local replaced = 0
+    for _, entry in ipairs(entries) do
+        local item = item_from_guid(entry.guid)
+        local take = item and r.GetActiveTake(item) or nil
+        local source = take and r.PCM_Source_CreateFromFile(replacement_path) or nil
+        if take and source then
+            r.SetMediaItemTake_Source(take, source)
+            replaced = replaced + 1
+        end
+    end
+    if replaced > 0 then
+        state.waveform_cache = {}
+        state.midi_cache = {}
+    end
+    return replaced
+end
+
+local function choose_replacement(path)
+    local accepted, replacement = r.GetUserFileNameForRead(path or "", "Relink missing media", "")
+    if not accepted or replacement == "" then return nil end
+    return replacement
+end
+
+local function relink_missing_selected(entries)
+    local by_source = {}
+    for _, entry in ipairs(entries) do
+        if entry.missing and entry.source_key then
+            local group = by_source[entry.source_key]
+            if not group then group = { path = entry.source_path, entries = {} }; by_source[entry.source_key] = group end
+            group.entries[#group.entries + 1] = entry
+        end
+    end
+    if not next(by_source) then state.status = "No missing media in selection"; return end
+    if state.preview_guid then stop_item_preview() end
+    local replacements = {}
+    for _, group in pairs(by_source) do
+        local replacement = choose_replacement(group.path)
+        if replacement then replacements[#replacements + 1] = { entries = group.entries, path = replacement } end
+    end
+    if #replacements == 0 then return end
+    local replaced = 0
+    r.Undo_BeginBlock()
+    for _, replacement in ipairs(replacements) do
+        replaced = replaced + relink_entries(replacement.entries, replacement.path)
+    end
+    r.Undo_EndBlock("Relink missing selected media", -1)
+    finish_batch("Relinked " .. tostring(replaced) .. (replaced == 1 and " clip" or " clips"))
+end
+
+local function relink_source(entry)
+    if not entry.missing then return end
+    local replacement = choose_replacement(entry.path)
+    if not replacement then return end
+    if state.preview_guid then stop_item_preview() end
+    local entries = {}
+    for _, guid in ipairs(entry.guids or {}) do entries[#entries + 1] = { guid = guid } end
+    r.Undo_BeginBlock()
+    local replaced = relink_entries(entries, replacement)
+    r.Undo_EndBlock("Relink missing source media", -1)
+    finish_batch("Relinked " .. tostring(replaced) .. (replaced == 1 and " use" or " uses"))
 end
 
 local function batch_unpool(entries)
@@ -1102,13 +1333,13 @@ local function update_drag()
     state.status = ""
 end
 
-local function filter_button(label, value)
+local function filter_button(label, value, width)
     local active = state.filter == value
     if active then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.accent_soft)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), COLORS.accent)
     end
-    local clicked = r.ImGui_Button(ctx, label, rounded(64), rounded(26))
+    local clicked = r.ImGui_Button(ctx, label, width or rounded(64), rounded(26))
     if active then r.ImGui_PopStyleColor(ctx, 2) end
     if clicked then
         state.filter = value
@@ -1199,6 +1430,55 @@ local function draw_theme_settings_body()
         r.ImGui_EndCombo(ctx)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "UI scale") end
+    r.ImGui_SameLine(ctx)
+    local scrollbar_changed, hide_scrollbar = r.ImGui_Checkbox(ctx, "Hide scrollbar", state.hide_content_scrollbar)
+    if scrollbar_changed then
+        state.hide_content_scrollbar = hide_scrollbar
+        r.SetExtState(EXT_SECTION, "hide_content_scrollbar", hide_scrollbar and "1" or "0", true)
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Keep mouse-wheel scrolling without showing the content scrollbar") end
+    r.ImGui_SetNextItemWidth(ctx, rounded(150))
+    local color_labels = { type = "Type", peaks = "Track peaks", tiles = "Track tiles" }
+    if r.ImGui_BeginCombo(ctx, "##settings_clip_color_mode", color_labels[state.color_mode] or "Track peaks") then
+        for _, option in ipairs({ { "Type", "type" }, { "Track peaks", "peaks" }, { "Track tiles", "tiles" } }) do
+            local selected = state.color_mode == option[2]
+            if r.ImGui_Selectable(ctx, option[1], selected) then
+                state.color_mode = option[2]
+                r.SetExtState(EXT_SECTION, "color_mode", state.color_mode, true)
+            end
+            if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clip color mode") end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetNextItemWidth(ctx, rounded(100))
+    local position_label = state.position_mode == "time" and "Time" or "Bars"
+    if r.ImGui_BeginCombo(ctx, "##settings_clip_position_mode", position_label) then
+        for _, option in ipairs({ { "Bars", "bars" }, { "Time", "time" } }) do
+            local selected = state.position_mode == option[2]
+            if r.ImGui_Selectable(ctx, option[1], selected) then
+                state.position_mode = option[2]
+                r.SetExtState(EXT_SECTION, "position_mode", state.position_mode, true)
+            end
+            if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Position display") end
+    r.ImGui_SetNextItemWidth(ctx, rounded(130))
+    local volume_changed, preview_volume = r.ImGui_SliderDouble(ctx, "Preview volume", state.preview_volume, 0, 200, "%.0f%%")
+    if volume_changed then
+        state.preview_volume = preview_volume
+        r.SetExtState(EXT_SECTION, "preview_volume", tostring(preview_volume), true)
+        apply_preview_volume()
+    end
+    r.ImGui_SameLine(ctx)
+    local loop_changed, loop_preview = r.ImGui_Checkbox(ctx, "Loop", state.loop_preview)
+    if loop_changed then
+        state.loop_preview = loop_preview
+        r.SetExtState(EXT_SECTION, "loop_preview", loop_preview and "1" or "0", true)
+    end
     r.ImGui_Separator(ctx)
     r.ImGui_TextColored(ctx, COLORS.text_dim, "Preset")
     r.ImGui_SetNextItemWidth(ctx, rounded(220))
@@ -1223,7 +1503,7 @@ local function draw_theme_settings_body()
     r.ImGui_TextColored(ctx, COLORS.text_dim, "Preview")
     draw_theme_preview()
     r.ImGui_Spacing(ctx)
-    local child_visible = r.ImGui_BeginChild(ctx, "##project_clips_theme_colors", rounded(330), rounded(310), 1)
+    local child_visible = r.ImGui_BeginChild(ctx, "##project_clips_theme_colors", 0, rounded(282), 1)
     if child_visible then
         local color_flags = r.ImGui_ColorEditFlags_NoInputs()
         for _, field in ipairs(THEME_COLOR_FIELDS) do
@@ -1277,8 +1557,8 @@ end
 
 local function draw_theme_settings()
     if not state.theme_settings_open then return end
-    r.ImGui_SetNextWindowSize(ctx, rounded(390), rounded(680), r.ImGui_Cond_Always())
-    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+    r.ImGui_SetNextWindowSize(ctx, rounded(360), rounded(720), r.ImGui_Cond_Always())
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
     local visible, open = r.ImGui_Begin(ctx, "Settings##project_clips", state.theme_settings_open, window_flags)
     state.theme_settings_open = open
     if visible then
@@ -1298,10 +1578,11 @@ local function draw_theme_settings()
     r.ImGui_End(ctx)
 end
 
-local function draw_all_tracks_button(expand)
+local function draw_all_tracks_button()
+    local expand = all_tracks_collapsed()
     local size = rounded(26)
     local x, y = r.ImGui_GetCursorScreenPos(ctx)
-    if r.ImGui_InvisibleButton(ctx, expand and "##expand_all_tracks" or "##collapse_all_tracks", size, size) then
+    if r.ImGui_InvisibleButton(ctx, "##toggle_all_tracks", size, size) then
         set_all_tracks_collapsed(not expand)
     end
     local hovered = r.ImGui_IsItemHovered(ctx)
@@ -1328,26 +1609,84 @@ local function draw_toolbar()
     local checkbox_width = r.ImGui_CalcTextSize(ctx, "Selected track") + r.ImGui_CalcTextSize(ctx, "Snap") + frame_height * 2
     local color_width = rounded(112)
     local position_width = rounded(74)
-    local group_buttons_width = state.view_mode == "items" and rounded(26 * 2) + gap or 0
-    local desired_width = rounded(150 + 64 * 3) + checkbox_width + color_width + position_width + group_buttons_width + gap * 10
+    local status_width = rounded(92)
+    local sort_width = rounded(92)
+    local group_buttons_width = state.view_mode == "items" and rounded(26) or 0
+    local filter_sort_width = sort_width + rounded(52) + (state.view_mode == "items" and status_width + gap or 0)
+    local desired_width = rounded(150 + 64 * 3) + checkbox_width + color_width + position_width + filter_sort_width + group_buttons_width + gap * 13
     local compact = available < desired_width
+    local single_control_row = compact and available >= rounded(380)
+    local type_button_width = compact and math.floor((available - (single_control_row and checkbox_width + gap * 4 or gap * 2)) / 3) or rounded(64)
+    local direction_width = rounded(52)
+    local compact_group_width = state.view_mode == "items" and rounded(26) or 0
+    local compact_combo_width = math.max(rounded(72), math.floor((available - direction_width - compact_group_width - gap * (state.view_mode == "items" and 4 or 1)) / (state.view_mode == "items" and 2 or 1)))
     r.ImGui_SetNextItemWidth(ctx, compact and available or math.max(rounded(150), math.min(rounded(320), available * 0.35)))
     local search_hint = state.view_mode == "sources" and "Search source name, path or type" or "Search clips or tracks"
     local changed, search = r.ImGui_InputTextWithHint(ctx, "##search", search_hint, state.search)
     if changed then state.search = search; state.signature = "" end
     if not compact then r.ImGui_SameLine(ctx) end
-    filter_button("All", "all")
-    r.ImGui_SameLine(ctx)
-    filter_button("Audio", "audio")
-    r.ImGui_SameLine(ctx)
-    filter_button("MIDI", "midi")
-    if compact then r.ImGui_NewLine(ctx) else r.ImGui_SameLine(ctx) end
+    filter_button("All", "all", type_button_width)
+    r.ImGui_SameLine(ctx, 0, gap)
+    filter_button("Audio", "audio", type_button_width)
+    r.ImGui_SameLine(ctx, 0, gap)
+    filter_button("MIDI", "midi", type_button_width)
+    if not compact or single_control_row then r.ImGui_SameLine(ctx, 0, gap) end
     local selected_changed, selected_only = r.ImGui_Checkbox(ctx, "Selected track", state.selected_track_only)
     if selected_changed then state.selected_track_only = selected_only; state.signature = "" end
     r.ImGui_SameLine(ctx)
     local snap_changed, snap = r.ImGui_Checkbox(ctx, "Snap", state.snap)
     if snap_changed then state.snap = snap end
+    if not compact then r.ImGui_SameLine(ctx) end
     if state.view_mode == "items" then
+        r.ImGui_SetNextItemWidth(ctx, compact and compact_combo_width or status_width)
+        local status_labels = { all = "All states", pooled = "Pooled", looped = "Looped", muted = "Muted", locked = "Locked" }
+        if r.ImGui_BeginCombo(ctx, "##clip_status_filter", status_labels[state.status_filter]) then
+            for _, option in ipairs({ { "All states", "all" }, { "Pooled", "pooled" }, { "Looped", "looped" }, { "Muted", "muted" }, { "Locked", "locked" } }) do
+                local selected = state.status_filter == option[2]
+                if r.ImGui_Selectable(ctx, option[1], selected) then
+                    state.status_filter = option[2]
+                    state.signature = ""
+                    r.SetExtState(EXT_SECTION, "status_filter", state.status_filter, true)
+                end
+                if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clip state filter") end
+        r.ImGui_SameLine(ctx, 0, gap)
+    end
+    local active_sort_width = compact and (state.view_mode == "items" and compact_combo_width or available - direction_width - gap) or sort_width
+    r.ImGui_SetNextItemWidth(ctx, active_sort_width)
+    local sort_options = state.view_mode == "items" and { { "Position", "position" }, { "Name", "name" }, { "Length", "length" } }
+        or { { "Name", "name" }, { "Uses", "uses" }, { "Length", "length" }, { "Type", "type" } }
+    local sort_key = state.view_mode == "items" and state.item_sort or state.source_sort
+    local sort_label = "Sort"
+    for _, option in ipairs(sort_options) do if option[2] == sort_key then sort_label = option[1]; break end end
+    if r.ImGui_BeginCombo(ctx, "##project_clips_sort", sort_label) then
+        for _, option in ipairs(sort_options) do
+            local selected = sort_key == option[2]
+            if r.ImGui_Selectable(ctx, option[1], selected) then
+                if state.view_mode == "items" then state.item_sort = option[2] else state.source_sort = option[2] end
+                state.signature = ""
+                r.SetExtState(EXT_SECTION, state.view_mode == "items" and "item_sort" or "source_sort", option[2], true)
+            end
+            if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Sort order") end
+    r.ImGui_SameLine(ctx, 0, gap)
+    if r.ImGui_Button(ctx, state.sort_descending and "Desc" or "Asc", direction_width, rounded(26)) then
+        state.sort_descending = not state.sort_descending
+        state.signature = ""
+        r.SetExtState(EXT_SECTION, "sort_descending", state.sort_descending and "1" or "0", true)
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, state.sort_descending and "Descending" or "Ascending") end
+    if compact and state.view_mode == "items" then
+        r.ImGui_SameLine(ctx, 0, gap)
+        draw_all_tracks_button()
+    end
+    if state.view_mode == "items" and not compact then
         r.ImGui_SameLine(ctx)
         r.ImGui_SetNextItemWidth(ctx, color_width)
         local color_labels = { type = "Type", peaks = "Track peaks", tiles = "Track tiles" }
@@ -1363,7 +1702,7 @@ local function draw_toolbar()
             r.ImGui_EndCombo(ctx)
         end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clip color mode") end
-        r.ImGui_SameLine(ctx)
+        r.ImGui_SameLine(ctx, 0, gap)
         r.ImGui_SetNextItemWidth(ctx, position_width)
         local position_label = state.position_mode == "time" and "Time" or "Bars"
         if r.ImGui_BeginCombo(ctx, "##clip_position_mode", position_label) then
@@ -1378,10 +1717,8 @@ local function draw_toolbar()
             r.ImGui_EndCombo(ctx)
         end
         if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Position display") end
-        r.ImGui_SameLine(ctx)
-        draw_all_tracks_button(false)
         r.ImGui_SameLine(ctx, 0, gap)
-        draw_all_tracks_button(true)
+        draw_all_tracks_button()
     end
 end
 
@@ -1552,6 +1889,15 @@ local function draw_card_context(entry)
     if r.ImGui_MenuItem(ctx, "Lock selected") then batch_set_item_flag(entries, "C_LOCK", true, "Lock selected project clips") end
     if r.ImGui_MenuItem(ctx, "Unlock selected") then batch_set_item_flag(entries, "C_LOCK", false, "Unlock selected project clips") end
     r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Rename selected...") then batch_rename(entries) end
+    local has_missing = false
+    for _, selected in ipairs(entries) do has_missing = has_missing or selected.missing end
+    if has_missing then
+        if r.ImGui_MenuItem(ctx, "Relink missing selected...") then relink_missing_selected(entries) end
+    else
+        r.ImGui_TextDisabled(ctx, "Relink missing selected...")
+    end
+    r.ImGui_Separator(ctx)
     if r.ImGui_MenuItem(ctx, "Select all visible") then
         r.SelectAllMediaItems(0, false)
         for _, current in ipairs(state.items) do
@@ -1583,7 +1929,7 @@ local function draw_card(entry)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local inverse = inverse_tiles_active(entry)
     local background = selected and COLORS.card_selected or hovered and COLORS.card_hover or COLORS.card_bg
-    local border = selected and COLORS.accent or hovered and entry.track_color or COLORS.border
+    local border = entry.missing and COLORS.danger or selected and COLORS.accent or hovered and entry.track_color or COLORS.border
     if inverse then
         background = selected and mix_color(entry.track_color, 0xFFFFFFFF, 0.2) or hovered and mix_color(entry.track_color, 0xFFFFFFFF, 0.1) or entry.track_color
         border = selected and contrast_color(background, false) or mix_color(entry.track_color, 0x000000FF, 0.35)
@@ -1609,7 +1955,8 @@ local function draw_card(entry)
     local type_color = clip_color(entry, entry.is_midi and COLORS.midi or COLORS.audio)
     local type_width = r.ImGui_CalcTextSize(ctx, type_label)
     r.ImGui_DrawList_AddText(draw_list, cursor_x + card_width - type_width - scaled(10), cursor_y + scaled(99), type_color, type_label)
-    r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(116), clip_text_color(entry, true), truncate_text(clip_metadata(entry), card_width - scaled(20)))
+    local metadata = entry.missing and "MISSING  |  " .. clip_metadata(entry) or clip_metadata(entry)
+    r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(116), entry.missing and COLORS.danger or clip_text_color(entry, true), truncate_text(metadata, card_width - scaled(20)))
     local controls_hovered = play_button_hovered or delete_button_hovered or toggles_hovered
     if not controls_hovered and hovered and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
         open_item_editor(entry)
@@ -1631,7 +1978,7 @@ local function draw_source_card(entry)
     local hovered = r.ImGui_IsItemHovered(ctx)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local background = hovered and COLORS.card_hover or COLORS.card_bg
-    local border = hovered and entry.track_color or COLORS.border
+    local border = entry.missing and COLORS.danger or hovered and entry.track_color or COLORS.border
     r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + card_width, cursor_y + card_height, background, scaled(5))
     r.ImGui_DrawList_AddRect(draw_list, cursor_x, cursor_y, cursor_x + card_width, cursor_y + card_height, border, scaled(5), 0, scaled(1))
     r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + scaled(4), cursor_y + card_height, entry.track_color, scaled(5))
@@ -1651,11 +1998,22 @@ local function draw_source_card(entry)
     r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(99), COLORS.text, truncate_text(entry.name, card_width - type_width - scaled(34)))
     r.ImGui_DrawList_AddText(draw_list, cursor_x + card_width - type_width - scaled(10), cursor_y + scaled(99), entry.track_color, type_label)
     local usage_label = tostring(entry.usage_count) .. (entry.usage_count == 1 and " use" or " uses")
-    local metadata = usage_label .. "  |  " .. format_length(entry.length) .. "  |  " .. entry.source_type
-    r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(116), COLORS.text_dim, truncate_text(metadata, card_width - scaled(20)))
+    local metadata = (entry.missing and "MISSING  |  " or "") .. usage_label .. "  |  " .. format_length(entry.length) .. "  |  " .. entry.source_type
+    r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(116), entry.missing and COLORS.danger or COLORS.text_dim, truncate_text(metadata, card_width - scaled(20)))
     if hovered and not play_button_hovered and entry.path ~= "" then r.ImGui_SetTooltip(ctx, entry.path) end
     if not play_button_hovered and r.ImGui_IsItemClicked(ctx, 0) then select_and_reveal(entry) end
-    if state.suppress_drag_guid ~= entry.guid then begin_item_drag(entry) end
+    local context_open = r.ImGui_BeginPopupContextItem(ctx, "##source_context_" .. entry.source_key)
+    if context_open then
+        if r.ImGui_MenuItem(ctx, "Select all uses") then select_all_source_uses(entry) end
+        if r.ImGui_MenuItem(ctx, "Select first and reveal") then select_and_reveal(entry) end
+        if entry.missing then
+            if r.ImGui_MenuItem(ctx, "Relink missing source...") then relink_source(entry) end
+        else
+            r.ImGui_TextDisabled(ctx, "Relink missing source...")
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    if not context_open and state.suppress_drag_guid ~= entry.guid then begin_item_drag(entry) end
 end
 
 local function draw_sources()
@@ -1665,13 +2023,15 @@ local function draw_sources()
     local gap = rounded(8)
     local columns = math.max(1, math.floor((available + gap) / (card_width + gap)))
     if r.ImGui_BeginTable(ctx, "source_media", columns, r.ImGui_TableFlags_SizingFixedFit()) then
-        for _, entry in ipairs(state.sources) do
+        for entry_index, entry in ipairs(state.sources) do
             r.ImGui_TableNextColumn(ctx)
+            r.ImGui_PushID(ctx, entry_index)
             if r.ImGui_IsRectVisible(ctx, card_width, card_height) then
                 draw_source_card(entry)
             else
                 r.ImGui_Dummy(ctx, card_width, card_height)
             end
+            r.ImGui_PopID(ctx)
         end
         r.ImGui_EndTable(ctx)
     end
@@ -1712,13 +2072,15 @@ local function draw_group(group)
     local gap = rounded(8)
     local columns = math.max(1, math.floor((available + gap) / (card_width + gap)))
     if r.ImGui_BeginTable(ctx, "clips_" .. tostring(group.index), columns, r.ImGui_TableFlags_SizingFixedFit()) then
-        for _, entry in ipairs(group.items) do
+        for entry_index, entry in ipairs(group.items) do
             r.ImGui_TableNextColumn(ctx)
+            r.ImGui_PushID(ctx, entry_index)
             if r.ImGui_IsRectVisible(ctx, card_width, card_height) then
                 draw_card(entry)
             else
                 r.ImGui_Dummy(ctx, card_width, card_height)
             end
+            r.ImGui_PopID(ctx)
         end
         r.ImGui_EndTable(ctx)
     end
@@ -1758,7 +2120,8 @@ local function draw_window()
             local message = state.selected_track_only and not r.GetSelectedTrack(0, 0) and "Select a track to show its media" or empty_label
             r.ImGui_TextColored(ctx, COLORS.text_dim, message)
         else
-            if r.ImGui_BeginChild(ctx, "clip_scroll", 0, state.status ~= "" and -rounded(28) or 0, 0) then
+            local scroll_flags = state.hide_content_scrollbar and r.ImGui_WindowFlags_NoScrollbar() or 0
+            if r.ImGui_BeginChild(ctx, "clip_scroll", 0, state.status ~= "" and -rounded(28) or 0, 0, scroll_flags) then
                 if state.view_mode == "sources" then
                     draw_sources()
                 else
@@ -1771,6 +2134,13 @@ local function draw_window()
         r.ImGui_End(ctx)
     end
     draw_theme_settings()
+    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+        if state.theme_settings_open then
+            state.theme_settings_open = false
+        else
+            state.open = false
+        end
+    end
     pop_theme(theme_stack)
     if scaled_font_pushed then r.ImGui_PopFont(ctx) end
 end
