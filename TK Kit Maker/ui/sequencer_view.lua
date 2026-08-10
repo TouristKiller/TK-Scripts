@@ -19,6 +19,31 @@ local ENGINE_ID_KEY = "P_EXT:TK_KIT_MAKER_SEQ_ENGINE_ID"
 local BUS_MARKER = "P_EXT:TK_KIT_MAKER_SEQ_BUS"
 local GLOBAL_PATTERN_SECTION = "TK_KIT_MAKER_SEQ"
 local GLOBAL_PATTERN_KEY = "GLOBAL_PATTERNS"
+
+-- Display grouping: how many steps share a shade before the shading flips.
+--
+-- Sixteen identical cells is a row you have to count along with a finger to
+-- find step 11, and counting is what you are doing every time you place a hit.
+-- Banding the background in fours turns that into reading the third block --
+-- which is how a Redrum or an mDSQ is read, and why every drum machine with a
+-- row of sixteen lights has some version of it.
+--
+-- Not fixed at four, because four only fits 4/4: a 3-step band is what makes a
+-- triplet feel or a 12-step pattern readable, and 6 and 8 are the ones a
+-- 6/8 or a half-bar phrase wants. 0 is off -- one flat shade, as it was.
+--
+-- A view setting, so it is kept globally rather than on the kit track: it says
+-- how you like to read a grid, not anything about the pattern in front of you,
+-- and having it come and go as you select different racks would be a setting
+-- that appears to forget itself.
+--
+-- Hung off the module table rather than kept in locals of its own: this file's
+-- main chunk is one variable under Lua's limit of 200 locals per function, and
+-- has been over it. Same reason GRV above is a table.
+M.DG = {
+  key = "DISPLAY_GROUP",
+  choices = { 0, 2, 3, 4, 5, 6, 7, 8 },
+}
 local SUBSTEP_LOOKAHEAD_MIN = 0.001
 local SUBSTEP_LOOKAHEAD_MAX = 0.004
 local table_step_value
@@ -61,6 +86,17 @@ local GRV = {
   HDR = 2176, HDR_STRIDE = 4,
   BASE = 2304, STRIDE = 64, MAX_STEPS = 32,
   dir = nil, names = nil, cache = {},
+  -- What a lane stores instead of a groove name when it is to follow the kit's
+  -- own. Stored as a name because that is what the field already holds and what
+  -- every saved pattern already round-trips -- a second "mode" field beside it
+  -- would be a thing to keep in step, and a preset written by an older version
+  -- would arrive with the two disagreeing.
+  --
+  -- The @ is what keeps it out of the way: groove names come from filenames and
+  -- from the folders above them, and Windows will not have an @ start a path
+  -- component by accident. It is refused as a name for the global groove
+  -- itself, so it can never mean "follow me".
+  GLOBAL = "@global",
 }
 
 function GRV.folder()
@@ -204,10 +240,36 @@ function GRV.draw_footer(ctx, id)
   end
 end
 
+-- What a lane's groove really is, once "follow the kit's own" is resolved.
+-- Returns the groove name and the amount to play it at.
+--
+-- Both come from the global when a lane follows it, not just the name. The
+-- point of one swing for the whole kit is one knob for the whole kit; leaving
+-- the amount per lane would mean setting the feel in one place and then
+-- turning it up in sixteen others, which is the job this exists to remove.
+--
+-- Every reader goes through here -- the engine and the MIDI export -- so a lane
+-- that follows the global cannot be shuffled at playback and straight in the
+-- exported file.
+function GRV.resolve(seq, cfg)
+  local name = cfg and cfg.groove or nil
+  if name == GRV.GLOBAL then
+    name = seq and seq.groove or nil
+    local amount = tonumber(seq and seq.groove_amount) or 0
+    return name, math.max(0, math.min(1, amount))
+  end
+  local amount = tonumber(cfg and cfg.groove_amount) or 0
+  return name, math.max(0, math.min(1, amount))
+end
+
 -- Parsed once per file. `false` marks one that failed, so a broken file is not
 -- reopened on every frame either.
 function GRV.get(name)
   if not name or name == "" then return nil end
+  -- The sentinel is a lane's instruction, never a groove in its own right. If
+  -- it ever reaches here the lane was resolved against a sequence that has no
+  -- global groove set, and the honest answer is "no groove".
+  if name == GRV.GLOBAL then return nil end
   local hit = GRV.cache[name]
   if hit ~= nil then return hit or nil end
   -- A file of the same name wins over the built-in, so a groove dropped in the
@@ -603,6 +665,50 @@ local function blend_rgb(a, b, t)
   local ar, ag, ab = unpack_rgb(a)
   local br, bg, bb = unpack_rgb(b)
   return pack_rgb(ar + (br - ar) * k, ag + (bg - ag) * k, ab + (bb - ab) * k)
+end
+
+function M.DG.normalize(value)
+  local n = math.floor(tonumber(value) or 0)
+  for _, choice in ipairs(M.DG.choices) do
+    if choice == n then return n end
+  end
+  return 0
+end
+
+function M.DG.load()
+  if not r.GetExtState then return 0 end
+  return M.DG.normalize(r.GetExtState(GLOBAL_PATTERN_SECTION, M.DG.key))
+end
+
+function M.DG.save(value)
+  if not r.SetExtState then return end
+  r.SetExtState(GLOBAL_PATTERN_SECTION, M.DG.key, tostring(M.DG.normalize(value)), true)
+end
+
+function M.DG.label(value)
+  local n = M.DG.normalize(value)
+  if n == 0 then return "Off" end
+  return tostring(n)
+end
+
+-- Which of the two shades a step falls on, or nil when the grouping is off.
+-- Counted from step 1, so the first band is always the light one and the
+-- downbeat is never the dark half of a pair.
+function M.DG.band(group, step)
+  local n = M.DG.normalize(group)
+  if n < 2 then return nil end
+  local s = math.floor(tonumber(step) or 1)
+  return math.floor((s - 1) / n) % 2
+end
+
+-- Applied to the steps that are OFF, and only to those. The lit ones carry the
+-- lane's colour, which is the thing the eye is actually reading -- shading
+-- those as well would spend contrast that belongs to on-versus-off on a
+-- question you can answer by counting blocks instead.
+function M.DG.shade(col, band)
+  if band == nil then return col end
+  if band == 0 then return blend_rgb(col, 0xFFFFFFFF, 0.10) end
+  return blend_rgb(col, 0x000000FF, 0.28)
 end
 
 function pitch_rand_level_of(cfg)
@@ -1519,6 +1625,10 @@ local function new_sequence()
     repeat_enabled = true,
     lane_auto_name_enabled = false,
     selected_pattern_index = 0,
+    -- The kit-wide groove. Lanes set to GROOVE_GLOBAL follow these two, so one
+    -- picker and one knob shuffle the whole pattern instead of sixteen.
+    groove = nil,
+    groove_amount = 0.5,
     pattern = {},
     lane_settings = {},
     song_slots = {},
@@ -1606,6 +1716,8 @@ local function sanitize_sequence(data)
   out.repeat_enabled = data.repeat_enabled ~= false
   out.lane_auto_name_enabled = data.lane_auto_name_enabled == true
   out.selected_pattern_index = math.max(0, math.floor(tonumber(data.selected_pattern_index) or 0))
+  out.groove = (type(data.groove) == "string" and data.groove ~= "" and data.groove ~= GRV.GLOBAL) and data.groove or nil
+  out.groove_amount = clamp(tonumber(data.groove_amount) or 0.5, 0, 1)
   local total = STEPS_PER_BAR
   if type(data.pattern) == "table" then
     for lane = 1, GRID_SLOTS do
@@ -1861,6 +1973,8 @@ local function sequence_snapshot(seq)
     repeat_enabled = seq.repeat_enabled,
     lane_auto_name_enabled = seq.lane_auto_name_enabled,
     selected_pattern_index = seq.selected_pattern_index,
+    groove = seq.groove,
+    groove_amount = seq.groove_amount,
     pattern = seq.pattern,
     lane_settings = seq.lane_settings,
     song_slots = seq.song_slots,
@@ -1871,6 +1985,11 @@ local function sequence_snapshot(seq)
     repeat_enabled = clean.repeat_enabled,
     lane_auto_name_enabled = clean.lane_auto_name_enabled,
     selected_pattern_index = clean.selected_pattern_index,
+    -- Carried with the page. A lane set to follow the global groove would
+    -- otherwise arrive in a saved preset, or in a song-mode export, pointing at
+    -- a groove that is no longer there -- and come out straight.
+    groove = clean.groove,
+    groove_amount = clean.groove_amount,
     pattern = clean.pattern,
     lane_settings = clean.lane_settings,
     song_slots = clean.song_slots,
@@ -2009,6 +2128,8 @@ local function apply_sequence_snapshot(seq, src)
   seq.host_transport = clean.host_transport == true
   seq.repeat_enabled = clean.repeat_enabled ~= false
   seq.lane_auto_name_enabled = clean.lane_auto_name_enabled == true
+  seq.groove = clean.groove
+  seq.groove_amount = clean.groove_amount
   seq.pattern = clone_table(clean.pattern)
   seq.lane_settings = clone_table(clean.lane_settings)
   seq.song_slots = clone_table(clean.song_slots)
@@ -2495,8 +2616,8 @@ local function engine_write_pattern(seq, solo_map, total_steps, lane_tracks, lan
     -- The header is cleared even when there is no groove, so switching one off
     -- actually switches it off instead of leaving the last table in memory.
     local GH = GRV.HDR + (lane - 1) * GRV.HDR_STRIDE
-    local amount = clamp(tonumber(cfg.groove_amount) or 0, 0, 1)
-    local groove = amount > 0 and GRV.get(cfg.groove) or nil
+    local grv_name, amount = GRV.resolve(seq, cfg)
+    local groove = amount > 0 and GRV.get(grv_name) or nil
     if groove then
       local steps = math.min(groove.steps, GRV.MAX_STEPS)
       local GB = GRV.BASE + (lane - 1) * GRV.STRIDE
@@ -3279,8 +3400,8 @@ local function export_sequence_to_midi(track, seq, opts)
     -- The groove has to be applied here as well as in the engine, or the export
     -- becomes the one place it goes missing: you would hear a shuffle, write it
     -- out, and get a straight pattern back with nothing on screen to say why.
-    local grv_amount = clamp(tonumber(cfg.groove_amount) or 0, 0, 1)
-    local grv_groove = grv_amount > 0 and GRV.get(cfg.groove) or nil
+    local grv_name, grv_amount = GRV.resolve(section_seq, cfg)
+    local grv_groove = grv_amount > 0 and GRV.get(grv_name) or nil
 
     local lane_tick = math.max(0, math.floor(tonumber(phase and phase.tick_index) or 0))
     local lane_step_start = tonumber(phase and phase.next_step_start) or 0
@@ -3888,6 +4009,7 @@ function M.init(app)
     euclid_pattern_delete_popup_open = false,
     active_mode = nil,
     knob_drag = nil,
+    display_group = nil,
   }
 end
 
@@ -3977,6 +4099,8 @@ local function draw_step(app)
   end
   local any_solo = solo_map_has_active_lane(solo_map)
   local total_steps = STEPS_PER_BAR
+  if state.display_group == nil then state.display_group = M.DG.load() end
+  local display_group = state.display_group
   local host_enabled = seq.host_transport == true
   local lane_tracks = collect_lane_tracks(parent)
   local selected_track = r.GetSelectedTrack(0, 0)
@@ -4266,9 +4390,22 @@ local function draw_step(app)
   local avail_h_after_steps = select(2, r.ImGui_GetContentRegionAvail(ctx)) or 0
   local layout_top_y = r.ImGui_GetCursorPosY(ctx)
   local song_lane_h = 64
+  -- The kit-wide row, between the lanes and the song row. Outside the lane
+  -- child on purpose: that one scrolls, and a global control that scrolls away
+  -- the moment you open a lane's settings is one you cannot reach exactly when
+  -- you are working on timing.
+  --
+  -- Asked for rather than typed in. It is one row of ordinary controls, so its
+  -- height is a frame plus the gap after it -- which depends on the font and on
+  -- the theme's padding. A number here would be right on one machine and would
+  -- push the song row into the transport bar on the next.
+  local master_row_h = 30
+  if r.ImGui_GetFrameHeightWithSpacing then
+    master_row_h = math.ceil(tonumber(r.ImGui_GetFrameHeightWithSpacing(ctx)) or master_row_h)
+  end
   local transport_y = layout_top_y + math.max(0, avail_h_after_steps - transport_h)
   local grid_h = math.max(140, transport_y - layout_top_y - transport_gap)
-  grid_h = math.max(140, grid_h - song_lane_h - transport_gap)
+  grid_h = math.max(140, grid_h - song_lane_h - transport_gap - master_row_h)
   if r.ImGui_BeginChild(ctx, "##tk_seq_grid", 0, grid_h, 1) then
     local row_x = r.ImGui_GetCursorPosX(ctx)
     local label_w = 92
@@ -4401,6 +4538,16 @@ local function draw_step(app)
         local base_col = is_active and (on and blend_rgb(lane_col, 0xFFFFFFFF, 0.10) or blend_rgb(Theme.colors.frame_bg, lane_col, 0.20)) or blend_rgb(Theme.colors.frame_bg, 0xFFFFFFFF, 0.02)
         local hover_col = is_active and (on and blend_rgb(lane_col, 0xFFFFFFFF, 0.28) or blend_rgb(Theme.colors.frame_hover, lane_col, 0.30)) or Theme.colors.frame_bg
         local active_col = is_active and (on and blend_rgb(lane_col, 0xFFFFFFFF, 0.38) or blend_rgb(Theme.colors.border, lane_col, 0.42)) or Theme.colors.frame_bg
+        -- Only the steps this lane actually plays are banded. Past the lane's
+        -- stop marker the cells are already dimmed to say "not part of the
+        -- cycle", and shading them in blocks would put them back into the
+        -- pattern to look at.
+        if is_active and not on then
+          local band = M.DG.band(display_group, lane_step)
+          base_col = M.DG.shade(base_col, band)
+          hover_col = M.DG.shade(hover_col, band)
+          active_col = M.DG.shade(active_col, band)
+        end
         if is_play then
           if on then
             base_col = blend_rgb(base_col, 0xFFFFFFFF, 0.48)
@@ -4917,11 +5064,22 @@ local function draw_step(app)
         local grv_y = echo_controls_y + btn_h + 4
         r.ImGui_SetCursorPosX(ctx, row_x)
         r.ImGui_SetCursorPosY(ctx, grv_y)
-        local grv_name = lane_cfg.groove
-        local grv_amt = clamp(tonumber(lane_cfg.groove_amount) or 0, 0, 1)
+        -- What this lane is SET to, which is not the same as what it plays: a
+        -- lane following the global is set to the sentinel and plays whatever
+        -- the row under the lanes says. The picker and the on/off button read
+        -- the setting; the tooltip and the amount read the resolved answer.
+        local grv_pick = lane_cfg.groove
+        local grv_follows = grv_pick == GRV.GLOBAL
+        local grv_name, grv_amt = GRV.resolve(seq, lane_cfg)
         local grv_on = grv_name ~= nil and grv_amt > 0
         if lane_toggle_button(ctx, "tk_seq_lane_groove_" .. tostring(lane), "Groove", btn6_w, btn_h, grv_on) then
-          if grv_on then
+          if grv_follows then
+            -- A following lane has no amount of its own to turn down, so off
+            -- means stop following rather than reaching into the global and
+            -- silencing the swing on every other lane with it.
+            lane_cfg.groove = nil
+            lane_cfg.groove_amount = 0
+          elseif grv_on then
             lane_cfg.groove_amount = 0
           else
             -- Turning it on with nothing chosen picks the first groove there
@@ -4959,17 +5117,29 @@ local function draw_step(app)
 
         r.ImGui_SameLine(ctx, 0, btn_gap)
         r.ImGui_SetNextItemWidth(ctx, btn7_w + btn8_w + btn_gap)
-        local grv_label = grv_name or "(none)"
+        local grv_label = grv_follows and ("Global: " .. (seq.groove or "none")) or (grv_pick or "(none)")
         if r.ImGui_BeginCombo(ctx, "##tk_seq_lane_groove_pick_" .. tostring(lane), grv_label) then
-          if r.ImGui_Selectable(ctx, "(none)", grv_name == nil) then
+          if r.ImGui_Selectable(ctx, "(none)", grv_pick == nil) then
             lane_cfg.groove = nil
             lane_cfg.groove_amount = 0
             save_sequence(parent, seq)
             if state.playing then refresh_playback_params(state, guid) end
           end
+          -- Above the named grooves, because it is the answer for most lanes
+          -- most of the time: a kit usually swings as one thing, and the named
+          -- ones below are the exceptions you make to it.
+          if r.ImGui_Selectable(ctx, "Global##tk_seq_lane_groove_global_" .. tostring(lane), grv_follows) then
+            lane_cfg.groove = GRV.GLOBAL
+            save_sequence(parent, seq)
+            if state.playing then refresh_playback_params(state, guid) end
+          end
+          if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Follow the kit's own groove -- the row under the lanes.\nChanging that one changes every lane set to Global.")
+          end
+          r.ImGui_Separator(ctx)
           local names = GRV.list()
-          local picked = GRV.draw_builtins(ctx, grv_name, "lane")
-          local from_tree = GRV.tree and GRV.draw_tree(ctx, GRV.tree, grv_name, "lane") or nil
+          local picked = GRV.draw_builtins(ctx, grv_pick, "lane")
+          local from_tree = GRV.tree and GRV.draw_tree(ctx, GRV.tree, grv_pick, "lane") or nil
           picked = from_tree or picked
           if picked then
             lane_cfg.groove = picked
@@ -4987,15 +5157,18 @@ local function draw_step(app)
         end
         if r.ImGui_IsItemHovered(ctx) then
           local g = GRV.get(grv_name)
+          local lead = grv_follows and "Following the kit groove\n" or ""
           if g then
             -- The shape is spelled out because the commonest surprise is a
             -- groove that appears to do nothing: swing moves the off-beats, so
             -- a lane playing on the beat comes out identical however far the
             -- amount is turned up.
-            r.ImGui_SetTooltip(ctx, grv_name .. "\n" .. GRV.lib.summary(g)
+            r.ImGui_SetTooltip(ctx, lead .. grv_name .. "\n" .. GRV.lib.summary(g)
               .. "\n\n" .. GRV.lib.shape(g)
               .. "\n> late    < early    . not moved"
               .. "\n\nA lane that only plays where the dots are will not change.")
+          elseif grv_follows then
+            r.ImGui_SetTooltip(ctx, "Following the kit groove, which is not set.\nPick one in the row under the lanes.")
           elseif grv_name then
             r.ImGui_SetTooltip(ctx, grv_name .. "\ncould not be read: " .. tostring(GRV.error(grv_name)))
           else
@@ -5005,18 +5178,24 @@ local function draw_step(app)
 
         r.ImGui_SameLine(ctx, 0, btn_gap)
         r.ImGui_SetNextItemWidth(ctx, btn9_w * 2)
-        r.ImGui_BeginDisabled(ctx, grv_name == nil)
+        -- Disabled while the lane follows the global, and showing the global's
+        -- own figure. A live slider here would be the second knob that the one
+        -- global knob exists to abolish -- and a lane whose amount said 20%
+        -- while it played at 55% would be worse than one you cannot drag.
+        r.ImGui_BeginDisabled(ctx, grv_name == nil or grv_follows)
         local amt_changed, amt_value = r.ImGui_SliderInt(ctx,
           "##tk_seq_lane_groove_amt_" .. tostring(lane),
           math.floor(grv_amt * 100 + 0.5), 0, 100, "Amount %d%%")
-        if amt_changed then
+        if amt_changed and not grv_follows then
           lane_cfg.groove_amount = clamp(amt_value / 100, 0, 1)
           save_sequence(parent, seq)
           if state.playing then refresh_playback_params(state, guid) end
         end
         r.ImGui_EndDisabled(ctx)
-        if r.ImGui_IsItemHovered(ctx) then
-          r.ImGui_SetTooltip(ctx, "0% = dead on the grid, 100% = the groove's own feel.\nMoves timing and velocity together.")
+        if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled and r.ImGui_HoveredFlags_AllowWhenDisabled() or nil) then
+          r.ImGui_SetTooltip(ctx, grv_follows
+            and "Set by the kit groove, in the row under the lanes."
+            or "0% = dead on the grid, 100% = the groove's own feel.\nMoves timing and velocity together.")
         end
 
         if r.ImGui_PopStyleVar then
@@ -5062,6 +5241,100 @@ local function draw_step(app)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, rack_label)
 
     r.ImGui_EndChild(ctx)
+  end
+
+  -- The kit-wide row: one groove for the whole pattern, and how the step grid
+  -- is shaded. Both belong to the kit rather than to a lane, which is why
+  -- neither is in the lane panel.
+  do
+    r.ImGui_SetCursorPosX(ctx, top_x)
+    local mrow_avail = select(1, r.ImGui_GetContentRegionAvail(ctx)) or 0
+    local mrow_gap = 6
+    -- Measured, not typed: the labels are drawn in the system sans-serif, so
+    -- the same four words are one width here and another on a Mac.
+    local swing_lbl_w = (select(1, r.ImGui_CalcTextSize(ctx, "Swing")) or 34) + mrow_gap
+    local grid_lbl_w = (select(1, r.ImGui_CalcTextSize(ctx, "Grid")) or 26) + mrow_gap
+    local grid_combo_w = 62
+    local labels_w = swing_lbl_w + grid_lbl_w + grid_combo_w + (mrow_gap * 3)
+    -- Whatever is left, split three to two between the picker and the amount:
+    -- the picker holds a name like "MPC60 / Swing 62", the slider holds "55%".
+    local free_w = math.max(120, mrow_avail - labels_w - 4)
+    local grv_combo_w = math.max(80, math.floor(free_w * 0.6))
+    local grv_amt_w = math.max(70, free_w - grv_combo_w - mrow_gap)
+
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Swing")
+    r.ImGui_SameLine(ctx, 0, mrow_gap)
+
+    r.ImGui_SetNextItemWidth(ctx, grv_combo_w)
+    if r.ImGui_BeginCombo(ctx, "##tk_seq_global_groove", seq.groove or "(none)") then
+      if r.ImGui_Selectable(ctx, "(none)", seq.groove == nil) then
+        seq.groove = nil
+        save_sequence(parent, seq)
+        if state.playing then refresh_playback_params(state, guid) end
+      end
+      local names = GRV.list()
+      local picked = GRV.draw_builtins(ctx, seq.groove, "global")
+      local from_tree = GRV.tree and GRV.draw_tree(ctx, GRV.tree, seq.groove, "global") or nil
+      picked = from_tree or picked
+      if picked then
+        seq.groove = picked
+        if (tonumber(seq.groove_amount) or 0) <= 0 then seq.groove_amount = 0.5 end
+        save_sequence(parent, seq)
+        if state.playing then refresh_playback_params(state, guid) end
+      end
+      if #names == 0 then
+        r.ImGui_TextColored(ctx, Theme.colors.text_faint, "no .mid files found")
+      end
+      GRV.draw_footer(ctx, "global")
+      r.ImGui_EndCombo(ctx)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      local g = GRV.get(seq.groove)
+      if g then
+        r.ImGui_SetTooltip(ctx, seq.groove .. "\n" .. GRV.lib.summary(g)
+          .. "\n\n" .. GRV.lib.shape(g)
+          .. "\n> late    < early    . not moved"
+          .. "\n\nEvery lane set to Global plays this.")
+      else
+        r.ImGui_SetTooltip(ctx, "The groove for the whole kit.\nLanes set to Global follow it; the rest keep their own.")
+      end
+    end
+
+    r.ImGui_SameLine(ctx, 0, mrow_gap)
+    r.ImGui_SetNextItemWidth(ctx, grv_amt_w)
+    r.ImGui_BeginDisabled(ctx, seq.groove == nil)
+    local g_amt = clamp(tonumber(seq.groove_amount) or 0, 0, 1)
+    local g_changed, g_value = r.ImGui_SliderInt(ctx, "##tk_seq_global_groove_amt",
+      math.floor(g_amt * 100 + 0.5), 0, 100, "Amount %d%%")
+    if g_changed then
+      seq.groove_amount = clamp(g_value / 100, 0, 1)
+      save_sequence(parent, seq)
+      if state.playing then refresh_playback_params(state, guid) end
+    end
+    r.ImGui_EndDisabled(ctx)
+    if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled and r.ImGui_HoveredFlags_AllowWhenDisabled() or nil) then
+      r.ImGui_SetTooltip(ctx, "0% = dead on the grid, 100% = the groove's own feel.\nOne knob for every lane set to Global.")
+    end
+
+    r.ImGui_SameLine(ctx, 0, mrow_gap * 2)
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Grid")
+    r.ImGui_SameLine(ctx, 0, mrow_gap)
+    r.ImGui_SetNextItemWidth(ctx, grid_combo_w)
+    if r.ImGui_BeginCombo(ctx, "##tk_seq_display_group", M.DG.label(display_group)) then
+      for _, choice in ipairs(M.DG.choices) do
+        if r.ImGui_Selectable(ctx, M.DG.label(choice) .. "##tk_seq_dg_" .. tostring(choice), choice == display_group) then
+          display_group = choice
+          state.display_group = choice
+          M.DG.save(choice)
+        end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Shades the empty steps in blocks, so you read step 11\ninstead of counting to it. 4 gives the usual four beats;\n3 suits triplets, 6 and 8 longer phrases. Off is one flat shade.")
+    end
   end
 
   local song_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()

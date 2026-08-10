@@ -277,14 +277,22 @@ function M.generate_kit(kitdef, pools, kit_index, script_path)
   if kitdef.export.write_usedlog   then UsedLog.flush() end
 
   local stitched
+  local stitched_only_removed = nil
   if kitdef.export.write_stitched and #results > 0 then
     -- The pick filter already keeps long samples out; passing the limit to the
     -- stitcher as well covers locked samples, which bypass the pick filter.
-    local ok, path_or_err, stitch_err, stitch_warnings = pcall(Stitcher.stitch_kit, dest_dir, final_name, results, kitdef.export.max_sample_seconds)
+    local ok, path_or_err, stitch_err, stitch_warnings, included = pcall(Stitcher.stitch_kit, dest_dir, final_name, results, kitdef.export.max_sample_seconds)
     if ok and path_or_err then
       stitched = path_or_err
       for _, warning in ipairs(stitch_warnings or {}) do
         errors[#errors + 1] = "Stitch: " .. warning
+      end
+      if kitdef.export.stitched_only then
+        local kept, removed = M.reduce_to_stitched(dest_dir, results, included)
+        for _, name in ipairs(kept) do
+          errors[#errors + 1] = "Cue file only: kept " .. name .. " (not in the stitched WAV)."
+        end
+        stitched_only_removed = removed
       end
     elseif ok then
       errors[#errors + 1] = "Stitch: " .. tostring(stitch_err)
@@ -296,8 +304,44 @@ function M.generate_kit(kitdef, pools, kit_index, script_path)
   Rng.clear()
   return {
     name = final_name, dest = dest_dir, results = results, errors = errors,
-    stitched = stitched, seed = M.seed_for(kitdef, kit_index),
+    stitched = stitched, stitched_only_removed = stitched_only_removed,
+    seed = M.seed_for(kitdef, kit_index),
   }
+end
+
+-- "The cue file is enough": leaves the stitched WAV and its cue sheet and
+-- removes the one-shots that went into it.
+--
+-- A kit meant for a slicer is one file. The sixteen copies beside it are the
+-- same audio a second time, and on a memory card or over a slow sync that is
+-- twice the bytes for nothing -- so this is a real export target, not tidying.
+--
+-- It deletes only what it can account for: a file is removed when the stitcher
+-- reported taking it in, and every other one is kept and named in the kit's
+-- errors. That is the whole safety of it. Skipping happens for good reasons --
+-- an mp3 the stitcher cannot read, a sample past the length limit -- and those
+-- files are not in the stitched WAV, so deleting them would be the one case
+-- where this loses audio outright.
+--
+-- The logs stay whatever they were asked to be. A sources log naming files that
+-- are no longer beside it still says where the kit came from, which is what it
+-- is for and the only record left once the copies are gone.
+function M.reduce_to_stitched(dest_dir, results, included)
+  local in_stitch = {}
+  for _, name in ipairs(included or {}) do in_stitch[name] = true end
+
+  local kept, removed = {}, 0
+  for _, res in ipairs(results) do
+    local name = res.out_name
+    if name and name ~= "" then
+      if in_stitch[name] then
+        if os.remove(dest_dir .. "/" .. name) then removed = removed + 1 end
+      else
+        kept[#kept + 1] = name
+      end
+    end
+  end
+  return kept, removed
 end
 
 -- How much of the material behind a kit carries a measurement. A character
@@ -428,6 +472,7 @@ function M.kitdef_from_explosion(opts)
       write_sourcelog = false,
       write_usedlog = false,
       write_stitched = opts.stitched == true,
+      stitched_only = opts.stitched_only == true,
       max_sample_seconds = opts.max_sample_seconds or 0,
       length_bias = opts.length_bias,
       tag_bias = opts.tag_bias,

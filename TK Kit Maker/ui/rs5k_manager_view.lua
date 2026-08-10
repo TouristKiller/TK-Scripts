@@ -1109,6 +1109,8 @@ local function save_current_kit(app, parent, rows)
     end
   end
 
+  Dialogs.set_last_export_folder(destination)
+
   local kit_name = tostring(state.rename_buffer or track_name(parent) or ""):gsub("^%s+", ""):gsub("%s+$", "")
   if kit_name == "" then kit_name = "Untitled Kit" end
   local dest_dir, final_name = Exporter.make_folder(destination, safe_filename(kit_name))

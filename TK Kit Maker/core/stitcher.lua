@@ -351,7 +351,16 @@ function M.stitch_kit(dest_dir, kit_name, results, max_seconds)
   if not ok then return nil, err, warnings end
 
   write_cue_sheet(dest_dir .. "/" .. kit_name .. " - Cues.txt", kit_name, target_rate, cues)
-  return out_path, nil, warnings
+
+  -- Which files actually went in, by their exported name. The caller needs this
+  -- to be able to offer "the stitched file only": what was SKIPPED -- an mp3, a
+  -- sample over the length limit -- is not in the stitched WAV, so deleting the
+  -- lot would throw away audio that has no other copy. Reported rather than
+  -- worked out again, because the reasons for skipping live here.
+  local included = {}
+  for i, item in ipairs(decoded) do included[i] = item.name end
+
+  return out_path, nil, warnings, included
 end
 
 return M

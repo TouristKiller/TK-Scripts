@@ -1,7 +1,108 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.49
+-- @version 0.2.50
 -- @changelog:
+--   0.2.50
+--   + Display grouping in the Step sequencer: the empty steps are shaded in
+--     blocks of 2 to 8, so you read step 11 instead of counting to it. Sixteen
+--     identical cells is a row you go along with a finger, and going along it is
+--     what you are doing every time you place a hit. Off is the flat shade it
+--     was. In the row under the lanes, beside the kit groove.
+--   # Not fixed at four. Four only fits 4/4: three is what makes a triplet feel
+--     or a twelve-step pattern readable, and six and eight are what a 6/8 or a
+--     half-bar phrase wants.
+--   # Only the steps a lane actually plays are banded. Past the lane's stop
+--     marker the cells are already dimmed to say "not part of the cycle", and
+--     shading those in blocks would put them back into the pattern to look at.
+--     Lit steps keep their lane colour: that contrast belongs to on-versus-off,
+--     not to a question you can answer by counting blocks.
+--   # It is kept globally rather than on the kit track. It says how you like to
+--     read a grid, not anything about the pattern in front of you, so following
+--     the selected rack would be a setting that appears to forget itself.
+--   + One groove for the whole kit, in a row under the lanes, and "Global" at
+--     the top of every lane's groove list. A kit usually swings as one thing;
+--     the named grooves below it are the exceptions you make to that. Setting it
+--     in sixteen places and then changing your mind was the reason a per-lane
+--     groove was less useful than it sounds.
+--   # The amount comes from the global too, not only the name. The point of one
+--     swing for the whole kit is one knob for the whole kit -- leaving the
+--     amount per lane would mean setting the feel in one place and then turning
+--     it up in sixteen others. A following lane's own amount slider is disabled
+--     and shows the global's figure rather than a number it is not playing.
+--   # Turning Groove off on a following lane stops it following, rather than
+--     reaching into the global and silencing the swing on every other lane
+--     with it.
+--   # One resolver, so the engine and the MIDI export cannot disagree. A lane
+--     that follows the global would otherwise be shuffled at playback and
+--     straight in the exported file, which is the failure that has no symptom
+--     until you open the file somewhere else. The global travels with the page,
+--     so a saved preset and a song-mode export both keep it.
+--   # The row sits outside the lane list, between it and the song row. Inside,
+--     it would scroll away the moment you opened a lane's settings -- which is
+--     exactly when you are working on timing.
+--   + The Builder Slots filter reads the filename, and the folder only when the
+--     filename names nothing. A folder called "WA Snares & Claps" says two
+--     things at once, so every file in it answered Snare and a slot asking for
+--     snares got the claps as well -- the filter looked broken while doing
+--     precisely what it was told.
+--   # The numbered-pack case still works, which is why the folder was read at
+--     all: "Kicks/001.wav" has nothing else to go on. The rule that serves both
+--     is that a file which names itself is described by its own name --
+--     wa_snare_01 says snare, so nothing above it can add clap; 001.wav says
+--     nothing, so the folder is all there is.
+--   # The test is whether the filename names ANY category, not the one being
+--     asked for. Otherwise a clap in a Snares folder would still answer Snare,
+--     which is the same bug one level down.
+--   # A plural folder counts as its singular, so Claps and Rims answer Clap and
+--     Rim. Kicks and Snares always did, because those words are long enough to
+--     be looked for as substrings, while "clap" and "rim" have to be whole
+--     tokens -- "clap" must not match Claptone. So the same question was
+--     answered differently depending on which category you asked about.
+--   # The Browser's Category filter and its counts follow the same rules: they
+--     read the same code, so what a facet says and what a slot picks cannot
+--     drift apart.
+--   + Add only what the list is showing as a Builder pool. Right-click a folder
+--     header, or the open collection, for "Add N filtered samples as Builder
+--     Pool" -- so a folder of ten snares, ten rims and ten claps gives you the
+--     ten claps, and the tag filter, the filename box and the sort are what
+--     decide. Offered only while something is actually filtering; with no filter
+--     on it would add what the item above it adds, by a worse route.
+--   # A fixed list, like a heatmap cell, saved with the preset. It does not
+--     rescan, which is the point: a rescan would put the other twenty back.
+--   + "Add as Builder Pool (stay here)" beside the existing one, on both the
+--     collection and the folder-header menus. Adding a shelf of packs is six
+--     right-clicks in the same list, and being thrown to the Builder after each
+--     one costs a tab back and a scroll to where you were. The one that jumps is
+--     still there and still first: it lands with the alias ready to type over,
+--     and the alias is what "From pattern" matches slots against.
+--   + Collapse all pools in the Builder, beside "+ Pool". A pool opened out is a
+--     folder list, a mode, a bias and a scan button, so eight of them is a page
+--     you scroll past to reach the slots. Which way the button goes next is
+--     remembered rather than read back off the headers -- ImGui will not be
+--     asked whether they are open, so a button that tried to work it out would
+--     be guessing.
+--   + "Cue file only" beside "Stitched WAV + cues": keeps the stitched WAV and
+--     its cue sheet and removes the one-shots that went into it. A kit for a
+--     slicer is one file, and the sixteen copies beside it are the same audio a
+--     second time -- on a memory card or over a slow sync, twice the bytes for
+--     nothing.
+--   # It deletes only what the stitcher reported taking in. Anything skipped --
+--     an mp3 it cannot read, a sample past the length limit -- is not in the
+--     stitched WAV, so deleting it would be the one case where this loses audio
+--     outright. Those files are kept and named in the result.
+--   + "Open last export folder", on the right-click of "+ Folder". The kits a
+--     batch just made are the ones you want to hear next, and finding them meant
+--     either remembering the path or opening the Builder to read it off the
+--     destination field -- neither of which is the browser you are standing in.
+--     Recorded by the export itself, so a destination typed straight into the
+--     field counts, and recorded when a batch starts rather than when it
+--     finishes: a cancelled run has still written the kits it got through.
+--   + Batch import single folders, in the Kit browser: the same "add every
+--     subfolder" the Sample Pack browser has, worded for kits and opening on the
+--     last export folder. Export fifty and import them as fifty kits, in two
+--     steps. Subfolders with no audio are skipped and ones already added are
+--     left out, so running it again offers what is new.
+--
 --   0.2.49
 --   + Rack pads now accept a sample dragged in from another TK script (the TK
 --     Workbench media browser) while the Kit Maker window is docked. A docked

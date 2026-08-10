@@ -6,6 +6,7 @@ local M = {}
 local EXT_SECTION = "TK_KIT_MAKER"
 local EXT_BASE    = "browse_base_folder"
 local EXT_LAST    = "browse_last_"
+local EXT_EXPORT  = "last_export_folder"
 
 local function normalize(path)
   path = tostring(path or ""):gsub("\\", "/")
@@ -50,6 +51,24 @@ end
 function M.set_base_folder(path)
   local norm = normalize(path or "")
   r.SetExtState(EXT_SECTION, EXT_BASE, norm, true)
+  return norm
+end
+
+-- Where the last export actually wrote, which is not the same question as
+-- "where did a browse dialog last open". A destination can be typed straight
+-- into the field rather than browsed to, and a batch may be run again days
+-- later from a preset that carries its own destination -- so the folder you
+-- want to go and look at is the one an export last used, recorded by the export
+-- itself. Persisted, because looking at what you made is usually the next
+-- session rather than the next minute.
+function M.get_last_export_folder()
+  return normalize(r.GetExtState(EXT_SECTION, EXT_EXPORT) or "")
+end
+
+function M.set_last_export_folder(path)
+  local norm = normalize(path or "")
+  if norm == "" then return "" end
+  r.SetExtState(EXT_SECTION, EXT_EXPORT, norm, true)
   return norm
 end
 

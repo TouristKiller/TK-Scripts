@@ -211,6 +211,8 @@ local function export_kit_folder(app, slots, kit_name)
     },
   }
 
+  Dialogs.set_last_export_folder(dest)
+
   local ok, kit = pcall(Engine.generate_kit, kitdef, {}, 1, app.script_path)
   if not ok or not kit then
     return false, "Export failed: " .. tostring(kit)
@@ -1396,10 +1398,25 @@ end
 --
 -- They all land in a group named after the folder that was picked, which is the
 -- thing you would otherwise do twenty times by hand straight afterwards.
+--
+-- It reads the same either way round. In the Kit browser the children are kits
+-- rather than packs -- which is what a batch export leaves behind, fifty
+-- folders in one place -- and the word each message uses follows the browser
+-- you are standing in. The work is identical: one level down, add every child
+-- that has audio under it. Only the noun changes, and getting the noun wrong is
+-- what makes a feature look like it is for something else.
 local function add_subfolders_as_collections(app)
   local state = app.browser
+  local kits = state.browser_mode == "kits"
+  local noun = kits and "kits" or "packs"
+  -- In the Kit browser it opens on the last export folder. That is where the
+  -- kits you are about to import were just written, so the commonest run of
+  -- this feature -- export fifty, then bring them in -- starts in the right
+  -- place instead of wherever you last browsed for samples.
   local folder = Dialogs.browse_folder(
-    "Select the folder whose subfolders are your packs", "", "source")
+    "Select the folder whose subfolders are your " .. noun,
+    kits and Dialogs.get_last_export_folder() or "",
+    kits and "destination" or "source")
   if not folder then return end
 
   local root = Scanner.normalize(folder)
@@ -1438,6 +1455,8 @@ local function add_subfolders_as_collections(app)
     return
   end
 
+  local what = kits and "kit" or "collection"
+
   -- Asked before rather than reported after: there is no undo in the Browser,
   -- and one click that quietly adds forty collections is a long job to take
   -- back by hand.
@@ -1450,10 +1469,11 @@ local function add_subfolders_as_collections(app)
       preview[#preview + 1] = string.format("  ... and %d more", #found - #preview)
     end
     local answer = r.ShowMessageBox(
-      string.format("Add %d subfolder%s of %s as collections?\n\n%s",
+      string.format("Add %d subfolder%s of %s as %s?\n\n%s",
         #found, #found == 1 and "" or "s", root:match("([^/]+)$") or root,
+        kits and "separate kits" or "collections",
         table.concat(preview, "\n")),
-      "Add subfolders as collections", 1)
+      kits and "Import subfolders as kits" or "Add subfolders as collections", 1)
     if answer ~= 1 then return end
   end
 
@@ -1468,8 +1488,8 @@ local function add_subfolders_as_collections(app)
   end
 
   if first then set_selected_collection(state, first) end
-  state.preview_error = string.format("Added %d collection%s under \"%s\".",
-    added, added == 1 and "" or "s", group)
+  state.preview_error = string.format("Added %d %s%s under \"%s\".",
+    added, what, added == 1 and "" or "s", group)
   save(app)
   refresh_collection(app, false)
 end
@@ -1519,9 +1539,20 @@ local function new_pool_id(app)
   return id
 end
 
-local function add_collection_as_pool(app)
+-- Both of these take `stay`, and the two answers are both right for different
+-- jobs -- which is why the menu offers both rather than picking one.
+--
+-- Jumping to the Builder is right when the pool is the point: it lands with its
+-- alias ready to be typed over, and the alias is what "From pattern" matches
+-- slots against, so it is rarely the folder's own name for long.
+--
+-- Staying is right when the pool is one of six: adding a shelf of packs means
+-- six right-clicks in the same list, and being thrown to the Builder after each
+-- one costs a tab back and a scroll to where you were -- the same reason "Add
+-- to Existing Builder Pool" has always stayed put.
+local function add_collection_as_pool(app, stay)
   local col = selected_collection(app)
-  if not col then return end
+  if not col then return false end
 
   ensure_builder_state(app)
 
@@ -1538,10 +1569,11 @@ local function add_collection_as_pool(app)
   }
   app.builder.pool_order[#app.builder.pool_order + 1] = id
   Scanner.scan_pool(app.pools[id])
-  app.view = "builder"
+  if not stay then app.view = "builder" end
+  return true, app.pools[id]
 end
 
-local function add_folder_as_pool(app, folder_path, alias)
+local function add_folder_as_pool(app, folder_path, alias, stay)
   local folder = Scanner.normalize(folder_path or "")
   if folder == "" then return false end
 
@@ -1560,8 +1592,48 @@ local function add_folder_as_pool(app, folder_path, alias)
   }
   app.builder.pool_order[#app.builder.pool_order + 1] = id
   Scanner.scan_pool(app.pools[id])
-  app.view = "builder"
-  return true
+  if not stay then app.view = "builder" end
+  return true, app.pools[id]
+end
+
+-- A pool built from the samples the list is SHOWING, not from the folder they
+-- happen to live in.
+--
+-- A folder called "WA Snares & Claps" is thirty files, and a Builder slot that
+-- wants a clap has to draw from all thirty and hope the slot filter sorts it
+-- out. It usually cannot: the slot filter reads names, and a pack whose claps
+-- are CLP_01 through CLP_10 beside RS_01 through RS_10 answers "clap" with ten
+-- of the thirty only if the naming happens to suit it. Filtering here instead
+-- means the filters on screen -- the tag filter, the filename box, the sort --
+-- decide, and you can SEE what you are about to add before you add it.
+--
+-- A fixed pool, therefore, like a heatmap cell: a folder pool rescans, and a
+-- rescan would quietly put the other twenty back. The list is saved with the
+-- preset rather than being found again, and the folder controls are hidden for
+-- it -- two of which would have emptied it.
+local function add_files_as_pool(app, files, alias, origin, stay)
+  if not files or #files == 0 then return false end
+
+  ensure_builder_state(app)
+  local id = new_pool_id(app)
+
+  local copy = {}
+  for i, path in ipairs(files) do copy[i] = path end
+
+  app.pools[id] = {
+    id = id,
+    alias = (alias and alias ~= "") and alias or "Filtered",
+    folders = {},
+    recursive = false,
+    files = copy,
+    fixed = true,
+    fixed_origin = origin or string.format("%d samples, as the Browser list had them filtered.", #copy),
+    mode = "repeat",
+    _bag = {},
+  }
+  app.builder.pool_order[#app.builder.pool_order + 1] = id
+  if not stay then app.view = "builder" end
+  return true, app.pools[id]
 end
 
 -- Where a cell sits on one axis, in that axis's own words. The grid is rescaled
@@ -1823,6 +1895,47 @@ local function draw_collection_context_menu(app, col)
         save(app)
         add_collection_as_pool(app)
       end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "New pool, and open the Builder on it so you can rename it.")
+      end
+      if r.ImGui_MenuItem(ctx, "Add as Builder Pool (stay here)##stay_" .. col.id) then
+        set_selected_collection(state, col.id)
+        save(app)
+        local ok, pool = add_collection_as_pool(app, true)
+        state.preview_error = ok
+          and ("Added as a new Builder pool: " .. tostring(pool and pool.alias or col.name))
+          or "Could not add that collection as a pool."
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Same thing without the tab change, for adding several in a row.\nIt keeps the collection's name; rename it in the Builder later.")
+      end
+
+      -- Same as the one on a folder header, over the whole collection. Only on
+      -- the open one: the filtered set belongs to whichever collection is on
+      -- screen, and would not be rebuilt for another until the next frame.
+      local col_open = state.selected_id == col.id
+      local col_filtering = (state.search or "") ~= "" or Tags.filter_active(state.tag_filter)
+      local col_shown = col_open and (state.display_files or state.filtered_files or {}) or {}
+      if col_open and col_filtering and #col_shown > 0 then
+        local col_alias = ((state.search or "") ~= "") and state.search or (col.name or "Filtered")
+        if r.ImGui_MenuItem(ctx, string.format(
+            "Add %d filtered sample%s as Builder Pool##col_pool_filtered_%s",
+            #col_shown, #col_shown == 1 and "" or "s", col.id)) then
+          local ok, pool = add_files_as_pool(app, col_shown, col_alias,
+            string.format("%d samples from %s, as filtered in the Browser.",
+              #col_shown, col.name or "the collection"), true)
+          state.preview_error = ok
+            and ("Added as a new Builder pool: " .. tostring(pool and pool.alias or col_alias))
+            or "Could not add those samples as a pool."
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx,
+            "Just the samples the list is showing, from the whole collection."
+            .. "\nThe tag and filename filters decide what goes in."
+            .. "\n\nA fixed list, saved with the preset. It does not rescan.")
+        end
+      end
+
       draw_existing_pool_menu(app, "col_" .. tostring(col.id), col.path)
       if r.ImGui_MenuItem(ctx, "Switch to Sample Kits##" .. col.id) then
         switch_browser_mode(app, "kits")
@@ -2207,6 +2320,47 @@ local function draw_samples_list(app)
             state.preview_error = "Folder added as a new Builder pool: " .. tostring(folder_alias)
           else
             state.preview_error = "Could not add that folder as a pool."
+          end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "New pool, and open the Builder on it so you can rename it.")
+        end
+
+        if r.ImGui_MenuItem(ctx, "Add as Builder Pool (stay here)##folder_pool_stay_" .. tostring(i)) then
+          local ok = add_folder_as_pool(app, folder_path, folder_alias, true)
+          if ok then
+            state.preview_error = "Folder added as a new Builder pool: " .. tostring(folder_alias)
+          else
+            state.preview_error = "Could not add that folder as a pool."
+          end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Same thing without the tab change, for adding several folders in a row.\nIt keeps the folder's name; rename it in the Builder later.")
+        end
+
+        -- Only offered while something is actually filtering. With no filter on
+        -- it would add exactly what the item above it adds, by a worse route:
+        -- a fixed list that cannot be rescanned, instead of the folder itself.
+        local filtering = (state.search or "") ~= "" or Tags.filter_active(state.tag_filter)
+        if filtering and #group.files > 0 then
+          local filtered_alias = folder_alias
+          if (state.search or "") ~= "" then filtered_alias = state.search end
+          if r.ImGui_MenuItem(ctx, string.format(
+              "Add %d filtered sample%s as Builder Pool##folder_pool_filtered_%d",
+              #group.files, #group.files == 1 and "" or "s", i)) then
+            local ok, pool = add_files_as_pool(app, group.files, filtered_alias,
+              string.format("%d samples from %s, as filtered in the Browser.",
+                #group.files, folder_alias), true)
+            state.preview_error = ok
+              and ("Added as a new Builder pool: " .. tostring(pool and pool.alias or filtered_alias))
+              or "Could not add those samples as a pool."
+          end
+          if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx,
+              "Just the samples this folder is showing, not the whole folder --"
+              .. "\nso a folder of snares, rims and claps gives you the claps alone."
+              .. "\n\nA fixed list, saved with the preset. It does not rescan, which is"
+              .. "\nthe point: a rescan would put the rest of the folder back.")
           end
         end
 
@@ -4993,7 +5147,8 @@ local function draw_top_controls(app, col, narrow)
   end
   if r.ImGui_IsItemHovered(ctx) then
     r.ImGui_SetTooltip(ctx, "Add a folder as a collection."
-      .. "\nRight click: start folder for browse dialogs"
+      .. "\nRight click: add a whole shelf at once, open the last export folder,"
+      .. "\nand set the start folder for browse dialogs"
       .. (base_folder ~= "" and ("\nCurrently: " .. base_folder) or ""))
   end
 
@@ -5008,17 +5163,42 @@ local function draw_top_controls(app, col, narrow)
     Theme.pop_font(ctx, pushed)
     r.ImGui_Separator(ctx)
 
-    if r.ImGui_MenuItem(ctx, "Add subfolders as collections\226\128\166##add_subfolders") then
+    if r.ImGui_MenuItem(ctx, kits_mode
+        and "Batch import single folders\226\128\166##add_subfolders"
+        or "Add subfolders as collections\226\128\166##add_subfolders") then
       add_subfolders_as_collections(app)
     end
     if r.ImGui_IsItemHovered(ctx) then
-      r.ImGui_SetTooltip(ctx,
-        "Pick the folder whose subfolders are your packs -- each one comes in as its own"
-        .. "\ncollection, filed under a group named after the folder you picked."
-        .. "\n\nOne level only: which folder counts as a pack is different in every library,"
-        .. "\nso your pick is the answer rather than something Kit Maker tries to work out."
-        .. "\nSubfolders with no audio anywhere below them are skipped.")
+      r.ImGui_SetTooltip(ctx, kits_mode
+        and ("Pick the folder your kits are in -- each subfolder comes in as a kit of its own,"
+          .. "\nfiled under a group named after the folder you picked. It opens on the last"
+          .. "\nexport folder, so a batch of fifty is exported and then imported in two steps."
+          .. "\n\nOne level only. Subfolders with no audio anywhere below them are skipped,"
+          .. "\nand ones already added are left out -- so running it again offers what is new.")
+        or ("Pick the folder whose subfolders are your packs -- each one comes in as its own"
+          .. "\ncollection, filed under a group named after the folder you picked."
+          .. "\n\nOne level only: which folder counts as a pack is different in every library,"
+          .. "\nso your pick is the answer rather than something Kit Maker tries to work out."
+          .. "\nSubfolders with no audio anywhere below them are skipped."))
     end
+    -- Where the last export actually wrote. Kits made by a batch are the ones
+    -- you want to go and hear straight afterwards, and hunting for the folder
+    -- means either remembering the path or opening the Builder again to read it
+    -- off the destination field -- neither of which is the browser you are
+    -- already standing in.
+    local last_export = Dialogs.get_last_export_folder()
+    r.ImGui_Separator(ctx)
+    r.ImGui_BeginDisabled(ctx, last_export == "" or not r.CF_ShellExecute)
+    if r.ImGui_MenuItem(ctx, "Open last export folder##open_last_export") then
+      r.CF_ShellExecute(last_export)
+    end
+    r.ImGui_EndDisabled(ctx)
+    if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled and r.ImGui_HoveredFlags_AllowWhenDisabled() or nil) then
+      r.ImGui_SetTooltip(ctx, last_export ~= ""
+        and (last_export .. "\n\nWhere a batch export, an Explosion or a saved kit last wrote.")
+        or "Nothing has been exported yet.")
+    end
+
     r.ImGui_Separator(ctx)
 
     if r.ImGui_MenuItem(ctx, "Set start folder\226\128\166##set_base") then

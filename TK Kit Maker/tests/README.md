@@ -51,6 +51,8 @@ pip install lupa
 | `test_colgroups.lua` | Grouping collections: one heading however it is spelled, pinned staying on top, and Move Up acting on what is on screen. |
 | `test_peaks.lua` | Transient detection: hits found once each, level independence, and that a steady tone is not sliced. |
 | `test_stale.lua` | Detecting an edited sample, and that a cache without the stamp still loads. |
+| `test_catfolder.lua` | Which name a category filter reads: the file first, the folder only when the file names nothing, and plural folders. |
+| `test_cueonly.lua` | "Cue file only": that it removes exactly what the stitcher took in, and nothing it skipped. |
 
 ## Why these two extra checks
 

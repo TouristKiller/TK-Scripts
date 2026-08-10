@@ -34,7 +34,7 @@ local function new_naming()
 end
 
 local function new_export()
-  return { destination = "", kit_count = 1, write_midilog = false, write_sourcelog = false, write_usedlog = false, write_stitched = false, max_sample_seconds = 0, length_bias = Bias.new_config(), tag_bias = Tags.new_bias_config() }
+  return { destination = "", kit_count = 1, write_midilog = false, write_sourcelog = false, write_usedlog = false, write_stitched = false, stitched_only = false, max_sample_seconds = 0, length_bias = Bias.new_config(), tag_bias = Tags.new_bias_config() }
 end
 
 function M.new_kitdef()
@@ -48,6 +48,8 @@ function M.init(app)
     next_pool_n = 1,
     pool_order = {},
     pool_pending_delete = nil,
+    pool_header_action = nil,
+    pools_collapsed = false,
     undo = Undo.new(),
     preset_name = "",
     preset_status = nil,
@@ -199,6 +201,34 @@ local function draw_pools(app)
 
   if Theme.primary_button(ctx, "+ Pool##builder_add_pool", 96, 0) then add_pool(app) end
 
+  -- One button for the whole stack. A pool opened out is a folder list, a mode,
+  -- a bias and a scan button, so eight pools is a page you scroll past to reach
+  -- the slots -- and shutting them one at a time is eight clicks in the exact
+  -- order you would rather not spend them.
+  --
+  -- Which way it goes next is remembered here rather than read back off the
+  -- headers: ImGui keeps the open state per header id and will not be asked
+  -- about it, so a button that tried to work out "are they all open?" would have
+  -- to guess. Remembering what it last did is the one answer that is never
+  -- wrong about its own effect.
+  --
+  -- The pools are only forced on the frame the button is pressed, which is what
+  -- keeps a single header clickable afterwards -- forcing every frame would nail
+  -- them shut.
+  if #app.builder.pool_order > 1 then
+    r.ImGui_SameLine(ctx)
+    local collapsed = app.builder.pools_collapsed == true
+    if Theme.ghost_button(ctx, collapsed and "Expand all##builder_pools_all" or "Collapse all##builder_pools_all", 104, 0) then
+      app.builder.pool_header_action = collapsed and "expand" or "collapse"
+      app.builder.pools_collapsed = not collapsed
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, collapsed
+        and "Open every pool again."
+        or "Fold every pool shut, so the slots are one scroll away instead of ten.")
+    end
+  end
+
   -- Undo appears only when there is something to undo, and looks like an action
   -- rather than a label.
   --
@@ -228,12 +258,18 @@ local function draw_pools(app)
     r.ImGui_TextColored(ctx, c.text_faint, "No pools yet. Create one with '+ Pool'.")
   end
 
+  local force_headers = app.builder.pool_header_action
+  local can_force = r.ImGui_SetNextItemOpen and r.ImGui_Cond_Always
+
   for _, pool_id in ipairs(app.builder.pool_order) do
     local pool = app.pools[pool_id]
     if pool then
       r.ImGui_PushID(ctx, pool_id)
       local count = pool_sample_count(pool)
       local header = string.format("%s   (%d)", pool.alias or pool_id, count)
+      if can_force and force_headers then
+        r.ImGui_SetNextItemOpen(ctx, force_headers == "expand", r.ImGui_Cond_Always())
+      end
       if r.ImGui_CollapsingHeader(ctx, header .. "###header") then
         r.ImGui_Indent(ctx, 6)
         r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 60))
@@ -373,6 +409,7 @@ local function draw_pools(app)
       r.ImGui_PopID(ctx)
     end
   end
+  app.builder.pool_header_action = nil
 
   if app.builder.pool_pending_delete then
     -- Taken before, not after: what you want back is the state you had.

@@ -290,6 +290,22 @@ local function draw_batch_options(app)
   if st_changed then export.write_stitched = st_value end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Joins all samples into one WAV with embedded cue points per slice (for slicers).\nWAV sources only; other formats are skipped.") end
 
+  -- Beside the stitch rather than under Naming, because it only means anything
+  -- with the stitch on: it says what to do with the one-shots afterwards.
+  flow_same_line(ctx, checkbox_width(ctx, "Cue file only"))
+  r.ImGui_BeginDisabled(ctx, not export.write_stitched)
+  local so_changed, so_value = r.ImGui_Checkbox(ctx, "Cue file only##export_stitched_only", export.stitched_only == true)
+  if so_changed then export.stitched_only = so_value end
+  r.ImGui_EndDisabled(ctx)
+  if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled and r.ImGui_HoveredFlags_AllowWhenDisabled() or nil) then
+    r.ImGui_SetTooltip(ctx, export.write_stitched
+      and ("Keep the stitched WAV and its cue sheet, and delete the one-shots that went into it."
+        .. "\nA kit for a slicer is one file; the copies beside it are the same audio twice."
+        .. "\n\nAnything the stitcher skipped is kept and named in the result, so a sample"
+        .. "\nthat is not in the stitched file is never the one that gets deleted.")
+      or "Needs 'Stitched WAV + cues' -- it decides what happens to the one-shots after stitching.")
+  end
+
   r.ImGui_AlignTextToFramePadding(ctx)
   Theme.label(ctx, "Max sample length (s)")
   r.ImGui_SameLine(ctx)
@@ -337,7 +353,9 @@ local function draw_progress_modal(app)
     if #batch.kits > 0 then
       if r.ImGui_BeginChild(ctx, "##export_result_kits", 380, math.min(150, #batch.kits * 20 + 8)) then
         for _, kit in ipairs(batch.kits) do
-          r.ImGui_Text(ctx, string.format("%s  (%d samples)", kit.name, #kit.results))
+          r.ImGui_Text(ctx, (kit.stitched_only_removed or 0) > 0
+            and string.format("%s  (%d samples \226\134\146 cue file)", kit.name, #kit.results)
+            or string.format("%s  (%d samples)", kit.name, #kit.results))
           if #kit.errors > 0 then
             r.ImGui_SameLine(ctx)
             r.ImGui_TextColored(ctx, c.warning, string.format("%d errors", #kit.errors))
@@ -444,6 +462,10 @@ function M.draw(app)
     if app.kitdef.seed_auto ~= false or not tonumber(app.kitdef.seed) then
       app.kitdef.seed = Rng.new_seed()
     end
+    -- Remembered here rather than when the batch finishes: a cancelled run has
+    -- still written the kits it got through, and that half-finished folder is
+    -- exactly the one you want to go and look at.
+    Dialogs.set_last_export_folder(app.kitdef.export.destination)
     app.export_batch = Engine.new_batch(app.kitdef, app.pools, app.script_path)
   end
   r.ImGui_EndDisabled(ctx)

@@ -36,6 +36,7 @@ function M.init(app)
     start_note    = 36,
     recursive     = true,
     stitched      = false,
+    stitched_only = false,
     max_sample_seconds = 0,
     length_bias   = Bias.new_config(),
     tag_bias      = Tags.new_bias_config(),
@@ -382,6 +383,19 @@ function M.draw(app)
   if st_changed then state.stitched = st_value end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Also joins all samples into one WAV with embedded cue points per slice (for slicers).\nWAV sources only; other formats are skipped.") end
 
+  r.ImGui_SameLine(ctx, nil, 12)
+  r.ImGui_BeginDisabled(ctx, not state.stitched)
+  local so_changed, so_value = r.ImGui_Checkbox(ctx, "Cue file only##expl_stitched_only", state.stitched_only == true)
+  if so_changed then state.stitched_only = so_value end
+  r.ImGui_EndDisabled(ctx)
+  if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled and r.ImGui_HoveredFlags_AllowWhenDisabled() or nil) then
+    r.ImGui_SetTooltip(ctx, state.stitched
+      and ("Keep the stitched WAV and its cue sheet, and delete the one-shots that went into it."
+        .. "\nA kit for a slicer is one file; the copies beside it are the same audio twice."
+        .. "\n\nAnything the stitcher skipped is kept and named in the result.")
+      or "Needs 'Stitched WAV + cues' -- it decides what happens to the one-shots after stitching.")
+  end
+
   r.ImGui_AlignTextToFramePadding(ctx)
   Theme.label(ctx, "Max sample length (s)")
   r.ImGui_SameLine(ctx)
@@ -455,6 +469,7 @@ function M.draw(app)
       start_note    = state.start_note,
       destination   = state.destination,
       stitched      = state.stitched,
+      stitched_only = state.stitched_only,
       max_sample_seconds = state.max_sample_seconds,
       pattern       = pattern_specs,
       name_seed     = state.name_seed,
@@ -464,6 +479,7 @@ function M.draw(app)
       seed          = math.floor(tonumber(state.seed) or 0),
     })
     Engine.rescan_pools(pools, true)
+    Dialogs.set_last_export_folder(state.destination)
     state.batch = Engine.new_batch(kitdef, pools, app.script_path)
   end
   r.ImGui_EndDisabled(ctx)
@@ -534,6 +550,14 @@ function M.draw(app)
       if res.stitched then
         local stitched_name = res.stitched:match("([^/\\]+)$") or res.stitched
         r.ImGui_Text(ctx, "Stitched: " .. stitched_name)
+      end
+      -- Said out loud, because deleting files is not something to leave to be
+      -- discovered: the option is a checkbox two rows up on a page you may not
+      -- have looked at since last week.
+      if (res.stitched_only_removed or 0) > 0 then
+        r.ImGui_TextColored(ctx, c.text_dim, string.format(
+          "Cue file only: %d one-shot%s removed, the stitched WAV and its cues kept.",
+          res.stitched_only_removed, res.stitched_only_removed == 1 and "" or "s"))
       end
       if #res.errors > 0 then
         r.ImGui_TextColored(ctx, c.danger, string.format("%d errors:", #res.errors))
