@@ -2447,7 +2447,13 @@ local function draw_source_combo(ctx, settings, app)
   set_next_combo_height(ctx, settings)
   if r.ImGui_BeginCombo(ctx, "##pb_source", current) then
     for _, source in ipairs(sources) do
-      if source ~= "Custom Folders" or state.custom_folder_source == "shared" then
+      -- Custom folders are made in TK FX Browser and read from the file the two
+      -- share. Hiding the entry until one exists made the feature look as though
+      -- it were not there at all, so it stays in the list and says where to go.
+      local empty_custom = source == "Custom Folders" and state.custom_folder_source ~= "shared"
+      if empty_custom then
+        r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Custom Folders - create them in TK FX Browser")
+      else
         local selected = current == source
         if r.ImGui_Selectable(ctx, source, selected) then
           settings.source = source

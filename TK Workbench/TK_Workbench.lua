@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.83
+-- @version 0.6.84
 -- @changelog:
+-- v0.6.84
+--   + Plugin Browser: "Custom Folders" stays in the source list even when you have none, saying where to make them. It used to be hidden until the file existed, which made the whole feature look as though it were not there - the folders are built in TK FX Browser and both read the same file, so there was nothing here to find until you already knew that
 -- v0.6.83
 --   + Control Room: Fixed the module refusing to load. Lua allows 200 local variables per file and this one was a handful short of it, so the actions added in the previous version tipped it over - a loop at the top of a file quietly claims five of those on its own. Nothing about the actions has changed; they are simply declared the way the rest of the file already was
 -- v0.6.82

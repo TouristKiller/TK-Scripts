@@ -1,10 +1,49 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.1.0
+-- @version 0.2.0
 -- @changelog:
---   + Initial preview release
+--   + Added standalone theme engine with presets, custom themes and UI scaling
+--   + Added Source Media view, item preview and arrange drag-and-drop
+--   + Added multi-selection with pooled MIDI, loop, mute, lock and delete actions
 
 local r = reaper
+
+local script_path = debug.getinfo(1, "S").source:match("@?(.*[\\/])") or ""
+local separator = package.config:sub(1, 1)
+local module_path = script_path .. "TK_PROJECT_CLIPS" .. separator
+package.path = module_path .. "?.lua;" .. package.path
+
+local json = require("json")
+local Theme = require("theme")
+local UIScale = require("ui_scale")
+
+local config_path = script_path .. "TK_PROJECT_CLIPS_SETTINGS.json"
+
+local function load_config()
+    local config = { theme_preset = "Graphite", custom_themes = {}, custom_theme_name = "My Theme" }
+    local file = io.open(config_path, "r")
+    if not file then return config end
+    local content = file:read("*a")
+    file:close()
+    local ok, decoded = pcall(json.decode, content)
+    if not ok or type(decoded) ~= "table" then return config end
+    if type(decoded.theme_preset) == "string" then config.theme_preset = decoded.theme_preset end
+    if type(decoded.custom_themes) == "table" then config.custom_themes = decoded.custom_themes end
+    if type(decoded.custom_theme_name) == "string" then config.custom_theme_name = decoded.custom_theme_name end
+    return config
+end
+
+local function save_config(config)
+    local ok, encoded = pcall(json.encode, config)
+    if not ok or not encoded then return false end
+    local file = io.open(config_path, "w")
+    if not file then return false end
+    file:write(encoded .. "\n")
+    file:close()
+    return true
+end
+
+local project_clips_settings = load_config()
 
 local SCRIPT_NAME = "TK Project Clips"
 local CARD_WIDTH = 220
@@ -12,6 +51,7 @@ local CARD_HEIGHT = 136
 local PREVIEW_HEIGHT = 82
 local PEAK_COUNT = 112
 local EXT_SECTION = "TK_PROJECT_CLIPS"
+local theme_preset = Theme.set_preset(project_clips_settings.theme_preset or "Graphite", project_clips_settings.custom_themes)
 local UI_SCALE_OPTIONS = {
     { label = "85%", value = 0.85 },
     { label = "100%", value = 1.0 },
@@ -21,22 +61,41 @@ local UI_SCALE_OPTIONS = {
     { label = "175%", value = 1.75 },
     { label = "200%", value = 2.0 },
 }
+local THEME_COLOR_FIELDS = {
+    { key = "window_bg", label = "Window" },
+    { key = "child_bg", label = "Panel" },
+    { key = "popup_bg", label = "Popup" },
+    { key = "frame_bg", label = "Frame" },
+    { key = "frame_hover", label = "Frame Hover" },
+    { key = "header", label = "Header" },
+    { key = "header_hover", label = "Header Hover" },
+    { key = "separator", label = "Separator" },
+    { key = "border", label = "Border" },
+    { key = "text", label = "Text" },
+    { key = "text_dim", label = "Dim Text" },
+    { key = "badge_text", label = "Badge Text" },
+    { key = "accent", label = "Accent" },
+    { key = "accent_soft", label = "Accent Soft" },
+    { key = "warning", label = "Warning" },
+    { key = "danger", label = "Danger" },
+}
 
 local COLORS = {
-    window_bg = 0x111318FF,
-    child_bg = 0x171A20FF,
-    card_bg = 0x1C2027FF,
-    card_hover = 0x242A33FF,
-    card_selected = 0x293443FF,
-    border = 0x343A45FF,
-    text = 0xE8EBF0FF,
-    text_dim = 0x9098A5FF,
-    accent = 0x58A6C7FF,
-    accent_soft = 0x284856FF,
+    window_bg = Theme.colors.window_bg,
+    child_bg = Theme.colors.child_bg,
+    card_bg = Theme.colors.frame_bg,
+    card_hover = Theme.colors.frame_hover,
+    card_selected = Theme.colors.header,
+    border = Theme.colors.border,
+    text = Theme.colors.text,
+    text_dim = Theme.colors.text_dim,
+    badge_text = Theme.colors.badge_text,
+    accent = Theme.colors.accent,
+    accent_soft = Theme.colors.accent_soft,
     audio = 0x73C6A3FF,
-    midi = 0xE5B567FF,
-    danger = 0xE06C75FF,
-    grid = 0xFFFFFF12,
+    midi = Theme.colors.warning,
+    danger = Theme.colors.danger,
+    grid = (Theme.colors.separator & 0xFFFFFF00) | 0x28,
 }
 
 local saved_color_mode = r.GetExtState(EXT_SECTION, "color_mode")
@@ -73,6 +132,8 @@ local state = {
     suppress_drag_guid = nil,
     cache_budget = 0,
     status = "",
+    theme_preset = theme_preset,
+    theme_settings_open = false,
     ui_scale = tonumber(r.GetExtState(EXT_SECTION, "ui_scale")) or 1.0,
     ui_fonts = {},
 }
@@ -124,6 +185,40 @@ end
 local function set_ui_scale(value)
     state.ui_scale = clamp(tonumber(value) or 1.0, 0.85, 2.0)
     r.SetExtState(EXT_SECTION, "ui_scale", tostring(state.ui_scale), true)
+end
+
+local function sync_theme_colors()
+    COLORS.window_bg = Theme.colors.window_bg
+    COLORS.child_bg = Theme.colors.child_bg
+    COLORS.card_bg = Theme.colors.frame_bg
+    COLORS.card_hover = Theme.colors.frame_hover
+    COLORS.card_selected = Theme.colors.header
+    COLORS.border = Theme.colors.border
+    COLORS.text = Theme.colors.text
+    COLORS.text_dim = Theme.colors.text_dim
+    COLORS.badge_text = Theme.colors.badge_text
+    COLORS.accent = Theme.colors.accent
+    COLORS.accent_soft = Theme.colors.accent_soft
+    COLORS.midi = Theme.colors.warning
+    COLORS.danger = Theme.colors.danger
+    COLORS.grid = (Theme.colors.separator & 0xFFFFFF00) | 0x28
+end
+
+local function apply_theme(name)
+    state.theme_preset = Theme.set_preset(name, project_clips_settings.custom_themes)
+    project_clips_settings.theme_preset = state.theme_preset
+    sync_theme_colors()
+    if not save_config(project_clips_settings) then state.status = "Could not save theme settings" end
+end
+
+local function theme_names()
+    local names = {}
+    for _, name in ipairs(Theme.get_preset_names()) do names[#names + 1] = name end
+    local custom_names = {}
+    for name in pairs(project_clips_settings.custom_themes or {}) do custom_names[#custom_names + 1] = name end
+    table.sort(custom_names, function(first, second) return first:lower() < second:lower() end)
+    for _, name in ipairs(custom_names) do names[#names + 1] = name end
+    return names
 end
 
 local function save_collapsed_tracks()
@@ -561,6 +656,32 @@ local function select_and_reveal(entry)
     r.UpdateArrange()
 end
 
+local function selected_entries()
+    local entries = {}
+    for _, entry in ipairs(state.items) do
+        if entry.selected and item_from_guid(entry.guid) then entries[#entries + 1] = entry end
+    end
+    return entries
+end
+
+local function select_card(entry, additive)
+    local item = item_from_guid(entry.guid)
+    if not item then return end
+    if not additive then
+        r.SelectAllMediaItems(0, false)
+        for _, current in ipairs(state.items) do current.selected = false end
+    end
+    local selected = additive and not entry.selected or true
+    r.SetMediaItemSelected(item, selected)
+    entry.selected = selected
+    if not additive then
+        local track = r.GetMediaItemTrack(item)
+        if track then r.SetOnlyTrackSelected(track) end
+        r.SetEditCurPos(r.GetMediaItemInfo_Value(item, "D_POSITION") or 0, true, false)
+    end
+    r.UpdateArrange()
+end
+
 local function isolate_item_preview(item)
     local source_track = r.GetMediaItemTrack(item)
     if not source_track then return false end
@@ -730,6 +851,183 @@ local function delete_item(entry)
     r.UpdateArrange()
 end
 
+local function finish_batch(status)
+    state.status = status
+    state.signature = ""
+    state.last_scan = 0
+    r.UpdateArrange()
+end
+
+local function batch_set_loop(entries, mode)
+    if #entries == 0 then return end
+    if state.preview_guid then stop_item_preview() end
+    r.Undo_BeginBlock()
+    for _, entry in ipairs(entries) do
+        local item = item_from_guid(entry.guid)
+        if item then
+            local current = (r.GetMediaItemInfo_Value(item, "B_LOOPSRC") or 0) > 0.5
+            local looped = mode == "toggle" and not current or mode == "enable"
+            r.SetMediaItemInfo_Value(item, "B_LOOPSRC", looped and 1 or 0)
+            entry.looped = looped
+        end
+    end
+    local label = mode == "toggle" and "Toggle source loop for selected items" or mode == "enable" and "Enable source loop for selected items" or "Disable source loop for selected items"
+    r.Undo_EndBlock(label, -1)
+    finish_batch(label)
+end
+
+local function batch_set_item_flag(entries, property, enabled, label)
+    if #entries == 0 then return end
+    if state.preview_guid then stop_item_preview() end
+    r.Undo_BeginBlock()
+    for _, entry in ipairs(entries) do
+        local item = item_from_guid(entry.guid)
+        if item then r.SetMediaItemInfo_Value(item, property, enabled and 1 or 0) end
+    end
+    r.Undo_EndBlock(label, -1)
+    finish_batch(label)
+end
+
+local function batch_unpool(entries)
+    if state.preview_guid then stop_item_preview() end
+    local eligible = {}
+    for _, entry in ipairs(entries) do
+        if entry.is_midi and entry.pooled then eligible[#eligible + 1] = entry end
+    end
+    if #eligible == 0 then return end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for _, entry in ipairs(eligible) do
+        local item = item_from_guid(entry.guid)
+        if item then
+            r.SelectAllMediaItems(0, false)
+            r.SetMediaItemSelected(item, true)
+            r.Main_OnCommand(41613, 0)
+        end
+    end
+    r.SelectAllMediaItems(0, false)
+    for _, entry in ipairs(entries) do
+        local item = item_from_guid(entry.guid)
+        if item then r.SetMediaItemSelected(item, true) end
+    end
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Unpool selected MIDI items", -1)
+    finish_batch(tostring(#eligible) .. " MIDI item" .. (#eligible == 1 and "" or "s") .. " unpooled")
+end
+
+local ITEM_PROPERTIES = { "D_LENGTH", "B_MUTE", "B_LOOPSRC", "C_LOCK", "I_GROUPID", "I_CUSTOMCOLOR", "D_FADEINLEN", "D_FADEOUTLEN", "D_FADEINDIR", "D_FADEOUTDIR", "C_FADEINSHAPE", "C_FADEOUTSHAPE" }
+local TAKE_PROPERTIES = { "D_PLAYRATE", "D_PITCH", "B_PPITCH", "I_CHANMODE", "D_VOL", "D_PAN", "I_CUSTOMCOLOR" }
+
+local function snapshot_pool_target(entry)
+    local item = item_from_guid(entry.guid)
+    local take = item and r.GetActiveTake(item) or nil
+    local track = item and r.GetMediaItemTrack(item) or nil
+    if not item or not take or not track then return nil end
+    local snapshot = { guid = entry.guid, track = track, position = r.GetMediaItemInfo_Value(item, "D_POSITION") or 0, item_values = {}, take_values = {} }
+    for _, key in ipairs(ITEM_PROPERTIES) do snapshot.item_values[key] = r.GetMediaItemInfo_Value(item, key) end
+    for _, key in ipairs(TAKE_PROPERTIES) do snapshot.take_values[key] = r.GetMediaItemTakeInfo_Value(take, key) end
+    local _, name = r.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+    snapshot.take_name = name or ""
+    return snapshot
+end
+
+local function apply_pool_target(snapshot, item)
+    r.SetMediaItemInfo_Value(item, "D_POSITION", snapshot.position)
+    for key, value in pairs(snapshot.item_values) do r.SetMediaItemInfo_Value(item, key, value) end
+    local take = r.GetActiveTake(item)
+    if take then
+        for key, value in pairs(snapshot.take_values) do r.SetMediaItemTakeInfo_Value(take, key, value) end
+        r.GetSetMediaItemTakeInfo_String(take, "P_NAME", snapshot.take_name, true)
+    end
+end
+
+local function batch_pool_to_source(source_entry, entries)
+    if #entries < 2 or not source_entry.is_midi then return end
+    for _, entry in ipairs(entries) do if not entry.is_midi then return end end
+    if state.preview_guid then stop_item_preview() end
+    local source_item = item_from_guid(source_entry.guid)
+    if not source_item then return end
+    local targets = {}
+    for _, entry in ipairs(entries) do
+        if entry.guid ~= source_entry.guid then
+            local snapshot = snapshot_pool_target(entry)
+            if snapshot then targets[#targets + 1] = snapshot end
+        end
+    end
+    if #targets == 0 then return end
+    local cursor = r.GetCursorPosition()
+    local selected_track_guids = {}
+    for index = 0, r.CountSelectedTracks(0) - 1 do
+        local track = r.GetSelectedTrack(0, index)
+        if track then selected_track_guids[#selected_track_guids + 1] = r.GetTrackGUID(track) end
+    end
+    local result_guids = { source_entry.guid }
+    local replaced = 0
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    r.SelectAllMediaItems(0, false)
+    r.SetMediaItemSelected(source_item, true)
+    r.Main_OnCommand(40698, 0)
+    for _, snapshot in ipairs(targets) do
+        local original = item_from_guid(snapshot.guid)
+        if original then
+            r.SelectAllMediaItems(0, false)
+            r.SetOnlyTrackSelected(snapshot.track)
+            r.SetEditCurPos(snapshot.position, false, false)
+            r.Main_OnCommand(41072, 0)
+            local pasted = r.GetSelectedMediaItem(0, 0)
+            if pasted and pasted ~= original then
+                apply_pool_target(snapshot, pasted)
+                local track = r.GetMediaItemTrack(original)
+                if track then r.DeleteTrackMediaItem(track, original) end
+                result_guids[#result_guids + 1] = r.BR_GetMediaItemGUID(pasted)
+                replaced = replaced + 1
+            else
+                result_guids[#result_guids + 1] = snapshot.guid
+            end
+        end
+    end
+    r.SelectAllMediaItems(0, false)
+    for _, guid in ipairs(result_guids) do
+        local item = item_from_guid(guid)
+        if item then r.SetMediaItemSelected(item, true) end
+    end
+    for track_index = 0, r.CountTracks(0) - 1 do
+        local track = r.GetTrack(0, track_index)
+        r.SetTrackSelected(track, false)
+    end
+    for track_index = 0, r.CountTracks(0) - 1 do
+        local track = r.GetTrack(0, track_index)
+        local guid = r.GetTrackGUID(track)
+        for _, selected_guid in ipairs(selected_track_guids) do
+            if guid == selected_guid then r.SetTrackSelected(track, true); break end
+        end
+    end
+    r.SetEditCurPos(cursor, false, false)
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Pool selected MIDI items to source", -1)
+    finish_batch(replaced == #targets and tostring(replaced + 1) .. " MIDI items pooled" or tostring(replaced) .. " of " .. tostring(#targets) .. " MIDI targets pooled")
+end
+
+local function batch_delete(entries)
+    if #entries == 0 then return end
+    if state.preview_guid then stop_item_preview() end
+    local deleted = 0
+    r.Undo_BeginBlock()
+    for _, entry in ipairs(entries) do
+        local item = item_from_guid(entry.guid)
+        local track = item and r.GetMediaItemTrack(item) or nil
+        if item and track then
+            r.DeleteTrackMediaItem(track, item)
+            state.waveform_cache[entry.cache_key] = nil
+            state.midi_cache[entry.cache_key] = nil
+            deleted = deleted + 1
+        end
+    end
+    r.Undo_EndBlock("Delete selected project clips", -1)
+    finish_batch(tostring(deleted) .. " item" .. (deleted == 1 and "" or "s") .. " deleted")
+end
+
 local function begin_item_drag(entry)
     if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_SourceAllowNullID()) then
         state.drag = { guid = entry.guid, is_midi = entry.is_midi, name = entry.name, source_path = entry.source_key and entry.path or nil }
@@ -837,20 +1135,62 @@ end
 local function draw_header()
     local available = r.ImGui_GetContentRegionAvail(ctx)
     local close_size = rounded(14)
-    local scale_width = rounded(72)
+    local settings_size = rounded(14)
     local gap = rounded(8)
     local items_width = rounded(74)
     local sources_width = rounded(112)
     local tabs_width = items_width + sources_width + rounded(7)
-    local right_width = tabs_width + scale_width + close_size + gap * 3
+    local right_width = tabs_width + settings_size + close_size + gap * 3
     r.ImGui_TextColored(ctx, COLORS.accent, SCRIPT_NAME)
     r.ImGui_SameLine(ctx, math.max(rounded(120), available - right_width))
     view_button("Items", "items", #state.items)
     r.ImGui_SameLine(ctx, 0, rounded(7))
     view_button("Source Media", "sources", #state.sources)
     r.ImGui_SameLine(ctx, 0, gap)
-    r.ImGui_SetNextItemWidth(ctx, scale_width)
-    if r.ImGui_BeginCombo(ctx, "##project_clips_ui_scale", ui_scale_label()) then
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local settings_x, settings_y = r.ImGui_GetCursorScreenPos(ctx)
+    local settings_hovered = r.ImGui_IsMouseHoveringRect(ctx, settings_x, settings_y, settings_x + settings_size, settings_y + settings_size)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, settings_x + settings_size * 0.5, settings_y + settings_size * 0.5, settings_size * 0.5, settings_hovered and COLORS.accent or 0xFFFFFFFF)
+    r.ImGui_DrawList_AddCircle(draw_list, settings_x + settings_size * 0.5, settings_y + settings_size * 0.5, settings_size * 0.5, COLORS.border, 16, scaled(1))
+    if r.ImGui_InvisibleButton(ctx, "##project_clips_settings", settings_size, settings_size) then state.theme_settings_open = true end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Settings") end
+    r.ImGui_SameLine(ctx, 0, gap)
+    local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
+    local hovered = r.ImGui_IsMouseHoveringRect(ctx, close_x, close_y, close_x + close_size, close_y + close_size)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, hovered and mix_color(COLORS.danger, COLORS.text, 0.2) or COLORS.danger)
+    r.ImGui_DrawList_AddCircle(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, COLORS.border, 16, scaled(1))
+    if r.ImGui_InvisibleButton(ctx, "##project_clips_close", close_size, close_size) then state.open = false end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
+end
+
+local function trim_text(value)
+    return tostring(value or ""):match("^%s*(.-)%s*$") or ""
+end
+
+local function is_reserved_theme_name(name)
+    local normalized = trim_text(name):lower()
+    if normalized == "unsaved custom" then return true end
+    return Theme.is_reserved_preset_name and Theme.is_reserved_preset_name(normalized) or false
+end
+
+local function draw_theme_preview()
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    local size = rounded(18)
+    local gap = rounded(6)
+    local swatches = { Theme.colors.window_bg, Theme.colors.child_bg, Theme.colors.frame_bg, Theme.colors.accent, Theme.colors.warning, Theme.colors.danger }
+    for index, color in ipairs(swatches) do
+        local left = x + (index - 1) * (size + gap)
+        r.ImGui_DrawList_AddRectFilled(draw_list, left, y, left + size, y + size, color, scaled(3))
+        r.ImGui_DrawList_AddRect(draw_list, left, y, left + size, y + size, COLORS.border, scaled(3), 0, scaled(1))
+    end
+    r.ImGui_Dummy(ctx, #swatches * (size + gap) - gap, size)
+end
+
+local function draw_theme_settings_body()
+    r.ImGui_TextColored(ctx, COLORS.text_dim, "Interface")
+    r.ImGui_SetNextItemWidth(ctx, rounded(120))
+    if r.ImGui_BeginCombo(ctx, "##settings_ui_scale", ui_scale_label()) then
         for _, option in ipairs(UI_SCALE_OPTIONS) do
             local selected = math.abs(state.ui_scale - option.value) < 0.01
             if r.ImGui_Selectable(ctx, option.label, selected) then set_ui_scale(option.value) end
@@ -859,14 +1199,103 @@ local function draw_header()
         r.ImGui_EndCombo(ctx)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "UI scale") end
-    r.ImGui_SameLine(ctx, 0, gap)
-    local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
-    local hovered = r.ImGui_IsMouseHoveringRect(ctx, close_x, close_y, close_x + close_size, close_y + close_size)
-    r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, hovered and 0xFF879AFF or 0xF7768EFF)
-    r.ImGui_DrawList_AddCircle(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0x3A1018FF, 16, scaled(1))
-    if r.ImGui_InvisibleButton(ctx, "##project_clips_close", close_size, close_size) then state.open = false end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, COLORS.text_dim, "Preset")
+    r.ImGui_SetNextItemWidth(ctx, rounded(220))
+    if r.ImGui_BeginCombo(ctx, "##theme_settings_preset", state.theme_preset) then
+        for _, name in ipairs(theme_names()) do
+            local selected = state.theme_preset == name
+            if r.ImGui_Selectable(ctx, name, selected) then
+                apply_theme(name)
+                if project_clips_settings.custom_themes[name] then project_clips_settings.custom_theme_name = name end
+            end
+            if selected then r.ImGui_SetItemDefaultFocus(ctx) end
+        end
+        r.ImGui_EndCombo(ctx)
+    end
+    if Theme.is_reaper_theme_preset and Theme.is_reaper_theme_preset(state.theme_preset) then
+        if r.ImGui_Button(ctx, "Refresh REAPER Theme", rounded(160), rounded(24)) then
+            apply_theme(state.theme_preset)
+            state.status = "REAPER theme colors refreshed"
+        end
+    end
+    r.ImGui_Separator(ctx)
+    r.ImGui_TextColored(ctx, COLORS.text_dim, "Preview")
+    draw_theme_preview()
+    r.ImGui_Spacing(ctx)
+    local child_visible = r.ImGui_BeginChild(ctx, "##project_clips_theme_colors", rounded(330), rounded(310), 1)
+    if child_visible then
+        local color_flags = r.ImGui_ColorEditFlags_NoInputs()
+        for _, field in ipairs(THEME_COLOR_FIELDS) do
+            local changed, value = r.ImGui_ColorEdit4(ctx, field.label .. "##" .. field.key, Theme.colors[field.key], color_flags)
+            if changed then
+                Theme.colors[field.key] = value
+                state.theme_preset = Theme.set_colors(Theme.colors, "Unsaved Custom")
+                sync_theme_colors()
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    local name_changed, custom_name = r.ImGui_InputTextWithHint(ctx, "##project_clips_custom_theme_name", "Custom theme name", project_clips_settings.custom_theme_name or "My Theme")
+    if name_changed then project_clips_settings.custom_theme_name = custom_name end
+    local theme_name = trim_text(project_clips_settings.custom_theme_name)
+    local theme_exists = project_clips_settings.custom_themes[theme_name] ~= nil
+    if r.ImGui_Button(ctx, theme_exists and "Update Custom" or "Save Custom", rounded(110), rounded(24)) then
+        if theme_name == "" then
+            state.status = "Custom theme name required"
+        elseif is_reserved_theme_name(theme_name) then
+            state.status = "Reserved theme names cannot be overwritten"
+        else
+            project_clips_settings.custom_themes[theme_name] = Theme.copy_current_colors()
+            state.theme_preset = Theme.set_preset(theme_name, project_clips_settings.custom_themes)
+            project_clips_settings.theme_preset = state.theme_preset
+            sync_theme_colors()
+            state.status = (theme_exists and "Updated custom theme: " or "Saved custom theme: ") .. theme_name
+            if not save_config(project_clips_settings) then state.status = "Could not save theme settings" end
+        end
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Delete Custom", rounded(110), rounded(24)) then
+        if theme_name == "" then
+            state.status = "Custom theme name required"
+        elseif is_reserved_theme_name(theme_name) then
+            state.status = "Reserved themes cannot be deleted"
+        elseif project_clips_settings.custom_themes[theme_name] then
+            project_clips_settings.custom_themes[theme_name] = nil
+            if state.theme_preset == theme_name then apply_theme("Graphite") else save_config(project_clips_settings) end
+            state.status = "Deleted custom theme: " .. theme_name
+        else
+            state.status = "Custom theme not found: " .. theme_name
+        end
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_Button(ctx, "Reset", rounded(90), rounded(24)) then
+        apply_theme("Graphite")
+        state.status = "Theme preset reset"
+    end
+end
+
+local function draw_theme_settings()
+    if not state.theme_settings_open then return end
+    r.ImGui_SetNextWindowSize(ctx, rounded(390), rounded(680), r.ImGui_Cond_Always())
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+    local visible, open = r.ImGui_Begin(ctx, "Settings##project_clips", state.theme_settings_open, window_flags)
+    state.theme_settings_open = open
+    if visible then
+        r.ImGui_TextColored(ctx, COLORS.accent, "Settings")
+        local close_size = rounded(14)
+        r.ImGui_SameLine(ctx, math.max(rounded(140), r.ImGui_GetWindowWidth(ctx) - close_size - rounded(16)))
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
+        local hovered = r.ImGui_IsMouseHoveringRect(ctx, close_x, close_y, close_x + close_size, close_y + close_size)
+        r.ImGui_DrawList_AddCircleFilled(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, hovered and 0xFF879AFF or 0xF7768EFF)
+        r.ImGui_DrawList_AddCircle(draw_list, close_x + close_size * 0.5, close_y + close_size * 0.5, close_size * 0.5, 0x3A1018FF, 16, scaled(1))
+        if r.ImGui_InvisibleButton(ctx, "##project_clips_settings_close", close_size, close_size) then state.theme_settings_open = false end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
+        r.ImGui_Separator(ctx)
+        draw_theme_settings_body()
+    end
+    r.ImGui_End(ctx)
 end
 
 local function draw_all_tracks_button(expand)
@@ -988,9 +1417,9 @@ local function draw_play_button(entry, cursor_x, cursor_y)
     local hovered = r.ImGui_IsMouseHoveringRect(ctx, x, y, x + size, y + size)
     local active = state.preview_guid == entry.guid
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    local background = hovered and 0x101216EE or 0x101216BB
+    local background = (COLORS.card_bg & 0xFFFFFF00) | (hovered and 0xEE or 0xBB)
     r.ImGui_DrawList_AddCircleFilled(draw_list, x + size * 0.5, y + size * 0.5, size * 0.5, background)
-    r.ImGui_DrawList_AddCircle(draw_list, x + size * 0.5, y + size * 0.5, size * 0.5, active and COLORS.danger or hovered and COLORS.accent or 0xFFFFFFFF, 16, scaled(1))
+    r.ImGui_DrawList_AddCircle(draw_list, x + size * 0.5, y + size * 0.5, size * 0.5, active and COLORS.danger or hovered and COLORS.accent or COLORS.text, 16, scaled(1))
     if active then
         local inset = scaled(7)
         r.ImGui_DrawList_AddRectFilled(draw_list, x + inset, y + inset, x + size - inset, y + size - inset, COLORS.danger, scaled(1))
@@ -998,7 +1427,7 @@ local function draw_play_button(entry, cursor_x, cursor_y)
         local center_x = x + size * 0.5
         local center_y = y + size * 0.5
         local triangle = scaled(4.5)
-        r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x - triangle * 0.65, center_y - triangle, center_x - triangle * 0.65, center_y + triangle, center_x + triangle, center_y, hovered and COLORS.accent or 0xFFFFFFFF)
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, center_x - triangle * 0.65, center_y - triangle, center_x - triangle * 0.65, center_y + triangle, center_x + triangle, center_y, hovered and COLORS.accent or COLORS.text)
     end
     if hovered and r.ImGui_IsMouseClicked(ctx, 0) then
         state.suppress_drag_guid = entry.guid
@@ -1015,10 +1444,10 @@ local function draw_delete_button(entry, cursor_x, cursor_y)
     local y = cursor_y + scaled(8)
     local hovered = r.ImGui_IsMouseHoveringRect(ctx, x, y, x + size, y + size)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    local background = hovered and 0x35171CEE or 0x101216BB
-    local color = hovered and COLORS.danger or 0xFFFFFFCC
+    local background = (COLORS.card_bg & 0xFFFFFF00) | (hovered and 0xEE or 0xBB)
+    local color = hovered and COLORS.danger or COLORS.text
     r.ImGui_DrawList_AddCircleFilled(draw_list, x + size * 0.5, y + size * 0.5, size * 0.5, background)
-    r.ImGui_DrawList_AddCircle(draw_list, x + size * 0.5, y + size * 0.5, size * 0.5, hovered and COLORS.danger or 0xFFFFFFFF, 16, scaled(1))
+    r.ImGui_DrawList_AddCircle(draw_list, x + size * 0.5, y + size * 0.5, size * 0.5, hovered and COLORS.danger or COLORS.text, 16, scaled(1))
     local left = x + scaled(7)
     local right = x + size - scaled(7)
     local top = y + scaled(8)
@@ -1040,12 +1469,12 @@ local function draw_item_toggle(entry, label, active, x, y, width)
     local hovered = r.ImGui_IsMouseHoveringRect(ctx, x, y, x + width, y + height)
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     local color = COLORS.audio
-    local background = active and ((color & 0xFFFFFF00) | (hovered and 0xDD or 0xB8)) or hovered and 0x101216DD or 0x10121699
+    local background = active and ((color & 0xFFFFFF00) | (hovered and 0xDD or 0xB8)) or ((COLORS.card_bg & 0xFFFFFF00) | (hovered and 0xDD or 0x99))
     local border = active and color or hovered and COLORS.text or COLORS.text_dim
     r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, background, scaled(3))
     r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, border, scaled(3), 0, scaled(1))
     local text_width, text_height = r.ImGui_CalcTextSize(ctx, label)
-    r.ImGui_DrawList_AddText(draw_list, x + (width - text_width) * 0.5, y + (height - text_height) * 0.5, active and 0x101216FF or COLORS.text, label)
+    r.ImGui_DrawList_AddText(draw_list, x + (width - text_width) * 0.5, y + (height - text_height) * 0.5, active and COLORS.badge_text or COLORS.text, label)
     if hovered and r.ImGui_IsMouseClicked(ctx, 0) then
         state.suppress_drag_guid = entry.guid
         toggle_item_loop(entry)
@@ -1065,7 +1494,7 @@ local function draw_pool_status(entry, x, y, width)
     r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, (color & 0xFFFFFF00) | (hovered and 0xDD or 0xB8), scaled(3))
     r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, hovered and COLORS.text or color, scaled(3), 0, scaled(1))
     local text_width, text_height = r.ImGui_CalcTextSize(ctx, "POOL")
-    r.ImGui_DrawList_AddText(draw_list, x + (width - text_width) * 0.5, y + (height - text_height) * 0.5, 0x101216FF, "POOL")
+    r.ImGui_DrawList_AddText(draw_list, x + (width - text_width) * 0.5, y + (height - text_height) * 0.5, COLORS.badge_text, "POOL")
     if hovered and r.ImGui_IsMouseClicked(ctx, 0) then
         state.suppress_drag_guid = entry.guid
         unpool_item(entry)
@@ -1087,6 +1516,60 @@ local function draw_item_toggles(entry, cursor_x, cursor_y, card_width)
         hovered = draw_pool_status(entry, pool_x, y, pool_width) or hovered
     end
     return hovered
+end
+
+local function draw_card_context(entry)
+    if not r.ImGui_BeginPopupContextItem(ctx, "##project_clip_context_" .. entry.guid) then return false end
+    local entries = selected_entries()
+    if #entries == 0 then entries = { entry } end
+    r.ImGui_TextColored(ctx, COLORS.text_dim, tostring(#entries) .. " selected")
+    if r.ImGui_MenuItem(ctx, entry.is_midi and "Open in MIDI editor" or "Open item properties") then open_item_editor(entry) end
+    if r.ImGui_MenuItem(ctx, "Select and reveal") then select_and_reveal(entry) end
+    r.ImGui_Separator(ctx)
+    local all_midi = #entries >= 2 and entry.is_midi
+    local has_pooled = false
+    for _, selected in ipairs(entries) do
+        all_midi = all_midi and selected.is_midi
+        has_pooled = has_pooled or selected.is_midi and selected.pooled
+    end
+    if all_midi then
+        if r.ImGui_MenuItem(ctx, "Pool selected MIDI to this item") then batch_pool_to_source(entry, entries) end
+    else
+        r.ImGui_TextDisabled(ctx, "Pool selected MIDI to this item")
+    end
+    if has_pooled then
+        if r.ImGui_MenuItem(ctx, "Unpool selected MIDI") then batch_unpool(entries) end
+    else
+        r.ImGui_TextDisabled(ctx, "Unpool selected MIDI")
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Enable loop for selected") then batch_set_loop(entries, "enable") end
+    if r.ImGui_MenuItem(ctx, "Disable loop for selected") then batch_set_loop(entries, "disable") end
+    if r.ImGui_MenuItem(ctx, "Toggle loop for selected") then batch_set_loop(entries, "toggle") end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Mute selected") then batch_set_item_flag(entries, "B_MUTE", true, "Mute selected project clips") end
+    if r.ImGui_MenuItem(ctx, "Unmute selected") then batch_set_item_flag(entries, "B_MUTE", false, "Unmute selected project clips") end
+    if r.ImGui_MenuItem(ctx, "Lock selected") then batch_set_item_flag(entries, "C_LOCK", true, "Lock selected project clips") end
+    if r.ImGui_MenuItem(ctx, "Unlock selected") then batch_set_item_flag(entries, "C_LOCK", false, "Unlock selected project clips") end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Select all visible") then
+        r.SelectAllMediaItems(0, false)
+        for _, current in ipairs(state.items) do
+            local item = item_from_guid(current.guid)
+            current.selected = item ~= nil
+            if item then r.SetMediaItemSelected(item, true) end
+        end
+        r.UpdateArrange()
+    end
+    if r.ImGui_MenuItem(ctx, "Clear selection") then
+        r.SelectAllMediaItems(0, false)
+        for _, current in ipairs(state.items) do current.selected = false end
+        r.UpdateArrange()
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Delete selected") then batch_delete(entries) end
+    r.ImGui_EndPopup(ctx)
+    return true
 end
 
 local function draw_card(entry)
@@ -1131,9 +1614,12 @@ local function draw_card(entry)
     if not controls_hovered and hovered and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
         open_item_editor(entry)
     elseif not controls_hovered and r.ImGui_IsItemClicked(ctx, 0) then
-        select_and_reveal(entry)
+        select_card(entry, r.JS_Mouse_GetState(4) == 4)
+    elseif not controls_hovered and r.ImGui_IsItemClicked(ctx, 1) and not entry.selected then
+        select_card(entry, false)
     end
-    if state.suppress_drag_guid ~= entry.guid then begin_item_drag(entry) end
+    local context_open = draw_card_context(entry)
+    if not context_open and state.suppress_drag_guid ~= entry.guid then begin_item_drag(entry) end
 end
 
 local function draw_source_card(entry)
@@ -1240,32 +1726,24 @@ local function draw_group(group)
 end
 
 local function push_theme()
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), COLORS.window_bg)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), COLORS.child_bg)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), COLORS.text)
+    UIScale.set(state.ui_scale)
+    local theme_stack = Theme.push(ctx)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TextDisabled(), COLORS.text_dim)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.card_bg)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), COLORS.card_hover)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), COLORS.accent_soft)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), COLORS.card_bg)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), COLORS.card_hover)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), COLORS.accent)
-    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), COLORS.border)
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), scaled(10), scaled(10))
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), scaled(8), scaled(7))
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), scaled(4))
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), scaled(1))
+    return theme_stack
 end
 
-local function pop_theme()
-    r.ImGui_PopStyleVar(ctx, 4)
-    r.ImGui_PopStyleColor(ctx, 11)
+local function pop_theme(theme_stack)
+    r.ImGui_PopStyleVar(ctx)
+    r.ImGui_PopStyleColor(ctx, 2)
+    Theme.pop(ctx, theme_stack)
 end
 
 local function draw_window()
     state.cache_budget = 4
     local scaled_font_pushed = push_scaled_font()
-    push_theme()
+    local theme_stack = push_theme()
     r.ImGui_SetNextWindowSize(ctx, rounded(760), rounded(520), r.ImGui_Cond_FirstUseEver())
     local visible
     visible, state.open = r.ImGui_Begin(ctx, SCRIPT_NAME, state.open, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
@@ -1292,7 +1770,8 @@ local function draw_window()
         if state.status ~= "" then r.ImGui_TextColored(ctx, COLORS.accent, state.status) end
         r.ImGui_End(ctx)
     end
-    pop_theme()
+    draw_theme_settings()
+    pop_theme(theme_stack)
     if scaled_font_pushed then r.ImGui_PopFont(ctx) end
 end
 
