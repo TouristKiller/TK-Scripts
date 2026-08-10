@@ -3975,52 +3975,66 @@ end
 -- The listening checks act on one monitor, the way the footer does: whichever is
 -- picked there, or the only one if there is just one. Without a target they say
 -- so rather than guessing at a monitor.
-local ACTIONS = {
-  dim = function(app, settings)
-    toggle_monitor_dim(settings)
-    app.status = "Control Room: dim " .. (state.dim_enabled and "on" or "off")
-  end,
-  mono = function(app, settings)
-    toggle_monitor_mono(app, settings)
-    app.status = "Control Room: mono toggled"
-  end,
-  all = function(app, settings, master, outputs)
-    for _, output in ipairs(outputs) do
-      local layout, base = monitor_format(settings, output.target, output.source)
-      if get_monitor_mode(settings, output.target, layout) ~= "full" then
-        write_monitor_mode(app, settings, master, output.index, output.target, "full", layout, base)
-      end
-    end
-    state.speaker_select_index = nil
-    app.status = "Control Room: all monitors back to full"
-  end
-}
+-- Nothing here may live at the top of the file: this module sits within a
+-- handful of Lua's 200 locals per chunk, and a loop out here would have claimed
+-- the last of them. Everything is a cr_ global, the way the rest of the file
+-- already works, and the mode branch is decided when the action arrives rather
+-- than built into a table beforehand.
+function cr_action_dim(app, settings)
+  toggle_monitor_dim(settings)
+  app.status = "Control Room: dim " .. (state.dim_enabled and "on" or "off")
+end
 
-for _, mode in ipairs(MONITOR_BUS_MODES) do
-  ACTIONS[mode] = function(app, settings, master, outputs)
-    local output = cr_mode_target(outputs)
-    if not output then
-      app.status = "Control Room: pick a monitor first - " .. tostring(#outputs) .. " to choose from"
-      return
+function cr_action_mono(app, settings)
+  toggle_monitor_mono(app, settings)
+  app.status = "Control Room: mono toggled"
+end
+
+function cr_action_all(app, settings, master, outputs)
+  for _, output in ipairs(outputs) do
+    local layout, base = monitor_format(settings, output.target, output.source)
+    if get_monitor_mode(settings, output.target, layout) ~= "full" then
+      write_monitor_mode(app, settings, master, output.index, output.target, "full", layout, base)
     end
-    if not cr_mode_available(settings, output, mode) then
-      app.status = "Control Room: " .. mode .. " does not apply to this monitor"
-      return
-    end
-    cr_toggle_check_mode(app, settings, master, output, mode)
-    app.status = "Control Room: " .. mode .. " toggled on " .. tostring(monitor_alias(settings, output.target) or output.name or "monitor")
   end
+  state.speaker_select_index = nil
+  app.status = "Control Room: all monitors back to full"
+end
+
+-- The listening checks act on one monitor, the way the footer does: whichever is
+-- picked there, or the only one when there is just one. With several to choose
+-- from and none chosen it says so rather than picking for you.
+function cr_action_mode(app, settings, master, outputs, mode)
+  local output = cr_mode_target(outputs)
+  if not output then
+    app.status = "Control Room: pick a monitor first - " .. tostring(#outputs) .. " to choose from"
+    return
+  end
+  if not cr_mode_available(settings, output, mode) then
+    app.status = "Control Room: " .. mode .. " does not apply to this monitor"
+    return
+  end
+  cr_toggle_check_mode(app, settings, master, output, mode)
+  app.status = "Control Room: " .. mode .. " toggled on " .. tostring(monitor_alias(settings, output.target) or output.name or "monitor")
 end
 
 function M.handle_action(app, verb)
-  local action = ACTIONS[tostring(verb or "")]
-  if not action then
-    app.status = "Control Room: unknown action " .. tostring(verb)
-    return
-  end
+  verb = tostring(verb or "")
   local settings = ensure_settings(app)
   local master = r.GetMasterTrack(0)
-  action(app, settings, master, monitor_outputs(master))
+  local outputs = monitor_outputs(master)
+  if verb == "dim" then
+    cr_action_dim(app, settings)
+  elseif verb == "mono" then
+    cr_action_mono(app, settings)
+  elseif verb == "all" then
+    cr_action_all(app, settings, master, outputs)
+  elseif cr_bus_index(verb) then
+    cr_action_mode(app, settings, master, outputs, verb)
+  else
+    app.status = "Control Room: unknown action " .. verb
+    return
+  end
   if app.save_settings then app.save_settings() end
 end
 

@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.82
+-- @version 0.6.83
 -- @changelog:
+-- v0.6.83
+--   + Control Room: Fixed the module refusing to load. Lua allows 200 local variables per file and this one was a handful short of it, so the actions added in the previous version tipped it over - a loop at the top of a file quietly claims five of those on its own. Nothing about the actions has changed; they are simply declared the way the rest of the file already was
 -- v0.6.82
 --   + Control Room: Discrete actions for Dim, Mono, Fold to Stereo, Mid, Side, Low, High and All Monitors Full, so they can go on a key or a control surface instead of only on a button. They appear in the action list as "TK Workbench: Control Room - ..." once ReaPack has installed them. Requested by DanialDevost
 --   + Control Room: Each action does exactly what its footer button does, toggling back off when fired again - two ways to reach one switch, never two switches. The listening checks act on the monitor picked in the footer, or the only one if there is just one, and say so rather than guessing when several are available and none is chosen

@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.6.82" author="TouristKiller" time="2026-08-10T11:45:00Z">
+    <version name="0.6.83" author="TouristKiller" time="2026-08-10T11:50:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -132,6 +132,8 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.6.83
+            + Control Room: Fixed the module refusing to load. Lua allows 200 local variables per file and this one was a handful short of it, so the actions added in the previous version tipped it over - a loop at the top of a file quietly claims five of those on its own. Nothing about the actions has changed; they are simply declared the way the rest of the file already was
             v0.6.81
             + Control Room: Discrete actions for Dim, Mono, Fold to Stereo, Mid, Side, Low, High and All Monitors Full, so they can go on a key or a control surface instead of only on a button. They appear in the action list as "TK Workbench: Control Room - ..." once ReaPack has installed them. Requested by DanialDevost
             + Control Room: Each action does exactly what its footer button does, toggling back off when fired again - two ways to reach one switch, never two switches. The listening checks act on the monitor picked in the footer, or the only one if there is just one, and say so rather than guessing when several are available and none is chosen
@@ -773,7 +775,7 @@ v0.2.36
 
  <category name="Media">
     <reapack name="TK_PROJECT_CLIPS.lua" type="script" desc="TK Project Clips">
-        <version name="0.1.0" author="TouristKiller" time="2026-08-09T16:00:00Z">
+        <version name="0.1.0" author="TouristKiller" time="2026-08-09T18:00:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS.lua</source>
         <changelog><![CDATA[
                 + Initial preview release
