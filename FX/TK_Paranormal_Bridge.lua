@@ -1,8 +1,8 @@
 -- @description TK Paranormal FX Bridge (drag FX from TK FX Browser into Paranormal)
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.0.1
 -- @changelog:
---   + Initial release: launches Paranormal FX and lets you drop plugins from TK FX Browser / Mini onto the canvas.
+--   + Fixed FX insertion when the browser clears the drag payload before Paranormal handles the mouse release.
 
 local r = reaper
 
@@ -291,7 +291,7 @@ function Draw()
     end
     if not latched_payload then return end
 
-    if not has and not down then
+    if not has and not down and not released then
         latched_payload = nil
         ReleaseClaim()
         return
