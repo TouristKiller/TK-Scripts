@@ -196,6 +196,36 @@ function M.set_bus_owner(track, fx, owner_id)
   return true
 end
 
+-- The engine at a chosen position in the chain rather than at the end.
+--
+-- A container rack has no bus and no sends: the pads are FX on the same track,
+-- so the engine's MIDI reaches them by flowing down the chain -- which only
+-- works if it sits ABOVE the container. At the end it would be talking to
+-- nothing.
+--
+-- AddByName's convention for "insert at position x" is -1000 - x.
+function M.add_fx_at(track, owner_id, position)
+  if not track or not r.TrackFX_AddByName then return -1 end
+  local pos = math.max(0, math.floor(tonumber(position) or 0))
+  local candidates = {
+    EngineJSFX.add_name,
+    "JS: TK Kit Maker Sequencer",
+    "TK Kit Maker Sequencer",
+  }
+  local fx = -1
+  for _, name in ipairs(candidates) do
+    fx = r.TrackFX_AddByName(track, name, false, -1000 - pos)
+    if fx and fx >= 0 then break end
+  end
+  if fx and fx >= 0 then
+    M.set_bus_owner(track, fx, owner_id)
+    if r.TrackFX_Show then
+      r.TrackFX_Show(track, fx, 2)
+    end
+  end
+  return fx or -1
+end
+
 function M.add_fx_end(track, owner_id)
   if not track or not r.TrackFX_AddByName then return -1 end
   local candidates = {

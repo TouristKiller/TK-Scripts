@@ -6,6 +6,10 @@ local SeqBus = require("core.seq_bus")
 local Bias = require("core.bias")
 local Scales = require("core.scales")
 local RS5K = require("core.rs5k")
+-- Where "which sampler belongs to lane N" is answered, once. See core/lane.lua:
+-- an fx index is asked for and used, never kept.
+local Lane = require("core.lane")
+local Rack = require("core.rack")
 
 local M = {}
 
@@ -1003,10 +1007,6 @@ end
 -- One rule, in core/rs5k.lua. This file, the Browser and the Kit Manager each
 -- had their own, and where they disagreed the Browser stacked a second RS5K on
 -- a pad instead of replacing its sample.
-local function find_rs5k_fx(track)
-  return RS5K.find(track)
-end
-
 local function get_rs5k_file(track, fx)
   if not track or fx == nil or fx < 0 then return nil end
   if not r.TrackFX_GetNamedConfigParm then return nil end
@@ -1117,17 +1117,25 @@ end
 
 local function build_lane_auto_names(lane_tracks)
   local out = {}
+  -- A container rack's pads have no track to take a name from -- all sixteen
+  -- share one -- so the fallback is the pad name stored on the rack. Read once
+  -- for the whole rack rather than per lane: it is one blob either way.
+  local pad_names = nil
+  if Lane.style(lane_tracks) == "container" and lane_tracks[1] then
+    local host = lane_tracks[1]
+    pad_names = Rack.pad_names(host, Rack.container_fx(host))
+  end
   for lane = 1, GRID_SLOTS do
     local lane_track = lane_tracks and lane_tracks[lane] or nil
     local source = ""
     if lane_track then
-      local lane_fx = find_rs5k_fx(lane_track)
+      local lane_fx = Lane.fx(lane_tracks, lane)
       local sample_file = lane_fx >= 0 and get_rs5k_file(lane_track, lane_fx) or nil
       if sample_file and sample_file ~= "" then
         source = file_stem(sample_file)
       end
       if source == "" then
-        source = track_name(lane_track)
+        source = pad_names and (pad_names[lane] or "") or track_name(lane_track)
       end
     end
     out[lane] = string.format("%02d %s", lane, detect_lane_role_name(source))
@@ -1221,18 +1229,32 @@ local function set_rs5k_pitch_semitones(track, fx, semitones)
   return true
 end
 
-function M.set_rs5k_pitch_envelope_active(track, fx, active)
-  if not track or fx == nil or fx < 0 then return false end
+-- Hands a parameter back and forth between its envelope and the sequencer.
+--
+-- An exported pattern drives the sampler through envelopes; the sequencer
+-- drives it by writing the parameters directly. Both at once and the envelope
+-- wins, so the sequencer would appear to have no effect on any pad you had ever
+-- exported. The envelope is switched off while the sequencer plays and back on
+-- when it stops -- `create = false`, so a pad that has never been exported is
+-- left alone rather than given an envelope it has no use for.
+function M.set_rs5k_param_envelope_active(track, fx, param_idx, active)
+  if not track or fx == nil or fx < 0 or not param_idx or param_idx < 0 then return false end
   if not r.GetFXEnvelope or not r.GetSetEnvelopeInfo_String then return false end
-  local pitch_idx = M.resolve_rs5k_pitch_param_index(track, fx)
-  if pitch_idx < 0 then return false end
-  local env = r.GetFXEnvelope(track, fx, pitch_idx, false)
+  local env = r.GetFXEnvelope(track, fx, param_idx, false)
   if not env then return false end
   r.GetSetEnvelopeInfo_String(env, "ACTIVE", active and "1" or "0", true)
   return true
 end
 
-local function set_rs5k_pan_percent(track, fx, pan_percent)
+function M.set_rs5k_pitch_envelope_active(track, fx, active)
+  if not track or fx == nil or fx < 0 then return false end
+  return M.set_rs5k_param_envelope_active(track, fx, M.resolve_rs5k_pitch_param_index(track, fx), active)
+end
+
+  -- `dry` computes the value without writing it, for the MIDI export: it needs
+  -- the same number to put on an envelope, and working it out a second time
+  -- somewhere else is how the two would drift apart.
+local function set_rs5k_pan_percent(track, fx, pan_percent, dry)
   if not track or fx == nil or fx < 0 then return false end
   if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
   local key = (track_guid(track) or tostring(track)) .. "#" .. tostring(fx)
@@ -1297,11 +1319,14 @@ local function set_rs5k_pan_percent(track, fx, pan_percent)
     norm = (target - min_num) / (max_num - min_num)
   end
 
-  r.TrackFX_SetParamNormalized(track, fx, pan_idx, clamp(norm, 0, 1))
-  return true
+  norm = clamp(norm, 0, 1)
+  if not dry then
+    r.TrackFX_SetParamNormalized(track, fx, pan_idx, norm)
+  end
+  return true, pan_idx, norm
 end
 
-local function set_rs5k_volume_db(track, fx, volume_db)
+local function set_rs5k_volume_db(track, fx, volume_db, dry)
   if not track or fx == nil or fx < 0 then return false end
   if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
   local key = (track_guid(track) or tostring(track)) .. "#" .. tostring(fx)
@@ -1436,11 +1461,14 @@ local function set_rs5k_volume_db(track, fx, volume_db)
     norm = (target - min_num) / (max_num - min_num)
   end
 
-  r.TrackFX_SetParamNormalized(track, fx, volume_idx, clamp(norm, 0, 1))
-  return true
+  norm = clamp(norm, 0, 1)
+  if not dry then
+    r.TrackFX_SetParamNormalized(track, fx, volume_idx, norm)
+  end
+  return true, volume_idx, norm
 end
 
-local function set_rs5k_attack_ms(track, fx, attack_ms)
+local function set_rs5k_attack_ms(track, fx, attack_ms, dry)
   if not track or fx == nil or fx < 0 then return false end
   if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
   local key = (track_guid(track) or tostring(track)) .. "#" .. tostring(fx)
@@ -1486,11 +1514,14 @@ local function set_rs5k_attack_ms(track, fx, attack_ms)
     local target = clamp(value, min_num, max_num)
     norm = (target - min_num) / (max_num - min_num)
   end
-  r.TrackFX_SetParamNormalized(track, fx, idx, clamp(norm, 0, 1))
-  return true
+  norm = clamp(norm, 0, 1)
+  if not dry then
+    r.TrackFX_SetParamNormalized(track, fx, idx, norm)
+  end
+  return true, idx, norm
 end
 
-local function set_rs5k_release_ms(track, fx, release_ms)
+local function set_rs5k_release_ms(track, fx, release_ms, dry)
   if not track or fx == nil or fx < 0 then return false end
   if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamEx then return false end
   local key = (track_guid(track) or tostring(track)) .. "#" .. tostring(fx)
@@ -1536,8 +1567,11 @@ local function set_rs5k_release_ms(track, fx, release_ms)
     local target = clamp(value, min_num, max_num)
     norm = (target - min_num) / (max_num - min_num)
   end
-  r.TrackFX_SetParamNormalized(track, fx, idx, clamp(norm, 0, 1))
-  return true
+  norm = clamp(norm, 0, 1)
+  if not dry then
+    r.TrackFX_SetParamNormalized(track, fx, idx, norm)
+  end
+  return true, idx, norm
 end
 
 find_param_index = function(track, fx, patterns)
@@ -1555,12 +1589,28 @@ find_param_index = function(track, fx, patterns)
   return -1
 end
 
+-- Opens every sampler's velocity range so the rack answers how hard a step was
+-- hit.
+--
+-- A fresh RS5K can arrive with its minimum volume at the top, which makes every
+-- note come out at full level whatever velocity it carries -- so the step
+-- velocities the engine sends are correct and inaudible, which is the most
+-- confusing shape a bug can take.
+--
+-- The child-track walk is kept for folder racks rather than replaced by the
+-- lane walk, and the difference is real: a folder rack may have more pads than
+-- the sequencer's sixteen lanes, and those extra pads are still played by hand
+-- and still want their velocity opened.
+--
+-- `open` is nested rather than a local of its own because this file's main
+-- chunk is at Lua's ceiling of 200 locals -- one more at the top level and it
+-- stops compiling.
 local function ensure_rack_velocity_response(parent)
   if not parent then return end
   if not r.TrackFX_SetParamNormalized or not r.TrackFX_GetParamNormalized then return end
-  each_child_track(parent, function(track)
-    local fx = find_rs5k_fx(track)
-    if fx < 0 then return end
+
+  local function open(track, fx)
+    if not track or fx < 0 then return end
 
     local min_gain_idx = find_param_index(track, fx, {
       "minimum velocity",
@@ -1600,21 +1650,19 @@ local function ensure_rack_velocity_response(parent)
         r.TrackFX_SetParamNormalized(track, fx, max_vel_idx, 1.0)
       end
     end
-  end)
-end
-
-local function get_selected_rack_parent_track()
-  local selected = r.GetSelectedTrack(0, 0)
-  if not selected then return nil end
-  local current = selected
-  while current do
-    if (r.GetMediaTrackInfo_Value(current, "I_FOLDERDEPTH") or 0) > 0 then
-      return current
-    end
-    if not r.GetParentTrack then break end
-    current = r.GetParentTrack(current)
   end
-  return nil
+
+  local lanes = collect_lane_tracks(parent)
+  if Lane.style(lanes) == "container" then
+    for lane = 1, #lanes do
+      open(Lane.resolve(lanes, lane))
+    end
+    return
+  end
+
+  each_child_track(parent, function(track)
+    open(track, RS5K.find(track))
+  end)
 end
 
 local function new_sequence()
@@ -2356,49 +2404,43 @@ local function ensure_lane_step_params(cfg, total_steps, default_vel)
   end
 end
 
-local function trigger_lane_note(state, lane, note, vel, mode, retrigger, off_at_time)
+-- Strikes the pad: note-off for whatever is sounding, then note-on.
+--
+-- Unconditional, which is what the JSFX engine does on every step it plays.
+-- There used to be a `retrigger` argument here and a Retrig button behind it,
+-- and the engine never read the setting -- so audition and playback disagreed
+-- with each other before either of them disagreed with the export. Whether the
+-- note-off actually cuts anything is the sampler's business: an RS5K with
+-- "obey note-offs" off ignores it and lets the sample ring, which is the drum
+-- machine behaviour that switch is for.
+local function trigger_lane_note(state, lane, note, vel, mode, off_at_time)
   local active = state.active_notes[lane]
-  local force_retrigger = false
-  if active and active.note and active.vel and active.vel ~= vel then
-    force_retrigger = true
-  end
-
-  if force_retrigger then
-    retrigger = true
-  end
-
-  if active and active.note and retrigger then
+  if active and active.note then
     send_note_off(active.note)
     state.active_notes[lane] = nil
-    active = nil
   end
 
-  if (not active) or retrigger then
-    local ok = send_note_on(note, vel)
-    if ok then
-      local guid = state.current_guid
-      if guid then
-        state.last_trigger_at_by_guid = state.last_trigger_at_by_guid or {}
-        state.last_trigger_at_by_guid[guid] = state.last_trigger_at_by_guid[guid] or {}
-        state.last_trigger_at_by_guid[guid][lane] = r.time_precise and r.time_precise() or os.clock()
-      end
-      local off_time = nil
-      if mode == "gate" then
-        off_time = off_at_time
-      end
-      state.active_notes[lane] = {
-        note = note,
-        vel = vel,
-        off_at_time = off_time,
-      }
+  -- There used to be a second branch here for the case where a hit arrived
+  -- while a note was sounding and was NOT to re-articulate: it stretched the
+  -- sounding note's note-off instead. With every hit striking the pad, nothing
+  -- is ever still sounding by this point and the branch could not be reached.
+  local ok = send_note_on(note, vel)
+  if ok then
+    local guid = state.current_guid
+    if guid then
+      state.last_trigger_at_by_guid = state.last_trigger_at_by_guid or {}
+      state.last_trigger_at_by_guid[guid] = state.last_trigger_at_by_guid[guid] or {}
+      state.last_trigger_at_by_guid[guid][lane] = r.time_precise and r.time_precise() or os.clock()
     end
-  elseif active and mode == "gate" then
-    local new_off = off_at_time
-    if not active.off_at_time or (new_off and new_off > active.off_at_time) then
-      active.off_at_time = new_off
-      active.vel = vel
-      state.active_notes[lane] = active
+    local off_time = nil
+    if mode == "gate" then
+      off_time = off_at_time
     end
+    state.active_notes[lane] = {
+      note = note,
+      vel = vel,
+      off_at_time = off_time,
+    }
   end
 end
 
@@ -2423,7 +2465,7 @@ local function run_pending_substep_events(state, elapsed)
         set_rs5k_attack_ms(ev.track, ev.fx, ev.attack or 0)
         set_rs5k_release_ms(ev.track, ev.fx, ev.release or 0)
       end
-      trigger_lane_note(state, ev.lane, ev.note, ev.vel, ev.mode, ev.retrigger, ev.off_at_time)
+      trigger_lane_note(state, ev.lane, ev.note, ev.vel, ev.mode, ev.off_at_time)
       table.remove(pending, i)
     else
       break
@@ -2525,6 +2567,35 @@ end
 
 local function engine_ensure_bus(parent, lane_tracks)
   engine_ensure_installed()
+
+  -- A container rack needs no bus and no sends. Everything the engine has to
+  -- reach is on this one track, so the engine goes on it too -- at the TOP of
+  -- the chain, above the container, because MIDI flows downwards and the pads
+  -- are below. That is the same path a MIDI controller already takes into this
+  -- track, which is how we know it arrives.
+  --
+  -- Returned early, before any cleanup. The two cleanup passes below delete
+  -- engine FX from the parent and from every lane track -- and here the parent
+  -- IS a lane track and IS where the engine lives, so running them would remove
+  -- the thing this function exists to install.
+  if Lane.style(lane_tracks) == "container" then
+    local fx = engine_find_fx(parent)
+    if fx >= 0 and engine_reinstalled and r.TrackFX_Delete then
+      r.TrackFX_Delete(parent, fx)
+      fx = -1
+    end
+    if fx < 0 then
+      fx = SeqBus.add_fx_at(parent, engine_id_for(parent), 0)
+    else
+      SeqBus.set_bus_owner(parent, fx, engine_id_for(parent))
+    end
+    if fx and fx >= 0 then
+      engine_reinstalled = false
+      return parent, 0
+    end
+    return nil, 0
+  end
+
   if not engine_parent_cleaned then
     engine_cleanup_parent(parent, lane_tracks)
     engine_cleanup_lane_fx(lane_tracks)
@@ -2686,9 +2757,17 @@ local function start_playback(state, guid, song_mode, parent)
     local lane_tracks = collect_lane_tracks(parent)
     for lane = 1, #lane_tracks do
       local lane_track = lane_tracks[lane]
-      local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+      local lane_fx = lane_track and Lane.fx(lane_tracks, lane) or -1
       if lane_track and lane_fx >= 0 then
         M.set_rs5k_pitch_envelope_active(lane_track, lane_fx, false)
+        local _, pan_idx = set_rs5k_pan_percent(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, pan_idx, false)
+        local _, vol_idx = set_rs5k_volume_db(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, vol_idx, false)
+        local _, atk_idx = set_rs5k_attack_ms(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, atk_idx, false)
+        local _, rel_idx = set_rs5k_release_ms(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, rel_idx, false)
       end
     end
   end
@@ -2711,9 +2790,17 @@ local function stop_playback(state, parent)
     local lane_tracks = collect_lane_tracks(parent)
     for lane = 1, #lane_tracks do
       local lane_track = lane_tracks[lane]
-      local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+      local lane_fx = lane_track and Lane.fx(lane_tracks, lane) or -1
       if lane_track and lane_fx >= 0 then
         M.set_rs5k_pitch_envelope_active(lane_track, lane_fx, true)
+        local _, pan_idx = set_rs5k_pan_percent(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, pan_idx, true)
+        local _, vol_idx = set_rs5k_volume_db(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, vol_idx, true)
+        local _, atk_idx = set_rs5k_attack_ms(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, atk_idx, true)
+        local _, rel_idx = set_rs5k_release_ms(lane_track, lane_fx, 0, true)
+        M.set_rs5k_param_envelope_active(lane_track, lane_fx, rel_idx, true)
         set_rs5k_pitch_semitones(lane_track, lane_fx, 0)
         set_rs5k_pan_percent(lane_track, lane_fx, 0)
         set_rs5k_volume_db(lane_track, lane_fx, 0)
@@ -2924,8 +3011,11 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
     local cycle_steps = clamp(math.floor(tonumber(cfg.cycle_steps) or total_steps), 1, total_steps)
     local lane_speed = normalize_lane_speed(cfg.speed)
     local lane_track = lane_tracks and lane_tracks[lane] or nil
-    local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
-    local rs5k_note_off = lane_fx >= 0 and rs5k_obeys_note_off(lane_track, lane_fx) or true
+    local lane_fx = lane_track and Lane.fx(lane_tracks, lane) or -1
+    local rs5k_note_off = true
+    if lane_track and lane_fx >= 0 then
+      rs5k_note_off = rs5k_obeys_note_off(lane_track, lane_fx)
+    end
     local lane_period = cycle_duration / (cycle_steps * lane_speed)
     if lane_period <= 0 then lane_period = step_duration end
     local direction = normalize_lane_direction(cfg.direction)
@@ -2953,7 +3043,6 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
         local step_release = clamp(math.floor(tonumber(table_step_value(cfg.step_release, lane_step, 0)) or 0), 0, 2000)
         local note = clamp(base_note, 0, 127)
         local mode = cfg.mode or "gate"
-        local retrigger = cfg.retrigger ~= false
         local step_vel = clamp(math.floor(tonumber(table_step_value(cfg.step_velocity, lane_step, default_vel)) or default_vel), 1, 127)
         local step_gate = clamp(math.floor(tonumber(table_step_value(cfg.step_gate, lane_step, 100)) or 100), 1, 100)
         local step_len = clamp(math.floor(tonumber(table_step_value(cfg.step_length, lane_step, 1)) or 1), 1, total_steps)
@@ -2983,7 +3072,7 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
             set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
             set_rs5k_release_ms(lane_track, lane_fx, step_release)
           end
-          trigger_lane_note(state, lane, note, step_vel, mode, retrigger, off_at_time)
+          trigger_lane_note(state, lane, note, step_vel, mode, off_at_time)
 
           if step_substeps > 1 then
             for sub_idx = 2, step_substeps do
@@ -3018,7 +3107,6 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
                   note = note,
                   vel = step_vel,
                   mode = mode,
-                  retrigger = true,
                   off_at_time = ev_off,
                 }
               end
@@ -3059,7 +3147,6 @@ local function process_lane_events(state, seq, total_steps, solo_map, any_solo, 
                   note = note,
                   vel = echo_vel,
                   mode = mode,
-                  retrigger = true,
                   off_at_time = ev_off,
                 }
               end
@@ -3081,7 +3168,7 @@ local function has_rs5k_step_modulation(seq, lane_tracks, total_steps)
   if type(lane_settings) ~= "table" then return false end
   for lane = 1, GRID_SLOTS do
     local lane_track = lane_tracks and lane_tracks[lane] or nil
-    local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+    local lane_fx = lane_track and Lane.fx(lane_tracks, lane) or -1
     if lane_track and lane_fx >= 0 then
       local cfg = lane_settings[lane]
       if type(cfg) == "table" then
@@ -3132,7 +3219,7 @@ local function engine_sync(state, seq, parent, solo_map, any_solo, total_steps, 
   local lane_fx_list = {}
   for lane = 1, GRID_SLOTS do
     local lane_track = lane_tracks and lane_tracks[lane] or nil
-    lane_fx_list[lane] = lane_track and find_rs5k_fx(lane_track) or -1
+    lane_fx_list[lane] = lane_track and Lane.fx(lane_tracks, lane) or -1
   end
 
   engine_write_pattern(seq, solo_map, total_steps, lane_tracks, lane_fx_list)
@@ -3159,24 +3246,70 @@ local function engine_sync(state, seq, parent, solo_map, any_solo, total_steps, 
     if running and cur then
       local cfg = lane_settings[lane]
       if cfg and state.lane_applied_step[lane] ~= cur then
+        -- Kept before it is overwritten: which way a pendulum lane is travelling
+        -- can only be read from where it has just been.
+        local prev = state.lane_applied_step[lane]
         state.lane_applied_step[lane] = cur
         local lane_track = lane_tracks and lane_tracks[lane] or nil
         local lane_fx = lane_fx_list[lane] or -1
         if lane_track and lane_fx >= 0 then
           local cycle_steps = clamp(math.floor(tonumber(cfg.cycle_steps) or total_steps), 1, total_steps)
-          local apply_step = state.lane_applied_step_init and state.lane_applied_step_init[lane] and (((cur % cycle_steps) + 1)) or cur
+
+          -- The step to PREPARE, while the current one is still sounding. These
+          -- are plugin parameters, not values carried by a note, so they have to
+          -- be in place before the note that wants them is struck.
+          --
+          -- Which step comes next depends on the lane's direction, and this used
+          -- to assume forwards -- so a backward or pendulum lane was handed the
+          -- wrong step's pitch, not merely a late one.
+          local first = not (state.lane_applied_step_init and state.lane_applied_step_init[lane])
           state.lane_applied_step_init = state.lane_applied_step_init or {}
           state.lane_applied_step_init[lane] = true
-          local step_pitch = seq_step_pitch(cfg, lane, apply_step)
-          local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, apply_step, 0)) or 0), -100, 100)
-          local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, apply_step, 0)) or 0), -24, 6)
-          local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, apply_step, 0)) or 0), 0, 2000)
-          local step_release = clamp(math.floor(tonumber(table_step_value(cfg.step_release, apply_step, 0)) or 0), 0, 2000)
-          set_rs5k_pitch_semitones(lane_track, lane_fx, step_pitch)
-          set_rs5k_pan_percent(lane_track, lane_fx, step_pan)
-          set_rs5k_volume_db(lane_track, lane_fx, step_volume)
-          set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
-          set_rs5k_release_ms(lane_track, lane_fx, step_release)
+
+          local apply_step
+          local dir = normalize_lane_direction(cfg.direction)
+          if first then
+            -- Nothing has been prepared yet, so the current step's own values
+            -- are the best available -- late for its note, right for its tail.
+            apply_step = cur
+          elseif dir == "bw" then
+            apply_step = (cur <= 1) and cycle_steps or (cur - 1)
+          elseif dir == "pendulum" and cycle_steps > 1 then
+            local ascending = (prev == nil) or (cur > prev)
+            if cur >= cycle_steps then
+              apply_step = cycle_steps - 1
+            elseif cur <= 1 then
+              apply_step = 2
+            else
+              apply_step = ascending and (cur + 1) or (cur - 1)
+            end
+          else
+            apply_step = (cur % cycle_steps) + 1
+          end
+
+          -- Only when that step is actually going to be struck.
+          --
+          -- One parameter is shared by every note the pad plays, so writing it
+          -- bends whatever is still ringing. Preparing a step that has no hit on
+          -- it therefore spends the tail of the note you just heard on a value
+          -- nothing is going to use. Skipping those leaves each hit holding its
+          -- own pitch for as long as it rings, which is what the exported
+          -- envelope does and why the export sounds cleaner.
+          local lane_pattern = seq.pattern and seq.pattern[lane] or nil
+          local will_play = (lane_pattern and lane_pattern[apply_step] == 1) or false
+
+          if will_play then
+            local step_pitch = seq_step_pitch(cfg, lane, apply_step)
+            local step_pan = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, apply_step, 0)) or 0), -100, 100)
+            local step_volume = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, apply_step, 0)) or 0), -24, 6)
+            local step_attack = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, apply_step, 0)) or 0), 0, 2000)
+            local step_release = clamp(math.floor(tonumber(table_step_value(cfg.step_release, apply_step, 0)) or 0), 0, 2000)
+            set_rs5k_pitch_semitones(lane_track, lane_fx, step_pitch)
+            set_rs5k_pan_percent(lane_track, lane_fx, step_pan)
+            set_rs5k_volume_db(lane_track, lane_fx, step_volume)
+            set_rs5k_attack_ms(lane_track, lane_fx, step_attack)
+            set_rs5k_release_ms(lane_track, lane_fx, step_release)
+          end
         end
       end
     elseif not state.playing then
@@ -3266,9 +3399,26 @@ table_step_value = function(tbl, idx, default)
   return v
 end
 
+-- The lanes of the rack under `parent`, as an array indexed by lane.
+--
+-- Tagged with the rack style on the way out, which is what Lane.fx reads to
+-- decide where a lane's sampler is. It is a plain array otherwise, exactly as
+-- it always was -- every `#lane_tracks` and `lane_tracks[i]` in this file is
+-- untouched by the tag, and that is the point of putting it there rather than
+-- changing the shape.
 collect_lane_tracks = function(parent)
   local out = {}
-  if not parent then return out end
+  if not parent then return Lane.track_rack(out, parent) end
+
+  -- A container rack is one track, so there are no children to walk: the pads
+  -- are FX inside it. Asked of the host track rather than passed in, so all six
+  -- callers stay as they are.
+  local desc = Rack.of(parent)
+  if desc and desc.style == "container" then
+    local pads = math.min(GRID_SLOTS, Lane.container_count(desc.track, desc.container))
+    return Lane.container_rack(desc.track, desc.guid, Rack.pad_order(desc.track), pads)
+  end
+
   local parent_depth = r.GetTrackDepth(parent)
   local direct_depth = parent_depth + 1
   local parent_idx = get_track_index0(parent)
@@ -3288,11 +3438,21 @@ collect_lane_tracks = function(parent)
       end
     end
   end
-  return out
+  return Lane.track_rack(out, parent)
 end
 
+-- Which lane a track IS, for keeping the lane selection in step with the track
+-- selection in the arrange view.
+--
+-- A container rack has no answer to this and must not invent one: all sixteen
+-- lanes are the same track, so the first match is always lane 1. Returning it
+-- would pin the selection to lane 1 on every frame and make the other fifteen
+-- unselectable -- the lane you clicked would spring back before you let go.
+-- With no answer the selection is simply internal, which is what it has to be
+-- when there is only one track to select.
 local function lane_index_for_track(lane_tracks, track)
   if not lane_tracks or not track then return nil end
+  if Lane.style(lane_tracks) == "container" then return nil end
   for lane = 1, #lane_tracks do
     if lane_tracks[lane] == track then
       return lane
@@ -3339,9 +3499,9 @@ local function get_note_filter_note(track, fx)
   return clamp(math.floor((tonumber(value) or 0) * 128 + 0.5), 0, 127)
 end
 
-local function rs5k_note_for_track(track, fallback_note)
+local function rs5k_note_for_track(track, fallback_note, fx_hint)
   local fallback = clamp(math.floor(tonumber(fallback_note) or BASE_NOTE), 0, 127)
-  local fx = find_rs5k_fx(track)
+  local fx = (fx_hint and fx_hint >= 0) and fx_hint or RS5K.find(track)
   if fx < 0 or not r.TrackFX_GetParamNormalized then
     return fallback
   end
@@ -3352,13 +3512,24 @@ local function rs5k_note_for_track(track, fallback_note)
   return clamp(math.floor((n * 127) + 0.5), 0, 127)
 end
 
-local function track_note_for_export(track, fallback_note)
+-- Which note a lane's pad answers to, for the MIDI export.
+--
+-- `fx_hint` is the pad we already know about, and it beats anything found by
+-- searching the track. It has to: in a container rack all sixteen pads sit on
+-- one track, so a search there answers the same for every lane -- and the first
+-- top-level FX it would find is the container or the engine, neither of which
+-- has a note range to read. Without the hint the export would be reading
+-- parameter 3 of the wrong plugin and calling it a note.
+local function track_note_for_export(track, fallback_note, fx_hint)
+  if fx_hint and fx_hint >= 0 then
+    return rs5k_note_for_track(track, fallback_note, fx_hint)
+  end
   local note_filter_fx = find_note_filter_fx(track)
   local note_filter_note = note_filter_fx >= 0 and get_note_filter_note(track, note_filter_fx) or nil
   if note_filter_note ~= nil then
     return note_filter_note
   end
-  local fx = find_rs5k_fx(track)
+  local fx = RS5K.find(track)
   if fx >= 0 then
     return rs5k_note_for_track(track, fallback_note)
   end
@@ -3383,7 +3554,6 @@ local function export_sequence_to_midi(track, seq, opts)
     if mode ~= "gate" and mode ~= "oneshot" then
       mode = "gate"
     end
-    local retrigger = cfg.retrigger ~= false
     local echo_enabled = cfg.echo_enabled == true
     local echo_count = normalize_lane_echo_count(cfg.echo_count)
     local echo_vel_mode = normalize_lane_echo_mode(cfg.echo_vel_mode)
@@ -3435,6 +3605,16 @@ local function export_sequence_to_midi(track, seq, opts)
           local sub_period_steps = lane_period_steps / step_substeps
           local gate_steps = step_substeps > 1 and (sub_period_steps * (step_gate / 100)) or (step_len * (step_gate / 100))
           local pitch_offset = seq_step_pitch(cfg, lane, lane_step)
+          -- Carried on the event so the export can put them on an envelope.
+          -- The engine applies these to the sampler live; without them here an
+          -- exported pattern is silent about pan and volume entirely.
+          local pan_value = clamp(math.floor(tonumber(table_step_value(cfg.step_pan, lane_step, 0)) or 0), -100, 100)
+          local volume_value = clamp(math.floor(tonumber(table_step_value(cfg.step_volume, lane_step, 0)) or 0), -24, 6)
+          -- Per LANE in practice rather than per step -- only the Euclid page
+          -- offers them, and it writes one value to every step -- but carried
+          -- per event anyway, so the export does not have to care which.
+          local attack_value = clamp(math.floor(tonumber(table_step_value(cfg.step_attack, lane_step, 0)) or 0), 0, 2000)
+          local release_value = clamp(math.floor(tonumber(table_step_value(cfg.step_release, lane_step, 0)) or 0), 0, 2000)
           if gate_steps <= 0 then
             gate_steps = math.min(1, sub_period_steps)
           end
@@ -3448,6 +3628,10 @@ local function export_sequence_to_midi(track, seq, opts)
                   vel = step_vel,
                   pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
                   pitch_offset = pitch_offset,
+                  pan = pan_value,
+                  volume = volume_value,
+                  attack = attack_value,
+                  release = release_value,
                 }
               else
                 local end_steps = start_steps + gate_steps
@@ -3458,6 +3642,10 @@ local function export_sequence_to_midi(track, seq, opts)
                   vel = step_vel,
                   pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
                   pitch_offset = pitch_offset,
+                  pan = pan_value,
+                  volume = volume_value,
+                  attack = attack_value,
+                  release = release_value,
                 }
               end
             end
@@ -3474,6 +3662,10 @@ local function export_sequence_to_midi(track, seq, opts)
                     vel = echo_vel,
                     pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
                     pitch_offset = pitch_offset,
+                  pan = pan_value,
+                  volume = volume_value,
+                  attack = attack_value,
+                  release = release_value,
                   }
                 else
                   local echo_end = echo_start + gate_steps
@@ -3484,6 +3676,10 @@ local function export_sequence_to_midi(track, seq, opts)
                     vel = echo_vel,
                     pitch = clamp(base_pitch + (use_pitch_as_note_offset and pitch_offset or 0), 0, 127),
                     pitch_offset = pitch_offset,
+                  pan = pan_value,
+                  volume = volume_value,
+                  attack = attack_value,
+                  release = release_value,
                   }
                 end
               end
@@ -3495,52 +3691,39 @@ local function export_sequence_to_midi(track, seq, opts)
       lane_step_start = lane_step_start + lane_period_steps
     end
 
+    -- One-shot: a note runs until the next hit on this lane, because that is
+    -- exactly what the engine does. It schedules no note-off of its own
+    -- (act_off = 0), so the sounding voice is only cut when the NEXT hit sends
+    -- its note-off first. A shorter note would cut the sample early wherever
+    -- the sampler obeys note-offs; a longer one cannot exist.
     if #triggers > 0 then
-      if retrigger then
-        for i = 1, #triggers do
-          local cur = triggers[i]
-          local nxt = triggers[i + 1]
-          local end_steps = nxt and nxt.start_steps or section_steps
-          if end_steps <= cur.start_steps then
-            end_steps = cur.start_steps + (1 / 64)
-          end
-          events[#events + 1] = {
-            start_steps = cur.start_steps,
-            end_steps = math.min(end_steps, section_steps),
-            vel = cur.vel,
-            pitch = cur.pitch,
-            pitch_offset = cur.pitch_offset,
-          }
+      for i = 1, #triggers do
+        local cur = triggers[i]
+        local nxt = triggers[i + 1]
+        local end_steps = nxt and nxt.start_steps or section_steps
+        if end_steps <= cur.start_steps then
+          end_steps = cur.start_steps + (1 / 64)
         end
-      else
-        local first = triggers[1]
         events[#events + 1] = {
-          start_steps = first.start_steps,
-          end_steps = section_steps,
-          vel = first.vel,
-          pitch = first.pitch,
-          pitch_offset = first.pitch_offset,
+          start_steps = cur.start_steps,
+          end_steps = math.min(end_steps, section_steps),
+          vel = cur.vel,
+          pitch = cur.pitch,
+          pitch_offset = cur.pitch_offset,
+          pan = cur.pan,
+          volume = cur.volume,
+          attack = cur.attack,
+          release = cur.release,
         }
       end
     end
 
-    if (not retrigger) and mode ~= "oneshot" and #events > 1 then
-      local merged = {}
-      local current = events[1]
-      for i = 2, #events do
-        local ev = events[i]
-        if ev.start_steps <= current.end_steps and ev.pitch == current.pitch then
-          if ev.end_steps > current.end_steps then
-            current.end_steps = ev.end_steps
-          end
-        else
-          merged[#merged + 1] = current
-          current = ev
-        end
-      end
-      merged[#merged + 1] = current
-      events = merged
-    end
+    -- Every hit gets its own note-on, always, because that is what the engine
+    -- does: it sends a note-off and then a note-on for every step it plays,
+    -- unconditionally. Without this a gate of 100%, a swung note pulled early,
+    -- or the one-shot stitching above all produce notes that touch at the same
+    -- pitch -- and a touching pair articulates once, not twice.
+    Lane.separate_notes(events, 1 / 64)
 
     local next_step_start = lane_step_start - section_steps
     if math.abs(next_step_start) < step_epsilon then
@@ -3634,14 +3817,45 @@ local function export_sequence_to_midi(track, seq, opts)
   local start_qn = time_to_qn(cursor_time)
 
   local inserted = 0
+
+  -- A container rack's lanes all live on one track, so they share one item per
+  -- section instead of getting one each. Without this the export would stack
+  -- sixteen items on top of each other -- which plays correctly and is
+  -- unreadable, and unreadable is the whole thing an export is for.
+  --
+  -- Keyed by section rather than by lane, and created by whichever lane reaches
+  -- the section first.
+  local shared_items = (Lane.style(lane_tracks) == "container") and {} or nil
+
   for lane = 1, GRID_SLOTS do
     local lane_track = lane_tracks[lane]
     if lane_track then
-      local base_pitch = track_note_for_export(lane_track, BASE_NOTE + (lane - 1))
-      local lane_fx = find_rs5k_fx(lane_track)
-      local rs5k_note_off = lane_track and lane_fx >= 0 and rs5k_obeys_note_off(lane_track, lane_fx) or true
+      -- The pad first, then its note: in a container rack the track alone
+      -- cannot say which of sixteen pads this lane is.
+      local lane_fx = Lane.fx(lane_tracks, lane)
+      local base_pitch = track_note_for_export(lane_track, BASE_NOTE + (lane - 1), lane_fx)
+      -- Whether this pad's sampler obeys note-offs at all, which is what
+      -- decides whether a note length means anything.
+      --
+      -- Written out rather than chained. `a and b or true` cannot return false:
+      -- a false answer falls straight through to the `or` and comes back true.
+      -- So this test never did anything, and the export wrote gate lengths for
+      -- every pad -- including ones that ignore note-offs, where a length is
+      -- meaningless at the time and starts cutting samples the moment someone
+      -- turns Note-off on. True when the pad cannot be read at all, which is
+      -- what the chain was reaching for.
+      local rs5k_note_off = true
+      if lane_track and lane_fx >= 0 then
+        rs5k_note_off = rs5k_obeys_note_off(lane_track, lane_fx)
+      end
       local use_pitch_as_note_offset = true
       local lane_pitch_env = nil
+      -- Pan and volume travel the same way pitch does. Without them a step's
+      -- pan and volume can be programmed and heard and then do nothing at all
+      -- in an exported pattern: they live on the sampler, and a MIDI note
+      -- cannot carry them.
+      local lane_pan_env, lane_volume_env = nil, nil
+      local lane_attack_env, lane_release_env = nil, nil
       local lane_pitch_param_idx = nil
       local inserted_pitch_points = false
       if lane_track and lane_fx >= 0 and r.GetFXEnvelope and r.InsertEnvelopePoint then
@@ -3695,7 +3909,11 @@ local function export_sequence_to_midi(track, seq, opts)
           section_end_time = section_start_time + 1.0
         end
 
-        local sec_item = r.CreateNewMIDIItemInProj(lane_track, section_start_time, section_end_time, false)
+        local sec_item = shared_items and shared_items[section_idx] or nil
+        if not sec_item then
+          sec_item = r.CreateNewMIDIItemInProj(lane_track, section_start_time, section_end_time, false)
+          if shared_items then shared_items[section_idx] = sec_item end
+        end
         if sec_item then
           local take = r.GetActiveTake(sec_item)
           if take and r.TakeIsMIDI(take) then
@@ -3721,7 +3939,21 @@ local function export_sequence_to_midi(track, seq, opts)
                 inserted = inserted + 1
                 if lane_pitch_param_idx and lane_pitch_param_idx >= 0 and r.InsertEnvelopePoint then
                   local semis = clamp(math.floor(tonumber(ev.pitch_offset) or 0), -24, 24)
-                  if semis ~= 0 and note_start_time then
+                  -- A step with NO offset writes its point too, once the
+                  -- envelope exists. An envelope holds its last value until the
+                  -- next point, so skipping the zeros meant one step at -18 sent
+                  -- every step after it down with it -- right to the end of the
+                  -- pattern, where the single reset point sat.
+                  --
+                  -- This is what playback has always done: set_rs5k_pitch_semitones
+                  -- is called for every step it triggers, zero included. The export
+                  -- was the one that disagreed, so an exported pattern did not
+                  -- sound like the one you had just been listening to.
+                  --
+                  -- Still nothing until the first real offset, so a lane that
+                  -- never touches pitch does not get an envelope it has no use
+                  -- for.
+                  if (semis ~= 0 or lane_pitch_env) and note_start_time then
                     if not lane_pitch_env then
                       lane_pitch_env = r.GetFXEnvelope(lane_track, lane_fx, lane_pitch_param_idx, true)
                     end
@@ -3734,14 +3966,82 @@ local function export_sequence_to_midi(track, seq, opts)
                     end
                   end
                 end
+
+                -- Pan and volume, on the same rule as pitch: nothing until the
+                -- first step that asks for something, and from then on a point
+                -- per note so a step back at centre actually returns there.
+                --
+                -- The value comes from the same code that sets it live, asked
+                -- not to write -- working the number out a second time here is
+                -- how the live sound and the exported one would drift apart.
+                if note_start_time and r.InsertEnvelopePoint and r.GetFXEnvelope then
+                  local pan_v = clamp(math.floor(tonumber(ev.pan) or 0), -100, 100)
+                  if pan_v ~= 0 or lane_pan_env then
+                    local ok_pan, pan_idx, pan_norm = set_rs5k_pan_percent(lane_track, lane_fx, pan_v, true)
+                    if ok_pan and pan_idx and pan_idx >= 0 and pan_norm then
+                      if not lane_pan_env then
+                        lane_pan_env = r.GetFXEnvelope(lane_track, lane_fx, pan_idx, true)
+                      end
+                      if lane_pan_env then
+                        r.InsertEnvelopePoint(lane_pan_env, note_start_time, pan_norm, 1, 0, false, true)
+                      end
+                    end
+                  end
+
+                  local vol_v = clamp(math.floor(tonumber(ev.volume) or 0), -24, 6)
+                  if vol_v ~= 0 or lane_volume_env then
+                    local ok_vol, vol_idx, vol_norm = set_rs5k_volume_db(lane_track, lane_fx, vol_v, true)
+                    if ok_vol and vol_idx and vol_idx >= 0 and vol_norm then
+                      if not lane_volume_env then
+                        lane_volume_env = r.GetFXEnvelope(lane_track, lane_fx, vol_idx, true)
+                      end
+                      if lane_volume_env then
+                        r.InsertEnvelopePoint(lane_volume_env, note_start_time, vol_norm, 1, 0, false, true)
+                      end
+                    end
+                  end
+
+                  -- Attack and release. Set on the Euclid page and applied live
+                  -- on every step, so without this an exported Euclid pattern
+                  -- lost the shape it was written with -- and stopping the
+                  -- sequencer wiped it from the sampler too.
+                  local atk_v = clamp(math.floor(tonumber(ev.attack) or 0), 0, 2000)
+                  if atk_v ~= 0 or lane_attack_env then
+                    local ok_atk, atk_idx, atk_norm = set_rs5k_attack_ms(lane_track, lane_fx, atk_v, true)
+                    if ok_atk and atk_idx and atk_idx >= 0 and atk_norm then
+                      if not lane_attack_env then
+                        lane_attack_env = r.GetFXEnvelope(lane_track, lane_fx, atk_idx, true)
+                      end
+                      if lane_attack_env then
+                        r.InsertEnvelopePoint(lane_attack_env, note_start_time, atk_norm, 1, 0, false, true)
+                      end
+                    end
+                  end
+
+                  local rel_v = clamp(math.floor(tonumber(ev.release) or 0), 0, 2000)
+                  if rel_v ~= 0 or lane_release_env then
+                    local ok_rel, rel_idx, rel_norm = set_rs5k_release_ms(lane_track, lane_fx, rel_v, true)
+                    if ok_rel and rel_idx and rel_idx >= 0 and rel_norm then
+                      if not lane_release_env then
+                        lane_release_env = r.GetFXEnvelope(lane_track, lane_fx, rel_idx, true)
+                      end
+                      if lane_release_env then
+                        r.InsertEnvelopePoint(lane_release_env, note_start_time, rel_norm, 1, 0, false, true)
+                      end
+                    end
+                  end
+                end
               end
             end
             if inserted_lane > 0 then
               r.MIDI_Sort(take)
-            else
+            elseif not shared_items then
               r.DeleteTrackMediaItem(lane_track, sec_item)
             end
-          else
+            -- A shared item is not thrown away by the first lane that had
+            -- nothing to add to it: fifteen others still have their turn. The
+            -- ones that stay empty are cleared up after the loop.
+          elseif not shared_items then
             r.DeleteTrackMediaItem(lane_track, sec_item)
           end
         end
@@ -3754,6 +4054,48 @@ local function export_sequence_to_midi(track, seq, opts)
           r.InsertEnvelopePoint(lane_pitch_env, final_time, reset_norm, 1, 0, false, true)
         end
         r.Envelope_SortPoints(lane_pitch_env)
+      end
+
+      -- Back to neutral after the pattern, so the rack is not left panned or
+      -- turned down by a kit you exported an hour ago.
+      if r.InsertEnvelopePoint and r.Envelope_SortPoints then
+        local final_time = qn_to_time(start_qn + (total_steps / 4))
+        if lane_pan_env and final_time then
+          local _, _, pan_zero = set_rs5k_pan_percent(lane_track, lane_fx, 0, true)
+          if pan_zero then r.InsertEnvelopePoint(lane_pan_env, final_time, pan_zero, 1, 0, false, true) end
+          r.Envelope_SortPoints(lane_pan_env)
+        end
+        if lane_volume_env and final_time then
+          local _, _, vol_zero = set_rs5k_volume_db(lane_track, lane_fx, 0, true)
+          if vol_zero then r.InsertEnvelopePoint(lane_volume_env, final_time, vol_zero, 1, 0, false, true) end
+          r.Envelope_SortPoints(lane_volume_env)
+        end
+        if lane_attack_env and final_time then
+          local _, _, atk_zero = set_rs5k_attack_ms(lane_track, lane_fx, 0, true)
+          if atk_zero then r.InsertEnvelopePoint(lane_attack_env, final_time, atk_zero, 1, 0, false, true) end
+          r.Envelope_SortPoints(lane_attack_env)
+        end
+        if lane_release_env and final_time then
+          local _, _, rel_zero = set_rs5k_release_ms(lane_track, lane_fx, 0, true)
+          if rel_zero then r.InsertEnvelopePoint(lane_release_env, final_time, rel_zero, 1, 0, false, true) end
+          r.Envelope_SortPoints(lane_release_env)
+        end
+      end
+    end
+  end
+
+  -- Sections that no lane played leave an empty item behind, which a folder
+  -- rack deletes as it goes. A shared one can only be judged once every lane
+  -- has had its turn.
+  if shared_items then
+    for _, item in pairs(shared_items) do
+      local take = item and r.GetActiveTake(item)
+      local notes = 0
+      if take and r.MIDI_CountEvts then
+        notes = select(2, r.MIDI_CountEvts(take)) or 0
+      end
+      if item and notes == 0 and r.DeleteTrackMediaItem then
+        r.DeleteTrackMediaItem(lane_tracks[1], item)
       end
     end
   end
@@ -3953,7 +4295,7 @@ end
 
 function M.ensure_stopped(app)
   if not app or not app.sequencer then return end
-  stop_playback(app.sequencer, get_selected_rack_parent_track())
+  stop_playback(app.sequencer, Rack.selected_host())
 end
 
 function M.init(app)
@@ -4017,7 +4359,7 @@ local function draw_step(app)
   local ctx = app.ctx
   local state = app.sequencer
   process_preview_note_offs(state)
-  local parent = get_selected_rack_parent_track()
+  local parent = Rack.selected_host()
   if not parent then
     if state.playing then
       stop_playback(state, nil)
@@ -4310,7 +4652,7 @@ local function draw_step(app)
     r.ImGui_SetCursorPosY(ctx, lane_row_y)
     if transport_text_button(ctx, "tk_seq_lane_rs5k", "RS5k", lane_action_w, top_button_h) then
       local lane_track = lane_tracks[selected_lane]
-      local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+      local lane_fx = lane_track and Lane.fx(lane_tracks, selected_lane) or -1
       if lane_track and lane_fx >= 0 and r.TrackFX_Show then
         r.TrackFX_Show(lane_track, lane_fx, 3)
       end
@@ -4435,7 +4777,7 @@ local function draw_step(app)
       seq.lane_settings[lane] = lane_cfg
       ensure_lane_step_params(lane_cfg, total_steps, DEFAULT_STEP_VELOCITY)
       local lane_track = lane_tracks[lane]
-      local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+      local lane_fx = lane_track and Lane.fx(lane_tracks, lane) or -1
       local rs5k_note_off = lane_fx >= 0 and rs5k_obeys_note_off(lane_track, lane_fx) or false
       local cycle_steps = clamp(math.floor(tonumber(lane_cfg.cycle_steps) or total_steps), 1, total_steps)
       local is_solo = solo_map[lane] == true
@@ -4868,6 +5210,9 @@ local function draw_step(app)
         local btn_h = 20
         local btn_gap = 6
         local btn1_w = 74
+        -- Retrig used to be the second button on the top row. The width stays:
+        -- the echo row below borrows it for its own second column, and so does
+        -- the groove picker.
         local btn2_w = 64
         local btn3_w = 72
         local btn4_w = 62
@@ -4896,13 +5241,9 @@ local function draw_step(app)
           save_sequence(parent, seq)
         end
 
-        r.ImGui_SameLine(ctx, 0, btn_gap)
-        local retrig_enabled = lane_cfg.retrigger ~= false
-        if lane_toggle_button(ctx, "tk_seq_lane_retrig_" .. tostring(lane), "Retrig", btn2_w, btn_h, retrig_enabled) then
-          lane_cfg.retrigger = not retrig_enabled
-          save_sequence(parent, seq)
-        end
-
+        -- Retrig stood here. The engine never read it, so it changed nothing
+        -- you could hear -- and both of its meanings are already Note-off's:
+        -- off lets the sample ring and layer, on cuts and restarts.
         r.ImGui_SameLine(ctx, 0, btn_gap)
         if lane_toggle_button(ctx, "tk_seq_lane_obey_" .. tostring(lane), "Note-off", btn3_w, btn_h, rs5k_note_off) and lane_track and lane_fx >= 0 then
           local next_value = not rs5k_note_off
@@ -5529,7 +5870,7 @@ local function draw_step(app)
           local lane_tracks = collect_lane_tracks(parent)
           for lane = 1, #lane_tracks do
             local lane_track = lane_tracks[lane]
-            local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+            local lane_fx = lane_track and Lane.fx(lane_tracks, lane) or -1
             if lane_track and lane_fx >= 0 then
               set_rs5k_pitch_semitones(lane_track, lane_fx, 0)
               set_rs5k_pan_percent(lane_track, lane_fx, 0)
@@ -6352,7 +6693,7 @@ function draw_euclid(app)
   local ctx = app.ctx
   local state = app.sequencer
   process_preview_note_offs(state)
-  local parent = get_selected_rack_parent_track()
+  local parent = Rack.selected_host()
   if not parent then
     if state.playing then stop_playback(state, nil) end
     r.ImGui_TextColored(ctx, Theme.colors.warning, "Select a kit folder track to use the sequencer.")
@@ -6649,7 +6990,7 @@ function draw_euclid(app)
       local direction_label = lane_direction_label(L.direction)
       local lane_col = lane_color(selected_lane)
       local lane_track_sel = lane_tracks and lane_tracks[selected_lane] or nil
-      local lane_fx_sel = lane_track_sel and find_rs5k_fx(lane_track_sel) or -1
+      local lane_fx_sel = lane_track_sel and Lane.fx(lane_tracks, selected_lane) or -1
       local lane_has_rs5k = lane_track_sel and lane_fx_sel >= 0
       local changed_any = false
       function tk_euclid_draw_one(id, label, val, vmin, vmax, disp, reset_val, draw_col)
@@ -6943,7 +7284,7 @@ end
         local gate_value = cgate and ngate or gate
         local gate_tip = "Gate: " .. tostring(gate_value) .. "%\nControls note length in Gate mode."
         local gate_track = lane_tracks[selected_lane]
-        local gate_fx = gate_track and find_rs5k_fx(gate_track) or -1
+        local gate_fx = gate_track and Lane.fx(lane_tracks, selected_lane) or -1
         if gate_fx >= 0 then
           if rs5k_obeys_note_off(gate_track, gate_fx) then
             gate_tip = gate_tip .. "\nRS5K Note-off is enabled, so Gate can shorten notes."
@@ -7332,7 +7673,7 @@ end
       r.ImGui_SameLine(ctx, 0, bottom_gap)
       if transport_text_button(ctx, "tk_euclid_open_rs5k", "RS5K", top_button_w, clear_h) then
         local lane_track = lane_tracks and lane_tracks[selected_lane] or nil
-        local lane_fx = lane_track and find_rs5k_fx(lane_track) or -1
+        local lane_fx = lane_track and Lane.fx(lane_tracks, selected_lane) or -1
         if lane_track and lane_fx >= 0 and r.TrackFX_Show then
           r.TrackFX_Show(lane_track, lane_fx, 3)
         end
@@ -7354,17 +7695,8 @@ end
       btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
       btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
       r.ImGui_SameLine(ctx, 0, bottom_gap)
-      local retrig_enabled = L.retrigger ~= false
-      if lane_toggle_button(ctx, "tk_euclid_lane_retrig", "Retrig", bottom_button_w, clear_h, retrig_enabled) then
-        L.retrigger = not retrig_enabled
-        euclid_save(parent, edata)
-        refresh_playback_params(state, guid)
-      end
-      btn_min_y = math.min(btn_min_y, select(2, r.ImGui_GetItemRectMin(ctx)))
-      btn_max_y = math.max(btn_max_y, select(2, r.ImGui_GetItemRectMax(ctx)))
-      r.ImGui_SameLine(ctx, 0, bottom_gap)
       local noteoff_track = lane_tracks and lane_tracks[selected_lane] or nil
-      local noteoff_fx = noteoff_track and find_rs5k_fx(noteoff_track) or -1
+      local noteoff_fx = noteoff_track and Lane.fx(lane_tracks, selected_lane) or -1
       local noteoff_enabled = noteoff_track and noteoff_fx >= 0 and rs5k_obeys_note_off(noteoff_track, noteoff_fx) or false
       if lane_toggle_button(ctx, "tk_euclid_lane_noteoff", "NoteOff", bottom_button_w, clear_h, noteoff_enabled) and noteoff_track and noteoff_fx >= 0 then
         set_rs5k_obey_note_off(noteoff_track, noteoff_fx, not noteoff_enabled)
@@ -7769,7 +8101,7 @@ function M.draw(app)
   local mode = app.view == "euclid" and "euclid" or "step"
   if state.active_mode ~= mode then
     if state.active_mode ~= nil then
-      stop_playback(state, get_selected_rack_parent_track())
+      stop_playback(state, Rack.selected_host())
     end
     state.active_mode = mode
   end

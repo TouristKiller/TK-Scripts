@@ -2,6 +2,7 @@ local r = reaper
 local Theme = require("core.theme")
 local Dialogs = require("core.dialogs")
 local Scanner = require("core.scanner")
+local Rack    = require("core.rack")
 local Store = require("core.browser_store")
 local BuilderView = require("ui.builder_view")
 local Presets = require("data.presets")
@@ -10,6 +11,8 @@ local Tags = require("core.tags")
 local Analyzer = require("core.analyzer")
 local Heatmap = require("core.heatmap")
 local RS5K = require("core.rs5k")
+local Pads = require("core.padnames")
+local Lane = require("core.lane")
 local Engine = require("core.engine")
 local Slice = require("core.slice")
 local Duration = require("core.duration")
@@ -772,21 +775,6 @@ local function each_child_track(parent, fn)
   end
 end
 
-local function get_selected_rack_parent_track()
-  local selected = r.GetSelectedTrack(0, 0)
-  if not selected then return nil end
-  if (r.GetMediaTrackInfo_Value(selected, "I_FOLDERDEPTH") or 0) > 0 then
-    return selected
-  end
-  if r.GetParentTrack then
-    local parent = r.GetParentTrack(selected)
-    if parent and (r.GetMediaTrackInfo_Value(parent, "I_FOLDERDEPTH") or 0) > 0 then
-      return parent
-    end
-  end
-  return nil
-end
-
 local function collect_rack_slot_usage(parent)
   local used = {}
   local max_used = 0
@@ -837,26 +825,31 @@ end
 -- `range` is { start01, stop01 }: which part of the file this pad plays. Only
 -- slicing passes it. Set here rather than afterwards because the fx index is
 -- already in hand, and looking it up again is the sort of thing that drifts.
-local function load_sample_into_rs5k(track, sample_path, midi_note, range)
-  local fx = find_rs5k_fx(track)
-  if fx < 0 then
-    fx = r.TrackFX_AddByName(track, "ReaSamplOmatic5000 (Cockos)", false, -1)
-  end
-  if fx < 0 then return false end
+-- Loads a sample into an RS5K that already exists, wherever it is. Split out
+-- from load_sample_into_rs5k because a pad inside a container is not found by
+-- searching its track -- there are sixteen of them on one track -- so the
+-- caller has to say which one, and everything after that is the same.
+local function load_sample_into_fx(track, fx, sample_path, midi_note, range)
+  if not track or not fx or fx < 0 then return false end
   local ok = r.TrackFX_SetNamedConfigParm(track, fx, "FILE0", sample_path)
   if ok then
     r.TrackFX_SetNamedConfigParm(track, fx, "DONE", "")
     if midi_note ~= nil then
-      local note = math.max(0, math.min(127, math.floor(tonumber(midi_note) or 0)))
-      local normalized = note / 127
-      r.TrackFX_SetParamNormalized(track, fx, 3, normalized)
-      r.TrackFX_SetParamNormalized(track, fx, 4, normalized)
+      RS5K.set_note(track, fx, midi_note)
     end
     if range then
       RS5K.set_range(track, fx, range[1], range[2])
     end
   end
   return ok == true
+end
+
+local function load_sample_into_rs5k(track, sample_path, midi_note, range)
+  local fx = find_rs5k_fx(track)
+  if fx < 0 then
+    fx = r.TrackFX_AddByName(track, "ReaSamplOmatic5000 (Cockos)", false, -1)
+  end
+  return load_sample_into_fx(track, fx, sample_path, midi_note, range)
 end
 
 local function create_empty_rs5k(track, midi_note)
@@ -1003,8 +996,59 @@ local function load_sample_to_selected_rs5k(app, sample_path)
   return false
 end
 
+-- The first pad of a container rack with nothing loaded on it, or nil.
+--
+-- A sample dropped on a track is unambiguous for a folder rack: that track IS
+-- the pad. A container rack is one track holding sixteen, so the drop has to
+-- pick, and the first empty pad is the answer a drum machine would give.
+local function first_empty_container_pad(track)
+  local desc = Rack.of(track)
+  if not desc or desc.style ~= "container" then return nil end
+
+  local count = Lane.container_count(desc.track, desc.container)
+  local lanes = Lane.container_rack(desc.track, desc.guid, Rack.pad_order(desc.track), count)
+  local order = Rack.pad_order(desc.track)
+  for i = 1, count do
+    local fx = Lane.fx(lanes, i)
+    if fx >= 0 then
+      local ok, file = r.TrackFX_GetNamedConfigParm(desc.track, fx, "FILE0")
+      if not ok or not file or tostring(file) == "" then
+        return desc, i, fx, order[i]
+      end
+    end
+  end
+  return desc, nil
+end
+
 local function load_sample_to_track(track, sample_path)
   if not track then return false end
+
+  -- A container rack: load into a pad rather than onto the track. Without this
+  -- the sample would go into a seventeenth sampler bolted to the end of the
+  -- chain, outside the container and outside the rack -- and the rack track
+  -- would be renamed after it.
+  local desc, pad, pad_fx, pad_guid = first_empty_container_pad(track)
+  if desc then
+    if not pad then
+      return false, "Every pad in this rack is full. Drop it on a pad in the Kit Manager to replace one."
+    end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local loaded = r.TrackFX_SetNamedConfigParm(desc.track, pad_fx, "FILE0", sample_path)
+    if loaded then
+      r.TrackFX_SetNamedConfigParm(desc.track, pad_fx, "DONE", "")
+      RS5K.set_note(desc.track, pad_fx, RS5K_BASE_NOTE + (pad - 1))
+      if pad_guid then Pads.suggest(desc.track, pad_guid, file_stem(sample_path)) end
+    end
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock(loaded and "TK Kit Maker: Load sample to pad"
+      or "TK Kit Maker: Load sample to pad (failed)", -1)
+    if not loaded then return false, "Could not load that sample into the pad." end
+    return true
+  end
+
   r.Undo_BeginBlock()
   r.PreventUIRefresh(1)
   local ok = load_sample_into_rs5k(track, sample_path)
@@ -1081,6 +1125,23 @@ function M.update_drag_drop(app)
   state.drag_mouse_was_down = false
 end
 
+-- REAPER itself loads a natively dragged file, so all this can do is name the
+-- track it landed on -- and a container rack must not be renamed after a sample.
+-- The drop cannot say which of sixteen pads was meant, and REAPER will have put
+-- its sampler at the end of the chain, outside the container. Say so rather than
+-- rename the rack and leave the user to find the stray.
+local function name_track_after_drop(track, sample_path)
+  if not track then return nil end
+  local desc = Rack.of(track)
+  if desc and desc.style == "container" then
+    return "Dropped on a container rack: REAPER put that sample outside the rack."
+      .. " Drag onto a pad in the Kit Manager instead, or onto the track from the"
+      .. " Browser's own list."
+  end
+  r.GetSetMediaTrackInfo_String(track, "P_NAME", file_leaf(sample_path):gsub("%.[%w]+$", ""), true)
+  return nil
+end
+
 function M.commit_track_drop(app)
   local state = app.browser
   if not state then return end
@@ -1088,8 +1149,8 @@ function M.commit_track_drop(app)
   if state.drag_native_pending_path then
     local native_track = resolve_native_drop_track(state, state.drag_native_pending_path, state.drag_native_pending_track, state.drag_native_pending_snapshot, state.drag_native_pending_state_snapshot)
     if native_track then
-      local sample_name = file_leaf(state.drag_native_pending_path):gsub("%.[%w]+$", "")
-      r.GetSetMediaTrackInfo_String(native_track, "P_NAME", sample_name, true)
+      local why = name_track_after_drop(native_track, state.drag_native_pending_path)
+      if why then state.preview_error = why end
       state.drag_native_pending_path = nil
       state.drag_native_pending_track = nil
       state.drag_native_pending_snapshot = nil
@@ -1126,8 +1187,8 @@ function M.commit_track_drop(app)
   if state.drag_native_mode then
     local native_track = resolve_native_drop_track(state, sample_path, track, state.drag_native_snapshot, state.drag_native_state_snapshot)
     if native_track then
-      local sample_name = file_leaf(sample_path):gsub("%.[%w]+$", "")
-      r.GetSetMediaTrackInfo_String(native_track, "P_NAME", sample_name, true)
+      local why = name_track_after_drop(native_track, sample_path)
+      if why then state.preview_error = why end
     else
       state.drag_native_pending_path = sample_path
       state.drag_native_pending_track = track
@@ -1136,8 +1197,11 @@ function M.commit_track_drop(app)
       state.drag_native_pending_tries = 30
     end
   else
-    if track and load_sample_to_track(track, sample_path) then
+    local dropped, why = load_sample_to_track(track, sample_path)
+    if track and dropped then
       state.drag_sample_path = nil
+    elseif why then
+      state.preview_error = why
     end
   end
 
@@ -1188,6 +1252,55 @@ local function build_rs5k_rack(rack_name, mapped_by_slot, rack_slots, undo_label
   r.UpdateArrange()
   r.Undo_EndBlock(undo_label, -1)
   return folder_track
+end
+
+-- The same kit as a container rack: one track, one container, a sampler per pad.
+--
+-- Structure comes from core/rack.lua, which refuses to hand back a half-built
+-- rack; this fills the pads it made and names them. The pad names go in the
+-- blob rather than anywhere REAPER shows, because a pad here has no track to
+-- carry a name -- see core/padnames.lua.
+--
+-- Returns the track, or nil and a reason.
+local function build_container_rack(rack_name, mapped_by_slot, rack_slots, undo_label)
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+
+  local track, ci_or_err = Rack.build_container({
+    name = rack_name,
+    pads = rack_slots,
+    base_note = RS5K_BASE_NOTE,
+    insert_after = r.GetSelectedTrack(0, 0),
+  })
+
+  if not track then
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock(undo_label .. " (failed)", -1)
+    return nil, tostring(ci_or_err)
+  end
+
+  local ci = ci_or_err
+  local guids = Rack.pad_guids(track, ci)
+  for slot = 1, rack_slots do
+    local item = mapped_by_slot[slot]
+    -- Resolved per pad and never kept, which is the rule this whole feature
+    -- runs on: the address is an expression over the FX chain, not a handle.
+    local addr = Lane.container_child_address(track, ci, slot)
+    if item then
+      load_sample_into_fx(track, addr, item.sample_path, RS5K_BASE_NOTE + (slot - 1), item.range)
+      if guids[slot] then Pads.suggest(track, guids[slot], item.sample_name) end
+      RS5K.set_note_name(track, RS5K_BASE_NOTE + (slot - 1), role_of(item.sample_path))
+    elseif guids[slot] then
+      Pads.suggest(track, guids[slot], string.format("Pad %02d", slot))
+    end
+  end
+
+  r.SetOnlyTrackSelected(track)
+  r.PreventUIRefresh(-1)
+  r.TrackList_AdjustWindows(false)
+  r.UpdateArrange()
+  r.Undo_EndBlock(undo_label, -1)
+  return track
 end
 
 -- Slicing a loop across the pads.
@@ -1252,7 +1365,7 @@ local function slice_to_rack(app, sample_path, opts)
   return true
 end
 
-local function create_rs5k_drum_rack_from_collection(app)
+local function create_rs5k_drum_rack_from_collection(app, style)
   local state = app.browser
   local col = selected_collection(app)
   if not col then
@@ -1331,9 +1444,18 @@ local function create_rs5k_drum_rack_from_collection(app)
   end
 
   local folder_name = col.name ~= "" and col.name or file_leaf(col.path)
-  build_rs5k_rack(folder_name .. " Rack", mapped_by_slot,
-    math.max(KIT_RACK_SLOTS, max_slot),
-    "TK Kit Maker: Create RS5K drum rack from kit")
+  local slots = math.max(KIT_RACK_SLOTS, max_slot)
+  if style == "container" then
+    local ok, err = build_container_rack(folder_name .. " Rack", mapped_by_slot, slots,
+      "TK Kit Maker: Create container drum rack from kit")
+    if not ok then
+      state.preview_error = "Could not build a container rack: " .. tostring(err)
+      return false
+    end
+  else
+    build_rs5k_rack(folder_name .. " Rack", mapped_by_slot, slots,
+      "TK Kit Maker: Create RS5K drum rack from kit")
+  end
 
   if total_files > #mapped then
     state.preview_error = "Rack created with " .. tostring(#mapped) .. " mapped samples."
@@ -1950,6 +2072,23 @@ local function draw_collection_context_menu(app, col)
         save(app)
         create_rs5k_drum_rack_from_collection(app)
       end
+      -- The same kit on one track, as FX inside a container. Half done: the
+      -- Step and Euclid pages drive it, the Kit Manager does not see it yet.
+      if r.ImGui_MenuItem(ctx, "Create Drum Rack (Container, experimental)##ctr_" .. col.id) then
+        state.selected_id = col.id
+        set_selected_collection(state, col.id)
+        save(app)
+        create_rs5k_drum_rack_from_collection(app, "container")
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx,
+          "One track instead of sixteen: every pad is a sampler inside one FX container."
+          .. "\n\nStill experimental. The Step and Euclid pages drive it, the Kit Manager"
+          .. "\nedits it and Save kit writes it out -- but relinking and undo have not"
+          .. "\nbeen gone through yet."
+          .. "\n\nOne track means no record arm and no colour per pad."
+          .. "\n\nNeeds REAPER 7.")
+      end
     end
 
     -- Writes out what the file list is showing, so the filters are the
@@ -2133,7 +2272,7 @@ sample_menu_items = function(app, file_path)
     if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "Cut this loop across the pads of a new rack.\nNothing is written to disk -- every pad plays its own\npart of the same file, and the cut points stay adjustable.")
     end
-    local rack_parent = get_selected_rack_parent_track()
+    local rack_parent = Rack.selected_parent()
     if rack_parent and r.ImGui_BeginMenu(ctx, "Load to RS5K rack slot...") then
       local used, max_used = collect_rack_slot_usage(rack_parent)
       local suggested = parse_slot_number(file_stem(file_path))
@@ -3542,7 +3681,7 @@ local function collection_file_set(app)
 end
 
 local function collect_rack_points(app, grid)
-  local parent = get_selected_rack_parent_track()
+  local parent = Rack.selected_parent()
   if not parent then
     return nil, "Select a track inside the rack you want to see."
   end
@@ -3649,7 +3788,7 @@ end
 -- option that builds one.
 local function fill_selected_rack_from_grid(app, picks)
   local state = app.browser
-  local parent = get_selected_rack_parent_track()
+  local parent = Rack.selected_parent()
   if not parent then
     state.preview_error = "Select a track inside the rack you want to fill first."
     return false

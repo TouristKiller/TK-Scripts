@@ -144,6 +144,19 @@ to read twice.
 A collection with no group behaves exactly as before, so a library that never
 uses this looks unchanged.
 
+Right-clicking **+ Folder** holds three things that are set once and then
+forgotten:
+
+- **Add subfolders as collections** — pick the folder whose children are your
+  packs and each comes in as its own collection, filed under a group named after
+  the folder you picked. In the KITS browser it is called **Batch import single
+  folders** and opens on the last export folder, so a batch of fifty kits is
+  exported and then imported in two steps. One level only; subfolders with no
+  audio are skipped, and ones already added are left out.
+- **Open last export folder** — where a batch export, an Explosion or a saved
+  kit last wrote.
+- **Set / clear start folder** — every browse dialog opens there.
+
 ### Auditioning & using samples (right panel)
 
 - **Filter by filename** narrows the list. **Flat list** drops the folder
@@ -269,6 +282,15 @@ unanalysed samples drop out of the list — the popup says how many.
 > read first and wins; if the word was only in a folder name the tag shows as
 > `ACOUSTIC?` in the tags panel, because that is a guess about the pack rather
 > than about the sample.
+
+> **Category reads the filename first.** The folder only counts when the
+> filename names nothing at all — so `Kicks/001.wav` is a kick, while a folder
+> called *WA Snares & Claps* no longer makes every file in it answer to both.
+> A file that names itself is described by its own name. Plural folders count
+> as their singular, so *Claps* and *Rims* answer Clap and Rim. The Builder's
+> slot filter uses the same rules, so a facet count and what a slot actually
+> picks cannot drift apart. A custom keyword still searches the whole path,
+> because what a keyword looks for is often only there.
 
 > **Filter here, weight there.** This is a real filter: ask for the noise hats
 > and you get the noise hats. The **Character** setting in Explosion and Builder
@@ -447,10 +469,20 @@ count.
 
 - From a **PACKS** collection (or its right-click menu): **Use for
   Explosion** sets it as the Explosion source, or **Add as Builder Pool**
-  creates a pool from it.
+  creates a pool from it and opens the Builder on it, ready to rename.
+  **Add as Builder Pool (stay here)** does the same without the tab change,
+  for adding several in a row.
+- **Add N filtered samples as Builder Pool**, on a folder header or on the open
+  collection, takes only what the list is showing. A folder of ten snares, ten
+  rims and ten claps filtered to "clap" gives you the ten claps, not the thirty.
+  It is a fixed list saved with the preset and does not rescan — a rescan would
+  put the other twenty back. Offered only while a filter is actually on.
 - From a **KITS** collection: **Create Drum Rack (RS5K)** builds a
   ready-to-play rack in REAPER, mapped from note 36 up. A stitched WAV in the
   folder is left out — it is the whole kit in one file, not a pad sound.
+- **Create Drum Rack (Container)** builds the same kit as ONE track, with every
+  pad a sampler inside a single FX container, instead of sixteen tracks. See
+  *Container racks* below. Experimental, and REAPER 7 only.
 - **Export … samples as a kit folder…** (right-click the collection you have
   open) copies what the file list is showing into a new kit folder, numbered and
   renamed like any other Kit Maker export. The filters *are* the selection:
@@ -596,6 +628,10 @@ for. It exists for the step you immediately regretted.
 
 ### Step 1 — Pools
 
+With more than one pool there is a **Collapse all** beside "+ Pool". A pool
+opened out is a folder list, a mode, a bias and a scan button, so eight of them
+is a page you scroll past to reach the slots.
+
 A **pool** is a named group of one or more sample folders.
 
 - **+ Pool**, then set the **Alias**, **+ Add folder**(s) and toggle
@@ -650,7 +686,13 @@ separator, with a live **Preview** of the resulting filename.
   See *Seeds* under Explosion; it works the same here, and a preset saves it.
 - Optional logs: **MIDI log**, **Sources log**, **Used-samples log** (avoids
   repeats across sessions), plus **Stitched WAV + cues** and **Max sample
-  length**. The MIDI log is written in REAPER's note-name format (`36 Kick`),
+  length**.
+- **Cue file only** sits beside the stitch: keep the stitched WAV and its cue
+  sheet, and delete the one-shots that went into it. A kit meant for a slicer is
+  one file, and the sixteen copies beside it are the same audio twice. It
+  removes only what the stitcher reported taking in — anything it skipped, an
+  mp3 or a sample past the length limit, is kept and named in the result, so a
+  sample that is not in the stitched WAV is never the one deleted. The MIDI log is written in REAPER's note-name format (`36 Kick`),
   so it can be loaded in the MIDI editor under *File → Note names* — or read as
   a plain list of what sits on which note.
 - A line above the button reports readiness — *"16 slots, all linked to a
@@ -661,6 +703,38 @@ separator, with a live **Preview** of the resulting filename.
 ---
 
 ## 5. Kit Manager (RS5K rack)
+
+### Container racks (experimental)
+
+A kit is normally a folder track with one track per pad. A **container rack** is
+the same kit on **one** track, with every pad a sampler inside a single FX
+container. Sixteen tracks become one, which is the point: a project with a dozen
+kits in it stays readable.
+
+Build one from the Kits browser — right-click a kit collection and choose
+**Create Drum Rack (Container)**. Existing racks are untouched; this is a second
+shape beside the old one, not a replacement.
+
+Everything works on it: both sequencer pages, the export, the Kit Manager, Save
+kit, relinking, and dragging a sample in. What one track cannot do:
+
+| | |
+|---|---|
+| **Record arm per pad** | One track, one arm. |
+| **A colour per pad** | Likewise. |
+| **Per-pad insert FX, sends, stems** | Everything shares the track's chain and its output. Per-pad volume and pan still work — those are the sampler's own. |
+
+Two things worth knowing:
+
+- Dragging a sample onto the rack **track** lands it on the first empty pad,
+  because a track cannot say which of sixteen you meant. Drop onto a pad in the
+  Kit Manager to choose.
+- Dragging a file from Explorer onto the track is REAPER's own drop, and REAPER
+  puts its sampler at the end of the chain — outside the rack. Kit Maker says so
+  rather than renaming the rack after it. Use the Browser or the pad grid.
+
+It is called experimental because it is new, not because it is unfinished.
+REAPER 7 only: FX containers do not exist before that.
 
 *The 4×4 pad window behind the playable racks.*
 
@@ -686,6 +760,12 @@ track's own name — the sample filename — so those rows never come up blank.
 
 **Save kit** writes the rack out as a kit folder: the samples, the cover, and
 the MIDI and sources logs. Pick the destination once and it is remembered.
+
+Files are numbered by pad. A number this kit put on last time is taken off
+first, so saving a kit twice does not give you `010_010_Cymbal`, and a sample
+brought in from another kit does not land as `010_013_Cymbal`. Only a number
+that could have been one of ours: slots run 1 to 16, so `808_kick` keeps its
+808 and `909_snare` its 909.
 
 Pads that play only part of their file — anything built with **Slice to rack**,
 or trimmed by hand afterwards — are written out as that part, not as the whole
@@ -737,8 +817,8 @@ Open a lane (click its name; right-click toggles the editor) and pick a
 | Control | What it does |
 |---------|--------------|
 | **Solo / Mute** | Focus or silence a lane. |
-| **One-shot / Retrig** | Play the whole sample ignoring gate, and choose retrigger behaviour. |
-| **Note-off (obey)** | Whether the lane respects RS5K note-off (needed for Gate/Length to shorten). |
+| **One-shot** | Play the whole sample out, ignoring Gate and Length. |
+| **Note-off (obey)** | Whether the sampler respects note-off. This is the switch that decides how a repeat behaves: on, a new hit cuts the one before it; off, the sample rings on and hits layer. Gate and Length only shorten anything when it is on. |
 | **Speed** | Lane runs at 1×, 0.5× or 2× the master step rate. |
 | **Direction** | Forward, reverse and other play orders per lane. |
 | **Echo** | Built-in repeats with adjustable rate, count and velocity mode/delta. |
@@ -753,6 +833,10 @@ because half of what a sampled groove is, is how hard it was hit.
 The pattern itself never moves. The groove is applied on the way out, so the
 knob works while it plays and turning it back to 0% leaves your grid exactly as
 it was — nothing to undo.
+
+At the top of every lane's groove list is **Global**: follow the kit's own
+groove, in the row under the lanes. That is the answer for most lanes most of
+the time, which is why it sits above the named ones.
 
 Seven grooves are built in:
 
@@ -813,6 +897,34 @@ Some things worth knowing:
   played from a mathematical one, so a `.mid` brings dynamics and a built-in
   does not.
 
+### The row under the lanes
+
+Two settings that belong to the whole kit rather than to one lane.
+
+**Swing** is the kit's own groove. Pick one and turn **Amount** up, and every
+lane set to **Global** follows it — one picker and one knob instead of sixteen.
+A kit usually swings as one thing; the named grooves in a lane's own list are
+the exceptions you make to that. The amount comes from here too, so a following
+lane's own Amount is greyed out and shows this figure rather than one it is not
+playing.
+
+**Grid** shades the empty steps in blocks, so you read step 11 instead of
+counting to it — the way a Redrum or an mDSQ does. Off is one flat shade.
+
+| Grid | Reads as |
+|------|----------|
+| **4** | The usual four beats to a bar. |
+| **3** | Triplet feels, and twelve-step patterns. |
+| **6 / 8** | Half-bar phrases and 6/8. |
+| **2 / 5 / 7** | Whatever the pattern actually is. |
+
+Only the steps a lane plays are banded — past its stop marker the cells stay
+dim, because those are not part of the cycle. Lit steps keep their lane colour:
+that contrast is doing the more important job.
+
+This one is a view setting, kept globally rather than on the kit track. It says
+how you like to read a grid, not anything about the pattern in front of you.
+
 ### Pattern pages, presets & playback
 
 - Four **pattern pages** per kit; **copy** / **paste** a whole page. They work
@@ -824,6 +936,17 @@ Some things worth knowing:
   **Host** follows REAPER's transport and tempo.
 - **Export to MIDI**: left-click exports one pattern, right-click exports all
   four (the Step-Mode cycle); a separate control does pattern vs. song export.
+  What comes out plays what you were listening to: the groove, the echoes, the
+  substeps and the probabilities are already notes, and the per-step pitch, pan,
+  volume, attack and release are written as FX parameter envelopes on the pad —
+  those live on the sampler rather than in the notes, so nothing else could
+  carry them.
+
+  Two things do not travel, and cannot. The exported item plays through the same
+  sampler the sequencer drives, so a plugin setting you change afterwards —
+  **Note-off** is the one people meet — changes how that item sounds. And a
+  note-off is not something a MIDI note can carry. If a pattern has to be
+  final, render it.
 
 ---
 
@@ -847,7 +970,7 @@ Select a lane to reveal its knob row.
 | **Vel / Pitch / Vol randomisers** | "Dice" that add controlled randomness with an amount level and a seed; re-roll for a new variation while keeping the pattern. |
 
 - Lane buttons mirror the Step page: **Solo**, **Mute**, **One-shot**,
-  **Retrig**, **Note-off**.
+  **Note-off**.
 - **Echo & Groove** opens the lane's popup, holding the echo settings and the
   same per-lane **groove** the Step page has — see *Groove* above. Each page
   keeps its own, so a Euclid lane can shuffle while the same lane on the Step

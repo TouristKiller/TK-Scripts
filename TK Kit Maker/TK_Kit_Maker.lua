@@ -1,7 +1,129 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.50
+-- @version 0.2.51
 -- @changelog:
+--   0.2.51
+--   # Export to MIDI now plays what the sequencer plays. It did not, in three
+--     different ways, and all three came down to one thing: two notes of the
+--     same pitch that touch cannot both be struck. The engine sends a note-off
+--     and then a note-on for every hit, so a repeat always re-articulates; a
+--     note rectangle that ends exactly where the next begins does not.
+--   # A gate of 100% over a length of one fills its step precisely and meets
+--     the next one, so a run of steps came out as a single sustained note.
+--   # A groove that pulls a note early made it start inside the one before it,
+--     so a swung double hit exported as one hit -- the second was there in the
+--     item and could not sound.
+--   # A one-shot lane threw away every hit after the first. Four kicks became
+--     one note running to the end of the bar: not a note that failed to sound,
+--     three that were never written. The engine plays all four.
+--   # Every exported note now ends a hair before the next of its pitch begins.
+--     The gap is a sixty-fourth of a step -- about two milliseconds at 120 --
+--     which is far under hearing and far over the rounding.
+--   # Per-step pitch in an exported pattern no longer runs away. A step at -18
+--     wrote its envelope point and a step at 0 wrote nothing, so an envelope
+--     holds its last value and every step after that one played at -18, right
+--     to the end where the single reset point sat. Steps with no offset now
+--     write their point too, which is what playback has always done.
+--   # Per-step pitch, pan, volume, attack and release are only written when the
+--     step they belong to is actually going to be struck. These are plugin
+--     parameters shared by every note a pad plays, so each write bends whatever
+--     is still ringing -- and preparing a step with no hit on it spent the tail
+--     of the note you had just heard on a value nothing was going to use. A hit
+--     now keeps its own pitch for as long as it rings, which is most of what
+--     made an exported pattern sound cleaner than the one you were listening to.
+--   # A lane running backwards or as a pendulum now prepares the right step.
+--     The look-ahead worked out the next step by counting forwards, so those two
+--     were handed the values of a step they were not about to play: wrong,
+--     rather than late. A pendulum's direction of travel is read from the step
+--     it has just left, since a step number alone cannot say which way it is
+--     going.
+--   + Per-step pan and volume, and the Euclid page's attack and release, now
+--     survive the export. They live on the sampler rather than in the notes, so
+--     an exported pattern said nothing about them at all -- you could program
+--     them, hear them, and get none of it back. All four are written as FX
+--     parameter envelopes, the way per-step pitch already was.
+--   # Attack and release were the worst of it: set on the Euclid page, applied
+--     on every step while it played, and then wiped from the sampler the moment
+--     you stopped. They did not survive the session, let alone the export.
+--   # A step back at centre writes its point too, so a pan that swung left
+--     returns rather than staying there for the rest of the bar. All of them go
+--     back to neutral after the pattern, so a rack is not left panned or turned
+--     down by a kit exported an hour ago.
+--   # The values come from the same code that sets them during playback, asked
+--     not to write. Working the numbers out a second time in the exporter is how
+--     the sound you heard and the file you got would drift apart -- the volume
+--     conversion alone is over a hundred lines of display-range probing.
+--   # An envelope and the sequencer cannot both own a parameter, and the
+--     envelope wins -- so the sequencer would have looked broken on any pad you
+--     had ever exported. Pitch already handed the parameter back and forth at
+--     play and stop; all five do now.
+--   # The export reads whether a pad's sampler obeys note-offs, which it never
+--     actually did: `a and b or true` cannot return false, so a pad that
+--     ignores note-offs answered "yes" and got gate-length notes anyway. Those
+--     lengths mean nothing while the sampler ignores them -- and start cutting
+--     samples the moment Note-off is switched on afterwards. A pad that ignores
+--     note-offs now exports notes that run to the next hit, which is what you
+--     were hearing when you exported.
+--   # Save kit takes off a slot number it put on last time, so saving a kit
+--     twice no longer gives you 010_010_Cymbal, and a sample brought in from
+--     another kit does not land as 010_013_Cymbal.
+--   # Only a number that could have been one of ours. Save kit numbers slots 1
+--     to 16, so anything above that was never a prefix and is part of the name:
+--     808_kick keeps its 808 and 909_snare its 909. That is the same test the
+--     Browser already uses in the other direction, where a leading number is
+--     read as a pad only if it falls inside the rack.
+--   - Retrig is gone from the Step and Euclid pages. The engine never read it:
+--     it sends a note-off before every note-on whatever the setting said, so
+--     the switch changed nothing you could hear -- while the export took it
+--     seriously, which is where the one-long-note came from.
+--   # Both of its meanings were already Note-off's. With Note-off on a hit cuts
+--     the one before it and restarts; with it off the sampler ignores the
+--     note-off and the sample rings on and layers. That is the switch that was
+--     doing the work all along.
+--   # Audition and playback agreed with each other even less than they agreed
+--     with the export: the click-preview honoured Retrig, the engine did not.
+--     All three now do the same thing.
+--   + Container racks, experimental: a kit as ONE track with sixteen samplers
+--     inside a single FX container, instead of sixteen tracks. Right-click a
+--     kit collection in the Kits browser for "Create Drum Rack (Container)".
+--     For AndreiMir, who asked for a way to stop a project filling up with
+--     dozens of tracks per kit.
+--   # The Step and Euclid pages drive it, it exports, and per-pad pitch, pan,
+--     volume, attack and release all work. The engine goes on the rack track
+--     itself, above the container, so there is no bus and there are no sends --
+--     everything it has to reach is already on that track.
+--   # The Kit Manager sees one too: the pads, their samples and their names,
+--     dropping a sample on a pad, and Save kit. Two things a single track
+--     cannot do are per-pad record arm and a colour per pad.
+--   # A pad blinks on the hit rather than staying lit for as long as the note
+--     lasts. That was fine while exported notes were a step long and wrong the
+--     moment they were not -- a one-shot lane writes a note that runs to the
+--     next hit, so a kick on step 1 with the next on step 9 held its pad lit for
+--     eight steps. The sequencer's own indicator has always worked off the
+--     moment of the trigger; this now matches it.
+--   # Playing an exported pattern lights the pad the note belongs to, not all
+--     sixteen. The Kit Manager asked whether anything was sounding on the pad's
+--     TRACK, which on a folder rack is the same question -- one pad per track,
+--     with a note filter in front of it. Sixteen pads on one track have no such
+--     luck. It reads the note now, and scans a track once rather than once per
+--     pad: sixteen rows over one item was the same pattern re-read sixteen
+--     times a frame.
+--   # Still experimental. Relinking a rack whose samples moved, and undo around
+--     building one, have not been gone through yet. Needs REAPER 7.
+--   # A pad is found by which plugin it is, not by where it sits. The rack
+--     writes down its pads' FX GUIDs while it is built, and the position is
+--     only a hint -- right almost always, and one read to check. Drop an FX
+--     into the container and every pad would otherwise have addressed the one
+--     next door, which reads exactly like a rack that works until it does not.
+--   # Nothing about existing racks changes. A folder rack is still a folder
+--     rack, and this is a second shape beside it rather than a replacement.
+--   # "Which sampler belongs to pad N" and "which rack am I pointing at" are
+--     each answered in one place now instead of three. An FX index inside a
+--     container is an expression over the whole chain rather than a name for a
+--     plugin -- it moves the moment anything is added to the track -- so it is
+--     worked out on use and never stored. The same is true of the container
+--     itself, which is found by its GUID.
+--
 --   0.2.50
 --   + Display grouping in the Step sequencer: the empty steps are shaded in
 --     blocks of 2 to 8, so you read step 11 instead of counting to it. Sixteen

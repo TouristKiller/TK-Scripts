@@ -127,6 +127,26 @@ function M.set_range(track, fx, start01, stop01)
   return true
 end
 
+-- The one note a pad answers to.
+--
+-- Parameters 3 and 4 are the note range, low and high, and setting both to the
+-- same value is what makes an instance a pad rather than a keyboard split. They
+-- are addressed by number rather than by name, as every other caller in this
+-- program does -- the two have never moved, and the loose name search that
+-- protects the start/end offsets is not worth the risk of matching some other
+-- range parameter here.
+--
+-- This is also what separates the pads of a container rack, where sixteen
+-- instances share one track and one MIDI stream: each takes its own note and
+-- ignores the rest.
+function M.set_note(track, fx, note)
+  if not track or not fx or fx < 0 or not r.TrackFX_SetParamNormalized then return false end
+  local n = math.max(0, math.min(127, math.floor(tonumber(note) or 0))) / 127
+  r.TrackFX_SetParamNormalized(track, fx, 3, n)
+  r.TrackFX_SetParamNormalized(track, fx, 4, n)
+  return true
+end
+
 function M.get_range(track, fx)
   local a = M.param_index(track, fx, "sample start offset", "start offs")
   local b = M.param_index(track, fx, "sample end offset", "end offs")

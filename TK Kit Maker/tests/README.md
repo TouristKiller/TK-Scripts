@@ -53,6 +53,11 @@ pip install lupa
 | `test_stale.lua` | Detecting an edited sample, and that a cache without the stamp still loads. |
 | `test_catfolder.lua` | Which name a category filter reads: the file first, the folder only when the file names nothing, and plural folders. |
 | `test_cueonly.lua` | "Cue file only": that it removes exactly what the stitcher took in, and nothing it skipped. |
+| `test_lane.lua` | What a lane resolves to, and that a container address moves when the FX chain around it does. |
+| `test_rack.lua` | Finding the rack you are pointing at: the folder walk at any nesting depth, and a container found by GUID rather than by index. |
+| `test_padnames.lua` | Pad names in a container rack: a name you typed survives the next sample, one nobody touched follows it. |
+| `test_slotprefix.lua` | Taking a slot number off a name before Save kit adds a fresh one, without eating the 808 in 808_kick. |
+| `test_buildcontainer.lua` | Building a container rack, and that it refuses when a pad lands on the track instead of inside the container. |
 
 ## Why these two extra checks
 

@@ -8,6 +8,9 @@ local Naming = require("core.naming")
 local Store = require("core.browser_store")
 local Relink = require("core.relink")
 local RS5K = require("core.rs5k")
+local Rack = require("core.rack")
+local Lane = require("core.lane")
+local Pads = require("core.padnames")
 
 local M = {}
 
@@ -300,6 +303,25 @@ local function flash_pads_from_sequencer_triggers(manager, seq_state, parent_gui
   end
 end
 
+-- Lights a pad while a note that belongs to it is sounding in an item on its
+-- track, so playing an exported pattern shows the same thing the sequencer does.
+--
+-- Which note belongs to which pad only became a question with container racks.
+-- On a folder rack each pad has a track of its own and a note filter in front of
+-- it, so any note playing on that track is that pad by construction. Sixteen
+-- pads sharing one track have no such luck: the first version asked "is anything
+-- sounding here", and every note lit all sixteen.
+--
+-- A pad blinks on the HIT, not for as long as the note lasts. It used to light
+-- while the note was sounding, which was fine when exported notes were a step
+-- long and wrong as soon as they were not: a one-shot lane exports a note that
+-- runs to the next hit, so a kick on step 1 with the next on step 9 held its pad
+-- lit for eight steps. The sequencer's own indicator has always worked off the
+-- moment of the trigger, and this now matches it.
+--
+-- Scanned once per TRACK rather than once per row. Sixteen container pads are
+-- sixteen rows over one track and one item, so the old shape re-read every note
+-- in the pattern sixteen times a frame.
 local function flash_pads_from_playing_items(manager, rows, solo_map, any_solo)
   if not manager or type(rows) ~= "table" then return end
   local play_state = math.floor(tonumber((r.GetPlayState and r.GetPlayState()) or 0) or 0)
@@ -307,48 +329,74 @@ local function flash_pads_from_playing_items(manager, rows, solo_map, any_solo)
   if not r.GetPlayPosition or not r.CountTrackMediaItems or not r.GetTrackMediaItem then return end
   if not r.GetMediaItemInfo_Value or not r.GetActiveTake or not r.TakeIsMIDI then return end
   if not r.MIDI_GetPPQPosFromProjTime or not r.MIDI_CountEvts or not r.MIDI_GetNote then return end
+  if not r.MIDI_GetProjTimeFromPPQPos then return end
+
+  -- How recently a note must have started to count as a hit. Wide enough that a
+  -- slow frame cannot step over it, short enough to read as a blink.
+  local HIT_WINDOW = 0.12
 
   local now = now_seconds()
   local play_pos = tonumber(r.GetPlayPosition()) or 0
   manager.pad_click_flash = manager.pad_click_flash or {}
+
+  -- track -> { any = bool, [pitch] = true }
+  local sounding = {}
+
+  local function scan(tr)
+    local found = sounding[tr]
+    if found then return found end
+    found = { any = false }
+    sounding[tr] = found
+
+    local item_count = r.CountTrackMediaItems(tr)
+    for item_idx = 0, item_count - 1 do
+      local item = r.GetTrackMediaItem(tr, item_idx)
+      if item then
+        local item_pos = tonumber(r.GetMediaItemInfo_Value(item, "D_POSITION") or 0) or 0
+        local item_len = tonumber(r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0) or 0
+        if play_pos >= item_pos and play_pos < (item_pos + item_len) then
+          local take = r.GetActiveTake(item)
+          if take and r.TakeIsMIDI(take) then
+            local ppq = tonumber(r.MIDI_GetPPQPosFromProjTime(take, play_pos) or 0) or 0
+            local _, note_count = r.MIDI_CountEvts(take)
+            for note_idx = 0, (note_count or 0) - 1 do
+              local ok, _, muted, start_ppq, _, _, pitch = r.MIDI_GetNote(take, note_idx)
+              if not ok then break end
+              local st = tonumber(start_ppq or 0) or 0
+              -- Notes come back in start order, so nothing after this one has
+              -- begun yet.
+              if st > ppq then break end
+              if not muted then
+                local st_time = tonumber(r.MIDI_GetProjTimeFromPPQPos(take, st)) or nil
+                local age = st_time and (play_pos - st_time) or nil
+                if age and age >= 0 and age <= HIT_WINDOW then
+                  found.any = true
+                  local p = math.floor(tonumber(pitch) or -1)
+                  if p >= 0 then found[p] = true end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+    return found
+  end
 
   for i = 1, #rows do
     local row = rows[i]
     local slot = row and (row.slot or row.grid_slot) or nil
     local tr = row and row.track or nil
     if slot and slot >= 1 and slot <= GRID_SLOTS and tr and lane_allowed_by_solo(solo_map, any_solo, slot) then
-      local item_count = r.CountTrackMediaItems(tr)
-      local lane_active = false
-      for item_idx = 0, item_count - 1 do
-        local item = r.GetTrackMediaItem(tr, item_idx)
-        if item then
-          local item_pos = tonumber(r.GetMediaItemInfo_Value(item, "D_POSITION") or 0) or 0
-          local item_len = tonumber(r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0) or 0
-          if play_pos >= item_pos and play_pos < (item_pos + item_len) then
-            local take = r.GetActiveTake(item)
-            if take and r.TakeIsMIDI(take) then
-              local ppq = tonumber(r.MIDI_GetPPQPosFromProjTime(take, play_pos) or 0) or 0
-              local _, note_count = r.MIDI_CountEvts(take)
-              for note_idx = 0, (note_count or 0) - 1 do
-                local ok, _, muted, start_ppq, end_ppq = r.MIDI_GetNote(take, note_idx)
-                if ok then
-                  local st = tonumber(start_ppq or 0) or 0
-                  if st > ppq then
-                    break
-                  end
-                  local en = tonumber(end_ppq or 0) or st
-                  if (not muted) and ppq >= st and ppq < en then
-                    lane_active = true
-                    break
-                  end
-                end
-              end
-            end
-          end
-        end
-        if lane_active then break end
+      local found = scan(tr)
+      local lane_active
+      if row.container then
+        -- The pad answers to one note, so that is the only one that lights it.
+        local note = row.note and math.floor(row.note) or nil
+        lane_active = (note ~= nil) and found[note] == true
+      else
+        lane_active = found.any
       end
-
       if lane_active then
         manager.pad_click_flash[slot] = math.max(manager.pad_click_flash[slot] or 0, now + 0.08)
       end
@@ -510,7 +558,7 @@ end
 local function play_track_audition(current, manager, note, obey_note_off, parent, lane_tracks)
   if not current or not current.track then return false end
   local midi_note = math.max(0, math.min(127, math.floor(tonumber(note) or 0)))
-  if track_has_non_rs5k_instrument(current.track) then
+  if not current.container and track_has_non_rs5k_instrument(current.track) then
     apply_synth_pad_setup(current.track, midi_note)
   end
   local ok = direct_midi_note_on(midi_note, 127)
@@ -912,7 +960,7 @@ local function set_rack_arm_state(parent, rows, armed, midi_value)
   r.SetMediaTrackInfo_Value(target, "I_RECMON", monitor_value)
   r.SetMediaTrackInfo_Value(target, "I_RECMODE", 0)
   for _, row in ipairs(rows or {}) do
-    if row.track then
+    if row.track and not row.container then
       r.SetMediaTrackInfo_Value(row.track, "I_RECARM", 0)
       r.SetMediaTrackInfo_Value(row.track, "I_RECMON", 0)
       r.SetMediaTrackInfo_Value(row.track, "I_RECMODE", 0)
@@ -1095,6 +1143,27 @@ local function trimmed_range(row)
   return start01, stop01
 end
 
+-- Takes off a slot number this kit put on last time, so saving a kit twice does
+-- not give you 010_010_Cymbal, and a sample dragged in from another kit does not
+-- arrive as 010_013_Cymbal.
+--
+-- Only a number that could be one of ours. Save kit writes "%03d_" with a slot
+-- from 1 to GRID_SLOTS, so anything outside that range was never a prefix and is
+-- part of the name: 808_kick keeps its 808, 909_snare its 909, 101_bass its 101.
+--
+-- This is the writing half of a rule that already exists for reading.
+-- create_rs5k_drum_rack_from_collection reads a leading number off a filename to
+-- decide which pad a sample belongs on, and throws it away when it falls outside
+-- the rack's slots -- which is why building a rack from a folder of 808 samples
+-- does not try to put one on pad 808. Same test, the other way round.
+local function strip_slot_prefix(name)
+  local digits, rest = tostring(name or ""):match("^(%d+)_(.*)$")
+  if not digits or rest == "" then return name end
+  local n = tonumber(digits)
+  if not n or n < 1 or n > GRID_SLOTS then return name end
+  return rest
+end
+
 local function save_current_kit(app, parent, rows)
   local state = app.rs5k_manager
   if not state or not parent then return false end
@@ -1121,7 +1190,7 @@ local function save_current_kit(app, parent, rows)
 
   for _, row in ipairs(rows or {}) do
     if row.sample_path and row.sample_path ~= "" then
-      local base = row.track_name ~= "" and row.track_name or file_stem(row.sample_path)
+      local base = strip_slot_prefix(row.track_name ~= "" and row.track_name or file_stem(row.sample_path))
       local prefix = row.grid_slot and string.format("%03d_", row.grid_slot) or ""
       local ext = file_ext(row.sample_path)
       local filename = prefix .. safe_filename(base) .. ext
@@ -1489,7 +1558,7 @@ local function apply_rack_colors(parent, rows, base_color, gradient)
   end
   local count = #rows
   for i, row in ipairs(rows or {}) do
-    if row and row.track then
+    if row and row.track and not row.container then
       local child_color = opaque_base
       if gradient and count > 1 then
         local t = (i - 1) / (count - 1)
@@ -1535,21 +1604,48 @@ local function each_child_track(parent, fn)
 end
 
 get_selected_rack_parent_track = function()
-  local selected = r.GetSelectedTrack(0, 0)
-  if not selected then return nil end
-  local current = selected
-  while current do
-    if (r.GetMediaTrackInfo_Value(current, "I_FOLDERDEPTH") or 0) > 0 then
-      return current
-    end
-    if not r.GetParentTrack then break end
-    current = r.GetParentTrack(current)
-  end
-  return nil
+  return Rack.selected_host()
 end
 
 collect_rows = function(parent)
   local rows = {}
+
+  -- A container rack has no child tracks: its pads are FX inside one container
+  -- on the rack track itself. The rows come out in the same shape, so
+  -- everything downstream that reads row.track and row.fx is untouched.
+  local desc = Rack.of(parent)
+  if desc and desc.style == "container" then
+    local order = Rack.pad_order(desc.track)
+    local names = Rack.pad_names(desc.track, desc.container)
+    local lanes = Lane.container_rack(desc.track, desc.guid, order,
+      Lane.container_count(desc.track, desc.container))
+    for i = 1, #lanes do
+      local fx = Lane.fx(lanes, i)
+      local note = fx >= 0 and get_rs5k_note(desc.track, fx) or nil
+      local slot = note and note >= DEFAULT_BASE_NOTE and ((note - DEFAULT_BASE_NOTE) + 1) or nil
+      rows[#rows + 1] = {
+        track = desc.track,
+        fx = fx,
+        -- A container pad is told apart by its own note range, so there is no
+        -- note filter in front of it and nothing to read one from.
+        note_filter_fx = -1,
+        note = note,
+        slot = slot,
+        child_pos = i,
+        track_idx = i,
+        -- The pad's own name, not the track's -- all sixteen share one track.
+        track_name = (names[i] and names[i] ~= "") and names[i]
+          or (fx >= 0 and file_stem(get_rs5k_file(desc.track, fx) or "") or "")
+          or "",
+        sample_path = fx >= 0 and get_rs5k_file(desc.track, fx) or nil,
+        has_rs5k = fx >= 0,
+        pad_guid = order[i],
+        container = true,
+      }
+    end
+    return rows
+  end
+
   each_child_track(parent, function(tr, track_idx, child_pos)
     local fx = find_rs5k_fx(tr)
     local note_filter_fx = find_note_filter_fx(tr)
@@ -1620,15 +1716,32 @@ end
 local function sync_rack_note_filters(rows)
   for i = 1, #(rows or {}) do
     local row = rows[i]
-    if row and row.track and row.note and track_has_non_rs5k_instrument(row.track) then
+    -- Never for a container rack: that track is the rack, and this strips
+    -- every RS5K off the track it is given. A pad there is a plugin inside a
+    -- container, told apart by its own note range, so there is no note filter
+    -- to put in front of it and nothing here that applies.
+    if row and row.track and row.note and not row.container
+        and track_has_non_rs5k_instrument(row.track) then
       apply_synth_pad_setup(row.track, row.note)
     end
   end
   return rows
 end
 
+-- A container rack has no bus and wants none: its pads are FX on the rack track
+-- itself, so the engine sits on that track above the container and its MIDI
+-- reaches them down the chain. There is nothing to route to.
+--
+-- Guarded here rather than at the call sites because this runs every frame the
+-- Kit Manager is open, with create_if_missing set. On a container rack that was
+-- building a bus track, sixteen sends to one track, and -- because creating a
+-- bus makes its parent a folder -- quietly turning the rack track into a folder
+-- as well. The sequencer then had two engines to arbitrate between and reported
+-- itself as not running.
 sync_manager_bus_routing = function(parent, lane_tracks, create_if_missing)
   if not parent then return nil, 0 end
+  local desc = Rack.of(parent)
+  if desc and desc.style == "container" then return nil, 0 end
   local bus = SeqBus.find_bus(parent)
   if not bus and create_if_missing == true then
     bus = SeqBus.create_bus(parent)
@@ -1636,6 +1749,32 @@ sync_manager_bus_routing = function(parent, lane_tracks, create_if_missing)
   if not bus then return nil, 0 end
   local sends = SeqBus.ensure_bus_sends(bus, lane_tracks or {})
   return bus, sends
+end
+
+-- Puts a sample on a pad and names it.
+--
+-- A pad on a child track has its own sampler to search for and its own track
+-- name to write. A pad inside a container has neither: sixteen share one track,
+-- so the row has to say which sampler, and the name goes in the pad blob.
+-- Three callers needed this and two of them were doing the track version to a
+-- container rack -- loading into whichever sampler came first and renaming the
+-- whole rack.
+local function load_sample_into_row(row, sample_path, note)
+  if not row or not row.track or not sample_path or sample_path == "" then return false end
+
+  if row.container then
+    if not row.fx or row.fx < 0 then return false end
+    local ok = r.TrackFX_SetNamedConfigParm(row.track, row.fx, "FILE0", sample_path)
+    if not ok then return false end
+    r.TrackFX_SetNamedConfigParm(row.track, row.fx, "DONE", "")
+    if note ~= nil then RS5K.set_note(row.track, row.fx, note) end
+    if row.pad_guid then Pads.suggest(row.track, row.pad_guid, file_stem(sample_path)) end
+    return true
+  end
+
+  if not load_sample_into_rs5k(row.track, sample_path, note) then return false end
+  r.GetSetMediaTrackInfo_String(row.track, "P_NAME", file_leaf(sample_path), true)
+  return true
 end
 
 local function selected_row(rows, slot)
@@ -1659,17 +1798,37 @@ local function load_sample_to_pad(parent, slot, sample_path)
     return false
   end
 
-  local note = DEFAULT_BASE_NOTE + (slot_n - 1)
-  local ok = load_sample_into_rs5k(row.track, sample_path, note)
-  if ok then
-    r.GetSetMediaTrackInfo_String(row.track, "P_NAME", file_leaf(sample_path), true)
-  end
-  return ok
+  return load_sample_into_row(row, sample_path, DEFAULT_BASE_NOTE + (slot_n - 1))
 end
 
 local function rack_prefix_map(app)
   app.browser.relink_prefixes = app.browser.relink_prefixes or {}
   return app.browser.relink_prefixes
+end
+
+-- Where the pad this item belongs to is NOW.
+--
+-- A relink item outlives the frame that made it: the modal stays open while the
+-- user browses for a folder, and a stored fx index is only true of the chain it
+-- was worked out in. Inside a container that is an address rather than a handle,
+-- so it is re-derived from the pad's own GUID here. Nothing else in this feature
+-- keeps one either.
+local function relink_live_fx(it)
+  if not it or not it.track then return -1 end
+  if not it.pad_guid or it.pad_guid == "" then return it.fx or -1 end
+
+  local desc = Rack.of(it.track)
+  if not desc or desc.style ~= "container" then return it.fx or -1 end
+  local count = Lane.container_count(desc.track, desc.container)
+  local lanes = Lane.container_rack(desc.track, desc.guid, Rack.pad_order(desc.track), count)
+  for i = 1, count do
+    local fx = Lane.fx(lanes, i)
+    if fx >= 0 and r.TrackFX_GetFXGUID
+        and r.TrackFX_GetFXGUID(desc.track, fx) == it.pad_guid then
+      return fx
+    end
+  end
+  return -1
 end
 
 local function relink_set_file(track, fx, new_path)
@@ -1709,6 +1868,7 @@ local function scan_rack_missing(app, parent, auto_apply)
         items[#items + 1] = {
           track = row.track,
           fx = row.fx,
+          pad_guid = row.pad_guid,
           note = row.note,
           old_path = path,
           basename = Relink.basename(path),
@@ -1735,7 +1895,7 @@ local function relink_try_folder(app, folder)
   for _, it in ipairs(rl.items) do
     if not it.resolved then
       local hit = Relink.search_recursive(folder, it.basename, 6000)
-      if hit and relink_set_file(it.track, it.fx, hit) then
+      if hit and relink_set_file(it.track, relink_live_fx(it), hit) then
         it.resolved = true
         it.new_path = hit
         found = found + 1
@@ -1747,7 +1907,7 @@ local function relink_try_folder(app, folder)
   for _, it in ipairs(rl.items) do
     if not it.resolved then
       local remapped = Relink.apply_prefix_map(it.old_path, prefix_map)
-      if remapped and relink_set_file(it.track, it.fx, remapped) then
+      if remapped and relink_set_file(it.track, relink_live_fx(it), remapped) then
         it.resolved = true
         it.new_path = remapped
         found = found + 1
@@ -1772,7 +1932,7 @@ local function relink_item_browse(app, it)
   local start = rl.last_search_dir or Relink.dirname(it.old_path)
   local pick = Dialogs.browse_file("Locate " .. it.basename, start, "", "source")
   if pick and Relink.file_exists(pick) then
-    if relink_set_file(it.track, it.fx, pick) then
+    if relink_set_file(it.track, relink_live_fx(it), pick) then
       it.resolved = true
       it.new_path = pick
       rl.last_search_dir = Relink.dirname(pick)
@@ -2446,9 +2606,7 @@ function M.draw(app)
       local transport_max_y = transport_min_y + transport_h
       local mx, my = global_mouse_pos(ctx)
       if state.drag_sample_path and state.drag_release_seen and current and current.track and point_in_rect(mx, my, transport_min_x, transport_min_y, transport_max_x, transport_max_y) then
-        if load_sample_into_rs5k(current.track, state.drag_sample_path, current.note or (DEFAULT_BASE_NOTE + ((current.grid_slot or 1) - 1))) then
-          local sample_name = file_leaf(state.drag_sample_path)
-          r.GetSetMediaTrackInfo_String(current.track, "P_NAME", sample_name, true)
+        if load_sample_into_row(current, state.drag_sample_path, current.note or (DEFAULT_BASE_NOTE + ((current.grid_slot or 1) - 1))) then
           state.drag_sample_path = nil
           state.drag_release_seen = false
           save(app)
@@ -2458,9 +2616,7 @@ function M.draw(app)
         if r.ImGui_BeginDragDropTarget(ctx) then
           local payload = accept_dropped_sample_path(ctx)
           if payload and payload ~= "" then
-            if load_sample_into_rs5k(current.track, payload, current.note or (DEFAULT_BASE_NOTE + ((current.grid_slot or 1) - 1))) then
-              local sample_name = file_leaf(payload)
-              r.GetSetMediaTrackInfo_String(current.track, "P_NAME", sample_name, true)
+            if load_sample_into_row(current, payload, current.note or (DEFAULT_BASE_NOTE + ((current.grid_slot or 1) - 1))) then
               save(app)
             end
           end
