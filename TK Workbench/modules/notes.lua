@@ -967,6 +967,11 @@ local function remove_block(index)
     state.blocks[1].font_family = DEFAULT_FONT_FAMILY
     state.blocks[1].list_mode = "none"
     state.blocks[1].checkbox_lines = {}
+    -- Drawings and alignment belong to the note's content, so they go with it.
+    -- Leaving the strokes behind would clear the text and keep the doodle on top
+    -- of the empty note.
+    state.blocks[1].align = "left"
+    state.blocks[1].strokes = {}
     clear_block_images(state.blocks[1])
     mark_dirty(state.blocks[1])
     return
@@ -998,21 +1003,67 @@ local function context_button(ctx, app, settings, id, label, active, enabled, wi
   if enabled == false and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
 end
 
+local CONTEXT_ITEMS = {
+  { id = "auto", label = "Auto" },
+  { id = "global", label = "Global" },
+  { id = "project", label = "Project" },
+  { id = "track", label = "Track" },
+  { id = "item", label = "Item" },
+  { id = "region", label = "Region" },
+}
+
 local function draw_context_bar(app, settings, info, width)
   local ctx = app.ctx
   local gap = UIScale.gap(4)
-  local button_w = math.max(UIScale.round(48), ((width or UIScale.round(320)) - gap * 5) / 6)
-  context_button(ctx, app, settings, "auto", "Auto", settings.auto_context == true, true, button_w)
-  r.ImGui_SameLine(ctx, 0, gap)
-  context_button(ctx, app, settings, "global", "Global", settings.auto_context ~= true and settings.active_context == "global", true, button_w)
-  r.ImGui_SameLine(ctx, 0, gap)
-  context_button(ctx, app, settings, "project", "Project", info.kind == "project", true, button_w)
-  r.ImGui_SameLine(ctx, 0, gap)
-  context_button(ctx, app, settings, "track", "Track", info.kind == "track", true, button_w)
-  r.ImGui_SameLine(ctx, 0, gap)
-  context_button(ctx, app, settings, "item", "Item", info.kind == "item", r.BR_GetMediaItemGUID ~= nil, button_w)
-  r.ImGui_SameLine(ctx, 0, gap)
-  context_button(ctx, app, settings, "region", "Region", info.kind == "region", r.GetLastMarkerAndCurRegion ~= nil, button_w)
+  local panel_w = width or UIScale.round(320)
+
+  -- How narrow a button may get is decided by the longest label, measured rather
+  -- than assumed so it still holds at another font size or UI scale. The old
+  -- floor was a flat 48px, which six buttons could not honour below a 308px
+  -- panel: they simply carried on past the edge.
+  local label_w = 0
+  for _, item in ipairs(CONTEXT_ITEMS) do
+    local w = r.ImGui_CalcTextSize and r.ImGui_CalcTextSize(ctx, item.label) or (#item.label * UIScale.round(7))
+    if (w or 0) > label_w then label_w = w end
+  end
+  local pad = UIScale.round(8)
+  if r.ImGui_GetStyleVar and r.ImGui_StyleVar_FramePadding then
+    local px = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_FramePadding())
+    if px and px > 0 then pad = px end
+  end
+  local min_button = label_w + pad * 2 + UIScale.round(2)
+
+  -- As many as fit on a row, the rest wrap onto the next. A notes panel has
+  -- vertical room going spare and no horizontal room at all, and switching
+  -- context is the thing you do most here - so wrapping beats hiding them
+  -- behind a menu, which would cost a click every time.
+  local columns = math.floor((panel_w + gap) / (min_button + gap))
+  columns = math.max(1, math.min(#CONTEXT_ITEMS, columns))
+  -- Spread evenly over however many rows that takes. Fitting as many as possible
+  -- on the first row would leave a 5 and a 1, which reads as something broken
+  -- rather than as a deliberate second row.
+  local rows = math.ceil(#CONTEXT_ITEMS / columns)
+  columns = math.ceil(#CONTEXT_ITEMS / rows)
+  local button_w = math.max(UIScale.round(24), (panel_w - gap * (columns - 1)) / columns)
+
+  local active_for = {
+    auto = settings.auto_context == true,
+    global = settings.auto_context ~= true and settings.active_context == "global",
+    project = info.kind == "project",
+    track = info.kind == "track",
+    item = info.kind == "item",
+    region = info.kind == "region",
+  }
+  local enabled_for = {
+    item = r.BR_GetMediaItemGUID ~= nil,
+    region = r.GetLastMarkerAndCurRegion ~= nil,
+  }
+  for index, item in ipairs(CONTEXT_ITEMS) do
+    -- every column but the first continues the row; the first starts a new one
+    if index > 1 and (index - 1) % columns ~= 0 then r.ImGui_SameLine(ctx, 0, gap) end
+    context_button(ctx, app, settings, item.id, item.label, active_for[item.id],
+      enabled_for[item.id] ~= false, button_w)
+  end
 end
 
 local function info_text(settings, info)
@@ -2650,40 +2701,87 @@ local function draw_block(app, settings, block, index, width)
   local icon_button_w = UIScale.round(22)
   if r.ImGui_Button(ctx, arrow, icon_button_w, 0) then block.collapsed = not block.collapsed; mark_dirty(block) end
   r.ImGui_SameLine(ctx)
-  r.ImGui_PushItemWidth(ctx, math.max(UIScale.round(80), (width or UIScale.round(320)) - UIScale.round(154)))
+  -- Room for the buttons on this row, counted rather than guessed. This used to
+  -- be a fixed 154px that matched the five buttons of the day, so adding the
+  -- drawing button pushed the last one off the edge of the panel.
+  local header_buttons = 6                        -- collapse, C, A, pencil, D, x
+  local spacing = UIScale.round(8)
+  if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
+    local sx = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+    if sx and sx > 0 then spacing = sx end
+  end
+  local buttons_w = header_buttons * icon_button_w + header_buttons * spacing
+  -- Below this the title field would be too small to read what is in it, so the
+  -- buttons fold into one menu instead of running off the edge of the panel.
+  local title_min = UIScale.round(90)
+  local panel_w = width or UIScale.round(320)
+  local overflow = (panel_w - buttons_w) < title_min
+  local collapsed_w = 2 * icon_button_w + 2 * spacing   -- the arrow and the menu
+  r.ImGui_PushItemWidth(ctx, math.max(UIScale.round(40),
+    panel_w - (overflow and collapsed_w or buttons_w)))
   local style_count = push_note_style(ctx, note_color, text_color)
   local title_changed, title = r.ImGui_InputText(ctx, "##title", block.title or "Notes")
   pop_note_style(ctx, style_count)
   if title_changed then block.title = title; mark_dirty(block) end
   r.ImGui_PopItemWidth(ctx)
-  r.ImGui_SameLine(ctx)
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), note_color)
-  if r.ImGui_Button(ctx, "C", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##note_colors") end
-  r.ImGui_PopStyleColor(ctx)
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Colors") end
-  draw_color_popup(ctx, block, state.context_info)
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "A", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##font_size") end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, normalize_font_family(block.font_family) .. " | " .. tostring(normalize_font_size(block.font_size)) .. " px") end
-  draw_font_size_popup(ctx, block)
-  r.ImGui_SameLine(ctx)
-  -- Freehand drawing, the same feature TK Notes has. The mode belongs to the
-  -- panel rather than the block, so the button reads "on" on every note.
+
   local drawing_on = state.drawing_enabled or state.eraser_enabled
-  if drawing_on then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.accent) end
-  if r.ImGui_Button(ctx, "\xE2\x9C\x8E", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##note_draw") end
-  if drawing_on then r.ImGui_PopStyleColor(ctx, 1) end
-  if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, state.eraser_enabled and "Eraser on -- drag over a line to rub it out"
-      or (state.drawing_enabled and "Drawing on -- drag to draw" or "Drawing"))
+  local drawing_tip = state.eraser_enabled and "Eraser on -- drag over a line to rub it out"
+    or (state.drawing_enabled and "Drawing on -- drag to draw" or "Drawing")
+  local delete_label = #state.blocks <= 1 and "Clear" or "Delete"
+  -- A popup cannot be opened from inside another one, so the menu records what
+  -- was picked and it is acted on below, once the menu has closed.
+  local want_colors, want_font, want_draw, want_duplicate, want_delete = false, false, false, false, false
+
+  if overflow then
+    r.ImGui_SameLine(ctx)
+    if drawing_on then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.accent) end
+    if r.ImGui_Button(ctx, "...", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##note_overflow") end
+    if drawing_on then r.ImGui_PopStyleColor(ctx, 1) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "More") end
+    if r.ImGui_BeginPopup(ctx, "##note_overflow") then
+      if r.ImGui_MenuItem(ctx, "Colors") then want_colors = true end
+      if r.ImGui_MenuItem(ctx, "Font") then want_font = true end
+      if r.ImGui_MenuItem(ctx, drawing_on and "Drawing (on)" or "Drawing") then want_draw = true end
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, "Duplicate") then want_duplicate = true end
+      if r.ImGui_MenuItem(ctx, delete_label) then want_delete = true end
+      r.ImGui_EndPopup(ctx)
+    end
+  else
+    r.ImGui_SameLine(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), note_color)
+    if r.ImGui_Button(ctx, "C", icon_button_w, 0) then want_colors = true end
+    r.ImGui_PopStyleColor(ctx)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Colors") end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "A", icon_button_w, 0) then want_font = true end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, normalize_font_family(block.font_family) .. " | " .. tostring(normalize_font_size(block.font_size)) .. " px") end
+    r.ImGui_SameLine(ctx)
+    -- Freehand drawing, the same feature TK Notes has. The mode belongs to the
+    -- panel rather than the block, so the button reads "on" on every note.
+    if drawing_on then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.accent) end
+    if r.ImGui_Button(ctx, "\xE2\x9C\x8E", icon_button_w, 0) then want_draw = true end
+    if drawing_on then r.ImGui_PopStyleColor(ctx, 1) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, drawing_tip) end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "D", icon_button_w, 0) then want_duplicate = true end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Duplicate") end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "x", icon_button_w, 0) then want_delete = true end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, delete_label) end
   end
+
+  if want_colors then r.ImGui_OpenPopup(ctx, "##note_colors") end
+  if want_font then r.ImGui_OpenPopup(ctx, "##font_size") end
+  if want_draw then r.ImGui_OpenPopup(ctx, "##note_draw") end
+  -- Drawn whichever layout is in use, so a popup opened from the menu behaves
+  -- exactly as it does from the button.
+  draw_color_popup(ctx, block, state.context_info)
+  draw_font_size_popup(ctx, block)
   draw_drawing_popup(ctx, block)
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "D", icon_button_w, 0) then duplicate_block(index) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Duplicate") end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "x", icon_button_w, 0) then remove_block(index); r.ImGui_PopID(ctx); return end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, #state.blocks <= 1 and "Clear" or "Delete") end
+  if want_duplicate then duplicate_block(index) end
+  if want_delete then remove_block(index); r.ImGui_PopID(ctx); return end
   if not block.collapsed then
     draw_body_editor(ctx, block, width or UIScale.round(320), UIScale.round(block.height or settings.block_height), note_color, text_color)
   end
@@ -2801,7 +2899,14 @@ function M.draw(app)
   local child_visible = r.ImGui_BeginChild(ctx, "##notes_blocks", 0, list_h, 0)
   if child_visible then
     if info.can_edit then
-      for index, block in ipairs(state.blocks) do draw_block(app, settings, block, index, math.max(UIScale.round(120), (width or UIScale.round(320)) - UIScale.round(4))) end
+      -- Measured in here, not handed down from outside. Once the list is long
+      -- enough to scroll, the scrollbar takes a slice of this child that the
+      -- outer measurement knows nothing about - and how wide that slice is
+      -- depends on the theme and on the "Hide scrollbars" setting, which sets it
+      -- to zero. Asking for what is left covers every one of those cases.
+      local list_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
+      list_w = math.max(UIScale.round(120), (list_w or width or UIScale.round(320)) - UIScale.round(4))
+      for index, block in ipairs(state.blocks) do draw_block(app, settings, block, index, list_w) end
     else
       r.ImGui_TextColored(ctx, Theme.colors.warning, info.label or "Context unavailable")
     end

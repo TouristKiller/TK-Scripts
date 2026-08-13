@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.86
+-- @version 0.6.87
 -- @changelog:
+-- v0.6.87
+--   + Notes: The delete button is back on screen. The drawing button added in 0.6.85 made six buttons on a note's header row, but the space kept for them was a fixed figure that fitted five - so the last one, delete, was pushed off the edge. The width is counted from the buttons that are actually there now, rather than being a number that has to be remembered
+--   + Notes: When the panel is too narrow for the full row, the buttons fold into a single "..." menu instead of running off the edge. Colors, Font, Drawing, Duplicate and Delete all stay reachable at any width, and the menu button lights up while drawing is on, exactly as the pencil does
+--   + Notes: The context row - Auto, Global, Project, Track, Item, Region - wraps onto a second or third line instead of running past the edge of a narrow panel. It used to divide the width by six but never below 48px a button, so under a 308px panel the row simply carried on past the side. How narrow a button may get is now measured from the longest label, so it holds at any font size or UI scale, and the rows are spread evenly rather than leaving a five and a one
+--   + Notes: Notes are sized to the room they actually have. The width was measured outside the scrolling list and handed in, so once there were enough notes to scroll, every one of them was a scrollbar too wide - and how wide that is depends on the theme and on the "Hide scrollbars" setting, which makes it nothing at all. The width is now measured inside the list, which is right in every one of those cases
+--   + Notes: Clearing the last note now also removes its drawing and resets its alignment. They were left behind, so clearing a note wiped the text but kept the doodle sitting on top of the empty page
 -- v0.6.86
 --   + Project Browser: Russian and other non-Latin project names are drawn correctly. A name that did not fit on one line was split at a byte rather than at a letter, and since Cyrillic takes two bytes per letter the split landed inside one - the halves were drawn as a placeholder box. It appeared to move when the window was resized because the split point moves with the width. Latin names were never affected, which is why it only showed up on Russian ones. The break also quietly swallowed a character, so a name lost its underscore or hyphen at the join. Reported by vik-tan
 --   + Project Browser: The single letter shown on a tile that has no artwork - the one that flashes past while scrolling before the cover loads - was the first byte of the name rather than the first letter, so it too came out as a placeholder box on a Cyrillic name. Reported by vik-tan
@@ -646,7 +652,8 @@ local module_names = {
   "arrange_bg_presets",
   "calculator",
   "lyrics",
-  "xy_pad"
+  "xy_pad",
+  "render_hub"
 }
 
 local theme_color_fields = {
@@ -1340,6 +1347,13 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
       local grid_x = L(15 + index * 11)
       r.ImGui_DrawList_AddLine(draw_list, grid_x, T(12), grid_x, B(12), color, W(1))
     end
+  elseif id == "render_hub" then
+    r.ImGui_DrawList_AddLine(draw_list, cx, T(10), cx, MY(4), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-7), MY(-3), cx, MY(4), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(7), MY(-3), cx, MY(4), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(10), B(17), L(10), B(10), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(10), B(10), R(10), B(10), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, R(10), B(17), R(10), B(10), color, W(2))
   elseif id == "calculator" then
     r.ImGui_DrawList_AddRect(draw_list, L(8), T(6), R(8), B(6), color, RD(3), 0, W(2))
     r.ImGui_DrawList_AddRect(draw_list, L(13), T(11), R(13), T(22), color, RD(2), 0, W(1))
