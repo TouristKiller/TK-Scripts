@@ -724,12 +724,20 @@ v0.2.51
         </version>
     </reapack>
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="0.9.98" author="TouristKiller" time="2026-08-05T23:30:00Z">
+        <version name="0.9.99" author="TouristKiller" time="2026-08-13T23:55:00Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
+                v0.9.99:
+                + New: a Wave column in the file list, off by default, switched on with the other columns under Settings. It shows the waveform of every audio file in the list rather than only the one loaded in the oscilloscope, so a folder can be read at a glance - where the hits are, what is a one-shot and what is a loop, which take is the loud one - without auditioning it file by file
+                + Wave: minima and maxima are drawn apart rather than folded into one absolute value, so a waveform that is not symmetrical around zero does not look as though it is. A kick that pulls hard one way reads as a kick, and near-silence stays a thin line instead of disappearing
+                + Wave: peaks are read from a file once and kept in a cache of their own under CACHE/peaks, about 8 KB per file. Coming back to a folder, or reopening the browser a day later, draws from that cache instead of asking REAPER again - which is the expensive part, since it means opening every file. The cache is stored at a fixed resolution and resampled for whatever width the column has, so dragging the column wider costs nothing at all
+                + Wave: a cached file is discarded when the file it came from changes size, so a re-rendered sample is read afresh rather than showing what it used to look like
+                + Wave: nothing loads while the list is moving. Loading starts a moment after scrolling stops, a few files per frame, so a folder fills in over a second or two instead of stalling on the frame that first shows it
+                + Wave: files REAPER has no peaks for yet - anything freshly recorded, rendered or copied in - are built rather than skipped. That build is carried across frames on a millisecond budget, one file at a time, so it fills in by itself instead of only appearing once the file happens to be played. Building peaks writes REAPER's usual .reapeaks files next to the audio; the alternate path under Preferences, Media, Peaks/Waveforms applies to these as it does to the rest of REAPER
+
                 v0.9.98:
                 + New: Auto Key. Pick a target key on a small keyboard and everything you preview or insert is transposed onto it, so a library in mixed keys lines up with the track. The current key sits in the bottom right of the oscilloscope - click it to open the options
                 + Auto Key: clicking a key on the keyboard auditions the selected sample in that key straight away, and switches Auto Key on rather than leaving the click silent. If something is already playing the pitch moves without restarting, so you can click through keys and hear it change instead of retriggering each time. There is a switch for anyone who would rather a click stayed quiet

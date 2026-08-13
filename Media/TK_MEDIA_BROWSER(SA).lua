@@ -1,8 +1,16 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.98
+-- @version 0.9.99
 -- @changelog:
 --[[
+v0.9.99:
++ New: a Wave column in the file list, off by default, switched on with the other columns under Settings. It shows the waveform of every audio file in the list rather than only the one loaded in the oscilloscope, so a folder can be read at a glance - where the hits are, what is a one-shot and what is a loop, which take is the loud one - without auditioning it file by file
++ Wave: minima and maxima are drawn apart rather than folded into one absolute value, so a waveform that is not symmetrical around zero does not look as though it is. A kick that pulls hard one way reads as a kick, and near-silence stays a thin line instead of disappearing
++ Wave: peaks are read from a file once and kept in a cache of their own under CACHE/peaks, about 8 KB per file. Coming back to a folder, or reopening the browser a day later, draws from that cache instead of asking REAPER again - which is the expensive part, since it means opening every file. The cache is stored at a fixed resolution and resampled for whatever width the column has, so dragging the column wider costs nothing at all
++ Wave: a cached file is discarded when the file it came from changes size, so a re-rendered sample is read afresh rather than showing what it used to look like
++ Wave: nothing loads while the list is moving. Loading starts a moment after scrolling stops, a few files per frame, so a folder fills in over a second or two instead of stalling on the frame that first shows it
++ Wave: files REAPER has no peaks for yet - anything freshly recorded, rendered or copied in - are built rather than skipped. That build is carried across frames on a millisecond budget, one file at a time, so it fills in by itself instead of only appearing once the file happens to be played. Building peaks writes REAPER's usual .reapeaks files next to the audio; the alternate path under Preferences, Media, Peaks/Waveforms applies to these as it does to the rest of REAPER
+
 v0.9.98:
 + New: Auto Key. Pick a target key on a small keyboard and everything you preview or insert is transposed onto it, so a library in mixed keys lines up with the track. The current key sits in the bottom right of the oscilloscope - click it to open the options
 + Auto Key: the tonic decides the shift and the mode does not, so picking C puts every sample's root on C and the same click always means the same thing. The shift takes the shortest way round the octave and never exceeds six semitones, so A minor to C minor is +3 rather than -9; nine semitones of pitch shift does not sound like music
@@ -217,6 +225,421 @@ r.RecursiveCreateDirectory(cache_dir, 0)
 r.RecursiveCreateDirectory(cover_art_cache_dir, 0)
 r.RecursiveCreateDirectory(collections_dir, 0)
 r.RecursiveCreateDirectory(presets_dir, 0)
+
+-- Waveform column -------------------------------------------------------------
+-- Peaks are read from a file once, stored on disk at one fixed resolution, and
+-- resampled in memory for whatever width the column happens to have. Opening a
+-- PCM_source is what costs time when reading peaks - not the peak maths - so it
+-- is the disk cache that makes one waveform per row affordable, and a column
+-- resize never reaches REAPER again. Minima and maxima are kept apart instead of
+-- folded into a single absolute value, because an envelope mirrored around its
+-- centre hides the shape the sound actually has.
+--
+-- Everything hangs off this one table on purpose: the chunk is within a handful
+-- of slots of Lua's 200 local variable limit.
+tkmb_peaks = {
+    CACHE_PX = 1024,          -- stored columns per file, ~8 KB on disk
+    MAGIC = "TKWF",
+    VERSION = 1,
+    HEADER_BYTES = 32,
+    MEM_MAX = 200,            -- envelopes held in memory before trimming
+    MEM_MIN = 80,
+    IDLE_SECONDS = 0.15,      -- quiet time after scrolling before anything loads
+    -- Reading a cache file costs a fraction of a millisecond while building an
+    -- envelope from the audio costs milliseconds, so the two get separate
+    -- budgets. Sharing one budget made a cached folder crawl in at the speed of
+    -- an uncached one.
+    ENQUEUE_PER_FRAME = 12,
+    READS_PER_FRAME = 12,
+    BUILDS_PER_FRAME = 2,
+    RETRY_SECONDS = 5.0,      -- pause before asking again for a file that gave nothing
+    -- Budget for carrying one REAPER peak build across frames. Long files take
+    -- many frames; the timeout is the escape hatch for one that never finishes.
+    BUILD_PUMP_ITERS = 256,
+    BUILD_PUMP_MS = 1.5,
+    JOB_TIMEOUT = 20.0,
+    job = nil,
+    dir = cache_dir .. "peaks" .. sep,
+    data = {},
+    data_count = 0,
+    view = {},
+    queue = {},
+    queued = {},
+    failed = {},
+    enqueued_this_frame = 0,
+    last_scroll = -1,
+    last_scroll_time = 0,
+}
+
+function tkmb_peaks.now()
+    return r.time_precise and r.time_precise() or os.clock()
+end
+
+-- Sharded, because a browsed library runs to thousands of these and one flat
+-- directory gets slow to open. Lower case throughout so the same file reached
+-- through a differently cased path keeps a single entry on Windows.
+function tkmb_peaks.file_path(path)
+    local normalized = tostring(path or ""):gsub("\\", "/"):lower()
+    local hash = 5381
+    for index = 1, #normalized do hash = (hash * 33 + normalized:byte(index)) % 2147483647 end
+    local name = (normalized:match("([^/]+)$") or "file"):gsub("[^%w_]", "_")
+    if #name > 48 then name = name:sub(1, 48) end
+    local dir = tkmb_peaks.dir .. string.format("%02x", hash % 256) .. sep
+    return dir, dir .. tostring(hash) .. "_" .. name .. ".tkwf"
+end
+
+-- Size of the source is the staleness check: one open, no extension needed, and
+-- a re-rendered file practically always lands on a different length.
+function tkmb_peaks.source_size(path)
+    local handle = io.open(path, "rb")
+    if not handle then return nil end
+    local size = handle:seek("end")
+    handle:close()
+    return size
+end
+
+function tkmb_peaks.write(path, data, source_size)
+    local dir, file_path = tkmb_peaks.file_path(path)
+    r.RecursiveCreateDirectory(dir, 0)
+    local handle = io.open(file_path, "wb")
+    if not handle then return false end
+    local count = data.count
+    local body = {}
+    for index = 1, count do
+        body[index] = string.pack("<ff", data.mins[index] or 0, data.maxs[index] or 0)
+    end
+    local ok = pcall(function()
+        handle:write(tkmb_peaks.MAGIC)
+        handle:write(string.pack("<I4I4I4dI8", tkmb_peaks.VERSION, count, data.channels or 1, data.length or 0, source_size or 0))
+        handle:write(table.concat(body))
+    end)
+    handle:close()
+    return ok
+end
+
+function tkmb_peaks.read(path, source_size)
+    local _, file_path = tkmb_peaks.file_path(path)
+    local handle = io.open(file_path, "rb")
+    if not handle then return nil end
+    local header = handle:read(tkmb_peaks.HEADER_BYTES)
+    if not header or #header < tkmb_peaks.HEADER_BYTES or header:sub(1, 4) ~= tkmb_peaks.MAGIC then
+        handle:close()
+        return nil
+    end
+    local ok, version, count, channels, length, stored_size = pcall(string.unpack, "<I4I4I4dI8", header, 5)
+    if not ok or version ~= tkmb_peaks.VERSION or not count or count <= 0 or count > 65536 then
+        handle:close()
+        return nil
+    end
+    if source_size and stored_size ~= 0 and stored_size ~= source_size then
+        handle:close()
+        return nil
+    end
+    local blob = handle:read(count * 8)
+    handle:close()
+    if not blob or #blob < count * 8 then return nil end
+    local mins, maxs = {}, {}
+    local pos = 1
+    for index = 1, count do
+        mins[index], maxs[index], pos = string.unpack("<ff", blob, pos)
+    end
+    return { mins = mins, maxs = maxs, count = count, channels = channels, length = length }
+end
+
+function tkmb_peaks.open(path)
+    local source = r.PCM_Source_CreateFromFile(path)
+    if not source then return nil end
+    local length = r.GetMediaSourceLength(source)
+    if not length or length <= 0 then
+        r.PCM_Source_Destroy(source)
+        return nil
+    end
+    local channels = r.GetMediaSourceNumChannels(source) or 1
+    if channels < 1 then channels = 1 end
+    return source, length, channels
+end
+
+-- One read of REAPER's peaks at the cache resolution. GetPeaks hands back the
+-- maxima first and the minima after them, so both halves are already there and
+-- keeping them apart costs nothing extra. A second return value reports whether
+-- anything but silence came back, which is how a file whose peaks REAPER has not
+-- built yet announces itself.
+function tkmb_peaks.read_source(source, length, channels)
+    local count = tkmb_peaks.CACHE_PX
+    local buffer = r.new_array(count * channels * 2)
+    buffer.clear()
+    local returned = r.PCM_Source_GetPeaks(source, count / length, 0, channels, count, 0, buffer)
+    -- The low 20 bits carry the sample count, and a plain truthiness test passes
+    -- on 0 in Lua, so an empty read has to be checked numerically.
+    local filled = math.floor((tonumber(returned) or 0) % 0x100000)
+    if filled > count then filled = count end
+    local base = count * channels
+    local mins, maxs = {}, {}
+    local has_signal = false
+    for index = 1, filled do
+        local lo, hi = 0, 0
+        for channel = 1, channels do
+            local pos = ((index - 1) * channels) + channel
+            local high = buffer[pos] or 0
+            local low = buffer[base + pos] or 0
+            if high > hi then hi = high end
+            if low < lo then lo = low end
+        end
+        mins[index], maxs[index] = lo, hi
+        if hi ~= 0 or lo ~= 0 then has_signal = true end
+    end
+    buffer.clear()
+    if filled <= 0 then return nil, false end
+    return { mins = mins, maxs = maxs, count = filled, channels = channels, length = length }, has_signal
+end
+
+-- A file REAPER has no peaks for yet reads back as silence. BuildPeaks is not a
+-- single call that does the work: mode 0 starts it, mode 1 has to be called
+-- again and again until it reports it is finished, and mode 2 closes it off.
+-- Asking with mode 0 and reading straight away - which is what this did at first
+-- - always came back empty, and the peaks only turned up later because playing
+-- the file made REAPER build them anyway. So the build is carried across frames
+-- here, one file at a time, on a millisecond budget.
+function tkmb_peaks.begin_build(path, source, length, channels, source_size)
+    if not r.PCM_Source_BuildPeaks then
+        r.PCM_Source_Destroy(source)
+        tkmb_peaks.failed[path] = tkmb_peaks.now()
+        return
+    end
+    r.PCM_Source_BuildPeaks(source, 0)
+    tkmb_peaks.job = {
+        path = path,
+        source = source,
+        length = length,
+        channels = channels,
+        source_size = source_size,
+        started = tkmb_peaks.now(),
+    }
+end
+
+function tkmb_peaks.pump()
+    local job = tkmb_peaks.job
+    if not job then return end
+    local deadline = tkmb_peaks.now() + (tkmb_peaks.BUILD_PUMP_MS / 1000)
+    local finished = false
+    for _ = 1, tkmb_peaks.BUILD_PUMP_ITERS do
+        if r.PCM_Source_BuildPeaks(job.source, 1) == 0 then
+            finished = true
+            break
+        end
+        if tkmb_peaks.now() >= deadline then break end
+    end
+    if not finished and (tkmb_peaks.now() - job.started) < tkmb_peaks.JOB_TIMEOUT then return end
+
+    r.PCM_Source_BuildPeaks(job.source, 2)
+    local data = finished and tkmb_peaks.read_source(job.source, job.length, job.channels) or nil
+    r.PCM_Source_Destroy(job.source)
+    tkmb_peaks.job = nil
+    if data then
+        -- The build ran to completion, so a flat envelope means the file really
+        -- is silent. Cache that rather than asking again for ever.
+        tkmb_peaks.write(job.path, data, job.source_size)
+        tkmb_peaks.store(job.path, data)
+    else
+        tkmb_peaks.failed[job.path] = tkmb_peaks.now()
+    end
+end
+
+function tkmb_peaks.trim()
+    if tkmb_peaks.data_count <= tkmb_peaks.MEM_MAX then return end
+    local entries = {}
+    for path, data in pairs(tkmb_peaks.data) do
+        entries[#entries + 1] = { path = path, used = data.used or 0 }
+    end
+    table.sort(entries, function(left, right) return left.used < right.used end)
+    for index = 1, #entries - tkmb_peaks.MEM_MIN do
+        local path = entries[index].path
+        tkmb_peaks.data[path] = nil
+        for key in pairs(tkmb_peaks.view) do
+            if key:sub(1, #path + 1) == path .. "|" then tkmb_peaks.view[key] = nil end
+        end
+    end
+    tkmb_peaks.data_count = tkmb_peaks.MEM_MIN
+end
+
+function tkmb_peaks.store(path, data)
+    tkmb_peaks.failed[path] = nil
+    data.used = tkmb_peaks.now()
+    if not tkmb_peaks.data[path] then
+        tkmb_peaks.data_count = tkmb_peaks.data_count + 1
+    end
+    tkmb_peaks.data[path] = data
+    tkmb_peaks.trim()
+    return data
+end
+
+-- Memory, then disk, then REAPER. Only the last of those is expensive, and it
+-- happens once per file for as long as the cache file survives. Reports which of
+-- those it took, so the caller can charge the right budget: "read" off the disk
+-- cache, "build" straight out of REAPER's existing peaks, "job" handed to the
+-- pump because there are no peaks yet, "defer" left alone because the pump is
+-- already busy with another file.
+function tkmb_peaks.load(path, allow_build)
+    local source_size = tkmb_peaks.source_size(path)
+    local data = tkmb_peaks.read(path, source_size)
+    if data then
+        tkmb_peaks.store(path, data)
+        return "read"
+    end
+    if not allow_build then return "defer" end
+    local source, length, channels = tkmb_peaks.open(path)
+    if not source then
+        tkmb_peaks.failed[path] = tkmb_peaks.now()
+        return "fail"
+    end
+    local built, has_signal = tkmb_peaks.read_source(source, length, channels)
+    if built and has_signal then
+        r.PCM_Source_Destroy(source)
+        tkmb_peaks.write(path, built, source_size)
+        tkmb_peaks.store(path, built)
+        return "build"
+    end
+    tkmb_peaks.begin_build(path, source, length, channels, source_size)
+    return "job"
+end
+
+-- Stored resolution to drawn resolution. Widening the column re-runs this over
+-- numbers already in memory instead of touching a file.
+function tkmb_peaks.resample(data, width)
+    local count = data.count
+    if count <= 0 or width <= 0 then return nil end
+    local mins, maxs = {}, {}
+    for index = 1, width do
+        local first = math.floor((index - 1) * count / width) + 1
+        local last = math.max(first, math.floor(index * count / width))
+        if last > count then last = count end
+        local lo, hi = 0, 0
+        for pos = first, last do
+            local low, high = data.mins[pos], data.maxs[pos]
+            if low and low < lo then lo = low end
+            if high and high > hi then hi = high end
+        end
+        mins[index], maxs[index] = lo, hi
+    end
+    return { mins = mins, maxs = maxs, count = width, length = data.length }
+end
+
+function tkmb_peaks.view_for(path, width)
+    local key = path .. "|" .. tostring(width)
+    local cached = tkmb_peaks.view[key]
+    if cached then return cached end
+    local data = tkmb_peaks.data[path]
+    if not data then return nil end
+    data.used = tkmb_peaks.now()
+    local view = tkmb_peaks.resample(data, width)
+    if view then tkmb_peaks.view[key] = view end
+    return view
+end
+
+-- Scroll position, not the clipper's range: the clipper can step more than once
+-- per frame with a different range each time, which would read as permanent
+-- movement and stall loading for good. Scroll is one stable number per frame.
+-- If the build of ReaImGui has no GetScrollY, this reads as never scrolling,
+-- which loads eagerly rather than not at all.
+function tkmb_peaks.note_scroll(scroll_y)
+    local rounded = math.floor((tonumber(scroll_y) or 0) + 0.5)
+    if tkmb_peaks.last_scroll ~= rounded then
+        tkmb_peaks.last_scroll = rounded
+        tkmb_peaks.last_scroll_time = tkmb_peaks.now()
+    end
+end
+
+function tkmb_peaks.idle()
+    return (tkmb_peaks.now() - tkmb_peaks.last_scroll_time) >= tkmb_peaks.IDLE_SECONDS
+end
+
+function tkmb_peaks.enqueue(path)
+    if tkmb_peaks.queued[path] or tkmb_peaks.data[path] then return end
+    if tkmb_peaks.enqueued_this_frame >= tkmb_peaks.ENQUEUE_PER_FRAME then return end
+    local failed_at = tkmb_peaks.failed[path]
+    if failed_at and (tkmb_peaks.now() - failed_at) < tkmb_peaks.RETRY_SECONDS then return end
+    tkmb_peaks.queue[#tkmb_peaks.queue + 1] = path
+    tkmb_peaks.queued[path] = true
+    tkmb_peaks.enqueued_this_frame = tkmb_peaks.enqueued_this_frame + 1
+end
+
+-- Called once per frame from loop(). The budgets are what keep a folder full of
+-- unseen files from stalling the UI: a cached folder lands within a few frames,
+-- an uncached one fills in over a second or two instead of blocking on the first
+-- frame that shows it.
+function tkmb_peaks.process()
+    tkmb_peaks.enqueued_this_frame = 0
+    tkmb_peaks.pump()
+    if #tkmb_peaks.queue == 0 then return end
+    if not tkmb_peaks.idle() then return end
+    local reads, builds = 0, 0
+    local deferred = {}
+    while #tkmb_peaks.queue > 0
+        and reads < tkmb_peaks.READS_PER_FRAME
+        and builds < tkmb_peaks.BUILDS_PER_FRAME do
+        local path = table.remove(tkmb_peaks.queue, 1)
+        local result = tkmb_peaks.load(path, tkmb_peaks.job == nil)
+        if result == "defer" then
+            -- A build is already running. This one still cost a look at the disk
+            -- cache, so it counts against the read budget rather than spinning
+            -- through the whole queue in one frame.
+            deferred[#deferred + 1] = path
+            reads = reads + 1
+        else
+            tkmb_peaks.queued[path] = nil
+            if result == "read" then reads = reads + 1 else builds = builds + 1 end
+            if result == "job" then break end
+        end
+    end
+    for index = 1, #deferred do
+        tkmb_peaks.queue[#tkmb_peaks.queue + 1] = deferred[index]
+    end
+end
+
+function tkmb_peaks.forget(path)
+    if tkmb_peaks.data[path] then
+        tkmb_peaks.data[path] = nil
+        tkmb_peaks.data_count = math.max(0, tkmb_peaks.data_count - 1)
+    end
+    for key in pairs(tkmb_peaks.view) do
+        if key:sub(1, #path + 1) == path .. "|" then tkmb_peaks.view[key] = nil end
+    end
+    tkmb_peaks.failed[path] = nil
+    local _, file_path = tkmb_peaks.file_path(path)
+    os.remove(file_path)
+end
+
+-- One unantialiased rect per column, drawn between the true minimum and maximum.
+-- Columns stay crisp where overlapping antialiased lines would smear, and the
+-- row keeps its normal height so switching the column on does not change how
+-- dense the list reads. ctx and the colour come in as arguments because this
+-- table is built before either of them exists.
+function tkmb_peaks.draw_cell(ctx, path, is_audio, color)
+    local avail_w = r.ImGui_GetContentRegionAvail(ctx)
+    local width = math.floor(avail_w or 0)
+    if width < 8 then return end
+    local height = math.floor(r.ImGui_GetTextLineHeight(ctx))
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_Dummy(ctx, width, height)
+    if not is_audio then return end
+
+    local view = tkmb_peaks.view_for(path, width)
+    if not view then
+        if tkmb_peaks.idle() then tkmb_peaks.enqueue(path) end
+        return
+    end
+
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local mid = y + height * 0.5
+    local half = height * 0.45
+    for index = 1, view.count do
+        local top = mid - math.min(1, view.maxs[index] or 0) * half
+        local bottom = mid - math.max(-1, view.mins[index] or 0) * half
+        if bottom - top < 1 then bottom = top + 1 end
+        r.ImGui_DrawList_AddRectFilled(draw_list, x + index - 1, top, x + index, bottom, color)
+    end
+end
+
 local ctx = r.ImGui_CreateContext('TK Media Browser')
 
 local font_size = 13
@@ -627,6 +1050,7 @@ local ui_settings = {
     
     visible_columns = {
         name = true,
+        wave = false,
         category = false,
         type = true,
         size = true,
@@ -2491,7 +2915,7 @@ end
 
 local function get_column_name_by_index(visible_index)
     local column_order = {
-        "name", "category", "type", "size", "duration", "sample_rate", "channels", "bpm", "lufs", "key",
+        "name", "wave", "category", "type", "size", "duration", "sample_rate", "channels", "bpm", "lufs", "key",
         "artist", "album", "title", "track", "year", "genre", "comment",
         "composer", "publisher", "timesignature", "bitrate", "bitspersample",
         "encoder", "copyright", "desc", "originator", "originatorref",
@@ -9550,6 +9974,9 @@ function draw_file_list()
                         if ui_settings.visible_columns.name then
                             r.ImGui_TableSetupColumn(ctx, "Name", S, fit and 4.0 or 0)
                         end
+                        if ui_settings.visible_columns.wave then
+                            r.ImGui_TableSetupColumn(ctx, "Wave", fit and S or F, fit and 2.0 or 140)
+                        end
                         if ui_settings.visible_columns.category then
                             r.ImGui_TableSetupColumn(ctx, "Cat", fit and S or F, fit and 1.0 or 55)
                         end
@@ -9808,10 +10235,11 @@ function draw_file_list()
                         
                         while r.ImGui_ListClipper_Step(ui.list_clipper) do
                             local display_start, display_end = r.ImGui_ListClipper_GetDisplayRange(ui.list_clipper)
-                            
+
                             if not display_start or not display_end then
                                 break
                             end
+                            tkmb_peaks.note_scroll(r.ImGui_GetScrollY and r.ImGui_GetScrollY(ctx) or 0)
                             
                             for i = display_start + 1, display_end do
                                 local file = files_to_display[i]
@@ -9989,6 +10417,11 @@ function draw_file_list()
                                         r.ImGui_Unindent(ctx, 18)
                                     end
                                     goto continue
+                                end
+                                if ui_settings.visible_columns.wave then
+                                    r.ImGui_TableNextColumn(ctx)
+                                    tkmb_peaks.draw_cell(ctx, file.full_path, is_audio_media_file(file.full_path),
+                                        hsv_to_color(ui_settings.accent_hue, 0.45, 0.95, 0.85))
                                 end
                                 if ui_settings.visible_columns.category then
                                     r.ImGui_TableNextColumn(ctx)
@@ -10817,6 +11250,7 @@ function loop()
         save_options()
     end
     process_lufs_analysis_queue()
+    tkmb_peaks.process()
     if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         ctx = r.ImGui_CreateContext('TK Media Browser')
         normal_font = r.ImGui_CreateFont('sans-serif', font_size)
@@ -15266,7 +15700,14 @@ function loop()
                     
                     ch1, val1 = r.ImGui_Checkbox(ctx, "Duration##col", ui_settings.visible_columns.duration)
                     if ch1 then ui_settings.visible_columns.duration = val1; save_options() end
-                    
+                    r.ImGui_SameLine(ctx, 200)
+
+                    ch1, val1 = r.ImGui_Checkbox(ctx, "Wave##col", ui_settings.visible_columns.wave or false)
+                    if ch1 then ui_settings.visible_columns.wave = val1; save_options() end
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, "Waveform per file. Peaks are cached on disk, so only the first look at a file costs anything.")
+                    end
+
                     ch1, val1 = r.ImGui_Checkbox(ctx, "Sample Rate##col", ui_settings.visible_columns.sample_rate)
                     if ch1 then ui_settings.visible_columns.sample_rate = val1; save_options() end
                     r.ImGui_SameLine(ctx, 200)
