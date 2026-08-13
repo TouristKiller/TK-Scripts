@@ -1,8 +1,17 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.14
+-- @version 3.2.15
 -- @changelog:
---[[ 
+--[[
+    v3.2.15:
+        + TK Notes 2.7.0 - shared notes with TK Workbench: both scripts now read and write the same note, so a note taken in one appears in the other and either can edit it. Each still works entirely on its own, and notes you already have are copied into the shared form the first time you open them, never moved or rewritten in place. Where both scripts held a note on the same context, both are kept and shown side by side.
+        + TK Notes: fixed Global notes being lost on restart. They live in reaper-extstate.ini, a flat file that cannot hold a line break, so a note of more than one line was silently truncated to nothing. Line breaks are now encoded on the way in and decoded on the way out, and notes written by earlier versions still read back exactly as they were. Reported by vik-tan
+        + TK Notes: font menu now matches the Workbench - a size slider with - and + either side, the family list below it and a reset. The size range is the same in both scripts now, where it used to be narrower here.
+        + TK Notes: right-click menu brought in line with the Workbench, with the things that were only there added here: bullet, numbered and checkbox lists, Bold and Add Image. Clicking a checkbox in the text ticks it.
+        + TK Notes: the palette button opens a real colour picker for text and note colour instead of preset swatches, and respects "use context color". Colours set with the old presets are unchanged. The separate palette menu and the hand-drawn font size slider are gone, both being second copies of what the picker and font menu already did.
+        + TK Notes: text alignment is now per tab instead of applying to every tab at once, and is shared with the Workbench.
+        + TK Notes: drawings are shared with the Workbench, appearing in the same place on the note in both.
+        + TK Notes: removed the auto-save setting and its interval. Notes were saved regardless of what it was set to, so the switch did nothing but suggest that turning it off would lose your work.
     v3.2.14:
         + Projects: added a responsive cover-art grid controlled by the Tile size slider in the columns menu; slide below 64 px to return to the table view.
         + Project grid: selection, double-click open, tooltips and project context actions are available directly from each cover tile.

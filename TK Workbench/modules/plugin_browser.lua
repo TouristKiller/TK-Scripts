@@ -10,7 +10,7 @@ local M = {
   id = "plugin_browser",
   title = "Plugin Browser",
   icon = "PLG",
-  version = "0.1.1"
+  version = "0.1.2"
 }
 
 local fx_root = r.GetResourcePath() .. "/Scripts/TK Scripts/FX/"
@@ -29,7 +29,7 @@ local defaults = {
   source = "All",
   view_mode = "tiles",
   show_screenshots = true,
-  screenshot_size = 82,
+  tile_size = 112,
   target_mode = "selected_track",
   recent_max = 30,
   sort_mode = "name",
@@ -59,6 +59,32 @@ local screenshot_signature_check_interval = 5.0
 local screenshot_normalization_version = 4
 local base_row_height = 40
 local uniform_ratio = 0.625
+-- Grouped in tables on purpose: this chunk is close to Lua's 200 top-level
+-- local limit, the same ceiling that already broke control_room.lua.
+local masonry = { min_ratio = 0.42, max_ratio = 1.60 }
+
+-- Requested tile width in unscaled pixels. Columns never go below this, the
+-- leftover pixels are shared out so the grid keeps filling the window exactly.
+local tile_size_range = { min = 64, max = 320, step = 4 }
+
+local views = {
+  order = { "list", "tiles", "masonry" },
+  labels = { list = "List", tiles = "Uniform", masonry = "Masonry" },
+  tooltips = { list = "List view", tiles = "Uniform grid", masonry = "Masonry wall" }
+}
+
+function views.normalize(mode)
+  if views.labels[mode] then return mode end
+  return "tiles"
+end
+
+function views.next(mode)
+  mode = views.normalize(mode)
+  for index, name in ipairs(views.order) do
+    if name == mode then return views.order[(index % #views.order) + 1] end
+  end
+  return "tiles"
+end
 
 local state = {
   plugins = {},
@@ -103,6 +129,19 @@ local state = {
   screenshot_image_errors = 0,
   screenshot_capture_active = false,
   screenshot_capture_plugin = nil,
+  aspect_ratios = {},
+  aspect_version = 0,
+  masonry_layout = nil,
+  nav_index = nil,
+  nav_focus = false,
+  nav_scroll_target = nil,
+  grid_columns = 1,
+  grid_item_h = 0,
+  visible_shot_count = 0,
+  results_scroll_y = 0,
+  results_scroll_max = 0,
+  scroll_anchor = 0,
+  apply_scroll_anchor = 0,
   parser_loaded = false,
   parser_categories = {},
   parser_developers = {},
@@ -190,6 +229,22 @@ local function ensure_settings(app)
     end
     if #normalized ~= #settings.type_priority then changed = true end
     settings.type_priority = normalized
+  end
+  local normalized_view_mode = views.normalize(settings.view_mode)
+  if settings.view_mode ~= normalized_view_mode then
+    settings.view_mode = normalized_view_mode
+    changed = true
+  end
+  local tile_size = math.floor(tonumber(settings.tile_size) or defaults.tile_size)
+  if tile_size < tile_size_range.min then tile_size = tile_size_range.min end
+  if tile_size > tile_size_range.max then tile_size = tile_size_range.max end
+  if settings.tile_size ~= tile_size then
+    settings.tile_size = tile_size
+    changed = true
+  end
+  if settings.screenshot_size ~= nil then
+    settings.screenshot_size = nil
+    changed = true
   end
   local dropdown_rows = math.floor(tonumber(settings.dropdown_rows) or defaults.dropdown_rows)
   if dropdown_rows < 8 then dropdown_rows = 8 end
@@ -788,6 +843,12 @@ local function trim_screenshot_cache(ctx, max_count, force)
   return true
 end
 
+-- Small tiles can put more screenshots on screen than the fixed cache holds,
+-- which would make it evict images it still needs on every frame.
+local function shot_cache_limit()
+  return math.max(max_screenshot_cache, (state.visible_shot_count or 0) + 24)
+end
+
 local function pop_next_screenshot_load()
   for index, key in ipairs(state.screenshot_load_order) do
     if state.screenshot_visible_keys[key] then
@@ -910,8 +971,9 @@ local function process_screenshot_load_queue(ctx)
       if not file_exists(path) then
         state.screenshot_missing[key] = r.time_precise()
       else
-        if #state.screenshot_cache_order >= max_screenshot_cache and not trim_screenshot_cache(ctx, max_screenshot_cache - 1, false) then
-          trim_screenshot_cache(ctx, math.max(min_screenshot_cache, max_screenshot_cache - 10), true)
+        local cache_limit = shot_cache_limit()
+        if #state.screenshot_cache_order >= cache_limit and not trim_screenshot_cache(ctx, cache_limit - 1, false) then
+          trim_screenshot_cache(ctx, math.max(min_screenshot_cache, cache_limit - 10), true)
         end
         local ok, image = false, nil
         if r.ImGui_CreateImage then ok, image = pcall(r.ImGui_CreateImage, path) end
@@ -961,6 +1023,9 @@ local function invalidate_screenshots(ctx)
   state.screenshot_load_queue = {}
   state.screenshot_load_order = {}
   state.screenshot_load_queued = {}
+  state.aspect_ratios = {}
+  state.aspect_version = state.aspect_version + 1
+  state.masonry_layout = nil
   build_screenshot_index(true)
 end
 
@@ -1476,6 +1541,9 @@ local function refresh_filter(settings, force)
   table.sort(result, function(left, right) return compare_plugin_order(left, right, settings, source) end)
   state.filtered = result
   state.last_filter_key = key
+  -- The cursor is an index into the old result list, so it means nothing now.
+  state.nav_index = nil
+  state.nav_scroll_target = nil
 end
 
 local function validate_track(track)
@@ -1809,6 +1877,8 @@ local function select_range(first_index, last_index, additive)
 end
 
 local function clear_selection(app)
+  state.nav_index = nil
+  state.nav_focus = false
   if selection_count() == 0 then return end
   state.selected_plugins = {}
   state.selection_anchor_index = nil
@@ -2212,6 +2282,9 @@ local function handle_plugin_click(app, settings, plugin, index, double_clicked)
   local ctx = app.ctx
   local ctrl = is_selection_ctrl_down(ctx)
   local shift = is_selection_shift_down(ctx)
+  -- Clicking parks the keyboard cursor here, so arrows carry on from the click.
+  state.nav_index = index
+  state.nav_focus = true
   if shift then
     local anchor = state.selection_anchor_index or index
     select_range(anchor, index, ctrl)
@@ -2492,6 +2565,26 @@ local function save_filter_change(app)
   if app.save_settings then app.save_settings() end
 end
 
+-- Resizing changes the total content height, so remember where we were as a
+-- fraction of the scroll range and restore it once the new layout is measured.
+local function set_tile_size(app, settings, value, save)
+  value = math.floor(tonumber(value) or defaults.tile_size)
+  if value < tile_size_range.min then value = tile_size_range.min end
+  if value > tile_size_range.max then value = tile_size_range.max end
+  if value == settings.tile_size then return false end
+  if (state.apply_scroll_anchor or 0) == 0 then
+    local scroll_max = state.results_scroll_max or 0
+    state.scroll_anchor = scroll_max > 0 and ((state.results_scroll_y or 0) / scroll_max) or 0
+  end
+  -- ImGui only reports the new content height one frame after it is drawn, so
+  -- the restore has to wait a frame for a scroll range it can trust.
+  state.apply_scroll_anchor = 2
+  settings.tile_size = value
+  state.masonry_layout = nil
+  if save ~= false and app.save_settings then app.save_settings() end
+  return true
+end
+
 local function draw_filter_popup(ctx, settings, app)
   if not r.ImGui_BeginPopup(ctx, "##pb_filter_menu") then return end
   settings.type_filter = type(settings.type_filter) == "table" and settings.type_filter or {}
@@ -2507,6 +2600,29 @@ local function draw_filter_popup(ctx, settings, app)
   if changed then
     settings.show_favorites_on_top = favorites_on_top
     save_filter_change(app)
+  end
+  r.ImGui_Separator(ctx)
+  r.ImGui_Text(ctx, "Layout")
+  local current_mode = views.normalize(settings.view_mode)
+  for index, mode in ipairs(views.order) do
+    if index > 1 then r.ImGui_SameLine(ctx) end
+    if r.ImGui_RadioButton(ctx, views.labels[mode], current_mode == mode) and current_mode ~= mode then
+      settings.view_mode = mode
+      state.masonry_layout = nil
+      if app.save_settings then app.save_settings() end
+    end
+  end
+  if current_mode ~= "list" then
+    r.ImGui_PushItemWidth(ctx, UIScale.round(150))
+    local tile_changed, tile_size = r.ImGui_SliderInt(ctx, "Tile size", settings.tile_size or defaults.tile_size, tile_size_range.min, tile_size_range.max, "%d px")
+    r.ImGui_PopItemWidth(ctx)
+    -- Dragging is applied live but only written to disk when the drag ends.
+    if tile_changed then set_tile_size(app, settings, tile_size, false) end
+    if r.ImGui_IsItemDeactivatedAfterEdit and r.ImGui_IsItemDeactivatedAfterEdit(ctx) and app.save_settings then app.save_settings() end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Minimum tile width; tiles stretch to fill the window.\nCtrl+scroll over the results does the same.") end
+    if r.ImGui_Button(ctx, "Reset size", UIScale.text_button_w(ctx, "Reset size", 150, 8), 0) then
+      set_tile_size(app, settings, defaults.tile_size)
+    end
   end
   r.ImGui_Separator(ctx)
   r.ImGui_Text(ctx, "Display")
@@ -2599,11 +2715,26 @@ local function draw_filter_popup(ctx, settings, app)
   r.ImGui_EndPopup(ctx)
 end
 
+-- Remembers the shape of every screenshot that has been seen, so the masonry
+-- layout can keep a stable height for a card after its image is evicted again.
+function masonry.record_ratio(plugin, image_w, image_h)
+  if not plugin or not plugin.name then return end
+  if not image_w or not image_h or image_w <= 0 or image_h <= 0 then return end
+  local ratio = image_h / image_w
+  if ratio < masonry.min_ratio then ratio = masonry.min_ratio end
+  if ratio > masonry.max_ratio then ratio = masonry.max_ratio end
+  local previous = state.aspect_ratios[plugin.name]
+  if previous and math.abs(previous - ratio) < 0.002 then return end
+  state.aspect_ratios[plugin.name] = ratio
+  state.aspect_version = state.aspect_version + 1
+end
+
 local function draw_row_screenshot(ctx, draw_list, settings, plugin, x, y, width, height)
   if not settings.show_screenshots then return end
   local image = get_screenshot_image(ctx, plugin)
   if image then
     local image_w, image_h = r.ImGui_Image_GetSize(image)
+    masonry.record_ratio(plugin, image_w, image_h)
     local scale = math.min(width / image_w, height / image_h)
     local draw_w = image_w * scale
     local draw_h = image_h * scale
@@ -2645,6 +2776,9 @@ local function draw_plugin_row(app, settings, plugin, index, row_width)
     r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + row_h, Theme.colors.accent, UIScale.px(3), 0, UIScale.px(1.5))
   end
   if hovered then r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + row_h, 0xFFFFFF10, UIScale.px(3)) end
+  if state.nav_index == index and not selected then
+    r.ImGui_DrawList_AddRect(draw_list, x + UIScale.px(1), y + UIScale.px(1), x + width - UIScale.px(1), y + row_h - UIScale.px(1), 0x00BFFFAA, UIScale.px(3), 0, UIScale.px(1.5))
+  end
   if show_shot then
     draw_row_screenshot(ctx, draw_list, settings, plugin, x, y + UIScale.round(4), UIScale.round(54), UIScale.round(32))
   end
@@ -2696,6 +2830,7 @@ local function draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, l
     local image = get_screenshot_image(ctx, plugin)
     if image then
       local image_w, image_h = r.ImGui_Image_GetSize(image)
+      masonry.record_ratio(plugin, image_w, image_h)
       if image_w and image_h and image_w > 0 and image_h > 0 then
         local inset = UIScale.round(8)
         local inner_w = cell_w - inset * 2
@@ -2719,6 +2854,12 @@ local function draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, l
   end
   r.ImGui_DrawList_AddRect(draw_list, x, y, x + cell_w, y + cell_h, hovered and hover or border, UIScale.px(4), 0, hovered and UIScale.px(2) or UIScale.px(1.5))
   if selected then r.ImGui_DrawList_AddRect(draw_list, x, y, x + cell_w, y + total_h, Theme.colors.accent, UIScale.px(4), 0, UIScale.px(2.0)) end
+  -- Only when the cursor sits somewhere other than the selection (Ctrl+arrow);
+  -- otherwise the selection highlight already shows where the cursor is.
+  if state.nav_index == index and not selected then
+    local o = UIScale.px(3)
+    r.ImGui_DrawList_AddRect(draw_list, x - o, y - o, x + cell_w + o, y + total_h + o, 0x00BFFFAA, UIScale.px(5), 0, UIScale.px(1.5))
+  end
   draw_type_badge(ctx, draw_list, plugin, x, y, cell_w)
   draw_favorite_dot(draw_list, plugin, x + UIScale.round(10), y + UIScale.round(10), UIScale.px(5))
   draw_pinned_marker(draw_list, plugin, x + UIScale.round(23), y + UIScale.round(10), UIScale.px(5))
@@ -2762,17 +2903,25 @@ local function draw_virtual_list(app, settings, row_width)
   if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
 end
 
+local function grid_metrics(settings, avail_w)
+  local gap = UIScale.round(10)
+  local usable_w = math.max(1, avail_w or UIScale.round(320))
+  local tile_size = math.max(tile_size_range.min, math.min(tile_size_range.max, math.floor(tonumber(settings.tile_size) or defaults.tile_size)))
+  local preferred_w = math.max(UIScale.round(tile_size_range.min), UIScale.round(tile_size))
+  local columns = math.max(1, math.floor((usable_w + gap) / (preferred_w + gap)))
+  return gap, usable_w, columns
+end
+
 local function draw_virtual_tiles(app, settings, avail_w)
   local ctx = app.ctx
   local padding = 0
-  local gap = UIScale.round(10)
-  local usable_w = math.max(1, avail_w - padding * 2)
-  local preferred_w = math.max(UIScale.round(112), math.min(UIScale.round(150), UIScale.round(tonumber(settings.screenshot_size) or 126)))
-  local columns = math.max(1, math.floor((usable_w + gap) / (preferred_w + gap)))
+  local gap, usable_w, columns = grid_metrics(settings, avail_w)
   local cell_w = math.floor((usable_w - (columns - 1) * gap) / columns)
   local cell_h = math.floor(cell_w * uniform_ratio)
   local label_h = r.ImGui_GetTextLineHeight(ctx) + UIScale.round(8)
   local item_h = cell_h + label_h + gap
+  state.grid_columns = columns
+  state.grid_item_h = item_h
   local row_count = math.ceil(#state.filtered / columns)
   local first_row, last_row, top_pad, bottom_pad = visible_range(ctx, row_count, item_h, 3)
   if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
@@ -2793,10 +2942,256 @@ local function draw_virtual_tiles(app, settings, avail_w)
   if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
 end
 
+-- Places every card in the currently shortest column. Column edges are rounded
+-- from a float width so the columns together always span the full window width.
+function masonry.build(ctx, settings, avail_w)
+  local gap, usable_w, columns = grid_metrics(settings, avail_w)
+  local label_h = r.ImGui_GetTextLineHeight(ctx) + UIScale.round(8)
+  local inset = UIScale.round(8)
+  local column_w = (usable_w - (columns - 1) * gap) / columns
+  local column_x, column_widths, column_heights = {}, {}, {}
+  for col = 1, columns do
+    local left = math.floor((col - 1) * (column_w + gap) + 0.5)
+    local right = math.floor((col - 1) * gap + col * column_w + 0.5)
+    column_x[col] = left
+    column_widths[col] = math.max(UIScale.round(40), right - left)
+    column_heights[col] = 0
+  end
+  local show_shots = settings.show_screenshots ~= false
+  local items = {}
+  for index = 1, #state.filtered do
+    local plugin = state.filtered[index]
+    local shortest = 1
+    for col = 2, columns do
+      if column_heights[col] < column_heights[shortest] - 0.5 then shortest = col end
+    end
+    local cell_w = column_widths[shortest]
+    local ratio = (show_shots and state.aspect_ratios[plugin.name]) or uniform_ratio
+    local inner_w = math.max(1, cell_w - inset * 2)
+    local cell_h = math.floor(inner_w * ratio + inset * 2 + 0.5)
+    local min_h = math.floor(cell_w * masonry.min_ratio)
+    local max_h = math.floor(cell_w * masonry.max_ratio)
+    if cell_h < min_h then cell_h = min_h end
+    if cell_h > max_h then cell_h = max_h end
+    items[index] = {
+      index = index,
+      col = shortest,
+      x = column_x[shortest],
+      y = column_heights[shortest],
+      w = cell_w,
+      h = cell_h,
+      total_h = cell_h + label_h
+    }
+    column_heights[shortest] = column_heights[shortest] + cell_h + label_h + gap
+  end
+  local total_h = 0
+  for col = 1, columns do
+    if column_heights[col] > total_h then total_h = column_heights[col] end
+  end
+  return { items = items, total_h = math.max(0, total_h - gap), columns = columns, label_h = label_h, gap = gap }
+end
+
+function masonry.signature(ctx, settings, avail_w)
+  return table.concat({
+    tostring(math.floor(avail_w or 0)),
+    tostring(#state.filtered),
+    tostring(state.last_filter_key or ""),
+    tostring(settings.tile_size or ""),
+    tostring(settings.show_screenshots ~= false),
+    tostring(state.aspect_version),
+    tostring(math.floor(r.ImGui_GetTextLineHeight(ctx) * 10)),
+    tostring(UIScale.round(1000))
+  }, "|")
+end
+
+function masonry.ensure(ctx, settings, avail_w)
+  local signature = masonry.signature(ctx, settings, avail_w)
+  local layout = state.masonry_layout
+  if not layout or layout.signature ~= signature then
+    layout = masonry.build(ctx, settings, avail_w)
+    layout.signature = signature
+    state.masonry_layout = layout
+  end
+  return layout
+end
+
+function masonry.draw(app, settings, avail_w)
+  local ctx = app.ctx
+  local layout = masonry.ensure(ctx, settings, avail_w)
+  if #layout.items == 0 then return end
+  local origin_x, origin_y = r.ImGui_GetCursorPos(ctx)
+  local scroll_y = r.ImGui_GetScrollY(ctx)
+  local window_h = r.ImGui_GetWindowHeight(ctx)
+  local buffer = math.max(UIScale.round(120), window_h * 0.5)
+  local top = scroll_y - buffer
+  local bottom = scroll_y + window_h + buffer
+  for _, item in ipairs(layout.items) do
+    local item_y = origin_y + item.y
+    if item_y <= bottom and item_y + item.total_h >= top then
+      local plugin = state.filtered[item.index]
+      if plugin then
+        r.ImGui_SetCursorPos(ctx, origin_x + item.x, item_y)
+        draw_uniform_card(app, settings, plugin, item.index, item.w, item.h, layout.label_h)
+      end
+    end
+  end
+  r.ImGui_SetCursorPos(ctx, origin_x, origin_y + layout.total_h + layout.gap)
+  r.ImGui_Dummy(ctx, 1, 1)
+end
+
+-- Arrow-key cursor over the results. Only the visible items are ever drawn, so
+-- movement is derived from the layout maths instead of from this frame's items.
+local nav = {}
+
+function nav.rect(settings, index)
+  local mode = views.normalize(settings.view_mode)
+  if mode == "masonry" then
+    local layout = state.masonry_layout
+    local item = layout and layout.items and layout.items[index]
+    if not item then return nil end
+    return item.y, item.total_h
+  end
+  if mode == "tiles" then
+    local item_h = state.grid_item_h or 0
+    if item_h <= 0 then return nil end
+    local row = math.ceil(index / math.max(1, state.grid_columns or 1))
+    return (row - 1) * item_h, item_h
+  end
+  local row_h = UIScale.round(base_row_height)
+  return (index - 1) * row_h, row_h
+end
+
+-- Left/right in masonry means "nearest card in the neighbouring column", which
+-- is not the same as index +/- 1 once the columns run at different lengths.
+function nav.masonry_move(items, index, dir)
+  local cur = items[index]
+  if not cur then return nil end
+  local want_col = cur.col
+  if dir == "left" then want_col = cur.col - 1 elseif dir == "right" then want_col = cur.col + 1 end
+  local best, best_dist = nil, math.huge
+  for other, item in ipairs(items) do
+    if item.col == want_col then
+      local eligible, dist
+      if dir == "up" then
+        eligible, dist = item.y < cur.y - 1, cur.y - item.y
+      elseif dir == "down" then
+        eligible, dist = item.y > cur.y + 1, item.y - cur.y
+      else
+        eligible, dist = true, math.abs(item.y - cur.y)
+      end
+      if eligible and dist < best_dist then best, best_dist = other, dist end
+    end
+  end
+  return best
+end
+
+function nav.move(settings, index, dir)
+  local count = #state.filtered
+  if count == 0 then return nil end
+  if not index then return 1 end
+  local mode = views.normalize(settings.view_mode)
+  if mode == "masonry" then
+    local layout = state.masonry_layout
+    local items = layout and layout.items
+    if items and items[index] then
+      local target = nav.masonry_move(items, index, dir)
+      if target then return target end
+      if dir == "left" then return math.max(1, index - 1) end
+      if dir == "right" then return math.min(count, index + 1) end
+      return index
+    end
+  elseif mode == "tiles" then
+    local columns = math.max(1, state.grid_columns or 1)
+    if dir == "up" then return index - columns >= 1 and index - columns or index end
+    if dir == "down" then return index + columns <= count and index + columns or index end
+  end
+  if dir == "up" or dir == "left" then return math.max(1, index - 1) end
+  return math.min(count, index + 1)
+end
+
+function nav.apply(app, settings, index, shift, ctrl)
+  local count = #state.filtered
+  if count == 0 or not index then return end
+  if index < 1 then index = 1 elseif index > count then index = count end
+  local plugin = state.filtered[index]
+  if not plugin then return end
+  state.nav_index = index
+  state.nav_focus = true
+  if shift then
+    select_range(state.selection_anchor_index or index, index, false)
+    app.status = tostring(selection_count()) .. " FX selected"
+  elseif not ctrl then
+    state.selected_plugins = { [selection_key(plugin)] = true }
+    state.selection_anchor_index = index
+    app.status = plugin.display_name
+  end
+  local y, h = nav.rect(settings, index)
+  if y then state.nav_scroll_target = { y = y, h = h } end
+end
+
+function nav.scroll_into_view(ctx)
+  local target = state.nav_scroll_target
+  if not target then return end
+  state.nav_scroll_target = nil
+  if not r.ImGui_GetScrollY or not r.ImGui_SetScrollY then return end
+  local scroll_y = r.ImGui_GetScrollY(ctx)
+  local window_h = r.ImGui_GetWindowHeight(ctx)
+  local margin = UIScale.round(8)
+  if target.y - margin < scroll_y then
+    r.ImGui_SetScrollY(ctx, math.max(0, target.y - margin))
+  elseif target.y + target.h + margin > scroll_y + window_h then
+    r.ImGui_SetScrollY(ctx, math.max(0, target.y + target.h + margin - window_h))
+  end
+end
+
+function nav.pressed(ctx, name, allow_repeat)
+  local key = r["ImGui_Key_" .. name]
+  if not key or not r.ImGui_IsKeyPressed then return false end
+  local ok_key, value = pcall(key)
+  if not ok_key or not value then return false end
+  local ok, hit = pcall(r.ImGui_IsKeyPressed, ctx, value, allow_repeat ~= false)
+  return ok and hit == true
+end
+
+-- Must run inside the results child: the scrolling below applies to it.
+function nav.keys(app, settings)
+  local ctx = app.ctx
+  if #state.filtered == 0 then return end
+  if r.ImGui_IsPopupOpen and r.ImGui_PopupFlags_AnyPopupId then
+    local ok, open = pcall(r.ImGui_IsPopupOpen, ctx, "", r.ImGui_PopupFlags_AnyPopupId())
+    if ok and open then return end
+  end
+  local hovered = r.ImGui_IsWindowHovered and r.ImGui_IsWindowHovered(ctx)
+  local focused = r.ImGui_IsWindowFocused and r.ImGui_IsWindowFocused(ctx)
+  if not (hovered or focused or state.nav_focus) then return end
+  -- With the search field active, left/right still belong to the text caret.
+  local typing = r.ImGui_IsAnyItemActive and r.ImGui_IsAnyItemActive(ctx) == true
+  local shift = is_selection_shift_down(ctx)
+  local ctrl = is_selection_ctrl_down(ctx)
+  local index = state.nav_index
+  local target = nil
+  if nav.pressed(ctx, "DownArrow") then target = nav.move(settings, index, "down")
+  elseif nav.pressed(ctx, "UpArrow") then target = nav.move(settings, index, "up")
+  elseif not typing and nav.pressed(ctx, "RightArrow") then target = nav.move(settings, index, "right")
+  elseif not typing and nav.pressed(ctx, "LeftArrow") then target = nav.move(settings, index, "left")
+  elseif not typing and nav.pressed(ctx, "Home") then target = 1
+  elseif not typing and nav.pressed(ctx, "End") then target = #state.filtered
+  end
+  if target then
+    nav.apply(app, settings, target, shift, ctrl)
+    return
+  end
+  -- No key repeat here: holding Enter must not insert the plugin over and over.
+  if index and (nav.pressed(ctx, "Enter", false) or nav.pressed(ctx, "KeypadEnter", false)) then
+    local plugin = state.filtered[index]
+    if plugin then add_fx_to_track(app, settings, plugin) end
+  end
+end
+
 local function draw_toolbar(app, settings, avail_w)
   local ctx = app.ctx
   local button_h = r.ImGui_GetFrameHeight(ctx)
-  local mode_label = settings.view_mode == "tiles" and "Uniform" or "List"
+  local mode_label = views.labels[views.normalize(settings.view_mode)]
   local mode_w = math.max(button_h, r.ImGui_CalcTextSize(ctx, mode_label) + UIScale.round(14))
   local group_kind = group_kind_for_source(settings.source or "All")
   local width = math.max(1, avail_w or UIScale.round(320))
@@ -2856,10 +3251,14 @@ local function draw_toolbar(app, settings, avail_w)
   end
   local function draw_mode_button(label, w)
     if r.ImGui_Button(ctx, label, w, button_h) then
-      settings.view_mode = settings.view_mode == "tiles" and "list" or "tiles"
+      settings.view_mode = views.next(settings.view_mode)
+      state.masonry_layout = nil
       if app.save_settings then app.save_settings() end
     end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, settings.view_mode == "tiles" and "Uniform layout" or "List view") end
+    if r.ImGui_IsItemHovered(ctx) then
+      local current = views.normalize(settings.view_mode)
+      r.ImGui_SetTooltip(ctx, views.tooltips[current] .. " - click for " .. views.labels[views.next(current)])
+    end
   end
   local function draw_screenshot_button(label, w)
     if r.ImGui_Button(ctx, label, w, button_h) then
@@ -2998,7 +3397,7 @@ function M.draw(app)
   refresh_filter(settings, false)
   local target = get_target_track()
   local shot_status = settings.show_screenshots and (" | shots " .. tostring(state.screenshot_index and state.screenshot_count or "lazy")) or ""
-  if settings.show_screenshots then shot_status = shot_status .. " | img " .. tostring(#state.screenshot_cache_order) .. "/" .. tostring(max_screenshot_cache) .. " | queue " .. tostring(#state.screenshot_load_order) end
+  if settings.show_screenshots then shot_status = shot_status .. " | img " .. tostring(#state.screenshot_cache_order) .. "/" .. tostring(shot_cache_limit()) .. " | queue " .. tostring(#state.screenshot_load_order) end
   if state.screenshot_image_errors > 0 then shot_status = shot_status .. " | image errors " .. tostring(state.screenshot_image_errors) end
   local info_text = track_label(target) .. " | " .. tostring(#state.filtered) .. " / " .. tostring(#state.plugins) .. " | " .. state.source .. parser_group_summary() .. favorites_source_summary() .. shared_data_summary() .. shot_status
   if state.load_error then
@@ -3007,13 +3406,32 @@ function M.draw(app)
   local _, remaining_h = r.ImGui_GetContentRegionAvail(ctx)
   local shortcut_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(6)
   local list_h = math.max(UIScale.round(120), (remaining_h or avail_h or UIScale.round(360)) - UI.info_line_height(ctx) - shortcut_h)
-  local child_visible = r.ImGui_BeginChild(ctx, "##pb_results", 0, list_h, 0)
+  -- NoNav keeps ImGui's own keyboard navigation, and the blue focus rectangle
+  -- it draws around the child, out of the way of the cursor handled below.
+  local results_flags = 0
+  if r.ImGui_WindowFlags_NoNav then
+    local ok_flags, flags = pcall(r.ImGui_WindowFlags_NoNav)
+    if ok_flags and flags then results_flags = flags end
+  elseif r.ImGui_WindowFlags_NoNavInputs then
+    local ok_flags, flags = pcall(r.ImGui_WindowFlags_NoNavInputs)
+    if ok_flags and flags then results_flags = flags end
+  end
+  local child_visible = r.ImGui_BeginChild(ctx, "##pb_results", 0, list_h, 0, results_flags)
   local ok, err = true, nil
   if child_visible then
     ok, err = pcall(function()
       local results_w = r.ImGui_GetContentRegionAvail(ctx) or avail_w or UIScale.round(320)
+      if settings.view_mode ~= "list" and r.ImGui_GetMouseWheel and r.ImGui_IsWindowHovered(ctx) and is_selection_ctrl_down(ctx) then
+        local wheel = r.ImGui_GetMouseWheel(ctx)
+        if wheel and wheel ~= 0 then
+          local steps = wheel > 0 and 1 or -1
+          set_tile_size(app, settings, (settings.tile_size or defaults.tile_size) + steps * tile_size_range.step)
+        end
+      end
       if #state.plugins == 0 and not state.load_error then
         r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No plugins loaded")
+      elseif settings.view_mode == "masonry" then
+        masonry.draw(app, settings, results_w)
       elseif settings.view_mode == "tiles" then
         draw_virtual_tiles(app, settings, results_w)
       else
@@ -3021,6 +3439,23 @@ function M.draw(app)
         draw_virtual_list(app, settings, row_width)
       end
       if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 0) and not r.ImGui_IsAnyItemHovered(ctx) and not state.dragging_plugin then clear_selection(app) end
+      nav.keys(app, settings)
+      nav.scroll_into_view(ctx)
+      local scroll_max = (r.ImGui_GetScrollMaxY and r.ImGui_GetScrollMaxY(ctx)) or 0
+      local restored = false
+      local pending = state.apply_scroll_anchor or 0
+      if pending > 0 then
+        pending = pending - 1
+        state.apply_scroll_anchor = pending
+        if pending == 0 and r.ImGui_SetScrollY then
+          local target = math.max(0, math.min(scroll_max, (state.scroll_anchor or 0) * scroll_max))
+          r.ImGui_SetScrollY(ctx, target)
+          state.results_scroll_y = target
+          restored = true
+        end
+      end
+      if not restored then state.results_scroll_y = r.ImGui_GetScrollY(ctx) end
+      state.results_scroll_max = scroll_max
     end)
   end
   r.ImGui_EndChild(ctx)
@@ -3028,6 +3463,9 @@ function M.draw(app)
   draw_drag_overlay(app)
   draw_bottom_shortcuts(app, avail_w or UIScale.round(320))
   UI.draw_info_line(ctx, info_text)
+  local visible_shots = 0
+  for _ in pairs(state.screenshot_visible_keys) do visible_shots = visible_shots + 1 end
+  state.visible_shot_count = visible_shots
   if settings.show_screenshots then process_screenshot_load_queue(ctx) end
 end
 

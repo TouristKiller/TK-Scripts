@@ -1,7 +1,17 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.6.4
+-- @version 2.7.0
 -- @changelog
+-- 2.7.0
+--   + Shared notes with TK Workbench: both scripts now read and write the same note, so a note taken in one appears in the other and either can edit it. Each still works entirely on its own - neither needs the other installed - and notes you already have are copied into the shared form the first time you open them, never moved or rewritten in place. If both scripts happened to hold a note on the same context, both are kept and shown side by side as an extra tab here and an extra note block there, because there is no way to tell which one you meant to keep
+--   + Fix: Global notes were lost on restart. They are stored in reaper-extstate.ini, which is a flat file that cannot hold a line break, so a note with more than one line was silently truncated to nothing. Line breaks are now encoded on the way in and decoded on the way out; notes written by earlier versions still read back exactly as they were. Reported by vik-tan
+--   + Font menu now matches the Workbench: a size slider with - and + either side, the font family list below it and a reset, instead of the old fixed steps. The size range is the same in both scripts now - it used to be narrower here, so seven of the sizes the Workbench offers were quietly discarded on the way over
+--   + Right-click menu brought in line with the Workbench, and the things that were only there are here now: bullet, numbered and checkbox lists, Bold, and Add Image. Clicking a checkbox in the text ticks it, rather than only being able to type the marker
+--   + Colour picker: the palette button now opens a real picker for text and note colour instead of a row of preset swatches, and it respects "use context color" the same way the Workbench does. Colours you set with the old presets are unchanged
+--   + Removed the separate palette menu and the hand-drawn font size slider. Both did the same job as the picker and the font menu above, in a second place with slightly different behaviour
+--   + Text alignment is now per tab. Setting a tab to centred used to centre every tab, which made it useless for anything but a note that was all one thing
+--   + Drawings are shared with the Workbench too, so a line drawn in one shows up in the other, in the same place on the note
+--   + Removed the auto-save setting and its interval. Notes were always saved regardless of what it was set to, so the switch did nothing but suggest that turning it off would lose your work
 -- 2.6.4
 --   + Line colors: select multiple lines and apply a color to all of them in one action (color palette, overflow menu and the new "Line color" submenu in the editor right-click menu)
 --   + Line colors: reset now also works on all selected lines at once
@@ -89,6 +99,29 @@ end
 local SCRIPT_DIR = EnsureTrailingSeparator(JoinPaths(RESOURCE_PATH, "Scripts", "TK Scripts", "TK_NOTES"))
 local EXT_NAMESPACE = "TK_NOTES"
 
+-- Deliberately the same range and the same list as the TK Workbench Notes
+-- module. They used to differ (10..32 there, 11..26 here), so a size chosen in
+-- the Workbench was rejected on load here, fell back to the default, and was
+-- then written back -- quietly shrinking the note. Note the separate
+-- FONT_SIZE_MIN/MAX further down: those bound the inline size markup in the
+-- text, which is a different thing entirely.
+local NOTE_FONT_SIZE_MIN = 10
+local NOTE_FONT_SIZE_MAX = 32
+local NOTE_FONT_SIZE_DEFAULT = 14
+local NOTE_FONT_FAMILY_DEFAULT = "sans-serif"
+local NOTE_FONT_FAMILIES = {
+    "sans-serif",
+    "serif",
+    "monospace",
+    "cursive",
+    "Arial",
+    "Courier New",
+    "Times New Roman",
+    "Verdana",
+    "Georgia",
+    "Comic Sans MS",
+}
+
 local ctx
 local font
 
@@ -97,8 +130,8 @@ local state = {
     dirty = false,
     last_edit_time = 0,
     last_save_time = 0,
-    auto_save_enabled = true,
-    auto_save_interval = 10,
+    shared_rev = 0,
+    shared_checked_at = 0,
     font_size = 14,
     font_family = "sans-serif",
     show_status = true,
@@ -219,16 +252,290 @@ local function ReadProjExtState(proj, extname, key)
     return ""
 end
 
+-- Persistent ExtState ends up in reaper-extstate.ini, a flat key=value file that
+-- cannot hold a newline: a multi-line note would be split across lines and come
+-- back truncated, or empty when the break lands before any content. Global mode
+-- is the only mode that stores notes this way (the others use ProjExtState in
+-- the project file), which is why only global notes were being lost. Values that
+-- need it are therefore percent-escaped onto a single line, behind a marker so
+-- that notes written by older versions still read back untouched.
+local EXT_ENCODED_PREFIX = "TKN1:"
+
+local function EncodeExtStateValue(value)
+    value = tostring(value or "")
+    if value == "" then return "" end
+    local needs_encoding = value:find("[\r\n%%]") ~= nil
+        or value:sub(1, #EXT_ENCODED_PREFIX) == EXT_ENCODED_PREFIX
+    if not needs_encoding then return value end
+    local encoded = value:gsub("%%", "%%25"):gsub("\r", "%%0D"):gsub("\n", "%%0A")
+    return EXT_ENCODED_PREFIX .. encoded
+end
+
+local function DecodeExtStateValue(value)
+    if not value or value == "" then return "" end
+    if value:sub(1, #EXT_ENCODED_PREFIX) ~= EXT_ENCODED_PREFIX then return value end
+    local payload = value:sub(#EXT_ENCODED_PREFIX + 1)
+    return (payload:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end))
+end
+
 local function WriteExtState(extname, key, value)
-    r.SetExtState(extname, key, value or "", true)
+    r.SetExtState(extname, key, EncodeExtStateValue(value), true)
     return true
 end
 
 local function ReadExtState(extname, key)
     if r.HasExtState(extname, key) then
-        return r.GetExtState(extname, key)
+        return DecodeExtStateValue(r.GetExtState(extname, key))
     end
     return ""
+end
+
+-- ---------------------------------------------------------------------------
+-- Shared store. The same note format the TK Workbench Notes module uses, so the
+-- two show and edit each other's notes. Optional: if the file is missing the
+-- script keeps working exactly as before, on its own storage.
+-- ---------------------------------------------------------------------------
+local Store
+do
+    local here = debug.getinfo(1, "S").source:match("@(.+[\\/])")
+    if here then
+        local ok, mod = pcall(dofile, here .. "TK_Notes_Store.lua")
+        if ok and type(mod) == "table" and mod.has_json and mod.has_json() then Store = mod end
+    end
+end
+
+local STORE_OWNER = "tk_notes"
+
+local function SharedContext()
+    if not Store then return nil end
+    if state.mode == "global" then return { kind = "global" } end
+    if state.mode == "project" then
+        if not state.current_proj then return nil end
+        return { kind = "project", project = state.current_proj }
+    end
+    if state.mode == "item" then
+        -- Keyed by the item's real GUID so the Workbench recognises the same
+        -- item, and so the note stays attached when the item is moved or
+        -- trimmed. The old position-based identifier is passed along purely so
+        -- the existing note can still be found and carried over. Without SWS
+        -- there is no real GUID, and this context simply does not share.
+        if not state.current_item or not r.BR_GetMediaItemGUID then return nil end
+        local guid = r.BR_GetMediaItemGUID(state.current_item)
+        if not guid or guid == "" then return nil end
+        return {
+            kind = "item",
+            project = state.current_proj,
+            guid = guid,
+            item = state.current_item,
+            legacy_tk_guid = state.current_item_guid
+        }
+    end
+    if state.current_track_guid and state.current_track then
+        return { kind = "track", project = state.current_proj, guid = state.current_track_guid, track = state.current_track }
+    end
+    return nil
+end
+
+-- The shared note stores an image as a path and a position; a texture is a
+-- runtime handle that cannot travel with it. Without loading one here the image
+-- arrives as data the editor has nothing to draw, which is why pictures added in
+-- the Workbench never showed up. Mirrors what LoadImagesFromString does for this
+-- script's own storage, including keeping next_image_id ahead of what came in.
+local RehydrateSharedImages
+
+-- Overlays the shared note on top of whatever the legacy load just produced.
+-- Called at the end of each Load*State, so the old storage still fills in first
+-- and stays the fallback whenever the shared store holds nothing.
+local function ApplySharedStore()
+    local ctx = SharedContext()
+    if not ctx then return end
+    local ok, doc = pcall(Store.ensure, ctx, STORE_OWNER)
+    if not ok or not doc or #doc.blocks == 0 then return end
+    local view = Store.to_tk_notes(doc)
+
+    state.shared_rev = doc.rev or 0
+    state.shared_signature = Store.content_signature(doc, "wb")
+    state.shared_known_ids = Store.block_ids(doc)
+    state.shared_block_id = view.id
+    state.text = NormalizeLineEndings(view.text or "")
+    state.tabs_enabled = view.tabs_enabled == true
+    state.tabs = {}
+    for _, tab in ipairs(view.tabs) do
+        state.tabs[#state.tabs + 1] = {
+            id = tab.id,
+            name = tab.name,
+            text = NormalizeLineEndings(tab.text or ""),
+            -- Not shown here -- this script has one font family and one text
+            -- colour for the whole note -- but kept so the next save hands them
+            -- back instead of flattening what the Workbench set per block.
+            font_family = tab.font_family,
+            text_color = tab.text_color,
+            note_color = tab.note_color,
+            use_context_color = tab.use_context_color,
+            align = tab.align,
+            images = tab.images or {},
+            strokes = tab.strokes or {},
+            font_size = tab.font_size or state.font_size,
+            line_colors = tab.line_colors or {}
+        }
+    end
+    if state.active_tab_index > #state.tabs then state.active_tab_index = 1 end
+    -- Everything below follows the tab that is actually on screen. Taking it
+    -- from the first block instead put block 1's colours and size under the text
+    -- of whichever tab you happened to be on.
+    local active = state.tabs[state.active_tab_index]
+    if state.tabs_enabled and active then
+        state.text = active.text
+    end
+    RehydrateSharedImages((active and active.images) or view.images or {})
+    state.strokes = (active and active.strokes) or view.strokes or {}
+    state.line_colors = (active and active.line_colors) or view.line_colors or {}
+    -- The tab on screen, not the first one. Reading view.align meant tab 1's
+    -- alignment was shown for every tab -- and then written back over theirs.
+    local tab_align = (active and active.align) or view.align
+    if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+        state.text_align = tab_align
+    end
+
+    -- Mirrors of the active tab, so the drawing code and the colour picker have
+    -- a single place to look. Nil means "not set" and the old behaviour applies.
+    state.note_color = active and active.note_color or nil
+    state.tab_text_color = active and active.text_color or nil
+    state.use_context_color = active and active.use_context_color or nil
+
+    local font_size = (active and active.font_size) or view.font_size
+    local font_family = (active and active.font_family) or view.font_family
+    local font_changed = false
+    if font_size and font_size ~= state.font_size then
+        state.font_size = font_size
+        font_changed = true
+    end
+    if font_family and font_family ~= "" and font_family ~= state.font_family then
+        state.font_family = font_family
+        font_changed = true
+    end
+    -- The four load functions all rebuild the font after changing these; this
+    -- overlay runs after them, so without doing the same the new size simply
+    -- never reached the screen.
+    if font_changed then BuildFont() end
+
+    -- Remembered so a later save can tell "the user picked a new font" from
+    -- "this is just what was loaded", and only overrule every block in the first
+    -- case. TK Notes has one setting for the whole note; the Workbench has one
+    -- per block, and those must not be flattened by merely opening the note.
+    state.shared_font_family = state.font_family
+    state.shared_text_mode = state.text_color_mode
+    state.dirty = false
+end
+
+-- Writes this script's view into the shared store. Store.apply keeps whatever
+-- the Workbench owns and this script cannot show, while letting a tab deleted
+-- here really disappear.
+-- This script's own view, expressed as a shared document. Used both to save and
+-- to work out whether a refresh would throw away anything that is only here.
+local function BuildSharedDocument()
+    local tabs = {}
+    -- Sync regardless of whether tabs are switched on. With a single note
+    -- tabs are off, but state.tabs still holds that note, and leaving the
+    -- stale copy behind wrote it out a second time under the same id.
+    if state.tabs[state.active_tab_index] then
+        state.tabs[state.active_tab_index].text = state.text
+        state.tabs[state.active_tab_index].images = state.images
+        state.tabs[state.active_tab_index].strokes = state.strokes
+        state.tabs[state.active_tab_index].font_size = state.font_size
+        state.tabs[state.active_tab_index].line_colors = state.line_colors
+        state.tabs[state.active_tab_index].note_color = state.note_color
+        state.tabs[state.active_tab_index].text_color = state.tab_text_color
+        state.tabs[state.active_tab_index].use_context_color = state.use_context_color
+        -- Only this tab: TK Notes has one alignment control, and it belongs to
+        -- the tab you are looking at, exactly as the font size does.
+        state.tabs[state.active_tab_index].align = state.text_align
+    end
+    for _, tab in ipairs(state.tabs) do tabs[#tabs + 1] = tab end
+    -- Only when the user actually picked a new font or text colour here does it
+    -- overrule what each block carries; otherwise the per-block values are
+    -- handed back untouched.
+    local family_changed = state.shared_font_family ~= nil and state.font_family ~= state.shared_font_family
+    local mode_changed = state.shared_text_mode ~= nil and state.text_color_mode ~= state.shared_text_mode
+    return Store.from_tk_notes({
+            id = state.shared_block_id,
+            text = state.text,
+            tabs_enabled = state.tabs_enabled,
+            tabs = tabs,
+            images = state.images,
+            strokes = state.strokes,
+            align = state.text_align,
+            font_size = state.font_size,
+            font_family = state.font_family,
+            font_family_changed = family_changed,
+            text_color_changed = mode_changed,
+            text_color = (state.text_color_mode == "black") and 0x000000FF or 0xFFFFFFFF,
+            line_colors = state.line_colors,
+            bg_color = (state.mode == "project") and state.project_bg_color or state.global_bg_color,
+        bg_brightness = (state.mode == "project") and state.project_bg_brightness or state.global_bg_brightness
+    }, STORE_OWNER)
+end
+
+-- True when this window is holding an edit that is not in the shared note yet.
+-- The dirty flag alone cannot answer this: the script raises it for things that
+-- are not edits to the note -- a window resize among them -- and refusing to
+-- refresh on that basis is what kept the Workbench's changes from ever arriving.
+local function HasUnsavedSharedChange(ctx)
+    local ok, changed = pcall(function()
+        local doc, carried = Store.apply(BuildSharedDocument(), Store.load(ctx, STORE_OWNER),
+            STORE_OWNER, state.shared_known_ids)
+        local signature = Store.own_signature(doc, carried, "wb")
+        return signature ~= nil and signature ~= state.shared_signature
+    end)
+    return ok and changed == true
+end
+
+local function SaveSharedStore()
+    local ctx = SharedContext()
+    if not ctx then return end
+    pcall(function()
+        local mine = BuildSharedDocument()
+        local stored = Store.load(ctx, STORE_OWNER)
+        local doc, carried = Store.apply(mine, stored, STORE_OWNER, state.shared_known_ids)
+        -- This script marks itself dirty for things that are not edits to the
+        -- note, a window resize among them. Writing then would push a possibly
+        -- stale copy over whatever the Workbench just saved, so a save that
+        -- changes nothing is simply not made.
+        local signature = Store.own_signature(doc, carried, "wb")
+        if signature and signature == state.shared_signature then return end
+        Store.save(ctx, doc, STORE_OWNER)
+        state.shared_signature = signature
+        state.shared_known_ids = Store.block_ids(doc)
+        -- So our own write is not read back as someone else's change -- unless
+        -- the save carried over notes we are not showing, in which case the
+        -- revision is deliberately left behind so the next poll pulls them in.
+        if (carried or 0) == 0 then state.shared_rev = doc.rev or state.shared_rev end
+    end)
+end
+
+-- Picks up edits made in the TK Workbench Notes panel while this window is open.
+-- Never runs on unsaved text: typing here always outranks a refresh.
+local SHARED_POLL_INTERVAL = 0.75
+
+local function RefreshFromSharedStore()
+    if not Store then return end
+    local ctx = SharedContext()
+    if not ctx then return end
+    local moment = r.time_precise()
+    if moment - (state.shared_checked_at or 0) < SHARED_POLL_INTERVAL then return end
+    state.shared_checked_at = moment
+    local ok, rev = pcall(Store.peek, ctx)
+    if not ok or not rev or rev == (state.shared_rev or 0) then return end
+    -- Something changed elsewhere. Only refuse it if there is genuinely unsaved
+    -- text here that the refresh would wipe out.
+    if state.dirty and HasUnsavedSharedChange(ctx) then return end
+    ApplySharedStore()
+    local editor = EnsureEditorState()
+    local length = #state.text
+    if editor.caret > length then editor.caret = length end
+    if (editor.selection_start or 0) > length then editor.selection_start = length end
+    if (editor.selection_end or 0) > length then editor.selection_end = length end
+    if (editor.selection_anchor or 0) > length then editor.selection_anchor = length end
 end
 
 local function MakeTrackAlignKey(track_guid)
@@ -280,14 +587,6 @@ local function GetGlobalDefaults()
 end
 
 local function LoadNotebook()
-    if r.HasExtState(EXT_NAMESPACE, "auto_save_interval") then
-        local stored_interval = r.GetExtState(EXT_NAMESPACE, "auto_save_interval")
-        local interval = tonumber(stored_interval)
-        if interval and interval >= 2 and interval <= 120 then
-            state.auto_save_interval = interval
-        end
-    end
-
     if r.HasExtState(EXT_NAMESPACE, "auto_context") then
         state.auto_context = r.GetExtState(EXT_NAMESPACE, "auto_context") == "1"
     end
@@ -308,7 +607,7 @@ local function SaveNotebook()
     if not is_item_mode and not is_track_mode and not is_project_mode and not is_global_mode then return end
     
     local text = state.text or ""
-    local text_key, align_key, color_key, images_key, strokes_key, font_size_key, font_family_key, auto_save_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key, bg_color_key, bg_brightness_key, line_colors_key
+    local text_key, align_key, color_key, images_key, strokes_key, font_size_key, font_family_key, window_width_key, window_height_key, show_status_key, tabs_enabled_key, tabs_data_key, bg_color_key, bg_brightness_key, line_colors_key
     
     if is_item_mode then
         text_key = MakeItemKey(state.current_item_guid, "text")
@@ -318,7 +617,6 @@ local function SaveNotebook()
         strokes_key = MakeItemKey(state.current_item_guid, "strokes")
         font_size_key = MakeItemKey(state.current_item_guid, "font_size")
         font_family_key = MakeItemKey(state.current_item_guid, "font_family")
-        auto_save_key = MakeItemKey(state.current_item_guid, "auto_save_enabled")
         window_width_key = MakeItemKey(state.current_item_guid, "window_width")
         window_height_key = MakeItemKey(state.current_item_guid, "window_height")
         show_status_key = MakeItemKey(state.current_item_guid, "show_status")
@@ -333,7 +631,6 @@ local function SaveNotebook()
         strokes_key = "PROJECT::strokes"
         font_size_key = "PROJECT::font_size"
         font_family_key = "PROJECT::font_family"
-        auto_save_key = "PROJECT::auto_save_enabled"
         window_width_key = "PROJECT::window_width"
         window_height_key = "PROJECT::window_height"
         show_status_key = "PROJECT::show_status"
@@ -350,7 +647,6 @@ local function SaveNotebook()
         strokes_key = "GLOBAL::strokes"
         font_size_key = "GLOBAL::font_size"
         font_family_key = "GLOBAL::font_family"
-        auto_save_key = "GLOBAL::auto_save_enabled"
         window_width_key = "GLOBAL::window_width"
         window_height_key = "GLOBAL::window_height"
         show_status_key = "GLOBAL::show_status"
@@ -367,7 +663,6 @@ local function SaveNotebook()
         strokes_key = tostring(state.current_track_guid) .. "::strokes"
         font_size_key = tostring(state.current_track_guid) .. "::font_size"
         font_family_key = tostring(state.current_track_guid) .. "::font_family"
-        auto_save_key = tostring(state.current_track_guid) .. "::auto_save_enabled"
         window_width_key = tostring(state.current_track_guid) .. "::window_width"
         window_height_key = tostring(state.current_track_guid) .. "::window_height"
         show_status_key = tostring(state.current_track_guid) .. "::show_status"
@@ -408,7 +703,6 @@ local function SaveNotebook()
     
     local font_size_value = tostring(state.font_size or 14)
     local font_family_value = state.font_family or "sans-serif"
-    local auto_save_value = tostring(state.auto_save_enabled and "true" or "false")
     local window_width_value = tostring(state.window_width or 600)
     local window_height_value = tostring(state.window_height or 400)
     local show_status_value = tostring(state.show_status and "true" or "false")
@@ -424,6 +718,10 @@ local function SaveNotebook()
             state.tabs[state.active_tab_index].images = state.images
             state.tabs[state.active_tab_index].strokes = state.strokes
             state.tabs[state.active_tab_index].font_size = state.font_size
+            -- Line colours are written per tab below, so a stale copy here ends
+            -- up in the file; alignment follows the same rule for consistency.
+            state.tabs[state.active_tab_index].line_colors = state.line_colors
+            state.tabs[state.active_tab_index].align = state.text_align
         end
         
         -- Format: tab_count|active_index|tab1_name:tab1_text|tab2_name:tab2_text|...
@@ -437,7 +735,7 @@ local function SaveNotebook()
     
     -- Use ExtState for global mode, ProjExtState for others
     local saved_text, saved_align, saved_color, saved_images, saved_strokes, saved_font_size, saved_font_family
-    local saved_auto_save, saved_window_width, saved_window_height, saved_show_status, saved_tabs_enabled, saved_tabs_data, saved_bg_color, saved_bg_brightness
+    local saved_window_width, saved_window_height, saved_show_status, saved_tabs_enabled, saved_tabs_data, saved_bg_color, saved_bg_brightness
     
     -- Serialize background color and brightness (only for project/global mode)
     local bg_color_value = ""
@@ -462,7 +760,6 @@ local function SaveNotebook()
         saved_strokes = WriteExtState(EXT_NAMESPACE, strokes_key, strokes_str)
         saved_font_size = WriteExtState(EXT_NAMESPACE, font_size_key, font_size_value)
         saved_font_family = WriteExtState(EXT_NAMESPACE, font_family_key, font_family_value)
-        saved_auto_save = WriteExtState(EXT_NAMESPACE, auto_save_key, auto_save_value)
         saved_window_width = WriteExtState(EXT_NAMESPACE, window_width_key, window_width_value)
         saved_window_height = WriteExtState(EXT_NAMESPACE, window_height_key, window_height_value)
         saved_show_status = WriteExtState(EXT_NAMESPACE, show_status_key, show_status_value)
@@ -479,7 +776,6 @@ local function SaveNotebook()
         saved_strokes = WriteProjExtState(state.current_proj, EXT_NAMESPACE, strokes_key, strokes_str)
         saved_font_size = WriteProjExtState(state.current_proj, EXT_NAMESPACE, font_size_key, font_size_value)
         saved_font_family = WriteProjExtState(state.current_proj, EXT_NAMESPACE, font_family_key, font_family_value)
-        saved_auto_save = WriteProjExtState(state.current_proj, EXT_NAMESPACE, auto_save_key, auto_save_value)
         saved_window_width = WriteProjExtState(state.current_proj, EXT_NAMESPACE, window_width_key, window_width_value)
         saved_window_height = WriteProjExtState(state.current_proj, EXT_NAMESPACE, window_height_key, window_height_value)
         saved_show_status = WriteProjExtState(state.current_proj, EXT_NAMESPACE, show_status_key, show_status_value)
@@ -559,11 +855,14 @@ local function SaveNotebook()
         end
     end
     
-    r.SetExtState(EXT_NAMESPACE, "auto_save_interval", tostring(state.auto_save_interval or 10), true)
     r.SetExtState(EXT_NAMESPACE, "auto_context", state.auto_context and "1" or "0", true)
     r.SetExtState(EXT_NAMESPACE, "window_pinned", state.window_pinned and "1" or "0", true)
     
-    if saved_text and saved_align and saved_color and saved_images and saved_strokes and saved_font_size and saved_font_family and saved_auto_save and saved_window_width and saved_window_height and saved_show_status and saved_tabs_enabled and saved_tabs_data then
+    -- Written alongside the legacy keys, not instead of them: the old storage
+    -- stays current so an older build of either script still finds its notes.
+    SaveSharedStore()
+
+    if saved_text and saved_align and saved_color and saved_images and saved_strokes and saved_font_size and saved_font_family and saved_window_width and saved_window_height and saved_show_status and saved_tabs_enabled and saved_tabs_data then
         state.dirty = false
         state.last_save_time = r.time_precise()
     end
@@ -682,6 +981,49 @@ local function RemoveImage(image_id)
         end
     end
     return false
+end
+
+RehydrateSharedImages = function(images)
+    images = images or {}
+    -- Rebuilding textures on every refresh would be wasteful and would drop an
+    -- image the user is halfway through dragging, so an unchanged set is left be.
+    if #images == #state.images then
+        local identical = true
+        for index, entry in ipairs(images) do
+            local current = state.images[index]
+            if not current or current.path ~= entry.path
+                or current.pos_x ~= entry.pos_x or current.pos_y ~= entry.pos_y
+                or current.scale ~= entry.scale or current.width ~= entry.width then
+                identical = false
+                break
+            end
+        end
+        if identical then return end
+    end
+    ClearAllImages()
+    for _, entry in ipairs(images or {}) do
+        local path = entry.path
+        if path and path ~= "" and r.file_exists(path) then
+            local texture, orig_width, orig_height = LoadImage(path)
+            if texture and orig_width and orig_height and orig_width > 0 then
+                local id = tonumber(entry.id) or (state.next_image_id)
+                state.images[#state.images + 1] = {
+                    id = id,
+                    path = path,
+                    texture = texture,
+                    width = tonumber(entry.width) or 150,
+                    height = tonumber(entry.height) or math.floor((orig_height / orig_width) * 150),
+                    pos_x = tonumber(entry.pos_x) or 10,
+                    pos_y = tonumber(entry.pos_y) or 10,
+                    scale = tonumber(entry.scale) or 100,
+                    dragging = false,
+                    drag_offset_x = 0,
+                    drag_offset_y = 0
+                }
+                if id >= state.next_image_id then state.next_image_id = id + 1 end
+            end
+        end
+    end
 end
 
 local function LoadImagesFromString(images_str)
@@ -1098,7 +1440,6 @@ local function SetNoTrackState(proj)
     state.last_edit_time = 0
     state.bold_input_active = false
     state.text_align = "left"
-    state.auto_save_enabled = true
     state.show_status = true
     state.window_width = 600
     state.window_height = 400
@@ -1151,7 +1492,7 @@ local function LoadProjectState(proj)
     
     local stored_font_size = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::font_size"))
     local stored_font_family = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::font_family")
-    local min_font, max_font = 11, 26
+    local min_font, max_font = NOTE_FONT_SIZE_MIN, NOTE_FONT_SIZE_MAX
     local default_font = 14
     local target_font = default_font
     if stored_font_size and stored_font_size >= min_font and stored_font_size <= max_font then
@@ -1171,7 +1512,6 @@ local function LoadProjectState(proj)
     end
     
     local stored_images = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::images")
-    local stored_auto_save = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::auto_save_enabled")
     local stored_width = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::window_width"))
     local stored_height = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::window_height"))
     local stored_show_status = ReadProjExtState(proj, EXT_NAMESPACE, "PROJECT::show_status")
@@ -1193,13 +1533,7 @@ local function LoadProjectState(proj)
         state.project_bg_color = nil
     end
     state.project_bg_brightness = tonumber(stored_bg_brightness) or 1.0
-    
-    if stored_auto_save then
-        state.auto_save_enabled = (stored_auto_save == "true")
-    else
-        state.auto_save_enabled = true
-    end
-    
+
     local gdef = GetGlobalDefaults()
     
     -- Load tabs data (always load, even if tabs are disabled, to preserve them)
@@ -1327,6 +1661,13 @@ local function LoadProjectState(proj)
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
                 state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                -- Alignment belongs to the tab, like its size and colours, so it
+                -- has to be picked up here too or the previous tab's setting stays
+                -- on screen and gets written over this one on the next save.
+                local tab_align = state.tabs[state.active_tab_index].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                 local tab_fs = state.tabs[state.active_tab_index].font_size
                 if tab_fs and tab_fs ~= state.font_size then
                     state.font_size = tab_fs
@@ -1407,6 +1748,8 @@ local function LoadProjectState(proj)
     -- Apply default appearance for project mode
     ApplyTrackAppearance(nil)
     
+    ApplySharedStore()
+
     local editor = EnsureEditorState()
     editor.caret = #state.text
     editor.selection_start = #state.text
@@ -1450,7 +1793,7 @@ local function LoadGlobalState()
     
     local stored_font_size = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::font_size"))
     local stored_font_family = ReadExtState(EXT_NAMESPACE, "GLOBAL::font_family")
-    local min_font, max_font = 11, 26
+    local min_font, max_font = NOTE_FONT_SIZE_MIN, NOTE_FONT_SIZE_MAX
     local default_font = 14
     local target_font = default_font
     if stored_font_size and stored_font_size >= min_font and stored_font_size <= max_font then
@@ -1470,7 +1813,6 @@ local function LoadGlobalState()
     end
     
     local stored_images = ReadExtState(EXT_NAMESPACE, "GLOBAL::images")
-    local stored_auto_save = ReadExtState(EXT_NAMESPACE, "GLOBAL::auto_save_enabled")
     local stored_width = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::window_width"))
     local stored_height = tonumber(ReadExtState(EXT_NAMESPACE, "GLOBAL::window_height"))
     local stored_show_status = ReadExtState(EXT_NAMESPACE, "GLOBAL::show_status")
@@ -1492,13 +1834,7 @@ local function LoadGlobalState()
         state.global_bg_color = nil
     end
     state.global_bg_brightness = tonumber(stored_bg_brightness) or 1.0
-    
-    if stored_auto_save then
-        state.auto_save_enabled = (stored_auto_save == "true")
-    else
-        state.auto_save_enabled = true
-    end
-    
+
     -- Load tabs data
     state.tabs_enabled = stored_tabs_enabled == "true"
     state.tabs = {}
@@ -1620,6 +1956,13 @@ local function LoadGlobalState()
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
                 state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                -- Alignment belongs to the tab, like its size and colours, so it
+                -- has to be picked up here too or the previous tab's setting stays
+                -- on screen and gets written over this one on the next save.
+                local tab_align = state.tabs[state.active_tab_index].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                 local tab_fs = state.tabs[state.active_tab_index].font_size
                 if tab_fs and tab_fs ~= state.font_size then
                     state.font_size = tab_fs
@@ -1695,6 +2038,8 @@ local function LoadGlobalState()
     -- Apply default appearance for global mode
     ApplyTrackAppearance(nil)
     
+    ApplySharedStore()
+
     local editor = EnsureEditorState()
     editor.caret = #state.text
     editor.selection_start = #state.text
@@ -1739,7 +2084,7 @@ local function LoadTrackState(proj, track, track_guid)
     local stored_font_size = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, font_size_key))
     local font_family_key = tostring(track_guid) .. "::font_family"
     local stored_font_family = ReadProjExtState(proj, EXT_NAMESPACE, font_family_key)
-    local min_font, max_font = 11, 26
+    local min_font, max_font = NOTE_FONT_SIZE_MIN, NOTE_FONT_SIZE_MAX
     local default_font = 14
     local target_font = default_font
     if stored_font_size and stored_font_size >= min_font and stored_font_size <= max_font then
@@ -1760,8 +2105,6 @@ local function LoadTrackState(proj, track, track_guid)
     
     local images_key = tostring(track_guid) .. "::images"
     local stored_images = ReadProjExtState(proj, EXT_NAMESPACE, images_key)
-    local auto_save_key = tostring(track_guid) .. "::auto_save_enabled"
-    local stored_auto_save = ReadProjExtState(proj, EXT_NAMESPACE, auto_save_key)
     local window_width_key = tostring(track_guid) .. "::window_width"
     local window_height_key = tostring(track_guid) .. "::window_height"
     local stored_width = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, window_width_key))
@@ -1774,13 +2117,7 @@ local function LoadTrackState(proj, track, track_guid)
     local stored_tabs_data = ReadProjExtState(proj, EXT_NAMESPACE, tabs_data_key)
     
     local gdef = GetGlobalDefaults()
-    
-    if stored_auto_save then
-        state.auto_save_enabled = (stored_auto_save == "true")
-    else
-        state.auto_save_enabled = true
-    end
-    
+
     if stored_tabs_enabled and stored_tabs_enabled ~= "" then
         state.tabs_enabled = stored_tabs_enabled == "true"
     else
@@ -1909,6 +2246,13 @@ local function LoadTrackState(proj, track, track_guid)
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
                 state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                -- Alignment belongs to the tab, like its size and colours, so it
+                -- has to be picked up here too or the previous tab's setting stays
+                -- on screen and gets written over this one on the next save.
+                local tab_align = state.tabs[state.active_tab_index].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                 local tab_fs = state.tabs[state.active_tab_index].font_size
                 if tab_fs and tab_fs ~= state.font_size then
                     state.font_size = tab_fs
@@ -1999,6 +2343,8 @@ local function LoadTrackState(proj, track, track_guid)
     state.track_number = number
     ApplyTrackAppearance(track)
 
+    ApplySharedStore()
+
     local editor = EnsureEditorState()
     editor.caret = #state.text
     editor.selection_start = editor.caret
@@ -2046,7 +2392,7 @@ local function LoadItemState(proj, item, item_guid)
     
     local stored_font_size = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "font_size")))
     local stored_font_family = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "font_family"))
-    local min_font, max_font = 11, 26
+    local min_font, max_font = NOTE_FONT_SIZE_MIN, NOTE_FONT_SIZE_MAX
     local default_font = 14
     local target_font = default_font
     if stored_font_size and stored_font_size >= min_font and stored_font_size <= max_font then
@@ -2066,7 +2412,6 @@ local function LoadItemState(proj, item, item_guid)
     end
     
     local stored_images = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "images"))
-    local stored_auto_save = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "auto_save_enabled"))
     local stored_width = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "window_width")))
     local stored_height = tonumber(ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "window_height")))
     local stored_show_status = ReadProjExtState(proj, EXT_NAMESPACE, MakeItemKey(item_guid, "show_status"))
@@ -2078,7 +2423,6 @@ local function LoadItemState(proj, item, item_guid)
     local prev_width = state.window_width
     local prev_height = state.window_height
     
-    state.auto_save_enabled = stored_auto_save and (stored_auto_save == "true") or true
     state.window_width = (stored_width and stored_width >= 300 and stored_width <= 3000) and stored_width or gdef.window_width
     state.window_height = (stored_height and stored_height >= 250 and stored_height <= 3000) and stored_height or gdef.window_height
     state.show_status = (stored_show_status == nil or stored_show_status == "") and gdef.show_status or (stored_show_status == "true")
@@ -2209,6 +2553,13 @@ local function LoadItemState(proj, item, item_guid)
                 state.images = state.tabs[state.active_tab_index].images or {}
                 state.strokes = state.tabs[state.active_tab_index].strokes or {}
                 state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                -- Alignment belongs to the tab, like its size and colours, so it
+                -- has to be picked up here too or the previous tab's setting stays
+                -- on screen and gets written over this one on the next save.
+                local tab_align = state.tabs[state.active_tab_index].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                 local tab_fs = state.tabs[state.active_tab_index].font_size
                 if tab_fs and tab_fs ~= state.font_size then
                     state.font_size = tab_fs
@@ -2299,6 +2650,8 @@ local function LoadItemState(proj, item, item_guid)
             ApplyItemAppearance(item)
         end
     end
+
+    ApplySharedStore()
 
     local editor = EnsureEditorState()
     editor.caret = #state.text
@@ -2449,6 +2802,10 @@ local function ResolveColorU32(color_idx)
 end
 
 local function GetEditorTextColor()
+    -- A colour picked for this tab wins. Without one the black/white mode this
+    -- script has always had still decides, so notes made before the picker
+    -- existed look exactly as they did.
+    if state.tab_text_color then return state.tab_text_color end
     if state.text_color_mode == "white" then
         return PackColorToU32(1, 1, 1, 1)
     elseif state.text_color_mode == "black" then
@@ -2557,6 +2914,143 @@ function GetColorTargetLines(editor)
         last_line = math.max(first_line, last_line - 1)
     end
     return first_line, last_line
+end
+
+-- ---------------------------------------------------------------------------
+-- List markers, ported from the TK Workbench Notes module so both apps mark a
+-- list identically. The marker lives in the text itself, which is why a list
+-- made in one already shows up as a list in the other -- neither has to know
+-- anything about the other's data.
+-- ---------------------------------------------------------------------------
+local function StripListPrefix(line_text)
+    line_text = tostring(line_text or "")
+    local stripped = line_text:gsub("^•%s+", "", 1)
+    if stripped ~= line_text then return stripped end
+    stripped = line_text:gsub("^%d+%.%s+", "", 1)
+    if stripped ~= line_text then return stripped end
+    stripped = line_text:gsub("^%[[ xX]%]%s+", "", 1)
+    return stripped
+end
+
+local function ListPrefixLength(line_text)
+    line_text = tostring(line_text or "")
+    local prefix = line_text:match("^•%s+") or line_text:match("^%d+%.%s+") or line_text:match("^%[[ xX]%]%s+")
+    return prefix and #prefix or 0
+end
+
+local function ListMarkerForMode(mode, number)
+    if mode == "bullet" then return "• " end
+    if mode == "numbered" then return tostring(number or 1) .. ". " end
+    if mode == "checkbox" then return "[ ] " end
+    return ""
+end
+
+local function SplitSourceLines(text)
+    text = tostring(text or "")
+    local lines, start = {}, 1
+    while true do
+        local newline = text:find("\n", start, true)
+        if newline then
+            lines[#lines + 1] = { text = text:sub(start, newline - 1), newline = true }
+            start = newline + 1
+        else
+            lines[#lines + 1] = { text = text:sub(start), newline = false }
+            break
+        end
+    end
+    return lines
+end
+
+local function NumberedStartForLine(lines, source_line)
+    for line = source_line - 1, 1, -1 do
+        local number = lines[line] and lines[line].text:match("^(%d+)%.%s+")
+        if number then return tonumber(number) + 1 end
+    end
+    return 1
+end
+
+-- Rewrites the prefixes of the selected lines and returns the new text plus
+-- where the caret should land, so it stays on the same character rather than
+-- drifting by the width of the marker.
+local function ApplyListModeToLines(text, first_line, last_line, caret, mode)
+    text = tostring(text or "")
+    local lines = SplitSourceLines(text)
+    local number = NumberedStartForLine(lines, first_line)
+    local caret_line = GetSourceLineFromByte(text, caret or 0)
+    local before = 0
+    for line = 1, caret_line - 1 do
+        if lines[line] then before = before + #lines[line].text + (lines[line].newline and 1 or 0) end
+    end
+    local caret_column = (caret or 0) - before
+    local old_prefix = lines[caret_line] and ListPrefixLength(lines[caret_line].text) or 0
+    local content_column = math.max(0, caret_column - old_prefix)
+    local new_caret_column = content_column
+
+    for line = first_line, last_line do
+        if lines[line] then
+            local body = StripListPrefix(lines[line].text)
+            if mode == "none" then
+                lines[line].text = body
+                if line == caret_line then new_caret_column = math.min(#body, content_column) end
+            else
+                local prefix = ListMarkerForMode(mode, number)
+                lines[line].text = prefix .. body
+                if line == caret_line then new_caret_column = #prefix + math.min(#body, content_column) end
+                if mode == "numbered" then number = number + 1 end
+            end
+        end
+    end
+
+    local parts, new_caret = {}, 0
+    for line, entry in ipairs(lines) do
+        if line < caret_line then new_caret = new_caret + #entry.text + (entry.newline and 1 or 0) end
+        parts[#parts + 1] = entry.text
+        if entry.newline then parts[#parts + 1] = "\n" end
+    end
+    if lines[caret_line] then
+        new_caret = new_caret + math.min(#lines[caret_line].text, math.max(0, new_caret_column))
+    end
+    return table.concat(parts), new_caret
+end
+
+-- Ticks or unticks the boxes on the given lines. A line without a box gets one,
+-- already ticked, which is how the Workbench behaves when you click a line.
+local function ToggleCheckboxOnLines(text, first_line, last_line)
+    local lines = SplitSourceLines(text)
+    for line = first_line, last_line do
+        local entry = lines[line]
+        if entry then
+            if entry.text:match("^%[[xX]%]%s+") then
+                entry.text = entry.text:gsub("^%[[xX]%](%s+)", "[ ]%1", 1)
+            elseif entry.text:match("^%[ %]%s+") then
+                entry.text = entry.text:gsub("^%[ %](%s+)", "[x]%1", 1)
+            else
+                entry.text = "[x] " .. StripListPrefix(entry.text)
+            end
+        end
+    end
+    local parts = {}
+    for _, entry in ipairs(lines) do
+        parts[#parts + 1] = entry.text
+        if entry.newline then parts[#parts + 1] = "\n" end
+    end
+    return table.concat(parts)
+end
+
+-- The marker that continues the list on the next line.
+local function NextListMarker(text, caret, mode)
+    if not mode or mode == "none" then return "" end
+    local line_text = tostring(text or ""):sub(1, caret or 0):match("[^\n]*$") or ""
+    if mode == "numbered" then
+        local number = tonumber(line_text:match("^(%d+)%.%s+")) or 0
+        return ListMarkerForMode("numbered", number + 1)
+    end
+    return ListMarkerForMode(mode, 1)
+end
+
+local function ClearCheckedBoxes(text)
+    text = tostring(text or "")
+    return (text:gsub("^%[[xX]%](%s+)", "[ ]%1"):gsub("\n%[[xX]%](%s+)", "\n[ ]%1"))
 end
 
 local function ClearSelection(editor, pos)
@@ -3345,6 +3839,49 @@ local function CaretFromMouse(layout, local_x, local_y, wrap_width, alignment)
     return CaretAtLinePosition(line, relative_x), relative_x
 end
 
+-- Which checkbox, if any, sits under the pointer. The Workbench draws real
+-- checkboxes and hit-tests those; here the box is three plain characters at the
+-- head of a line, so the test is done on the glyphs the layout already placed:
+-- the wrapped line has to be the first one of its source line, that source line
+-- has to start with a box, and the click has to land on those characters.
+local function CheckboxLineAtMouse(layout, local_x, local_y, wrap_width, alignment)
+    local lines = layout and layout.lines
+    if not lines or #lines == 0 then return nil end
+    local line_height = layout.line_height
+    local idx = nil
+    for li, ln in ipairs(lines) do
+        local top = ln.y or ((li - 1) * line_height)
+        local bot = top + (ln.height or line_height)
+        if local_y >= top and local_y < bot then idx = li; break end
+    end
+    if not idx then return nil end
+    local line = lines[idx]
+    if not line or not line.start_byte then return nil end
+
+    -- A wrapped continuation carries no marker of its own; only the first
+    -- visual line of a source line may hold one.
+    local start_byte = line.start_byte
+    if start_byte > 1 and state.text:byte(start_byte - 1) ~= 10 then return nil end
+    if not state.text:sub(start_byte, start_byte + 3):match("^%[[ xX]%]%s") then return nil end
+
+    -- The three glyphs of the box itself, in layout coordinates.
+    local first, last = nil, nil
+    for _, entry in ipairs(line.chars or {}) do
+        if not entry.is_format then
+            if not first then first = entry end
+            last = entry
+            if entry.byte_end and entry.byte_end >= start_byte + 2 then break end
+        end
+    end
+    if not first or not last then return nil end
+    local offset = CalculateLineOffset(line, wrap_width, alignment)
+    if local_x < offset + first.x0 or local_x > offset + last.x1 then return nil end
+
+    -- start_byte - 1 is the newline that ended the previous line, so counting up
+    -- to it lands on this line's number; at the very start it returns 1.
+    return GetSourceLineFromByte(state.text, start_byte - 1)
+end
+
 local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, max_text_height, editing_enabled)
     local text_changed = false
     local caret_changed = false
@@ -3554,22 +4091,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
         end
 
         if r.ImGui_Key_Enter and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter(), false) then
-            local marker = ""
-            if state.list_mode ~= "none" then
-                if state.list_mode == "bullet" then
-                    marker = "• "
-                else
-                    local before_text = state.text:sub(1, editor.caret)
-                    local last_line = before_text:match("[^\n]*$") 
-                    local prev_num = last_line:match("^(%d+)%. ")
-                    
-                    if prev_num then
-                        marker = (tonumber(prev_num) + 1) .. ". "
-                    else
-                        marker = "1. "
-                    end
-                end
-            end
+            local marker = NextListMarker(state.text, editor.caret, state.list_mode)
             
             process_codepoint(10)  
             
@@ -3584,22 +4106,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
             end
         end
         if r.ImGui_Key_KeypadEnter and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_KeypadEnter(), false) then
-            local marker = ""
-            if state.list_mode ~= "none" then
-                if state.list_mode == "bullet" then
-                    marker = "• "
-                else
-                    local before_text = state.text:sub(1, editor.caret)
-                    local last_line = before_text:match("[^\n]*$")  
-                    local prev_num = last_line:match("^(%d+)%. ")
-                    
-                    if prev_num then
-                        marker = (tonumber(prev_num) + 1) .. ". "
-                    else
-                        marker = "1. "
-                    end
-                end
-            end
+            local marker = NextListMarker(state.text, editor.caret, state.list_mode)
             
             process_codepoint(10)  
             
@@ -3940,34 +4447,58 @@ local function DrawMenuBar()
     r.ImGui_SameLine(ctx, 0, 10)
     r.ImGui_SetCursorPosY(ctx, toolbar_base_y)
     
+    -- Same layout as the Workbench Notes font menu: size row on top, then the
+    -- family list, then Reset. Size applies to the tab you are on, exactly as a
+    -- block's size does over there.
     if r.ImGui_BeginMenu(ctx, "Font") then
-        local font_families = {
-            "sans-serif",
-            "serif", 
-            "monospace",
-            "cursive",
-            "Arial",
-            "Courier New",
-            "Times New Roman",
-            "Verdana",
-            "Georgia",
-            "Comic Sans MS",
-        }
-        
-        local current_font = state.font_family or "sans-serif"
-        
-        for _, family in ipairs(font_families) do
-            local is_selected = (family == current_font)
-            if r.ImGui_MenuItem(ctx, family, nil, is_selected) then
-                if state.font_family ~= family then
-                    state.font_family = family
-                    BuildFont()
-                    state.dirty = true
-                    state.last_edit_time = r.time_precise()
-                end
+        local size = state.font_size or NOTE_FONT_SIZE_DEFAULT
+        local family = state.font_family or NOTE_FONT_FAMILY_DEFAULT
+        local changed = false
+
+        if r.ImGui_Button(ctx, "-", 24, 0) then size = size - 1; changed = true end
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, 120)
+        local slider_changed, slider_value = r.ImGui_SliderInt(ctx, "##note_font_size",
+            size, NOTE_FONT_SIZE_MIN, NOTE_FONT_SIZE_MAX, "%d px")
+        if slider_changed then size = slider_value; changed = true end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "+", 24, 0) then size = size + 1; changed = true end
+
+        r.ImGui_Separator(ctx)
+        r.ImGui_Text(ctx, "Font")
+        for _, option in ipairs(NOTE_FONT_FAMILIES) do
+            if r.ImGui_MenuItem(ctx, option, nil, option == family) then
+                family = option
+                changed = true
             end
         end
-        
+
+        r.ImGui_Separator(ctx)
+        local can_reset = size ~= NOTE_FONT_SIZE_DEFAULT or family ~= NOTE_FONT_FAMILY_DEFAULT
+        if r.ImGui_MenuItem(ctx, "Reset", nil, false, can_reset) then
+            size = NOTE_FONT_SIZE_DEFAULT
+            family = NOTE_FONT_FAMILY_DEFAULT
+            changed = true
+        end
+
+        if changed then
+            if size < NOTE_FONT_SIZE_MIN then size = NOTE_FONT_SIZE_MIN end
+            if size > NOTE_FONT_SIZE_MAX then size = NOTE_FONT_SIZE_MAX end
+            if size ~= state.font_size or family ~= state.font_family then
+                state.font_size = size
+                state.font_family = family
+                -- Straight into the tab as well, which is what the toolbar
+                -- slider used to do; the legacy save reads the size from the tab
+                -- and would otherwise write the old one back.
+                if state.tabs[state.active_tab_index] then
+                    state.tabs[state.active_tab_index].font_size = size
+                end
+                BuildFont()
+                state.dirty = true
+                state.last_edit_time = r.time_precise()
+            end
+        end
+
         r.ImGui_EndMenu(ctx)
     end
     
@@ -4141,6 +4672,13 @@ local function DrawMenuBar()
                     state.images = state.tabs[state.active_tab_index].images or {}
                     state.strokes = state.tabs[state.active_tab_index].strokes or {}
                     state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                -- Alignment belongs to the tab, like its size and colours, so it
+                -- has to be picked up here too or the previous tab's setting stays
+                -- on screen and gets written over this one on the next save.
+                local tab_align = state.tabs[state.active_tab_index].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                 end
             end
             state.dirty = true
@@ -4179,69 +4717,77 @@ local function DrawMenuBar()
         end
         r.ImGui_PopStyleColor(ctx, 3)
         if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Text color palette\nSet color for the current line, all selected lines, or all text")
+            r.ImGui_SetTooltip(ctx, "Colors\nNote and text color for this tab\nLine colors are in the right-click menu")
         end
     else
         table.insert(overflow_items, "color")
     end
     
+-- The colour picker, lifted out of the right-click menu so the palette
+-- button owns it. Same contents as the Workbench Notes picker.
+-- The colour picker that the palette button opens. Same contents and the same
+-- order as the Workbench Notes picker: the follow-the-context switch, a wheel
+-- for the note, a wheel for the text. Touch nothing and this script keeps doing
+-- what it always did -- black/white text mode, per-mode background -- so notes
+-- made before the picker existed look unchanged.
+local function DrawColorsPicker(ctx)
+    if not r.ImGui_ColorEdit4 then
+        r.ImGui_Text(ctx, "Color picker unavailable in this ReaImGui version")
+        return
+    end
+    local flags = r.ImGui_ColorEditFlags_NoInputs and r.ImGui_ColorEditFlags_NoInputs() or 0
+    local changed = false
+
+    if state.mode == "track" or state.mode == "item" then
+        local ok, value = r.ImGui_Checkbox(ctx, "Use context color", state.use_context_color == true)
+        if ok then
+            state.use_context_color = value or nil
+            changed = true
+        end
+    end
+
+    local following = state.use_context_color == true and state.track_bg_color ~= nil
+    if following and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
+    local note_ok, note_value = r.ImGui_ColorEdit4(ctx, "Note",
+        state.note_color or state.track_bg_color or 0x2A303AFF, flags)
+    if note_ok then
+        state.note_color = note_value
+        state.use_context_color = nil
+        changed = true
+    end
+    if following and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+
+    local text_ok, text_value = r.ImGui_ColorEdit4(ctx, "Text",
+        (state.tab_text_color or GetEditorTextColor()) | 0xFF, flags)
+    if text_ok then
+        state.tab_text_color = (text_value & 0xFFFFFF00) | 0xFF
+        changed = true
+    end
+
+    if state.note_color or state.tab_text_color or state.use_context_color then
+        r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Reset Colors") then
+            state.note_color = nil
+            state.tab_text_color = nil
+            state.use_context_color = nil
+            changed = true
+        end
+    end
+
+    if changed then
+        local tab = state.tabs[state.active_tab_index]
+        if tab then
+            tab.note_color = state.note_color
+            tab.text_color = state.tab_text_color
+            tab.use_context_color = state.use_context_color
+        end
+        state.dirty = true
+        state.last_edit_time = r.time_precise()
+    end
+end
+
     if r.ImGui_BeginPopup(ctx, "text_color_palette") then
-        r.ImGui_Text(ctx, "Default Text Color")
-        r.ImGui_Separator(ctx)
-        local mode_labels = {{"White", "white"}, {"Black", "black"}}
-        for _, ml in ipairs(mode_labels) do
-            local sel = state.text_color_mode == ml[2]
-            if r.ImGui_MenuItem(ctx, sel and ("✓ " .. ml[1]) or ("  " .. ml[1])) then
-                state.text_color_mode = ml[2]
-                state.dirty = true
-                state.last_edit_time = r.time_precise()
-                SaveNotebook()
-            end
-        end
-        r.ImGui_Separator(ctx)
-        local editor_lc = EnsureEditorState()
-        local lc_first, lc_last = GetColorTargetLines(editor_lc)
-        local lc_count = lc_last - lc_first + 1
-        r.ImGui_Text(ctx, lc_count > 1 and string.format("Color Selected Lines (%d)", lc_count) or "Color Current Line")
-        local cur_line_col = nil
-        for ln = lc_first, lc_last do
-            if state.line_colors[ln] then cur_line_col = state.line_colors[ln] break end
-        end
-        for i, preset in ipairs(TEXT_COLOR_PRESETS) do
-            if i > 1 and (i - 1) % 6 ~= 0 then
-                r.ImGui_SameLine(ctx)
-            end
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), preset.hex)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), preset.hex)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), preset.hex)
-            local btn_size = 24
-            if r.ImGui_Button(ctx, "##lc_preset_" .. i, btn_size, btn_size) then
-                for ln = lc_first, lc_last do state.line_colors[ln] = preset.hex end
-                state.dirty = true
-                state.last_edit_time = r.time_precise()
-            end
-            r.ImGui_PopStyleColor(ctx, 3)
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, preset.name)
-            end
-        end
-        r.ImGui_Separator(ctx)
-        if cur_line_col then
-            if r.ImGui_MenuItem(ctx, lc_count > 1 and "Reset selected lines" or "Reset current line") then
-                for ln = lc_first, lc_last do state.line_colors[ln] = nil end
-                state.dirty = true
-                state.last_edit_time = r.time_precise()
-            end
-        end
-        local has_any = false
-        for _ in pairs(state.line_colors) do has_any = true; break end
-        if has_any then
-            if r.ImGui_MenuItem(ctx, "Reset all line colors") then
-                state.line_colors = {}
-                state.dirty = true
-                state.last_edit_time = r.time_precise()
-            end
-        end
+        DrawColorsPicker(ctx)
         r.ImGui_EndPopup(ctx)
     end
 
@@ -4328,6 +4874,12 @@ local function DrawMenuBar()
             if r.ImGui_Button(ctx, icon_label, button_width, button_height) then
                 if state.text_align ~= info.value then
                     state.text_align = info.value
+                    -- Straight onto the tab as well. Waiting for the autosave
+                    -- would lose the choice if the user switches tab first, since
+                    -- switching reloads the alignment from the tab.
+                    if state.tabs[state.active_tab_index] then
+                        state.tabs[state.active_tab_index].align = info.value
+                    end
                     state.dirty = true
                     state.last_edit_time = r.time_precise()
                 end
@@ -4512,11 +5064,19 @@ local function DrawMenuBar()
     if r.ImGui_BeginPopup(ctx, "list_options") then
         r.ImGui_Text(ctx, "List Type")
         r.ImGui_Separator(ctx)
-        if r.ImGui_MenuItem(ctx, state.list_mode == "bullet" and "✓ Bullet (•)" or "Bullet (•)") then
+        -- The same four modes the right-click menu and the Workbench offer, so
+        -- the two ways into this setting cannot disagree.
+        if r.ImGui_MenuItem(ctx, "None", nil, state.list_mode == "none") then
+            state.list_mode = "none"
+        end
+        if r.ImGui_MenuItem(ctx, "Bullet (•)", nil, state.list_mode == "bullet") then
             state.list_mode = "bullet"
         end
-        if r.ImGui_MenuItem(ctx, state.list_mode == "numbered" and "✓ Numbered (1. 2. 3.)" or "Numbered (1. 2. 3.)") then
+        if r.ImGui_MenuItem(ctx, "Numbered (1. 2. 3.)", nil, state.list_mode == "numbered") then
             state.list_mode = "numbered"
+        end
+        if r.ImGui_MenuItem(ctx, "Checkbox ([ ])", nil, state.list_mode == "checkbox") then
+            state.list_mode = "checkbox"
         end
         r.ImGui_EndPopup(ctx)
     end
@@ -4600,65 +5160,6 @@ local function DrawMenuBar()
         table.insert(overflow_items, "info")
     end
 
-    if CheckToolbarFit(64) then
-        SameLineToolbar()
-        local slider_width = 60.0
-        local slider_height = 16.0
-        local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
-        r.ImGui_InvisibleButton(ctx, "##font_size_slider", slider_width, slider_height)
-        local fs_hovered = r.ImGui_IsItemHovered(ctx)
-        local fs_active = r.ImGui_IsItemActive(ctx)
-        local x0, y0 = cursor_x, cursor_y
-        local cx = x0 + 8.0
-        local cy = y0 + slider_height * 0.65
-        local track_w = slider_width - 16.0
-        local min_val, max_val = 11, 26
-        local norm = (state.font_size - min_val) / (max_val - min_val)
-        if norm < 0.0 then norm = 0.0 elseif norm > 1.0 then norm = 1.0 end
-        local font_changed = false
-        if fs_active then
-            local mx, _ = r.ImGui_GetMousePos(ctx)
-            local new_norm = (mx - cx) / math.max(1.0, track_w)
-            if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
-            local new_font = math.floor(min_val + (new_norm * (max_val - min_val)) + 0.5)
-            if new_font ~= state.font_size then
-                state.font_size = new_font
-                BuildFont()
-                font_changed = true
-            end
-            norm = new_norm
-        elseif fs_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
-            local mx, _ = r.ImGui_GetMousePos(ctx)
-            local new_norm = (mx - cx) / math.max(1.0, track_w)
-            if new_norm < 0.0 then new_norm = 0.0 elseif new_norm > 1.0 then new_norm = 1.0 end
-            local new_font = math.floor(min_val + (new_norm * (max_val - min_val)) + 0.5)
-            if new_font ~= state.font_size then
-                state.font_size = new_font
-                BuildFont()
-                font_changed = true
-            end
-            norm = new_norm
-        end
-        if font_changed then
-            if state.tabs_enabled and state.tabs[state.active_tab_index] then
-                state.tabs[state.active_tab_index].font_size = state.font_size
-            end
-            state.dirty = true
-            state.last_edit_time = r.time_precise()
-        end
-        local draw_list = r.ImGui_GetWindowDrawList(ctx)
-        local track_col = 0x666666FF  
-        local knob_x = cx + norm * track_w
-        r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx + track_w, cy, track_col, 2.0)
-        r.ImGui_DrawList_AddCircleFilled(draw_list, knob_x, cy, 6.0, 0xFFFFFFFF)
-        r.ImGui_DrawList_AddCircle(draw_list, knob_x, cy, 6.0, 0x333333FF, 0, 1.0)
-        if fs_hovered then
-            r.ImGui_SetTooltip(ctx, string.format("Font size: %d", state.font_size))
-        end
-    else
-        table.insert(overflow_items, "fontsize")
-    end
-
     if #overflow_items > 0 then
         SameLineToolbar()
         if r.ImGui_BeginMenu(ctx, "▼##overflow") then
@@ -4677,6 +5178,13 @@ local function DrawMenuBar()
                             state.images = state.tabs[state.active_tab_index].images or {}
                             state.strokes = state.tabs[state.active_tab_index].strokes or {}
                             state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                -- Alignment belongs to the tab, like its size and colours, so it
+                -- has to be picked up here too or the previous tab's setting stays
+                -- on screen and gets written over this one on the next save.
+                local tab_align = state.tabs[state.active_tab_index].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                         end
                     end
                     state.dirty = true
@@ -4684,42 +5192,12 @@ local function DrawMenuBar()
                 end
             end
             
+            -- The same picker the palette button opens, so the toolbar and this
+            -- overflow copy of it cannot drift apart. Line colours are not here:
+            -- they live in the right-click menu, where the selection is.
             if overflow_set["color"] then
-                if r.ImGui_BeginMenu(ctx, "🎨 Text color") then
-                    local mode_labels = {{"White", "white"}, {"Black", "black"}}
-                    for _, ml in ipairs(mode_labels) do
-                        if r.ImGui_MenuItem(ctx, ml[1], nil, state.text_color_mode == ml[2]) then
-                            state.text_color_mode = ml[2]
-                            state.dirty = true
-                            state.last_edit_time = r.time_precise()
-                            SaveNotebook()
-                        end
-                    end
-                    r.ImGui_Separator(ctx)
-                    local editor_ov = EnsureEditorState()
-                    local ov_first, ov_last = GetColorTargetLines(editor_ov)
-                    local ov_count = ov_last - ov_first + 1
-                    local ov_suffix = ov_count > 1 and string.format(" (%d lines)", ov_count) or " (line)"
-                    local ov_has_color = false
-                    for ln = ov_first, ov_last do
-                        if state.line_colors[ln] then ov_has_color = true break end
-                    end
-                    for _, preset in ipairs(TEXT_COLOR_PRESETS) do
-                        local is_set = state.line_colors[ov_first] == preset.hex
-                        if r.ImGui_MenuItem(ctx, preset.name .. ov_suffix, nil, is_set) then
-                            for ln = ov_first, ov_last do state.line_colors[ln] = preset.hex end
-                            state.dirty = true
-                            state.last_edit_time = r.time_precise()
-                        end
-                    end
-                    if ov_has_color then
-                        r.ImGui_Separator(ctx)
-                        if r.ImGui_MenuItem(ctx, ov_count > 1 and "Reset line colors" or "Reset line color") then
-                            for ln = ov_first, ov_last do state.line_colors[ln] = nil end
-                            state.dirty = true
-                            state.last_edit_time = r.time_precise()
-                        end
-                    end
+                if r.ImGui_BeginMenu(ctx, "🎨 Colors") then
+                    DrawColorsPicker(ctx)
                     r.ImGui_EndMenu(ctx)
                 end
             end
@@ -4741,22 +5219,28 @@ local function DrawMenuBar()
                 end
             end
             
+            -- The overflow copy of the alignment buttons. It has to set the tab
+            -- as well, exactly as the toolbar ones do, or the two disagree about
+            -- where the setting lives.
             if overflow_set["align"] then
                 r.ImGui_Separator(ctx)
-                if r.ImGui_MenuItem(ctx, "|≡ Align left", nil, state.text_align == "left") then
-                    state.text_align = "left"
+                local function SetAlignment(value)
+                    if state.text_align == value then return end
+                    state.text_align = value
+                    if state.tabs[state.active_tab_index] then
+                        state.tabs[state.active_tab_index].align = value
+                    end
                     state.dirty = true
                     state.last_edit_time = r.time_precise()
+                end
+                if r.ImGui_MenuItem(ctx, "|≡ Align left", nil, state.text_align == "left") then
+                    SetAlignment("left")
                 end
                 if r.ImGui_MenuItem(ctx, "≡ Align center", nil, state.text_align == "center") then
-                    state.text_align = "center"
-                    state.dirty = true
-                    state.last_edit_time = r.time_precise()
+                    SetAlignment("center")
                 end
                 if r.ImGui_MenuItem(ctx, "≡| Align right", nil, state.text_align == "right") then
-                    state.text_align = "right"
-                    state.dirty = true
-                    state.last_edit_time = r.time_precise()
+                    SetAlignment("right")
                 end
                 r.ImGui_Separator(ctx)
             end
@@ -4824,21 +5308,6 @@ local function DrawMenuBar()
                 end
             end
             
-            if overflow_set["fontsize"] then
-                r.ImGui_Separator(ctx)
-                r.ImGui_Text(ctx, string.format("Font size: %d", state.font_size))
-                r.ImGui_SetNextItemWidth(ctx, 120)
-                local fs_changed, fs_new = r.ImGui_SliderInt(ctx, "##overflow_fontsize", state.font_size, 11, 26)
-                if fs_changed and fs_new ~= state.font_size then
-                    state.font_size = fs_new
-                    BuildFont()
-                    if state.tabs_enabled and state.tabs[state.active_tab_index] then
-                        state.tabs[state.active_tab_index].font_size = state.font_size
-                    end
-                    state.dirty = true
-                    state.last_edit_time = r.time_precise()
-                end
-            end
             
             r.ImGui_EndMenu(ctx)
         end
@@ -5004,12 +5473,20 @@ local function DrawTabBar()
                     state.tabs[state.active_tab_index].strokes = state.strokes
                     state.tabs[state.active_tab_index].font_size = state.font_size
                     state.tabs[state.active_tab_index].line_colors = state.line_colors
+                    -- The alignment belongs to the tab being left, exactly like
+                    -- its size and colours. Without this the outgoing tab never
+                    -- kept its own, so every tab ended up sharing one.
+                    state.tabs[state.active_tab_index].align = state.text_align
                 end
                 state.active_tab_index = i
                 state.text = state.tabs[i].text or ""
                 state.images = state.tabs[i].images or {}
                 state.strokes = state.tabs[i].strokes or {}
                 state.line_colors = state.tabs[i].line_colors or {}
+                local tab_align = state.tabs[i].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                 local tab_fs = state.tabs[i].font_size
                 if tab_fs and tab_fs ~= state.font_size then
                     state.font_size = tab_fs
@@ -5059,6 +5536,7 @@ local function DrawTabBar()
                         state.tabs[state.active_tab_index].strokes = state.strokes
                         state.tabs[state.active_tab_index].font_size = state.font_size
                         state.tabs[state.active_tab_index].line_colors = state.line_colors
+                        state.tabs[state.active_tab_index].align = state.text_align
                     end
                     
                     table.remove(state.tabs, i)
@@ -5069,6 +5547,13 @@ local function DrawTabBar()
                         state.images = state.tabs[state.active_tab_index].images or {}
                         state.strokes = state.tabs[state.active_tab_index].strokes or {}
                         state.line_colors = state.tabs[state.active_tab_index].line_colors or {}
+                -- Alignment belongs to the tab, like its size and colours, so it
+                -- has to be picked up here too or the previous tab's setting stays
+                -- on screen and gets written over this one on the next save.
+                local tab_align = state.tabs[state.active_tab_index].align
+                if tab_align == "left" or tab_align == "center" or tab_align == "right" then
+                    state.text_align = tab_align
+                end
                         local tab_fs = state.tabs[state.active_tab_index].font_size
                         if tab_fs and tab_fs ~= state.font_size then
                             state.font_size = tab_fs
@@ -5148,8 +5633,10 @@ local function DrawTabBar()
             state.tabs[state.active_tab_index].strokes = state.strokes
             state.tabs[state.active_tab_index].font_size = state.font_size
             state.tabs[state.active_tab_index].line_colors = state.line_colors
+            state.tabs[state.active_tab_index].align = state.text_align
         end
-        table.insert(state.tabs, {name = "Tab " .. (#state.tabs + 1), text = "", images = {}, strokes = {}, font_size = state.font_size, line_colors = {}})
+        -- A new tab starts from what is on screen, alignment included.
+        table.insert(state.tabs, {name = "Tab " .. (#state.tabs + 1), text = "", images = {}, strokes = {}, font_size = state.font_size, line_colors = {}, align = state.text_align})
         state.active_tab_index = #state.tabs
         state.text = ""
         state.images = state.tabs[state.active_tab_index].images  
@@ -5192,6 +5679,12 @@ local function DrawEditor()
     local wrap_width = editor_w - (EditorConstants.padding_x * 2)
     if wrap_width < 32 then wrap_width = 32 end
     local max_text_height = math.max(0, editor_h - EditorConstants.padding_y)
+
+    -- Images are positioned and hit-tested here but painted at the very end of
+    -- this block. The editor fills its whole background further down, which
+    -- would paint straight over anything drawn before it -- that is what the
+    -- foreground draw list used to sidestep, at the cost of covering popups too.
+    local pending_image_draws = {}
 
     local layout = BuildEditorLayout(ctx, state.text, wrap_width, line_height)
     local text_changed = HandleEditorInput(ctx, editor, layout, wrap_width, line_height, max_text_height, state.can_edit)
@@ -5372,24 +5865,17 @@ local function DrawEditor()
                 goto continue_image_loop
             end
             
-            local overlay_list = r.ImGui_GetForegroundDrawList and r.ImGui_GetForegroundDrawList(ctx)
-            local target_list = overlay_list or (r.ImGui_GetWindowDrawList and r.ImGui_GetWindowDrawList(ctx))
-            if target_list and r.ImGui_DrawList_AddImage then
+            if r.ImGui_DrawList_AddImage then
                 local scroll_x = r.ImGui_GetScrollX(ctx)
                 local scroll_y = editor.scroll_y
-                local min_x = area_x + img.pos_x - scroll_x
-                local min_y = area_y + img.pos_y - scroll_y
-                local max_x = min_x + img_w
-                local max_y = min_y + img_h
-
-                r.ImGui_DrawList_PushClipRect(target_list, area_x, area_y, area_x + editor_w, area_y + editor_h, true)
-                r.ImGui_DrawList_AddImage(target_list, img.texture, min_x, min_y, max_x, max_y, 0, 0, 1, 1, PackColorToU32(1.0, 1.0, 1.0, 1.0))
-
-                if state.selected_image_id == img.id then
-                    local border_color = PackColorToU32(0.2, 0.6, 1.0, 1.0) 
-                    r.ImGui_DrawList_AddRect(target_list, min_x - 2, min_y - 2, max_x + 2, max_y + 2, border_color, 0, 0, 2.0)
-                end
-                r.ImGui_DrawList_PopClipRect(target_list)
+                pending_image_draws[#pending_image_draws + 1] = {
+                    texture = img.texture,
+                    selected = state.selected_image_id == img.id,
+                    min_x = area_x + img.pos_x - scroll_x,
+                    min_y = area_y + img.pos_y - scroll_y,
+                    w = img_w,
+                    h = img_h
+                }
             else
                 r.ImGui_SetCursorPos(ctx, img.pos_x, img.pos_y)
                 r.ImGui_Image(ctx, img.texture, img_w, img_h)
@@ -5485,6 +5971,32 @@ local function DrawEditor()
         if r.ImGui_BeginPopup(ctx, "editor_context_menu") then
             local has_sel = HasSelection(editor)
             local sel_text = has_sel and GetSelectedText(editor) or nil
+
+            -- Top of the menu, in the Workbench's order: Bold, then images.
+            if r.ImGui_MenuItem(ctx, "Bold", "Ctrl+B", false, can_edit) then
+                ToggleBoldFormatting(editor)
+            end
+            if r.ImGui_MenuItem(ctx, "Add Image", nil, false, can_edit and r.JS_Dialog_BrowseForOpenFiles ~= nil) then
+                local ok, path = r.JS_Dialog_BrowseForOpenFiles("Select Image", "", "*.png;*.jpg;*.jpeg;*.bmp;*.gif", "Images", false)
+                if ok and path and path ~= "" then
+                    if AddImage(path) then
+                        state.dirty = true
+                        state.last_edit_time = r.time_precise()
+                        SaveNotebook()
+                    else
+                        r.ShowMessageBox("Failed to load image. Please check if the file format is supported.", "TK Notebook", 0)
+                    end
+                end
+            end
+            if #state.images > 0 then
+                if r.ImGui_MenuItem(ctx, "Remove All Images", nil, false, can_edit) then
+                    ClearAllImages()
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+            end
+            r.ImGui_Separator(ctx)
+
             if r.ImGui_MenuItem(ctx, "Cut", "Ctrl+X", false, has_sel and can_edit) then
                 if sel_text and sel_text ~= "" then
                     WriteClipboardText(sel_text)
@@ -5527,6 +6039,47 @@ local function DrawEditor()
             r.ImGui_Separator(ctx)
             local ctx_first, ctx_last = GetColorTargetLines(editor)
             local ctx_count = ctx_last - ctx_first + 1
+
+            -- Same submenu, same wording and same order as the Workbench Notes
+            -- module, so the two right-click menus read alike.
+            if r.ImGui_BeginMenu(ctx, "List Mode") then
+                local function ApplyMode(mode)
+                    PushUndoState(true)
+                    local new_text, new_caret = ApplyListModeToLines(state.text, ctx_first, ctx_last, editor.caret, mode)
+                    state.text = new_text
+                    editor.caret = ClampToText(new_caret)
+                    ClearSelection(editor, editor.caret)
+                    state.list_mode = mode
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+                if r.ImGui_MenuItem(ctx, "None", nil, state.list_mode == "none") then ApplyMode("none") end
+                if r.ImGui_MenuItem(ctx, "Bullet (•)", nil, state.list_mode == "bullet") then ApplyMode("bullet") end
+                if r.ImGui_MenuItem(ctx, "Numbered (1. 2. 3.)", nil, state.list_mode == "numbered") then ApplyMode("numbered") end
+                if r.ImGui_MenuItem(ctx, "Checkbox ([ ])", nil, state.list_mode == "checkbox") then ApplyMode("checkbox") end
+                r.ImGui_Separator(ctx)
+                -- The Workbench ticks a box by clicking it; this editor has no
+                -- click targets in the text, so the same thing is offered here.
+                if r.ImGui_MenuItem(ctx, ctx_count > 1 and "Toggle Checkboxes" or "Toggle Checkbox") then
+                    PushUndoState(true)
+                    state.text = ToggleCheckboxOnLines(state.text, ctx_first, ctx_last)
+                    editor.caret = ClampToText(editor.caret)
+                    ClearSelection(editor, editor.caret)
+                    state.dirty = true
+                    state.last_edit_time = r.time_precise()
+                end
+                if state.text:find("%[[xX]%]%s") then
+                    if r.ImGui_MenuItem(ctx, "Clear Checked Boxes") then
+                        PushUndoState(true)
+                        state.text = ClearCheckedBoxes(state.text)
+                        editor.caret = ClampToText(editor.caret)
+                        state.dirty = true
+                        state.last_edit_time = r.time_precise()
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+
             if r.ImGui_BeginMenu(ctx, ctx_count > 1 and string.format("Line color (%d lines)", ctx_count) or "Line color") then
                 for _, preset in ipairs(TEXT_COLOR_PRESETS) do
                     local is_set = state.line_colors[ctx_first] == preset.hex
@@ -5544,6 +6097,13 @@ local function DrawEditor()
                     r.ImGui_Separator(ctx)
                     if r.ImGui_MenuItem(ctx, ctx_count > 1 and "Reset line colors" or "Reset line color") then
                         for ln = ctx_first, ctx_last do state.line_colors[ln] = nil end
+                        state.dirty = true
+                        state.last_edit_time = r.time_precise()
+                    end
+                end
+                if next(state.line_colors or {}) then
+                    if r.ImGui_MenuItem(ctx, "Reset All Line Colors") then
+                        for ln in pairs(state.line_colors) do state.line_colors[ln] = nil end
                         state.dirty = true
                         state.last_edit_time = r.time_precise()
                     end
@@ -5573,6 +6133,23 @@ local function DrawEditor()
             local scroll_y = editor.scroll_y
             local local_x = mouse_x - (area_x + EditorConstants.padding_x)
             local local_y = mouse_y - (area_y + EditorConstants.padding_y) + scroll_y
+
+            -- Clicking the box itself ticks it, as it does in the Workbench,
+            -- instead of just dropping the caret there. Only without Shift, so
+            -- extending a selection over a list still works.
+            local checkbox_line = (not shift_down)
+                and CheckboxLineAtMouse(layout, local_x, local_y, wrap_width, state.text_align) or nil
+            if checkbox_line then
+                PushUndoState(true)
+                state.text = ToggleCheckboxOnLines(state.text, checkbox_line, checkbox_line)
+                editor.caret = ClampToText(editor.caret)
+                ClearSelection(editor, editor.caret)
+                editor.mouse_selecting = false
+                state.dirty = true
+                state.last_edit_time = r.time_precise()
+                goto checkbox_handled
+            end
+
             local caret_pos, relative_x = CaretFromMouse(layout, local_x, local_y, wrap_width, state.text_align)
             local new_caret = ClampCaret(state.text, caret_pos)
             if shift_down then
@@ -5590,6 +6167,7 @@ local function DrawEditor()
             end
             editor.preferred_x = relative_x
             editor.scroll_to_caret = true
+            ::checkbox_handled::
         end
 
         if editor.request_focus then
@@ -5650,6 +6228,13 @@ local function DrawEditor()
             base_bg = PackColorToU32(r, g, b, state.global_bg_color.a)
         end
         
+        -- A note colour picked for this tab overrides the per-mode background,
+        -- unless this tab is set to follow the track or item colour -- which is
+        -- what base_bg already holds at this point.
+        if state.note_color and state.use_context_color ~= true then
+            base_bg = state.note_color
+        end
+
         local bg_color = base_bg
         if not can_edit then
             bg_color = ApplyAlpha(bg_color, 0.6) or bg_color
@@ -5891,6 +6476,27 @@ local function DrawEditor()
             end
         end
 
+    -- Painted last: over the editor background, the text and the drawings, but
+    -- still inside this window's own layer, so a popup opened on top of them
+    -- stays on top.
+    if #pending_image_draws > 0 then
+        local image_list = r.ImGui_GetWindowDrawList(ctx)
+        if image_list then
+            r.ImGui_DrawList_PushClipRect(image_list, area_x, area_y, area_x + editor_w, area_y + editor_h, true)
+            for _, entry in ipairs(pending_image_draws) do
+                local max_x = entry.min_x + entry.w
+                local max_y = entry.min_y + entry.h
+                r.ImGui_DrawList_AddImage(image_list, entry.texture, entry.min_x, entry.min_y, max_x, max_y,
+                    0, 0, 1, 1, PackColorToU32(1.0, 1.0, 1.0, 1.0))
+                if entry.selected then
+                    r.ImGui_DrawList_AddRect(image_list, entry.min_x - 2, entry.min_y - 2, max_x + 2, max_y + 2,
+                        PackColorToU32(0.2, 0.6, 1.0, 1.0), 0, 0, 2.0)
+                end
+            end
+            r.ImGui_DrawList_PopClipRect(image_list)
+        end
+    end
+
     r.ImGui_SetCursorScreenPos(ctx, area_x, area_y + content_height)
     r.ImGui_Dummy(ctx, 0, 0)
     end
@@ -5942,6 +6548,7 @@ local function Frame()
     end
 
     UpdateActiveContext(false)
+    RefreshFromSharedStore()
 
     local window_flags = r.ImGui_WindowFlags_MenuBar()
     if r.ImGui_WindowFlags_NoTitleBar then

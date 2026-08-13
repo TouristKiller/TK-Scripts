@@ -4,6 +4,10 @@ local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
 local json = require("core.json")
 local Selection = require("core.selection")
+-- Shared with the standalone TK Notes script: both ship their own copy of this
+-- file and agree on the note format, not on one installed file.
+local ok_store, Store = pcall(require, "core.notes_store")
+if not ok_store then Store = nil end
 
 local M = {
   id = "notes",
@@ -74,7 +78,17 @@ local state = {
   last_edit_time = 0,
   next_id = 1,
   loaded = false,
-  font_cache = {}
+  font_cache = {},
+  shared_rev = 0,
+  shared_checked_at = 0,
+  -- Freehand drawing, ported from TK Notes. The mode is a property of the panel,
+  -- not of a block, so switching it does not count as an edit to the note.
+  drawing_enabled = false,
+  eraser_enabled = false,
+  drawing_color = { r = 1.0, g = 0.25, b = 0.25, a = 1.0 },
+  drawing_thickness = 2.0,
+  drawing_block = nil,
+  current_stroke = {}
 }
 
 local selection_recency = {
@@ -400,7 +414,7 @@ local function new_block(title, body)
   local id = "block_" .. tostring(state.next_id)
   state.next_id = state.next_id + 1
   local use_context_color = state.context_info and (state.context_info.kind == "track" or state.context_info.kind == "item" or state.context_info.kind == "region") or false
-  return { id = id, title = title or "Notes", body = body or "", collapsed = false, use_context_color = use_context_color, note_color = DEFAULT_NOTE_COLOR, text_color = DEFAULT_TEXT_COLOR, line_colors = {}, font_size = DEFAULT_FONT_SIZE, font_family = DEFAULT_FONT_FAMILY, list_mode = "none", checkbox_lines = {}, images = {}, height = defaults.block_height, created_at = os.time(), updated_at = os.time() }
+  return { id = id, title = title or "Notes", body = body or "", collapsed = false, use_context_color = use_context_color, note_color = DEFAULT_NOTE_COLOR, text_color = DEFAULT_TEXT_COLOR, line_colors = {}, font_size = DEFAULT_FONT_SIZE, font_family = DEFAULT_FONT_FAMILY, align = "left", strokes = {}, list_mode = "none", checkbox_lines = {}, images = {}, height = defaults.block_height, created_at = os.time(), updated_at = os.time() }
 end
 
 local function normalize_color(value, fallback)
@@ -423,6 +437,36 @@ local function normalize_font_family(value)
     if value == family then return family end
   end
   return DEFAULT_FONT_FAMILY
+end
+
+local function normalize_strokes(value)
+  local out = {}
+  if type(value) ~= "table" then return out end
+  for _, stroke in ipairs(value) do
+    if type(stroke) == "table" and type(stroke.points) == "table" and #stroke.points > 1 then
+      local points = {}
+      for _, point in ipairs(stroke.points) do
+        if tonumber(point.x) and tonumber(point.y) then
+          points[#points + 1] = { x = tonumber(point.x), y = tonumber(point.y) }
+        end
+      end
+      if #points > 1 then
+        local colour = type(stroke.color) == "table" and stroke.color or {}
+        out[#out + 1] = {
+          color = { r = tonumber(colour.r) or 1, g = tonumber(colour.g) or 0,
+                    b = tonumber(colour.b) or 0, a = tonumber(colour.a) or 1 },
+          thickness = math.max(1, math.min(12, tonumber(stroke.thickness) or 2)),
+          points = points
+        }
+      end
+    end
+  end
+  return out
+end
+
+local function normalize_align(value)
+  if value == "center" or value == "right" then return value end
+  return "left"
 end
 
 local function normalize_list_mode(value)
@@ -544,6 +588,8 @@ local function prepare_block(block, info)
   block.line_colors = normalize_line_colors(block.line_colors)
   block.font_size = normalize_font_size(block.font_size)
   block.font_family = normalize_font_family(block.font_family)
+  block.align = normalize_align(block.align)
+  block.strokes = normalize_strokes(block.strokes)
   block.list_mode = normalize_list_mode(block.list_mode)
   block.checkbox_lines = normalize_checkbox_lines(block.checkbox_lines)
   if type(block.images) ~= "table" then block.images = {} end
@@ -571,6 +617,8 @@ local function normalize_blocks(blocks)
           line_colors = normalize_line_colors(block.line_colors),
           font_size = normalize_font_size(block.font_size),
           font_family = normalize_font_family(block.font_family),
+          align = normalize_align(block.align),
+          strokes = normalize_strokes(block.strokes),
           list_mode = normalize_list_mode(block.list_mode),
           checkbox_lines = normalize_checkbox_lines(block.checkbox_lines),
           images = normalize_images(block.images),
@@ -686,8 +734,46 @@ local function apply_track_marker(track, has_note, want_suffix, char)
   if desired ~= name then r.GetSetMediaTrackInfo_String(track, "P_NAME", desired, true) end
 end
 
+local STORE_OWNER = "workbench"
+
+-- Maps this module's context descriptor onto the shared store's. Returns nil for
+-- anything the shared store does not cover -- marker and region notes keep their
+-- existing storage untouched -- so those paths fall through unchanged below.
+local function store_context(info)
+  if not Store or not Store.has_json or not Store.has_json() then return nil end
+  if not info or not info.can_edit then return nil end
+  if info.kind == "global" then return { kind = "global" } end
+  if info.kind == "project" then return { kind = "project", project = info.project } end
+  if info.kind == "track" then
+    if not info.track then return nil end
+    local guid = info.key and info.key:match("^(.+)::blocks$") or nil
+    if not guid or guid == "" then return nil end
+    return { kind = "track", project = info.project, guid = guid, track = info.track }
+  end
+  if info.kind == "item" then
+    local guid = info.key and info.key:match("^ITEM::(.+)::blocks$") or nil
+    if not guid or guid == "" then return nil end
+    -- The item pointer lets the shared store rebuild the identifier TK Notes
+    -- used to file this item under, so its existing note is found and adopted.
+    return { kind = "item", project = info.project, guid = guid, item = info.item }
+  end
+  return nil
+end
+
 local function read_blocks(info)
   if not info or not info.can_edit then return { new_block("Notes", "") } end
+  local shared_ctx = store_context(info)
+  if shared_ctx then
+    local ok, doc = pcall(Store.ensure, shared_ctx, STORE_OWNER)
+    if ok and doc then
+      state.shared_rev = doc.rev or 0
+      state.shared_signature = Store.content_signature(doc, "tk")
+      state.shared_known_ids = Store.block_ids(doc)
+      local blocks = normalize_blocks(Store.to_workbench(doc))
+      if #blocks > 0 then return blocks end
+      return { new_block("Notes", "") }
+    end
+  end
   local raw
   if info.storage == "track" then
     if not info.track then return { new_block("Notes", "") } end
@@ -723,6 +809,8 @@ local function encode_blocks(blocks)
       line_colors = encode_line_colors(block.line_colors),
       font_size = normalize_font_size(block.font_size),
       font_family = normalize_font_family(block.font_family),
+      align = normalize_align(block.align),
+      strokes = normalize_strokes(block.strokes),
       list_mode = normalize_list_mode(block.list_mode),
       checkbox_lines = encode_checkbox_lines(block.checkbox_lines),
       images = encode_images(block.images),
@@ -738,6 +826,30 @@ end
 
 local function write_blocks(info, blocks)
   if not info or not info.can_edit then return false end
+  local shared_ctx = store_context(info)
+  if shared_ctx then
+    local ok, result = pcall(function()
+      local stored = Store.load(shared_ctx, STORE_OWNER)
+      -- apply, not merge: what this module shows is the full membership, so a
+      -- block deleted here must not come back from the stored copy. The stored
+      -- copy only supplies the bits TK Notes owns and this module cannot show.
+      local doc, carried = Store.apply(Store.from_workbench(blocks, STORE_OWNER), stored, STORE_OWNER, state.shared_known_ids)
+      -- A save that changes nothing is not made: it would only push this view
+      -- over whatever the other window may have written in the meantime.
+      local signature = Store.own_signature(doc, carried, "tk")
+      if signature and signature == state.shared_signature then return true end
+      local written = Store.save(shared_ctx, doc, STORE_OWNER)
+      state.shared_signature = signature
+      state.shared_known_ids = Store.block_ids(doc)
+      -- Remember what we just wrote, so our own save is not mistaken for someone
+      -- else's change on the next poll. If the save carried over notes this panel
+      -- is not showing, the revision is left behind on purpose so the next poll
+      -- fetches them.
+      if (carried or 0) == 0 then state.shared_rev = doc.rev or state.shared_rev end
+      return written
+    end)
+    if ok and result then return true end
+  end
   if info.storage == "track" then
     if not info.track then return false end
     if blocks_have_content(blocks) then
@@ -777,6 +889,27 @@ local function mark_dirty(block)
   if block then block.updated_at = os.time() end
   state.dirty = true
   state.last_edit_time = now()
+end
+
+-- Picks up edits made in the standalone TK Notes while this panel is open. Only
+-- runs when nothing here is waiting to be saved: unsaved typing always wins over
+-- a refresh, otherwise a slow poll could undo what someone is in the middle of.
+local SHARED_POLL_INTERVAL = 0.75
+
+local function refresh_from_shared_store(app)
+  if state.dirty or not state.loaded then return end
+  local info = state.context_info
+  local shared_ctx = info and store_context(info)
+  if not shared_ctx then return end
+  local moment = now()
+  if moment - (state.shared_checked_at or 0) < SHARED_POLL_INTERVAL then return end
+  state.shared_checked_at = moment
+  local ok, rev = pcall(Store.peek, shared_ctx)
+  if not ok or not rev or rev == (state.shared_rev or 0) then return end
+  release_blocks_images(state.blocks)
+  state.blocks = read_blocks(info)
+  state.dirty = false
+  if app then app.status = "Notes updated from TK Notes" end
 end
 
 local function load_context(app, info)
@@ -919,6 +1052,61 @@ local function draw_color_popup(ctx, block, info)
   c, value = r.ImGui_ColorEdit4(ctx, "Text", text_color, flags)
   if c then block.text_color = opaque_color(value, DEFAULT_TEXT_COLOR); changed = true end
   if changed then mark_dirty(block) end
+  r.ImGui_EndPopup(ctx)
+end
+
+-- Strokes keep their colour as four 0..1 floats, the way TK Notes writes them,
+-- so both apps read the same numbers straight from the note.
+local function pack_stroke_color(colour)
+  local function byte(value, fallback)
+    local number = tonumber(value)
+    if not number then number = fallback end
+    if number < 0 then number = 0 elseif number > 1 then number = 1 end
+    return math.floor(number * 255 + 0.5)
+  end
+  return (byte(colour.r, 1) << 24) | (byte(colour.g, 0) << 16) | (byte(colour.b, 0) << 8) | byte(colour.a, 1)
+end
+
+-- Drawing controls, matching what TK Notes offers: the mode itself, a colour,
+-- a thickness, an eraser, and a way to wipe this note's drawings.
+local function draw_drawing_popup(ctx, block)
+  if not r.ImGui_BeginPopup(ctx, "##note_draw") then return end
+  local changed_mode, drawing = r.ImGui_Checkbox(ctx, "Drawing", state.drawing_enabled == true)
+  if changed_mode then
+    state.drawing_enabled = drawing
+    if drawing then state.eraser_enabled = false end
+    state.drawing_block, state.current_stroke = nil, {}
+  end
+  local changed_eraser, eraser = r.ImGui_Checkbox(ctx, "Eraser", state.eraser_enabled == true)
+  if changed_eraser then
+    state.eraser_enabled = eraser
+    if eraser then state.drawing_enabled = false end
+    state.drawing_block, state.current_stroke = nil, {}
+  end
+
+  r.ImGui_Separator(ctx)
+  if r.ImGui_ColorEdit4 then
+    local flags = r.ImGui_ColorEditFlags_NoInputs and r.ImGui_ColorEditFlags_NoInputs() or 0
+    local packed = pack_stroke_color(state.drawing_color)
+    local ok, value = r.ImGui_ColorEdit4(ctx, "Color", packed, flags)
+    if ok then
+      state.drawing_color = {
+        r = ((value >> 24) & 0xFF) / 255, g = ((value >> 16) & 0xFF) / 255,
+        b = ((value >> 8) & 0xFF) / 255, a = (value & 0xFF) / 255
+      }
+    end
+  end
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(120))
+  local size_ok, size = r.ImGui_SliderDouble(ctx, "Thickness", state.drawing_thickness, 1, 12, "%.0f px")
+  if size_ok then state.drawing_thickness = size end
+
+  if #(block.strokes or {}) > 0 then
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Clear Drawings On This Note") then
+      block.strokes = {}
+      mark_dirty(block)
+    end
+  end
   r.ImGui_EndPopup(ctx)
 end
 
@@ -1418,6 +1606,7 @@ local function get_note_font(ctx, family, font_size)
   return font
 end
 
+
 local function draw_text_sized(ctx, draw_list, x, y, color, text, font_size, font)
   if r.ImGui_DrawList_AddTextEx and font_size then
     local ok = pcall(r.ImGui_DrawList_AddTextEx, draw_list, font, font_size, x, y, color, text)
@@ -1755,8 +1944,21 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       local previous = layout.lines[idx - 1]
       return line and (not previous or previous.source_line ~= line.source_line)
     end
+    -- Checkbox indent plus the alignment offset. Every place that maps between
+    -- a character and a screen position goes through here -- drawing, the caret
+    -- and the mouse -- so alignment lands in all of them at once instead of
+    -- being applied in one and forgotten in another.
+    local align_mode = block.align
+    if align_mode ~= "center" and align_mode ~= "right" then align_mode = "left" end
     local function line_indent(line)
-      return line and line.checkbox and checkbox_indent or 0
+      local indent = (line and line.checkbox) and checkbox_indent or 0
+      if align_mode ~= "left" and line then
+        local slack = wrap_width - (line.width or 0)
+        if slack > 0 then
+          indent = indent + ((align_mode == "center") and math.floor(slack * 0.5) or slack)
+        end
+      end
+      return indent
     end
     local function caret_from_mouse()
       local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
@@ -1825,6 +2027,79 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     end
     r.ImGui_InvisibleButton(ctx, "##body_capture", avail_w, avail_h)
     local hovered = r.ImGui_IsItemHovered(ctx)
+
+    -- Freehand drawing. Runs before the text input below and takes the mouse for
+    -- itself while active, so a drag draws a line instead of selecting text.
+    -- Nothing here paints: the draw list does not exist yet and the text is
+    -- laid down further below anyway. The cursor ring is handed to the drawing
+    -- pass at the end of the block, where it lands on top like the images do.
+    local drawing_here, eraser_ring = false, nil
+    local can_edit_here = state.context_info == nil or state.context_info.can_edit ~= false
+    if (state.drawing_enabled or state.eraser_enabled) and can_edit_here then
+      drawing_here = true
+      local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+      local down = r.ImGui_IsMouseDown(ctx, 0)
+      local local_x = mouse_x - origin_x
+      local local_y = mouse_y - origin_y + editor.scroll_y
+
+      if state.eraser_enabled then
+        local radius = UIScale.round(10)
+        if hovered then eraser_ring = { x = mouse_x, y = mouse_y, radius = radius } end
+        if hovered and down then
+          -- Erasing splits a stroke rather than dropping it whole, so rubbing
+          -- out the middle of a line leaves both ends behind.
+          local kept, changed = {}, false
+          for _, stroke in ipairs(block.strokes or {}) do
+            local run = {}
+            for _, point in ipairs(stroke.points or {}) do
+              local dx, dy = point.x - local_x, point.y - local_y
+              if (dx * dx + dy * dy) > radius * radius then
+                run[#run + 1] = point
+              else
+                changed = true
+                if #run > 1 then
+                  kept[#kept + 1] = { points = run, color = stroke.color, thickness = stroke.thickness }
+                end
+                run = {}
+              end
+            end
+            if #run > 1 then
+              kept[#kept + 1] = { points = run, color = stroke.color, thickness = stroke.thickness }
+            end
+          end
+          if changed then
+            block.strokes = kept
+            mark_dirty(block)
+          end
+        end
+      else
+        if hovered and down and state.drawing_block == nil then
+          state.drawing_block = block.id
+          state.current_stroke = { { x = local_x, y = local_y } }
+        end
+        if state.drawing_block == block.id then
+          if down then
+            local last = state.current_stroke[#state.current_stroke]
+            if not last or math.abs(local_x - last.x) > 1 or math.abs(local_y - last.y) > 1 then
+              state.current_stroke[#state.current_stroke + 1] = { x = local_x, y = local_y }
+            end
+          else
+            if #state.current_stroke > 1 then
+              block.strokes = block.strokes or {}
+              block.strokes[#block.strokes + 1] = {
+                points = state.current_stroke,
+                color = { r = state.drawing_color.r, g = state.drawing_color.g,
+                          b = state.drawing_color.b, a = state.drawing_color.a },
+                thickness = state.drawing_thickness
+              }
+              mark_dirty(block)
+            end
+            state.drawing_block = nil
+            state.current_stroke = {}
+          end
+        end
+      end
+    end
     if max_scroll > 0 and hovered and not editor.scrollbar_dragging and r.ImGui_GetMouseWheel then
       local wheel = select(1, r.ImGui_GetMouseWheel(ctx))
       if wheel and wheel ~= 0 then
@@ -1883,7 +2158,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     if hovered_image and r.ImGui_MouseCursor_Hand then r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_Hand()) end
     if hovered_image and r.ImGui_SetTooltip then r.ImGui_SetTooltip(ctx, "Drag to move | Right-click for options") end
     update_image_drag()
-    if r.ImGui_IsItemClicked(ctx, 0) and not scrollbar_active then
+    if r.ImGui_IsItemClicked(ctx, 0) and not scrollbar_active and not drawing_here then
       if hovered_image then
         block.selected_image_id = hovered_image.id
         block.dragging_image_id = hovered_image.id
@@ -2100,6 +2375,19 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Remove All Images") then clear_block_images(block); mark_dirty(block); image_rects = {} end
       end
+      -- Same three choices TK Notes offers, and stored on the block so the two
+      -- show the note the same way round.
+      if r.ImGui_BeginMenu(ctx, "Alignment") then
+        local current = block.align
+        if current ~= "center" and current ~= "right" then current = "left" end
+        for _, option in ipairs({ { "Left", "left" }, { "Center", "center" }, { "Right", "right" } }) do
+          if r.ImGui_MenuItem(ctx, option[1], nil, current == option[2]) and current ~= option[2] then
+            block.align = option[2]
+            mark_dirty(block)
+          end
+        end
+        r.ImGui_EndMenu(ctx)
+      end
       if r.ImGui_BeginMenu(ctx, "List Mode") then
         local mode = normalize_list_mode(block.list_mode)
         local function try_list_mode(new_mode)
@@ -2268,6 +2556,39 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
       end
     end
     draw_note_images(ctx, draw_list, block, image_rects, origin_x, origin_y - scroll_y, text_color)
+
+    -- Freehand drawings, in the same coordinates TK Notes stores them in:
+    -- relative to the top-left of the body, scrolling with the text.
+    for _, stroke in ipairs(block.strokes or {}) do
+      if stroke.points and #stroke.points > 1 then
+        local colour = stroke.color or {}
+        local packed = pack_stroke_color(colour)
+        for index = 1, #stroke.points - 1 do
+          local p1, p2 = stroke.points[index], stroke.points[index + 1]
+          r.ImGui_DrawList_AddLine(draw_list,
+            origin_x + p1.x, origin_y + p1.y - scroll_y,
+            origin_x + p2.x, origin_y + p2.y - scroll_y,
+            packed, stroke.thickness or 2.0)
+        end
+      end
+    end
+
+    -- The line being drawn right now is not in block.strokes until the mouse
+    -- comes up, so it is painted here to follow the pointer.
+    if state.drawing_block == block.id and #(state.current_stroke or {}) > 1 then
+      local packed = pack_stroke_color(state.drawing_color)
+      for index = 1, #state.current_stroke - 1 do
+        local p1, p2 = state.current_stroke[index], state.current_stroke[index + 1]
+        r.ImGui_DrawList_AddLine(draw_list,
+          origin_x + p1.x, origin_y + p1.y - scroll_y,
+          origin_x + p2.x, origin_y + p2.y - scroll_y,
+          packed, state.drawing_thickness)
+      end
+    end
+    if eraser_ring then
+      r.ImGui_DrawList_AddCircle(draw_list, eraser_ring.x, eraser_ring.y, eraser_ring.radius,
+        0xFF4D4DCC, 0, UIScale.px(2))
+    end
     if editor.active then
       local _, caret_x, caret_y, caret_line = locate_caret(layout, text, editor.caret)
       local x = origin_x + padding_x + line_indent(caret_line) + caret_x
@@ -2345,6 +2666,18 @@ local function draw_block(app, settings, block, index, width)
   if r.ImGui_Button(ctx, "A", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##font_size") end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, normalize_font_family(block.font_family) .. " | " .. tostring(normalize_font_size(block.font_size)) .. " px") end
   draw_font_size_popup(ctx, block)
+  r.ImGui_SameLine(ctx)
+  -- Freehand drawing, the same feature TK Notes has. The mode belongs to the
+  -- panel rather than the block, so the button reads "on" on every note.
+  local drawing_on = state.drawing_enabled or state.eraser_enabled
+  if drawing_on then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.accent) end
+  if r.ImGui_Button(ctx, "\xE2\x9C\x8E", icon_button_w, 0) then r.ImGui_OpenPopup(ctx, "##note_draw") end
+  if drawing_on then r.ImGui_PopStyleColor(ctx, 1) end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, state.eraser_enabled and "Eraser on -- drag over a line to rub it out"
+      or (state.drawing_enabled and "Drawing on -- drag to draw" or "Drawing"))
+  end
+  draw_drawing_popup(ctx, block)
   r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, "D", icon_button_w, 0) then duplicate_block(index) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Duplicate") end
@@ -2445,6 +2778,7 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings, info = ensure_context(app)
+  refresh_from_shared_store(app)
   local width = r.ImGui_GetContentRegionAvail(ctx)
   draw_context_bar(app, settings, info, width)
   local settings_btn_w = UIScale.round(30)

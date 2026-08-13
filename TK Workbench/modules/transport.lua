@@ -990,11 +990,15 @@ end
 -- ---------------------------------------------------------------------------
 local TS_SLOTS = { "A", "B", "C" }
 
+-- Same project ext-state section as the navigator's zoom slots; the keys are
+-- prefixed differently so the two sets of slots cannot collide.
+local EXT_SECTION = "TK_WORKBENCH_TRANSPORT"
+
 local function ts_slot_key(i) return "ts_slot_" .. i end
 
 local function ts_slot_get(i)
   if not r.GetProjExtState then return nil end
-  local _, blob = r.GetProjExtState(0, ZOOM_EXT_SECTION, ts_slot_key(i))
+  local _, blob = r.GetProjExtState(0, EXT_SECTION, ts_slot_key(i))
   if not blob or blob == "" then return nil end
   local s, e = blob:match("^([-%.%d]+);([-%.%d]+)$")
   s, e = tonumber(s), tonumber(e)
@@ -1006,7 +1010,7 @@ local function ts_slot_save(i)
   if not r.SetProjExtState or not r.GetSet_LoopTimeRange then return false end
   local s, e = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
   if not s or not e or (e - s) <= 0.0000001 then return false end
-  r.SetProjExtState(0, ZOOM_EXT_SECTION, ts_slot_key(i), string.format("%.9f;%.9f", s, e))
+  r.SetProjExtState(0, EXT_SECTION, ts_slot_key(i), string.format("%.9f;%.9f", s, e))
   return true
 end
 

@@ -1,7 +1,15 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.84
+-- @version 0.6.85
 -- @changelog:
+-- v0.6.85
+--   + Plugin Browser: Masonry view, so screenshots sit like a brick wall instead of on a fixed grid. Tiles keep their own proportions rather than being squared off, the columns always fill the window exactly, and resizing re-lays them to fit. Requested by vik-tan
+--   + Plugin Browser: Tile size is adjustable, and the layout keeps adapting to the window at every size rather than only at the one it was designed for
+--   + Plugin Browser: Arrow keys move through the plugins, and the blue rectangle that used to appear around the list is gone. Pressing an arrow selected the child window itself and then did nothing, which looked like navigation that was broken rather than navigation that was never there. Reported by vik-tan
+--   + Transport: Fixed the module erroring on open. It read a name that belonged to another module's file, so it was empty here - the kind of thing Lua only complains about at the moment the line runs. Reported by vik-tan
+--   + Notes: Shares its notes with TK Notes. A note written in either script appears in the other and both can edit it, while each still works on its own without the other installed. Existing notes on both sides are copied into the shared form once, and where both scripts held a note on the same context both are kept - the Workbench shows the other one as an extra note block
+--   + Notes: Text alignment, left, centre or right, set per note block rather than for the panel as a whole, and shared with TK Notes
+--   + Notes: Drawing mode, with a colour, an adjustable thickness and an eraser, reached from the pencil button in a block's header. Drawings scroll with the text they were drawn over and are shared with TK Notes. The eraser splits a line rather than removing it whole, so rubbing out the middle of a stroke leaves both ends behind
 -- v0.6.84
 --   + Plugin Browser: "Custom Folders" stays in the source list even when you have none, saying where to make them. It used to be hidden until the file existed, which made the whole feature look as though it were not there - the folders are built in TK FX Browser and both read the same file, so there was nothing here to find until you already knew that
 -- v0.6.83
