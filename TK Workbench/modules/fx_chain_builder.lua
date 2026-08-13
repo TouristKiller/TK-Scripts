@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
+local Text = require("core.text")
 
 local M = {
   id = "fx_chain_builder",
@@ -204,8 +205,10 @@ end
 local function truncate_text(ctx, text, max_width)
   text = tostring(text or "")
   if r.ImGui_CalcTextSize(ctx, text) <= max_width then return text end
+  -- Whole characters, so a Cyrillic or accented name does not lose half a
+  -- letter to the ellipsis and draw a placeholder box in its place.
   while #text > 3 and r.ImGui_CalcTextSize(ctx, text .. "...") > max_width do
-    text = text:sub(1, -2)
+    text = text:sub(1, Text.char_start(text, #text) - 1)
   end
   return text .. "..."
 end

@@ -1,7 +1,11 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.85
+-- @version 0.6.86
 -- @changelog:
+-- v0.6.86
+--   + Project Browser: Russian and other non-Latin project names are drawn correctly. A name that did not fit on one line was split at a byte rather than at a letter, and since Cyrillic takes two bytes per letter the split landed inside one - the halves were drawn as a placeholder box. It appeared to move when the window was resized because the split point moves with the width. Latin names were never affected, which is why it only showed up on Russian ones. The break also quietly swallowed a character, so a name lost its underscore or hyphen at the join. Reported by vik-tan
+--   + Project Browser: The single letter shown on a tile that has no artwork - the one that flashes past while scrolling before the cover loads - was the first byte of the name rather than the first letter, so it too came out as a placeholder box on a Cyrillic name. Reported by vik-tan
+--   + Same fix applied where any long name is shortened with an ellipsis: the shared text helper, Control Room, Send Studio, Plugin Browser and FX Chain Builder all cut off whole letters now instead of half of one
 -- v0.6.85
 --   + Plugin Browser: Masonry view, so screenshots sit like a brick wall instead of on a fixed grid. Tiles keep their own proportions rather than being squared off, the columns always fill the window exactly, and resizing re-lays them to fit. Requested by vik-tan
 --   + Plugin Browser: Tile size is adjustable, and the layout keeps adapting to the window at every size rather than only at the one it was designed for
@@ -1103,7 +1107,13 @@ end
 local function ellipsize_text(value, max_width)
   value = tostring(value or "")
   if value == "" or calc_text_width(value) <= max_width then return value end
-  while #value > 1 and calc_text_width(value .. "...") > max_width do value = value:sub(1, -2) end
+  -- Whole characters. Dropping one byte splits a Cyrillic or accented letter and
+  -- the half left over is drawn as a placeholder box.
+  while #value > 1 and calc_text_width(value .. "...") > max_width do
+    local cut = #value
+    while cut > 1 and value:byte(cut) >= 0x80 and value:byte(cut) < 0xC0 do cut = cut - 1 end
+    value = value:sub(1, cut - 1)
+  end
   return value .. "..."
 end
 

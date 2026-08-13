@@ -238,7 +238,15 @@ end
 local function ellipsize_text(ctx, value, max_width)
   value = tostring(value or "")
   if value == "" or calc_text_width(ctx, value) <= max_width then return value end
-  while #value > 1 and calc_text_width(ctx, value .. "...") > max_width do value = value:sub(1, -2) end
+  -- Back off a whole character at a time. Dropping one byte splits a Cyrillic or
+  -- accented letter and the half left behind is drawn as a placeholder box. The
+  -- walk is written out rather than pulled from core.text because this file is
+  -- close to Lua's 200-local ceiling and a require costs one of those.
+  while #value > 1 and calc_text_width(ctx, value .. "...") > max_width do
+    local cut = #value
+    while cut > 1 and value:byte(cut) >= 0x80 and value:byte(cut) < 0xC0 do cut = cut - 1 end
+    value = value:sub(1, cut - 1)
+  end
   return value .. "..."
 end
 

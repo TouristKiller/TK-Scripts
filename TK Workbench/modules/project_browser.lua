@@ -1238,7 +1238,7 @@ local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, 
     local text_h = r.ImGui_GetTextLineHeight and r.ImGui_GetTextLineHeight(ctx) or UIScale.round(14)
     local room = (x2 - x1) - UIScale.round(6)
     local label, text_w = nil, 0
-    for _, candidate in ipairs({ "No image", "No img", fallback_text and fallback_text:sub(1, 1):upper() or "" }) do
+    for _, candidate in ipairs({ "No image", "No img", fallback_text and Text.first_char(fallback_text):upper() or "" }) do
       if candidate ~= "" then
         local width = r.ImGui_CalcTextSize and (r.ImGui_CalcTextSize(ctx, candidate) or 0) or #candidate * 7
         if width <= room then label, text_w = candidate, width break end
@@ -1248,7 +1248,7 @@ local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, 
       r.ImGui_DrawList_AddText(draw_list, x1 + ((x2 - x1) - text_w) * 0.5, y1 + ((y2 - y1) - text_h) * 0.5, Theme.colors.text_dim, label)
     end
   elseif fallback_text and fallback_text ~= "" then
-    r.ImGui_DrawList_AddText(draw_list, x1 + UIScale.round(13), y1 + UIScale.round(10), Theme.colors.text_dim, fallback_text:sub(1, 1):upper())
+    r.ImGui_DrawList_AddText(draw_list, x1 + UIScale.round(13), y1 + UIScale.round(10), Theme.colors.text_dim, Text.first_char(fallback_text):upper())
   end
   if options.no_frame ~= true then r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, Theme.colors.border, UIScale.px(5), 0, UIScale.px(0.8)) end
 end
@@ -1545,15 +1545,26 @@ local function tile_caption_lines(ctx, text, max_w)
   for pos in text:gmatch("()%s") do
     if tile_text_w(ctx, text:sub(1, pos - 1)) <= max_w then break_at = pos else break end
   end
-  if not break_at then
+  local first, second
+  if break_at then
+    first = text:sub(1, break_at - 1)
+    second = text:sub(break_at + 1)
+  else
+    -- No space fits, so the break falls between characters. Stepping back a byte
+    -- at a time would cut a Cyrillic or accented letter in half, and the two
+    -- halves are drawn as placeholder boxes - which appear to move as the window
+    -- is resized, because the break point moves with it.
     local cut = #text
-    while cut > 1 and tile_text_w(ctx, text:sub(1, cut)) > max_w do cut = cut - 1 end
-    break_at = cut + 1
+    while cut > 1 and tile_text_w(ctx, text:sub(1, cut)) > max_w do
+      cut = Text.char_start(text, cut) - 1
+    end
+    -- Nothing is dropped here: there is no separator to skip, unlike above.
+    first, second = text:sub(1, cut), text:sub(cut + 1)
   end
-  local first = text:sub(1, break_at - 1)
-  local second = text:sub(break_at + 1)
   if tile_text_w(ctx, second) > max_w then
-    while #second > 1 and tile_text_w(ctx, second .. "...") > max_w do second = second:sub(1, -2) end
+    while #second > 1 and tile_text_w(ctx, second .. "...") > max_w do
+      second = second:sub(1, Text.char_start(second, #second) - 1)
+    end
     second = second .. "..."
   end
   return first, second

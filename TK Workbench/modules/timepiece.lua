@@ -347,8 +347,13 @@ local function fit_text(ctx, text, width)
   text = tostring(text or "")
   if calc_text_width(ctx, text) <= width then return text end
   local suffix = "..."
+  -- Whole characters. Dropping one byte splits a Cyrillic or accented letter and
+  -- the half left over is drawn as a placeholder box - region names in
+  -- particular are whatever the user typed.
   while #text > 1 and calc_text_width(ctx, text .. suffix) > width do
-    text = text:sub(1, #text - 1)
+    local cut = #text
+    while cut > 1 and text:byte(cut) >= 0x80 and text:byte(cut) < 0xC0 do cut = cut - 1 end
+    text = text:sub(1, cut - 1)
   end
   return text .. suffix
 end

@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
+local Text = require("core.text")
 
 local M = {
   id = "send_studio",
@@ -98,7 +99,11 @@ end
 local function ellipsize_text(ctx, value, max_width)
   value = tostring(value or "")
   if value == "" or calc_text_width(ctx, value) <= max_width then return value end
-  while #value > 1 and calc_text_width(ctx, value .. "...") > max_width do value = value:sub(1, -2) end
+  -- Whole characters, so a Cyrillic or accented name does not lose half a
+  -- letter to the ellipsis and draw a placeholder box in its place.
+  while #value > 1 and calc_text_width(ctx, value .. "...") > max_width do
+    value = value:sub(1, Text.char_start(value, #value) - 1)
+  end
   return value .. "..."
 end
 

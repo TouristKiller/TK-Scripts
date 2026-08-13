@@ -2392,8 +2392,14 @@ local function truncate_text(ctx, text, max_width)
   text = tostring(text or "")
   if r.ImGui_CalcTextSize(ctx, text) <= max_width then return text end
   local value = text
+  -- Back off a whole character at a time. Dropping one byte splits a Cyrillic or
+  -- accented letter and the half left behind is drawn as a placeholder box. The
+  -- walk is written out rather than pulled from core.text because this file is
+  -- close to Lua's 200-local ceiling and a require costs one of those.
   while #value > 1 and r.ImGui_CalcTextSize(ctx, value .. "..") > max_width do
-    value = value:sub(1, -2)
+    local cut = #value
+    while cut > 1 and value:byte(cut) >= 0x80 and value:byte(cut) < 0xC0 do cut = cut - 1 end
+    value = value:sub(1, cut - 1)
   end
   return value .. ".."
 end

@@ -61,4 +61,33 @@ function M.lower(value)
   return table.concat(out)
 end
 
+-- Byte index where the character covering `pos` begins.
+--
+-- Cutting a string at an arbitrary byte splits anything outside ASCII in half,
+-- and half a character is not a character: it is drawn as a placeholder box.
+-- Continuation bytes of a UTF-8 sequence are 10xxxxxx (0x80-0xBF), so walking
+-- back over those lands on the byte that starts the character.
+function M.char_start(value, pos)
+  value = tostring(value or "")
+  if pos == nil or pos < 1 then return 1 end
+  local i = math.max(1, math.min(pos, #value))
+  while i > 1 do
+    local b = value:byte(i)
+    if b < 0x80 or b >= 0xC0 then break end
+    i = i - 1
+  end
+  return i
+end
+
+-- The first whole character, for the single-letter placeholder drawn on a tile
+-- that has no artwork. value:sub(1, 1) takes one byte, which for a Cyrillic or
+-- accented name is the first half of a letter.
+function M.first_char(value)
+  value = tostring(value or "")
+  if value == "" then return "" end
+  local b1 = value:byte(1)
+  local len = b1 >= 0xF0 and 4 or b1 >= 0xE0 and 3 or b1 >= 0xC0 and 2 or 1
+  return value:sub(1, len)
+end
+
 return M

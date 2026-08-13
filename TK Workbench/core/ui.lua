@@ -1,6 +1,7 @@
 local r = reaper
 local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
+local Text = require("core.text")
 
 local M = {}
 
@@ -95,7 +96,11 @@ local function fit_text(ctx, value, max_width)
 	if text_width(ctx, value) <= max_width then return value end
 	local ellipsis = "..."
 	local text = value
-	while #text > 1 and text_width(ctx, text .. ellipsis) > max_width do text = text:sub(1, -2) end
+	-- A whole character at a time: dropping single bytes cuts a Cyrillic or
+	-- accented letter in half and the remnant is drawn as a placeholder box.
+	while #text > 1 and text_width(ctx, text .. ellipsis) > max_width do
+		text = text:sub(1, Text.char_start(text, #text) - 1)
+	end
 	if #text <= 1 and text_width(ctx, ellipsis) > max_width then return "" end
 	return text .. ellipsis
 end
