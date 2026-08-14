@@ -1,8 +1,22 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 0.9.99
+-- @version 1.0.0
 -- @changelog:
 --[[
+v1.0.0:
++ New: a loops / one-shots filter, on the search bar next to All, cycling through L/S, Loop and Shot with a click, so a folder that mixes them can be narrowed to one or the other. What a file is gets read from its name and the folder it sits in, which is free for every file in a location and settles most of a library on its own - 01 Bass Loops next to 02 Bass Hits is the way these are filed
++ Loops / Shots: where a waveform is already cached the attacks in it are counted, because what separates the two is repetition rather than length. One attack is one sound however long it rings, so a crash ringing out for eight seconds, an 808 with a long tail and a riser are all one-shots, while several attacks spread evenly across a file are a bar of music. Attacks bunched at the start and then nothing stay a one-shot too - that is one busy gesture, not a loop. A reading like that outranks both the name and the tempo, since a pack that tags its one-shots with the pack tempo would otherwise turn every long hit into a loop
++ Loops / Shots: attacks are counted on the outline of the sound rather than the wave itself. A kick or an 808 is a sine of around fifty hertz, and at a thousand columns across a short file every cycle of it lands in its own column, so the raw shape rises and falls with the waveform and each cycle reads as a hit - which is exactly how a single 808 came out as eight evenly spaced attacks. Following the sound with an instant attack and a fifty millisecond release holds the level between cycles, longer than a cycle of anything with a pitch and shorter than the gap between two musical events
++ Loops / Shots: where the length and tempo are known and nothing more convincing is available, the bar count decides - a loop is a whole number of beats long and a one-shot practically never is. At least a full bar is required, because two beats is a short enough target for a hit with a long tail to land on by accident. None of this costs anything extra and all of it only applies to what is already known, so switching the filter never sets off a pass over the whole library
++ Loops / Shots: a name that mentions two different instruments is a loop, because one hit is one instrument - Kicks_Hats_Perc is a bar of music whatever else the name says. Instrument names are found inside a word as well as beside one, since packs write Kick8, modkick2 and 808spec1 and matching whole words only left all three saying nothing. Short names still have to match whole, or ride would be found in override, tom in custom and hat in whatever, and a name made of digits has to sit clear of other digits, or the 8081 in Trap-Kick-100K 8081 reads as an 808. An 808 counts as the kick it is, together with sub and bass, so Trap-Kick-808 names one instrument rather than three and stays a hit. A bare number where a tempo would sit counts as well, since packs write ALL_110_Dub_Kick and mean 110 BPM by it, while a one-shot carries no tempo. Position is what tells the two apart: a tempo is stated early, before what the file is, while a number in the last slot is counting the files, so Clap 100.wav is the hundredth clap and not a loop at 100 BPM
++ Fixed a filter being ignored until it was touched: the file list is sorted over the whole scan, and that sorted copy was drawn as-is, so a category or a loops / one-shots setting restored at startup showed every sample until clicking something cleared the sort. The sort order is now kept while the entries are taken from the filtered list, which covers the category buttons, the search box and the new filter in one place
++ Loops / Shots: the file count follows the filter, and names the total it came from while it is holding some of it back, so a search that turns up matches you cannot see reads as "0 of 22 files" rather than as an empty list under a count of 22
++ Loops / Shots: a file that none of that can place stays visible under both filters rather than quietly disappearing, and hovering any file names the verdict and the reason behind it, so a surprise can be traced instead of guessed at. A waveform arriving after the list was drawn can overturn what the name suggested, and the list is rebuilt when it does
++ Auto categories: an instrument is now looked for as a word rather than as any run of letters that happens to spell one. "tom" sits inside custom and automatic, which filed every CustomContact and Automatic sample under toms, and the same trap holds ride inside override, arp and harp inside sharp, organ inside organic, sub inside subtle and keys inside monkeys
++ Auto categories: abbreviations are allowed at either edge of a word but not buried inside one, because names glue words together and a two letter abbreviation then turns up across the seam. "hh" is inside SynthHorn, SynthHybrid and TechHouse, which put a whole pack of synths under hihat, while OpenHH and ClosedHH carry theirs at the end and had to keep working. Names that end in a glued instrument - CaesarPad, DatBass, HMLead, SoftSawz - are matched as they always were, since hundreds of files are written that way
++ Auto categories: "cym" has to stand as a word of its own, because Cymatics is a sample pack rather than a cymbal and over a thousand of its files carried the name into the cymbal category, winning ties against vocals, synths and pads. Every file that really does write "Cym" says Cymbal somewhere as well, so none of them are lost
++ Auto categories: a drum machine names the box a sound came off, not the sound itself - an 808 has claps and hats on it as readily as kicks - so "808" no longer counts as much as a spelled out instrument and ESWTR808 Clap 01 is a clap. Two letter abbreviations are weighed the same way, since "sn" inside "snap" was dragging percussion into snare
+
 v0.9.99:
 + New: a Wave column in the file list, off by default, switched on with the other columns under Settings. It shows the waveform of every audio file in the list rather than only the one loaded in the oscilloscope, so a folder can be read at a glance - where the hits are, what is a one-shot and what is a loop, which take is the loud one - without auditioning it file by file
 + Wave: minima and maxima are drawn apart rather than folded into one absolute value, so a waveform that is not symmetrical around zero does not look as though it is. A kick that pulls hard one way reads as a kick, and near-silence stays a thin line instead of disappearing
@@ -638,6 +652,477 @@ function tkmb_peaks.draw_cell(ctx, path, is_audio, color)
         if bottom - top < 1 then bottom = top + 1 end
         r.ImGui_DrawList_AddRectFilled(draw_list, x + index - 1, top, x + index, bottom, color)
     end
+end
+
+-- Loop / one-shot ------------------------------------------------------------
+-- Three kinds of evidence, and they cost wildly different amounts, so they are
+-- kept in tiers and the cheapest one that can decide gets to.
+--
+--   1 name and folder - free. Both are already in the flat file cache for every
+--     file in a location, so a whole library can be sorted without touching a
+--     single one of them. Libraries are named and filed consistently enough that
+--     this alone settles most of it: 01 Bass Loops next to 02 Bass Hits.
+--   2 bar length - needs the duration and the tempo, which means opening the
+--     file, so it is only used where that is already known. A loop is a whole
+--     number of beats long and a one-shot practically never is, which makes this
+--     the most convincing evidence of the three when it is available.
+--   3 envelope shape - free once a file has a waveform cached, which is every
+--     file scrolled past with the Wave column on. A loop carries sound all the
+--     way to its last sample because it has to meet its own start; a one-shot
+--     peaks early and decays into silence.
+--
+-- A verdict is kept with the tier it came from, so passing better evidence in
+-- later replaces a guess instead of being ignored. Files nothing can settle stay
+-- "unknown" on purpose and are shown under both filters: quietly hiding a file
+-- the browser was unsure about is worse than showing one too many.
+tkmb_shape = {
+    mode = "all",             -- "all" | "loop" | "oneshot"
+    cache = {},
+    filter_key = nil,
+    filter_cache = nil,
+    dirty = false,
+    next_refresh = 0,
+    BEAT_TOLERANCE = 0.015,   -- how far off a whole number of beats may land
+    TAIL_LOOP = 0.25,         -- tail still this loud against the peak reads as a loop
+    TAIL_SHOT = 0.06,         -- tail this quiet reads as a one-shot
+}
+
+tkmb_shape.SHOT_WORDS = { "one shot", "oneshot", "one shots", "oneshots", "os", "hit", "hits", "stab", "stabs", "single", "shot", "shots" }
+tkmb_shape.LOOP_WORDS = { "loop", "loops", "looped", "break", "breaks", "breakbeat", "groove", "grooves", "riff", "riffs", "phrase", "phrases", "pattern", "patterns", "construction", "fill", "fills" }
+-- FX that are single events by convention: a riser or an impact is one gesture
+-- however long it lasts, and only counts as a loop when something calls it one.
+tkmb_shape.FX_WORDS = { "impact", "stinger", "riser", "uplifter", "downlifter", "whoosh", "sweep", "transition", "boom", "braam", "slam", "drop" }
+
+-- Grouped so that plurals and synonyms count once. What matters is how many
+-- different instruments a name mentions: one hit is one instrument, so a file
+-- calling itself Kicks_Hats_Perc is a bar of music whatever else it says.
+tkmb_shape.INSTRUMENTS = {
+    -- An 808 is the kick, and in trap it is the bass as well, so these are three
+    -- words for one instrument rather than three instruments. Kept together, a
+    -- name like Trap-Kick-808 counts once and stays a hit; apart, it counted
+    -- twice and every one of them came out as a loop.
+    { "kick", "kicks", "bd", "808", "808s", "bass", "sub", "subbass" },
+    -- A rimshot is a way of hitting a snare, not a second instrument alongside
+    -- it, so it belongs in this group and not with the percussion below.
+    { "snare", "snares", "sd", "rimshot", "rimshots" },
+    { "clap", "claps" },
+    -- "hh" is two characters, so it only ever matches as a whole word, which is
+    -- what a name like ESWTR808 HH Closed 04 needs.
+    { "hihat", "hihats", "hat", "hats", "openhat", "closedhat", "hh" },
+    { "tom", "toms" },
+    { "crash", "ride", "cymbal", "cymbals" },
+    { "rim", "clave", "claves", "cowbell", "shaker", "tambourine", "conga", "congas", "bongo", "bongos", "block" },
+    { "perc", "percussion" },
+    { "snap", "snaps", "stick", "sticks" },
+}
+
+function tkmb_shape.normalise(text)
+    return " " .. tostring(text or ""):lower():gsub("[_%-%.%(%)%[%]/\\]", " "):gsub("%s+", " ") .. " "
+end
+
+function tkmb_shape.has_word(text, words)
+    for index = 1, #words do
+        if text:find(" " .. words[index] .. " ", 1, true) then return words[index] end
+    end
+    return nil
+end
+
+-- Short words have to match whole, because "hat" lives inside "whatever" and
+-- "rim" inside "trimmed". Longer ones are distinctive enough to be found inside
+-- a token, which is what it takes to read Kick8, modkick2 and 808spec1 - names
+-- that glue the instrument to a number and would otherwise say nothing at all.
+-- The exceptions are the ones that hide in ordinary words: ride in override,
+-- tom in custom, sub in subtle.
+tkmb_shape.NO_SUBSTRING = { ride = true, hat = true, hats = true, tom = true, toms = true,
+    sub = true, rim = true, sd = true, bd = true, os = true, block = true }
+
+function tkmb_shape.has_part(text, words)
+    for index = 1, #words do
+        local word = words[index]
+        if text:find(" " .. word .. " ", 1, true) then return word end
+        if #word >= 3 and not tkmb_shape.NO_SUBSTRING[word] then
+            -- A name made of digits has to open a word and end where the digits
+            -- do. 8081 is the file's number rather than an 808, and the 808 in
+            -- ESWTR808 is the pack's name, not the instrument in the file -
+            -- which matters, because reading it as one turns every ESWTR808
+            -- Clap into two instruments and therefore a loop. Letters have no
+            -- such trouble and Kick8 has to keep working, so only numeric names
+            -- are held to it.
+            local numeric = word:match("^%d+$") ~= nil
+            local from = 1
+            while true do
+                local starts, ends = text:find(word, from, true)
+                if not starts then break end
+                if not numeric then return word end
+                local before = (starts > 1) and text:sub(starts - 1, starts - 1) or " "
+                local after = (ends < #text) and text:sub(ends + 1, ends + 1) or " "
+                if before == " " and not after:match("%d") then return word end
+                from = starts + 1
+            end
+        end
+    end
+    return nil
+end
+
+function tkmb_shape.count_instruments(text)
+    local found, first = 0, nil
+    for group = 1, #tkmb_shape.INSTRUMENTS do
+        local word = tkmb_shape.has_part(text, tkmb_shape.INSTRUMENTS[group])
+        if word then
+            found = found + 1
+            first = first or word
+        end
+    end
+    return found, first
+end
+
+-- A bare number where a tempo would sit. Packs write ALL_110_Dub_Kick and mean
+-- 110 BPM by it, and a one-shot carries no tempo. Two digits minimum and inside
+-- a musical range, so that 808 does not read as a tempo.
+--
+-- Position is what separates a tempo from a file's number, and getting this
+-- wrong is expensive: a folder of claps numbered up to 301 had every one
+-- between 60 and 200 called a loop. A tempo is stated early, before what the
+-- file is - ALL_110_Dub_Kick - while a number that comes last is counting the
+-- files - Clap 100.wav. So the final slot is never read as a tempo.
+function tkmb_shape.has_tempo(text)
+    if text:find("%d%s*bpm") then return true end
+    local tokens = {}
+    for token in text:gmatch("%S+") do tokens[#tokens + 1] = token end
+    if #tokens == 0 then return false end
+    -- Names end in an extension and folders do not, so the counting slot is the
+    -- token before a trailing "wav" and the last token otherwise.
+    local last = tokens[#tokens]
+    local counting = (last:match("^%a%a?%a?%a?$") and #tokens > 1) and (#tokens - 1) or #tokens
+    for index = 1, #tokens do
+        local token = tokens[index]
+        local value = tonumber(token)
+        if value and #token >= 2 and value >= 60 and value <= 200 and index ~= counting then
+            return true
+        end
+    end
+    return false
+end
+
+-- Whole words rather than substrings, because "hat" lives inside "whatever" and
+-- "os" inside almost everything.
+function tkmb_shape.from_text(name, folder)
+    local in_name = tkmb_shape.normalise(name)
+    local in_folder = tkmb_shape.normalise(folder)
+
+    local word = tkmb_shape.has_word(in_name, tkmb_shape.SHOT_WORDS)
+    if word then return "oneshot", "name says " .. word end
+    word = tkmb_shape.has_word(in_name, tkmb_shape.LOOP_WORDS)
+    if word then return "loop", "name says " .. word end
+
+    -- Two instruments in one name means both are playing, and that is a bar of
+    -- music rather than a hit. This has to come before the single-instrument
+    -- reading below, which would otherwise call Kicks_Hats_Perc a one-shot.
+    local instruments, instrument = tkmb_shape.count_instruments(in_name)
+    if instruments >= 2 then
+        return "loop", string.format("names %d instruments", instruments)
+    end
+    if tkmb_shape.has_tempo(in_name) then return "loop", "tempo in name" end
+
+    word = tkmb_shape.has_word(in_folder, tkmb_shape.SHOT_WORDS)
+    if word then return "oneshot", "folder says " .. word end
+    word = tkmb_shape.has_word(in_folder, tkmb_shape.LOOP_WORDS)
+    if word then return "loop", "folder says " .. word end
+    if tkmb_shape.has_tempo(in_folder) then return "loop", "tempo in folder" end
+
+    word = tkmb_shape.has_word(in_name, tkmb_shape.FX_WORDS)
+    if word then return "oneshot", word .. " is a single gesture" end
+    -- One instrument, with nothing anywhere calling it a loop, is a hit.
+    if instruments == 1 then
+        return "oneshot", instrument .. " alone, no loop marking"
+    end
+    return nil
+end
+
+-- At least a full bar, because two beats is a short enough target that a hit
+-- with a long tail lands on it by accident, and packs tag every file with the
+-- pack tempo whether it is a loop or not.
+function tkmb_shape.from_bars(seconds, bpm)
+    seconds = tonumber(seconds) or 0
+    bpm = tonumber(bpm) or 0
+    if seconds < 1.0 or bpm < 40 or bpm > 300 then return nil end
+    local beats = seconds * bpm / 60
+    if beats < 4 then return nil end
+    local nearest = math.floor(beats + 0.5)
+    if math.abs(beats - nearest) / nearest > tkmb_shape.BEAT_TOLERANCE then return nil end
+    return "loop", string.format("%d beats at %g BPM", nearest, bpm)
+end
+
+-- What separates the two is repetition, not length: a one-shot is a single
+-- event and a loop contains several. Counting attacks says that directly, and it
+-- is the only reading that gets a long crash or an 808 ringing out for eight
+-- seconds right - those are one hit that happens to decay slowly, and judging
+-- them on how much sound is left at the end calls every one of them a loop.
+-- Level at the end only helps where there are no attacks to count at all.
+--
+-- The second return value marks a reading as decisive. One attack, or several
+-- evenly spaced ones, is a stronger statement about a file than anything a name
+-- or a bar count can offer, so those outrank the other tiers; the rest defer.
+function tkmb_shape.from_envelope(data)
+    local count = data and data.count or 0
+    if count < 64 then return nil end
+    local amp = {}
+    local peak = 0
+    for index = 1, count do
+        local high = data.maxs[index] or 0
+        local low = data.mins[index] or 0
+        if low < 0 then low = -low end
+        local value = high > low and high or low
+        amp[index] = value
+        if value > peak then peak = value end
+    end
+    if peak <= 0.001 then return nil end
+
+    -- Attacks have to be counted on the outline of the sound, not on the wave
+    -- itself. A kick or an 808 is a sine of around fifty hertz, and at a
+    -- thousand columns for a short file every one of its cycles lands in its own
+    -- column - so the raw envelope rises and falls with the waveform, and each
+    -- cycle reads as an attack. That is what turned a single 808 into "8
+    -- attacks, evenly spaced": a sine is nothing if not evenly spaced.
+    --
+    -- A follower with an instant attack and a slow release fixes it. Between
+    -- cycles it holds its level instead of falling back, so a pitched tail
+    -- climbs no further, while a real hit still jumps the moment it arrives. The
+    -- release is set in time rather than columns, at 50 ms, which is longer than
+    -- a cycle of anything with a pitch and shorter than the gap between two
+    -- musical events.
+    local seconds = tonumber(data.length) or 0
+    local per_second = (seconds > 0) and (count / seconds) or 0
+    local release_columns = (per_second > 0) and (per_second * 0.05) or (count / 64)
+    if release_columns < 2 then release_columns = 2 end
+    if release_columns > count / 8 then release_columns = count / 8 end
+    local release = math.exp(-1 / release_columns)
+    local level = 0
+    for index = 1, count do
+        local value = amp[index]
+        if value > level then
+            level = value
+        else
+            level = level * release + value * (1 - release)
+        end
+        amp[index] = level
+    end
+
+    local window = math.max(4, math.floor(count / 48))
+    if per_second > 0 then
+        local spacing = math.floor(per_second * 0.08)
+        if spacing > window then window = spacing end
+        if window > math.floor(count / 6) then window = math.floor(count / 6) end
+    end
+    local onsets, last_onset, previous = 0, -count, nil
+    local gaps, gap_total = 0, 0
+    local gap_list = {}
+    local opening = 0
+    for index = 1, window do
+        if amp[index] > opening then opening = amp[index] end
+    end
+    if opening >= peak * 0.5 then
+        onsets, previous, last_onset = 1, 1, 1
+    end
+    for index = 2, count do
+        if amp[index] > peak * 0.2
+            and (amp[index] - amp[index - 1]) > peak * 0.22
+            and (index - last_onset) > window then
+            onsets = onsets + 1
+            if previous then
+                gaps = gaps + 1
+                gap_list[gaps] = index - previous
+                gap_total = gap_total + (index - previous)
+            end
+            previous = index
+            last_onset = index
+        end
+    end
+    -- A loop keeps hitting all the way through; a burst of attacks bunched at
+    -- the start and then nothing is one gesture, however many transients it has.
+    local spread = last_onset >= count * 0.5
+
+    -- How much of the opening level is still there at the end. A loop holds its
+    -- level because it has to meet its own start; a one-shot falls away.
+    local quarter = math.max(1, math.floor(count / 4))
+    local head, tail = 0, 0
+    for index = 1, quarter do head = head + amp[index] end
+    for index = count - quarter + 1, count do tail = tail + amp[index] end
+    head, tail = head / quarter, tail / quarter
+    local sustain = head > 0 and (tail / head) or 0
+
+    -- Evenly spaced attacks are a bar of music; ragged ones are one busy noise.
+    local regular = false
+    if gaps >= 2 then
+        local mean_gap = gap_total / gaps
+        local variance = 0
+        for index = 1, gaps do
+            local difference = gap_list[index] - mean_gap
+            variance = variance + difference * difference
+        end
+        regular = mean_gap > 0 and (math.sqrt(variance / gaps) / mean_gap) <= 0.4
+    end
+
+    -- One attack is one sound, however long it rings. Where it also dies away
+    -- that is settled; where it holds its level to the end it could be a drone
+    -- cut to loop, so the reading stands but yields to a name that says so.
+    if onsets == 1 and sustain <= 0.5 then
+        return "oneshot", "one attack, however long it rings", true
+    end
+    if onsets == 1 then
+        return "oneshot", "one attack, level held", false
+    end
+    if onsets >= 3 and spread and (regular or sustain >= 0.45) then
+        return "loop", string.format("%d attacks%s", onsets, regular and ", evenly spaced" or ""), true
+    end
+    if onsets >= 3 and not spread then
+        return "oneshot", string.format("%d attacks, all at the start", onsets), true
+    end
+    if onsets >= 3 then
+        return "oneshot", string.format("%d ragged attacks, then gone", onsets), false
+    end
+    if onsets == 2 then
+        if sustain >= 0.6 then return "loop", "two attacks, level held", false end
+        return "oneshot", "two attacks, then gone", false
+    end
+    -- Nothing to count: a drone or pad that keeps its level is a loop, anything
+    -- that fades out is a single sound.
+    if sustain >= 0.6 then return "loop", "sustained to the end", false end
+    if sustain <= 0.25 then return "oneshot", "fades away, no repeat", false end
+    return nil
+end
+
+-- Cheapest evidence first, and a later call carrying better evidence upgrades a
+-- verdict that was reached on a weaker tier.
+function tkmb_shape.classify(path, name, folder, seconds, bpm)
+    local held = tkmb_shape.cache[path]
+    if held and held.tier >= 3 then return held.kind, held.why end
+
+    local peaks = tkmb_peaks.data[path]
+    local soft_kind, soft_why = nil, nil
+    if peaks then
+        local kind, why, decisive = tkmb_shape.from_envelope(peaks)
+        -- A decisive shape outranks everything else. One attack means one sound
+        -- whatever the name suggests and whatever the length works out to, and a
+        -- pack that tags its one-shots with the pack tempo would otherwise turn
+        -- every long hit into a loop.
+        if kind and decisive then
+            -- A waveform arriving later can overturn what the name suggested, so
+            -- the filtered list has to be told it is out of date.
+            if held and held.kind ~= kind then tkmb_shape.dirty = true end
+            tkmb_shape.cache[path] = { kind = kind, why = why, tier = 3 }
+            return kind, why
+        end
+        soft_kind, soft_why = kind, why
+        -- The envelope also hands over an exact length for nothing, which is
+        -- what the bar test needs and what nobody has otherwise.
+        local bar_kind, bar_why = tkmb_shape.from_bars(seconds or peaks.length, bpm)
+        if bar_kind then
+            tkmb_shape.cache[path] = { kind = bar_kind, why = bar_why, tier = 3 }
+            return bar_kind, bar_why
+        end
+    end
+
+    if held and held.tier >= 2 then return held.kind, held.why end
+    local kind, why = tkmb_shape.from_bars(seconds, bpm)
+    if kind then
+        tkmb_shape.cache[path] = { kind = kind, why = why, tier = 2 }
+        return kind, why
+    end
+
+    if held then return held.kind, held.why end
+    kind, why = tkmb_shape.from_text(name, folder)
+    if kind then
+        tkmb_shape.cache[path] = { kind = kind, why = why, tier = 1 }
+        return kind, why
+    end
+    -- A shape that was not decisive still beats having nothing at all.
+    if soft_kind then
+        tkmb_shape.cache[path] = { kind = soft_kind, why = soft_why, tier = 3 }
+        return soft_kind, soft_why
+    end
+    tkmb_shape.cache[path] = { kind = "unknown", why = "nothing to go on", tier = 1 }
+    return "unknown", "nothing to go on"
+end
+
+function tkmb_shape.reset()
+    tkmb_shape.cache = {}
+    tkmb_shape.filter_key = nil
+    tkmb_shape.filter_cache = nil
+end
+
+-- The sorted list and the filtered list ------------------------------------
+-- Sorting is done over the whole scan, so the sorted list predates whatever the
+-- category buttons and the search box have since narrowed the filtered list down
+-- to. Drawing straight from it brought every sample back after a restart, with
+-- the category still lit, until touching a filter cleared the sort cache and let
+-- the narrowed list through again.
+--
+-- Keeping the sort order but only the entries that survived fixes that once for
+-- all of them: the category filter, the search box, and anything else that
+-- narrows the list, without repeating any of their logic here. Both lists come
+-- in as arguments because this sits above where they are declared.
+tkmb_display = { key = nil, cache = nil }
+
+function tkmb_display.list(sorted, narrowed)
+    if not sorted or #sorted == 0 then return narrowed or {} end
+    if not narrowed or #narrowed == 0 or #narrowed >= #sorted then return sorted end
+    local key = table.concat({
+        tostring(#sorted), tostring(#narrowed),
+        tostring(sorted[1] and sorted[1].full_path),
+        tostring(narrowed[1] and narrowed[1].full_path),
+    }, "\0")
+    if tkmb_display.key == key and tkmb_display.cache then return tkmb_display.cache end
+    local allowed = {}
+    for index = 1, #narrowed do
+        local file = narrowed[index]
+        if file and file.full_path then allowed[file.full_path] = true end
+    end
+    local kept = {}
+    for index = 1, #sorted do
+        local file = sorted[index]
+        if file and allowed[file.full_path] then kept[#kept + 1] = file end
+    end
+    tkmb_display.key = key
+    tkmb_display.cache = kept
+    return kept
+end
+
+-- Only the text tier is free for every file, so that is all the filter leans on
+-- for a location it has never drawn. Everything already known refines it as you
+-- go, and unknowns are kept in view rather than dropped.
+function tkmb_shape.filter(files)
+    local mode = tkmb_shape.mode
+    if mode ~= "loop" and mode ~= "oneshot" then return files end
+    local first = files[1] and files[1].full_path or ""
+    local key = mode .. "\0" .. tostring(#files) .. "\0" .. first
+    -- Rebuilding is a pass over the whole location, so a verdict changing under
+    -- us does not rebuild on the spot: it is coalesced into one refresh a moment
+    -- later, by which time a screenful of waveforms has usually landed together.
+    local now = r.time_precise and r.time_precise() or os.clock()
+    local stale = tkmb_shape.dirty and now >= (tkmb_shape.next_refresh or 0)
+    if tkmb_shape.filter_key == key and tkmb_shape.filter_cache and not stale then
+        return tkmb_shape.filter_cache
+    end
+    if stale then
+        tkmb_shape.dirty = false
+        tkmb_shape.next_refresh = now + 0.4
+    end
+    local kept = {}
+    for index = 1, #files do
+        local file = files[index]
+        local kind = tkmb_shape.classify(file.full_path, file.name, file.parent_folder)
+        if kind == mode or kind == "unknown" then
+            kept[#kept + 1] = file
+        end
+    end
+    tkmb_shape.filter_key = key
+    tkmb_shape.filter_cache = kept
+    -- Kept so the file count can say what it is holding back. A search that
+    -- turns up matches you cannot see is worth explaining rather than leaving
+    -- as an empty list.
+    tkmb_shape.filtered_from = #files
+    return kept
 end
 
 local ctx = r.ImGui_CreateContext('TK Media Browser')
@@ -3762,6 +4247,7 @@ local function save_options()
             visible_columns = ui_settings.visible_columns,
             show_spectral_view = waveform.show_spectral_view,
             auto_selected_category = ui.auto_selected_category,
+            shape_filter = tkmb_shape.mode,
             auto_source_location = ui.auto_source_location,
             auto_source_index = ui.auto_source_index,
             waveform_preview_height = ui.waveform_preview_height,
@@ -4118,6 +4604,7 @@ local function load_options()
                 ui_settings.visible_columns = options.visible_columns
             end
             ui.auto_selected_category = options.auto_selected_category or "All"
+            tkmb_shape.mode = options.shape_filter or "all"
             ui.auto_source_location = options.auto_source_location or ""
             ui.auto_source_index = options.auto_source_index or 0
             if file_location.remember_last_location and options.last_location_index then
@@ -9887,7 +10374,7 @@ function draw_file_list()
                         end
                         search_filter.filtered_files = flat_files
                     end
-                    
+
                     local table_flags = r.ImGui_TableFlags_Resizable() |
                                        r.ImGui_TableFlags_Sortable() |
                                        r.ImGui_TableFlags_RowBg() |
@@ -10215,7 +10702,14 @@ function draw_file_list()
                             end
                         end
                         
-                        local files_to_display = (#search_filter.sorted_files > 0) and search_filter.sorted_files or search_filter.filtered_files
+                        -- Sort order from the sorted list, membership from the
+                        -- filtered one, then the loops / one-shots filter. Doing
+                        -- this here rather than only where filtered_files is
+                        -- built is what makes a filter survive a restart:
+                        -- presort_flat_files fills the sorted list from the raw
+                        -- scan when a location first loads, and that used to win.
+                        local files_to_display = tkmb_display.list(search_filter.sorted_files, search_filter.filtered_files)
+                        files_to_display = tkmb_shape.filter(files_to_display)
                         ui.visible_files = files_to_display
                         
                         if ui.scroll_to_top then
@@ -10359,6 +10853,13 @@ function draw_file_list()
                                 if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_DelayNormal()) then
                                     if r.ImGui_BeginTooltip(ctx) then
                                         r.ImGui_PushFont(ctx, small_font, small_font_size)
+                                        if is_audio_media_file(file.full_path) then
+                                            local kind, why = tkmb_shape.classify(file.full_path, file.name, file.parent_folder,
+                                                metadata.duration_seconds, metadata.bpm_num)
+                                            local label = (kind == "loop" and "Loop") or (kind == "oneshot" and "One-shot") or "Unclear"
+                                            r.ImGui_Text(ctx, label .. " - " .. tostring(why))
+                                            r.ImGui_Separator(ctx)
+                                        end
                                         r.ImGui_Text(ctx, "Shift+Click: Insert at Edit Cursor")
                                         r.ImGui_Text(ctx, "Ctrl+Click: Toggle Selection")
                                         r.ImGui_Text(ctx, "Right-Click: Context Menu")
@@ -11271,8 +11772,15 @@ function loop()
     if has_files then
         if file_location.flat_view then
             ui.visible_files = {}
-            local files_to_use = (search_filter.sorted_files and #search_filter.sorted_files > 0) and search_filter.sorted_files
-                or ((search_filter.filtered_files and #search_filter.filtered_files > 0) and search_filter.filtered_files or search_filter.cached_flat_files)
+            -- Same list the table will draw, worked out the same way. This runs
+            -- at the top of the frame and the file count is read further down,
+            -- while the table is drawn afterwards, so without it the count
+            -- reported the list before the filters touched it. The table asks
+            -- for the same thing a moment later and lands on these cached
+            -- results.
+            local files_to_use = tkmb_display.list(search_filter.sorted_files, search_filter.filtered_files)
+            if #files_to_use == 0 then files_to_use = search_filter.cached_flat_files end
+            files_to_use = tkmb_shape.filter(files_to_use)
             for i = 1, #files_to_use do
                 local file = files_to_use[i]
                 if file and not file.is_dir then
@@ -12383,9 +12891,9 @@ function loop()
                 cached_cat_filter_key = ""
             end
             r.ImGui_PopStyleColor(ctx, 1)
-            
+
             r.ImGui_Spacing(ctx)
-            
+
             local src_name = ui.auto_source_location:match("([^/\\]+)[/\\]?$") or "No source"
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), unselected_button_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), accent_hover_color)
@@ -14554,7 +15062,8 @@ function loop()
                 end
                 
                 local dropdown_button_width = 20
-                local all_btn_reserve = (ui.current_view_mode ~= "collections" and ui.current_view_mode ~= "auto") and (ui_settings.button_height + 8 + spacing) or 0
+                local all_btn_reserve = ((ui.current_view_mode ~= "collections" and ui.current_view_mode ~= "auto") and (ui_settings.button_height + 8 + spacing) or 0)
+                    + (ui_settings.button_height + 20 + spacing)
                 local search_width = (available_width - view_buttons_width - all_btn_reserve) * 0.85 + dropdown_button_width - 5
                 if search_width < 80 then search_width = 80 end
                 
@@ -14689,6 +15198,31 @@ function loop()
                 if r.ImGui_IsItemHovered(ctx) then
                     r.ImGui_SetTooltip(ctx, "Search across all saved locations (cached folders only)\nForces flat view while active")
                 end
+            end
+
+            -- Loop / one-shot filter. On the search bar rather than in a view's own
+            -- panel, because the filter applies wherever the file table is drawn and
+            -- a control you cannot see from there is a control you do not have. One
+            -- button cycling through three states: the bar has no room for three.
+            r.ImGui_SameLine(ctx, 0, 0)
+            r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), transparent_color)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), (tkmb_shape.mode ~= "all") and hsv_to_color(ui_settings.selection_hue, 1.0, 1.0) or accent_color)
+            if r.ImGui_Button(ctx, ((tkmb_shape.mode == "loop") and "Loop" or (tkmb_shape.mode == "oneshot") and "Shot" or "L/S") .. "##ShapeFilter", ui_settings.button_height + 20, ui_settings.button_height) then
+                tkmb_shape.mode = (tkmb_shape.mode == "all") and "loop" or (tkmb_shape.mode == "loop") and "oneshot" or "all"
+                tkmb_shape.filter_key = nil
+                tkmb_shape.filter_cache = nil
+                search_filter._search_render_key = nil
+                search_filter._search_render_cache = nil
+                clear_sort_cache()
+                save_options()
+            end
+            r.ImGui_PopStyleColor(ctx, 4)
+            r.ImGui_PopStyleVar(ctx, 1)
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Loops / one-shots filter - click to cycle\n\nL/S  everything\nLoop  loops only\nShot  one-shots only\n\nRead from the name and folder, refined by bar length and\nwaveform where those are already known. Files it cannot\nplace stay visible under both. Hover a file to see why.")
             end
             if r.ImGui_BeginPopup(ctx, "SearchHistoryPopup") then
                 if #search_filter.search_history > 0 then
@@ -15072,7 +15606,21 @@ function loop()
                 else
                     r.ImGui_Dummy(ctx, 0, 3)
                 end
-                r.ImGui_Text(ctx, string.format("%d files", #search_filter.filtered_files))
+                -- What is on screen, so the count follows the loops / one-shots
+                -- filter instead of reporting the list it was applied to, and it
+                -- names the total it came from while the filter is holding some
+                -- of it back.
+                local shown_count = #(ui.visible_files or search_filter.filtered_files)
+                local from_count = tkmb_shape.filtered_from or 0
+                if tkmb_shape.mode ~= "all" and from_count > shown_count then
+                    r.ImGui_Text(ctx, string.format("%d of %d files", shown_count, from_count))
+                    if r.ImGui_IsItemHovered(ctx) then
+                        r.ImGui_SetTooltip(ctx, string.format("%d hidden by the %s filter", from_count - shown_count,
+                            tkmb_shape.mode == "loop" and "Loop" or "Shot"))
+                    end
+                else
+                    r.ImGui_Text(ctx, string.format("%d files", shown_count))
+                end
                 
                 r.ImGui_SameLine(ctx, 0, 10)
                 

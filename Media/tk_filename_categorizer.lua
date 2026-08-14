@@ -18,7 +18,7 @@ local CATEGORY_KEYWORDS = {
         "pedal hat", "pedalhat"
     },
     cymbal = {
-        "cymbal", "cym", "crash", "ride", "splash", "china"
+        "cymbal", "cym", "cyms", "crash", "ride", "splash", "china"
     },
     tom = {
         "tom", "toms", "floor tom", "rack tom", "hi tom", "lo tom",
@@ -107,6 +107,78 @@ local CATEGORY_ORDER = {
     "vocal", "fx", "loop"
 }
 
+-- Keywords that hint at a category without naming one, scored below a real
+-- instrument name so that anything explicit wins the tie.
+--
+-- A drum machine qualifies a sample, it does not identify it: an 808 has claps
+-- and hats on it as readily as kicks, so ESWTR808 Clap 01 is a clap. Scored the
+-- same as a kick it drew level with the word "clap" and won on the ordering
+-- above, which put every 808 pack's whole contents under kick.
+--
+-- The two-letter abbreviations have the same trouble for a different reason:
+-- matching is on substrings, so "sn" is inside "snap" and drags a percussion
+-- sample into snare on the same tie.
+local WEAK_KEYWORDS = {
+    ["808"] = true,
+    ["kk"] = true, ["bd"] = true, ["sn"] = true, ["sd"] = true,
+}
+
+-- Keywords that may only match at the start of a word. Matching is on plain
+-- substrings, which is what lets Kick8 and modkick2 be read as kicks, but short
+-- instrument names also live inside ordinary words: "tom" is inside custom and
+-- automatic, which filed every CustomContact and Automatic sample under toms.
+-- The same goes for hat in whatever, ride in override, arp and harp in sharp,
+-- organ in organic, sub in subtle and keys in monkeys.
+local WORD_START_ONLY = {
+    ["tom"] = true, ["toms"] = true, ["hat"] = true, ["ride"] = true,
+    ["arp"] = true, ["harp"] = true, ["organ"] = true, ["sub"] = true,
+    ["keys"] = true, ["sine"] = true, ["stab"] = true,
+}
+
+-- Abbreviations get a gentler rule: either edge of a word will do, just not
+-- buried inside one. Names glue words together, so a two letter abbreviation
+-- turns up across the seam - "hh" sits inside SynthHorn, SynthHybrid and
+-- TechHouse, which filed a whole pack of synths under hihat. Insisting on the
+-- start of a word would have gone too far the other way, because OpenHH and
+-- ClosedHH carry theirs at the end and there are two hundred of those.
+local WORD_EDGE_ONLY = {
+    ["hh"] = true, ["kk"] = true, ["bd"] = true, ["sn"] = true, ["sd"] = true,
+    ["clp"] = true, ["snr"] = true, ["kck"] = true, ["kik"] = true,
+}
+
+-- "cym" has to be a word of its own, because Cymatics is a sample pack and not
+-- a cymbal, and a thousand of its files carry the name. Every file that really
+-- does write "Cym" also says Cymbal somewhere, so nothing is lost by it; "cyms"
+-- is listed separately for the handful of finger cymbals that do not.
+local WHOLE_WORD_ONLY = {
+    ["cym"] = true, ["cyms"] = true,
+}
+
+-- Deliberately not on either list: pad, bass, lead and saw. They look like the
+-- same risk but the library says otherwise - CaesarPad, DatBass, HMLead and
+-- SoftSawz put them at the end of a glued word, hundreds of times over, and a
+-- word rule would lose every one of them.
+local function keyword_found(padded_text, kw)
+    if WHOLE_WORD_ONLY[kw] then
+        return padded_text:find(" " .. kw .. " ", 1, true) ~= nil
+    end
+    if WORD_START_ONLY[kw] then
+        return padded_text:find(" " .. kw, 1, true) ~= nil
+    end
+    if WORD_EDGE_ONLY[kw] then
+        local from = 1
+        while true do
+            local starts, ends = padded_text:find(kw, from, true)
+            if not starts then return false end
+            local before = padded_text:sub(starts - 1, starts - 1)
+            local after = (ends < #padded_text) and padded_text:sub(ends + 1, ends + 1) or " "
+            if not before:match("%a") or not after:match("%a") then return true end
+            from = starts + 1
+        end
+    end
+    return padded_text:find(kw, 1, true) ~= nil
+end
+
 function categorizer.classify(filename, folder_path)
     local name_lower = filename:lower():gsub("[_%-%.%(%)]", " ")
     local folder_lower = ""
@@ -114,15 +186,19 @@ function categorizer.classify(filename, folder_path)
         folder_lower = folder_path:lower():gsub("[_%-%.%(%)]", " ")
     end
 
+    local padded_name = " " .. name_lower
+    local padded_folder = " " .. folder_lower
+
     local scores = {}
     for cat, keywords in pairs(CATEGORY_KEYWORDS) do
         scores[cat] = 0
         for _, kw in ipairs(keywords) do
-            if name_lower:find(kw, 1, true) then
-                scores[cat] = scores[cat] + 2
+            local weight = WEAK_KEYWORDS[kw] and 1 or 2
+            if keyword_found(padded_name, kw) then
+                scores[cat] = scores[cat] + weight
             end
-            if folder_lower:find(kw, 1, true) then
-                scores[cat] = scores[cat] + 1
+            if keyword_found(padded_folder, kw) then
+                scores[cat] = scores[cat] + weight * 0.5
             end
         end
     end
