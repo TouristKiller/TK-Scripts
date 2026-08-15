@@ -1,8 +1,11 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 1.0.1
+-- @version 1.0.2
 -- @changelog:
 --[[
+v1.0.2:
++ Added support for standalone AAC audio files. Files with the .aac extension are now scanned, listed, previewed, filtered and handled like the other supported audio formats
+
 v1.0.1:
 + All locations: the same file is now shown only once when a parent sample folder and one or more of its subfolders have both been added. Windows path differences in slash direction or letter case no longer make duplicate entries
 + Auto Key: fixed previews starting without the key shift of the newly selected sample. The preview pitch and the Pitch readout now both use the actual Auto Key offset immediately
@@ -1596,6 +1599,7 @@ local file_types = {
     ogg = "REAPER_MEDIAFOLDER",
     wma = "REAPER_MEDIAFOLDER",
     m4a = "REAPER_MEDIAFOLDER",
+    aac = "REAPER_MEDIAFOLDER",
     mp4 = "REAPER_VIDEOFOLDER",
     mov = "REAPER_VIDEOFOLDER",
     avi = "REAPER_VIDEOFOLDER",
@@ -3312,14 +3316,14 @@ end
 local supported_extensions = {
     [".wav"] = true, [".mp3"] = true, [".mid"] = true, [".midi"] = true,
     [".aif"] = true, [".aiff"] = true, [".flac"] = true, [".ogg"] = true,
-    [".wma"] = true, [".m4a"] = true, [".jpg"] = true, [".jpeg"] = true,
+    [".wma"] = true, [".m4a"] = true, [".aac"] = true, [".jpg"] = true, [".jpeg"] = true,
     [".png"] = true, [".gif"] = true, [".bmp"] = true, [".mp4"] = true,
     [".mov"] = true, [".avi"] = true, [".wmv"] = true, [".mkv"] = true
 }
 
 ext_groups = {
     wav  = "audio", mp3  = "audio", aif  = "audio", aiff = "audio",
-    flac = "audio", ogg  = "audio", wma  = "audio", m4a  = "audio",
+    flac = "audio", ogg  = "audio", wma  = "audio", m4a  = "audio", aac = "audio",
     mid  = "midi",  midi = "midi",
     mp4  = "video", mov  = "video", avi  = "video", wmv  = "video", mkv = "video",
     jpg  = "image", jpeg = "image", png  = "image", gif  = "image", bmp = "image"
@@ -6532,7 +6536,7 @@ function tkmb_auto_trim_is_audio(file_path)
     local ext = file_path and file_path:match("%.([^%.]+)$")
     if not ext then return false end
     ext = ext:lower()
-    return ext == "wav" or ext == "mp3" or ext == "aif" or ext == "aiff" or ext == "flac" or ext == "ogg" or ext == "wma" or ext == "m4a"
+    return ext == "wav" or ext == "mp3" or ext == "aif" or ext == "aiff" or ext == "flac" or ext == "ogg" or ext == "wma" or ext == "m4a" or ext == "aac"
 end
 
 function tkmb_clear_auto_trim_selection(file_path)
@@ -7329,6 +7333,7 @@ local function read_directory_recursive(path, load_children)
            file:match("%.ogg$") or
            file:match("%.wma$") or
            file:match("%.m4a$") or
+           file:match("%.aac$") or
            file:match("%.jpg$") or
            file:match("%.jpeg$") or
            file:match("%.png$") or
@@ -15698,7 +15703,7 @@ function loop()
                     local hover_color = hsv_to_color(ui_settings.accent_hue, 0.6, 1.0)
 
                     local filters_seq = {
-                        {key = "filter_audio", kind = "audio", tip = "Toggle Audio files (wav, mp3, aif, aiff, flac, ogg, wma, m4a)"},
+                        {key = "filter_audio", kind = "audio", tip = "Toggle Audio files (wav, mp3, aif, aiff, flac, ogg, wma, m4a, aac)"},
                         {key = "filter_midi",  kind = "midi",  tip = "Toggle MIDI files (mid, midi)"},
                         {key = "filter_video", kind = "video", tip = "Toggle Video files (mp4, mov, avi, wmv, mkv)"},
                         {key = "filter_image", kind = "image", tip = "Toggle Image files (jpg, jpeg, png, gif, bmp)"}
@@ -16239,7 +16244,7 @@ function loop()
                         apply_filter_change()
                     end
                     if r.ImGui_IsItemHovered(ctx) then
-                        r.ImGui_SetTooltip(ctx, "Show audio files: wav, mp3, aif, aiff, flac, ogg, wma, m4a")
+                        r.ImGui_SetTooltip(ctx, "Show audio files: wav, mp3, aif, aiff, flac, ogg, wma, m4a, aac")
                     end
                     r.ImGui_SameLine(ctx)
                     local f_midi_changed, f_midi_new = r.ImGui_Checkbox(ctx, "MIDI##ftype", ui_settings.filter_midi)

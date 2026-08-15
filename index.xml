@@ -744,17 +744,14 @@ v0.2.51
         </version>
     </reapack>
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="1.0.1" author="TouristKiller" time="2026-08-15T19:47:46Z">
+        <version name="1.0.2" author="TouristKiller" time="2026-08-15T20:34:18Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-            v1.0.1:
-            + All locations: the same file is now shown only once when a parent sample folder and one or more of its subfolders have both been added. Windows path differences in slash direction or letter case no longer make duplicate entries
-            + Auto Key: fixed previews starting without the key shift of the newly selected sample. The preview pitch and the Pitch readout now both use the actual Auto Key offset immediately
-            + Auto Key: added optional audio detection as a final fallback when metadata, filename and folder provide no key. It waits for a stable reading at 80% confidence before changing pitch, updates a playing preview when ready and reports the detected note and confidence in the Key tooltip
-            + Auto Key: moved the Key button to the bottom-left of the oscilloscope so cover art can remain in the bottom-right without overlap
+            v1.0.2:
+            + Added support for standalone AAC audio files. Files with the .aac extension are now scanned, listed, previewed, filtered and handled like the other supported audio formats
 
 ]]></changelog>
         </version>
