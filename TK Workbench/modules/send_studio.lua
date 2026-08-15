@@ -2,6 +2,7 @@ local r = reaper
 local Theme = require("core.theme")
 local UIScale = require("core.ui_scale")
 local Text = require("core.text")
+local Routing = require("core.routing")
 
 local M = {
   id = "send_studio",
@@ -357,51 +358,16 @@ local function write_send_mono(track, category, index, mono)
   end)
 end
 
--- Audio channel routing (I_SRCCHAN / I_DSTCHAN). Encoding: channel index in the
--- low bits, bit 1024 = mono, -1 (source only) = MIDI / no audio.
-local function chan_parse(raw)
-  raw = math.floor(tonumber(raw) or 0)
-  if raw < 0 then return { none = true } end
-  return { channel = raw & 0x1FF, mono = (raw & 1024) ~= 0 }
-end
+-- Audio channel routing (I_SRCCHAN / I_DSTCHAN) now lives in core/routing.lua,
+-- so the Sidechain module works from the same encoding rules rather than a
+-- second copy of them. These are the same functions under the same names.
+local chan_parse = Routing.chan_parse
+local chan_label = Routing.chan_label
+local track_channel_count = Routing.track_channel_count
+local channel_options = Routing.channel_options
 
-local function chan_label(raw)
-  local parsed = chan_parse(raw)
-  if parsed.none then return "MIDI" end
-  if parsed.mono then return tostring(parsed.channel + 1) end
-  return tostring(parsed.channel + 1) .. "/" .. tostring(parsed.channel + 2)
-end
-
-local function track_channel_count(track)
-  if not valid_track(track) or not r.GetMediaTrackInfo_Value then return 2 end
-  local ok, value = pcall(r.GetMediaTrackInfo_Value, track, "I_NCHAN")
-  return ok and math.max(2, math.floor(tonumber(value) or 2)) or 2
-end
-
--- Grow a track's channel count (even, min 2) so a chosen channel pair exists.
 local function ensure_track_channels(track, needed)
-  if not valid_track(track) or not r.SetMediaTrackInfo_Value then return false end
-  needed = math.max(2, math.floor(tonumber(needed) or 2))
-  if needed % 2 == 1 then needed = needed + 1 end
-  if track_channel_count(track) >= needed then return false end
-  return write_with_undo("Send Studio: Set track channels", function()
-    return r.SetMediaTrackInfo_Value(track, "I_NCHAN", needed)
-  end)
-end
-
--- Channel options up to at least 16 channels, so higher pairs (3/4, 5/6 ...) can
--- be picked even when the track does not have them yet (needs = channels required).
-local function channel_options(track, include_midi)
-  local options = {}
-  if include_midi then options[#options + 1] = { value = -1, label = "MIDI (no audio)", needs = 0 } end
-  local count = math.max(track_channel_count(track), 16)
-  for channel = 0, count - 2, 2 do
-    options[#options + 1] = { value = channel, label = tostring(channel + 1) .. "/" .. tostring(channel + 2), needs = channel + 2 }
-  end
-  for channel = 0, count - 1 do
-    options[#options + 1] = { value = channel | 1024, label = "Mono " .. tostring(channel + 1), needs = channel + 1 }
-  end
-  return options
+  return Routing.ensure_track_channels(track, needed, "Send Studio: Set track channels")
 end
 
 local function write_send_srcchan(track, category, index, value)

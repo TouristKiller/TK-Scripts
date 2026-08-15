@@ -1,7 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.6.90
+-- @version 0.7.0
 -- @changelog:
+-- v0.7.0
+--   + Sidechain: A new module for the routing nobody enjoys doing by hand. Select the track that should duck, click the track that should trigger it, and the send is made, the receiving track is given the channels it needs, a compressor is added and its key input is pointed at exactly those channels. The channel pair is whichever one is free rather than always 3/4, so it does not collide with a Control Room feed or anything else already using them. Requested by DaniloVillanova
+--   + Sidechain: ReaComp is built in and set up for you. Any other compressor - Pro-C, Kotelnikov, a volume shaper - is stored by setting one up by hand once and capturing it. What gets remembered is not the channel its key input sat on but the distance from the pair it was captured on, so the same preset lands correctly whether the next sidechain ends up on 3/4 or on 7/8
+--   + Sidechain: A preset can hold the plugin's settings or only the plugin and its routing. The first is ready to work the moment it lands; the second loads the compressor at its factory settings for you to dial in, which is lighter but leaves a plugin's own key input switch for you to turn on. Presets can be renamed, deleted, and re-read from a track once you have tweaked one further
+--   + Sidechain: A second source on the same track feeds the compressor that is already there, so several triggers add up and one compressor ducks for all of them - which is what "duck the pad for the kick and the snare" actually needs. Ctrl-click gives that source its own channel pair and its own compressor instead, and which of the two is the default is a setting
+--   + Sidechain: Everything already feeding the selected track is listed, whether this module made it or you did, with the channels and the send mode it uses. Removing one takes the send and the compressor that came with it, and leaves a send you made yourself alone
+--   + Project Browser: Tiles no longer run under the scrollbar. Their width was measured before the scrolling list began and had a fixed 12 pixels taken off to stand in for the padding and the scrollbar - but a scrollbar is not a fixed width, it depends on the theme, and with "Hide scrollbars" switched on it is not there at all. The room is now measured inside the list, where it is already the truth in all three cases. The list rows were a fraction too wide for the same reason and are fixed with it. Reported by vik-tan
 -- v0.6.90
 --   + Render Hub: A new module for getting audio out of REAPER. The render window is a single dialog with settings you cannot name, wildcards you have to remember, and no sight of what you are about to get - so the panel shows the actual list of files the current settings would write. That list comes from REAPER itself rather than from a second guess at the pattern syntax, so it is what you will get, not an approximation of it. Type in the pattern and the list changes along with you
 --   + Render Hub: Presets are captured from a project that is already set up, not assembled in the panel. The output format is an opaque block of settings that no script can safely write by hand, so the way to make a "Master WAV 24/48" or a "Stems per track" is to set the render window the way you want it once and press the plus. Clicking a preset loads it back into the project, and the preset matching what the project currently holds is marked LIVE. The capture window shows the source, bounds and format it is about to store, because REAPER only hands its render window settings to the project once that window is closed or its Save settings button is pressed - capturing too early would otherwise quietly store the previous state
@@ -660,7 +667,8 @@ local module_names = {
   "calculator",
   "lyrics",
   "xy_pad",
-  "render_hub"
+  "render_hub",
+  "sidechain"
 }
 
 local theme_color_fields = {
@@ -1354,6 +1362,16 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
       local grid_x = L(15 + index * 11)
       r.ImGui_DrawList_AddLine(draw_list, grid_x, T(12), grid_x, B(12), color, W(1))
     end
+  elseif id == "sidechain" then
+    -- Two waveforms: one ducking under the other where they meet.
+    r.ImGui_DrawList_AddLine(draw_list, L(8), MY(-9), L(18), MY(-9), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, L(18), MY(-9), MX(-2), MY(-2), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-2), MY(-2), MX(6), MY(-2), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(6), MY(-2), MX(12), MY(-9), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(12), MY(-9), R(8), MY(-9), color, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, MX(2), MY(9), RD(3), color, 12)
+    r.ImGui_DrawList_AddLine(draw_list, L(8), MY(9), MX(-2), MY(9), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(6), MY(9), R(8), MY(9), color, W(2))
   elseif id == "render_hub" then
     r.ImGui_DrawList_AddLine(draw_list, cx, T(10), cx, MY(4), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, MX(-7), MY(-3), cx, MY(4), color, W(2))

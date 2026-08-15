@@ -1682,7 +1682,15 @@ local function draw_project_list(app, settings, width, height)
   end
   local child_visible = r.ImGui_BeginChild(ctx, "##project_list", 0, height, 0, child_flags)
   if child_visible then
-    local inner_w = math.max(UIScale.round(80), width - UIScale.round(12))
+    -- Measured inside the list, not handed in from outside it. The width was
+    -- taken before this child began and had a fixed 12px knocked off as a stand
+    -- in for the padding and the scrollbar - but a scrollbar is not a fixed
+    -- width, it depends on the theme, and with "hide scrollbars" on it is not
+    -- there at all. Every tile was that difference too wide, so the right hand
+    -- column ran under the scrollbar. Asking for the room that is actually
+    -- available is right in all three cases. Reported by vik-tan.
+    local measured = select(1, r.ImGui_GetContentRegionAvail(ctx))
+    local inner_w = math.max(UIScale.round(80), tonumber(measured) or (width - UIScale.round(12)))
     local tile = tile_metrics(ctx, settings, inner_w)
     handle_project_list_keyboard(app, settings, tile and (tile.h + tile.gap) or row_h, tile and tile.columns or 1)
     if #state.locations == 0 then

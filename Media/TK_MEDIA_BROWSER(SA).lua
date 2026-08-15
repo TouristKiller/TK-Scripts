@@ -1,8 +1,14 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.0.1
 -- @changelog:
 --[[
+v1.0.1:
++ All locations: the same file is now shown only once when a parent sample folder and one or more of its subfolders have both been added. Windows path differences in slash direction or letter case no longer make duplicate entries
++ Auto Key: fixed previews starting without the key shift of the newly selected sample. The preview pitch and the Pitch readout now both use the actual Auto Key offset immediately
++ Auto Key: added optional audio detection as a final fallback when metadata, filename and folder provide no key. It waits for a stable reading at 80% confidence before changing pitch, updates a playing preview when ready and reports the detected note and confidence in the Key tooltip
++ Auto Key: moved the Key button to the bottom-left of the oscilloscope so cover art can remain in the bottom-right without overlap
+
 v1.0.0:
 + New: a loops / one-shots filter, on the search bar next to All, cycling through L/S, Loop and Shot with a click, so a folder that mixes them can be narrowed to one or the other. What a file is gets read from its name and the folder it sits in, which is free for every file in a location and settles most of a library on its own - 01 Bass Loops next to 02 Bass Hits is the way these are filed
 + Loops / Shots: where a waveform is already cached the attacks in it are counted, because what separates the two is repetition rather than length. One attack is one sound however long it rings, so a crash ringing out for eight seconds, an 808 with a long tail and a riser are all one-shots, while several attacks spread evenly across a file are a bar of music. Attacks bunched at the start and then nothing stay a one-shot too - that is one busy gesture, not a loop. A reading like that outranks both the name and the tempo, since a pack that tags its one-shots with the pack tempo would otherwise turn every long hit into a loop
@@ -1277,6 +1283,10 @@ local waveform = {
     last_pitch_update = 0,
     pitch_history = {},  -- For smoothing
     stable_pitch_timer = 0,  -- Timer for how long pitch has been stable
+    stable_pitch_ready = false,
+    pitch_confidence = 0,
+    pitch_max_deviation = 0,
+    pitch_file = nil,
     slices = {},
     slice_file_path = "",
     slice_dragging = nil,
@@ -2748,6 +2758,8 @@ local AK = {
     skip_percussive = true,
     from_filename = true,
     bare_letters = false,
+    detect_audio = false,
+    min_confidence = 0.8,
     audition_on_click = true,
     cache = {},
     save = nil,
@@ -2862,30 +2874,35 @@ function AK.source_key(path, meta)
     if not path or path == "" then return nil end
     local cached = AK.cache[path]
     if cached ~= nil then
-        if cached == false then return nil end
-        return cached.tonic, cached.mode, cached.origin, cached.assumed
-    end
-    meta = meta or get_file_metadata(path)
-    local tonic, mode = AK.parse(meta and meta.key)
-    local origin, assumed = tonic and "metadata" or nil, false
-    if not tonic and AK.from_filename then
-        tonic, mode, assumed = AK.from_name(path:match("([^/\\]+)$") or path)
-        if tonic then origin = "filename" end
-        if not tonic then
-            -- Libraries are often filed as Loops/C/bass.wav, so the folder the
-            -- file sits in is worth a look once its own name came up empty.
-            local folder = path:match("([^/\\]+)[/\\][^/\\]+$")
-            if folder then
-                tonic, mode, assumed = AK.from_name(folder)
-                if tonic then origin = "folder" end
+        if cached ~= false then
+            return cached.tonic, cached.mode, cached.origin, cached.assumed
+        end
+    else
+        meta = meta or get_file_metadata(path)
+        local tonic, mode = AK.parse(meta and meta.key)
+        local origin, assumed = tonic and "metadata" or nil, false
+        if not tonic and AK.from_filename then
+            tonic, mode, assumed = AK.from_name(path:match("([^/\\]+)$") or path)
+            if tonic then origin = "filename" end
+            if not tonic then
+                local folder = path:match("([^/\\]+)[/\\][^/\\]+$")
+                if folder then
+                    tonic, mode, assumed = AK.from_name(folder)
+                    if tonic then origin = "folder" end
+                end
             end
         end
+        if tonic then
+            AK.cache[path] = { tonic = tonic, mode = mode, origin = origin, assumed = assumed }
+            return tonic, mode, origin, assumed
+        end
+        AK.cache[path] = false
     end
-    if tonic then
-        AK.cache[path] = { tonic = tonic, mode = mode, origin = origin, assumed = assumed }
-        return tonic, mode, origin, assumed
+    if AK.detect_audio and waveform.stable_pitch_ready and waveform.pitch_file == path
+        and (waveform.pitch_confidence or 0) >= AK.min_confidence and waveform.stable_pitch_hz then
+        local midi_note = math.floor(69 + 12 * (math.log(waveform.stable_pitch_hz / 440) / math.log(2)) + 0.5)
+        return midi_note % 12, "major", "detected", true
     end
-    AK.cache[path] = false
     return nil
 end
 
@@ -2910,7 +2927,12 @@ function AK.status(path, meta)
     if not AK.enabled then return "off" end
     if not path or path == "" then return "no file" end
     local tonic, mode, origin, assumed = AK.source_key(path, meta)
-    if not tonic then return "key unknown, left alone" end
+    if not tonic then
+        if AK.detect_audio and playback.current_playing_file == path then
+            return "listening for a stable key, left alone"
+        end
+        return "key unknown, left alone"
+    end
     if AK.skip_percussive and AK.is_percussive(path, meta) then
         return AK.label(tonic, mode) .. " - percussive, skipped"
     end
@@ -2928,6 +2950,8 @@ function AK.status(path, meta)
         note = note .. "  (from metadata)"
     elseif origin == "folder" then
         note = note .. "  (from folder name)"
+    elseif origin == "detected" then
+        note = note .. string.format("  (audio %.0f%%)", (waveform.pitch_confidence or 0) * 100)
     end
     return note
 end
@@ -3041,6 +3065,11 @@ function AK.draw_popup(ctx)
     if r.ImGui_IsItemHovered(ctx) then
         r.ImGui_SetTooltip(ctx, "Reads a lone C or A as a key. Turn this on if your library is filed that way.\nOff by default, because in a name like Drum_Loop_A_01 that letter is a variation rather than a key")
     end
+    local detect_changed, detect_value = r.ImGui_Checkbox(ctx, "Detect key from audio as fallback", AK.detect_audio)
+    if detect_changed then AK.detect_audio = detect_value; dirty = true end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Used only when metadata, filename and folder provide no key.\nApplies after a stable detection reaches 80% confidence")
+    end
     local audition_changed, audition_value = r.ImGui_Checkbox(ctx, "Play the sample on a key click", AK.audition_on_click ~= false)
     if audition_changed then AK.audition_on_click = audition_value; dirty = true end
     if r.ImGui_IsItemHovered(ctx) then
@@ -3049,16 +3078,12 @@ function AK.draw_popup(ctx)
     r.ImGui_Separator(ctx)
     if r.ImGui_Button(ctx, "Forget detected keys", 160, 0) then AK.cache = {} end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Re-reads every file's key on next use") end
+    if dirty and playback.playing_preview and AK.audition then AK.audition() end
     if dirty and AK.save then AK.save() end
     r.ImGui_EndPopup(ctx)
 end
 
--- Sits in the bottom right of the oscilloscope canvas and opens the popup. Drawn
--- straight onto the scope's draw list rather than as a widget, because the canvas
--- has not been consumed by its Dummy yet and a real button would shove it around.
--- `art_shown` steps the badge aside when the cover art thumbnail is in that
--- corner; the box expression has to match the one in draw_cover_art_overlay.
-function AK.draw_overlay(ctx, draw_list, x, y, w, h, art_shown)
+function AK.draw_overlay(ctx, draw_list, x, y, w, h)
     -- Deliberately quiet: no fill and no border while it is off, so it reads as a
     -- label on the scope rather than a button competing with the waveform. The
     -- accent only appears once Auto Key is actually doing something.
@@ -3067,14 +3092,9 @@ function AK.draw_overlay(ctx, draw_list, x, y, w, h, art_shown)
     local pad_x, pad_y = 4, 1
     local box_w = text_w + pad_x * 2
     local box_h = r.ImGui_GetTextLineHeight(ctx) + pad_y * 2
-    local right = x + w - 5
-    if art_shown then
-        local art = math.min(64, math.max(32, math.min(w * 0.24, h - 10)))
-        right = right - art - 5
-    end
-    local box_x = right - box_w
+    local box_x = x + 5
     local box_y = y + h - box_h - 5
-    if box_x < x + 4 or box_h + 10 > h then return end
+    if box_x + box_w > x + w - 4 or box_h + 10 > h then return end
     -- IsMouseHoveringRect rather than IsWindowHovered plus a manual compare: it is
     -- built for exactly this and respects the clip rect.
     local hovered = false
@@ -4268,6 +4288,7 @@ local function save_options()
             auto_key_skip_percussive = AK.skip_percussive,
             auto_key_from_filename = AK.from_filename,
             auto_key_bare_letters = AK.bare_letters,
+            auto_key_detect_audio = AK.detect_audio,
             auto_key_audition = AK.audition_on_click
         }
         file:write(serialize(options))
@@ -4521,6 +4542,7 @@ local function load_options()
             if options.auto_key_skip_percussive ~= nil then AK.skip_percussive = options.auto_key_skip_percussive and true or false end
             if options.auto_key_from_filename ~= nil then AK.from_filename = options.auto_key_from_filename and true or false end
             if options.auto_key_bare_letters ~= nil then AK.bare_letters = options.auto_key_bare_letters and true or false end
+            if options.auto_key_detect_audio ~= nil then AK.detect_audio = options.auto_key_detect_audio and true or false end
             if options.auto_key_audition ~= nil then AK.audition_on_click = options.auto_key_audition and true or false end
             if options.current_view_mode ~= "collections" and options.current_view_mode ~= "auto" then
                 file_location.flat_view = options.flat_view ~= nil and options.flat_view or false
@@ -7380,6 +7402,7 @@ end
 local function build_all_locations_flat_list()
     local combined = {}
     local seen = {}
+    local windows = tostring(r.GetOS() or ""):match("Win") ~= nil
     for _, loc in ipairs(file_location.locations or {}) do
         local entries = load_fast_cache(loc)
         if not entries then
@@ -7387,9 +7410,13 @@ local function build_all_locations_flat_list()
         end
         if type(entries) == "table" then
             for _, e in ipairs(entries) do
-                if type(e) == "table" and e.full_path and not e.is_dir and not seen[e.full_path] then
-                    seen[e.full_path] = true
-                    combined[#combined + 1] = e
+                if type(e) == "table" and e.full_path and not e.is_dir then
+                    local path_key = tostring(e.full_path):gsub("\\", "/"):gsub("/+", "/")
+                    if windows then path_key = path_key:lower() end
+                    if not seen[path_key] then
+                        seen[path_key] = true
+                        combined[#combined + 1] = e
+                    end
                 end
             end
         end
@@ -7668,8 +7695,8 @@ local function tkmb_embedded_bpm_rate(source)
     return project_bpm / file_bpm
 end
 
-local function tkmb_applied_pitch()
-    local pitch = (playback.current_pitch or 0) + AK.offset(playback.current_playing_file)
+local function tkmb_applied_pitch(file_path)
+    local pitch = (playback.current_pitch or 0) + AK.offset(file_path or playback.current_playing_file)
     if playback.tape_speed then
         local rate = playback.effective_playrate or 1.0
         if rate > 0 then
@@ -7861,6 +7888,10 @@ local function stop_playback(is_loop_restart)
     waveform.current_pitch_hz = nil
     waveform.current_pitch_note = nil
     waveform.last_pitch_update = 0
+    waveform.stable_pitch_ready = false
+    waveform.pitch_confidence = 0
+    waveform.pitch_max_deviation = 0
+    waveform.pitch_file = nil
     
     if waveform.monitor_sel_start and waveform.monitor_sel_end and math.abs(waveform.monitor_sel_end - waveform.monitor_sel_start) > 0.01 then
         playback.prev_play_cursor = waveform.monitor_sel_start
@@ -7903,7 +7934,7 @@ local function start_playback(file_path)
     end
     r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", playback.preview_volume)
     r.CF_Preview_SetValue(playback.playing_preview, "B_LOOP", playback.loop_play and 1 or 0)
-    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
+    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch(file_path))
     
     local ext = file_path:match("%.([^%.]+)$")
     if ext then ext = ext:lower() end
@@ -8112,7 +8143,7 @@ local function start_playback(file_path)
         playback.effective_playrate = base_rate * (playback.current_playrate or 1.0)
         r.CF_Preview_SetValue(playback.playing_preview, "D_PLAYRATE", playback.effective_playrate)
     end
-    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
+    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch(file_path))
     update_monitor_positions()
     
     -- Calculate next measure position if needed
@@ -13697,7 +13728,9 @@ function loop()
                                     local min_history_for_stable = math.max(2, math.floor(pitch_history_max * 0.6))
                                     if #waveform.pitch_history >= min_history_for_stable then
                                         local is_consistent = true
+                                        waveform.pitch_max_deviation = 0
                                         for _, freq in ipairs(waveform.pitch_history) do
+                                            waveform.pitch_max_deviation = math.max(waveform.pitch_max_deviation, math.abs(freq - avg_freq) / avg_freq)
                                             if math.abs(freq - avg_freq) / avg_freq > pitch_consistency_tol then
                                                 is_consistent = false
                                                 break
@@ -13713,22 +13746,32 @@ function loop()
                                             else
                                                 waveform.stable_pitch_timer = 0
                                             end
+                                            waveform.pitch_confidence = math.max(0, math.min(1, 1 - waveform.pitch_max_deviation / pitch_consistency_tol))
                                             
                                             if waveform.stable_pitch_timer >= pitch_stability_time then
                                                 waveform.stable_pitch_hz = new_stable_freq
                                                 waveform.stable_pitch_note = new_stable_note
+                                                waveform.stable_pitch_ready = waveform.pitch_confidence >= AK.min_confidence
+                                                waveform.pitch_file = playback.current_playing_file
+                                                if waveform.stable_pitch_ready and AK.enabled and AK.detect_audio and r.CF_Preview_SetValue then
+                                                    r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
+                                                end
                                             end
                                         else
                                             -- If not consistent, use the most recent detection but reset timer
                                             waveform.stable_pitch_timer = 0
                                             waveform.stable_pitch_hz = detected_freq
                                             waveform.stable_pitch_note = freq_to_note(detected_freq)
+                                            waveform.stable_pitch_ready = false
+                                            waveform.pitch_confidence = 0
                                         end
                                     else
                                         -- Not enough history yet, use current detection
                                         waveform.stable_pitch_timer = 0
                                         waveform.stable_pitch_hz = detected_freq
                                         waveform.stable_pitch_note = freq_to_note(detected_freq)
+                                        waveform.stable_pitch_ready = false
+                                        waveform.pitch_confidence = 0
                                     end
                                     
                                     waveform.current_pitch_hz = detected_freq
@@ -13740,6 +13783,8 @@ function loop()
                                     waveform.current_pitch_note = nil
                                     waveform.stable_pitch_hz = nil
                                     waveform.stable_pitch_note = nil
+                                    waveform.stable_pitch_ready = false
+                                    waveform.pitch_confidence = 0
                                     waveform.pitch_history = {}  -- Clear history on error
                                 else
                                     -- detected_freq is nil (silence or low confidence)
@@ -13747,6 +13792,8 @@ function loop()
                                     waveform.current_pitch_note = nil
                                     waveform.stable_pitch_hz = nil
                                     waveform.stable_pitch_note = nil
+                                    waveform.stable_pitch_ready = false
+                                    waveform.pitch_confidence = 0
                                     waveform.pitch_history = {}  -- Clear history when no pitch detected
                                 end
                                 waveform.last_pitch_update = current_time
@@ -14304,8 +14351,8 @@ function loop()
                     r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x888888FF, text)
                 end
             end
-            local art_shown = draw_cover_art_for_preview(draw_list, pos_x, pos_y, width, height)
-            AK.draw_overlay(ctx, draw_list, pos_x, pos_y, width, height, art_shown)
+            draw_cover_art_for_preview(draw_list, pos_x, pos_y, width, height)
+            AK.draw_overlay(ctx, draw_list, pos_x, pos_y, width, height)
             r.ImGui_Dummy(ctx, width, height)
         end
         do
@@ -14864,7 +14911,7 @@ function loop()
             r.ImGui_PopStyleColor(ctx, 1)
         end
 
-        local pitch_text = playback.tape_speed and ("Pitch " .. string.format("%.1f st", tkmb_applied_pitch())) or ("Pitch " .. string.format("%d st", playback.current_pitch))
+        local pitch_text = playback.tape_speed and ("Pitch " .. string.format("%.1f st", tkmb_applied_pitch())) or ("Pitch " .. string.format("%.0f st", tkmb_applied_pitch()))
         local pitch_text_w = r.ImGui_CalcTextSize(ctx, pitch_text)
         r.ImGui_SetCursorPos(ctx, knob_spacing + knob_size * 2 + 80 + knob_size * 0.5 - pitch_text_w * 0.5, value_y)
         r.ImGui_Text(ctx, pitch_text)
