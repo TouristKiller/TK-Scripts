@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.7.1
+-- @version 0.7.2
 -- @changelog:
+-- v0.7.2
+--   + Plugin Browser: "Add to new track as send" is back, the way TK FX Browser and TK FX Browser Mini do it. Right-click a plugin for either the active track or every selected track: a new track is made holding that plugin, and each chosen track gets a send to it, in one undo step. It asks for the track's name with the plugin name filled in, and it can group the send tracks into a folder - the same two options under the same names as in the browser, so a preset set up there behaves the same here. Requested by Heavy
 -- v0.7.1
 --   + Render Hub: Renders more than one project in a batch. Projects you have open are listed on their own, and projects you do not have open can be added as files, so a folder of last year's work can be put through a new format without opening any of it by hand. Nothing is ever saved: an open tab is read as it stands and put back the way it was, and a file is opened over the front tab and left untouched on disk. The render is still correct, because REAPER's queue keeps a copy of every job the moment it is queued - which is exactly why none of this has to be written back into your projects. Requested by vik-tan
 --   + Render Hub: The render queue is no longer invisible. The Run button says how many jobs are waiting and lists them when hovered, which matters because running the queue renders everything in it, including anything queued in an earlier session. Right-click it to open the queue and drop a job that should not be there; that deletes only REAPER's queued copy and leaves the project it came from alone

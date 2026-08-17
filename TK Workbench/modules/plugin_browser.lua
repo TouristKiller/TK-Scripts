@@ -43,6 +43,9 @@ local defaults = {
   dropdown_rows = 18,
   return_to_rack_after_add = true,
   return_to_chain_builder_after_add = true,
+  send_name_mode = "prompt",
+  send_folder = false,
+  send_folder_name = "SEND TRACK",
   type_priority = { "CLAP", "VST3", "VST", "JS", "AU", "LV2", "OTHER" },
   type_filter = { VST3 = true, VST = true, CLAP = true, JS = true, AU = true, LV2 = true, OTHER = true },
   group_selection = { all = "", developer = "", category = "", folders = "", custom_folders = "" }
@@ -2443,12 +2446,132 @@ local function draw_rating_label(ctx, draw_list, plugin, x, y, size_delta)
   end
 end
 
+-- "Add as send", the same shape as TK FX Browser's so the two behave alike: a new
+-- track holding the plugin, fed by a send from each chosen source track. Ported
+-- rather than reinvented, including the folder handling, because a user coming
+-- from the browser expects the same result. Requested by Heavy.
+--
+-- Everything hangs off this one table: plugin_browser sits close to Lua's limit
+-- of 200 locals per chunk, so a handful of `local function` helpers here would
+-- cost slots the module cannot spare.
+local sends = {}
+
+function sends.name_for(settings, plugin)
+  local fallback = plugin.display_name or plugin.name
+  if settings.send_name_mode ~= "prompt" then return fallback end
+  local ok, value = r.GetUserInputs("Name send track", 1, "Track name:,extrawidth=200", fallback)
+  if not ok then return nil end
+  local trimmed = tostring(value or ""):match("^%s*(.-)%s*$") or ""
+  if trimmed == "" then return fallback end
+  return trimmed
+end
+
+-- Inserts the track and returns its index. With the folder option on, the track
+-- lands as the last child of the send folder, which means fixing the depth of the
+-- track that used to close it - otherwise the folder ends one track too early.
+function sends.insert_track(settings)
+  local count = r.CountTracks(0) or 0
+  if settings.send_folder ~= true then
+    r.InsertTrackAtIndex(count, true)
+    return count
+  end
+  local folder_name = settings.send_folder_name or "SEND TRACK"
+  local folder_index = -1
+  for index = 0, count - 1 do
+    local track = r.GetTrack(0, index)
+    local _, name = r.GetTrackName(track)
+    if name == folder_name and r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") == 1 then
+      folder_index = index
+      break
+    end
+  end
+  if folder_index < 0 then
+    r.InsertTrackAtIndex(count, true)
+    local folder = r.GetTrack(0, count)
+    r.GetSetMediaTrackInfo_String(folder, "P_NAME", folder_name, true)
+    r.SetMediaTrackInfo_Value(folder, "I_FOLDERDEPTH", 1)
+    r.InsertTrackAtIndex(count + 1, true)
+    r.SetMediaTrackInfo_Value(r.GetTrack(0, count + 1), "I_FOLDERDEPTH", -1)
+    return count + 1
+  end
+  local last = count - 1
+  local depth = 1
+  for index = folder_index + 1, count - 1 do
+    depth = depth + (r.GetMediaTrackInfo_Value(r.GetTrack(0, index), "I_FOLDERDEPTH") or 0)
+    if depth <= 0 then last = index; break end
+  end
+  local at = last + 1
+  r.InsertTrackAtIndex(at, true)
+  local closing = r.GetTrack(0, last)
+  if closing and r.GetMediaTrackInfo_Value(closing, "I_FOLDERDEPTH") == -1 then
+    r.SetMediaTrackInfo_Value(closing, "I_FOLDERDEPTH", 0)
+  end
+  r.SetMediaTrackInfo_Value(r.GetTrack(0, at), "I_FOLDERDEPTH", -1)
+  return at
+end
+
+function sends.sources(active_only)
+  local list = {}
+  if active_only then
+    local track = r.GetSelectedTrack(0, 0) or (r.GetLastTouchedTrack and r.GetLastTouchedTrack())
+    if track then list[1] = track end
+    return list
+  end
+  for index = 0, (r.CountSelectedTracks(0) or 0) - 1 do
+    local track = r.GetSelectedTrack(0, index)
+    if track then list[#list + 1] = track end
+  end
+  return list
+end
+
+function sends.create(app, settings, plugin, sources)
+  if not sources or #sources == 0 then
+    app.status = "No source track for a send"
+    return
+  end
+  local name = sends.name_for(settings, plugin)
+  if not name then return end
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  local at = sends.insert_track(settings)
+  local track = r.GetTrack(0, at)
+  local added = track ~= nil and add_fx_to_track_pointer(track, plugin)
+  if track then r.GetSetMediaTrackInfo_String(track, "P_NAME", name, true) end
+  local fed = 0
+  for _, source in ipairs(sources) do
+    if source and source ~= track and r.ValidatePtr(source, "MediaTrack*") then
+      if (r.CreateTrackSend(source, track) or -1) >= 0 then fed = fed + 1 end
+    end
+  end
+  r.PreventUIRefresh(-1)
+  r.TrackList_AdjustWindows(false)
+  r.Undo_EndBlock("Add " .. tostring(plugin.display_name or plugin.name) .. " as send", -1)
+  r.UpdateArrange()
+  if added then
+    add_recent(settings, plugin.name)
+    state.last_filter_key = nil
+  end
+  app.status = string.format("%s on \"%s\", fed by %d track%s",
+    tostring(plugin.display_name or plugin.name), name, fed, fed == 1 and "" or "s")
+end
+
 local function draw_plugin_context_menu(app, settings, plugin, popup_id)
   local ctx = app.ctx
   if r.ImGui_BeginPopupContextItem(ctx, popup_id) then
     local chain_plugins = drag_plugins_for(plugin)
     if r.ImGui_MenuItem(ctx, "Add to selected track(s)") then add_fx_to_selected_tracks(app, settings, plugin) end
     if r.ImGui_MenuItem(ctx, "Add to new track") then add_fx_to_new_track(app, settings, plugin) end
+    if r.ImGui_MenuItem(ctx, "Add to new track as send (active track)") then
+      sends.create(app, settings, plugin, sends.sources(true))
+    end
+    local selected_count = r.CountSelectedTracks(0) or 0
+    if selected_count > 0 then
+      local label = selected_count == 1 and "Add to new track as send (1 selected track)"
+        or ("Add to new track as send (" .. tostring(selected_count) .. " selected tracks)")
+      if r.ImGui_MenuItem(ctx, label) then
+        sends.create(app, settings, plugin, sends.sources(false))
+      end
+    end
     if is_instrument(plugin.name) and r.ImGui_BeginMenu(ctx, "Add as virtual instrument to new track") then
       if r.ImGui_MenuItem(ctx, "All MIDI inputs") then add_instrument_to_new_track(app, settings, plugin, 6112) end
       local num_midi_inputs = r.GetNumMIDIInputs and r.GetNumMIDIInputs() or 0
