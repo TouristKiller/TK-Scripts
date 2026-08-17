@@ -33,10 +33,11 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.7.2" author="TouristKiller" time="2026-08-17T22:37:00Z">
+    <version name="0.8.0" author="TouristKiller" time="2026-08-18T01:33:04Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
+     <source main="main" file="TK_Idea_Capture.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Idea_Capture.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua</source>
@@ -76,6 +77,7 @@
     <source file="core/routing.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/routing.lua</source>
     <source file="core/fx_chunk.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/fx_chunk.lua</source>
     <source file="core/workbench_module_action_runner.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/workbench_module_action_runner.lua</source>
+    <source file="core/idea_vault_store.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/idea_vault_store.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Control_Room_Dim.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Dim.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Control_Room_Mono.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Mono.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Control_Room_Fold_to_Stereo.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Control_Room_Fold_to_Stereo.lua</source>
@@ -110,6 +112,8 @@
     <source main="main" file="Module Actions/TK_Workbench_Open_XY_Pad.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_XY_Pad.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Render_Hub.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Render_Hub.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Sidechain.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Sidechain.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Idea_Vault.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Idea_Vault.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Idea_Vault_Capture.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Idea_Vault_Capture.lua</source>
      <source file="modules/action_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_browser.lua</source>
     <source file="modules/arrange_bg_presets.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/arrange_bg_presets.lua</source>
     <source file="modules/calculator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/calculator.lua</source>
@@ -133,12 +137,19 @@
      <source file="modules/navigator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/navigator.lua</source>
      <source file="modules/transport.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/transport.lua</source>
      <source file="modules/track_recall.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_recall.lua</source>
+     <source file="modules/idea_vault.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/idea_vault.lua</source>
       <source file="modules/track_tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/track_tags.lua</source>
      <source file="modules/render_hub.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/render_hub.lua</source>
      <source file="modules/sidechain.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/sidechain.lua</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.8.0
+            + Idea Vault: A new module for the ideas you record in the morning and then never find again. It saves the selected track as a track template - MIDI items, envelopes and the FX chain all included - renders an audio preview beside it, and keeps the two together with your own description of the mood or style. This is the part an FX chain could never do: a chain carries plugins and nothing else, so it has no items, no MIDI and no sound to play back
+            + Idea Vault: Previews play locked to the project tempo without being transposed, so something recorded at 96 BPM sits in the grid of a song at 120. The tempo it was recorded at is written into a small file beside the preview rather than read back out of the audio, because whether a format carries a tempo tag a script can read varies per format and per REAPER build - and a preview playing at the wrong rate is worse than no preview at all
+            + Idea Vault: The preview format follows the project unless you pin one. Pinning copies the format out of the render dialog rather than building it in the panel, for the same reason Render Hub captures its presets instead of assembling them: the format is an opaque block of settings no script can safely write by hand. Set WavPack once, pin it, and every capture in every project uses it from then on
+            + Idea Vault: Capturing is one keystroke. TK_Idea_Capture.lua does the whole thing from a single dialog without opening Workbench, which is the point when the idea is still in your hands. The work itself lives in a shared core file that both the action and the module use, so the two cannot drift apart
+            + Idea Vault: A render that fails still leaves you the template. Template and preview are written separately and the capture says what it could not do, because losing a performance to a misconfigured codec would defeat the whole point of saving it
             v0.7.2
             + Plugin Browser: "Add to new track as send" is back, the way TK FX Browser and TK FX Browser Mini do it. Right-click a plugin for either the active track or every selected track: a new track is made holding that plugin, and each chosen track gets a send to it, in one undo step. It asks for the track's name with the plugin name filled in, and it can group the send tracks into a folder - the same two options under the same names as in the browser, so a preset set up there behaves the same here. Requested by Heavy
             v0.7.1

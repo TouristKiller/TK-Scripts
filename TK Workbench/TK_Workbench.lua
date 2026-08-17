@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.7.2
+-- @version 0.8.0
 -- @changelog:
+-- v0.8.0
+--   + Idea Vault: A new module for the ideas you record in the morning and then never find again. It saves the selected track as a track template - MIDI items, envelopes and the FX chain all included - renders an audio preview beside it, and keeps the two together with your own description of the mood or style. This is the part an FX chain could never do: a chain carries plugins and nothing else, so it has no items, no MIDI and no sound to play back
+--   + Idea Vault: Previews play locked to the project tempo without being transposed, so something recorded at 96 BPM sits in the grid of a song at 120. The tempo it was recorded at is written into a small file beside the preview rather than read back out of the audio, because whether a format carries a tempo tag a script can read varies per format and per REAPER build - and a preview playing at the wrong rate is worse than no preview at all
+--   + Idea Vault: The preview format follows the project unless you pin one. Pinning copies the format out of the render dialog rather than building it in the panel, for the same reason Render Hub captures its presets instead of assembling them: the format is an opaque block of settings no script can safely write by hand. Set WavPack once, pin it, and every capture in every project uses it from then on
+--   + Idea Vault: Capturing is one keystroke. TK_Idea_Capture.lua does the whole thing from a single dialog without opening Workbench, which is the point when the idea is still in your hands. The work itself lives in a shared core file that both the action and the module use, so the two cannot drift apart
+--   + Idea Vault: A render that fails still leaves you the template. Template and preview are written separately and the capture says what it could not do, because losing a performance to a misconfigured codec would defeat the whole point of saving it
 -- v0.7.2
 --   + Plugin Browser: "Add to new track as send" is back, the way TK FX Browser and TK FX Browser Mini do it. Right-click a plugin for either the active track or every selected track: a new track is made holding that plugin, and each chosen track gets a send to it, in one undo step. It asks for the track's name with the plugin name filled in, and it can group the send tracks into a folder - the same two options under the same names as in the browser, so a preset set up there behaves the same here. Requested by Heavy
 -- v0.7.1
@@ -664,6 +670,7 @@ local module_names = {
   "action_clipboard",
   "script_launcher",
   "track_recall",
+  "idea_vault",
   "track_tags",
   "automation_item_manager",
   "control_room",
@@ -1286,6 +1293,13 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, R(20), T(15), cx, MY(-2), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, cx, MY(3), L(21), B(14), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, cx, MY(3), R(21), B(14), color, W(2))
+  elseif id == "idea_vault" then
+    r.ImGui_DrawList_AddCircle(draw_list, cx, T(19), RD(9), color, 24, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-4), T(27), MX(-4), B(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(4), T(27), MX(4), B(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-5), B(14), MX(5), B(14), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-4), B(10), MX(4), B(10), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, MX(-2), B(7), MX(2), B(7), color, W(2))
   elseif id == "track_tags" then
     r.ImGui_DrawList_AddLine(draw_list, L(10), T(14), R(16), T(14), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, R(16), T(14), R(8), cy, color, W(2))
