@@ -1,8 +1,11 @@
 ﻿-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.15
+-- @version 3.2.16
 -- @changelog:
 --[[
+    v3.2.16:
+        + Browser organization: formats, developers, native folders and their entries can now receive individual text colors from their right-click menus, with separate reset actions and persistent storage.
+        + Track inspector: the INFO panel now displays the selected track icon when available, with Set/Remove Track Icon actions; tracks without an icon show a direct Set Track Icon button.
     v3.2.15:
         + TK Notes 2.7.0 - shared notes with TK Workbench: both scripts now read and write the same note, so a note taken in one appears in the other and either can edit it. Each still works entirely on its own, and notes you already have are copied into the shared form the first time you open them, never moved or rewritten in place. Where both scripts held a note on the same context, both are kept and shown side by side.
         + TK Notes: fixed Global notes being lost on restart. They live in reaper-extstate.ini, a flat file that cannot hold a line break, so a note of more than one line was silently truncated to nothing. Line breaks are now encoded on the way in and decoded on the way out, and notes written by earlier versions still read back exactly as they were. Reported by vik-tan
@@ -1076,6 +1079,12 @@ custom_folder_color_popup_open = custom_folder_color_popup_open or false
 custom_folder_color_popup_path = custom_folder_color_popup_path or nil
 custom_folder_color_popup_name = custom_folder_color_popup_name or ""
 custom_folder_color_popup_color = custom_folder_color_popup_color or nil
+browser_item_color_popup_open = browser_item_color_popup_open or false
+browser_item_color_popup_key = browser_item_color_popup_key or nil
+browser_item_color_popup_name = browser_item_color_popup_name or ""
+browser_item_color_popup_color = browser_item_color_popup_color or nil
+info_track_icon_path = info_track_icon_path or nil
+info_track_icon_texture = info_track_icon_texture or nil
 show_custom_folder_colors_window = show_custom_folder_colors_window or false
 custom_folder_icon_popup_open = custom_folder_icon_popup_open or false
 custom_folder_icon_popup_path = custom_folder_icon_popup_path or nil
@@ -1511,6 +1520,7 @@ function SetDefaultConfig()
         custom_folder_colors = {},
         custom_folder_icons = {},
         show_custom_folder_icons = true,
+        browser_item_colors = {},
         
         last_used_project_location = last_used_project_location or PROJECTS_DIR,
         last_selected_project_path = "",
@@ -2337,6 +2347,9 @@ function LoadConfig()
         end
         if type(config.custom_folder_icons) ~= "table" then
             config.custom_folder_icons = {}
+        end
+        if type(config.browser_item_colors) ~= "table" then
+            config.browser_item_colors = {}
         end
         if config.show_custom_folder_icons == nil then
             config.show_custom_folder_icons = true
@@ -16410,6 +16423,9 @@ function DrawBrowserItems(tbl, main_cat_name)
                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
             end
+            local item_color_key = GetBrowserItemColorKey(main_cat_name, subgroup_name)
+            local item_color = config.browser_item_colors and config.browser_item_colors[item_color_key]
+            if type(item_color) == "number" then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), item_color) end
             if r.ImGui_Selectable(ctx, header_text .. "##browseritem_" .. i, is_selected) then
                 -- Sort only when clicked
                 filtered_fx = DedupeByTypePriority(filtered_fx)
@@ -16474,6 +16490,7 @@ function DrawBrowserItems(tbl, main_cat_name)
                 end
                 ClearScreenshotCache()
             end
+            if type(item_color) == "number" then r.ImGui_PopStyleColor(ctx) end
             r.ImGui_Unindent(ctx, 10)
 
             if main_cat_name == "FOLDERS" then
@@ -16520,6 +16537,14 @@ function DrawBrowserItems(tbl, main_cat_name)
                 end
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
                     StartFolderScreenshots(subgroup_name)
+                end
+                if r.ImGui_MenuItem(ctx, "Set Color...") then
+                    OpenBrowserItemColorPopup(main_cat_name, subgroup_name)
+                end
+                if config.browser_item_colors and config.browser_item_colors[item_color_key] ~= nil then
+                    if r.ImGui_MenuItem(ctx, "Reset Color") then
+                        ClearBrowserItemColor(item_color_key)
+                    end
                 end
                 r.ImGui_EndPopup(ctx)
             end
@@ -17104,6 +17129,115 @@ function DrawCollapseHeader(label, is_expanded, tooltip_show, tooltip_hide)
     end
 
     return is_clicked
+end
+
+function GetBrowserItemColorKey(category_name, item_name)
+    return tostring(category_name or "") .. ":" .. tostring(item_name or "")
+end
+
+function OpenBrowserItemColorPopup(category_name, item_name)
+    local key = GetBrowserItemColorKey(category_name, item_name)
+    config.browser_item_colors = config.browser_item_colors or {}
+    browser_item_color_popup_key = key
+    browser_item_color_popup_name = item_name or ""
+    browser_item_color_popup_color = config.browser_item_colors[key] or config.text_color or 0xC8C8C8FF
+    browser_item_color_popup_open = true
+end
+
+function SetBrowserItemColor(key, color)
+    if not key or type(color) ~= "number" then return end
+    config.browser_item_colors = config.browser_item_colors or {}
+    config.browser_item_colors[key] = color
+    SaveConfig()
+end
+
+function ClearBrowserItemColor(key)
+    if not key then return end
+    if config.browser_item_colors and config.browser_item_colors[key] ~= nil then
+        config.browser_item_colors[key] = nil
+        SaveConfig()
+    end
+end
+
+function DrawBrowserMainHeader(category_name, label)
+    local color_key = GetBrowserItemColorKey("MAIN", category_name)
+    local color = config.browser_item_colors and config.browser_item_colors[color_key]
+    if type(color) == "number" then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), color) end
+    local is_open = r.ImGui_CollapsingHeader(ctx, label)
+    if type(color) == "number" then r.ImGui_PopStyleColor(ctx) end
+    if r.ImGui_BeginPopupContextItem(ctx, "browser_main_header_ctx_" .. category_name) then
+        if r.ImGui_MenuItem(ctx, "Set Color...") then
+            OpenBrowserItemColorPopup("MAIN", category_name)
+        end
+        if config.browser_item_colors and config.browser_item_colors[color_key] ~= nil then
+            if r.ImGui_MenuItem(ctx, "Reset Color") then
+                ClearBrowserItemColor(color_key)
+            end
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    return is_open
+end
+
+function GetInfoTrackIcon(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return nil end
+    local _, icon_path = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
+    if not icon_path or icon_path == "" then
+        if info_track_icon_texture and r.ImGui_ValidatePtr(info_track_icon_texture, "ImGui_Image*") then
+            r.ImGui_Detach(ctx, info_track_icon_texture)
+        end
+        info_track_icon_path = nil
+        info_track_icon_texture = nil
+        return nil
+    end
+    if info_track_icon_path == icon_path and info_track_icon_texture and r.ImGui_ValidatePtr(info_track_icon_texture, "ImGui_Image*") then
+        return info_track_icon_texture
+    end
+    if info_track_icon_texture and r.ImGui_ValidatePtr(info_track_icon_texture, "ImGui_Image*") then
+        r.ImGui_Detach(ctx, info_track_icon_texture)
+    end
+    info_track_icon_path = icon_path
+    info_track_icon_texture = nil
+    local full_path = icon_path
+    if not icon_path:match("^[A-Za-z]:") and not icon_path:match("^[/\\]") then
+        full_path = r.GetResourcePath() .. "/Data/track_icons/" .. icon_path
+    end
+    local file = io.open(full_path, "rb")
+    if not file then return nil end
+    file:close()
+    local ok, texture = pcall(r.ImGui_CreateImage, full_path)
+    if not ok or not texture then return nil end
+    r.ImGui_Attach(ctx, texture)
+    info_track_icon_texture = texture
+    return texture
+end
+
+function DrawInfoTrackIcon(track)
+    local texture = GetInfoTrackIcon(track)
+    if not texture then return false end
+    local width, height = r.ImGui_Image_GetSize(texture)
+    if not width or not height or width <= 0 or height <= 0 then return false end
+    local max_size = math.min(64, r.ImGui_GetContentRegionAvail(ctx))
+    local scale = math.min(max_size / width, max_size / height)
+    local draw_width = math.max(1, math.floor(width * scale))
+    local draw_height = math.max(1, math.floor(height * scale))
+    local cursor_x = r.ImGui_GetCursorPosX(ctx)
+    local available_width = r.ImGui_GetContentRegionAvail(ctx)
+    r.ImGui_SetCursorPosX(ctx, cursor_x + math.max(0, (available_width - draw_width) * 0.5))
+    r.ImGui_Image(ctx, texture, draw_width, draw_height)
+    if r.ImGui_BeginPopupContextItem(ctx, "InfoTrackIconContext") then
+        if r.ImGui_MenuItem(ctx, "Set Track Icon...") then
+            r.SetOnlyTrackSelected(track)
+            r.Main_OnCommand(40899, 0)
+        end
+        if r.ImGui_MenuItem(ctx, "Remove Track Icon") then
+            r.SetOnlyTrackSelected(track)
+            r.Main_OnCommand(40900, 0)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+    r.ImGui_Dummy(ctx, 0, 4)
+    return true
 end
 
 function DrawCollapseHeaderHalf(label, is_expanded, tooltip_show, tooltip_hide, is_left, thumb_mode)
@@ -17803,7 +17937,7 @@ function ShowBrowserPanel()
                     r.ImGui_SetNextItemOpen(ctx, true)
                     initial_header_auto_expand_done = true
                 end
-                if r.ImGui_CollapsingHeader(ctx, header_label) then
+                if DrawBrowserMainHeader(category_name, header_label) then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
@@ -17829,7 +17963,7 @@ function ShowBrowserPanel()
                     r.ImGui_SetNextItemOpen(ctx, true)
                     initial_header_auto_expand_done = true
                 end
-                if r.ImGui_CollapsingHeader(ctx, "DEVELOPER") then
+                if DrawBrowserMainHeader(category_name, "DEVELOPER") then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
@@ -17855,7 +17989,7 @@ function ShowBrowserPanel()
                     r.ImGui_SetNextItemOpen(ctx, true)
                     initial_header_auto_expand_done = true
                 end
-                if r.ImGui_CollapsingHeader(ctx, "CATEGORY") then
+                if DrawBrowserMainHeader(category_name, "CATEGORY") then
                     DrawBrowserItems(CAT_TEST[i].list, CAT_TEST[i].name)
                 end
                 r.ImGui_PopStyleColor(ctx, 3)
@@ -17881,7 +18015,7 @@ function ShowBrowserPanel()
                     r.ImGui_SetNextItemOpen(ctx, true)
                     initial_header_auto_expand_done = true
                 end
-                if r.ImGui_CollapsingHeader(ctx, "FOLDERS") then
+                if DrawBrowserMainHeader(category_name, "FOLDERS") then
                     local function EnsurePinnedList()
                         if not config.pinned_subgroups then config.pinned_subgroups = {} end
                         if not config.pinned_subgroups["FOLDERS"] then config.pinned_subgroups["FOLDERS"] = {} end
@@ -17961,7 +18095,11 @@ function ShowBrowserPanel()
                                 local line_h = r.ImGui_GetTextLineHeightWithSpacing(ctx)
                                 r.ImGui_DrawList_AddRectFilled(dl, x-2, y, x + avail_w, y + line_h, 0xFF704030, 3)
                             end
+                            local folder_color_key = GetBrowserItemColorKey("FOLDERS", folder_name)
+                            local folder_color = config.browser_item_colors and config.browser_item_colors[folder_color_key]
+                            if type(folder_color) == "number" then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), folder_color) end
                             r.ImGui_Selectable(ctx, header_text, folder_is_selected)
+                            if type(folder_color) == "number" then r.ImGui_PopStyleColor(ctx) end
                             r.ImGui_Unindent(ctx, 10)
 
                             if r.ImGui_IsMouseDragging(ctx, 0, 5.0) then
@@ -18039,6 +18177,14 @@ function ShowBrowserPanel()
                                 end
                                 if r.ImGui_MenuItem(ctx, 'Capture Folder Screenshots') then
                                     StartFolderScreenshots(folder_name)
+                                end
+                                if r.ImGui_MenuItem(ctx, "Set Color...") then
+                                    OpenBrowserItemColorPopup("FOLDERS", folder_name)
+                                end
+                                if config.browser_item_colors and config.browser_item_colors[folder_color_key] ~= nil then
+                                    if r.ImGui_MenuItem(ctx, "Reset Color") then
+                                        ClearBrowserItemColor(folder_color_key)
+                                    end
                                 end
                                 r.ImGui_Separator(ctx)
                                 if r.ImGui_MenuItem(ctx, "Sort Folders A-Z") then
@@ -18399,6 +18545,13 @@ function ShowBrowserPanel()
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
         local info_open = r.ImGui_BeginChild(ctx, "InfoContent", -1, content_h)
         if info_open then
+            if not DrawInfoTrackIcon(TRACK) and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
+                if r.ImGui_Button(ctx, "Set Track Icon...##InfoNoTrackIcon", -1, 22) then
+                    r.SetOnlyTrackSelected(TRACK)
+                    r.Main_OnCommand(40899, 0)
+                end
+                r.ImGui_Dummy(ctx, 0, 4)
+            end
             local proj = 0 
             local _, proj_name = r.EnumProjects(-1, "")
             if not proj_name or proj_name == "" then
@@ -31367,6 +31520,43 @@ if visible then
 
     DrawCustomFolderColorsWindow()
     DrawCustomFolderIconsWindow()
+
+    if browser_item_color_popup_open then
+        r.ImGui_OpenPopup(ctx, "Browser Item Color")
+        browser_item_color_popup_open = false
+    end
+
+    if r.ImGui_BeginPopupModal(ctx, "Browser Item Color", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
+        r.ImGui_Text(ctx, browser_item_color_popup_name or "")
+        r.ImGui_Separator(ctx)
+        local color_flags = r.ImGui_ColorEditFlags_NoLabel()
+        local changed_color, new_color = r.ImGui_ColorEdit4(ctx, "##BrowserItemColor", browser_item_color_popup_color or 0xFFFFFFFF, color_flags)
+        if changed_color then browser_item_color_popup_color = new_color end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_Button(ctx, "Apply", 100, 0) then
+            SetBrowserItemColor(browser_item_color_popup_key, browser_item_color_popup_color)
+            browser_item_color_popup_key = nil
+            browser_item_color_popup_name = ""
+            browser_item_color_popup_color = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Reset", 100, 0) then
+            ClearBrowserItemColor(browser_item_color_popup_key)
+            browser_item_color_popup_key = nil
+            browser_item_color_popup_name = ""
+            browser_item_color_popup_color = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Cancel", 100, 0) then
+            browser_item_color_popup_key = nil
+            browser_item_color_popup_name = ""
+            browser_item_color_popup_color = nil
+            r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
 
     if custom_folder_color_popup_open then
         r.ImGui_OpenPopup(ctx, "Custom Folder Color")

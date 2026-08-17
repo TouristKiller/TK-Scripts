@@ -197,7 +197,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.15" author="TouristKiller" time="2026-08-13T15:00:00Z">
+    <version name="3.2.16" author="TouristKiller" time="2026-08-18T01:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -213,63 +213,9 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
-                v3.2.15:
-                + TK Notes 2.7.0 - shared notes with TK Workbench: both scripts now read and write the same note, so a note taken in one appears in the other and either can edit it. Each still works entirely on its own, and notes you already have are copied into the shared form the first time you open them, never moved or rewritten in place. Where both scripts held a note on the same context, both are kept and shown side by side.
-                + TK Notes: fixed Global notes being lost on restart. They live in reaper-extstate.ini, a flat file that cannot hold a line break, so a note of more than one line was silently truncated to nothing. Line breaks are now encoded on the way in and decoded on the way out, and notes written by earlier versions still read back exactly as they were. Reported by vik-tan
-                + TK Notes: font menu now matches the Workbench - a size slider with - and + either side, the family list below it and a reset. The size range is the same in both scripts now, where it used to be narrower here.
-                + TK Notes: right-click menu brought in line with the Workbench, with the things that were only there added here: bullet, numbered and checkbox lists, Bold and Add Image. Clicking a checkbox in the text ticks it.
-                + TK Notes: the palette button opens a real colour picker for text and note colour instead of preset swatches, and respects "use context color". Colours set with the old presets are unchanged. The separate palette menu and the hand-drawn font size slider are gone, both being second copies of what the picker and font menu already did.
-                + TK Notes: text alignment is now per tab instead of applying to every tab at once, and is shared with the Workbench.
-                + TK Notes: drawings are shared with the Workbench, appearing in the same place on the note in both.
-                + TK Notes: removed the auto-save setting and its interval. Notes were saved regardless of what it was set to, so the switch did nothing but suggest that turning it off would lose your work.
-
-]]></changelog>
-    </version>
-    <version name="3.2.14" author="TouristKiller" time="2026-08-08T20:15:00Z">
-    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
-    <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
-    <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
-    <source file="TKFXBProjectMeta.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBProjectMeta.lua</source>
-    <source file="TKFXBPatchbay.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBPatchbay.lua</source>
-    <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/json.lua</source>
-    <source main="main" file="TK_NOTES.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES.lua</source>
-    <source main="main" file="TK_FX_BROWSER Mini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER%20Mini.lua</source>
-    <source main="main" file="TK_NOTES_OpenTrackMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenTrackMode.lua</source>
-    <source main="main" file="TK_NOTES_OpenItemMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenItemMode.lua</source>
-    <source main="main" file="TK_NOTES_OpenProjectMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenProjectMode.lua</source>
-    <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
-    <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
-                <changelog><![CDATA[
-                v3.2.14:
-                + Projects: added a responsive cover-art grid controlled by the Tile size slider in the columns menu; slide below 64 px to return to the table view.
-                + Project grid: selection, double-click open, tooltips and project context actions are available directly from each cover tile.
-                + Project grid performance: only visible rows are rendered, cover paths are cached and image loading is deferred and capped per frame for smooth scrolling with large project libraries.
-
-]]></changelog>
-    </version>
-    <version name="3.2.12" author="TouristKiller" time="2026-08-02T00:05:00Z">
-    <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
-    <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
-    <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
-    <source file="TKFXBProjectMeta.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBProjectMeta.lua</source>
-    <source file="TKFXBPatchbay.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBPatchbay.lua</source>
-    <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/json.lua</source>
-    <source main="main" file="TK_NOTES.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES.lua</source>
-    <source main="main" file="TK_FX_BROWSER Mini.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER%20Mini.lua</source>
-    <source main="main" file="TK_NOTES_OpenTrackMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenTrackMode.lua</source>
-    <source main="main" file="TK_NOTES_OpenItemMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenItemMode.lua</source>
-    <source main="main" file="TK_NOTES_OpenProjectMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenProjectMode.lua</source>
-    <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
-    <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
-                <changelog><![CDATA[
-            v3.2.12:
-            + Custom images: assign your own artwork to a plugin via the right-click menu ("Set Custom Image..."), handy for JSFX and other plugins that don't capture well. The image is copied to the CustomImages folder, scaled down to a max width and used everywhere instead of the captured screenshot; "Remove Custom Image" brings the screenshot back. Also available in TK FX BROWSER Mini, which shares the same folder.
-            + Custom images settings (SCREENSHOTS tab): on/off toggle, max width, "Open Custom Images Folder" and "Rescan Custom Images" - dropping a file named after the plugin straight into that folder works too, no need to assign it from the menu.
-            + Folder info bar: no longer pushes a scrollbar into the window (the reserved height is measured instead of fixed) and it now also shows for the Developer, All Plugins and Category subgroups.
-
-            v3.2.11:
-            + TK Notes: fixed per-selection text sizing - larger text now sits on the same baseline as the rest of the line, and the A- / A+ buttons no longer behave erratically (reliable increase/decrease with the selection kept active).
-
+                v3.2.16:
+                + Browser organization: formats, developers, native folders and their entries can now receive individual text colors from their right-click menus, with separate reset actions and persistent storage.
+                + Track inspector: the INFO panel now displays the selected track icon when available, with Set/Remove Track Icon actions; tracks without an icon show a direct Set Track Icon button.
 
 ]]></changelog>
     </version>
