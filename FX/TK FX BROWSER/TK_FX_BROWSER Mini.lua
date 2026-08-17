@@ -1,8 +1,10 @@
 ﻿-- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.15
+-- @version 1.2.17
 -- @changelog:
 --[[ 
+    v1.2.17:
+        + Visibility settings: added a separate option to show or hide the scrollbar in the Browser/INFO panel; the screenshot scrollbar remains independently configurable.
     v1.2.15:
         + Browser organization: formats, developers, native folders and their entries can now receive individual text colors from their right-click menus, with separate reset actions and persistent storage.
         + Track inspector: the INFO panel now displays the selected track icon when available, with Set/Remove Track Icon actions; tracks without an icon show a direct Set Track Icon button.
@@ -1464,6 +1466,7 @@ function SetDefaultConfig()
         show_tags = true,
         hideMeter = false,
         show_screenshot_scrollbar = true,
+        show_browser_panel_scrollbar = false,
         show_type_dividers = false,
         sort_alphabetically = false,
         screenshot_view_type = 1,
@@ -15004,8 +15007,11 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, "List Hover Screenshot", "", config.list_hover_screenshot) then
                 config.list_hover_screenshot = not config.list_hover_screenshot; SaveConfig()
             end
-            if r.ImGui_MenuItem(ctx, config.show_screenshot_scrollbar and "Hide Scrollbar" or "Show Scrollbar") then
+            if r.ImGui_MenuItem(ctx, config.show_screenshot_scrollbar and "Hide Screenshot Scrollbar" or "Show Screenshot Scrollbar") then
                 config.show_screenshot_scrollbar = not config.show_screenshot_scrollbar; SaveConfig()
+            end
+            if r.ImGui_MenuItem(ctx, config.show_browser_panel_scrollbar and "Hide Browser/Info Scrollbar" or "Show Browser/Info Scrollbar") then
+                config.show_browser_panel_scrollbar = not config.show_browser_panel_scrollbar; SaveConfig()
             end
             if r.ImGui_MenuItem(ctx, config.show_browser_panel_mini and "Hide Browser Panel" or "Show Browser Panel") then
                 config.show_browser_panel_mini = not config.show_browser_panel_mini; SaveConfig()
@@ -16945,7 +16951,7 @@ function ShowBrowserPanel()
     local content_h = math.max(0, avail_h - toggle_button_height - ams_row_height - 4)
 
     if not browser_panel_show_info then
-    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_browser_panel_scrollbar and 14 or 0)
     local content_open = r.ImGui_BeginChild(ctx, "BrowserContent", -1, content_h)
     if content_open then
         -- SEGMENT 1: FAVORITES + PROJECT FX
@@ -17734,7 +17740,7 @@ function ShowBrowserPanel()
         r.ImGui_PopStyleVar(ctx) -- ScrollbarSize (from BrowserContent)
     end
     else
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
+        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_browser_panel_scrollbar and 14 or 0)
         local info_open = r.ImGui_BeginChild(ctx, "InfoContent", -1, content_h)
         if info_open then
             if not DrawInfoTrackIcon(TRACK) and TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
