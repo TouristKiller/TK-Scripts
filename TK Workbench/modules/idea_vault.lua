@@ -8,7 +8,7 @@ local M = {
   id = "idea_vault",
   title = "Idea Vault",
   icon = "IDV",
-  version = "0.1.0"
+  version = "0.1.1"
 }
 
 local state = {
@@ -20,6 +20,7 @@ local state = {
   preview_source = nil,
   preview_name = nil,
   tempo_lock = true,
+  match_tempo = false,
   loop = false,
   fixed_h = nil,
   capture_open = false,
@@ -145,6 +146,20 @@ end
 --------------------------------------------------------------------------------
 -- actions
 --------------------------------------------------------------------------------
+
+-- Whether the tempo is about to change has to be read before the load, because
+-- afterwards the project already sits at the idea's tempo and nothing differs.
+local function load_idea(app, idea)
+  local changing = state.match_tempo and Store.tempo_differs(idea, r.Master_GetTempo())
+  local ok, err = Store.load(idea, { match_tempo = state.match_tempo })
+  if not ok then
+    app.status = tostring(err or "Could not load the idea")
+    return
+  end
+  app.status = changing
+    and string.format("Loaded %s and set the project to %g BPM", tostring(idea.name), tonumber(idea.bpm) or 0)
+    or ("Loaded " .. tostring(idea.name))
+end
 
 local function do_capture(app)
   local idea, warning = Store.capture({
@@ -378,7 +393,7 @@ local function draw_row(app, idea, width, row_h)
       if playing then stop_preview() else play(app, idea) end
     end
   end
-  if double and not badge_hot then Store.load(idea); app.status = "Loaded " .. tostring(idea.name) end
+  if double and not badge_hot then load_idea(app, idea) end
   if hovered and not badge_hot then
     r.ImGui_SetTooltip(ctx, tostring(idea.name) .. "\n" .. summary_line(idea)
       .. (idea.description ~= "" and ("\n\n" .. idea.description) or "")
@@ -390,10 +405,7 @@ local function draw_row(app, idea, width, row_h)
     if r.ImGui_MenuItem(ctx, playing and "Stop" or "Play") then
       if playing then stop_preview() else play(app, idea) end
     end
-    if r.ImGui_MenuItem(ctx, "Load into project") then
-      Store.load(idea)
-      app.status = "Loaded " .. tostring(idea.name)
-    end
+    if r.ImGui_MenuItem(ctx, "Load into project") then load_idea(app, idea) end
     if r.ImGui_MenuItem(ctx, "Rename") then
       state.rename_target = idea
       state.rename_text = tostring(idea.name or "")
@@ -441,6 +453,18 @@ local function draw_footer(app)
   r.ImGui_Text(ctx, tostring(idea.name or ""))
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, summary_line(idea))
 
+  -- The preview obeys Lock to tempo, but a loaded template cannot: it carries no
+  -- tempo at all, so its items land against whatever tempo map is already there.
+  -- Saying so is the difference between an idea that sounds like its preview and
+  -- one that quietly does not.
+  local project_bpm = r.Master_GetTempo()
+  if Store.tempo_differs(idea, project_bpm) then
+    r.ImGui_TextColored(ctx, Theme.colors.warning, state.match_tempo
+      and string.format("Loading sets the project to %g BPM.", tonumber(idea.bpm) or 0)
+      or string.format("Recorded at %g BPM, project is at %g - loading plays it at %g.",
+        tonumber(idea.bpm) or 0, project_bpm, project_bpm))
+  end
+
   local playing = state.preview ~= nil and state.preview_name == idea.name
   local button_w = UIScale.text_button_w(ctx, "Load into project", 120)
   local small_w = UIScale.text_button_w(ctx, "Stop", 64)
@@ -448,10 +472,7 @@ local function draw_footer(app)
     if playing then stop_preview() else play(app, idea) end
   end
   r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Load into project", button_w, 0) then
-    Store.load(idea)
-    app.status = "Loaded " .. tostring(idea.name)
-  end
+  if r.ImGui_Button(ctx, "Load into project", button_w, 0) then load_idea(app, idea) end
   r.ImGui_SameLine(ctx)
 
   local changed, value = r.ImGui_Checkbox(ctx, "Lock to tempo", state.tempo_lock)
@@ -475,6 +496,15 @@ local function draw_footer(app)
     if state.preview and r.CF_Preview_SetValue then
       r.CF_Preview_SetValue(state.preview, "B_LOOP", state.loop and 1 or 0)
     end
+  end
+  r.ImGui_SameLine(ctx)
+  changed, value = r.ImGui_Checkbox(ctx, "Match tempo on load", state.match_tempo)
+  if changed then state.match_tempo = value end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx,
+      "Sets the project tempo to the idea's before the tracks land, so a loaded\n"
+      .. "idea sounds like the preview you just heard. Off by default, because it\n"
+      .. "changes the whole project - it is one undo step together with the load.")
   end
 end
 

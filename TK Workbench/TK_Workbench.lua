@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.8.0
+-- @version 0.8.1
 -- @changelog:
+-- v0.8.1
+--   + Idea Vault: An idea recorded at another tempo now says so before you load it. A track template holds no tempo of its own - there is not one TEMPO line in one - so its items land against whatever tempo map the project already has, and the MIDI inside follows that map too. The preview you just heard obeyed Lock to tempo; the loaded template cannot, and that difference was invisible
+--   + Idea Vault: "Match tempo on load" sets the project to the idea's tempo before the tracks arrive, which is the only moment it helps: item positions and lengths are stored in seconds, so a tempo set afterwards leaves them sitting where they no longer line up with the phrase they were played as. It is off by default because it changes the whole project, and it is one undo step together with the load
 -- v0.8.0
 --   + Idea Vault: A new module for the ideas you record in the morning and then never find again. It saves the selected track as a track template - MIDI items, envelopes and the FX chain all included - renders an audio preview beside it, and keeps the two together with your own description of the mood or style. This is the part an FX chain could never do: a chain carries plugins and nothing else, so it has no items, no MIDI and no sound to play back
 --   + Idea Vault: Previews play locked to the project tempo without being transposed, so something recorded at 96 BPM sits in the grid of a song at 120. The tempo it was recorded at is written into a small file beside the preview rather than read back out of the audio, because whether a format carries a tempo tag a script can read varies per format and per REAPER build - and a preview playing at the wrong rate is worse than no preview at all

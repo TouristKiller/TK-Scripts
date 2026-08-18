@@ -615,6 +615,26 @@ function Store.preview_rate(idea, project_bpm)
   return project_bpm / recorded
 end
 
+function Store.tempo_differs(idea, project_bpm)
+  local recorded = tonumber(idea and idea.bpm)
+  project_bpm = tonumber(project_bpm) or r.Master_GetTempo()
+  if not recorded or recorded <= 0 or not project_bpm or project_bpm <= 0 then return false end
+  return math.abs(recorded - project_bpm) > 0.01
+end
+
+-- A track template carries no tempo of its own - there is not a single TEMPO
+-- line in one. Item positions and lengths are stored in seconds and read
+-- against whatever tempo map is in place when the tracks arrive, and the MIDI
+-- inside follows that map too. So the tempo has to be set before the template
+-- lands, not after, or the items sit at second-positions that no longer line up
+-- with the phrase they were played as.
+function Store.apply_tempo(idea)
+  local bpm = tonumber(idea and idea.bpm)
+  if not bpm or bpm <= 0 or not r.SetCurrentBPM then return false end
+  r.SetCurrentBPM(0, bpm, false)
+  return true
+end
+
 function Store.matches(idea, query)
   query = tostring(query or ""):lower()
   if query == "" then return true end
@@ -634,13 +654,16 @@ end
 -- acting on an idea
 --------------------------------------------------------------------------------
 
-function Store.load(idea)
+-- opts.match_tempo sets the project tempo to the idea's before the tracks land,
+-- inside the same undo block so one press of Ctrl+Z takes both back.
+function Store.load(idea, opts)
   if not idea or not idea.template_path or not r.file_exists(idea.template_path) then
     return false, "The template file is missing"
   end
   local before = r.CountTracks(0)
   r.PreventUIRefresh(1)
   r.Undo_BeginBlock()
+  if opts and opts.match_tempo then Store.apply_tempo(idea) end
   r.Main_openProject(idea.template_path)
   local first_new = r.GetTrack(0, before)
   if first_new then r.SetOnlyTrackSelected(first_new) end
