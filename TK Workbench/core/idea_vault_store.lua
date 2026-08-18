@@ -45,6 +45,15 @@ local FORMAT_NAMES = {
   vggo = "OGG", supO = "Opus", supo = "Opus", kpvw = "WavPack"
 }
 
+-- Every captured item is stamped "Beats (auto-stretch at tempo changes)", which
+-- REAPER writes as BEAT 1 with IMPLIEDWARP beside it. Read off REAPER rather
+-- than guessed, and not offered as a choice: the loading side already fits an
+-- idea to whatever project it lands in, so this only governs what happens on
+-- tempo changes afterwards - and there auto-stretch is simply what you want.
+-- The alternatives are the behaviours that made a saved idea land wrong in the
+-- first place, so there is nothing to gain by keeping them reachable.
+local TIMEBASE = { beat = 1, warp = true }
+
 local defaults = {
   root = "",
   render_format = "",
@@ -264,6 +273,41 @@ function Store.collect_tracks(include_children)
   return tracks
 end
 
+-- Stamps every item in a track chunk with an explicit timebase, replacing
+-- whatever it had. A freshly read chunk says BEAT -1, which means "ask the
+-- project" - and that is exactly why a saved idea used to land differently
+-- depending on where you loaded it. Only the item's own top level is touched:
+-- the SOURCE and TAKE blocks nested inside it are left alone.
+local function apply_item_timebase(chunk)
+  local spec = TIMEBASE
+  local out = {}
+  local depth, item_depth = 0, nil
+  for line in (chunk .. "\n"):gmatch("([^\n]*)\n") do
+    local trimmed = line:match("^%s*(.-)%s*$")
+    local opening = trimmed:sub(1, 1) == "<"
+    local closing = trimmed == ">"
+    local drop = false
+    if item_depth and depth == item_depth and not opening and not closing then
+      local key = trimmed:match("^(%u+)")
+      drop = key == "BEAT" or key == "IMPLIEDWARP"
+    end
+    if not drop then out[#out + 1] = line end
+    if opening then
+      depth = depth + 1
+      if not item_depth and trimmed:match("^<ITEM") then
+        item_depth = depth
+        local indent = line:match("^(%s*)") or ""
+        out[#out + 1] = indent .. "BEAT " .. tostring(spec.beat)
+        if spec.warp then out[#out + 1] = indent .. "IMPLIEDWARP 1" end
+      end
+    elseif closing then
+      if item_depth and depth == item_depth then item_depth = nil end
+      depth = depth - 1
+    end
+  end
+  return table.concat(out, "\n")
+end
+
 -- An .RTrackTemplate is literally the track state chunk, one <TRACK ...> block
 -- per track, so writing one is writing what GetTrackStateChunk already returns.
 -- Items and envelopes are part of that chunk, which is the whole reason this
@@ -274,7 +318,7 @@ function Store.write_template(tracks, path)
   for _, track in ipairs(tracks) do
     local ok, chunk = r.GetTrackStateChunk(track, "", false)
     if not ok then return false, "Could not read the track chunk" end
-    chunks[#chunks + 1] = chunk
+    chunks[#chunks + 1] = apply_item_timebase(chunk)
   end
   if not write_file(path, table.concat(chunks, "\n") .. "\n") then
     return false, "Could not write " .. path
@@ -654,17 +698,103 @@ end
 -- acting on an idea
 --------------------------------------------------------------------------------
 
+local SCALED_ITEM_KEYS = { "D_POSITION", "D_LENGTH", "D_FADEINLEN", "D_FADEOUTLEN", "D_SNAPOFFSET" }
+
+-- A track template records no tempo of its own - not one TEMPO line, no stretch
+-- markers - so its items arrive as raw seconds and REAPER has nothing to
+-- convert them from. The item timebase only governs what happens on tempo
+-- changes after they are in; at the moment of import it can do nothing.
+--
+-- The sidecar is the only thing that knows, so the fitting happens here.
+-- Positions and lengths scale by the tempo ratio, and audio takes get the
+-- matching playrate so the sound still fills the new length - with the take's
+-- preserve-pitch flag holding the pitch. Source offsets are deliberately left
+-- alone: length times rate is unchanged, so the same piece of audio is used.
+-- MIDI takes keep their rate, because their notes are ticks and already play at
+-- the project tempo; only their item boundaries need moving.
+local function fit_items_to_tempo(first_track, ratio)
+  local count = 0
+  for i = first_track, r.CountTracks(0) - 1 do
+    local track = r.GetTrack(0, i)
+    for j = 0, r.CountTrackMediaItems(track) - 1 do
+      local item = r.GetTrackMediaItem(track, j)
+      for _, key in ipairs(SCALED_ITEM_KEYS) do
+        local value = r.GetMediaItemInfo_Value(item, key)
+        if value and value ~= 0 then r.SetMediaItemInfo_Value(item, key, value * ratio) end
+      end
+      for k = 0, r.CountTakes(item) - 1 do
+        local take = r.GetTake(item, k)
+        if take and not r.TakeIsMIDI(take) then
+          local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+          if rate and rate > 0 then
+            r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate / ratio)
+          end
+        end
+      end
+      count = count + 1
+    end
+  end
+  return count
+end
+
+-- Track envelope points sit on the project timeline in plain seconds - the same
+-- timeline the items were just moved along - so automation would otherwise stay
+-- behind where the performance used to be. This covers FX parameter envelopes
+-- too, since those are track envelopes as far as the API is concerned.
+--
+-- Take envelopes are deliberately not touched: their points live in take time,
+-- and length times rate came out unchanged, so they still line up with the
+-- audio they were drawn against.
+local function fit_envelopes_to_tempo(first_track, ratio)
+  local count = 0
+  for i = first_track, r.CountTracks(0) - 1 do
+    local track = r.GetTrack(0, i)
+    for e = 0, r.CountTrackEnvelopes(track) - 1 do
+      local env = r.GetTrackEnvelope(track, e)
+      local points = r.CountEnvelopePoints(env)
+      for p = 0, points - 1 do
+        local ok, time, value, shape, tension, selected = r.GetEnvelopePoint(env, p)
+        -- Sorting is held off until the whole lane is scaled, or a point moved
+        -- past its neighbour would renumber the ones still to be read.
+        if ok then
+          r.SetEnvelopePoint(env, p, time * ratio, value, shape, tension, selected, true)
+        end
+      end
+      if points > 0 then
+        r.Envelope_SortPoints(env)
+        count = count + 1
+      end
+    end
+  end
+  return count
+end
+
 -- opts.match_tempo sets the project tempo to the idea's before the tracks land,
--- inside the same undo block so one press of Ctrl+Z takes both back.
+-- inside the same undo block so one press of Ctrl+Z takes both back. Otherwise
+-- the items are fitted to the project instead, unless opts.fit_tempo is false.
 function Store.load(idea, opts)
   if not idea or not idea.template_path or not r.file_exists(idea.template_path) then
     return false, "The template file is missing"
   end
   local before = r.CountTracks(0)
+  local matching = opts and opts.match_tempo
+  local recorded = tonumber(idea.bpm)
+  local project_bpm = r.Master_GetTempo()
+  local ratio = nil
+  if not matching and (not opts or opts.fit_tempo ~= false)
+     and recorded and recorded > 0 and project_bpm and project_bpm > 0 then
+    ratio = recorded / project_bpm
+    if math.abs(ratio - 1) < 0.0001 then ratio = nil end
+  end
+
   r.PreventUIRefresh(1)
   r.Undo_BeginBlock()
-  if opts and opts.match_tempo then Store.apply_tempo(idea) end
+  if matching then Store.apply_tempo(idea) end
   r.Main_openProject(idea.template_path)
+  if ratio then
+    fit_items_to_tempo(before, ratio)
+    fit_envelopes_to_tempo(before, ratio)
+  end
   local first_new = r.GetTrack(0, before)
   if first_new then r.SetOnlyTrackSelected(first_new) end
   r.Undo_EndBlock("Load idea: " .. tostring(idea.name or ""), -1)

@@ -453,16 +453,19 @@ local function draw_footer(app)
   r.ImGui_Text(ctx, tostring(idea.name or ""))
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, summary_line(idea))
 
-  -- The preview obeys Lock to tempo, but a loaded template cannot: it carries no
-  -- tempo at all, so its items land against whatever tempo map is already there.
-  -- Saying so is the difference between an idea that sounds like its preview and
-  -- one that quietly does not.
+  -- Fitting is the normal case and reads as information; bending the project is
+  -- the one that changes something outside this panel, so only that is coloured
+  -- as something to notice.
   local project_bpm = r.Master_GetTempo()
   if Store.tempo_differs(idea, project_bpm) then
-    r.ImGui_TextColored(ctx, Theme.colors.warning, state.match_tempo
-      and string.format("Loading sets the project to %g BPM.", tonumber(idea.bpm) or 0)
-      or string.format("Recorded at %g BPM, project is at %g - loading plays it at %g.",
-        tonumber(idea.bpm) or 0, project_bpm, project_bpm))
+    if state.match_tempo then
+      r.ImGui_TextColored(ctx, Theme.colors.warning,
+        string.format("Loading sets the whole project to %g BPM.", tonumber(idea.bpm) or 0))
+    else
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim,
+        string.format("Recorded at %g BPM - it will be fitted to the project's %g.",
+          tonumber(idea.bpm) or 0, project_bpm))
+    end
   end
 
   local playing = state.preview ~= nil and state.preview_name == idea.name
@@ -471,8 +474,6 @@ local function draw_footer(app)
   if r.ImGui_Button(ctx, playing and "Stop" or "Play", small_w, 0) then
     if playing then stop_preview() else play(app, idea) end
   end
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_Button(ctx, "Load into project", button_w, 0) then load_idea(app, idea) end
   r.ImGui_SameLine(ctx)
 
   local changed, value = r.ImGui_Checkbox(ctx, "Lock to tempo", state.tempo_lock)
@@ -497,14 +498,20 @@ local function draw_footer(app)
       r.CF_Preview_SetValue(state.preview, "B_LOOP", state.loop and 1 or 0)
     end
   end
+  -- Two rows rather than one: hearing it, then loading it. Five controls chained
+  -- on a single line came to over 500px, and a panel narrower than that pushed
+  -- the last one off the right edge - where the canvas offers nothing to scroll
+  -- with, so the control was simply gone.
+  if r.ImGui_Button(ctx, "Load into project", button_w, 0) then load_idea(app, idea) end
   r.ImGui_SameLine(ctx)
-  changed, value = r.ImGui_Checkbox(ctx, "Match tempo on load", state.match_tempo)
+  changed, value = r.ImGui_Checkbox(ctx, "Set project tempo to the idea's", state.match_tempo)
   if changed then state.match_tempo = value end
   if r.ImGui_IsItemHovered(ctx) then
     r.ImGui_SetTooltip(ctx,
-      "Sets the project tempo to the idea's before the tracks land, so a loaded\n"
-      .. "idea sounds like the preview you just heard. Off by default, because it\n"
-      .. "changes the whole project - it is one undo step together with the load.")
+      "The exception, not the rule: items already fit themselves to the project\n"
+      .. "they land in. Tick this to bend the project to the idea instead, which is\n"
+      .. "what you want when a new piece starts from one. It changes the whole\n"
+      .. "project, and it is one undo step together with the load.")
   end
 end
 

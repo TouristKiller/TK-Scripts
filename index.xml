@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.8.1" author="TouristKiller" time="2026-08-18T02:07:39Z">
+    <version name="0.8.2" author="TouristKiller" time="2026-08-18T03:16:08Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -144,6 +144,12 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.8.2
+            + Idea Vault: An idea now fits itself to the project you load it into. A track template records no tempo of its own - not one TEMPO line, no stretch markers - so its items are plain seconds and REAPER has nothing to convert them from: a phrase captured at 120 landed in a project at 140 with its notes in the right place and its item boundaries in the wrong one. The sidecar is the one thing that knows what tempo it was played at, so positions, lengths and fades are scaled on the way in
+            + Idea Vault: Audio comes along without being transposed. The item is scaled and the take's playrate is moved the other way, so length times rate is unchanged and exactly the same piece of audio is used - only faster or slower, with the take's preserve-pitch flag holding the note where it was. MIDI takes keep their rate, because their notes are ticks and already play at the project tempo; only their item boundaries need moving
+            + Idea Vault: Track envelopes are scaled with the items. Their points sit on the project timeline in plain seconds, so automation used to stay behind where the performance had been. FX parameter envelopes are covered by the same pass, since REAPER counts those as track envelopes too. Take envelopes are deliberately left alone: their points live in take time, and length times rate came out unchanged
+            + Idea Vault: Captured items are stamped "Beats (auto-stretch at tempo changes)" rather than being left to inherit whatever the project they land in happens to be set to. That inherited setting is why the same idea behaved differently depending on where it went - and if it was Time, nothing adapted at all. Fitting on load handles the arrival; this handles every tempo change after it
+            + Idea Vault: The tempo checkbox is now named "Set project tempo to the idea's", which is what it does. It reads as the exception it is: items fit themselves to the project, and this bends the project to the idea instead - what you want when a new piece starts from one. It also moved to its own row: five controls on a single line ran past the right edge of a narrow panel, and there is nothing there to scroll with
             v0.8.1
             + Idea Vault: An idea recorded at another tempo now says so before you load it. A track template holds no tempo of its own - there is not one TEMPO line in one - so its items land against whatever tempo map the project already has, and the MIDI inside follows that map too. The preview you just heard obeyed Lock to tempo; the loaded template cannot, and that difference was invisible
             + Idea Vault: "Match tempo on load" sets the project to the idea's tempo before the tracks arrive, which is the only moment it helps: item positions and lengths are stored in seconds, so a tempo set afterwards leaves them sitting where they no longer line up with the phrase they were played as. It is off by default because it changes the whole project, and it is one undo step together with the load
