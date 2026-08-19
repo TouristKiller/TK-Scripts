@@ -5,6 +5,10 @@
 --[[
 2.5.9
 
+[MIDI / Stuck Notes]
++ Bug fix - notes could be left sounding with no note-off ever following, which a retrospective recording then stretches to the end of the item. stopNotesFromPlaying was driven by the list of the last chord played, so when a second chord started while a first was still sounding, any note that appeared only in the earlier chord was orphaned. It now releases everything that is actually sounding, which is what every caller already meant: previewing a chord, stopping progression playback, and releasing a MIDI trigger all stop first and then play what should still be held. Reported by Deodan.
++ Bug fix - closing the ChordGun window while a chord was sounding left those notes hanging permanently. Nothing released them afterwards, so no key or button could still rescue them. The window now kills all playing notes on the way out.
+
 [Menus / Discoverability]
 + The Dice right-click menu is back to what it says on the icon: randomize settings only (Progression Length, Always Start on Tonic, Use Selected Chord Types). It had turned into a drawer holding chord length, playback timing, and a Clear Progression entry that duplicated the CLEAR button already sitting below it -- none of which anyone would think to look for under a dice.
 + "Tight Timing (JSFX Engine)" moved to the PLAY button's right-click, next to Sync Play, since both answer the same question: how playback behaves. PLAY's right-click is now a small menu instead of a direct Sync Play toggle.
@@ -3431,10 +3435,22 @@ end
 
 function stopNotesFromPlaying()
 
-  local notesThatArePlaying = getNotesThatArePlaying()
+  -- Was driven by notesThatArePlaying, which is only ever the last chord: a
+  -- second chord overwrote the list without releasing the first, so notes that
+  -- appeared only in the earlier chord never got a note-off at all. Live you
+  -- might not notice, but a retrospective recording keeps the orphaned note-on
+  -- and stretches that note to the end of the item.
+  --
+  -- playingNoteChannels is the actual record of what is sounding, and every
+  -- caller here means "stop everything, then play the new thing" -- including
+  -- the MIDI trigger release, which re-triggers still-held notes afterwards.
+  local sounding = {}
+  for midiNote in pairs(playingNoteChannels) do
+    sounding[#sounding + 1] = midiNote
+  end
 
-  for noteIndex = 1, #notesThatArePlaying do
-    stopNoteFromPlaying(notesThatArePlaying[noteIndex])
+  for i = 1, #sounding do
+    stopNoteFromPlaying(sounding[i])
   end
 
   setNotesThatArePlaying({})
@@ -14551,6 +14567,11 @@ local function cleanup()
 		helpWindowOpen = false
 		reaper.SetExtState("TK_ChordGun_Help", "closed", "0", false)
 	end
+
+	-- Closing the window while a chord sounds used to leave those note-ons with
+	-- no note-off ever following -- the one variant no key could still rescue,
+	-- and a permanent stuck note in anything recorded retrospectively.
+	stopAllNotesFromPlaying()
 
 	-- The engine lives in the audio thread and would happily keep playing after
 	-- the window is gone, so stop it and hand ownership back.

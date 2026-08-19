@@ -772,9 +772,13 @@ v0.2.51
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.5.9" author="TouristKiller (based on pandabot ChordGun)" time="2026-08-19T14:06:58Z">
+      <version name="2.5.9" author="TouristKiller (based on pandabot ChordGun)" time="2026-08-19T14:27:13Z">
         <changelog><![CDATA[
         v2.5.9
+
+        [MIDI / Stuck Notes]
+        + Bug fix - notes could be left sounding with no note-off ever following, which a retrospective recording then stretches to the end of the item. stopNotesFromPlaying was driven by the list of the last chord played, so when a second chord started while a first was still sounding, any note that appeared only in the earlier chord was orphaned. It now releases everything that is actually sounding, which is what every caller already meant. Reported by Deodan.
+        + Bug fix - closing the ChordGun window while a chord was sounding left those notes hanging permanently, with no key or button able to rescue them. The window now kills all playing notes on the way out.
 
         [Menus / Discoverability]
         + The Dice right-click menu is back to what it says on the icon: randomize settings only (Progression Length, Always Start on Tonic, Use Selected Chord Types). It had turned into a drawer holding chord length, playback timing, and a Clear Progression entry that duplicated the CLEAR button already sitting below it.
