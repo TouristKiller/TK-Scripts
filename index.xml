@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.8.2" author="TouristKiller" time="2026-08-18T03:16:08Z">
+    <version name="0.8.3" author="TouristKiller" time="2026-08-19T12:44:58Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -144,6 +144,14 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.8.3
+            + Send Studio: The list view fits a send on one line. The name shared its row with nothing at all - it took a full line of its own and left the width beside it empty - so it now sits in a fixed column ahead of the M/S/L/D cluster. Fixed rather than sized to the text on purpose: a name measured to its own label started every row's buttons at a different place, and a list you read down wants a column
+            + Send Studio: Pan is a knob instead of a slider. At 110px it was the widest thing in the row by some way, and a round control says the same thing in a quarter of the space - which is what buys the fader its place on the first line. Drag, Shift+wheel and right-click to centre all work exactly as they did, and the pointer carries the destination track's colour
+            + Send Studio: When the fader is pushed onto a second line, the row rearranges rather than leaving a hole: the buttons move right against the edge the fader vacated, and the fader takes every pixel left over on the line it landed on. This needed the row to be measured before it is drawn - deciding a break while drawing is enough to wrap a row, but not to lay one out
+            + Send Studio: The volume slider carries the destination track's colour, so a send can be found by the colour of the bus it feeds. The trough is tinted and the grab stays a theme colour, because ImGui draws the dB readout on top of the grab. The readout picks its own colour against the shade that is really there, and the tint stops at the point where a bright, saturated track colour would leave no text in the palette clearing 4.5:1 against it
+            + Send Studio: Both volume steppers sit behind the fader and cannot be separated from it, in the send rows and on the track's own fader alike. They used to straddle it, one on each side, and wrap onto different lines
+            + Send Studio: Rows are spaced tighter than the theme's general spacing. Every gap in a row is paid for thirteen times across it and again for every send below it, so this is where the density is
+            + Send Studio: The Patchbay button moved onto the track fader row and gives up its word for "PB" when the panel gets narrow. The Sends heading took its place at the right of the toolbar, which saves the line it used to occupy above the list; Receives keeps a heading of its own, right-aligned to match, with the rule underneath it rather than stranded above
             v0.8.2
             + Idea Vault: An idea now fits itself to the project you load it into. A track template records no tempo of its own - not one TEMPO line, no stretch markers - so its items are plain seconds and REAPER has nothing to convert them from: a phrase captured at 120 landed in a project at 140 with its notes in the right place and its item boundaries in the wrong one. The sidecar is the one thing that knows what tempo it was played at, so positions, lengths and fades are scaled on the way in
             + Idea Vault: Audio comes along without being transposed. The item is scaled and the take's playrate is moved the other way, so length times rate is unchanged and exactly the same piece of audio is used - only faster or slower, with the take's preserve-pitch flag holding the note where it was. MIDI takes keep their rate, because their notes are ticks and already play at the project tempo; only their item boundaries need moving

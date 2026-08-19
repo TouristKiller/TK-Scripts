@@ -18,8 +18,6 @@ local defaults = {
   card_flow = "columns",      -- "columns" (fill height first) | "rows" (fill width first)
   link_enabled = false,
   pinned_guid = "",
-  show_sends = true,
-  show_receives = true,
   default_send_mode = 0,      -- 0 = Post, 1 = Pre-FX, 3 = Pre-Fader
   meter_smoothing = 0.35
 }
@@ -1704,14 +1702,43 @@ end
 -- List row drawing (compact)
 -- ---------------------------------------------------------------------------
 
-local function push_slider_theme(ctx)
-  -- Use the muted accent for the grab: ImGui draws the value text on top of the
-  -- grab, and accent_soft contrasts with the theme text colour in every preset,
-  -- so the readout stays legible even when the handle sits over it.
-  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x00000044)
+-- Mix two packed RGBA colours. Theme keeps its own blend private, and this only
+-- needs the opaque case: a tint laid over the dark trough.
+local function mix_rgb(first, second, amount)
+  local fr, fg, fb = (first >> 24) & 0xFF, (first >> 16) & 0xFF, (first >> 8) & 0xFF
+  local sr, sg, sb = (second >> 24) & 0xFF, (second >> 16) & 0xFF, (second >> 8) & 0xFF
+  local function lerp(a, b) return math.floor(a + (b - a) * amount + 0.5) & 0xFF end
+  return (lerp(fr, sr) << 24) | (lerp(fg, sg) << 16) | (lerp(fb, sb) << 8) | 0xFF
+end
+
+-- The grab stays a theme colour: ImGui draws the value text on top of it, and
+-- accent_soft contrasts with the theme text in every preset. A tint colours the
+-- trough instead, so a send carries its destination's colour without the
+-- readout landing on an arbitrary bus colour and disappearing into it.
+--
+-- The trough is mixed down to an opaque colour rather than laid on at low
+-- alpha, because the text colour is then chosen against the shade that is
+-- really there instead of against a guess at what the blend came out as.
+local function push_slider_theme(ctx, tint)
+  if not tint then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x00000044)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), Theme.colors.accent_soft)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), Theme.colors.accent_soft)
+    return 3
+  end
+  -- 0.42 is the ceiling: past it a bright, saturated track colour lifts the
+  -- trough far enough that no text in the theme palette still clears 4.5:1
+  -- against it, and the readout starts vanishing into the bus colour. Measured
+  -- across the brightest colours a track can carry, so hover and press stay
+  -- visible without crossing it.
+  local trough = mix_rgb(0x000000FF, tint, 0.34)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), trough)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), mix_rgb(0x000000FF, tint, 0.38))
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), mix_rgb(0x000000FF, tint, 0.42))
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), Theme.colors.accent_soft)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), Theme.colors.accent_soft)
-  return 3
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.text_for_background(trough, nil, nil, 4.5))
+  return 6
 end
 
 -- Shift+wheel fine-adjust for a native slider (call right after the slider,
@@ -1743,28 +1770,17 @@ local function draw_list_row(app, lane, settings)
   local enabled = lane.enabled == true
   r.ImGui_PushID(ctx, lane.id)
 
-  local gap = UIScale.round(8)
-  if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ItemSpacing then
-    local ok, sx = pcall(r.ImGui_GetStyleVar, ctx, r.ImGui_StyleVar_ItemSpacing())
-    if ok and sx then gap = sx end
-  end
+  -- Tighter than the theme's general ItemSpacing on purpose. These rows are
+  -- read down as a list, and every gap here is paid for thirteen times across
+  -- the row and again for every send below it.
+  local gap = UIScale.round(4)
   local avail = r.ImGui_GetContentRegionAvail(ctx)
   local swatch_w = UIScale.round(10)
 
-  -- Line 1: colour swatch + track name, filling the row width
-  local cx, cy = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local line_h = r.ImGui_GetFrameHeight(ctx)
-  r.ImGui_DrawList_AddRectFilled(draw_list, cx, cy + UIScale.round(3), cx + UIScale.round(4), cy + line_h - UIScale.round(3), lane.handle_color or Theme.colors.border, UIScale.px(2))
-  r.ImGui_Dummy(ctx, swatch_w, line_h)
-  r.ImGui_SameLine(ctx, 0, 0)
-  r.ImGui_AlignTextToFramePadding(ctx)
-  r.ImGui_TextColored(ctx, enabled and Theme.colors.text or Theme.colors.text_dim, ellipsize_text(ctx, lane.label, math.max(UIScale.round(40), avail - swatch_w - UIScale.round(6))))
-  if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, (lane.custom_label or "") ~= "" and (lane.label .. "  (" .. (lane.track_label or "") .. ")") or lane.label)
-  end
 
-  -- Control widths for the wrapping flow below (buttons fixed, sliders capped to the pane)
+  -- Control widths for the wrapping flow (buttons fixed, sliders capped to the pane)
   local mute_w = UIScale.text_button_w(ctx, "M", 30, 6)
   local toggle_w = UIScale.text_button_w(ctx, "S", 26, 6)
   local mode_w = UIScale.text_button_w(ctx, "Pre-Fader", 74, 6)
@@ -1772,8 +1788,54 @@ local function draw_list_row(app, lane, settings)
   local fx_w = UIScale.text_button_w(ctx, "FX", 30, 6)
   local more_w = UIScale.text_button_w(ctx, "...", 26, 6)
   local rm_w = UIScale.text_button_w(ctx, "x", 26, 6)
-  local vol_w = math.min(UIScale.round(150), avail)
-  local pan_w = math.min(UIScale.round(110), avail)
+  local step_w = UIScale.text_button_w(ctx, "-", 22, 6)
+  local vol_w = math.min(UIScale.round(100), math.max(UIScale.round(40), avail - (step_w + gap) * 2))
+  local pan_knob_w = UIScale.round(26)
+
+  -- The name shares a row with the M/S/L/D cluster when there is room, and drops
+  -- back to a line of its own when there is not. Only that cluster counts: the
+  -- fader and everything after it are free to wrap onto the next line, and
+  -- demanding room for them here is what used to push the name onto a line of
+  -- its own while half the row sat empty beside it.
+  --
+  -- The name gets what is left after the cluster, so the two can never compete:
+  -- name_room already has the buttons and their gaps subtracted.
+  --
+  -- This turns on width, never on the height it produces, so a name moving to
+  -- its own line cannot change the answer and set the row flickering.
+  -- A fixed column, not the width of the text. Sizing each name to its own
+  -- label lined every row up differently - one send's buttons here, the next
+  -- one's an inch further along - and a list you read down wants a column.
+  -- Every row in a frame gets the same width, so the M/S/L/D cluster starts at
+  -- the same x all the way down; a long name takes the ellipsis and keeps its
+  -- full text in the tooltip.
+  local name_fixed = UIScale.round(120)
+  local name_floor = UIScale.round(56)
+  local row_needs = swatch_w + mute_w + toggle_w * 3 + gap * 4
+  -- A few pixels of slack: without it the name eats the remainder exactly, the
+  -- row ends flush against the edge, and the last button in the cluster always
+  -- measures as "just doesn't fit".
+  local name_room = avail - row_needs - UIScale.round(4)
+  local inline_name = name_room >= name_floor
+  local name_w = inline_name and math.min(name_fixed, name_room) or 0
+
+  local function name_tooltip()
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, (lane.custom_label or "") ~= "" and (lane.label .. "  (" .. (lane.track_label or "") .. ")") or lane.label)
+    end
+  end
+
+  local function draw_name(width)
+    local nx, ny = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_DrawList_AddRectFilled(draw_list, nx, ny + UIScale.round(3), nx + UIScale.round(4), ny + line_h - UIScale.round(3), lane.handle_color or Theme.colors.border, UIScale.px(2))
+    local text_y = ny + math.max(0, (line_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5)
+    r.ImGui_DrawList_AddText(draw_list, nx + swatch_w, text_y, enabled and Theme.colors.text or Theme.colors.text_dim,
+      ellipsize_text(ctx, lane.label, math.max(UIScale.round(20), width - swatch_w)))
+    r.ImGui_Dummy(ctx, width, line_h)
+    name_tooltip()
+  end
+
+  if not inline_name then draw_name(math.max(UIScale.round(40), avail)) end
 
   local function toggle_button(label, active, action, tip, active_color)
     active_color = active_color or Theme.colors.accent
@@ -1788,6 +1850,9 @@ local function draw_list_row(app, lane, settings)
   end
 
   local items = {}
+  if inline_name then
+    items[#items + 1] = { w = swatch_w + name_w, is_name = true, draw = function(w) draw_name(w) end }
+  end
   items[#items + 1] = { w = mute_w, draw = function()
     if lane.muted then
       r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.warning)
@@ -1801,19 +1866,14 @@ local function draw_list_row(app, lane, settings)
   items[#items + 1] = { w = toggle_w, draw = function() toggle_button("S##solo", lane.solo_on or lane.audition_active or lane.audition_return_active, function() lane.toggle_solo(not ctrl_down(ctx)) end, (lane.category == -1 and "Solo receive" or "Solo send") .. ": isolate this routing (Ctrl-click to add)") end }
   items[#items + 1] = { w = toggle_w, draw = function() toggle_button("L##listen", lane.audition_active or lane.audition_return_active, function() if shift_key_down(ctx) then lane.toggle_audition_return() else lane.toggle_audition() end end, "Listen: solo original + return (Shift-click: return only)", lane.audition_return_active and Theme.colors.warning or Theme.colors.accent) end }
   items[#items + 1] = { w = toggle_w, draw = function() toggle_button("D##defeat", lane.solo_defeat, lane.toggle_defeat, "Solo defeat: keep this routing audible while another is soloed") end }
-  local step_w = UIScale.text_button_w(ctx, "-", 22, 6)
   local function nudge_volume(delta)
     local cur = linear_to_db(lane.value, settings.min_db)
     lane.write_volume(db_to_linear(clamp(cur + delta, settings.min_db, settings.max_db), settings.min_db, settings.max_db))
   end
-  items[#items + 1] = { w = step_w, draw = function()
-    if r.ImGui_Button(ctx, "-##voldn", step_w, 0) and enabled then nudge_volume(-1) end
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "-1 dB") end
-  end }
-  items[#items + 1] = { w = vol_w, draw = function()
+  items[#items + 1] = { w = vol_w, group_w = vol_w + (step_w + gap) * 2, is_fader = true, draw = function(w)
     local shown_db = linear_to_db(lane.value, settings.min_db)
-    r.ImGui_SetNextItemWidth(ctx, vol_w)
-    local sc = push_slider_theme(ctx)
+    r.ImGui_SetNextItemWidth(ctx, w)
+    local sc = push_slider_theme(ctx, enabled and lane.handle_color or nil)
     local changed, nd = r.ImGui_SliderDouble(ctx, "##vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
     r.ImGui_PopStyleColor(ctx, sc)
     local preview_db = (changed and type(nd) == "number") and nd or shown_db
@@ -1832,31 +1892,66 @@ local function draw_list_row(app, lane, settings)
     end
     if not applied and changed then lane.write_volume(db_to_linear(nd, settings.min_db, settings.max_db)) end
   end }
-  items[#items + 1] = { w = step_w, draw = function()
+  items[#items + 1] = { w = step_w, nobreak = true, draw = function()
+    if r.ImGui_Button(ctx, "-##voldn", step_w, 0) and enabled then nudge_volume(-1) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "-1 dB") end
+  end }
+  items[#items + 1] = { w = step_w, nobreak = true, draw = function()
     if r.ImGui_Button(ctx, "+##volup", step_w, 0) and enabled then nudge_volume(1) end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "+1 dB") end
   end }
-  items[#items + 1] = { w = pan_w, draw = function()
+  items[#items + 1] = { w = pan_knob_w, draw = function()
+    -- A knob rather than a 110px slider: pan was by far the widest thing in the
+    -- row, and the whole point of this layout is fitting a send on one line.
+    -- Same gestures as the sliders keep it - drag, Shift+wheel, right-click.
     local shown_pan = tonumber(lane.pan) or 0
-    r.ImGui_SetNextItemWidth(ctx, pan_w)
-    local sc = push_slider_theme(ctx)
-    local changed, np = r.ImGui_SliderDouble(ctx, "##pan", shown_pan, -1, 1, format_pan(lane.pan))
-    r.ImGui_PopStyleColor(ctx, sc)
-    local preview_pan = (changed and type(np) == "number") and np or shown_pan
-    local active_pan = (r.ImGui_IsItemActive and r.ImGui_IsItemActive(ctx)) or false
-    if r.ImGui_IsItemHovered(ctx) or active_pan or changed then
-      draw_slider_value_above(ctx, preview_pan, format_pan(preview_pan), -1, 1, Theme.colors.accent)
+    local kx, ky = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_InvisibleButton(ctx, "##pan", pan_knob_w, line_h)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    local mx = select(1, r.ImGui_GetMousePos(ctx))
+    local radius = math.min(pan_knob_w, line_h) * 0.5 - UIScale.px(2)
+    local ccx, ccy = kx + pan_knob_w * 0.5, ky + line_h * 0.5
+
+    local dragging = state.drag and state.drag.id == lane.id and state.drag.kind == "listpan"
+    if hovered and enabled and r.ImGui_IsMouseClicked(ctx, 0) then
+      state.drag = { id = lane.id, kind = "listpan", x = mx, start = shown_pan }
+      dragging = true
     end
-    local applied = false
-    if r.ImGui_IsItemHovered(ctx) then
-      if r.ImGui_IsMouseClicked(ctx, 1) then lane.write_pan(0); applied = true
+    if dragging then
+      if r.ImGui_IsMouseDown(ctx, 0) then
+        -- A full sweep takes about 120px of travel, so the knob is no twitchier
+        -- than the slider it replaces.
+        local next_pan = clamp(state.drag.start + (mx - state.drag.x) / UIScale.round(60), -1, 1)
+        if next_pan ~= shown_pan then lane.write_pan(next_pan) end
+        shown_pan = next_pan
+      else
+        state.drag = nil
+        dragging = false
+      end
+    end
+    if hovered and enabled then
+      if r.ImGui_IsMouseClicked(ctx, 1) then lane.write_pan(0); shown_pan = 0
       else
         local wp = slider_wheel_delta(ctx, shown_pan, 0.02, -1, 1)
-        if wp then lane.write_pan(wp); applied = true end
+        if wp then lane.write_pan(wp); shown_pan = wp end
       end
-      r.ImGui_SetTooltip(ctx, "Drag | Shift+wheel: fine | Right-click: center")
     end
-    if not applied and changed then lane.write_pan(np) end
+
+    local track_col = enabled and (lane.handle_color or Theme.colors.accent) or Theme.colors.border
+    r.ImGui_DrawList_AddCircleFilled(draw_list, ccx, ccy, radius, 0x00000044, 20)
+    r.ImGui_DrawList_AddCircle(draw_list, ccx, ccy, radius, (hovered or dragging) and track_col or Theme.colors.border, 20, UIScale.px(1.2))
+    -- Centre is straight up, hard left and right are three quarters round.
+    local angle = -math.pi * 0.5 + shown_pan * (math.pi * 0.75)
+    r.ImGui_DrawList_AddLine(draw_list, ccx, ccy, ccx + math.cos(angle) * radius * 0.82, ccy + math.sin(angle) * radius * 0.82,
+      enabled and track_col or Theme.colors.border, UIScale.px(1.8))
+    if math.abs(shown_pan) < 0.005 then
+      r.ImGui_DrawList_AddCircleFilled(draw_list, ccx, ccy, UIScale.px(1.6), Theme.colors.text_dim, 8)
+    end
+
+    if hovered or dragging then
+      draw_slider_value_above(ctx, shown_pan, format_pan(shown_pan), -1, 1, Theme.colors.accent)
+      r.ImGui_SetTooltip(ctx, "Pan: drag | Shift+wheel: fine | Right-click: center")
+    end
   end }
   items[#items + 1] = { w = mode_w, draw = function()
     if r.ImGui_Button(ctx, send_mode_label(lane.mode) .. "##mode", mode_w, 0) then lane.write_mode(next_send_mode(lane.mode)) end
@@ -1880,14 +1975,52 @@ local function draw_list_row(app, lane, settings)
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, lane.category == -1 and "Remove receive" or "Remove send") end
   end }
 
-  -- Flow the controls and wrap to the next line when the next one won't fit.
-  local start_x = r.ImGui_GetCursorScreenPos(ctx)
-  local visible_x2 = start_x + r.ImGui_GetContentRegionAvail(ctx)
+  -- Measure first, then draw. Deciding the break while drawing is enough to wrap
+  -- a row, but not to lay one out: to push the buttons right and stretch the
+  -- fader you have to know what ends up on which line before the first item is
+  -- committed. The widths are all declared, so the pass costs nothing.
+  --
+  -- nobreak keeps a group together once it has started; group_w makes the
+  -- decision to start it in the first place account for the whole group, so the
+  -- fader never lands on a line its steppers cannot follow it onto.
+  local flow_avail = r.ImGui_GetContentRegionAvail(ctx)
+  local lines, first, width = {}, 1, 0
   for i, item in ipairs(items) do
-    item.draw()
-    if i < #items then
-      local last_x2 = select(1, r.ImGui_GetItemRectMax(ctx))
-      if last_x2 + gap + items[i + 1].w < visible_x2 then r.ImGui_SameLine(ctx, 0, gap) end
+    width = (i == first) and item.w or (width + gap + item.w)
+    local nxt = items[i + 1]
+    local brk = true
+    if nxt then
+      brk = (not nxt.nobreak) and (width + gap + (nxt.group_w or nxt.w) > flow_avail)
+    end
+    if brk then
+      lines[#lines + 1] = { first = first, last = i, width = width }
+      first, width = i + 1, 0
+    end
+  end
+
+  local fader_line
+  for li, ln in ipairs(lines) do
+    for i = ln.first, ln.last do
+      if items[i].is_fader then fader_line = li end
+    end
+  end
+
+  -- Only once the fader has been pushed off the first line is there a hole
+  -- worth closing: the buttons go right, against the edge the fader vacated,
+  -- and the fader takes every pixel left over on the line it landed on.
+  local rearrange = fader_line ~= nil and fader_line > 1
+
+  for li, ln in ipairs(lines) do
+    local slack = math.max(0, flow_avail - ln.width)
+    for i = ln.first, ln.last do
+      local item = items[i]
+      local w = item.w
+      if rearrange and li == fader_line and item.is_fader then w = w + slack end
+      item.draw(w)
+      if i < ln.last then
+        local extra = (rearrange and li == 1 and item.is_name) and slack or 0
+        r.ImGui_SameLine(ctx, 0, gap + extra)
+      end
     end
   end
   draw_channel_popup(app, lane, "##send_studio_chan")
@@ -1955,14 +2088,25 @@ local function draw_section_list(app, settings, rows)
   end
 end
 
-local function draw_section(app, settings, title, rows, add_mode, column_height)
+local function draw_section(app, settings, title, rows, add_mode, column_height, with_header)
   local ctx = app.ctx
-  r.ImGui_TextColored(ctx, Theme.colors.accent, title)
-  r.ImGui_SameLine(ctx)
-  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "(" .. tostring(#rows) .. ")")
-  r.ImGui_SameLine(ctx)
-  if r.ImGui_SmallButton(ctx, "+ Add##add_" .. add_mode) then open_picker(add_mode) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, add_mode == "receive" and "Add a receive from another track" or "Add a send to another track") end
+  if with_header ~= false then
+    -- Laid out like the Sends heading in the toolbar - right-aligned, same
+    -- label, same spacing - so the two read as one pair. The rule goes under
+    -- the heading rather than above it: the last row of the section before
+    -- this one already draws a line, and a second one above the heading left
+    -- it stranded in a band of empty space between two rules.
+    local label = title .. " (" .. tostring(#rows) .. ")"
+    local pad = UIScale.round(6)
+    local block_w = calc_text_width(ctx, label) + pad + calc_text_width(ctx, "+ Add") + UIScale.round(14)
+    local avail_x = r.ImGui_GetContentRegionAvail(ctx)
+    if avail_x > block_w then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (avail_x - block_w)) end
+    r.ImGui_TextColored(ctx, Theme.colors.accent, label)
+    r.ImGui_SameLine(ctx, 0, pad)
+    if r.ImGui_SmallButton(ctx, "+ Add##add_" .. add_mode) then open_picker(add_mode) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, add_mode == "receive" and "Add a receive from another track" or "Add a send to another track") end
+    r.ImGui_Separator(ctx)
+  end
   if #rows == 0 then
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, add_mode == "receive" and "No receives on this track." or "No sends on this track.")
   elseif settings.view_mode == "list" then
@@ -1970,7 +2114,6 @@ local function draw_section(app, settings, title, rows, add_mode, column_height)
   else
     draw_section_strips(app, settings, rows, column_height)
   end
-  r.ImGui_Dummy(ctx, 1, UIScale.round(6))
 end
 
 -- ---------------------------------------------------------------------------
@@ -2115,7 +2258,7 @@ local function launch_patchbay()
   return false
 end
 
-local function draw_toolbar(app, settings, target, sources, pinned)
+local function draw_toolbar(app, settings, target, sources, pinned, send_count)
   local ctx = app.ctx
   local has_target = valid_track(target)
   local clip_count = state.clipboard and #state.clipboard or 0
@@ -2171,18 +2314,21 @@ local function draw_toolbar(app, settings, target, sources, pinned)
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Clear active solo/listen and restore the previous state") end
   end
 
-  -- Patchbay launcher, right-aligned
-  local installed = patchbay_installed()
-  local patch_w = calc_text_width(ctx, "Patchbay") + UIScale.round(14)
-  r.ImGui_SameLine(ctx)
-  local avail_x = r.ImGui_GetContentRegionAvail(ctx)
-  if avail_x > patch_w then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (avail_x - patch_w)) end
-  if not installed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.text_dim) end
-  if r.ImGui_SmallButton(ctx, "Patchbay##send_studio_patchbay") then
-    if installed then launch_patchbay() else app.status = "TK Patchbay Standalone is not installed" end
+  -- The Sends heading lives here, right-aligned, instead of costing a line of
+  -- its own above the list. Receives keeps its own bar, so each "+ Add" still
+  -- sits directly above the list it adds to.
+  if send_count then
+    local label = "Sends (" .. tostring(send_count) .. ")"
+    local pad = UIScale.round(6)
+    local block_w = calc_text_width(ctx, label) + pad + calc_text_width(ctx, "+ Add") + UIScale.round(14)
+    r.ImGui_SameLine(ctx)
+    local avail_x = r.ImGui_GetContentRegionAvail(ctx)
+    if avail_x > block_w then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + (avail_x - block_w)) end
+    r.ImGui_TextColored(ctx, Theme.colors.accent, label)
+    r.ImGui_SameLine(ctx, 0, pad)
+    if r.ImGui_SmallButton(ctx, "+ Add##add_send") then open_picker("send") end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add a send to another track") end
   end
-  if not installed then r.ImGui_PopStyleColor(ctx, 1) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, installed and "Open TK Patchbay (standalone)" or "TK Patchbay Standalone is not installed") end
 
   r.ImGui_Separator(ctx)
 end
@@ -2226,13 +2372,20 @@ local function draw_track_fader(app, settings, target)
   r.ImGui_SameLine(ctx)
 
   local step_w = UIScale.text_button_w(ctx, "-", 22, 6)
-  if r.ImGui_Button(ctx, "-##track_dn", step_w, 0) then nudge(-1) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "-1 dB") end
-  r.ImGui_SameLine(ctx)
 
+  -- Both steppers sit behind the fader, the same way a send row has them, and
+  -- the Patchbay launcher closes the row off. It gives up its word when the
+  -- panel gets narrow: two letters plus a tooltip beat a button pushed off the
+  -- edge, and the fader is what the room is really for.
   local avail = r.ImGui_GetContentRegionAvail(ctx)
-  -- Reserve only one gap so the "+" ends flush right, right under the Pin icon.
-  local slider_w = math.max(UIScale.round(70), avail - step_w - gap)
+  local patch_full = calc_text_width(ctx, "Patchbay") + UIScale.round(14)
+  local patch_short = calc_text_width(ctx, "PB") + UIScale.round(14)
+  local patch_label = "Patchbay"
+  local patch_w = patch_full
+  if avail - (step_w * 2 + patch_full + gap * 3) < UIScale.round(120) then
+    patch_label, patch_w = "PB", patch_short
+  end
+  local slider_w = math.max(UIScale.round(70), avail - step_w * 2 - patch_w - gap * 3)
   r.ImGui_SetNextItemWidth(ctx, slider_w)
   local sc = push_slider_theme(ctx)
   local changed, nd = r.ImGui_SliderDouble(ctx, "##track_vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
@@ -2248,8 +2401,19 @@ local function draw_track_fader(app, settings, target)
   end
   if not applied and changed then write_track_own_volume(target, db_to_linear(nd, settings.min_db, settings.max_db)) end
   r.ImGui_SameLine(ctx)
+  if r.ImGui_Button(ctx, "-##track_dn", step_w, 0) then nudge(-1) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "-1 dB") end
+  r.ImGui_SameLine(ctx)
   if r.ImGui_Button(ctx, "+##track_up", step_w, 0) then nudge(1) end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "+1 dB") end
+  r.ImGui_SameLine(ctx)
+  local installed = patchbay_installed()
+  if not installed then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), Theme.colors.text_dim) end
+  if r.ImGui_Button(ctx, patch_label .. "##send_studio_patchbay", patch_w, 0) then
+    if installed then launch_patchbay() else app.status = "TK Patchbay Standalone is not installed" end
+  end
+  if not installed then r.ImGui_PopStyleColor(ctx, 1) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, installed and "Open TK Patchbay (standalone)" or "TK Patchbay Standalone is not installed") end
   r.ImGui_Separator(ctx)
 end
 
@@ -2340,7 +2504,14 @@ function M.draw(app)
 
   draw_header(app, settings, target, pinned, #sources)
   draw_track_fader(app, settings, target)
-  draw_toolbar(app, settings, target, sources, pinned)
+  -- Built before the toolbar because the Sends heading now lives up there and
+  -- needs the count.
+  local sends, receives
+  if valid_track(target) then
+    sends = build_rows(app, target, 0, settings, pinned, sources)
+    receives = build_rows(app, target, -1, settings, pinned, sources)
+  end
+  draw_toolbar(app, settings, target, sources, pinned, sends and #sends or nil)
   r.ImGui_Dummy(ctx, 1, UIScale.round(4))
 
   local footer_h = r.ImGui_GetFrameHeight(ctx) + UIScale.round(22)
@@ -2350,12 +2521,8 @@ function M.draw(app)
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Tip: use Pin to keep a track in view while selecting others.")
     else
       local _, body_h = r.ImGui_GetContentRegionAvail(ctx)
-      local sends = build_rows(app, target, 0, settings, pinned, sources)
-      local receives = build_rows(app, target, -1, settings, pinned, sources)
-      draw_section(app, settings, "Sends", sends, "send", body_h)
-      r.ImGui_Separator(ctx)
-      r.ImGui_Dummy(ctx, 1, UIScale.round(4))
-      draw_section(app, settings, "Receives", receives, "receive", body_h)
+      draw_section(app, settings, "Sends", sends, "send", body_h, false)
+      draw_section(app, settings, "Receives", receives, "receive", body_h, true)
     end
     r.ImGui_EndChild(ctx)
   end
