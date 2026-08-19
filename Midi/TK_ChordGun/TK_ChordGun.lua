@@ -5,37 +5,28 @@
 --[[
 2.5.9
 
-[MIDI Trigger]
-+ Bug fix - the "Assign MIDI Trigger" overlay sent you to the top bar to switch the connector icon on. That icon is not in the top bar: it sits in the small column at the right of the chord display, between the dice and the pin. The overlay now says where it actually is. Reported by Deodan.
-+ The amber highlight on that warning was pinned to hardcoded line numbers, so any change to the wording above it would have mis-coloured the box. It now follows the lines it belongs to.
-
-[MIDI / Stuck Notes]
-+ Bug fix - notes could be left sounding with no note-off ever following, which a retrospective recording then stretches to the end of the item. stopNotesFromPlaying was driven by the list of the last chord played, so when a second chord started while a first was still sounding, any note that appeared only in the earlier chord was orphaned. It now releases everything that is actually sounding, which is what every caller already meant: previewing a chord, stopping progression playback, and releasing a MIDI trigger all stop first and then play what should still be held. Reported by Deodan.
-+ Bug fix - closing the ChordGun window while a chord was sounding left those notes hanging permanently. Nothing released them afterwards, so no key or button could still rescue them. The window now kills all playing notes on the way out.
-
-[Menus / Discoverability]
-+ The Dice right-click menu is back to what it says on the icon: randomize settings only (Progression Length, Always Start on Tonic, Use Selected Chord Types). It had turned into a drawer holding chord length, playback timing, and a Clear Progression entry that duplicated the CLEAR button already sitting below it -- none of which anyone would think to look for under a dice.
-+ "Tight Timing (JSFX Engine)" moved to the PLAY button's right-click, next to Sync Play, since both answer the same question: how playback behaves. PLAY's right-click is now a small menu instead of a direct Sync Play toggle.
-+ PLAY now shows the playback mode in its colour: blue for Sync Play, green for Tight Timing, teal for both, and orange when Tight Timing is switched on but the engine is not actually running (no track selected, FX bypassed or missing). That last case used to be silent.
-+ "Default For New Chords" and "Apply Default Length To All Slots" moved to a right-click on the beats column of the [+] slot panel, where the per-slot beats value already is. Added "Use This Slot's Length As Default" there as well.
-+ Tooltips now name what a right-click menu contains instead of saying "Settings", and the [+] panel has its own tooltip.
-
-2.5.8
-
 [Progression / Timing]
-+ New "Tight Timing (JSFX Engine)" option (Right-Click the PLAY button). Progression playback moves out of the defer loop and into a JSFX that emits the notes from the audio thread on the exact sample. The old path decided when a chord started with roughly 33 ms of slack and then sent it through StuffMIDIMessage, which waits for the next audio block on top of that -- at 120 BPM that is over 6% of a beat, which is what made the progression feel loose against the grid.
-+ Strum and arpeggio no longer stall REAPER. They used to busy-wait on the main thread between notes (five notes at 80 ms froze the UI for 320 ms, which threw off the timing of the following chord as well). They are now onsets the engine schedules against, so they cost nothing and land exactly.
-+ Playback no longer needs a record-armed track. The engine goes at the top of the normal track FX chain rather than the Input FX chain, so it keeps running whether or not the track is armed.
++ New "Tight Timing" option (Right-Click the PLAY button): progression playback moves out of the defer loop into a JSFX that emits the notes from the audio thread, on the exact sample. The old path picked the start of a chord with roughly 33 ms of slack and then went through StuffMIDIMessage, which waits for the next audio block on top of that - at 120 BPM that is over 6% of a beat, which is what made the progression feel loose against the grid.
++ Strum and arpeggio no longer stall REAPER. They used to busy-wait on the main thread between notes (five notes at 80 ms froze the UI for 320 ms, which threw the timing of the following chord off as well). They are now onsets the engine schedules against, so they cost nothing and land exactly.
++ Playback no longer needs a record-armed track: the engine sits at the top of the normal track FX chain instead of the Input FX chain. Notes played this way are heard but not recorded - use INSERT to write the progression into an item.
 + Starting mid-bar or scrubbing the transport now lands on the chord that belongs at that position instead of restarting the progression.
-+ The engine is written into REAPER/Effects on demand and version-locked to the script, so the gmem layout it reads can never lag behind the layout the script writes.
-+ Turning the option off, or having no track selected, falls back to the previous timing rather than going silent.
-
-2.5.7
++ PLAY shows the playback mode in its colour: blue for Sync Play, green for Tight Timing, teal for both, and orange when Tight Timing is on but the engine is not actually running (no track selected, FX bypassed or missing).
++ The engine is written into REAPER/Effects on demand and version-locked to the script, so it can never lag behind the data the script writes. With the option off, or no track selected, playback falls back to the previous timing rather than going silent.
 
 [Progression / Chord Length]
-+ New default chord length setting (Right-Click the beats column of the [+] slot panel): choose 0.5 / 1 / 2 / 4 / 8 beats and every chord added to an empty progression slot from then on gets that length. Previously new chords were always 1 beat, so working in bars meant stepping the beats value up in every single slot by hand. The setting is stored globally, so it survives project and script restarts.
-+ Added "Apply Default Length To All Slots" alongside it, which sets every filled slot in the current progression to the default length in one go. Requested by a user who wanted whole-bar or two-bar chords without editing each slot.
-+ Chord map templates now also use the default chord length instead of a hardcoded 1 beat. Saved presets keep the lengths stored in the file.
++ New default length for new chords (Right-Click the beats column of the [+] slot panel): 0.5 / 1 / 2 / 4 / 8 beats. Previously every new chord was one beat, so working in bars meant stepping the value up in every single slot by hand. The setting is stored globally, so it survives project and script restarts. Requested by a user who wanted whole-bar or two-bar chords.
++ Same menu: "Use This Slot's Length As Default" and "Apply Default Length To All Slots".
++ Chord map templates use the default length as well. Saved presets keep the lengths stored in the file.
+
+[MIDI / Stuck Notes]
++ Bug fix - notes could be left sounding with no note-off ever following, which a retrospective recording then stretches to the end of the item. stopNotesFromPlaying was driven by the list of the last chord played, so a second chord starting while a first was still sounding orphaned any note that appeared only in the earlier one. It now releases everything that is actually sounding. Reachable through overlapping MIDI triggers and through Hold Mode. Reported by Deodan.
++ Bug fix - closing the ChordGun window while a chord was sounding left those notes hanging permanently, with no key or button able to rescue them. The window now kills all playing notes on the way out.
+
+[MIDI Trigger]
++ Bug fix - the "Assign MIDI Trigger" overlay sent you to the top bar to switch the connector icon on. That icon is not in the top bar: it sits in the small column at the right of the chord display, between the dice and the pin. The overlay now says where it actually is. Reported by Deodan.
+
+[Menus]
++ The Dice right-click menu holds randomize settings only (Progression Length, Always Start on Tonic, Use Selected Chord Types). Playback settings live on PLAY, chord length on the [+] panel. Tooltips now name what a menu contains instead of saying "Settings".
 
 2.5.6
 
