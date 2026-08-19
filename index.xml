@@ -772,9 +772,13 @@ v0.2.51
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.5.9" author="TouristKiller (based on pandabot ChordGun)" time="2026-08-19T14:27:13Z">
+      <version name="2.5.9" author="TouristKiller (based on pandabot ChordGun)" time="2026-08-19T14:35:16Z">
         <changelog><![CDATA[
         v2.5.9
+
+        [MIDI Trigger]
+        + Bug fix - the "Assign MIDI Trigger" overlay sent you to the top bar to switch the connector icon on. That icon is not in the top bar: it sits in the small column at the right of the chord display, between the dice and the pin. The overlay now says where it actually is. Reported by Deodan.
+        + The amber highlight on that warning was pinned to hardcoded line numbers, so any change to the wording above it would have mis-coloured the box.
 
         [MIDI / Stuck Notes]
         + Bug fix - notes could be left sounding with no note-off ever following, which a retrospective recording then stretches to the end of the item. stopNotesFromPlaying was driven by the list of the last chord played, so when a second chord started while a first was still sounding, any note that appeared only in the earlier chord was orphaned. It now releases everything that is actually sounding, which is what every caller already meant. Reported by Deodan.

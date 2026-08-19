@@ -5,6 +5,10 @@
 --[[
 2.5.9
 
+[MIDI Trigger]
++ Bug fix - the "Assign MIDI Trigger" overlay sent you to the top bar to switch the connector icon on. That icon is not in the top bar: it sits in the small column at the right of the chord display, between the dice and the pin. The overlay now says where it actually is. Reported by Deodan.
++ The amber highlight on that warning was pinned to hardcoded line numbers, so any change to the wording above it would have mis-coloured the box. It now follows the lines it belongs to.
+
 [MIDI / Stuck Notes]
 + Bug fix - notes could be left sounding with no note-off ever following, which a retrospective recording then stretches to the end of the item. stopNotesFromPlaying was driven by the list of the last chord played, so when a second chord started while a first was still sounding, any note that appeared only in the earlier chord was orphaned. It now releases everything that is actually sounding, which is what every caller already meant: previewing a chord, stopping progression playback, and releasing a MIDI trigger all stop first and then play what should still be held. Reported by Deodan.
 + Bug fix - closing the ChordGun window while a chord was sounding left those notes hanging permanently. Nothing released them afterwards, so no key or button could still rescue them. The window now kills all playing notes on the way out.
@@ -615,6 +619,7 @@ function renderMidiLearnOverlay()
 	end
 
 	local lines = {}
+	local warningFirstLine, warningLastLine
 	if listening then
 		local target = midiTriggerLearnTarget
 		lines[#lines + 1] = "Listening for MIDI note..."
@@ -626,8 +631,13 @@ function renderMidiLearnOverlay()
 		lines[#lines + 1] = "Press any key on your MIDI device."
 		if not midiTriggerEnabled then
 			lines[#lines + 1] = ""
+			warningFirstLine = #lines + 1
 			lines[#lines + 1] = "MIDI Trigger is currently OFF."
-			lines[#lines + 1] = "Enable the connector icon (top bar) so triggers fire."
+			-- The icon is not in the top bar; it sits in the small column at the
+			-- right of the chord display, between the dice and the pin.
+			lines[#lines + 1] = "Enable the connector icon to make triggers fire."
+			lines[#lines + 1] = "It is right of the chord display, under the dice."
+			warningLastLine = #lines
 		end
 		lines[#lines + 1] = ""
 		lines[#lines + 1] = "(Press Esc or click to cancel)"
@@ -665,7 +675,9 @@ function renderMidiLearnOverlay()
 	for i = 1, #lines do
 		if lines[i] ~= "" then
 			if listening then
-				if i >= 5 and not midiTriggerEnabled and i <= 6 then
+				-- Was hardcoded to lines 5 and 6, which silently mis-colours the
+				-- moment the wording above it gains or loses a line.
+				if warningFirstLine and i >= warningFirstLine and i <= warningLastLine then
 					gfx.set(1, 0.75, 0.3, 1)
 				else
 					gfx.set(0.95, 0.95, 0.95, 1)
