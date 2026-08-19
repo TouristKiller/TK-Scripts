@@ -1,8 +1,12 @@
-﻿-- @description TK FX BROWSER
+-- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.17
+-- @version 3.2.18
 -- @changelog:
 --[[
+    v3.2.18:
+        + Track templates: a template with a preview beside it can be auditioned without loading it. TK Idea Vault renders one when it saves a template, and any audio file sharing a template's name counts - so a preview put there by hand works the same way. Right-click a template in the list, or click the play badge on its thumbnail.
+        + Track templates: the preview plays at the project's tempo rather than at whatever it was recorded at, without transposing it. The tempo it was played at comes from the .tkidea file Idea Vault leaves beside the template; without one the preview simply plays at its own speed.
+        + Track templates: thumbnails carrying a preview are marked with a play badge, so it is visible which ones have something to hear instead of having to right-click each to find out. The badge turns into a pause symbol while it sounds, and clicking it plays rather than loading the template.
     v3.2.17:
         + Visibility settings: added a separate option to show or hide the scrollbar in the Browser/INFO panel; the screenshot scrollbar remains independently configurable.
     v3.2.16:
@@ -11701,6 +11705,91 @@ function GetProjectPreviewPath(project_path)
     return nil
 end
 
+-- ---------------------------------------------------------------------------
+-- Track template previews
+--
+-- TK Idea Vault writes a rendered preview next to the template it belongs to,
+-- sharing its basename. Any audio file sitting beside a template that way is
+-- treated as its preview, so a preview dropped there by hand works just as
+-- well. When Idea Vault's .tkidea sidecar is there too it also says what tempo
+-- the performance was played at, and the preview is then pitched into the
+-- project's tempo instead of playing back at whatever it happened to be
+-- recorded at.
+-- ---------------------------------------------------------------------------
+
+TRACK_TEMPLATE_PREVIEW_EXT = {
+    wav = true, wave = true, mp3 = true, flac = true, ogg = true,
+    opus = true, m4a = true, aif = true, aiff = true, wv = true
+}
+track_template_preview_path = nil
+
+function GetTrackTemplatePreviewPath(template_full_path)
+    if not template_full_path or template_full_path == "" then return nil end
+    local dir = template_full_path:match([==[(.*[/\])]==])
+    local base = template_full_path:match([==[([^/\]+)%.RTrackTemplate$]==])
+    if not dir or not base then return nil end
+    local i = 0
+    r.EnumerateFiles(dir, -1)
+    repeat
+        local f = r.EnumerateFiles(dir, i)
+        if f then
+            local stem, ext = f:match("^(.*)%.([^%.]+)$")
+            if stem == base and ext and TRACK_TEMPLATE_PREVIEW_EXT[ext:lower()] then
+                return dir .. f
+            end
+        end
+        i = i + 1
+    until not f
+    return nil
+end
+
+function GetTrackTemplatePreviewRate(template_full_path)
+    local sidecar = template_full_path and template_full_path:gsub("%.RTrackTemplate$", ".tkidea")
+    if not sidecar or not r.file_exists(sidecar) then return 1.0 end
+    local file = io.open(sidecar, "rb")
+    if not file then return 1.0 end
+    local body = file:read("*a")
+    file:close()
+    local ok, decoded = pcall(json.decode, body)
+    if not ok or type(decoded) ~= "table" then return 1.0 end
+    local recorded = tonumber(decoded.bpm)
+    local project = r.Master_GetTempo and r.Master_GetTempo() or nil
+    if not recorded or recorded <= 0 or not project or project <= 0 then return 1.0 end
+    return project / recorded
+end
+
+function IsTrackTemplatePreviewPlaying(template_full_path)
+    return track_template_preview_path ~= nil and track_template_preview_path == template_full_path
+end
+
+function ToggleTrackTemplatePreview(template_full_path)
+    if IsTrackTemplatePreviewPlaying(template_full_path) then
+        ReleaseCurrentPreview()
+        return
+    end
+    local preview_path = GetTrackTemplatePreviewPath(template_full_path)
+    if not preview_path then return end
+    if not r.CF_CreatePreview or not r.CF_Preview_Play then return end
+    ReleaseCurrentPreview()
+    local source = r.PCM_Source_CreateFromFile(preview_path)
+    if not source then return end
+    local preview = r.CF_CreatePreview(source)
+    if not preview then
+        if r.PCM_Source_Destroy then r.PCM_Source_Destroy(source) end
+        return
+    end
+    if r.CF_Preview_SetValue then
+        r.CF_Preview_SetValue(preview, "D_VOLUME", preview_volume or 1.0)
+        -- D_PLAYRATE keeps the pitch where it is, so an idea recorded at another
+        -- tempo lands in this project's grid without being transposed.
+        r.CF_Preview_SetValue(preview, "D_PLAYRATE", GetTrackTemplatePreviewRate(template_full_path))
+    end
+    r.CF_Preview_Play(preview)
+    current_preview = preview
+    current_source = source
+    track_template_preview_path = template_full_path
+end
+
 function ReleaseCurrentPreview()
     if current_preview and r.CF_Preview_Stop then
         pcall(r.CF_Preview_Stop, current_preview)
@@ -11710,6 +11799,7 @@ function ReleaseCurrentPreview()
     end
     current_preview = nil
     current_source = nil
+    track_template_preview_path = nil
     collectgarbage("collect")
 end
 
@@ -16084,6 +16174,13 @@ function DrawTrackTemplates(tbl, path)
             end
             
             if r.ImGui_BeginPopup(ctx, "TrackTemplateOptions_" .. i) then
+                local tt_full = ResolveTrackTemplatesRoot() .. path .. os_separator .. tbl[i] .. extension
+                if GetTrackTemplatePreviewPath(tt_full) then
+                    if r.ImGui_MenuItem(ctx, IsTrackTemplatePreviewPlaying(tt_full) and "Stop preview" or "Play preview") then
+                        ToggleTrackTemplatePreview(tt_full)
+                    end
+                    r.ImGui_Separator(ctx)
+                end
                 if r.ImGui_MenuItem(ctx, "Rename") then
                     local retval, new_name = r.GetUserInputs("Rename Track Template", 1, "New name:", tbl[i])
                     if retval then
@@ -21597,14 +21694,58 @@ function RenderTrackTemplatesSection(popped_view_stylevars)
                     if DrawTrackTemplatePlaceholderButton("tt_placeholder_" .. i, cell_w, cell_h, item.name) then cell_clicked = true end
                 end
 
+                -- A badge on the corner, because a preview you cannot see is a
+                -- preview nobody right-clicks to look for. Filled while it sounds.
+                --
+                -- The badge is drawn over the tile rather than being a widget of
+                -- its own, so it cannot swallow the click by itself: anyone
+                -- aiming at the triangle would have loaded the template instead.
+                -- The tile's own click is therefore reinterpreted - landing
+                -- inside the badge plays, anywhere else loads.
+                local badge_full = GetTrackTemplateFullPath(item)
+                local badge_hit = false
+                if GetTrackTemplatePreviewPath(badge_full) then
+                    local bx, by = r.ImGui_GetItemRectMin(ctx)
+                    local dl = r.ImGui_GetWindowDrawList(ctx)
+                    local playing = IsTrackTemplatePreviewPlaying(badge_full)
+                    local mx, my = r.ImGui_GetMousePos(ctx)
+                    local hovered = r.ImGui_IsItemHovered(ctx)
+                    badge_hit = hovered and ((mx - (bx + 12)) ^ 2 + (my - (by + 12)) ^ 2) <= 100
+                    local disc = playing and 0x7AA2F7FF or (badge_hit and 0x000000EE or 0x000000AA)
+                    r.ImGui_DrawList_AddCircleFilled(dl, bx + 12, by + 12, 8, disc, 16)
+                    if badge_hit or playing then
+                        r.ImGui_DrawList_AddCircle(dl, bx + 12, by + 12, 8, 0x7AA2F7FF, 16, 1.5)
+                    end
+                    if playing then
+                        r.ImGui_DrawList_AddRectFilled(dl, bx + 8, by + 8, bx + 10, by + 16, 0x111111FF)
+                        r.ImGui_DrawList_AddRectFilled(dl, bx + 13, by + 8, bx + 15, by + 16, 0x111111FF)
+                    else
+                        r.ImGui_DrawList_AddTriangleFilled(dl, bx + 9, by + 7, bx + 9, by + 17, bx + 17, by + 12, 0xFFFFFFDD)
+                    end
+                    if badge_hit then
+                        r.ImGui_SetTooltip(ctx, playing and "Stop preview" or "Play preview")
+                    end
+                end
+
                 if cell_clicked then
-                    LoadTemplate(item.template_path)
+                    if badge_hit then
+                        ToggleTrackTemplatePreview(badge_full)
+                    else
+                        LoadTemplate(item.template_path)
+                    end
                 end
 
                 if r.ImGui_IsItemClicked(ctx, 1) then
                     r.ImGui_OpenPopup(ctx, "TrackTemplateGridOptions_" .. i)
                 end
                 if r.ImGui_BeginPopup(ctx, "TrackTemplateGridOptions_" .. i) then
+                    local tt_full = GetTrackTemplateFullPath(item)
+                    if GetTrackTemplatePreviewPath(tt_full) then
+                        if r.ImGui_MenuItem(ctx, IsTrackTemplatePreviewPlaying(tt_full) and "Stop preview" or "Play preview") then
+                            ToggleTrackTemplatePreview(tt_full)
+                        end
+                        r.ImGui_Separator(ctx)
+                    end
                     if r.ImGui_MenuItem(ctx, "Rename") then
                         RenameTrackTemplateGridItem(item)
                     end
