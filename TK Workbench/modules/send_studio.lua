@@ -1876,11 +1876,8 @@ local function draw_list_row(app, lane, settings)
     local sc = push_slider_theme(ctx, enabled and lane.handle_color or nil)
     local changed, nd = r.ImGui_SliderDouble(ctx, "##vol", shown_db, settings.min_db, settings.max_db, "%.1f dB")
     r.ImGui_PopStyleColor(ctx, sc)
-    local preview_db = (changed and type(nd) == "number") and nd or shown_db
-    local active_db = (r.ImGui_IsItemActive and r.ImGui_IsItemActive(ctx)) or false
-    if r.ImGui_IsItemHovered(ctx) or active_db or changed then
-      draw_slider_value_above(ctx, preview_db, string.format("%.1f dB", preview_db), settings.min_db, settings.max_db, Theme.colors.accent)
-    end
+    -- No value bubble here: the slider already prints the dB inside itself, and
+    -- push_slider_theme keeps that readout at 4.5:1 over any track tint.
     local applied = false
     if r.ImGui_IsItemHovered(ctx) then
       if r.ImGui_IsMouseClicked(ctx, 1) then lane.write_volume(1); applied = true

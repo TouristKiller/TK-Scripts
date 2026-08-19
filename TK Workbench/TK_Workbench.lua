@@ -1,7 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.8.3
+-- @version 0.8.4
 -- @changelog:
+-- v0.8.4
+--   + Send Studio: The dB bubble above the volume slider in the list view is gone. The slider prints its own value inside itself and always has, so the bubble was the same number twice over. It was added when a tinted trough could swallow that readout, and the tint is now handled where it belongs - the trough picks a text colour that clears 4.5:1 against the shade it really is - which leaves the bubble with nothing to do. It also appeared on hover rather than only while dragging, and drew above its own row, over the send listed before it. The pan knob keeps its bubble: a knob has nowhere to print a value
 -- v0.8.3
 --   + Send Studio: The list view fits a send on one line. The name shared its row with nothing at all - it took a full line of its own and left the width beside it empty - so it now sits in a fixed column ahead of the M/S/L/D cluster. Fixed rather than sized to the text on purpose: a name measured to its own label started every row's buttons at a different place, and a list you read down wants a column
 --   + Send Studio: Pan is a knob instead of a slider. At 110px it was the widest thing in the row by some way, and a round control says the same thing in a quarter of the space - which is what buys the fader its place on the first line. Drag, Shift+wheel and right-click to centre all work exactly as they did, and the pointer carries the destination track's colour
