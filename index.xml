@@ -772,8 +772,34 @@ v0.2.51
 
 
     <reapack name="TK_ChordGun.lua" type="script" desc="TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition">
-      <version name="2.5.6" author="TouristKiller (based on pandabot ChordGun)" time="2026-06-11T19:15:00Z">
+      <version name="2.5.9" author="TouristKiller (based on pandabot ChordGun)" time="2026-08-19T14:06:58Z">
         <changelog><![CDATA[
+        v2.5.9
+
+        [Menus / Discoverability]
+        + The Dice right-click menu is back to what it says on the icon: randomize settings only (Progression Length, Always Start on Tonic, Use Selected Chord Types). It had turned into a drawer holding chord length, playback timing, and a Clear Progression entry that duplicated the CLEAR button already sitting below it.
+        + "Tight Timing (JSFX Engine)" moved to the PLAY button's right-click, next to Sync Play, since both answer the same question: how playback behaves. PLAY's right-click is now a small menu instead of a direct Sync Play toggle.
+        + PLAY now shows the playback mode in its colour: blue for Sync Play, green for Tight Timing, teal for both, and orange when Tight Timing is switched on but the engine is not actually running (no track selected, FX bypassed or missing). That last case used to be silent.
+        + Default chord length and "Apply Default Length To All Slots" moved to a right-click on the beats column of the [+] slot panel, where the per-slot beats value already is. Added "Use This Slot's Length As Default" there as well.
+        + Tooltips now name what a right-click menu contains instead of saying "Settings", and the [+] panel has its own tooltip.
+
+        v2.5.8
+
+        [Progression / Timing]
+        + New "Tight Timing (JSFX Engine)" option (Right-Click the PLAY button). Progression playback moves out of the defer loop and into a JSFX that emits the notes from the audio thread on the exact sample. The old path decided when a chord started with roughly 33 ms of slack and then sent it through StuffMIDIMessage, which waits for the next audio block on top of that - at 120 BPM that is over 6% of a beat, which is what made the progression feel loose against the grid.
+        + Strum and arpeggio no longer stall REAPER. They used to busy-wait on the main thread between notes (five notes at 80 ms froze the UI for 320 ms, which threw off the timing of the following chord as well). They are now onsets the engine schedules against, so they cost nothing and land exactly.
+        + Playback no longer needs a record-armed track. The engine goes at the top of the normal track FX chain rather than the Input FX chain, so it keeps running whether or not the track is armed.
+        + Starting mid-bar or scrubbing the transport now lands on the chord that belongs at that position instead of restarting the progression.
+        + The engine is written into REAPER/Effects on demand and version-locked to the script, so the gmem layout it reads can never lag behind the layout the script writes.
+        + Turning the option off, or having no track selected, falls back to the previous timing rather than going silent.
+
+        v2.5.7
+
+        [Progression / Chord Length]
+        + New default chord length setting (Right-Click the beats column of the [+] slot panel): choose 0.5 / 1 / 2 / 4 / 8 beats and every chord added to an empty progression slot from then on gets that length. Previously new chords were always 1 beat, so working in bars meant stepping the beats value up in every single slot by hand. The setting is stored globally, so it survives project and script restarts.
+        + Added "Apply Default Length To All Slots" alongside it, which sets every filled slot in the current progression to the default length in one go. Requested by a user who wanted whole-bar or two-bar chords without editing each slot.
+        + Chord map templates now also use the default chord length instead of a hardcoded 1 beat. Saved presets keep the lengths stored in the file.
+
         v2.5.6
 
         [Time Selection / Insert]
@@ -805,6 +831,7 @@ v0.2.51
         <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun.lua</source>
         <source file="TK_ChordGun/TK_ChordGun_Help.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Help.lua</source>
         <source file="TK_ChordGun/TK_ChordGun_Data.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Data.lua</source>
+        <source file="TK_ChordGun/TK_ChordGun_Seq_Engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Seq_Engine.lua</source>
         <source main="main midi_editor" file="TK_ChordGun/Reset_TK_ChordGun_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/Reset_TK_ChordGun_Settings.lua</source>
         <source file="TK_ChordGun/README.md">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/README.md</source>
         <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun decrement chord inversion.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun%20decrement%20chord%20inversion.lua</source>

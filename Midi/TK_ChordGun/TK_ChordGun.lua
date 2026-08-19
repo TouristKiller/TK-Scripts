@@ -1,8 +1,34 @@
 -- @description TK ChordGun - Enhanced chord generator with scale filter/remap and chord recognition
 -- @author TouristKiller (based on pandabot ChordGun)
--- @version 2.5.6
+-- @version 2.5.9
 -- @changelog
 --[[
+2.5.9
+
+[Menus / Discoverability]
++ The Dice right-click menu is back to what it says on the icon: randomize settings only (Progression Length, Always Start on Tonic, Use Selected Chord Types). It had turned into a drawer holding chord length, playback timing, and a Clear Progression entry that duplicated the CLEAR button already sitting below it -- none of which anyone would think to look for under a dice.
++ "Tight Timing (JSFX Engine)" moved to the PLAY button's right-click, next to Sync Play, since both answer the same question: how playback behaves. PLAY's right-click is now a small menu instead of a direct Sync Play toggle.
++ PLAY now shows the playback mode in its colour: blue for Sync Play, green for Tight Timing, teal for both, and orange when Tight Timing is switched on but the engine is not actually running (no track selected, FX bypassed or missing). That last case used to be silent.
++ "Default For New Chords" and "Apply Default Length To All Slots" moved to a right-click on the beats column of the [+] slot panel, where the per-slot beats value already is. Added "Use This Slot's Length As Default" there as well.
++ Tooltips now name what a right-click menu contains instead of saying "Settings", and the [+] panel has its own tooltip.
+
+2.5.8
+
+[Progression / Timing]
++ New "Tight Timing (JSFX Engine)" option (Right-Click the PLAY button). Progression playback moves out of the defer loop and into a JSFX that emits the notes from the audio thread on the exact sample. The old path decided when a chord started with roughly 33 ms of slack and then sent it through StuffMIDIMessage, which waits for the next audio block on top of that -- at 120 BPM that is over 6% of a beat, which is what made the progression feel loose against the grid.
++ Strum and arpeggio no longer stall REAPER. They used to busy-wait on the main thread between notes (five notes at 80 ms froze the UI for 320 ms, which threw off the timing of the following chord as well). They are now onsets the engine schedules against, so they cost nothing and land exactly.
++ Playback no longer needs a record-armed track. The engine goes at the top of the normal track FX chain rather than the Input FX chain, so it keeps running whether or not the track is armed.
++ Starting mid-bar or scrubbing the transport now lands on the chord that belongs at that position instead of restarting the progression.
++ The engine is written into REAPER/Effects on demand and version-locked to the script, so the gmem layout it reads can never lag behind the layout the script writes.
++ Turning the option off, or having no track selected, falls back to the previous timing rather than going silent.
+
+2.5.7
+
+[Progression / Chord Length]
++ New default chord length setting (Right-Click the beats column of the [+] slot panel): choose 0.5 / 1 / 2 / 4 / 8 beats and every chord added to an empty progression slot from then on gets that length. Previously new chords were always 1 beat, so working in bars meant stepping the beats value up in every single slot by hand. The setting is stored globally, so it survives project and script restarts.
++ Added "Apply Default Length To All Slots" alongside it, which sets every filled slot in the current progression to the default length in one go. Requested by a user who wanted whole-bar or two-bar chords without editing each slot.
++ Chord map templates now also use the default chord length instead of a hardcoded 1 beat. Saved presets keep the lengths stored in the file.
+
 2.5.6
 
 [Time Selection / Insert]
@@ -388,6 +414,13 @@ Original ChordGun: https://github.com/benjohnson2001/ChordGun
 local alwaysOnTopEnabled = (reaper.GetExtState("TK_ChordGun", "alwaysOnTop") == "true")
 package.path = debug.getinfo(1,"S").source:match[[^@?(.*[\/])[^\/]-$]] .."?.lua;".. package.path
 local Data = require("TK_ChordGun_Data")
+
+-- Optional: without it ChordGun simply falls back to the old defer-loop timing.
+SeqEngine = nil
+do
+  local engineLoaded, engineModule = pcall(require, "TK_ChordGun_Seq_Engine")
+  if engineLoaded then SeqEngine = engineModule end
+end
 
 baseWidth = 775
 baseHeight = 775
@@ -877,7 +910,9 @@ local ConfigKeys = {
   midiTriggerMappings = "midiTriggerMappings",
   midiTriggerColumnMappings = "midiTriggerColumnMappings",
   midiTriggerMode = "midiTriggerMode",
-  showHarmonicCompass = "showHarmonicCompass"
+  showHarmonicCompass = "showHarmonicCompass",
+  defaultChordBeats = "defaultChordBeats",
+  tightEngine = "tightEngine"
 }
 
 function setValue(key, value)
@@ -1359,6 +1394,24 @@ function setScaleFilterMode(mode)
   updateScaleFilterState()
 end
 
+-- Adds TK_Scale_Filter.jsfx to a track's Input FX chain.
+-- Tries the path ReaPack installs to first (Effects/<index>/<category>/<file>),
+-- which loads by path and so works even before REAPER has rescanned its JSFX
+-- list; then the desc name; then the bare filename, so copies installed
+-- manually elsewhere under Effects/ keep working.
+function addScaleFilterToInputFX(track)
+  local candidates = {
+    "JS: TK Scripts/Midi/TK_ChordGun/TK_Scale_Filter.jsfx",
+    "JS: TK Scale Filter & Remap",
+    "JS: TK_Scale_Filter",
+  }
+  for _, name in ipairs(candidates) do
+    local fxIndex = reaper.TrackFX_AddByName(track, name, true, -1000 - 0x1000000)
+    if fxIndex >= 0 then return fxIndex end
+  end
+  return -1
+end
+
 function cycleScaleFilterMode()
   local nextMode = (scaleFilterMode + 1) % 3
   
@@ -1385,7 +1438,7 @@ function cycleScaleFilterMode()
            reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0)
            return
         end
-        local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
+        local fxIndex = addScaleFilterToInputFX(track)
         if fxIndex < 0 then
            reaper.ShowMessageBox("Could not add TK Scale Filter.", "Setup Failed", 0)
            return
@@ -2183,6 +2236,22 @@ end
 
 function setNoteLengthIndex(index)
   setPersistentNumber(ConfigKeys.noteLengthIndex, index)
+end
+
+-- Length (in beats) that a chord gets when it is added to an empty progression slot.
+-- Same value set as the per-slot beats stepper, so a default can always be reached there too.
+chordBeatsValues = {0.5, 1, 2, 4, 8}
+
+function getDefaultChordBeats()
+  local beats = getPersistentNumber(ConfigKeys.defaultChordBeats, 1) or 1
+  for _, value in ipairs(chordBeatsValues) do
+    if value == beats then return beats end
+  end
+  return 1
+end
+
+function setDefaultChordBeats(beats)
+  setPersistentNumber(ConfigKeys.defaultChordBeats, beats)
 end
 
 Timer = {}
@@ -3329,6 +3398,12 @@ function stopAllNotesFromPlaying()
   usedNoteChannels = {}
   setNotesThatArePlaying({})
 
+  -- Notes emitted by the engine live on the track chain, well out of reach of
+  -- the note-offs above, so it needs telling separately.
+  if seqUseEngine() then
+    seqPanic()
+  end
+
   if reaper.time_precise then
     suppressExternalMidiUntil = math.max(suppressExternalMidiUntil or 0, reaper.time_precise() + 0.05)
   end
@@ -3727,7 +3802,7 @@ function addChordToProgression(scaleNoteIndex, chordTypeIndex, chordText, target
       scaleNoteIndex = scaleNoteIndex,
       chordTypeIndex = chordTypeIndex,
       text = chordText,
-      beats = currentSlot.beats or 1,
+      beats = currentSlot.beats or getDefaultChordBeats(),
       repeats = currentSlot.repeats or 1,
       octave = octave or getOctave(),
       inversion = inversion,
@@ -3807,12 +3882,327 @@ function clearChordProgression()
   resetTransientState("playback")
 end
 
+function applyDefaultChordBeatsToAllSlots()
+
+  local beats = getDefaultChordBeats()
+
+  for i = 1, maxProgressionSlots do
+    if chordProgression[i] then
+      chordProgression[i].beats = beats
+    end
+  end
+
+  guiShouldBeUpdated = true
+end
+
 function removeChordFromProgression(index)
 
   if index > 0 and index <= maxProgressionSlots then
     chordProgression[index] = nil
     resetTransientState("playback")
   end
+end
+
+-- === Sequencer engine bridge ================================================
+--
+-- Progression playback normally runs from the defer loop, which decides when a
+-- chord starts with about 33 ms of slack and then hands it to StuffMIDIMessage,
+-- where it waits for the start of the next audio block. Together that is far
+-- too loose to play against a grid. The JSFX engine takes the timing over: Lua
+-- writes the whole progression into gmem and the audio thread emits the notes
+-- on the exact sample.
+--
+-- Lua keeps every musical decision. A slot crosses over as a list of notes that
+-- each carry their own velocity, onset and gate, so strum, arpeggios, velocity
+-- curves and inversions are still produced by the code below -- the engine only
+-- places what it is given.
+
+function getTightEngineEnabled()
+  return getPersistentNumber(ConfigKeys.tightEngine, 0) == 1
+end
+
+function setTightEngineEnabled(enabled)
+  setPersistentNumber(ConfigKeys.tightEngine, enabled and 1 or 0)
+end
+
+function seqGetOwnerId()
+  if seqOwnerId and seqOwnerId > 0 then return seqOwnerId end
+
+  local saved = tonumber(reaper.GetExtState("TK_ChordGun", "seqOwnerId") or "")
+  if not saved or saved <= 0 then
+    saved = math.random(1, 100000000)
+    reaper.SetExtState("TK_ChordGun", "seqOwnerId", tostring(saved), true)
+  end
+
+  seqOwnerId = saved
+  return seqOwnerId
+end
+
+function seqGmemAttach()
+  if not SeqEngine then return false end
+  if not reaper.gmem_attach or not reaper.gmem_write then return false end
+  if not reaper.gmem_attach(SeqEngine.gmem_name) then return false end
+  return true
+end
+
+function seqTrackIsValid(track)
+  if not track then return false end
+  if reaper.ValidatePtr2 then
+    return reaper.ValidatePtr2(0, track, "MediaTrack*")
+  end
+  return true
+end
+
+function seqFindEngineFx(track)
+  if not seqTrackIsValid(track) or not reaper.TrackFX_GetCount then return -1 end
+
+  for i = 0, reaper.TrackFX_GetCount(track) - 1 do
+    local retval, fxName = reaper.TrackFX_GetFXName(track, i, "")
+    if retval and fxName and fxName:lower():find("tk chordgun sequencer", 1, true) then
+      return i
+    end
+  end
+
+  return -1
+end
+
+-- Position 0 of the NORMAL chain, not the Input FX chain: the engine's MIDI
+-- reaches the instrument by flowing down the chain, and normal track FX keep
+-- running on a track that is not record-armed.
+function seqAddEngineToTrack(track)
+  if not SeqEngine or not seqTrackIsValid(track) then return -1 end
+  if not reaper.TrackFX_AddByName then return -1 end
+  if not SeqEngine.ensure_installed() then return -1 end
+
+  local fx = seqFindEngineFx(track)
+
+  if fx < 0 then
+    local candidates = {
+      SeqEngine.add_name,
+      "JS: TK ChordGun Sequencer",
+      "TK ChordGun Sequencer",
+    }
+    for _, name in ipairs(candidates) do
+      fx = reaper.TrackFX_AddByName(track, name, false, -1000)
+      if fx and fx >= 0 then break end
+    end
+  end
+
+  if fx and fx >= 0 and reaper.TrackFX_SetParamNormalized then
+    reaper.TrackFX_SetParamNormalized(track, fx, 0, seqGetOwnerId() / 100000000)
+  end
+
+  return fx or -1
+end
+
+-- Hands ownership back, so an engine left on a track the user moved away from
+-- goes quiet instead of playing along.
+function seqReleaseEngine(track)
+  if not seqTrackIsValid(track) then return end
+
+  local fx = seqFindEngineFx(track)
+  if fx >= 0 and reaper.TrackFX_SetParamNormalized then
+    reaper.TrackFX_SetParamNormalized(track, fx, 0, 0)
+  end
+end
+
+function seqEnsureEngine()
+  local track = reaper.GetSelectedTrack(0, 0)
+
+  if track ~= seqEngineTrack then
+    if seqTrackIsValid(seqEngineTrack) then
+      seqReleaseEngine(seqEngineTrack)
+    end
+    seqEngineTrack = track
+    if track then seqAddEngineToTrack(track) end
+  end
+
+  return seqEngineTrack
+end
+
+function seqNoteChannel()
+  local channel = getCurrentNoteChannel()
+  if scaleFilterMode == 2 or midiTriggerEnabled then
+    channel = 15
+  end
+  return channel
+end
+
+function seqWriteProgression()
+  if not seqGmemAttach() then return false end
+
+  local G = SeqEngine.GMEM
+  local slotCount = math.min(progressionLength or 8, G.MAX_SLOTS)
+  if slotCount < 1 then slotCount = 1 end
+
+  local bpm = reaper.Master_GetTempo()
+  if not bpm or bpm <= 0 then bpm = 120 end
+  local secondsPerBeat = 60.0 / bpm
+
+  local savedOverride = currentSlotVelocityOverride
+
+  for i = 1, slotCount do
+    local base = G.SLOT_BASE + (i - 1) * G.SLOT_STRIDE
+    local slot = chordProgression[i]
+
+    -- An empty slot is a one-beat rest, the same length the defer loop gave it.
+    local beats = 1
+    local repeats = 1
+    local noteCount = 0
+
+    if slot then
+      beats = slot.beats or getDefaultChordBeats()
+      repeats = slot.repeats or 1
+
+      local chordData, root = resolveSlotChord(slot)
+      if chordData and root then
+        local notes = getChordNotesArray(root, chordData, slot.octave or getOctave(), slot.inversion)
+        notes = applyArpPattern(notes)
+
+        currentSlotVelocityOverride = slot.velocity
+        local baseVelocity = getCurrentVelocity()
+
+        -- Strum and arp are nothing but onsets. The defer loop used to busy-wait
+        -- between the notes, freezing the UI thread; here the same spread is
+        -- just an offset the engine schedules against.
+        local spreadInBeats = 0
+        if strumEnabled then
+          spreadInBeats = getStrumDelaySeconds() / secondsPerBeat
+        elseif arpEnabled then
+          spreadInBeats = getArpDelaySeconds() / secondsPerBeat
+        end
+
+        noteCount = math.min(#notes, G.MAX_NOTES)
+
+        for k = 1, noteCount do
+          local onset = spreadInBeats * (k - 1)
+          if onset >= beats then onset = beats - 0.001 end
+
+          -- Every note of the slot releases together at the slot end, which is
+          -- what the old code did by holding them until the next chord.
+          local gate = beats - onset
+          if gate <= 0 then gate = 0.001 end
+
+          local velocity = baseVelocity
+          if strumEnabled then
+            velocity = getStrumVelocity(baseVelocity, k, noteCount)
+          end
+
+          reaper.gmem_write(base + G.S_NOTE + (k - 1), notes[k])
+          reaper.gmem_write(base + G.S_VEL + (k - 1), velocity)
+          reaper.gmem_write(base + G.S_ONSET + (k - 1), onset)
+          reaper.gmem_write(base + G.S_GATE + (k - 1), gate)
+        end
+
+        currentSlotVelocityOverride = savedOverride
+      end
+    end
+
+    reaper.gmem_write(base + G.S_BEATS, beats)
+    reaper.gmem_write(base + G.S_REPEATS, repeats)
+    reaper.gmem_write(base + G.S_NNOTES, noteCount)
+  end
+
+  reaper.gmem_write(G.NSLOTS, slotCount)
+  -- 0 tells the engine to use the host tempo. That follows a tempo map at the
+  -- playback position, where a BPM read here is only ever a snapshot.
+  reaper.gmem_write(G.TEMPO, 0)
+  reaper.gmem_write(G.CHAN, seqNoteChannel())
+  reaper.gmem_write(G.ACTIVE, seqGetOwnerId())
+
+  seqLastWriteTime = reaper.time_precise()
+  return true
+end
+
+function seqPanic()
+  if not seqGmemAttach() then return end
+  seqPanicCounter = (seqPanicCounter or 0) + 1
+  reaper.gmem_write(SeqEngine.GMEM.PANIC, seqPanicCounter)
+end
+
+function seqStart()
+  if not seqWriteProgression() then return false end
+
+  local G = SeqEngine.GMEM
+  seqRestartCounter = (seqRestartCounter or 0) + 1
+
+  reaper.gmem_write(G.SYNC, syncPlayEnabled and 1 or 0)
+  reaper.gmem_write(G.RESTART, seqRestartCounter)
+  reaper.gmem_write(G.RUN, 1)
+
+  return true
+end
+
+function seqStop()
+  if not seqGmemAttach() then return end
+  reaper.gmem_write(SeqEngine.GMEM.RUN, 0)
+  seqPanic()
+end
+
+-- True while the engine is actually ticking. The heartbeat is the only honest
+-- signal: the FX can be present but bypassed, offline, or on a track that got
+-- deleted, and in all of those cases nothing would be heard.
+function seqEngineIsAlive()
+  if not seqGmemAttach() or not reaper.gmem_read then return false end
+
+  local alive = reaper.gmem_read(SeqEngine.GMEM.ALIVE) or 0
+  local now = reaper.time_precise()
+
+  if alive ~= seqLastAlive then
+    seqLastAlive = alive
+    seqLastAliveTime = now
+    return true
+  end
+
+  return (now - (seqLastAliveTime or 0)) < 1.0
+end
+
+function seqUseEngine()
+  return SeqEngine ~= nil and getTightEngineEnabled() and reaper.gmem_attach ~= nil
+end
+
+-- The engine owns the clock now, so the defer loop only mirrors what it reports
+-- back: which slot is sounding, for the highlight and the chord display.
+function seqFollowEngine()
+  if not seqGmemAttach() or not reaper.gmem_read then return end
+
+  local G = SeqEngine.GMEM
+  local step = math.floor(reaper.gmem_read(G.CURSTEP) or 0)
+
+  -- Picks up edits made while it plays, without writing 800 gmem values a frame.
+  local now = reaper.time_precise()
+  if now - (seqLastWriteTime or 0) > 0.25 then
+    seqWriteProgression()
+  end
+
+  if step < 1 or step == currentProgressionIndex then return end
+  currentProgressionIndex = step
+
+  local slot = chordProgression[step]
+  if not slot then
+    setNotesThatArePlaying({})
+    return
+  end
+
+  local chordData, root = resolveSlotChord(slot)
+  if not chordData or not root then return end
+
+  currentlyPlayingChord = {
+    rootNote = root,
+    chordCode = chordData.code
+  }
+
+  if slot.scaleNoteIndex and slot.scaleNoteIndex <= #scaleNotes then
+    setSelectedScaleNote(slot.scaleNoteIndex)
+    if slot.chordTypeIndex then
+      setSelectedChordType(slot.scaleNoteIndex, slot.chordTypeIndex)
+    end
+  end
+
+  local notes = getChordNotesArray(root, chordData, slot.octave or getOctave(), slot.inversion)
+  notes = applyArpPattern(notes)
+  setNotesThatArePlaying(notes)
+  updateChordText(root, chordData, notes)
 end
 
 function exportProgressionToTrack()
@@ -4529,7 +4919,7 @@ function applyProgressionTemplate(template)
           scaleNoteIndex = actualDegree,
           chordTypeIndex = chordTypeIndex,
           text = text,
-          beats = 1,
+          beats = getDefaultChordBeats(),
           repeats = 1,
           octave = getOctave(),
           inversion = getChordInversionState(actualDegree),
@@ -4714,19 +5104,41 @@ function startProgressionPlayback()
   progressionPlaying = true
   currentProgressionIndex = 1
   progressionLastBeatTime = reaper.time_precise()
+
+  -- If the engine cannot take it (no track selected, JSFX missing, gmem
+  -- unavailable) we drop back to the defer-loop timing rather than go silent.
+  if seqUseEngine() then
+    seqEnsureEngine()
+    if seqStart() then
+      seqPlaybackActive = true
+      return
+    end
+  end
+
+  seqPlaybackActive = false
   playProgressionChord(1)
 end
 
 function stopProgressionPlayback()
   progressionPlaying = false
   currentProgressionIndex = 0
+
+  if seqPlaybackActive then
+    seqStop()
+    seqPlaybackActive = false
+  end
+
   resetTransientState("playback")
   stopNotesFromPlaying()
 end
 
 function updateProgressionPlayback()
   if not progressionPlaying then return end
-  
+
+  if seqPlaybackActive then
+    seqFollowEngine()
+    return
+  end
 
   local hasChords = false
   for i = 1, maxProgressionSlots do
@@ -9871,8 +10283,43 @@ function handleSlotDropdownInput()
 				end
 			end
 		end
+
+		-- "I want this for every chord" is a thought you have with the beats
+		-- arrows under the cursor, not while looking at a dice icon, so the
+		-- default for new chords is set from right here.
+		if ctrl.key == "beats" and mouseButtonIsNotPressedDown and mouseInCol and gfx.mouse_cap & 2 == 2 then
+			mouseButtonIsNotPressedDown = false
+			dropdownBlocksInput = true
+
+			local currentDefault = getDefaultChordBeats()
+			local beatsLabels = {"0.5 beat", "1 beat", "2 beats", "4 beats (1 bar)", "8 beats (2 bars)"}
+			local beatsMenu = ""
+			for bi, value in ipairs(chordBeatsValues) do
+				beatsMenu = beatsMenu .. ((currentDefault == value) and "!" or "") .. beatsLabels[bi] .. "|"
+			end
+
+			gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+			local selection = gfx.showmenu(
+				">Default For New Chords|" .. beatsMenu .. "<|" ..
+				"Use This Slot's Length As Default|" ..
+				"Apply Default Length To All Slots")
+
+			local beatsCount = #chordBeatsValues
+
+			if selection >= 1 and selection <= beatsCount then
+				setDefaultChordBeats(chordBeatsValues[selection])
+			elseif selection == beatsCount + 1 then
+				setDefaultChordBeats(chordProgression[i].beats or 1)
+			elseif selection == beatsCount + 2 then
+				applyDefaultChordBeatsToAllSlots()
+			end
+		end
 	end
-	
+
+	if tooltipsEnabled and isHoveringDropdown then
+		queueTooltip("Beats / Repeats / Octave / Inversion\nRight-Click the beats column: default length for new chords", gfx.mouse_x, gfx.mouse_y)
+	end
+
 	if isHoveringDropdown and mouseButtonIsNotPressedDown and gfx.mouse_cap & 1 == 1 then
 		mouseButtonIsNotPressedDown = false
 	end
@@ -10095,7 +10542,7 @@ function ProgressionSlots:update()
 		if tooltipsEnabled and isHovering and openSlotDropdown ~= i then
 			local tooltip
 			if chordProgression[i] then
-				tooltip = "Click: Preview | [V]: Velocity | [+]: Edit settings | Shift+Click: Loop end | Right-Click: Deselect | Shift+Right-Click: Clear"
+				tooltip = "Click: Preview | [V]: Velocity | [+]: Beats/repeats/octave/inversion | Shift+Click: Loop end | Right-Click: Deselect | Shift+Right-Click: Clear"
 			else
 				tooltip = "Click: Select slot | Shift+Click: Set loop endpoint | Right-Click: Deselect"
 			end
@@ -12176,7 +12623,7 @@ function Interface:addSetupButton(xMargin, yMargin, xPadding, rowIndex, colIndex
       end
       
 
-      local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
+      local fxIndex = addScaleFilterToInputFX(track)
       if fxIndex >= 0 then
           reaper.ShowMessageBox(
               "TK Scale Filter added to Input FX successfully!\n\n" ..
@@ -12288,16 +12735,55 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
         startProgressionPlayback() 
       end
     end,
-		function() 
-      syncPlayEnabled = not syncPlayEnabled 
-      guiShouldBeUpdated = true
+		function()
+      -- Both entries answer the same question -- how playback behaves -- so
+      -- they belong together on the button that starts it.
+      local tightEnabled = getTightEngineEnabled()
+      local tightLabel = "Tight Timing (JSFX Engine)"
+      if tightEnabled and not seqEngineIsAlive() then
+        tightLabel = tightLabel .. " - engine not running"
+      end
+
+      gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
+      local selection = gfx.showmenu(
+        (syncPlayEnabled and "!" or "") .. "Sync Play (follow transport)|" ..
+        (tightEnabled and "!" or "") .. tightLabel)
+
+      if selection == 1 then
+        syncPlayEnabled = not syncPlayEnabled
+        guiShouldBeUpdated = true
+      elseif selection == 2 then
+        local enable = not tightEnabled
+        setTightEngineEnabled(enable)
+        if progressionPlaying then
+          stopProgressionPlayback()
+        end
+        if enable then
+          seqEnsureEngine()
+        elseif seqTrackIsValid(seqEngineTrack) then
+          seqReleaseEngine(seqEngineTrack)
+          seqEngineTrack = nil
+        end
+        guiShouldBeUpdated = true
+      end
     end,
-		function() 
-      local state = syncPlayEnabled and "ON" or "OFF"
-      return "Click: Start progression playback\nRight-Click: Toggle Sync Play (Current: " .. state .. ")" 
+		function()
+      local sync = syncPlayEnabled and "ON" or "OFF"
+      local tight = getTightEngineEnabled() and "ON" or "OFF"
+      return "Click: Start progression playback\nRight-Click: Sync Play (" .. sync .. ") and Tight Timing (" .. tight .. ")"
     end,
     true,
-    function() return syncPlayEnabled and "3399FF" or nil end
+    -- The engine can be switched on and still not be running -- no track
+    -- selected, FX bypassed, JSFX missing -- and that is exactly the case worth
+    -- seeing at a glance, so it gets its own colour rather than a silent lie.
+    function()
+      local tightEnabled = getTightEngineEnabled()
+      if tightEnabled and not seqEngineIsAlive() then return "CC6633" end
+      if tightEnabled and syncPlayEnabled then return "33CCCC" end
+      if tightEnabled then return "33CC66" end
+      if syncPlayEnabled then return "3399FF" end
+      return nil
+    end
 	)
 	
 
@@ -12572,27 +13058,26 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
       local check8 = progressionLength == 8 and "!" or ""
       local checkTonic = randomizeStartWithTonic and "!" or ""
       local checkSelected = randomizeUseSelectedChords and "!" or ""
-      
+
+      -- Randomizer settings only. Chord length lives on the [+] slot panel where
+      -- beats already is, and playback settings live on the PLAY button.
       local menu = ">Progression Length|" .. check4 .. "4 Slots|" .. check8 .. "8 Slots|<|" ..
                    checkTonic .. "Always Start on Tonic|" ..
-                   checkSelected .. "Use Selected Chord Types|" ..
-                   "Clear Progression"
-      
+                   checkSelected .. "Use Selected Chord Types"
+
       gfx.x, gfx.y = gfx.mouse_x, gfx.mouse_y
       local selection = gfx.showmenu(menu)
-      
-      if selection == 1 then 
+
+      if selection == 1 then
           progressionLength = 4
           guiShouldBeUpdated = true
-      elseif selection == 2 then 
+      elseif selection == 2 then
           progressionLength = 8
           guiShouldBeUpdated = true
-      elseif selection == 3 then 
+      elseif selection == 3 then
           randomizeStartWithTonic = not randomizeStartWithTonic
       elseif selection == 4 then
           randomizeUseSelectedChords = not randomizeUseSelectedChords
-      elseif selection == 5 then
-          clearChordProgression()
       end
   end
   
@@ -12601,7 +13086,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
     diceY,
     diceSize,
     function() randomizeProgression() end,
-    function() return "Click: Fill empty slots | Right-Click: Settings" end,
+    function() return "Click: Fill empty slots with random chords\nRight-Click: Randomize settings (length, tonic, chord types)" end,
     onDiceRightClick
   )
   table.insert(self.elements, diceButton)
@@ -12703,7 +13188,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
                         reaper.ShowMessageBox("Please select a track first!", "No Track Selected", 0)
                         return
                     end
-                    local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
+                    local fxIndex = addScaleFilterToInputFX(track)
                     if fxIndex < 0 then
                         reaper.ShowMessageBox("Could not add TK Scale Filter.", "Setup Failed", 0)
                         return
@@ -12792,7 +13277,7 @@ function Interface:addProgressionControls(xMargin, yMargin, xPadding, yPadding, 
           local retval, fxName = reaper.TrackFX_GetFXName(track, i + 0x1000000, "")
           if fxName and fxName:match("TK Scale Filter") then reaper.ShowMessageBox("TK Scale Filter is already on this track's Input FX!", "Already Setup", 0) return end
       end
-      local fxIndex = reaper.TrackFX_AddByName(track, "JS: TK_Scale_Filter", true, -1000 - 0x1000000)
+      local fxIndex = addScaleFilterToInputFX(track)
       if fxIndex >= 0 then reaper.ShowMessageBox("TK Scale Filter added to Input FX successfully!", "Setup Complete", 0) else reaper.ShowMessageBox("Could not add TK Scale Filter.", "Setup Failed", 0) end
   end
 
@@ -14065,6 +14550,15 @@ local function cleanup()
 	if helpWindowOpen then
 		helpWindowOpen = false
 		reaper.SetExtState("TK_ChordGun_Help", "closed", "0", false)
+	end
+
+	-- The engine lives in the audio thread and would happily keep playing after
+	-- the window is gone, so stop it and hand ownership back.
+	if seqUseEngine() then
+		seqStop()
+		if seqTrackIsValid(seqEngineTrack) then
+			seqReleaseEngine(seqEngineTrack)
+		end
 	end
 end
 
