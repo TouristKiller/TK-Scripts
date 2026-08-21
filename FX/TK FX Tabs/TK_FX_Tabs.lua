@@ -1,7 +1,12 @@
 -- @description TK FX Tabs
 -- @author TouristKiller
--- @version 1.2.1
+-- @version 1.2.2
 -- @changelog:
+--   v1.2.2
+--   # Tab bar stayed under the plugin until you clicked the bar, with plugins that grab focus while opening (MusicLab RealGuitar/RealEight): the swallowed mouse release left the bar's z-order correction switched off
+--   + Keep tab bar on top: option for plugins that keep drawing themselves over the tab bar (the bar is only forced on top while the bar or its plugin has focus)
+--   + ESC key action: choose what ESC does - close the script (red dot, default), close only the FX window (amber dot) or nothing at all. Requested by Veridian
+--   + Start in background: launch the script without showing anything; the tab bar appears as soon as an FX window is opened. Requested by Veridian
 --   v1.2.1
 --   + Close FX button (amber dot): closes only the FX window while the script keeps running (combine with 'Hide tab bar when no FX is open' to hide the bar as well)
 --   # Detached mode: the BYPASS/OFFLINE overlay now shows again, centered in the REAPER window
@@ -118,6 +123,13 @@ local TAB_FILTER_SELECTED = 1
 local TAB_FILTER_FOLDER = 2
 local TAB_FILTER_GROUP = 3
 local TAB_FILTER_LABELS = { "All FX", "Selected tracks", "Same folder/parent", "Same REAPER track group" }
+-- Global on purpose: this chunk is close to Lua's 200 top-level local limit.
+ESC_ACTION_CLOSE_SCRIPT = 0
+ESC_ACTION_CLOSE_FX = 1
+ESC_ACTION_IGNORE = 2
+local ESC_ACTION_LABELS = { "Close script", "Close FX window", "Do nothing" }
+-- 0 = off, 1 = arm on the next scan, 2 = hidden until an FX shows up
+local background_start_state = 0
 
 local function ext_get_bool(key, default_value)
   local value = r.GetExtState(SECTION, key)
@@ -170,8 +182,13 @@ local settings = {
   theme_topbar_border = ext_get_bool("theme_topbar_border", true),
   auto_hide_when_empty = ext_get_bool("auto_hide_when_empty", false),
   detached_mode = ext_get_bool("detached_mode", false),
+  keep_topbar_on_top = ext_get_bool("keep_topbar_on_top", false),
+  esc_action = ext_get_number("esc_action", ESC_ACTION_CLOSE_SCRIPT),
+  start_in_background = ext_get_bool("start_in_background", false),
   scan_interval = 0.75,
 }
+
+if settings.start_in_background then background_start_state = 1 end
 
 if settings.follow_fx_position and settings.center_fx_in_reaper_window then
   settings.center_fx_in_reaper_window = false
@@ -986,6 +1003,23 @@ local function update_window_touch_pause()
     topbar_restack_until = r.time_precise() + 0.5
   end
   place_state.mouse_down = mouse_down
+  -- Watchdog. A plugin that grabs the foreground while the mouse is still down swallows
+  -- the release, so ImGui never reports it and topbar_mouse_captured stays true - which
+  -- silently disables every z-order correction until the user clicks the bar again.
+  -- The physical button state does not depend on who has focus, so use that to recover.
+  if topbar_mouse_captured and not mouse_down then
+    local now = r.time_precise()
+    if not place_state.capture_stuck_since then
+      place_state.capture_stuck_since = now
+    elseif now - place_state.capture_stuck_since > 0.25 then
+      topbar_mouse_captured = false
+      topbar_focus_click_armed = false
+      topbar_dragging = false
+      place_state.capture_stuck_since = nil
+    end
+  else
+    place_state.capture_stuck_since = nil
+  end
 end
 
 local function window_touch_paused()
@@ -1120,6 +1154,7 @@ end
 
 local function place_active_window()
   local dragging_topbar = topbar_drag_active()
+  place_state.force_top = false
   if settings.follow_fx_position and not dragging_topbar then return follow_fx_window_update() end
   if window_touch_paused() and not dragging_topbar then return false end
   if host_rect.width < 120 or host_rect.height < 90 then return false end
@@ -1133,6 +1168,9 @@ local function place_active_window()
   local hwnd = safe_trackfx_get_floating_window(track, entry.fx_index)
   if not hwnd then return false end
   set_topbar_owner(hwnd)
+  -- Last resort for plugins that keep raising themselves above the tab bar:
+  -- only while the bar/plugin pair is in front, so the bar never floats over other apps.
+  if settings.keep_topbar_on_top then place_state.force_top = foreground_is_topbar_pair(hwnd) end
   if not dragging_topbar then keep_topbar_above_fx(hwnd) end
   local center_mode = settings.center_fx_in_reaper_window == true
   local resized_window = measure_fx_window(entry, hwnd)
@@ -2266,6 +2304,24 @@ local function draw_settings_popup()
     local changed_autohide, next_autohide = r.ImGui_Checkbox(ctx, "Hide tab bar when no FX is open", settings.auto_hide_when_empty == true)
     if changed_autohide then settings.auto_hide_when_empty = next_autohide; ext_set_bool("auto_hide_when_empty", next_autohide) end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The tab bar only appears while an FX window is open.\nIt returns automatically when you open an FX.") end
+    local changed_background, next_background = r.ImGui_Checkbox(ctx, "Start in background (no window)", settings.start_in_background == true)
+    if changed_background then settings.start_in_background = next_background; ext_set_bool("start_in_background", next_background) end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Start the script without showing anything and without touching FX windows\nthat are already open. The tab bar appears as soon as you open an FX.\nTakes effect the next time you start the script.\nCombine with 'Hide tab bar when no FX is open' to keep it out of the way.") end
+    if r.ImGui_BeginCombo then
+      local current_esc = normalized_esc_action()
+      if r.ImGui_BeginCombo(ctx, "ESC key", ESC_ACTION_LABELS[current_esc + 1] or ESC_ACTION_LABELS[1]) then
+        for action = ESC_ACTION_CLOSE_SCRIPT, ESC_ACTION_IGNORE do
+          local selected = current_esc == action
+          if r.ImGui_Selectable(ctx, ESC_ACTION_LABELS[action + 1], selected) then
+            settings.esc_action = action
+            ext_set_number("esc_action", action)
+          end
+          if selected and r.ImGui_SetItemDefaultFocus then r.ImGui_SetItemDefaultFocus(ctx) end
+        end
+        r.ImGui_EndCombo(ctx)
+      end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "What ESC does while the tab bar has focus:\n'Close script' = the red dot, 'Close FX window' = the amber dot\n(the script keeps running), 'Do nothing' = ESC is ignored.") end
+    end
     local changed_detached, next_detached = r.ImGui_Checkbox(ctx, "Detached (dockable launcher)", settings.detached_mode == true)
     if changed_detached then settings.detached_mode = next_detached; ext_set_bool("detached_mode", next_detached); if next_detached then clear_topbar_owner() end; place_state.moved = false; place_state.applied_left = nil; place_state.applied_top = nil; pending_place_until = 0; last_place_time = 0 end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Turn the tab bar into a normal, dockable window (launcher).\nIt no longer attaches to or moves the plugin; clicking a tab opens/focuses that FX.\nWhile detached, Center/Follow/edge/offset and auto-hide are ignored (except: opening an FX still centers it when 'Center FX' is on).") end
@@ -2292,6 +2348,9 @@ local function draw_settings_popup()
     local changed_flip, next_flip = r.ImGui_Checkbox(ctx, "Tab bar below plugin (flip)", settings.vertical_flip == true)
     if changed_flip then settings.vertical_flip = next_flip; ext_set_bool("vertical_flip", next_flip); pending_place_until = r.time_precise() + 0.5; last_place_time = 0 end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Place the tab bar on the opposite (bottom) side of the plugin.\nWorks in all modes. Also fixes macOS setups where the bar\nappears at the bottom instead of the top.") end
+    local changed_ontop, next_ontop = r.ImGui_Checkbox(ctx, "Keep tab bar on top", settings.keep_topbar_on_top == true)
+    if changed_ontop then settings.keep_topbar_on_top = next_ontop; ext_set_bool("keep_topbar_on_top", next_ontop); place_state.force_top = false end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Only needed for plugins that keep drawing themselves over the tab bar.\nThe bar is forced on top while the bar or its plugin has focus, so it\ndrops back as soon as you click another window. While the plugin does\nhave focus the bar also covers windows that would normally sit above it.\nNo effect in detached mode.") end
     local changed_numbers, next_numbers = r.ImGui_Checkbox(ctx, "Show track numbers", settings.show_track_numbers ~= false)
     if changed_numbers then settings.show_track_numbers = next_numbers; ext_set_bool("show_track_numbers", next_numbers); tab_width_cache = {}; tab_label_cache = {} end
     if r.ImGui_BeginCombo then
@@ -2630,9 +2689,9 @@ local function draw_blocked_state_window()
 end
 
 local function maintain_active_window()
-  if active_key == "" then return end
+  if active_key == "" then place_state.force_top = false; return end
   local active_entry = find_entry_by_key(active_key)
-  if entry_blocked_state(active_entry) then sync_host_rect_to_entry_size(active_entry); close_pending_previous(); return end
+  if entry_blocked_state(active_entry) then place_state.force_top = false; sync_host_rect_to_entry_size(active_entry); close_pending_previous(); return end
   local now = r.time_precise()
   if topbar_mouse_captured or now - last_place_time >= 0.08 then
     if place_active_window() then close_pending_previous(); pending_place_until = 0 end
@@ -2732,10 +2791,53 @@ local function esc_requested_close()
   return false
 end
 
+function normalized_esc_action()
+  local action = math.floor(tonumber(settings.esc_action) or ESC_ACTION_CLOSE_SCRIPT)
+  if action ~= ESC_ACTION_CLOSE_FX and action ~= ESC_ACTION_IGNORE then return ESC_ACTION_CLOSE_SCRIPT end
+  return action
+end
+
+function handle_esc_key()
+  if topbar_popup_active then return end
+  local action = normalized_esc_action()
+  if action == ESC_ACTION_IGNORE then return end
+  if not esc_requested_close() then return end
+  if action == ESC_ACTION_CLOSE_FX then
+    close_active_window()
+  else
+    close_requested = true
+  end
+end
+
+-- Background start: stay invisible until an FX window shows up. Already open FX
+-- windows are left alone and recorded, so they do not count as 'newly opened'.
+function begin_background_start()
+  if background_start_state ~= 1 then return end
+  background_start_state = 2
+  startup_clean_done = true
+  startup_open_done = true
+  external_open_state = {}
+  for entry_index = 1, #instruments do
+    local entry = instruments[entry_index]
+    local track = resolve_entry_track(entry)
+    external_open_state[entry.key] = track ~= nil and safe_trackfx_get_floating_window(track, entry.fx_index) ~= nil
+  end
+end
+
+function background_start_hides_window()
+  if background_start_state ~= 2 then return false end
+  if active_key ~= "" or pending_activate_key ~= "" then
+    background_start_state = 0
+    return false
+  end
+  return true
+end
+
 local function loop()
   topbar_popup_active = false
   update_window_touch_pause()
   scan_instruments(force_scan)
+  begin_background_start()
   close_existing_instruments_on_start()
   open_startup_instrument()
   process_pending_activation()
@@ -2769,11 +2871,13 @@ local function loop()
     window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoResize")
     window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoBackground")
     window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_NoDocking")
-    if settings.follow_fx_position and follow_pair_on_top then window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_TopMost") end
+    if (settings.follow_fx_position and follow_pair_on_top) or place_state.force_top then window_flags = add_imgui_flag(window_flags, "ImGui_WindowFlags_TopMost") end
     if r.ImGui_SetNextWindowDockID then r.ImGui_SetNextWindowDockID(ctx, 0, imgui_flag("ImGui_Cond_Always")) end
   end
   local open = true
-  if not (settings.auto_hide_when_empty and not detached and active_key == "" and pending_activate_key == "" and not topbar_dragging) then
+  local hidden = background_start_hides_window()
+    or (settings.auto_hide_when_empty and not detached and active_key == "" and pending_activate_key == "" and not topbar_dragging)
+  if not hidden then
     local theme_stack = push_theme()
     if detached then
       if entry_blocked_state(active_entry) then
@@ -2797,7 +2901,7 @@ local function loop()
         draw_toolbar()
         draw_custom_tabs()
         if not r.JS_Window_SetPosition or not r.TrackFX_GetFloatingWindow then r.ImGui_TextColored(ctx, theme.text_dim, "js_ReaScriptAPI is not available") end
-        if esc_requested_close() and not topbar_popup_active then close_requested = true end
+        handle_esc_key()
       else
         sync_topbar_window_to_blocked_entry(active_entry)
         draw_topbar_background()
@@ -2807,7 +2911,7 @@ local function loop()
         if not r.JS_Window_SetPosition or not r.TrackFX_GetFloatingWindow then r.ImGui_TextColored(ctx, theme.text_dim, "js_ReaScriptAPI is not available") end
         update_topbar_focus_click()
         update_plugin_rect_from_topbar()
-        if esc_requested_close() and not topbar_popup_active then close_requested = true end
+        handle_esc_key()
       end
     end
     r.ImGui_End(ctx)
@@ -2819,6 +2923,7 @@ local function loop()
   end
   if detached then
     clear_topbar_owner()
+    place_state.force_top = false
     capture_external_floating_window()
     place_detached_active_window()
     if pending_close_key ~= "" and pending_close_deadline > 0 and r.time_precise() >= pending_close_deadline then

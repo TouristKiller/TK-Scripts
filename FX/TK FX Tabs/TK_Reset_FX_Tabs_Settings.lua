@@ -22,6 +22,9 @@ local keys = {
   "theme_topbar_border",
   "auto_hide_when_empty",
   "detached_mode",
+  "keep_topbar_on_top",
+  "esc_action",
+  "start_in_background",
   "custom_themes",
   "custom_theme_name"
 }
