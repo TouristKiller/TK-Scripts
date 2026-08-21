@@ -28,7 +28,8 @@ local defaults = {
   sync_strategy = "manual",
   search_term = "",
   filter_tag = "",
-  selected_tags = {}
+  selected_tags = {},
+  hidden_tags = {}
 }
 
 local state = {
@@ -50,6 +51,45 @@ local state = {
   last_filter_key = nil,
   visibility_snapshot = nil
 }
+
+-- Tracks without tags used to be collateral damage: they match no tag, so any
+-- filter hid them and only clearing the filter brought them back. They get a
+-- chip of their own instead. The sentinel opens with a control character so it
+-- can never collide with something the user typed - clean_tag only trims
+-- whitespace - and json writes it as \u0001, so it survives the settings file.
+local UNTAGGED = "\1untagged"
+
+local function tag_label(tag)
+  if tag == UNTAGGED then return "Untagged" end
+  return tostring(tag)
+end
+
+-- The untagged chip matches on the absence of tags, so every "does this track
+-- match" question goes through here instead of indexing a lookup directly.
+local function track_matches_tags(tags, lookup)
+  if lookup[UNTAGGED] and (type(tags) ~= "table" or #tags == 0) then return true end
+  if type(tags) == "table" then
+    for _, tag in ipairs(tags) do if lookup[tag] then return true end end
+  end
+  return false
+end
+
+local function tags_lookup(list)
+  local lookup = {}
+  for _, tag in ipairs(list or {}) do lookup[tag] = true end
+  return lookup
+end
+
+local function list_contains(list, tag)
+  for _, current in ipairs(list or {}) do if current == tag then return true end end
+  return false
+end
+
+local function list_without(list, tag)
+  local out = {}
+  for _, current in ipairs(list or {}) do if current ~= tag then out[#out + 1] = current end end
+  return out
+end
 
 local function copy_default(value)
   if type(value) ~= "table" then return value end
@@ -320,10 +360,7 @@ local function collect_tracks(settings)
       local tags = state.data.tracks[guid] or {}
       local name = track_name(track, index)
       local include = settings.show_empty_tracks == true or #tags > 0
-      local matches_selected_tags = false
-      if selected_count > 0 then
-        for _, tag in ipairs(tags) do if selected_lookup[tag] then matches_selected_tags = true break end end
-      end
+      local matches_selected_tags = selected_count > 0 and track_matches_tags(tags, selected_lookup)
       if include and search ~= "" then
         local haystack = name:lower()
         for _, tag in ipairs(tags) do haystack = haystack .. " " .. tag:lower() end
@@ -363,6 +400,29 @@ local function tag_is_selected(settings, tag)
   return false
 end
 
+-- Hide tags are a second, independent list. Keeping them apart from the
+-- selected ones is what lets the two be combined: isolate a group, then take
+-- one tag back out of it, without either click having to know about the other.
+local function normalize_hidden_tags(settings)
+  local hidden, seen = {}, {}
+  if type(settings.hidden_tags) == "table" then
+    for _, tag in ipairs(settings.hidden_tags) do
+      tag = tostring(tag or "")
+      if tag ~= "" and not seen[tag] then
+        hidden[#hidden + 1] = tag
+        seen[tag] = true
+      end
+    end
+  end
+  settings.hidden_tags = hidden
+  return hidden, seen
+end
+
+local function tag_is_hidden(settings, tag)
+  local _, seen = normalize_hidden_tags(settings)
+  return seen[tag] == true
+end
+
 local function selected_tag_tracks(settings)
   local selected = normalize_selected_tags(settings)
   local selected_lookup = {}
@@ -372,11 +432,8 @@ local function selected_tag_tracks(settings)
     local track = r.GetTrack(0, index)
     local guid = track_guid(track)
     if guid then
-      local tags = state.data.tracks[guid]
-      if type(tags) == "table" then
-        for _, tag in ipairs(tags) do
-          if selected_lookup[tag] then result[#result + 1] = track break end
-        end
+      if track_matches_tags(state.data.tracks[guid], selected_lookup) then
+        result[#result + 1] = track
       end
     end
   end
@@ -401,6 +458,7 @@ end
 local set_selected_tags_visibility
 local show_all_tracks
 local restore_previous_visibility
+local apply_tag_visibility
 
 local function clear_visibility_snapshot()
   state.visibility_snapshot = nil
@@ -492,41 +550,45 @@ local function remove_tag_from_selected(app, tag)
   if changed and save_store(app) then app.status = "Tags removed tag from selected tracks" end
 end
 
-local function update_selected_tag_name(app, settings, old_tag, new_tag)
-  local selected = normalize_selected_tags(settings)
-  local next_tags = {}
-  local seen = {}
-  local changed = false
-  for _, tag in ipairs(selected) do
+local function rename_in_list(list, old_tag, new_tag)
+  local out, seen, changed = {}, {}, false
+  for _, tag in ipairs(list or {}) do
     local value = tag == old_tag and new_tag or tag
     if value ~= tag then changed = true end
     if value ~= "" and not seen[value] then
-      next_tags[#next_tags + 1] = value
+      out[#out + 1] = value
       seen[value] = true
     end
   end
-  if changed then
-    settings.selected_tags = next_tags
-    settings.filter_tag = next_tags[1] or ""
-    state.last_filter_key = nil
-    if app.save_settings then app.save_settings() end
-  end
-  return changed
+  return out, changed
+end
+
+-- A rename has to follow the tag into both lists. Miss the hidden one and the
+-- tag stays hidden under a name no chip carries any more, which looks exactly
+-- like tracks disappearing for no reason.
+local function update_selected_tag_name(app, settings, old_tag, new_tag)
+  local selected, selected_changed = rename_in_list(normalize_selected_tags(settings), old_tag, new_tag)
+  local hidden, hidden_changed = rename_in_list(normalize_hidden_tags(settings), old_tag, new_tag)
+  if not selected_changed and not hidden_changed then return false end
+  settings.selected_tags = selected
+  settings.hidden_tags = hidden
+  settings.filter_tag = selected[1] or ""
+  state.last_filter_key = nil
+  if app.save_settings then app.save_settings() end
+  return true
 end
 
 local function remove_selected_tag_name(app, settings, removed_tag)
   local selected = normalize_selected_tags(settings)
-  local next_tags = {}
-  local changed = false
-  for _, tag in ipairs(selected) do
-    if tag == removed_tag then changed = true else next_tags[#next_tags + 1] = tag end
-  end
+  local hidden = normalize_hidden_tags(settings)
+  local changed = list_contains(selected, removed_tag) or list_contains(hidden, removed_tag)
   if changed then
-    settings.selected_tags = next_tags
-    settings.filter_tag = next_tags[1] or ""
+    settings.selected_tags = list_without(selected, removed_tag)
+    settings.hidden_tags = list_without(hidden, removed_tag)
+    settings.filter_tag = settings.selected_tags[1] or ""
     state.last_filter_key = nil
     if app.save_settings then app.save_settings() end
-    if #next_tags > 0 then set_selected_tags_visibility(app, settings) else restore_previous_visibility(app) end
+    apply_tag_visibility(app, settings)
   end
 end
 
@@ -557,7 +619,7 @@ local function rename_tag_everywhere(app, settings, old_tag, new_tag)
       state.data.tracks[guid] = normalize_tag_array(tags)
     end
   end
-  if update_selected_tag_name(app, settings, old_tag, new_tag) then set_selected_tags_visibility(app, settings) end
+  if update_selected_tag_name(app, settings, old_tag, new_tag) then apply_tag_visibility(app, settings) end
   if changed and save_store(app) then
     app.status = "Tags renamed " .. old_tag .. " to " .. new_tag
     return true
@@ -688,28 +750,43 @@ end
 
 function set_selected_tags_visibility(app, settings)
   ensure_visibility_snapshot()
+  local include = normalize_selected_tags(settings)
+  local hidden = normalize_hidden_tags(settings)
+  local include_lookup = tags_lookup(include)
+  local hidden_lookup = tags_lookup(hidden)
   local tracks = selected_tag_tracks(settings)
-  local tagged = {}
-  for _, track in ipairs(tracks) do
-    local guid = track_guid(track)
-    if guid then tagged[guid] = true end
-  end
   r.Undo_BeginBlock()
   r.PreventUIRefresh(1)
-  r.Main_OnCommand(40297, 0)
-  for _, track in ipairs(tracks) do r.SetTrackSelected(track, true) end
-  for index = 0, r.CountTracks(0) - 1 do
+  -- Selecting the matches only means something for an isolate. With nothing but
+  -- hide tags the match is "everything that is left", and selecting the whole
+  -- project is not what that click asked for.
+  if #include > 0 then
+    r.Main_OnCommand(40297, 0)
+    for _, track in ipairs(tracks) do r.SetTrackSelected(track, true) end
+  end
+  local total = r.CountTracks(0)
+  local shown = 0
+  for index = 0, total - 1 do
     local track = r.GetTrack(0, index)
     local guid = track_guid(track)
-    local visible = guid and tagged[guid] == true
+    local tags = guid and state.data.tracks[guid] or nil
+    -- No include tags means every track is in scope; a hide tag then vetoes.
+    -- It vetoes an included track too, so the outcome does not depend on which
+    -- chip happened to be clicked last.
+    local visible = #include == 0 or track_matches_tags(tags, include_lookup)
+    if visible and #hidden > 0 and track_matches_tags(tags, hidden_lookup) then visible = false end
+    -- A track whose GUID cannot be read matches nothing, and hiding a track
+    -- that no chip can ever bring back is the one outcome worth avoiding.
+    if not guid then visible = true end
     r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", visible and 1 or 0)
     r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", visible and 1 or 0)
+    if visible then shown = shown + 1 end
   end
   r.PreventUIRefresh(-1)
   r.TrackList_AdjustWindows(false)
   r.UpdateArrange()
   r.Undo_EndBlock("Set tagged track visibility", -1)
-  app.status = "Tags selected " .. tostring(#tracks) .. " tracks"
+  app.status = "Tags showing " .. tostring(shown) .. " of " .. tostring(total) .. " tracks"
 end
 
 function restore_previous_visibility(app)
@@ -738,6 +815,16 @@ function restore_previous_visibility(app)
   clear_visibility_snapshot()
   app.status = "Tags restored previous visibility: " .. tostring(restored) .. " tracks"
   return true
+end
+
+-- Every place that changes either list ends here. With both of them empty
+-- there is no filter left to apply, and what the user was looking at before
+-- the first click comes back.
+function apply_tag_visibility(app, settings)
+  local include = normalize_selected_tags(settings)
+  local hidden = normalize_hidden_tags(settings)
+  if #include == 0 and #hidden == 0 then return restore_previous_visibility(app) end
+  return set_selected_tags_visibility(app, settings)
 end
 
 function show_all_tracks(app)
@@ -832,9 +919,47 @@ local function draw_remove_tag_confirm_popup(app, settings)
   end
 end
 
+-- The two lists are written together and applied in one go, so a chip can move
+-- a tag from one to the other without a frame in which it sits in both.
+local function set_tag_lists(app, settings, selected, hidden)
+  settings.selected_tags = selected
+  settings.hidden_tags = hidden
+  settings.filter_tag = selected[1] or ""
+  state.last_filter_key = nil
+  if app.save_settings then app.save_settings() end
+  apply_tag_visibility(app, settings)
+end
+
+-- Both escape hatches below put every track back on screen, and a row of lit
+-- chips next to a fully visible project claims a filter that is no longer
+-- doing anything. The filter goes with the visibility.
+local function clear_tag_filter(app, settings)
+  settings.selected_tags = {}
+  settings.hidden_tags = {}
+  settings.filter_tag = ""
+  state.last_filter_key = nil
+  if app.save_settings then app.save_settings() end
+end
+
+local function toggle_hidden_tag(app, settings, tag)
+  local selected_tags = normalize_selected_tags(settings)
+  local hidden_tags = normalize_hidden_tags(settings)
+  if list_contains(hidden_tags, tag) then
+    set_tag_lists(app, settings, selected_tags, list_without(hidden_tags, tag))
+    return
+  end
+  -- A tag cannot be isolated and hidden at once, so it leaves the other list on
+  -- the way in. Sitting in both would make the veto below read as a tag hiding
+  -- the very tracks it selected.
+  local next_hidden = list_without(hidden_tags, tag)
+  next_hidden[#next_hidden + 1] = tag
+  set_tag_lists(app, settings, list_without(selected_tags, tag), next_hidden)
+end
+
 local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
   local color = state.data.colors[tag]
   local selected = tag_is_selected(settings, tag)
+  local hidden = tag_is_hidden(settings, tag)
   local pushed = 0
   if settings.show_tag_colors ~= false and color then
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), color)
@@ -842,36 +967,41 @@ local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), color_text_for_bg(color))
     pushed = 3
   end
-  if r.ImGui_Button(ctx, tostring(tag) .. "##tag_chip_" .. tostring(suffix)) then
+  if r.ImGui_Button(ctx, tag_label(tag) .. "##tag_chip_" .. tostring(suffix)) then
     local ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+    local alt = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
     local selected_tags = normalize_selected_tags(settings)
-    if ctrl then
-      local next_tags = {}
-      local removed = false
-      for _, current in ipairs(selected_tags) do
-        if current == tag then removed = true else next_tags[#next_tags + 1] = current end
-      end
-      if not removed then next_tags[#next_tags + 1] = tag end
-      settings.selected_tags = next_tags
-      settings.filter_tag = next_tags[1] or ""
-      state.last_filter_key = nil
-      if app.save_settings then app.save_settings() end
-      if #next_tags > 0 then set_selected_tags_visibility(app, settings) else restore_previous_visibility(app) end
-    else
-      if #selected_tags == 1 and selected_tags[1] == tag then
-        settings.selected_tags = {}
-        settings.filter_tag = ""
-        state.last_filter_key = nil
-        if app.save_settings then app.save_settings() end
-        restore_previous_visibility(app)
+    local hidden_tags = normalize_hidden_tags(settings)
+    if alt then
+      -- Alt is the hide gesture. Hiding one tag used to mean ctrl-clicking
+      -- every other one, which is both tedious and wrong: it silently drops
+      -- the tracks that carry no tag at all.
+      toggle_hidden_tag(app, settings, tag)
+    elseif ctrl then
+      if list_contains(selected_tags, tag) then
+        set_tag_lists(app, settings, list_without(selected_tags, tag), hidden_tags)
       else
-        settings.selected_tags = { tag }
-        settings.filter_tag = tag
-        state.last_filter_key = nil
-        if app.save_settings then app.save_settings() end
-        set_selected_tags_visibility(app, settings)
+        local next_selected = list_without(selected_tags, tag)
+        next_selected[#next_selected + 1] = tag
+        set_tag_lists(app, settings, next_selected, list_without(hidden_tags, tag))
       end
+    elseif #selected_tags == 1 and selected_tags[1] == tag then
+      -- Clicking the isolated tag again is the way back to the full project,
+      -- so it drops the hide tags with it rather than leaving a filter behind
+      -- that no highlighted chip accounts for.
+      set_tag_lists(app, settings, {}, {})
+    else
+      set_tag_lists(app, settings, { tag }, list_without(hidden_tags, tag))
     end
+  end
+  if hidden then
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+    local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+    r.ImGui_DrawList_AddRect(draw_list, min_x - UIScale.round(1), min_y - UIScale.round(1), max_x + UIScale.round(1), max_y + UIScale.round(1), Theme.colors.danger, UIScale.px(4), 0, UIScale.px(2))
+    -- A line through the name reads as "hidden" on its own, which the accent
+    -- ring of a selected chip cannot do without a legend next to it.
+    r.ImGui_DrawList_AddLine(draw_list, min_x + UIScale.round(3), (min_y + max_y) * 0.5, max_x - UIScale.round(3), (min_y + max_y) * 0.5, Theme.colors.danger, UIScale.px(1.5))
   end
   if selected then
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -881,8 +1011,16 @@ local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
     r.ImGui_DrawList_AddCircleFilled(draw_list, max_x - UIScale.round(6), min_y + UIScale.round(6), UIScale.px(3), Theme.colors.accent, 12)
   end
   if pushed > 0 then r.ImGui_PopStyleColor(ctx, pushed) end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Filter by " .. tostring(tag)) end
-  if r.ImGui_BeginPopupContextItem(ctx, "##tag_context_" .. tostring(suffix)) then
+  if r.ImGui_IsItemHovered(ctx) then
+    if hidden then
+      r.ImGui_SetTooltip(ctx, "Hiding " .. tag_label(tag) .. "\nAlt-click to stop hiding")
+    else
+      r.ImGui_SetTooltip(ctx, "Filter by " .. tag_label(tag) .. "\nCtrl-click to add to the filter\nAlt-click to hide instead")
+    end
+  end
+  -- Every item below acts on a tag in the store, and the untagged chip is not
+  -- one: there is nothing to rename, recolour or remove.
+  if tag ~= UNTAGGED and r.ImGui_BeginPopupContextItem(ctx, "##tag_context_" .. tostring(suffix)) then
     if state.edit_color_tag ~= tag then
       state.edit_color_tag = tag
       state.edit_color_value = state.data.colors[tag] or state.edit_color_value
@@ -890,6 +1028,9 @@ local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
     if r.ImGui_MenuItem(ctx, "Add to selected tracks") then add_tag_to_guids(app, selected_track_guids(), tag) end
     r.ImGui_Separator(ctx)
     if r.ImGui_MenuItem(ctx, "Select tracks with tag") then select_tracks_with_tag(app, tag) end
+    if r.ImGui_MenuItem(ctx, hidden and "Stop hiding tracks with tag" or "Hide tracks with tag") then
+      toggle_hidden_tag(app, settings, tag)
+    end
     local muted = tagged_tracks_all_state(tag, "B_MUTE", 1)
     if r.ImGui_MenuItem(ctx, muted and "Unmute tracks with tag" or "Mute tracks with tag") then set_tagged_track_state(app, tag, "B_MUTE", muted and 0 or 1, muted and "Unmute tracks by tag" or "Mute tracks by tag") end
     local armed = tagged_tracks_all_state(tag, "I_RECARM", 1)
@@ -1035,8 +1176,12 @@ local function draw_available_tags(app, settings, width)
   local ctx = app.ctx
   if #state.available_sorted == 0 then return end
   r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Tags")
-  local line_w = 0
+  -- Drawn unconditionally. It belongs to the filter row rather than to the
+  -- project, and a chip that comes and goes as the last track gets a tag is
+  -- harder to find than one that is simply always there.
+  draw_tag_chip(ctx, app, settings, UNTAGGED, "available_untagged", nil)
   local max_w = math.max(UIScale.round(80), width - UIScale.round(2))
+  local line_w = r.ImGui_CalcTextSize(ctx, tag_label(UNTAGGED)) + UIScale.round(14) + UIScale.gap(6)
   for index, tag in ipairs(state.available_sorted) do
     local tag_w = r.ImGui_CalcTextSize(ctx, tag) + UIScale.round(14)
     if line_w > 0 and line_w + tag_w > max_w then
@@ -1089,8 +1234,11 @@ local function draw_track_row(app, settings, item, width)
     r.TrackList_AdjustWindows(false)
   end
   if r.ImGui_BeginPopupContextItem(ctx, "##track_atlas_track_context") then
-    if r.ImGui_MenuItem(ctx, "Show all tracks") then show_all_tracks(app) end
-    if r.ImGui_MenuItem(ctx, "Restore previous visibility") then restore_previous_visibility(app) end
+    if r.ImGui_MenuItem(ctx, "Show all tracks") then
+      clear_tag_filter(app, settings)
+      show_all_tracks(app)
+    end
+    if r.ImGui_MenuItem(ctx, "Restore previous visibility") then set_tag_lists(app, settings, {}, {}) end
     r.ImGui_EndPopup(ctx)
   end
   if #item.tags > 0 then

@@ -202,6 +202,18 @@ local function normalize_path(path)
   return path:gsub("/+$", "")
 end
 
+-- Everything in here is stored with forward slashes so comparing and joining
+-- stays simple. REAPER opens such a path fine on Windows, but it also remembers
+-- it verbatim: EnumProjects then hands the slashes back to every other script,
+-- and the ones that split a project path on "\\" (X-Raym's "Open project folder
+-- in explorer or finder" among them) come up empty. Hand REAPER the native form.
+local function native_path(path)
+  path = normalize_path(path)
+  local os_name = r.GetOS and r.GetOS() or ""
+  if os_name:match("^Win") then return (path:gsub("/", "\\")) end
+  return path
+end
+
 local function join_path(folder, name)
   folder = normalize_path(folder)
   if folder == "" then return tostring(name or "") end
@@ -987,7 +999,7 @@ local function make_project_preview(app, settings, project, mode)
   end
   if not was_open then
     r.Main_OnCommand(41929, 0)
-    r.Main_openProject(project_path)
+    r.Main_openProject(native_path(project_path))
   end
   local reaper_project = find_open_project_by_path(project_path)
   if not reaper_project then app.status = "Could not open project"; return end
@@ -1257,17 +1269,18 @@ local function open_project_now(app, project, new_tab)
   if not project or not project.path then return end
   if not r.Main_openProject then app.status = "Main_openProject is not available"; return end
   local mode_def = modes[project.mode or "projects"] or modes.projects
+  local open_path = native_path(project.path)
   if project.mode == "track_templates" then
-    local ok = pcall(r.Main_openProject, project.path, 1)
-    if not ok then r.Main_openProject(project.path) end
+    local ok = pcall(r.Main_openProject, open_path, 1)
+    if not ok then r.Main_openProject(open_path) end
     app.status = "Inserting track template: " .. project.name
     return
   end
   if new_tab and r.Main_OnCommand then r.Main_OnCommand(41929, 0) end
   if project.mode == "project_templates" then
-    r.Main_openProject("template:" .. project.path)
+    r.Main_openProject("template:" .. open_path)
   else
-    r.Main_openProject(project.path)
+    r.Main_openProject(open_path)
   end
   -- Everything in the project being replaced is freed by that call, and the
   -- snapshot the frame started with is still pointing at it. Modules updating

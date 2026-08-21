@@ -181,9 +181,16 @@ local function do_capture(app)
   for _, entry in ipairs(state.ideas) do
     if entry.name == idea.name then state.selected = entry; break end
   end
-  app.status = warning
-    and ("Saved " .. idea.name .. " without a preview: " .. tostring(warning))
-    or ("Captured " .. idea.name)
+  -- A warning no longer implies there is no preview file: a render that ran but
+  -- came out silent leaves one behind, and saying it was not written would send
+  -- the user looking for the wrong problem.
+  if not warning then
+    app.status = "Captured " .. idea.name
+  elseif tostring(idea.preview or "") ~= "" then
+    app.status = "Captured " .. idea.name .. ": " .. tostring(warning)
+  else
+    app.status = "Saved " .. idea.name .. " without a preview: " .. tostring(warning)
+  end
   return true
 end
 

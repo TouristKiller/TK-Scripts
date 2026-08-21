@@ -454,6 +454,97 @@ local function resolve_bounds(cfg, tracks)
   return { flag = 1 }
 end
 
+-- Solo is exclusive: everything that is not soloed goes quiet, and that
+-- includes the buses the idea's own tracks route through. Master/parent send
+-- off plus an explicit send into a sub-bus is a routing style REAPER is
+-- perfectly happy with, but the solo cut the path and the render came out
+-- silent. So follow the signal downstream from every track in the idea and
+-- solo whatever it passes through on its way to the master.
+local function routing_chain(tracks)
+  local in_idea, seen, queue, buses = {}, {}, {}, {}
+  local reaches_master = false
+  for _, track in ipairs(tracks) do
+    in_idea[track] = true
+    if not seen[track] then seen[track] = true; queue[#queue + 1] = track end
+  end
+  local function push(dest)
+    if not dest or seen[dest] then return end
+    seen[dest] = true
+    queue[#queue + 1] = dest
+    if not in_idea[dest] then buses[#buses + 1] = dest end
+  end
+  local head = 1
+  while head <= #queue do
+    local track = queue[head]
+    head = head + 1
+    if r.GetMediaTrackInfo_Value(track, "B_MAINSEND") == 1 then
+      -- No parent folder means this send lands on the master itself.
+      local parent = r.GetParentTrack(track)
+      if parent then push(parent) else reaches_master = true end
+    end
+    for i = 0, (r.GetTrackNumSends(track, 0) or 0) - 1 do
+      local muted = r.GetTrackSendInfo_Value(track, 0, i, "B_MUTE")
+      if muted == nil or muted == 0 then
+        push(r.GetTrackSendInfo_Value(track, 0, i, "P_DESTTRACK"))
+      end
+    end
+  end
+  return buses, reaches_master
+end
+
+local function folder_children(track)
+  local out = {}
+  if r.GetMediaTrackInfo_Value(track, "I_FOLDERDEPTH") ~= 1 then return out end
+  local total = r.CountTracks(0)
+  -- IP_TRACKNUMBER is 1-based, so it is already the 0-based index of the track
+  -- after this one - the first child.
+  local level = 1
+  local j = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+  while j < total and level > 0 do
+    local child = r.GetTrack(0, j)
+    out[#out + 1] = child
+    level = level + r.GetMediaTrackInfo_Value(child, "I_FOLDERDEPTH")
+    j = j + 1
+  end
+  return out
+end
+
+-- Soloing a folder track plays the whole folder, so a sub-bus that doubles as a
+-- folder parent would drag its other children into the preview. Those get muted
+-- for the length of the render - only the ones that are neither part of the
+-- idea nor carrying its signal.
+local function folder_bystanders(tracks, buses)
+  local keep = {}
+  for _, track in ipairs(tracks) do keep[track] = true end
+  for _, track in ipairs(buses) do keep[track] = true end
+  local out, added = {}, {}
+  for _, bus in ipairs(buses) do
+    for _, child in ipairs(folder_children(bus)) do
+      if not keep[child] and not added[child] then
+        added[child] = true
+        out[#out + 1] = child
+      end
+    end
+  end
+  return out
+end
+
+local function snapshot_mute(tracks)
+  local snap = {}
+  for _, track in ipairs(tracks) do
+    snap[#snap + 1] = { track = track, mute = r.GetMediaTrackInfo_Value(track, "B_MUTE") }
+  end
+  return snap
+end
+
+local function restore_mute(snap)
+  for _, entry in ipairs(snap) do
+    if r.ValidatePtr2(0, entry.track, "MediaTrack*") then
+      r.SetMediaTrackInfo_Value(entry.track, "B_MUTE", entry.mute)
+    end
+  end
+end
+
 -- Renders the given tracks to one preview file and puts every project setting
 -- it touched back the way it found it, including the solo states.
 function Store.render_preview(tracks, base, dir, cfg)
@@ -464,6 +555,8 @@ function Store.render_preview(tracks, base, dir, cfg)
   local render_snapshot = snapshot_render()
   local solo_snapshot = snapshot_solo()
   local bounds = resolve_bounds(cfg, tracks)
+  local buses, reaches_master = routing_chain(tracks)
+  local mute_snapshot = snapshot_mute(folder_bystanders(tracks, buses))
 
   r.PreventUIRefresh(1)
   for _, entry in ipairs(solo_snapshot) do
@@ -472,18 +565,28 @@ function Store.render_preview(tracks, base, dir, cfg)
   for _, track in ipairs(tracks) do
     r.SetMediaTrackInfo_Value(track, "I_SOLO", 1)
   end
+  for _, track in ipairs(buses) do
+    r.SetMediaTrackInfo_Value(track, "I_SOLO", 1)
+  end
+  for _, entry in ipairs(mute_snapshot) do
+    r.SetMediaTrackInfo_Value(entry.track, "B_MUTE", 1)
+  end
   apply_render_settings(base, dir, cfg, bounds)
 
   local ok, err = pcall(r.Main_OnCommand, RENDER_COMMAND, 0)
 
   restore_render(render_snapshot)
   restore_solo(solo_snapshot)
+  restore_mute(mute_snapshot)
   r.PreventUIRefresh(-1)
   r.UpdateArrange()
 
   if not ok then return nil, tostring(err) end
   local path = find_rendered(dir, base)
   if not path then return nil, "The render produced no file - check the render format settings" end
+  if not reaches_master then
+    return path, "Nothing on these tracks reaches the master, so the preview is silent - check the master/parent send and the sends out of them"
+  end
   return path
 end
 
@@ -598,13 +701,17 @@ function Store.capture(opts)
 
   local warning = nil
   if opts.render ~= false then
-    local preview_path, render_err = Store.render_preview(tracks, base, root, cfg)
+    local preview_path, render_note = Store.render_preview(tracks, base, root, cfg)
+    warning = render_note
     if preview_path then
       idea.preview = select(2, split_path(preview_path))
       idea.preview_path = preview_path
       idea.duration = media_length(preview_path) or 0
-    else
-      warning = render_err
+      -- A file that carries no audio at all is worth saying out loud: the
+      -- capture looks like it worked and the preview plays back nothing.
+      if idea.duration <= 0 and not warning then
+        warning = "The preview rendered empty - check the routing and the render settings"
+      end
     end
   end
 

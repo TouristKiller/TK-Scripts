@@ -1,7 +1,16 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.8.4
+-- @version 0.8.5
 -- @changelog:
+-- v0.8.5
+--   + Project Browser: Opening a project no longer breaks the scripts you run afterwards. Paths are kept with forward slashes inside the module because it makes comparing and joining them simple, and REAPER opens such a path on Windows without complaint - but it also remembers it exactly as it was handed over, so EnumProjects gave those slashes back to every other script that asked what project was open. Anything splitting a project path on the Windows separator then found nothing to split on, which is why X-Raym's "Open project folder in explorer or finder" failed on a nil the moment the project came from the browser and worked when the same project came from Explorer. REAPER is now handed the native form. Reported by vik-tan
+--   + Idea Vault: A capture no longer renders silence when the tracks feed a sub-bus. Solo is exclusive - everything that is not soloed goes quiet - and the preview solos the idea's own tracks and renders the master mix, which cut the very bus that was carrying their signal there. With master or parent send switched off, a routing style REAPER is perfectly happy with, nothing arrived at the master and the file came out empty. The routing is now followed downstream from every track in the idea, through parent sends and explicit sends alike, and the buses on the way are soloed with it - so the preview is what the idea actually sounds like, bus processing included, rather than the raw tracks forced past their own routing. Reported by manthosdm
+--   + Idea Vault: Soloing a bus that doubles as a folder parent would have pulled its other children into the preview, so those are muted for the length of the render and put back afterwards, alongside the solo states that were already being restored. Nothing about the project is left changed either way, which is why the sends themselves are not switched on and off: they are off on purpose, and a render interrupted halfway would leave that setup in pieces
+--   + Idea Vault: A preview that cannot reach the master, or that arrives zero seconds long, now says so instead of being saved without a word. A capture that looks like it worked and plays back nothing is worth interrupting for, and the message no longer offers render-format advice in the case where the file was written and the routing was the problem
+--   + Tags: A tag can be hidden instead of isolated. Alt-click one, or use "Hide tracks with tag" in its right-click menu, and the tracks carrying it go away while everything else stays. Hiding a single group used to mean ctrl-clicking every other tag to assemble the complement by hand, which is tedious at three tags and unusable at ten. A hide overrules a selection, so the two can be combined and the result never depends on which chip happened to be clicked last. Requested by manthosdm
+--   + Tags: Untagged tracks have a chip of their own. They match no tag, so any filter dropped them and nothing short of clearing it brought them back - they were collateral damage of a selection they could never be part of. "Untagged" now behaves like any other tag: click it to isolate them, alt-click to hide them, ctrl-click to add them to a filter that already has tags in it. Reported by manthosdm
+--   + Tags: "Show all tracks" and "Restore previous visibility" clear the tag filter along with the visibility, because a row of lit chips beside a fully visible project claims a filter that is no longer doing anything
+--   + Workbench: The auto-collapse edge offset can be set as far as 250px, where it stopped at 96px before, for setups that need a collapsed panel to sit further in from the screen edge than that. Requested by vik-tan
 -- v0.8.4
 --   + Send Studio: The dB bubble above the volume slider in the list view is gone. The slider prints its own value inside itself and always has, so the bubble was the same number twice over. It was added when a tinted trough could swallow that readout, and the tint is now handled where it belongs - the trough picks a text colour that clears 4.5:1 against the shade it really is - which leaves the bubble with nothing to do. It also appeared on hover rather than only while dragging, and drew above its own row, over the send listed before it. The pan knob keeps its bubble: a knob has nowhere to print a value
 -- v0.8.3
@@ -1997,7 +2006,7 @@ local function draw_preferences_settings()
     end
     r.ImGui_PopItemWidth(ctx)
     r.ImGui_PushItemWidth(ctx, 140)
-    changed, value = r.ImGui_SliderInt(ctx, "Edge offset", math.floor((tonumber(app.settings.auto_collapse_edge_offset) or 0) + 0.5), 0, 96, "%d px")
+    changed, value = r.ImGui_SliderInt(ctx, "Edge offset", math.floor((tonumber(app.settings.auto_collapse_edge_offset) or 0) + 0.5), 0, 250, "%d px")
     if changed and not auto_collapse_locked then
       app.settings.auto_collapse_edge_offset = value
       app.cache.auto_collapse_force_restore = true
@@ -2109,7 +2118,7 @@ local function auto_collapse_edge_hover_margin()
 end
 
 local function auto_collapse_edge_offset()
-  return clamp(app.settings.auto_collapse_edge_offset or 0, 0, 96)
+  return clamp(app.settings.auto_collapse_edge_offset or 0, 0, 250)
 end
 
 local function expanded_window_min_size()

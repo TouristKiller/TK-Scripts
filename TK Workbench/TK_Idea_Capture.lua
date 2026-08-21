@@ -110,7 +110,15 @@ end
 -- meant to be one keystroke on a morning where the point is to keep playing.
 -- Anything less than a full capture does report, because otherwise a missing
 -- preview would only turn up weeks later when auditioning.
-if warning then
+if warning and tostring(idea.preview or "") ~= "" then
+  -- The render ran and left a file behind, so the warning is about what ended
+  -- up in it. Repeating the render-format advice here would send the user off
+  -- to fix a setting that is already correct.
+  r.ShowMessageBox(
+    "Saved \"" .. idea.name .. "\", but the preview may not sound right:\n\n"
+      .. tostring(warning),
+    SCRIPT_NAME, 0)
+elseif warning then
   r.ShowMessageBox(
     "Saved the template for \"" .. idea.name .. "\", but the preview render failed:\n\n"
       .. tostring(warning)
