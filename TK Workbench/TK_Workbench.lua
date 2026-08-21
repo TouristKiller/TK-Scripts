@@ -1,7 +1,15 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.8.5
+-- @version 0.8.6
 -- @changelog:
+-- v0.8.6
+--   + Send Studio: A track with receives no longer takes the panel down when it is opened. The card view fills a column top to bottom and then moves the cursor below that column so whatever comes after lines up with it - but moving the cursor is not the same as claiming the space, and Receives is the last thing in the body, so ImGui found the cursor sitting below everything that had actually been drawn and refused to close the panel with "Code uses SetCursorPos() to extend window/parent boundaries". An item is now submitted at that position, which is what tells ImGui the space is taken. Reported by Warren
+--   + Workbench: A module that fails that way used to take the rest of the frame with it, the shell included, so there was no toolbar left to click your way back to Home with - and since the active module is kept in the settings, restarting REAPER landed straight back in the same dead frame. Three such frames in a row now closes the module and puts Home back, which is enough to rule out a one-off and quick enough to leave a message instead of a window that has stopped. The PopID that follows a module's draw is skipped when the context is already gone, since that second error only ever buried the real one - it is the "expected a valid ImGui_Context*" line that came with reports like this
+--   + Idea Vault: A preview is rendered over the idea's own items again, not over a time selection left somewhere else in the song. Any time selection used to win outright, so a capture made while one was sitting two minutes further along rendered that stretch instead - the right length, the right format, and silence, with nothing anywhere saying so. A selection is now honoured only when it genuinely sits on the items being captured, which is the case where it means "capture this part"; one that does not overlap them, or a sliver from a stray drag in the ruler, is treated as the leftover it is. Reported by manthosdm
+--   + Idea Vault: A preview that comes out silent now says so, and says what it covered. Duration could never answer that question - a render aimed at an empty stretch produces a perfectly normal file - so the rendered preview is scanned for signal before the capture reports success, and a silent one is reported with the range it rendered, which is the fastest way to see that the render was pointed at the wrong part of the project. A build that cannot read peaks says nothing rather than crying silence
+--   + Idea Vault: TK_Idea_Preview_Check.lua ships with the package as an action of its own. It renders nothing and changes nothing: it reports which tracks a capture would take, the range it would render and whether a time selection is sitting on the items or somewhere else entirely, which buses would be soloed along with the idea, and whether anything reaches the master - and then scans the previews already in the vault for signal. That last line is the one that matters, because it separates the two failures that look identical from the outside: a preview that is silent was rendered that way, while one that has audio and still plays back silent is a player problem
+--   + Render Hub: The render source is labelled correctly. Master mix is the absence of both stem bits rather than a bit of its own, so testing for one labelled every plain master-mix render - the commonest there is, and what Render Hub's own presets write - as "Custom", while stems-plus-master read as "Master". Selected items, tracks via master and razor edits have their own names now instead of falling into the same bucket, and the bounds list knows about project and selected markers, which it did not
+--   + Project Browser: A track template plays the audio file lying beside it. The playback panel turned track templates away on sight, and the lookup behind it only knew the ".tkprev." names that project previews carry - so an Idea Vault capture, which writes Idea.RTrackTemplate and Idea.wav into one folder, had a preview the browser could not see. An audio file sharing a template's name is now that template's preview, whoever wrote it: drop a wav next to a template you made years ago and it plays. Ten formats are tried in a fixed order so a folder holding both a wav and an mp3 of the same idea always answers with the same one, and a scan of the folder catches anything else. Make Preview and Manage stay hidden for templates, since both are about rendering a project and managing the files named for one. Requested by TouristKiller
 -- v0.8.5
 --   + Project Browser: Opening a project no longer breaks the scripts you run afterwards. Paths are kept with forward slashes inside the module because it makes comparing and joining them simple, and REAPER opens such a path on Windows without complaint - but it also remembers it exactly as it was handed over, so EnumProjects gave those slashes back to every other script that asked what project was open. Anything splitting a project path on the Windows separator then found nothing to split on, which is why X-Raym's "Open project folder in explorer or finder" failed on a nil the moment the project came from the browser and worked when the same project came from Explorer. REAPER is now handed the native form. Reported by vik-tan
 --   + Idea Vault: A capture no longer renders silence when the tracks feed a sub-bus. Solo is exclusive - everything that is not soloed goes quiet - and the preview solos the idea's own tracks and renders the master mix, which cut the very bus that was carrying their signal there. With master or parent send switched off, a routing style REAPER is perfectly happy with, nothing arrived at the master and the file came out empty. The routing is now followed downstream from every track in the idea, through parent sends and explicit sends alike, and the buses on the way are soloed with it - so the preview is what the idea actually sounds like, bus processing included, rather than the raw tracks forced past their own routing. Reported by manthosdm
@@ -2447,13 +2455,18 @@ local function pop_workspace_style(vars)
   if vars and vars > 0 then r.ImGui_PopStyleVar(ctx, vars) end
 end
 
+local function context_alive()
+  if not r.ImGui_ValidatePtr then return true end
+  return r.ImGui_ValidatePtr(ctx, "ImGui_Context*") == true
+end
+
 local function draw_module_error(module, err)
   -- An ImGui structural failure (an unbalanced PushID or BeginChild inside a
   -- module) invalidates the context on its way out. Drawing the message on that
   -- dead context would raise a second, more confusing error and hide the real
   -- one, so bail out here: loop() recreates the context on the next frame and
   -- the message shows up then.
-  if r.ImGui_ValidatePtr and not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then return end
+  if not context_alive() then return end
   local width = r.ImGui_GetContentRegionAvail(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -2474,6 +2487,36 @@ local function draw_module_error(module, err)
   r.ImGui_Dummy(ctx, 1, 1)
 end
 
+-- How many frames running a module may take the context down with it before the
+-- workbench puts Home back on screen. A structural failure kills every call
+-- after it in that frame, the shell's own included, so the window never finishes
+-- drawing - there is no toolbar left to click and no way back to Home. Three
+-- frames is enough to rule out a one-off (a track deleted mid-frame) and quick
+-- enough that the user sees a message instead of a window that has stopped.
+local STRUCTURAL_FAIL_LIMIT = 3
+
+-- Close the module that keeps failing and go back to Home. The module id lives
+-- in the settings, so without this it is still the active one on the next run
+-- and the script comes back up straight into the same dead frame.
+local function recover_from_structural_failure(module)
+  local id = module and module.id
+  local title = tostring(module and (module.title or module.id) or "Module")
+  local in_split = id and app.settings.split_module == id
+  if in_split then
+    app.settings.split_module = ""
+    -- Not just cleared: with only two modules loaded the split pane would fall
+    -- back to the very module we are trying to get off the screen.
+    app.settings.split_view_enabled = false
+  end
+  if id and app.settings.active_module == id then
+    app.settings.active_module = HOME_MODULE_ID
+    app.settings.split_pinned_pane = ""
+    app.settings.split_pinned_return = ""
+  end
+  save_settings()
+  app.status = title .. " kept failing to draw and was closed - details in workbench_errors.txt"
+end
+
 local function draw_module_instance(module, pane_id)
   if not module then
     r.ImGui_TextColored(ctx, Theme.text_for_backgrounds({ Theme.colors.window_bg, Theme.colors.child_bg }, Theme.colors.warning, nil, 4.5), "No modules loaded")
@@ -2485,17 +2528,34 @@ local function draw_module_instance(module, pane_id)
     -- as belonging to this module's failure.
     app.breadcrumb = nil
     local ok, err = pcall(module.draw, app)
+    app.cache.structural_fails = app.cache.structural_fails or {}
     if ok then
       clear_module_error(module.id .. ".draw")
+      app.cache.structural_fails[module.id] = nil
     else
       record_module_error(module.id .. ".draw", err)
-      draw_module_error(module, err)
+      if context_alive() then
+        -- An ordinary Lua error: the module stops, the panel says why, and the
+        -- rest of the window carries on drawing around it.
+        app.cache.structural_fails[module.id] = nil
+        draw_module_error(module, err)
+      else
+        local count = (app.cache.structural_fails[module.id] or 0) + 1
+        app.cache.structural_fails[module.id] = count
+        if count >= STRUCTURAL_FAIL_LIMIT then
+          app.cache.structural_fails[module.id] = nil
+          recover_from_structural_failure(module)
+        end
+      end
     end
     -- Deliberately not cleared here. The PopID below is outside the module's own
     -- pcall, so when that is the thing that fails the note has to survive long
     -- enough to be read - and that failure is exactly the one we are chasing.
   end
-  r.ImGui_PopID(ctx)
+  -- Popping on a context the module already invalidated raises a second error
+  -- ("expected a valid ImGui_Context*") that buries the real one in the log and
+  -- aborts the frame before anything downstream gets a chance to tidy up.
+  if context_alive() then r.ImGui_PopID(ctx) end
 end
 
 local function splitter_thickness()

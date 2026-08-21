@@ -50,7 +50,9 @@ local BOUNDS_LABELS = {
   [2] = "Time selection",
   [3] = "Project regions",
   [4] = "Selected items",
-  [5] = "Selected regions"
+  [5] = "Selected regions",
+  [6] = "Project markers",
+  [7] = "Selected markers"
 }
 
 -- REAPER stores the sink type as a little-endian fourcc, so the decoded config
@@ -999,17 +1001,32 @@ function fmt.bounds_label(snapshot)
   return BOUNDS_LABELS[bounds] or ("Bounds " .. tostring(bounds))
 end
 
--- The RENDER_SETTINGS bitmask carries more than these two flags, so anything
--- unrecognised stays "Custom" instead of being guessed at.
+-- Read off the SDK header rather than inferred, because the two bits that
+-- decide between master and stems do not mean what their names suggest:
+-- master mix is the *absence* of both (&(1|2)==0), &1 is stems plus the master
+-- and &2 is stems alone. Guessing that &1 meant "master" labelled every plain
+-- master-mix render - the commonest render there is, and the one Render Hub's
+-- own presets write - as "Custom".
+--
+-- The item, track and razor-edit sources sit in higher bits and outrank the
+-- stem bits, so they are tested first.
 function fmt.source_label(snapshot)
   local settings = math.floor(tonumber(snapshot and snapshot.numbers and snapshot.numbers.RENDER_SETTINGS) or 0)
   local label
-  if settings & 2 ~= 0 then
-    label = "Stems"
+  if settings & 64 ~= 0 then
+    label = "Items via master"
+  elseif settings & 32 ~= 0 then
+    label = "Selected items"
+  elseif settings & 128 ~= 0 then
+    label = "Tracks via master"
+  elseif settings & 4096 ~= 0 then
+    label = "Razor edits"
+  elseif settings & 2 ~= 0 then
+    label = (settings & 8192 ~= 0) and "Stems pre-fader" or "Stems"
   elseif settings & 1 ~= 0 then
-    label = "Master"
+    label = "Stems + master"
   else
-    label = "Custom"
+    label = "Master mix"
   end
   if settings & 4 ~= 0 then label = label .. " multi" end
   return label
@@ -1985,9 +2002,10 @@ function view.draw_presets(app, height)
 end
 
 -- Which context the bounds hand to the wildcards. Only what BOUNDSFLAG settles
--- is claimed here: whether stems are on lives in a bit of RENDER_SETTINGS whose
--- meaning is not documented well enough to warn about, so $track is left alone
--- rather than warned about wrongly.
+-- is claimed here. $track resolves per stem rather than per bounds, so it is
+-- deliberately left out of this: warning about it would mean second-guessing
+-- the source as well as the bounds, and a wildcard warned about wrongly is
+-- worse than one not warned about at all.
 function view.bounds_context(bounds)
   if bounds == 3 or bounds == 5 then return "regions" end
   if bounds == 4 then return "items" end

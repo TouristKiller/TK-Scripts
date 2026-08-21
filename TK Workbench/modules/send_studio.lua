@@ -2076,7 +2076,14 @@ local function draw_section_strips(app, settings, rows, column_height)
     draw_strip(app, lane, settings, strip_w, strip_h)
   end
   -- Move below the tallest (first) column so the following content lines up.
+  -- The Dummy after it is not optional. SetCursorPos on its own moves the cursor
+  -- without claiming the space, and when this section is the last thing in the
+  -- body child - Receives, card view - the cursor sits below everything that was
+  -- actually submitted and EndChild refuses the frame with "uses SetCursorPos()
+  -- to extend window/parent boundaries". A zero-ish item at the new position is
+  -- the documented way to grow the boundary to match.
   r.ImGui_SetCursorPos(ctx, origin_x, origin_y + math.min(rows_per_col, #rows) * (strip_h + spacing))
+  r.ImGui_Dummy(ctx, 1, 1)
 end
 
 local function draw_section_list(app, settings, rows)

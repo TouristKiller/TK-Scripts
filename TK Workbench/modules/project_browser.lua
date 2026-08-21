@@ -783,9 +783,54 @@ local function list_project_previews(project)
   return list
 end
 
+-- A track template has no .tkprev. files and no proxy: what sits beside it is a
+-- plain audio file under the same name. Idea Vault writes exactly that - Idea.
+-- RTrackTemplate and Idea.wav in one folder - but nothing here is specific to
+-- Idea Vault, and that is the point: an audio file next to a template, sharing
+-- its name, is that template's preview whoever wrote it. Drop a wav beside a
+-- template you made years ago and it plays.
+local TEMPLATE_PREVIEW_EXTS = {
+  "wav", "flac", "aif", "aiff", "wv", "ogg", "opus", "mp3", "m4a", "w64"
+}
+
+local function template_preview_path(project)
+  if not project or not project.path then return nil end
+  local dir = project.folder or project_folder(project.path)
+  local base = project_preview_base(project)
+  if dir == "" or base == "" then return nil end
+  -- The extension list is walked in order rather than the directory, so a folder
+  -- holding both a wav and an mp3 of the same idea always answers with the same
+  -- one instead of whichever the filesystem happened to hand back first.
+  for _, ext in ipairs(TEMPLATE_PREVIEW_EXTS) do
+    local path = join_path(dir, base .. "." .. ext)
+    if file_exists(path) then return path end
+  end
+  -- Only if none of them matched: a case-different extension, or one written in
+  -- a format not on the list, still turns up in a scan of the folder.
+  local base_l = base:lower()
+  local index = 0
+  while true do
+    local name = r.EnumerateFiles(dir, index)
+    if not name then break end
+    local stem, ext = name:match("^(.*)%.([^%.]+)$")
+    if stem and ext and stem:lower() == base_l then
+      for _, allowed in ipairs(TEMPLATE_PREVIEW_EXTS) do
+        if ext:lower() == allowed then return join_path(dir, name) end
+      end
+    end
+    index = index + 1
+  end
+  return nil
+end
+
 local function project_preview_path(project)
   if not project or not project.path then return nil end
   if state.preview_path_cache[project.path] ~= nil then return state.preview_path_cache[project.path] or nil end
+  if project.mode == "track_templates" then
+    local found = template_preview_path(project)
+    state.preview_path_cache[project.path] = found or false
+    return found
+  end
   local dir = project.folder or project_folder(project.path)
   local base = project_preview_base(project)
   if dir ~= "" then
@@ -1795,7 +1840,8 @@ local function draw_project_preview_transport(app, settings, project, width)
   local disabled = preview_path == nil or not r.CF_CreatePreview or not r.CF_Preview_Play
   local length_text = format_project_length(length)
   local time_text = format_project_length(position) .. " / " .. (length_text ~= "" and length_text or "0:00")
-  local preview_label = preview_path and "Preview" or "No preview"
+  local preview_label = preview_path and "Preview" or
+    (project.mode == "track_templates" and "No audio beside this template" or "No preview")
   local collapsed = draw_playback_collapse_button(ctx)
   r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
   if disabled then
@@ -1828,6 +1874,11 @@ local function draw_project_preview_transport(app, settings, project, width)
     end
     r.ImGui_PopItemWidth(ctx)
   end
+  -- Make Preview opens a project and renders it, and Manage lists the .tkprev.
+  -- files that flow produces. Neither means anything for a track template: there
+  -- is no project to open and no naming scheme to manage. The transport above
+  -- stays, because playing what is already there is the whole point.
+  if project.mode == "track_templates" then return end
   local button_gap = UIScale.gap(8)
   local action_row_w = select(1, r.ImGui_GetContentRegionAvail(ctx))
   local action_button_w = math.max(1, (action_row_w - button_gap) * 0.5)
@@ -1947,8 +1998,6 @@ local function draw_project_playback_panel(app, project, width, height)
   if child_visible then
     if not project then
       draw_playback_placeholder(ctx, "Select a project")
-    elseif project.mode == "track_templates" then
-      draw_playback_placeholder(ctx, "No project playback for track templates")
     else
       local ok, err = pcall(draw_project_preview_transport, app, ensure_settings(app), project, width)
       if not ok then

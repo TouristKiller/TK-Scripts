@@ -438,20 +438,51 @@ local function apply_render_settings(base, dir, cfg, bounds)
   set_number("RENDER_TAILFLAG", tail > 0 and 15 or 0)
 end
 
+local function range_label(prefix, start_pos, end_pos)
+  if not start_pos or not end_pos then return prefix end
+  return string.format("%s (%.1fs - %.1fs)", prefix, start_pos, end_pos)
+end
+
+-- A time selection shorter than this is a stray drag in the ruler, not a
+-- decision about what to capture.
+local MIN_TIMESEL = 0.25
+
+-- What the preview covers. "auto" means the idea's own items: a capture is of a
+-- phrase, and the song around it is not part of it.
+--
+-- A time selection is honoured only when it is genuinely sitting on that phrase.
+-- One left behind somewhere else in the song used to win outright - and there is
+-- nearly always one left behind somewhere - so the render was aimed at a stretch
+-- of project with nothing on it and produced a preview of the right length, in
+-- the right format, containing silence. Nothing said so: the file existed, its
+-- duration was not zero, and every check passed. That is the failure this rule
+-- and the peak scan further down exist to stop.
 local function resolve_bounds(cfg, tracks)
   local mode = cfg.bounds or "auto"
-  if mode == "project" then return { flag = 1 } end
+  if mode == "project" then return { flag = 1, label = "the whole project" } end
+
   local sel_start, sel_end = r.GetSet_LoopTimeRange(false, false, 0, 0, false)
-  if (mode == "auto" or mode == "timesel") and sel_end and sel_end > sel_start then
-    return { flag = 2 }
-  end
-  if mode == "auto" then
-    local first, last = items_extent(tracks)
-    if first and last and last > first then
-      return { flag = 0, start_pos = first, end_pos = last }
+  local has_selection = sel_start and sel_end and sel_end > sel_start
+  if mode == "timesel" then
+    if has_selection then
+      return { flag = 2, start_pos = sel_start, end_pos = sel_end,
+               label = range_label("the time selection", sel_start, sel_end) }
     end
+    return { flag = 1, label = "the whole project - there is no time selection" }
   end
-  return { flag = 1 }
+
+  local first, last = items_extent(tracks)
+  local has_items = first and last and last > first
+  local on_the_idea = (not has_items) or (sel_start < last and sel_end > first)
+  if has_selection and (sel_end - sel_start) >= MIN_TIMESEL and on_the_idea then
+    return { flag = 2, start_pos = sel_start, end_pos = sel_end,
+             label = range_label("the time selection", sel_start, sel_end) }
+  end
+  if has_items then
+    return { flag = 0, start_pos = first, end_pos = last,
+             label = range_label("the items on these tracks", first, last) }
+  end
+  return { flag = 1, label = "the whole project - these tracks have no items" }
 end
 
 -- Solo is exclusive: everything that is not soloed goes quiet, and that
@@ -545,6 +576,58 @@ local function restore_mute(snap)
   end
 end
 
+-- Anything under -80 dB is silence for this purpose: a render that produced
+-- nothing but dither or a plugin's noise floor is still a preview of nothing.
+local SILENCE_FLOOR = 0.0001
+local PEAK_RATE = 40
+local PEAK_MAX_POINTS = 4096
+
+-- Whether a rendered preview actually carries signal. Duration cannot answer
+-- that: a render aimed at an empty stretch of project comes back the right
+-- length, in the right format, and silent - which is exactly what a wrong range,
+-- a mute upstream or an instrument that never received its MIDI produces, and
+-- the one failure the capture could not see.
+--
+-- Returns true, false, or nil for "cannot say". Nil matters: a build without
+-- these functions, or a file whose peaks are not available, must never be
+-- reported as a silent preview. Only a scan that really ran and really found
+-- nothing says false.
+local function preview_has_signal(path)
+  if not r.PCM_Source_CreateFromFile or not r.PCM_Source_GetPeaks or not r.new_array then return nil end
+  local source = r.PCM_Source_CreateFromFile(path)
+  if not source then return nil end
+  local answer = nil
+  local ok = pcall(function()
+    local length = tonumber(r.GetMediaSourceLength(source)) or 0
+    local channels = math.floor(tonumber(r.GetMediaSourceNumChannels and r.GetMediaSourceNumChannels(source)) or 0)
+    if length <= 0 or channels <= 0 then return end
+    local rate, points = PEAK_RATE, math.ceil(length * PEAK_RATE)
+    if points > PEAK_MAX_POINTS then
+      points = PEAK_MAX_POINTS
+      rate = points / length
+    end
+    if points < 1 then return end
+    -- Peaks come back interleaved in blocks - maximums, then minimums, then the
+    -- extra type, which is not asked for here. Three blocks are allocated so a
+    -- build that writes one anyway cannot run past the end of the buffer.
+    local buf = r.new_array(points * channels * 3)
+    buf.clear()
+    -- The low 20 bits of the return value are how many peak points came back.
+    -- Zero means the peaks were not available, not that the file is quiet.
+    local returned = r.PCM_Source_GetPeaks(source, rate, 0, channels, points, 0, buf) & 0xFFFFF
+    if returned <= 0 then return end
+    local peak = 0
+    for i = 1, points * channels * 2 do
+      local value = math.abs(buf[i] or 0)
+      if value > peak then peak = value end
+    end
+    answer = peak > SILENCE_FLOOR
+  end)
+  if r.PCM_Source_Destroy then r.PCM_Source_Destroy(source) end
+  if not ok then return nil end
+  return answer
+end
+
 -- Renders the given tracks to one preview file and puts every project setting
 -- it touched back the way it found it, including the solo states.
 function Store.render_preview(tracks, base, dir, cfg)
@@ -586,6 +669,14 @@ function Store.render_preview(tracks, base, dir, cfg)
   if not path then return nil, "The render produced no file - check the render format settings" end
   if not reaches_master then
     return path, "Nothing on these tracks reaches the master, so the preview is silent - check the master/parent send and the sends out of them"
+  end
+  -- Said with the range in it on purpose. "The preview is silent" sends someone
+  -- looking at their routing; "it rendered 41.2s - 47.8s and found nothing
+  -- there" tells them in one line that the render was pointed at the wrong part
+  -- of the project, which is the likelier of the two by some way.
+  if preview_has_signal(path) == false then
+    return path, "The preview rendered silence. It covered " .. tostring(bounds.label or "the render range") ..
+      " - check that the idea is inside that range and audible with the other tracks quiet"
   end
   return path
 end
