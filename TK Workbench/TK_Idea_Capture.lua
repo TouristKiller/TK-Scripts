@@ -1,7 +1,9 @@
 -- @description TK Idea Capture
 -- @author TouristKiller
--- @version 0.1.0
+-- @version 0.1.1
 -- @changelog:
+--   + Tags are split on commas alone, the way the module splits them, so
+--     "dark pad" typed here is one tag and not two
 --   + Initial release: saves the selected track as a track template plus a
 --     tempo-tagged audio preview, in one action, without opening TK Workbench
 
@@ -55,12 +57,6 @@ local function is_yes(value)
   return value == "" or value == "y" or value == "yes" or value == "j" or value == "ja" or value == "1"
 end
 
-local function split_tags(value)
-  local tags = {}
-  for tag in tostring(value or ""):gmatch("[^%s,]+") do tags[#tags + 1] = tag end
-  return tags
-end
-
 local function suggested_name()
   local track = r.GetSelectedTrack(0, 0)
   if not track then return "" end
@@ -79,7 +75,7 @@ end
 
 local captions = table.concat({
   "Name",
-  "Tags (space separated)",
+  "Tags (comma separated)",
   "Render preview (y/n)",
   "Description",
   "extrawidth=280",
@@ -96,7 +92,9 @@ local render = is_yes(fields[3])
 
 local idea, warning = Store.capture({
   name = fields[1],
-  tags = split_tags(fields[2]),
+  -- The store splits on commas alone, so a tag typed here and the same tag
+  -- typed in the module are one tag rather than two.
+  tags = Store.parse_tags(fields[2]),
   description = fields[4],
   render = render
 })

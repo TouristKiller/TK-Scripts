@@ -7,7 +7,7 @@ local M = {
   id = "automation_item_manager",
   title = "Automation Item Manager",
   icon = "AIM",
-  version = "0.1.0"
+  version = "0.1.1"
 }
 
 local state = {
@@ -382,8 +382,10 @@ local function parse_automation_file(file_path)
   local content = file:read("*all")
   file:close()
   local data = { points = {}, srclen = 1.0, point_count = 0, source_file = file_path, source_envelope_type = "unknown", value_range = { min = math.huge, max = -math.huge } }
-  for line in content:gmatch("[^\r\n]+") do
-    line = line:gsub("^%s+", ""):gsub("%s+$", "")
+  -- Trimmed into a local instead of back into the loop variable: from Lua 5.5
+  -- on, a for control variable is const and assigning to it will not compile.
+  for raw_line in content:gmatch("[^\r\n]+") do
+    local line = raw_line:gsub("^%s+", ""):gsub("%s+$", "")
     if line:match("^SRCLEN") then
       data.srclen = tonumber(line:match("SRCLEN%s+([%d%.%-]+)")) or 1.0
     elseif line:match("^PPT") then

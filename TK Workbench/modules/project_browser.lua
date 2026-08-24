@@ -9,7 +9,7 @@ local M = {
   id = "project_browser",
   title = "Project Browser",
   icon = "PRJ",
-  version = "0.1.0"
+  version = "0.1.2"
 }
 
 local resource_path = r.GetResourcePath()
@@ -53,6 +53,11 @@ local defaults = {
   recent_count = 15,
   max_scan_projects = 5000,
   open_new_tab_on_double_click = false,
+  -- Off by design: this runs somebody's Lua after every open, and a startup
+  -- script that launches background scripts launches another copy each time.
+  run_startup_script = false,
+  -- Empty means the well-known one, <resource path>/Scripts/__startup.lua.
+  startup_script_path = "",
   sort_by = "name",
   sort_ascending = true
 }
@@ -78,6 +83,9 @@ local state = {
   search_changed_at = 0,
   metadata_cache = {},
   cover_queue = {},
+  -- Covers this build cannot draw, so they are looked at once instead of
+  -- being queued again on every frame the tile is on screen.
+  cover_skip = {},
   recent_cache = nil,
   recent_cache_limit = nil,
   cover_path_cache = {},
@@ -101,7 +109,11 @@ local state = {
 
 local stop_project_preview
 
-local image_ext = { png = true, jpg = true, jpeg = true, webp = true, bmp = true }
+-- Only what ReaImGui can decode. It uses stb_image, which has no webp reader,
+-- and a file it cannot decode must never reach ImGui_CreateImage: the decode
+-- happens inside ImGui after the pcall has returned, so the failure arrives as a
+-- ReaScript error dialog rather than as a value this code can check.
+local image_ext = { png = true, jpg = true, jpeg = true, bmp = true }
 
 local function active_mode(settings)
   local mode = tostring(settings.browser_mode or "projects")
@@ -184,6 +196,8 @@ local function ensure_settings(app)
   settings.compact_list = settings.compact_list == true
   settings.preview_volume = math.max(0, math.min(2, tonumber(settings.preview_volume) or defaults.preview_volume))
   settings.open_new_tab_on_double_click = settings.open_new_tab_on_double_click == true
+  settings.run_startup_script = settings.run_startup_script == true
+  settings.startup_script_path = tostring(settings.startup_script_path or "")
   settings.search_term = tostring(settings.search_term or "")
   settings.pending_location = tostring(settings.pending_location or "")
   settings.current_location = tostring(settings.current_location or "")
@@ -1218,6 +1232,7 @@ local function load_cover(ctx, project)
   if not project then return nil end
   local path = project_cover_path(project)
   if not path or not r.ImGui_CreateImage then return nil end
+  if state.cover_skip[path] then return nil end
   local cached = state.cover_image_cache[path]
   if cached then
     cached.used = cover_now()
@@ -1236,7 +1251,11 @@ local function process_cover_queue(ctx)
   for path in pairs(state.cover_queue) do
     if loaded >= COVER_LOADS_PER_FRAME or size >= COVER_CACHE_MAX then break end
     state.cover_queue[path] = nil
-    if not state.cover_image_cache[path] then
+    local ext = tostring(path):match("%.([^%.\\/]+)$")
+    if not ext or not image_ext[ext:lower()] then
+      -- A cover from before this rule existed, or one pointed at by hand.
+      state.cover_skip[path] = true
+    elseif not state.cover_image_cache[path] then
       local ok, image = pcall(r.ImGui_CreateImage, path)
       if ok and image then
         local attached = true
@@ -1310,6 +1329,51 @@ local function draw_cover(ctx, draw_list, entry, x1, y1, x2, y2, fallback_text, 
   if options.no_frame ~= true then r.ImGui_DrawList_AddRect(draw_list, x1, y1, x2, y2, Theme.colors.border, UIScale.px(5), 0, UIScale.px(0.8)) end
 end
 
+-- REAPER runs <resource path>/Scripts/__startup.lua once, when the application
+-- starts, and never again - not when a project is loaded, whoever loads it. For
+-- someone whose working setup lives in that file, only the project that
+-- happened to be open at boot gets it, and everything opened afterwards lands
+-- in a half-furnished REAPER.
+local function default_startup_script()
+  return native_path(resource_path .. "/Scripts/__startup.lua")
+end
+
+local function startup_script_path(settings)
+  local path = tostring(settings and settings.startup_script_path or "")
+  if path == "" then return default_startup_script() end
+  return native_path(path)
+end
+
+-- Registered as an action and run through Main_OnCommand rather than dofile'd
+-- into this script's Lua state. A startup script that installs a defer loop -
+-- most of them do - would otherwise install it inside Workbench, where it dies
+-- with Workbench and reports its own errors as a Workbench module failure. This
+-- way it runs as its own instance, exactly as REAPER runs it at startup.
+-- AddRemoveReaScript hands back the command id of a file that is already
+-- registered, so running it a hundred times adds one action list entry.
+local function run_startup_script(app, settings)
+  local path = startup_script_path(settings)
+  if path == "" then return end
+  if r.file_exists and not r.file_exists(path) then
+    app.status = "Startup script not found: " .. path
+    return
+  end
+  if not r.AddRemoveReaScript or not r.Main_OnCommand then
+    app.status = "This REAPER build cannot run the startup script"
+    return
+  end
+  local command = r.AddRemoveReaScript(true, 0, path, true)
+  if not command or command == 0 then
+    app.status = "Could not register the startup script: " .. path
+    return
+  end
+  r.Main_OnCommand(command, 0)
+  app.status = "Ran the startup script"
+end
+
+-- Returns true when a project was actually opened. Inserting a track template
+-- is not that: it drops tracks into the project already open, so there is no
+-- new session for a startup script to set up.
 local function open_project_now(app, project, new_tab)
   if not project or not project.path then return end
   if not r.Main_openProject then app.status = "Main_openProject is not available"; return end
@@ -1319,7 +1383,7 @@ local function open_project_now(app, project, new_tab)
     local ok = pcall(r.Main_openProject, open_path, 1)
     if not ok then r.Main_openProject(open_path) end
     app.status = "Inserting track template: " .. project.name
-    return
+    return false
   end
   if new_tab and r.Main_OnCommand then r.Main_OnCommand(41929, 0) end
   if project.mode == "project_templates" then
@@ -1335,6 +1399,7 @@ local function open_project_now(app, project, new_tab)
   -- Dropping the snapshot is the only honest answer; the next frame rebuilds it.
   app.selection = {}
   app.status = "Opening " .. mode_def.item_label .. ": " .. project.name
+  return true
 end
 
 -- Every caller sits inside the draw pass, most of them between a row or tile's
@@ -2108,6 +2173,30 @@ local function draw_settings_popup(app, settings)
     if mode ~= "track_templates" then
       c, v = r.ImGui_Checkbox(ctx, "Double-click opens in new tab", settings.open_new_tab_on_double_click == true)
       if c then settings.open_new_tab_on_double_click = v; if app.save_settings then app.save_settings() end end
+      c, v = r.ImGui_Checkbox(ctx, "Run startup script after opening", settings.run_startup_script == true)
+      if c then settings.run_startup_script = v; if app.save_settings then app.save_settings() end end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx,
+          "REAPER runs Scripts/__startup.lua once when it starts and never again, so a project opened\n"
+          .. "later misses whatever that script sets up. This runs it again after an open, as its own\n"
+          .. "script instance rather than inside Workbench.\n"
+          .. "Off by default: a startup script that launches background scripts launches another copy\n"
+          .. "every time, and inserting a track template never triggers it")
+      end
+      if settings.run_startup_script then
+        r.ImGui_SetNextItemWidth(ctx, UIScale.round(240))
+        c, v = r.ImGui_InputTextWithHint(ctx, "Startup script", default_startup_script(), tostring(settings.startup_script_path or ""))
+        if c then settings.startup_script_path = v; if app.save_settings then app.save_settings() end end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Leave this empty for the well-known one:\n" .. default_startup_script()
+            .. "\nAny .lua file will do - it does not have to be called __startup.lua")
+        end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Run now") then run_startup_script(app, settings) end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Runs it once, right now, so you can see what it does before it runs on every open")
+        end
+      end
     end
     if r.ImGui_BeginCombo(ctx, "Sort", settings.sort_by) then
       for _, item in ipairs({ "name", "date", "path" }) do
@@ -2218,7 +2307,14 @@ function M.update(app)
   local opening = state.pending_open_project
   if opening then
     state.pending_open_project = nil
-    open_project_now(app, opening.project, opening.new_tab)
+    local opened = open_project_now(app, opening.project, opening.new_tab)
+    -- One frame later, for the same reason the open itself is queued: the
+    -- script runs on its own instead of inside the call that just loaded a
+    -- project, and REAPER has settled by the time it looks around.
+    if opened and settings.run_startup_script then state.pending_startup_script = true end
+  elseif state.pending_startup_script then
+    state.pending_startup_script = nil
+    run_startup_script(app, settings)
   end
   scan_step(settings)
   update_project_preview(app)

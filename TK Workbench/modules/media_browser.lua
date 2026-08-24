@@ -9,7 +9,7 @@ local M = {
   id = "media_browser",
   title = "Media Browser",
   icon = "MED",
-  version = "0.1.5"
+  version = "0.1.6"
 }
 
 local resource_path = r.GetResourcePath()
@@ -76,6 +76,16 @@ local EXT = {
   video = { mp4 = true, mov = true, mkv = true, avi = true, webm = true, mpg = true, mpeg = true, wmv = true, flv = true, m4v = true, gif = true },
   image = { png = true, jpg = true, jpeg = true, webp = true, bmp = true }
 }
+
+-- What ReaImGui can actually turn into a texture. It decodes what stb_image
+-- decodes, and webp is not on that list - so a webp cover browses and lists like
+-- any other image but must never reach ImGui_CreateImage. The pcall around that
+-- call does not help: the decode happens later, inside ImGui, and the failure
+-- comes back as a ReaScript error dialog ("unsupported format") that returns
+-- every frame the tile is on screen and survives a reinstall, because it is the
+-- file in the folder that causes it, not anything Workbench stored. Reported by
+-- Tobbe.
+local DISPLAYABLE_IMAGE = { png = true, jpg = true, jpeg = true, bmp = true }
 
 local state = {
   locations = {},
@@ -438,7 +448,10 @@ function folder_art_path(folder)
   folder = normalize_path(folder)
   if folder == "" then return nil end
   if state.folder_art_path_cache[folder] ~= nil then return state.folder_art_path_cache[folder] or nil end
-  local names = { "cover.jpg", "cover.jpeg", "cover.png", "cover.webp", "folder.jpg", "folder.jpeg", "folder.png", "folder.webp", "front.jpg", "front.jpeg", "front.png" }
+  -- No webp among them on purpose: see DISPLAYABLE_IMAGE. A folder whose only
+  -- cover is a webp shows the plain coloured placeholder, which is what it did
+  -- before covers existed at all.
+  local names = { "cover.jpg", "cover.jpeg", "cover.png", "folder.jpg", "folder.jpeg", "folder.png", "front.jpg", "front.jpeg", "front.png" }
   for _, name in ipairs(names) do
     local path = folder .. "/" .. name
     if file_exists(path) then
@@ -450,10 +463,21 @@ function folder_art_path(folder)
   return nil
 end
 
+function mb_can_display_image(path)
+  path = tostring(path or "")
+  if path == "" then return false end
+  if not DISPLAYABLE_IMAGE[extension(path)] then return false end
+  return file_exists(path)
+end
+
 function load_folder_art(ctx, folder)
   if not r.ImGui_CreateImage then return nil end
   local path = folder_art_path(folder)
   if not path then return nil end
+  if not mb_can_display_image(path) then
+    state.folder_art_path_cache[normalize_path(folder)] = false
+    return nil
+  end
   local cached = state.folder_art_image_cache[path]
   if cached then cached.used = mb_image_now(); return cached end
   if not mb_may_load_image(state.folder_art_image_cache) then return nil end
@@ -472,6 +496,7 @@ end
 
 function load_image(ctx, file)
   if not file or file.kind ~= "image" or not r.ImGui_CreateImage then return nil end
+  if not mb_can_display_image(file.path) then return nil end
   local cached = state.image_cache[file.path]
   if cached then cached.used = mb_image_now(); return cached end
   -- This used to keep exactly one image and throw the rest away on the spot,
@@ -830,6 +855,9 @@ function embedded_art_path(file_path)
     end
   end)
   if not ok or not img or not img_ext then state.embedded_art_path_cache[key] = false; return nil end
+  -- Cover art embedded in a tag can be webp too, and writing it out would only
+  -- produce a cache file nothing can draw.
+  if not DISPLAYABLE_IMAGE[img_ext] then state.embedded_art_path_cache[key] = false; return nil end
   ensure_cache_dir()
   local out_path = cache_dir .. "/art2_" .. cache_key(file_path) .. "." .. img_ext
   if not file_exists(out_path) then
@@ -855,6 +883,14 @@ function load_embedded_art(ctx, file_path)
   if not r.ImGui_CreateImage then return nil end
   local path = embedded_art_path(file_path)
   if not path then return nil end
+  -- The extracted file being gone is the other half of what Tobbe saw: an
+  -- emptied cache folder leaves this pointing at a name with nothing behind it,
+  -- and ImGui answers that with "No such file or directory". Forgetting the
+  -- path makes the next pass write it again instead.
+  if not mb_can_display_image(path) then
+    state.embedded_art_path_cache[normalize_path(file_path)] = nil
+    return nil
+  end
   local cached = state.embedded_art_image_cache[path]
   if type(cached) == "table" then cached.used = mb_image_now(); return cached end
   if cached ~= nil then return nil end

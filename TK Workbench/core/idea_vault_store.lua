@@ -103,6 +103,17 @@ local function sanitize(name)
   return name:sub(1, 120)
 end
 
+-- Ratings are stored as a plain number 0-5. Anything else - a hand-edited
+-- sidecar, an older one with no rating at all - reads as unrated rather than
+-- as an error, because a vault that refuses to list an idea over a typo in one
+-- field is worse than one that shows it with no stars.
+local function clamp_rating(value)
+  local rating = math.floor(tonumber(value) or 0)
+  if rating < 0 then rating = 0 end
+  if rating > 5 then rating = 5 end
+  return rating
+end
+
 local function read_file(path)
   local file = io.open(path, "rb")
   if not file then return nil end
@@ -703,10 +714,39 @@ local function track_names(tracks)
   return names
 end
 
+-- Every file in the vault that belongs to one idea, found by basename instead
+-- of by what the sidecar records. The sidecar names exactly one preview, but a
+-- capture can leave more than one file behind: a project with a secondary
+-- render format writes two audio files per render, and REAPER drops a
+-- .reapeaks cache next to any preview it has drawn. Delete and rename work off
+-- this list so nothing with the idea's name is left behind.
+local function owned_files(root, base)
+  local out = {}
+  base = tostring(base or "")
+  if base == "" then return out end
+  local lower = base:lower()
+  local prefix = lower .. "."
+  r.EnumerateFiles(root, -1)
+  local i = 0
+  while true do
+    local filename = r.EnumerateFiles(root, i)
+    if not filename then break end
+    local name = filename:lower()
+    if name == lower or name:sub(1, #prefix) == prefix then
+      out[#out + 1] = filename
+    end
+    i = i + 1
+  end
+  return out
+end
+
+-- Any file on the basename counts as taken, not just the template and the
+-- sidecar: a stray preview left over from an older delete would otherwise let a
+-- new capture reuse the name, and find_rendered would then hand the new idea
+-- the old audio.
 local function unique_base(root, base)
   local candidate, n = base, 2
-  while r.file_exists(root .. candidate .. TEMPLATE_EXT)
-     or r.file_exists(root .. candidate .. SIDECAR_EXT) do
+  while #owned_files(root, candidate) > 0 do
     candidate = base .. " (" .. n .. ")"
     n = n + 1
     if n > 999 then break end
@@ -720,7 +760,7 @@ end
 local PERSISTED = {
   "schema", "name", "description", "tags", "bpm", "timesig_num", "timesig_den",
   "created", "tracks", "track_count", "template", "preview", "duration",
-  "source_project"
+  "source_project", "rating"
 }
 
 local function serialize(idea)
@@ -776,6 +816,7 @@ function Store.capture(opts)
     name = base,
     description = tostring(opts.description or ""),
     tags = type(opts.tags) == "table" and opts.tags or {},
+    rating = clamp_rating(opts.rating),
     bpm = r.Master_GetTempo(),
     timesig_num = timesig_num,
     timesig_den = timesig_den,
@@ -816,6 +857,8 @@ end
 --------------------------------------------------------------------------------
 
 local function hydrate(idea, root)
+  idea.tags = type(idea.tags) == "table" and idea.tags or {}
+  idea.rating = clamp_rating(idea.rating)
   idea.template_path = root .. (idea.template or "")
   idea.sidecar_path = root .. (idea.name or "") .. SIDECAR_EXT
   idea.preview_path = idea.preview ~= "" and (root .. idea.preview) or nil
@@ -877,7 +920,82 @@ function Store.apply_tempo(idea)
   return true
 end
 
-function Store.matches(idea, query)
+-- Commas separate tags, whitespace does not: "melodic, dark pad" is two tags,
+-- one of which is two words. Splitting on spaces as well would make every
+-- multi-word tag unwritable, and at a hundred ideas the tags that pay for
+-- themselves are the ones specific enough to have a space in them.
+function Store.parse_tags(text)
+  if type(text) == "table" then
+    local copy = {}
+    for _, tag in ipairs(text) do copy[#copy + 1] = tostring(tag) end
+    text = table.concat(copy, ",")
+  end
+  local tags, seen = {}, {}
+  for part in tostring(text or ""):gmatch("[^,]+") do
+    local tag = part:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    local key = tag:lower()
+    if tag ~= "" and not seen[key] then
+      seen[key] = true
+      tags[#tags + 1] = tag
+    end
+  end
+  return tags
+end
+
+function Store.tags_text(idea)
+  return table.concat((idea and idea.tags) or {}, ", ")
+end
+
+-- Every tag in the vault with how often it is used, alphabetical. Alphabetical
+-- rather than by count on purpose: a row of chips that reorders itself as you
+-- tag is a row you cannot learn the shape of.
+function Store.all_tags(ideas)
+  local counts, order = {}, {}
+  for _, idea in ipairs(ideas or {}) do
+    for _, tag in ipairs(idea.tags or {}) do
+      local key = tostring(tag):lower()
+      if not counts[key] then
+        counts[key] = { tag = tostring(tag), count = 0 }
+        order[#order + 1] = counts[key]
+      end
+      counts[key].count = counts[key].count + 1
+    end
+  end
+  table.sort(order, function(a, b) return a.tag:lower() < b.tag:lower() end)
+  return order
+end
+
+local function tag_set(idea)
+  local set = {}
+  for _, tag in ipairs(idea.tags or {}) do set[tostring(tag):lower()] = true end
+  return set
+end
+
+-- filters (all optional): tags and exclude_tags as arrays, min_rating a number.
+-- Tags are ANDed - an idea has to carry every tag that is lit - because the
+-- point of tagging one idea "melodic" and "pad" is to be able to ask for both
+-- at once. One excluded tag is enough to drop it.
+function Store.matches(idea, query, filters)
+  filters = filters or {}
+  if clamp_rating(idea.rating) < clamp_rating(filters.min_rating) then return false end
+  -- "Untagged" is not a tag, so it cannot live in the tag list: it matches on
+  -- the absence of every tag, which is the one thing a list of tags to look for
+  -- can never express. It is the chip you need most while retagging a vault,
+  -- because it is the pile of ideas that still wants doing.
+  local untagged = #(idea.tags or {}) == 0
+  if filters.untagged == "only" and not untagged then return false end
+  if filters.untagged == "exclude" and untagged then return false end
+  local wanted = filters.tags or {}
+  local unwanted = filters.exclude_tags or {}
+  if #wanted > 0 or #unwanted > 0 then
+    local set = tag_set(idea)
+    for _, tag in ipairs(wanted) do
+      if not set[tostring(tag):lower()] then return false end
+    end
+    for _, tag in ipairs(unwanted) do
+      if set[tostring(tag):lower()] then return false end
+    end
+  end
   query = tostring(query or ""):lower()
   if query == "" then return true end
   local haystack = table.concat({
@@ -890,6 +1008,51 @@ function Store.matches(idea, query)
     if not haystack:find(word, 1, true) then return false end
   end
   return true
+end
+
+-- Sorted in place. Name is the tiebreaker everywhere, so two ideas captured in
+-- the same second or sitting on the same rating keep a fixed order between
+-- refreshes instead of swapping places.
+function Store.sort_ideas(ideas, by, ascending)
+  local function name_of(idea) return tostring(idea.name or ""):lower() end
+  -- Sorting by tag means sorting by the first one an idea carries, which is the
+  -- one that was typed first and the only one that can lead when an idea has
+  -- four. Untagged ideas go to the bottom in both directions: they are not a
+  -- tag that sorts before "ambient", they are the ones this sort cannot place.
+  if by == "tag" then
+    table.sort(ideas, function(a, b)
+      local ta, tb = (a.tags or {})[1], (b.tags or {})[1]
+      if (ta == nil) ~= (tb == nil) then return tb == nil end
+      if ta and tb then
+        ta, tb = tostring(ta):lower(), tostring(tb):lower()
+        if ta ~= tb then
+          if ascending then return ta < tb end
+          return ta > tb
+        end
+      end
+      return name_of(a) < name_of(b)
+    end)
+    return ideas
+  end
+  local key
+  if by == "name" then
+    key = name_of
+  elseif by == "rating" then
+    key = function(idea) return clamp_rating(idea.rating) end
+  elseif by == "duration" then
+    key = function(idea) return tonumber(idea.duration) or 0 end
+  else
+    key = function(idea) return tostring(idea.created or "") end
+  end
+  table.sort(ideas, function(a, b)
+    local ka, kb = key(a), key(b)
+    if ka ~= kb then
+      if ascending then return ka < kb end
+      return ka > kb
+    end
+    return name_of(a) < name_of(b)
+  end)
+  return ideas
 end
 
 --------------------------------------------------------------------------------
@@ -1002,6 +1165,13 @@ function Store.load(idea, opts)
   return true
 end
 
+local function move_file(from, to)
+  if not from or from == "" or from == to then return true end
+  if not r.file_exists(from) then return true end
+  os.rename(from, to)
+  return not r.file_exists(from)
+end
+
 function Store.rename(idea, new_name)
   local root = Store.root()
   -- Settling on the wanted name before uniquifying, because unique_base sees
@@ -1013,9 +1183,20 @@ function Store.rename(idea, new_name)
   local _, preview_file = split_path(idea.preview_path or "")
   local _, preview_ext = split_ext(preview_file)
 
-  if idea.has_template then os.rename(idea.template_path, root .. base .. TEMPLATE_EXT) end
+  -- The sidecar is not renamed with the rest: it is rewritten under the new
+  -- name below, and the old one has to go or the vault lists the idea twice.
+  local old_base = tostring(idea.name or "")
+  for _, filename in ipairs(owned_files(root, old_base)) do
+    local suffix = filename:sub(#old_base + 1)
+    if suffix:lower() ~= SIDECAR_EXT then
+      move_file(root .. filename, root .. base .. suffix)
+    end
+  end
+  -- Fallbacks for a sidecar that points at files off the basename, which a
+  -- hand-edited one can.
+  if idea.has_template then move_file(idea.template_path, root .. base .. TEMPLATE_EXT) end
   if idea.has_preview and preview_ext ~= "" then
-    os.rename(idea.preview_path, root .. base .. "." .. preview_ext)
+    move_file(idea.preview_path, root .. base .. "." .. preview_ext)
   end
   os.remove(idea.sidecar_path)
 
@@ -1031,12 +1212,137 @@ function Store.update(idea)
   return Store.write_sidecar(idea)
 end
 
+-- Description, tags and rating live in the sidecar alone, so changing them
+-- touches no template and no preview - which is why these are edits and
+-- renaming is not.
+function Store.set_meta(idea, description, tags)
+  if not idea then return false, "No idea to edit" end
+  idea.description = tostring(description or "")
+  idea.tags = Store.parse_tags(tags)
+  return Store.write_sidecar(idea)
+end
+
+-- Adds or removes tags across a whole list of ideas in one pass. Ideas that
+-- already carry the tag (or already lack it) are left alone rather than
+-- rewritten, so the count that comes back is the number of sidecars that
+-- actually changed - which is what a status line should say.
+--
+-- Returns changed, failed.
+function Store.tag_ideas(ideas, tags, mode)
+  tags = Store.parse_tags(tags)
+  if #tags == 0 then return 0, 0 end
+  local removing = mode == "remove"
+  local changed, failed = 0, 0
+  for _, idea in ipairs(ideas or {}) do
+    local current = idea.tags or {}
+    local next_tags, present = {}, {}
+    for _, tag in ipairs(current) do present[tostring(tag):lower()] = true end
+    if removing then
+      local drop = {}
+      for _, tag in ipairs(tags) do drop[tostring(tag):lower()] = true end
+      for _, tag in ipairs(current) do
+        if not drop[tostring(tag):lower()] then next_tags[#next_tags + 1] = tag end
+      end
+    else
+      for _, tag in ipairs(current) do next_tags[#next_tags + 1] = tag end
+      for _, tag in ipairs(tags) do
+        if not present[tostring(tag):lower()] then
+          next_tags[#next_tags + 1] = tag
+          present[tostring(tag):lower()] = true
+        end
+      end
+    end
+    if #next_tags ~= #current then
+      idea.tags = next_tags
+      local ok = Store.write_sidecar(idea)
+      if ok then changed = changed + 1 else failed = failed + 1 end
+    end
+  end
+  return changed, failed
+end
+
+-- Renames a tag everywhere it occurs, and renaming onto a tag that already
+-- exists merges the two - which is the same operation from the user's side:
+-- "melodic" and "melodics" were always meant to be one thing. An empty target
+-- removes the tag from every idea instead.
+--
+-- Returns changed, failed.
+function Store.rename_tag(ideas, from, to)
+  from = tostring(from or "")
+  if from == "" then return 0, 0 end
+  local key = from:lower()
+  local target = Store.parse_tags(to)[1]
+  local changed, failed = 0, 0
+  for _, idea in ipairs(ideas or {}) do
+    local current = idea.tags or {}
+    local carries = false
+    for _, tag in ipairs(current) do
+      if tostring(tag):lower() == key then carries = true; break end
+    end
+    if carries then
+      local next_tags, seen = {}, {}
+      for _, tag in ipairs(current) do
+        -- Spelled out rather than written as "matched and target or tag": with
+        -- an empty target that idiom quietly falls through to the old tag, and
+        -- deleting a tag from the whole vault would rewrite every sidecar
+        -- while changing nothing in any of them.
+        local replacement = tag
+        if tostring(tag):lower() == key then replacement = target end
+        if replacement then
+          local rkey = tostring(replacement):lower()
+          if not seen[rkey] then
+            seen[rkey] = true
+            next_tags[#next_tags + 1] = replacement
+          end
+        end
+      end
+      idea.tags = next_tags
+      local ok = Store.write_sidecar(idea)
+      if ok then changed = changed + 1 else failed = failed + 1 end
+    end
+  end
+  return changed, failed
+end
+
+function Store.set_rating(idea, rating)
+  if not idea then return false, "No idea to rate" end
+  idea.rating = clamp_rating(rating)
+  return Store.write_sidecar(idea)
+end
+
+-- Returns ok, leftovers, message. Deleting only the three paths the sidecar
+-- names left the extra files a capture can produce behind, so this clears
+-- everything on the basename. os.remove is also allowed to fail quietly - a
+-- preview REAPER still has open will not go on Windows - so what survives is
+-- handed back rather than swallowed.
 function Store.delete(idea)
-  if not idea then return false end
-  if idea.has_template then os.remove(idea.template_path) end
-  if idea.has_preview then os.remove(idea.preview_path) end
-  if idea.sidecar_path then os.remove(idea.sidecar_path) end
-  return true
+  if not idea then return false, {}, "No idea to delete" end
+  local root = Store.root()
+  local targets, seen = {}, {}
+  local function add(path)
+    if not path or path == "" then return end
+    local key = path:lower()
+    if seen[key] then return end
+    seen[key] = true
+    targets[#targets + 1] = path
+  end
+  for _, filename in ipairs(owned_files(root, idea.name)) do add(root .. filename) end
+  add(idea.template_path)
+  add(idea.preview_path)
+  add(idea.sidecar_path)
+
+  local left = {}
+  for _, path in ipairs(targets) do
+    os.remove(path)
+    if r.file_exists(path) then left[#left + 1] = path end
+  end
+  if #left > 0 then
+    local _, filename = split_path(left[1])
+    local message = "Could not delete " .. filename
+    if #left > 1 then message = message .. " and " .. (#left - 1) .. " more file(s)" end
+    return false, left, message
+  end
+  return true, left
 end
 
 return Store
