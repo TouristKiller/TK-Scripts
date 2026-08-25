@@ -1065,8 +1065,11 @@ v0.2.51
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.9.4" author="TouristKiller" time="2026-07-08T20:30:00Z">
+        <version name="1.9.5" author="TouristKiller" time="2026-08-25T14:29:00Z">
             <changelog><![CDATA[
+            v1.9.5:
+            + Added a Labels setting to show or hide the record-arm, solo, and mute status dots
+
             v1.9.4:
             + Fixed: in very large templates (1000+ tracks) some tracks consistently showed no label/color while scrolling; the visible-range detection no longer relies on a binary search over I_TCPY (which broke on hidden/zero-height tracks) but uses a robust linear scan
 

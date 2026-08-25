@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.4
+-- @version 1.9.5
 -- @changelog 
 --[[
+v1.9.5:
++ Added a Labels setting to show or hide the record-arm, solo, and mute status dots
+
 v1.9.4:
 + Fixed: in very large templates (1000+ tracks) some tracks consistently showed no label/color while scrolling; the visible-range detection no longer relies on a binary search over I_TCPY (which broke on hidden/zero-height tracks) but uses a robust linear scan
 
@@ -533,6 +536,7 @@ local default_settings              = {
     show_first_fx                   = false,
     show_parent_label               = false,
     show_record_color               = true,
+    show_status_dots                = true,
     horizontal_offset               = 100,
     vertical_offset                 = 0,
     selected_font                   = 1,
@@ -1694,6 +1698,10 @@ function ShowSettingsWindow()
         r.ImGui_SameLine(ctx, column_width * 2)
         if r.ImGui_RadioButton(ctx, "Hide on hover", settings.text_hover_enabled) then
             settings.text_hover_enabled = not settings.text_hover_enabled
+        end
+        r.ImGui_SameLine(ctx, column_width * 3)
+        if r.ImGui_RadioButton(ctx, "Status dots", settings.show_status_dots) then
+            settings.show_status_dots = not settings.show_status_dots
         end
         
         r.ImGui_Dummy(ctx, 0, 4)
@@ -4794,9 +4802,9 @@ function loop()
                 
                 local track_visible = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") == 1
                 if track_visible and IsTrackVisible(track) then
-                    local is_armed = r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
-                    local is_muted = r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
-                    local is_soloed = r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
+                    local is_armed = settings.show_status_dots and r.GetMediaTrackInfo_Value(track, "I_RECARM") == 1
+                    local is_muted = settings.show_status_dots and r.GetMediaTrackInfo_Value(track, "B_MUTE") == 1
+                    local is_soloed = settings.show_status_dots and r.GetMediaTrackInfo_Value(track, "I_SOLO") > 0
                     local track_number = r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")
             
                     local text_width = r.ImGui_CalcTextSize(ctx, track_name)
