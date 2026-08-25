@@ -794,14 +794,24 @@ v0.2.51
         </version>
     </reapack>
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="1.0.2" author="TouristKiller" time="2026-08-15T20:34:18Z">
+        <version name="1.1.0" author="TouristKiller" time="2026-08-25T20:00:45Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
-            v1.0.2:
-            + Added support for standalone AAC audio files. Files with the .aac extension are now scanned, listed, previewed, filtered and handled like the other supported audio formats
+            v1.1.0:
+            + New: Single Pane Layout, a switch under Settings that stacks everything in one column - folders, file list, waveform, oscilloscope, transport - so the browser can be docked as a narrow strip beside the arrange instead of needing a wide floating window. The two-pane layout is untouched and remains the default. Requested by Heavy
+            + Single Pane: the folder pane and the oscilloscope each have a drag handle for their height. Dragging the folder handle all the way up collapses that pane entirely and leaves the handle in place, so it can be pulled back open
+            + Single Pane: the heights you set are treated as wishes rather than commitments. When they do not all fit, the folder pane gives way first, then the oscilloscope, then the waveform, so the file list keeps a usable minimum and the transport row is always on screen. Nothing overwrites what you set, so shrinking one region hands the others their full height back
+            + Single Pane: the folder pane and its tabs step aside in Settings and Keyboard Shortcuts, where they have nothing to show. Beside a settings page an empty pane is a narrow column you hardly notice; stacked above one it is a large empty band
+            + Folders: an option under Settings to align folder names to the left instead of centring them on the button, so the pane reads the way the Collections tree does. Requested by Heavy
+            + Top bar: the row of icons is replaced by two dots at the right-hand end - white opens a menu holding everything those icons did, red closes the browser - which is how the other TK scripts are laid out and hands about 110 pixels back to the search field. That counts most in a narrow dock. Requested by Heavy
+            + Top bar: the loops / one-shots filter moved from the search bar to the end of the second row, beside the file type icons it belongs with. All three of its states are drawn in the accent colour now, since the label already says which state it is in. Requested by Heavy
+            + View mode: the Tree / Flat / Compact button is shown in Collections and Auto as well, cycling Flat and Compact there because neither has a folder tree to show. It used to be hidden in those modes, which also put Compact view out of reach from them. Requested by Heavy
+            + Auto Key: the badge moved out of the oscilloscope onto the transport row, next to the switch that hides the scope. With the scope hidden there was no way to reach Auto Key at all - including no way to switch it back off once it was on - and an open Auto Key panel closed itself the moment the scope was toggled
+            + Fixed: Hide Scrollbars now covers the file list as well. That scrollbar belongs to the table rather than to the panel around it, and a table scrollbar ignores the flag the setting was using, so the list kept its bar in either layout
+            + Fixed: the empty strip under the progress bar. The bar is drawn rather than laid out, and the placeholder reserving its height sat one row too low, so it reserved a second bar's worth of space underneath instead of the bar itself
 
 ]]></changelog>
         </version>
