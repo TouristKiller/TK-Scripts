@@ -1,7 +1,13 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.8.7
+-- @version 0.9.0
 -- @changelog:
+-- v0.9.0
+--   + Cue: a new module for playing rather than editing. It shows the section you are in and the one coming next, the beat you are on, how many bars are left before the change, and the tempo and time signature including the next change to either - read off the project's own regions and tempo map, so a song that is already marked up needs no setting up at all. Three states carry the whole message without being read: quiet while it runs, amber from two bars before a change, red in the final bar, green on the change itself. It is built narrow first, for a side dock: everything stacks, and the wider panel only adds detail it can afford.
+--   + Cue: the cues can be heard as well as seen. A tick through the warning bars, a count-in through the last one, and an accent on the change itself, played by a JSFX the module writes into your Effects folder rather than one shipped beside it - there is then only ever one copy, and no stale second one for REAPER to load instead. Nothing is timed by the script: Lua works out the moments and hands them over, and the effect fires them from the audio thread, sample accurate. A heartbeat stops the click within a second of Workbench closing, so it cannot be left ticking away at an empty room.
+--   + Cue: the click lives in REAPER's monitoring FX by default, where it is not part of the project and never lands in a render, or on a track of its own for anyone sending it to their in-ears. Moving it between the two moves it rather than leaving a second copy behind, and a cue track this module made goes with it - unless you have put items on it, added an effect or routed it somewhere, in which case it is yours and it stays.
+--   + Cue: your own sounds instead of the built-in tones. Drop .wav files in a TK Cue Sounds folder beside your REAPER settings and pick one per cue. They are read by the module and handed to the effect through shared memory rather than by filename, which is what makes it work at all: JSFX resolves filenames against its own Effects folder, so a path to your sounds folder would simply never open, and every cue would fall back to a tone without a word about why. Mono, up to two seconds, at whatever rate the file was recorded at.
+--   + Cue: what it does is saved per song, in the project itself, so it travels with the .RPP and survives Save As. A setup worth keeping again can be exported as a .tkcue file and loaded onto the next song, and a project with nothing of its own falls back to the defaults you set. Sections can be given a label of their own for the screen and their own warning distance, matched by name so that inserting an intro halfway through arranging does not throw the rest away.
 -- v0.8.7
 --   + Automation Item Manager: The automation item parser assigns its trimmed line to a local instead of back to the loop variable it came from. No behaviour changes today - it is the same string either way - but from Lua 5.5 on a for control variable is const, and that one line was the only place in the whole package that would refuse to compile the day REAPER ships it. Every Lua file in the package now loads clean under 5.5
 --   + Media Browser / Project Browser: A webp cover no longer throws "ImGui_CreateImage: unsupported format" at you, over and over. ReaImGui decodes what stb_image decodes and there is no webp reader in it, and the pcall this code already had around ImGui_CreateImage could not catch that: the decode happens inside ImGui after that call has returned, so the failure arrived as a ReaScript error dialog instead of as a value the script could check - which is also why it came back every frame the tile was on screen, and why reinstalling changed nothing. The cause was the file in the folder, not anything Workbench had stored. A webp is now never handed to ImGui at all: not as a folder cover, not as an image file in the browser, not as artwork embedded in a tag, and not as a project cover. Such a folder shows the plain coloured placeholder, exactly as it did before covers existed. The other line in that dialog, "No such file or directory", came from artwork extracted out of a tag whose cache file had since been cleared away: that path is now forgotten and written again rather than passed on to ImGui as a name with nothing behind it. Reported by Tobbe
@@ -712,6 +718,7 @@ local MODULE_ACTION_HEARTBEAT_KEY = "heartbeat"
 local module_names = {
   "project_overview",
   "timepiece",
+  "cue",
   "transport",
   "navigator",
   "project_browser",
@@ -1349,6 +1356,11 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, MX(-5), B(14), MX(5), B(14), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, MX(-4), B(10), MX(4), B(10), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, MX(-2), B(7), MX(2), B(7), color, W(2))
+  elseif id == "cue" then
+    r.ImGui_DrawList_AddRect(draw_list, L(15), T(6), R(15), B(6), color, RD(4), 0, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, T(14), RD(4), color, 16)
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, RD(4), color, 16, W(1.5))
+    r.ImGui_DrawList_AddCircle(draw_list, cx, B(14), RD(4), color, 16, W(1.5))
   elseif id == "track_tags" then
     r.ImGui_DrawList_AddLine(draw_list, L(10), T(14), R(16), T(14), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, R(16), T(14), R(8), cy, color, W(2))
