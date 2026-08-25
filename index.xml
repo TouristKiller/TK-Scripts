@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.9.0" author="TouristKiller" time="2026-08-25T14:39:39Z">
+    <version name="0.9.1" author="TouristKiller" time="2026-08-25T16:14:33Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -45,6 +45,7 @@
      <source file="core/cue_presets.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/cue_presets.lua</source>
      <source file="core/cue_audio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/cue_audio.lua</source>
      <source file="core/cue_wav.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/cue_wav.lua</source>
+     <source file="core/metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/metronome.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_1.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_2.lua</source>
      <source main="main" file="Action Clipboard Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Action%20Clipboard%20Actions/TK_Workbench_Action_Clipboard_Run_Slot_3.lua</source>
@@ -151,6 +152,8 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.9.1
+            + Transport / Control Room: the metronome volume moves the whole click again, not just the accented beat. REAPER keeps two levels for the metronome - VOL 0.25 0.125 in the project file, the first for the accented beat and the second for every other one - and its settings window shows that second level relative to the first. Writing only the first, which is what one slider labelled Volume naturally does, left B, C and D exactly where they were while the window reported their relative gain climbing: pull the slider most of the way down and it reads +54 dB, which from the outside looks like a volume control that turns three of the four beats up. Both levels now move together and keep their balance, the balance survives a trip through silence rather than being flattened on the way back, and a REAPER that only exposes the one level still works as it did. Reported on the forum
             v0.9.0
             + Cue: a new module for playing rather than editing. It shows the section you are in and the one coming next, the beat you are on, how many bars are left before the change, and the tempo and time signature including the next change to either - read off the project's own regions and tempo map, so a song that is already marked up needs no setting up at all. Three states carry the whole message without being read: quiet while it runs, amber from two bars before a change, red in the final bar, green on the change itself. It is built narrow first, for a side dock: everything stacks, and the wider panel only adds detail it can afford.
             + Cue: the cues can be heard as well as seen. A tick through the warning bars, a count-in through the last one, and an accent on the change itself, played by a JSFX the module writes into your Effects folder rather than one shipped beside it - there is then only ever one copy, and no stale second one for REAPER to load instead. Nothing is timed by the script: Lua works out the moments and hands them over, and the effect fires them from the audio thread, sample accurate. A heartbeat stops the click within a second of Workbench closing, so it cannot be left ticking away at an empty room.

@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local Metronome = require("core.metronome")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
 local Selection = require("core.selection")
@@ -174,30 +175,14 @@ local function focus_time()
 end
 local function run(cmd) r.Main_OnCommand(cmd, 0) end
 
--- Metronome volume via SWS config vars (same approach as the Control Room module).
-local METRO_VOL_KEYS = { "projmetrovol", "projmetrovol1", "projmetrov1", "metronomevol" }
-local metro_key_checked, metro_key = false, nil
-local function metro_vol_key()
-  if metro_key_checked then return metro_key end
-  metro_key_checked = true
-  if not r.SNM_GetDoubleConfigVar or not r.SNM_SetDoubleConfigVar then return nil end
-  local sentinel = -987654.321
-  for _, k in ipairs(METRO_VOL_KEYS) do
-    local ok, v = pcall(r.SNM_GetDoubleConfigVar, k, sentinel)
-    if ok and type(v) == "number" and v ~= sentinel then metro_key = k; return k end
-  end
-  return nil
-end
+-- Metronome volume lives in core/metronome, because it is two levels and not
+-- one: moving only the accented beat is what made the other three look like
+-- they were being turned up.
 local function read_metro_vol()
-  local k = metro_vol_key()
-  if not k then return nil end
-  local ok, v = pcall(r.SNM_GetDoubleConfigVar, k, 1)
-  if ok and type(v) == "number" then return v end
-  return nil
+  return Metronome.volume()
 end
 local function write_metro_vol(v)
-  local k = metro_vol_key()
-  if k then r.SNM_SetDoubleConfigVar(k, math.max(0.0, math.min(2.0, v))) end
+  Metronome.set_volume(v, 2.0)
 end
 
 -- Metronome click pattern: one character per beat of the measure, "1" for an
@@ -1733,10 +1718,15 @@ BLOCKS.metronome = function(ctx, app, settings, width)
     local ch, v = r.ImGui_SliderDouble(ctx, "##metro_vol", vol, 0.0, 2.0, "Volume  %.2f")
     pop_slider_style(ctx, sc)
     if ch then write_metro_vol(v) end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, string.format(
+        "Metronome volume. The unaccented beats keep their balance with the accented one (%.0f%%).\n"
+        .. "Double-click for 1.00", Metronome.balance() * 100))
+    end
     if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked and r.ImGui_IsMouseDoubleClicked(ctx, 0) then write_metro_vol(1.0) end
     y = y + r.ImGui_GetFrameHeight(ctx) + gap
   else
-    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Volume needs the SWS extension")
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, Metronome.status() or "Volume needs the SWS extension")
     y = y + lh + gap
   end
 

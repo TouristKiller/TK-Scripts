@@ -1,5 +1,6 @@
 local r = reaper
 local Theme = require("core.theme")
+local Metronome = require("core.metronome")
 local UIScale = require("core.ui_scale")
 local MeterEngine = require("core.meter_engine")
 local Layouts = require("core.channel_layouts")
@@ -82,14 +83,7 @@ local state = {
   preset_status = nil
 }
 
-local metronome_keys = {
-  "projmetrovol",
-  "projmetrovol1",
-  "projmetrovol2",
-  "projmetrov1",
-  "projmetrov2",
-  "metronomevol"
-}
+
 
 local METRONOME_TOGGLE_ACTION = 40364
 local REAROUTE_CHANNELS = 16
@@ -376,39 +370,22 @@ local function smoothed_meter(id, raw_value, settings)
 end
 
 local function detect_metronome_key()
-  if state.metronome_checked then return state.metronome_key end
-  state.metronome_checked = true
-  if not r.SNM_GetDoubleConfigVar or not r.SNM_SetDoubleConfigVar then
-    state.metronome_status = "SWS config API not available"
-    return nil
-  end
-  local sentinel = -987654.321
-  for _, key in ipairs(metronome_keys) do
-    local ok, value = pcall(r.SNM_GetDoubleConfigVar, key, sentinel)
-    if ok and type(value) == "number" and value ~= sentinel then
-      state.metronome_key = key
-      state.metronome_status = nil
-      return key
-    end
-  end
-  state.metronome_status = "Metronome volume API not found"
-  return nil
+  state.metronome_status = Metronome.status()
+  return Metronome.available() and true or nil
 end
 
+-- Both of these go through core/metronome: the metronome has a level for the
+-- accented beat and one for the rest, and a single volume control has to move
+-- them together or it silently rebalances the click.
 local function read_metronome_volume()
-  local key = detect_metronome_key()
-  if not key then return nil end
-  local ok, value = pcall(r.SNM_GetDoubleConfigVar, key, 1)
-  if ok and type(value) == "number" then return clamp(value, 0, 4) end
-  return nil
+  local value = Metronome.volume()
+  return value and clamp(value, 0, 4) or nil
 end
 
 local function write_metronome_volume(value)
-  local key = detect_metronome_key()
-  if not key then return false end
-  value = clamp(value, 0, 4)
+  if not Metronome.available() then return false end
   return write_with_undo("Control Room: Metronome volume", function()
-    return r.SNM_SetDoubleConfigVar(key, value)
+    return Metronome.set_volume(clamp(value, 0, 4), 4)
   end)
 end
 
