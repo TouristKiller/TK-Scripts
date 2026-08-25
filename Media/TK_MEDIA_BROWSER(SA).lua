@@ -1,8 +1,15 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 1.1.0
+-- @version 1.2.0
 -- @changelog:
 --[[
+v1.2.0:
++ New: a fourth view mode, Grouped, on the Tree / Flat / Compact button (T -> F -> G -> C). It is the flat list with a collapsible header per folder, so a location reads as an overview of what is in it and opens where you want it, instead of being scrolled through as one long list. Folders start collapsed, and which ones you opened is remembered per location. Requested by Heavy
++ Grouped: the header names the folder relative to the location and counts the files in it, so two folders that happen to share a name stay apart. That path is worked out from the file itself rather than read from what the scan stored, which means no library has to be scanned again for this
++ Grouped: the grouping is worked out once per change and then cached, and which folder a file belongs to is remembered for as long as the location does not change. Typing in the search box rebuilds the list on every keystroke, and that is what keeps it from costing anything
++ New: Show Progress Bar, under Settings. Switched off, the transport hands its space back to the oscilloscope, or to the folder pane and the file list in the single pane layout - the transport measures its own height, so nothing else needs adjusting for it
++ Fixed: an image that cannot be decoded no longer takes the whole browser down with it. ReaImGui reads what stb_image reads, and webp is not on that list - nor is anything that is not really an image at all, such as an audio file picked as a folder image by mistake. Such a file reached ImGui_CreateImage, and the failure came back as an error dialog for every frame the thumbnail was on screen, which made the browser unusable and, once docked, impossible to start. Wrapping the call in a pcall does not help: the decode happens inside ImGui after the call has already returned, so the failure never arrives as something the script could check. A file that cannot be decoded is therefore never handed to ImGui at all - not as a cover found in a pack, not as a folder image chosen by hand, and not in the image viewer. That folder simply shows no thumbnail. Reported by Heavy
+
 v1.1.0:
 + New: Single Pane Layout, a switch under Settings that stacks everything in one column - folders, file list, waveform, oscilloscope, transport - so the browser can be docked as a narrow strip beside the arrange instead of needing a wide floating window. The two-pane layout is untouched and remains the default. Requested by Heavy
 + Single Pane: the folder pane and the oscilloscope each have a drag handle for their height. Dragging the folder handle all the way up collapses that pane entirely and leaves the handle in place, so it can be pulled back open
@@ -1239,6 +1246,7 @@ local file_location = {
     saved_folder_flat_view = false,
     custom_folder_names = {},  
     custom_folder_colors = {},
+    custom_folder_images = {},
     rename_popup_location = nil,
     rename_popup_initialized = false,
     renaming_location = nil,
@@ -1394,6 +1402,7 @@ local ui = {
     -- Strip layout only: the nav pane and the scope get an explicit height there,
     -- because stacked regions cannot each claim 'whatever is left'.
     strip_nav_height = 160,
+    folder_expanded = {},
     strip_osc_height = 110,
     is_dragging_waveform_divider = false,
     left_panel_width = 200,
@@ -1541,6 +1550,10 @@ local ui_settings = {
     flatten_search_results = false,
     folder_pane_match_results = true,
     folder_pane_left_align = false,
+    group_by_folder = false,
+    show_progress_bar = true,
+    folder_grid = false,
+    folder_tile_size = 96,
     strip_layout = false,
     time_display_compact = false,
     hide_scrollbar = false,  
@@ -2045,13 +2058,171 @@ function load_cover_image(file_path)
     return last_cover_img
 end
 
+-- Folder cover thumbnails. An ImGui texture is uncompressed: a 1500x1500 cover costs 9 MB,
+-- and a grid of 32 locations full of those is a third of a gigabyte. So the grid never hands
+-- ImGui an original - LICE scales each cover down once, the result is written to
+-- CACHE/folder_thumbs, and only that is ever loaded. The cache key carries the source's size
+-- and modification time, so replacing an image rebuilds its thumbnail on its own.
+tkmb_thumb = {
+    dir = cache_dir .. "folder_thumbs" .. sep,
+    tex = {},      -- thumbnail path -> ImGui image, or false when it would not decode
+    made = {},     -- source path -> thumbnail path, or false when it could not be made
+    auto = {},     -- folder -> auto-detected cover, or false when the folder has none
+    budget = 0,
+    SIZE = 192,
+}
+r.RecursiveCreateDirectory(tkmb_thumb.dir, 0)
+
+-- What ReaImGui can actually turn into a texture: it decodes what stb_image decodes, and
+-- there is no webp reader in it. Such a file has to be kept away from ImGui_CreateImage
+-- entirely - a pcall around that call does not help, because the decode happens inside
+-- ImGui after the call has returned, so the failure arrives as a ReaScript error dialog
+-- rather than as a value this code could check. That is also why it repeats every frame the
+-- thumbnail is on screen. Same list and same reasoning as TK Workbench's media browser.
+tkmb_thumb.DISPLAYABLE = { png = true, jpg = true, jpeg = true, bmp = true }
+
+function tkmb_thumb.can_display(path)
+    if not path or path == "" then return false end
+    return tkmb_thumb.DISPLAYABLE[(path:match("%.([%w]+)$") or ""):lower()] == true
+end
+
+function tkmb_thumb.can_scale()
+    return (r.JS_LICE_CreateBitmap and r.JS_LICE_ScaledBlit and r.JS_LICE_WritePNG
+        and r.JS_LICE_GetWidth and r.JS_LICE_GetHeight and r.JS_LICE_DestroyBitmap) and true or false
+end
+
+function tkmb_thumb.loader_for(src)
+    local ext = (src:match("%.([%w]+)$") or ""):lower()
+    if ext == "png" then return r.JS_LICE_LoadPNG end
+    if ext == "jpg" or ext == "jpeg" then return r.JS_LICE_LoadJPG end
+    return nil
+end
+
+-- Returns the thumbnail to draw, building it only while this frame still has budget.
+-- Rescaling decodes the whole image, which is far too slow to do for a grid in one frame, so
+-- a couple are made per frame and the rest fill in over the next few - the same drip the Wave
+-- column uses for peaks. Formats LICE cannot read fall back to the original file.
+function tkmb_thumb.path_for(src)
+    if not src or src == "" then return nil end
+    local known = tkmb_thumb.made[src]
+    if known ~= nil then return known or nil end
+
+    local loader = tkmb_thumb.can_scale() and tkmb_thumb.loader_for(src) or nil
+    if not loader then
+        -- Falling back to the original is only safe for what ImGui can decode itself.
+        -- This is where a cover.webp used to slip through.
+        if not tkmb_thumb.can_display(src) then
+            tkmb_thumb.made[src] = false
+            return nil
+        end
+        tkmb_thumb.made[src] = src
+        return src
+    end
+    local out = tkmb_thumb.dir .. cover_cache_key(src) .. ".png"
+    if r.file_exists(out) then
+        tkmb_thumb.made[src] = out
+        return out
+    end
+    if tkmb_thumb.budget <= 0 then return nil end
+    tkmb_thumb.budget = tkmb_thumb.budget - 1
+
+    local ok, bm = pcall(loader, src)
+    if not ok or not bm then tkmb_thumb.made[src] = false return nil end
+    local w = r.JS_LICE_GetWidth(bm) or 0
+    local h = r.JS_LICE_GetHeight(bm) or 0
+    local written = false
+    if w >= 1 and h >= 1 then
+        local scale = math.min(tkmb_thumb.SIZE / w, tkmb_thumb.SIZE / h, 1)
+        local dw = math.max(1, math.floor(w * scale + 0.5))
+        local dh = math.max(1, math.floor(h * scale + 0.5))
+        local dst = r.JS_LICE_CreateBitmap(true, dw, dh)
+        if dst then
+            pcall(r.JS_LICE_ScaledBlit, dst, 0, 0, dw, dh, bm, 0, 0, w, h, 1.0, "COPY")
+            pcall(r.JS_LICE_WritePNG, out, dst, false)
+            written = r.file_exists(out)
+            pcall(r.JS_LICE_DestroyBitmap, dst)
+        end
+    end
+    pcall(r.JS_LICE_DestroyBitmap, bm)
+    tkmb_thumb.made[src] = written and out or false
+    return written and out or nil
+end
+
+function tkmb_thumb.texture(src)
+    local path = tkmb_thumb.path_for(src)
+    if not path then return nil end
+    local cached = tkmb_thumb.tex[path]
+    if cached == false then return nil end
+    if cached then
+        if not r.ImGui_ValidatePtr then return cached end
+        local ok, valid = pcall(r.ImGui_ValidatePtr, cached, "ImGui_Image*")
+        if ok and valid then return cached end
+        tkmb_thumb.tex[path] = nil
+    end
+    if not r.ImGui_CreateImage then return nil end
+    if not tkmb_thumb.can_display(path) then
+        tkmb_thumb.tex[path] = false
+        return nil
+    end
+    local ok, img = pcall(r.ImGui_CreateImage, path)
+    if ok and img then
+        if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, img) end
+        tkmb_thumb.tex[path] = img
+        return img
+    end
+    tkmb_thumb.tex[path] = false
+    return nil
+end
+
+-- A file called cover.* in the folder is used unless an image was picked by hand, so packs
+-- that ship their own artwork light up without anyone choosing anything.
+function tkmb_thumb.cover_in(folder)
+    if not r.EnumerateFiles or not folder or folder == "" then return nil end
+    local rank = { png = 1, jpg = 2, jpeg = 3, bmp = 4, gif = 5 }
+    local best, best_rank = nil, 99
+    local i = 0
+    while true do
+        local fn = r.EnumerateFiles(folder, i)
+        if not fn then break end
+        local stem, ext = fn:match("^(.*)%.([%w]+)$")
+        if stem and stem:lower() == "cover" then
+            local rk = rank[ext:lower()]
+            -- No catch-all rank: an unranked extension is one ImGui cannot decode, and
+            -- picking it here is what put a cover.webp in front of ImGui_CreateImage.
+            if rk and rk < best_rank then best, best_rank = folder .. sep .. fn, rk end
+        end
+        i = i + 1
+    end
+    return best
+end
+
+function tkmb_thumb.for_folder(location)
+    local chosen = file_location.custom_folder_images[location]
+    if chosen and chosen ~= "" then
+        return tkmb_thumb.can_display(chosen) and chosen or nil
+    end
+    local found = tkmb_thumb.auto[location]
+    if found == nil then
+        found = tkmb_thumb.cover_in(location) or false
+        tkmb_thumb.auto[location] = found
+    end
+    return found or nil
+end
+
+function tkmb_thumb.forget(location)
+    local src = file_location.custom_folder_images[location]
+    if src then tkmb_thumb.made[src] = nil end
+    tkmb_thumb.auto[location] = nil
+end
+
 function draw_cover_art_preview(file_path)
     if not ui_settings.show_cover_art then return end
     local image = load_cover_image(file_path)
     if not image then return end
     local img_w, img_h = 1, 1
     if r.ImGui_Image_GetSize then
-        img_w, img_h = r.ImGui_Image_GetSize(image)
+        local ok_size, w, h = pcall(r.ImGui_Image_GetSize, image)
+        if ok_size then img_w, img_h = w, h end
     end
     if not img_w or not img_h or img_w <= 0 or img_h <= 0 then
         img_w, img_h = 1, 1
@@ -2070,7 +2241,12 @@ function draw_cover_art_preview(file_path)
     if offset_x > 0 then
         r.ImGui_SetCursorPosX(ctx, cursor_x + offset_x)
     end
-    r.ImGui_Image(ctx, image, draw_w, draw_h)
+    -- A texture that cannot be drawn is dropped rather than allowed to raise: the cover is
+    -- decoration, and losing the whole browser over it is the wrong trade.
+    if not pcall(r.ImGui_Image, ctx, image, draw_w, draw_h) then
+        release_cover_image()
+        bad_cover_cache[file_path] = true
+    end
     r.ImGui_SetCursorPosX(ctx, cursor_x)
     r.ImGui_Spacing(ctx)
 end
@@ -2087,7 +2263,8 @@ function draw_cover_art_overlay(draw_list, file_path, x, y, w, h)
     if not image then ui.cover_art_preview_full = false return false end
     local img_w, img_h = 1, 1
     if r.ImGui_Image_GetSize then
-        img_w, img_h = r.ImGui_Image_GetSize(image)
+        local ok_size, w, h = pcall(r.ImGui_Image_GetSize, image)
+        if ok_size then img_w, img_h = w, h end
     end
     if not img_w or not img_h or img_w <= 0 or img_h <= 0 then
         img_w, img_h = 1, 1
@@ -4270,6 +4447,11 @@ local function save_options()
             flatten_search_results = ui_settings.flatten_search_results,
             folder_pane_match_results = ui_settings.folder_pane_match_results,
             folder_pane_left_align = ui_settings.folder_pane_left_align,
+            group_by_folder = ui_settings.group_by_folder,
+            show_progress_bar = ui_settings.show_progress_bar,
+            folder_grid = ui_settings.folder_grid,
+            folder_tile_size = ui_settings.folder_tile_size,
+            folder_expanded = ui.folder_expanded,
             strip_layout = ui_settings.strip_layout,
             hide_scrollbar = ui_settings.hide_scrollbar,
             pass_keys_to_reaper = ui_settings.pass_keys_to_reaper,
@@ -4284,6 +4466,7 @@ local function save_options()
             pitch_detection_enabled = ui.pitch_detection_enabled,
             custom_folder_names = file_location.custom_folder_names,
             custom_folder_colors = file_location.custom_folder_colors,
+            custom_folder_images = file_location.custom_folder_images,
             visible_columns = ui_settings.visible_columns,
             show_spectral_view = waveform.show_spectral_view,
             auto_selected_category = ui.auto_selected_category,
@@ -4381,6 +4564,10 @@ local function get_settings_table()
         flatten_search_results = ui_settings.flatten_search_results,
         folder_pane_match_results = ui_settings.folder_pane_match_results,
         folder_pane_left_align = ui_settings.folder_pane_left_align,
+        group_by_folder = ui_settings.group_by_folder,
+        show_progress_bar = ui_settings.show_progress_bar,
+        folder_grid = ui_settings.folder_grid,
+        folder_tile_size = ui_settings.folder_tile_size,
         strip_layout = ui_settings.strip_layout,
         hide_scrollbar = ui_settings.hide_scrollbar,
         pass_keys_to_reaper = ui_settings.pass_keys_to_reaper,
@@ -4451,6 +4638,10 @@ local function apply_settings_from_table(settings)
     ui_settings.flatten_search_results = settings.flatten_search_results ~= nil and settings.flatten_search_results or false
     ui_settings.folder_pane_match_results = settings.folder_pane_match_results ~= false
     ui_settings.folder_pane_left_align = settings.folder_pane_left_align == true
+    ui_settings.group_by_folder = settings.group_by_folder == true
+    ui_settings.show_progress_bar = settings.show_progress_bar ~= false
+    ui_settings.folder_grid = settings.folder_grid == true
+    ui_settings.folder_tile_size = settings.folder_tile_size or 96
     ui_settings.strip_layout = settings.strip_layout == true
     ui_settings.hide_scrollbar = settings.hide_scrollbar ~= nil and settings.hide_scrollbar or false
     ui_settings.pass_keys_to_reaper = settings.pass_keys_to_reaper == true
@@ -4555,6 +4746,7 @@ local function load_options()
             ui.waveform_grid_overlay = options.waveform_grid_overlay or false
             ui.waveform_preview_height = options.waveform_preview_height or 92
             ui.strip_nav_height = options.strip_nav_height or 160
+            ui.folder_expanded = options.folder_expanded or {}
             ui.strip_osc_height = options.strip_osc_height or 110
             ui.left_panel_width = options.left_panel_width or 200
             waveform.show_spectral_view = options.show_spectral_view or false
@@ -4636,6 +4828,10 @@ local function load_options()
             ui_settings.flatten_search_results = options.flatten_search_results == true
             ui_settings.folder_pane_match_results = options.folder_pane_match_results ~= false
             ui_settings.folder_pane_left_align = options.folder_pane_left_align == true
+            ui_settings.group_by_folder = options.group_by_folder == true
+            ui_settings.show_progress_bar = options.show_progress_bar ~= false
+            ui_settings.folder_grid = options.folder_grid == true
+            ui_settings.folder_tile_size = options.folder_tile_size or 96
             ui_settings.strip_layout = options.strip_layout == true
             if options.hide_scrollbar ~= nil then
                 ui_settings.hide_scrollbar = options.hide_scrollbar
@@ -4656,6 +4852,7 @@ local function load_options()
             ui.pitch_detection_enabled = options.pitch_detection_enabled ~= nil and options.pitch_detection_enabled or true
             file_location.custom_folder_names = options.custom_folder_names or {}
             file_location.custom_folder_colors = options.custom_folder_colors or {}
+            file_location.custom_folder_images = options.custom_folder_images or {}
             if options.visible_columns then
                 ui_settings.visible_columns = options.visible_columns
             end
@@ -4733,6 +4930,10 @@ local function load_options()
                         ui_settings.flatten_search_results = options2.flatten_search_results == true
                         ui_settings.folder_pane_match_results = options2.folder_pane_match_results ~= false
                         ui_settings.folder_pane_left_align = options2.folder_pane_left_align == true
+                        ui_settings.group_by_folder = options2.group_by_folder == true
+                        ui_settings.show_progress_bar = options2.show_progress_bar ~= false
+                        ui_settings.folder_grid = options2.folder_grid == true
+                        ui_settings.folder_tile_size = options2.folder_tile_size or 96
                         ui_settings.strip_layout = options2.strip_layout == true
                         if options2.hide_scrollbar ~= nil then
                             ui_settings.hide_scrollbar = options2.hide_scrollbar
@@ -4750,6 +4951,7 @@ local function load_options()
                         ui.auto_source_index = options2.auto_source_index or 0
                         ui.waveform_preview_height = options2.waveform_preview_height or 92
                         ui.strip_nav_height = options2.strip_nav_height or 160
+                        ui.folder_expanded = options2.folder_expanded or {}
                         ui.strip_osc_height = options2.strip_osc_height or 110
                         ui.left_panel_width = options2.left_panel_width or 200
                         if file_location.remember_last_location and options2.last_location_index then
@@ -8383,7 +8585,7 @@ local function get_display_index_for_path(files, path)
     return nil
 end
 
-local function scroll_selected_file_into_view(row_h, files_to_display)
+local function scroll_selected_file_into_view(row_h, files_to_display, plan)
     ui.scroll_target_index = nil
     if not ui.scroll_selected_file then return end
     if not ui.selected_index or ui.selected_index < 1 then return end
@@ -8394,17 +8596,25 @@ local function scroll_selected_file_into_view(row_h, files_to_display)
     end
     local target_index = get_display_index_for_path(files_to_display, playback.current_playing_file) or ui.selected_index
     ui.selected_index = target_index
-    ui.scroll_target_index = target_index
+    -- With folder headers the row the file sits on is not its index in the file list, and a
+    -- file inside a collapsed folder has no row at all - then there is nothing to scroll to.
+    local row_index = target_index
+    local total_items = files_to_display and #files_to_display or 0
+    if plan then
+        row_index = plan.file_to_row[target_index]
+        if not row_index then return end
+        total_items = #plan.rows
+    end
+    ui.scroll_target_index = row_index
     row_h = math.max(1, row_h or 18)
     local window_h = math.max(1, r.ImGui_GetWindowHeight(ctx))
     local scroll_max = r.ImGui_GetScrollMaxY and r.ImGui_GetScrollMaxY(ctx) or 0
-    local total_items = files_to_display and #files_to_display or 0
     if total_items > 0 and scroll_max > 0 then
         local measured = (scroll_max + window_h) / total_items
         if measured > 1 then row_h = measured end
     end
     -- grove sprong zodat de rij binnen het clipper-bereik valt; SetScrollHereY op de rij centreert daarna exact
-    local target_scroll = ((target_index - 1) * row_h) + (row_h * 0.5) - (window_h * 0.5)
+    local target_scroll = ((row_index - 1) * row_h) + (row_h * 0.5) - (window_h * 0.5)
     if target_scroll < 0 then target_scroll = 0 end
     r.ImGui_SetScrollY(ctx, target_scroll)
 end
@@ -10138,6 +10348,132 @@ function get_audio_data()
     end
 end
 
+-- Flat view with folder headers (the "G" view mode). The renderer walks a row plan rather
+-- than the file list itself: a plan entry is either a number - an index into the file list -
+-- or a header table. files_to_display therefore stays exactly what it was, which matters
+-- because the selection, the keyboard navigation and the file counter all index into it and
+-- need to know nothing about headers.
+tkmb_group = { key = nil, cache = nil, version = 0, dir_cache = {}, dir_location = nil }
+
+-- Derived from full_path rather than read from the entry: the scan only stores the last
+-- path segment in parent_folder, so two different "Kicks" folders would land under one
+-- header. Deriving it here keeps the cache format - and 15k scanned files - untouched.
+function tkmb_group.folder_of(path, location, memo)
+    local dir = path:match("^(.*)[/\\][^/\\]*$") or ""
+    -- Memoised per directory: a library of 15k files has a few hundred folders, and the
+    -- normalising below is two gsubs - doing that per file rather than per folder was worth
+    -- 128 ms on a location switch.
+    if memo then
+        local hit = memo[dir]
+        if hit then return hit end
+    end
+    local out = dir
+    if location and location ~= "" and #dir >= #location
+        and dir:sub(1, #location):lower() == location:lower() then
+        out = dir:sub(#location + 1)
+    end
+    out = (out:gsub("^[/\\]+", ""):gsub("\\", "/"))
+    if memo then memo[dir] = out end
+    return out
+end
+
+-- Folders start collapsed, so what is stored is which ones are open rather than which
+-- ones are shut: a fresh location then costs nothing to remember, and the table only ever
+-- holds the handful of folders actually being worked in.
+function tkmb_group.is_collapsed(location, folder)
+    local t = ui.folder_expanded
+    return not (t and t[(location or "") .. "|" .. (folder or "")])
+end
+
+function tkmb_group.toggle(location, folder)
+    ui.folder_expanded = ui.folder_expanded or {}
+    local id = (location or "") .. "|" .. (folder or "")
+    ui.folder_expanded[id] = (not ui.folder_expanded[id]) or nil
+    tkmb_group.version = tkmb_group.version + 1
+    save_options()
+end
+
+function tkmb_group.plan(files, location)
+    -- Table identity alone will not do: presort_flat_files re-sorts in place, which leaves
+    -- the identity untouched, so the sort and filter state go into the key as well.
+    local key = tostring(files) .. "|" .. #files
+        .. "|" .. tostring(search_filter.last_sort_column)
+        .. "|" .. tostring(search_filter.last_sort_direction)
+        .. "|" .. tostring(tkmb_shape.mode)
+        .. "|" .. tostring(search_filter.search_term)
+        .. "|" .. tostring(location)
+        .. "|" .. tostring(tkmb_group.version)
+    if tkmb_group.key == key and tkmb_group.cache then return tkmb_group.cache end
+
+    -- Which folder a path belongs to never changes while the location does not, so it is
+    -- cached across rebuilds rather than only within one. Typing in the search box rebuilds
+    -- the plan on every keystroke, and this is what keeps that from costing anything.
+    if tkmb_group.dir_location ~= location then
+        tkmb_group.dir_location = location
+        tkmb_group.dir_cache = {}
+    end
+    local pcache = tkmb_group.dir_cache
+    local order, members, memo = {}, {}, {}
+    for i = 1, #files do
+        local f = files[i]
+        if f and f.full_path then
+            local folder = pcache[f.full_path]
+            if not folder then
+                folder = tkmb_group.folder_of(f.full_path, location, memo)
+                pcache[f.full_path] = folder
+            end
+            local m = members[folder]
+            if not m then
+                m = {}
+                members[folder] = m
+                order[#order + 1] = folder
+            end
+            m[#m + 1] = i
+        end
+    end
+    table.sort(order, function(a, b) return a:lower() < b:lower() end)
+
+    -- Files sitting directly in the location carry an empty relative path; they read better
+    -- under the location's own name than under a blank header.
+    local root_label = (location or ""):match("([^/\\]+)[/\\]?$") or "/"
+    local rows, file_to_row = {}, {}
+    for _, folder in ipairs(order) do
+        local m = members[folder]
+        rows[#rows + 1] = { folder = folder, label = (folder == "" and root_label or folder), count = #m }
+        if not tkmb_group.is_collapsed(location, folder) then
+            for j = 1, #m do
+                rows[#rows + 1] = m[j]
+                file_to_row[m[j]] = #rows
+            end
+        end
+    end
+    tkmb_group.key = key
+    tkmb_group.cache = { rows = rows, file_to_row = file_to_row }
+    return tkmb_group.cache
+end
+
+-- Drawn as an ordinary table row on the ordinary row height: the clipper estimates its
+-- scroll extent from a uniform row height, and a taller header makes scrolling jump.
+function tkmb_group.draw_header(row, location)
+    local collapsed = tkmb_group.is_collapsed(location, row.folder)
+    r.ImGui_TableNextRow(ctx)
+    if r.ImGui_TableSetBgColor and r.ImGui_TableBgTarget_RowBg0 then
+        r.ImGui_TableSetBgColor(ctx, r.ImGui_TableBgTarget_RowBg0(),
+            hsv_to_color(ui_settings.accent_hue, 0.35, 0.45, 0.45))
+    end
+    r.ImGui_TableNextColumn(ctx)
+    local caret = collapsed and "> " or "v "
+    local label = caret .. (row.label == "" and "/" or row.label) .. "   (" .. row.count .. ")"
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 0.20, 1.0))
+    if r.ImGui_Selectable(ctx, label .. "##tkgrp_" .. row.folder, false, r.ImGui_SelectableFlags_SpanAllColumns()) then
+        tkmb_group.toggle(location, row.folder)
+    end
+    r.ImGui_PopStyleColor(ctx, 1)
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, row.label .. "   " .. row.count .. " files")
+    end
+end
+
 function draw_file_list()
     if file_location.current_location ~= "" then
             -- The list's vertical scrollbar belongs to the table, not to this child:
@@ -10795,14 +11131,16 @@ function draw_file_list()
                             ui.scroll_to_top = false
                         end
                         local row_h = r.ImGui_GetTextLineHeight(ctx)
-                        scroll_selected_file_into_view(row_h, files_to_display)
+                        local group_plan = (ui_settings.group_by_folder and not ui_settings.compact_view)
+                            and tkmb_group.plan(files_to_display, file_location.current_location) or nil
+                        scroll_selected_file_into_view(row_h, files_to_display, group_plan)
                         
                         local clipper_valid = ui.list_clipper and r.ImGui_ValidatePtr(ui.list_clipper, 'ImGui_ListClipper*')
                         if not clipper_valid then
                             ui.list_clipper = r.ImGui_CreateListClipper(ctx)
                         end
                         
-                        local total_items = #files_to_display
+                        local total_items = group_plan and #group_plan.rows or #files_to_display
                         r.ImGui_ListClipper_Begin(ui.list_clipper, total_items)
                         
                         while r.ImGui_ListClipper_Step(ui.list_clipper) do
@@ -10814,7 +11152,20 @@ function draw_file_list()
                             tkmb_peaks.note_scroll(r.ImGui_GetScrollY and r.ImGui_GetScrollY(ctx) or 0)
                             
                             for i = display_start + 1, display_end do
-                                local file = files_to_display[i]
+                                local file
+                                if group_plan then
+                                    -- A plan entry is either a header table or an index into
+                                    -- files_to_display, so everything below this point still
+                                    -- sees exactly the file it always saw.
+                                    local row = group_plan.rows[i]
+                                    if type(row) == "table" then
+                                        tkmb_group.draw_header(row, file_location.current_location)
+                                        goto continue
+                                    end
+                                    file = row and files_to_display[row] or nil
+                                else
+                                    file = files_to_display[i]
+                                end
                                 if not file then
                                     goto continue
                                 end
@@ -12029,6 +12380,17 @@ function tkmb_ui.draw_nav_pane()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), accent_active_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), button_text_color)
 
+        -- Grid geometry, worked out once: how many tiles fit across, how wide one ends up
+        -- after dividing the leftover evenly, and how tall it is with room for its caption.
+        local grid_mode = ui_settings.folder_grid
+        local grid_gap = 4
+        local tile_w = math.max(48, ui_settings.folder_tile_size or 96)
+        if tile_w > total_width then tile_w = math.max(24, total_width) end
+        local grid_cols = math.max(1, math.floor((total_width + grid_gap) / (tile_w + grid_gap)))
+        tile_w = math.floor((total_width - (grid_cols - 1) * grid_gap) / grid_cols)
+        local tile_h = tile_w + r.ImGui_GetTextLineHeight(ctx) + 4
+        local grid_col = 0
+
         for i, location in ipairs(file_location.locations) do
             local is_selected = (i == file_location.selected_location_index)
             local folder_name = file_location.custom_folder_names[location] or (location:match("([^/\\]+)[/\\]?$") or location)
@@ -12063,6 +12425,7 @@ function tkmb_ui.draw_nav_pane()
                 if ok_disabled then r.ImGui_EndDisabled(ctx) end
                 r.ImGui_SameLine(ctx)
                 local cancel_clicked = r.ImGui_Button(ctx, "Cancel", 120, ui_settings.button_height)
+                grid_col = 0
                 if ok_clicked or enter_pressed then
                     local trimmed = ui_settings.rename_inline_text:gsub("^%s+", ""):gsub("%s+$", "")
                     if trimmed == "" then
@@ -12080,53 +12443,17 @@ function tkmb_ui.draw_nav_pane()
                     ui_settings.rename_inline_text = ""
                 end
             else
-                r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), ui_settings.folder_pane_left_align and 0.0 or 0.5, 0.5)
-                if r.ImGui_Button(ctx, folder_name, total_width, ui_settings.button_height) then
-                file_location.selected_location_index = i
-                file_location.current_location = location
-                if file_location.search_all then
-                    file_location.search_all = false
-                    if file_location.prev_flat_view ~= nil then
-                        file_location.flat_view = file_location.prev_flat_view
-                        file_location.prev_flat_view = nil
-                    end
-                end
-                clear_file_selection()
-
-                if search_filter.last_sort_column >= 0 then
-                    search_filter.remembered_sort_column = search_filter.last_sort_column
-                    search_filter.remembered_sort_direction = search_filter.last_sort_direction
-                end
-
-                if file_location.flat_view then
-                    local flat = get_flat_file_list(location)
-                    if not flat or #flat == 0 then
-                        refresh_file_cache(location)
-                        flat = get_flat_file_list(location)
-                    end
-                    presort_flat_files(flat)
-                    if not file_location.current_files or #file_location.current_files == 0 then
-                        file_location.current_files = read_directory_recursive(location, false)
-                    end
+                if grid_mode then
+                    if grid_col > 0 then r.ImGui_SameLine(ctx, 0, grid_gap) end
+                    tkmb_ui.draw_folder_tile(i, location, folder_name, is_selected, tile_w, tile_h, base_color)
+                    grid_col = (grid_col + 1) % grid_cols
                 else
-                    tree_cache.cache = {} 
-                    file_location.current_files = read_directory_recursive(location, false)
-                    search_filter.cached_location = ""
-                    search_filter.cached_flat_files = {}
-                    cached_metadata = {}
-                    category_cache = {}
-                    cached_cat_counts = {}
-                    cached_cat_counts_loc = ""
-                    cached_cat_filter = {}
-                    cached_cat_filter_key = ""
+                    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), ui_settings.folder_pane_left_align and 0.0 or 0.5, 0.5)
+                    if r.ImGui_Button(ctx, folder_name, total_width, ui_settings.button_height) then
+                        tkmb_ui.select_location(i, location)
+                    end
+                    r.ImGui_PopStyleVar(ctx, 1)
                 end
-
-                file_location.last_folder_location = location
-                file_location.last_folder_index = i
-
-                save_options()
-                end
-                r.ImGui_PopStyleVar(ctx, 1)
                 if r.ImGui_BeginDragDropSource(ctx, 0) then
                     r.ImGui_SetDragDropPayload(ctx, "FOLDER_REORDER", tostring(i))
                     r.ImGui_Text(ctx, folder_name)
@@ -12206,6 +12533,23 @@ function tkmb_ui.draw_nav_pane()
                 if file_location.custom_folder_colors[location] then
                     if r.ImGui_MenuItem(ctx, "Reset to Default Color") then
                         file_location.custom_folder_colors[location] = nil
+                        save_options()
+                    end
+                end
+
+                if r.ImGui_MenuItem(ctx, "Set Image...") then
+                    local ok, picked = r.GetUserFileNameForRead(location .. sep, "Select folder image", ".png")
+                    if ok and picked and picked ~= "" then
+                        tkmb_thumb.forget(location)
+                        file_location.custom_folder_images[location] = picked
+                        save_options()
+                    end
+                end
+                if file_location.custom_folder_images[location] then
+                    -- Clearing the choice lets a cover.* in the folder take over again.
+                    if r.ImGui_MenuItem(ctx, "Reset Image") then
+                        tkmb_thumb.forget(location)
+                        file_location.custom_folder_images[location] = nil
                         save_options()
                     end
                 end
@@ -14802,86 +15146,91 @@ function tkmb_ui.draw_transport()
     r.ImGui_Text(ctx, pitch_text)
 
     r.ImGui_PopFont(ctx)
-    r.ImGui_Separator(ctx)
-    r.ImGui_Dummy(ctx, 0, 2)
-    local width = r.ImGui_GetContentRegionAvail(ctx)
-    local height = 12
-    local draw_list = r.ImGui_GetWindowDrawList(ctx)
-    local x, y = r.ImGui_GetCursorScreenPos(ctx)
-    local toggle_size = 11
-    local toggle_gap = 3
-    local toggle_x = x + width - toggle_size
-    local toggle_y = y + (height - toggle_size) * 0.5
-    local text_width = math.max(0, width - toggle_size - toggle_gap)
-    local function format_clock_pair(seconds, pad_minutes)
-        seconds = math.max(0, seconds or 0)
-        local mins = math.floor(seconds / 60)
-        local secs = math.floor(seconds % 60)
-        if pad_minutes then
-            return string.format("%02d:%02d", mins, secs)
+    -- The progress bar is the one part of the transport that can be switched off. The
+    -- height is measured rather than assumed, so both layouts reclaim the space by
+    -- themselves once it is gone.
+    if ui_settings.show_progress_bar then
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 2)
+        local width = r.ImGui_GetContentRegionAvail(ctx)
+        local height = 12
+        local draw_list = r.ImGui_GetWindowDrawList(ctx)
+        local x, y = r.ImGui_GetCursorScreenPos(ctx)
+        local toggle_size = 11
+        local toggle_gap = 3
+        local toggle_x = x + width - toggle_size
+        local toggle_y = y + (height - toggle_size) * 0.5
+        local text_width = math.max(0, width - toggle_size - toggle_gap)
+        local function format_clock_pair(seconds, pad_minutes)
+            seconds = math.max(0, seconds or 0)
+            local mins = math.floor(seconds / 60)
+            local secs = math.floor(seconds % 60)
+            if pad_minutes then
+                return string.format("%02d:%02d", mins, secs)
+            end
+            return string.format("%d:%02d", mins, secs)
         end
-        return string.format("%d:%02d", mins, secs)
-    end
-    if playback.playing_preview and playback.current_playing_file ~= "" and playback.playing_source then
-        local retval, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
-        local source_length = r.GetMediaSourceLength(playback.playing_source)
-        pos = pos or 0
-        source_length = source_length or 1
-        local adjusted_length = source_length / (playback.effective_playrate or 1.0)
-        local progress = math.min(pos / adjusted_length, 1)
-        local red, green
-        if progress < 0.6 then
-            red = 0.0
-            green = 1.0
-        elseif progress < 0.9 then
-            local fade = (progress - 0.6) / 0.3
-            red = fade
-            green = 1.0
+        if playback.playing_preview and playback.current_playing_file ~= "" and playback.playing_source then
+            local retval, pos = r.CF_Preview_GetValue(playback.playing_preview, "D_POSITION")
+            local source_length = r.GetMediaSourceLength(playback.playing_source)
+            pos = pos or 0
+            source_length = source_length or 1
+            local adjusted_length = source_length / (playback.effective_playrate or 1.0)
+            local progress = math.min(pos / adjusted_length, 1)
+            local red, green
+            if progress < 0.6 then
+                red = 0.0
+                green = 1.0
+            elseif progress < 0.9 then
+                local fade = (progress - 0.6) / 0.3
+                red = fade
+                green = 1.0
+            else
+                local fade = (progress - 0.9) / 0.1
+                red = 1.0
+                green = 1.0 - fade
+            end
+            local bar_color = r.ImGui_ColorConvertDouble4ToU32(red, green, 0.0, 1.0)
+            r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width * progress, y + height, bar_color)
+            local adjusted_length = source_length / (playback.effective_playrate or 1.0)
+            local time_text
+            if ui_settings.time_display_compact then
+                time_text = format_clock_pair(pos, true) .. " / " .. format_clock_pair(adjusted_length, false)
+            else
+                time_text = string.format("%.2f / %.2f s", pos, adjusted_length)
+            end
+            local text_w, text_h = r.ImGui_CalcTextSize(ctx, time_text)
+            local text_x = x + (text_width - text_w) / 2
+            local text_y = y + (height - text_h) / 2
+            local outline_color = 0x000000FF
+            r.ImGui_DrawList_AddText(draw_list, text_x - 1, text_y, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x + 1, text_y, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y - 1, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y + 1, outline_color, time_text)
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0xFFFFFFFF, time_text)
         else
-            local fade = (progress - 0.9) / 0.1
-            red = 1.0
-            green = 1.0 - fade
+            local text = "PROGRESS......"
+            local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, text)
+            local text_x = x + (text_width - text_size_w) / 2
+            local text_y = y + (height - text_size_h) / 2
+            r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x888888FF, text)
         end
-        local bar_color = r.ImGui_ColorConvertDouble4ToU32(red, green, 0.0, 1.0)
-        r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width * progress, y + height, bar_color)
-        local adjusted_length = source_length / (playback.effective_playrate or 1.0)
-        local time_text
-        if ui_settings.time_display_compact then
-            time_text = format_clock_pair(pos, true) .. " / " .. format_clock_pair(adjusted_length, false)
-        else
-            time_text = string.format("%.2f / %.2f s", pos, adjusted_length)
+        r.ImGui_SetCursorScreenPos(ctx, toggle_x, toggle_y)
+        r.ImGui_InvisibleButton(ctx, "##time_display_toggle", toggle_size, toggle_size)
+        if r.ImGui_IsItemClicked(ctx, 0) then
+            ui_settings.time_display_compact = not ui_settings.time_display_compact
         end
-        local text_w, text_h = r.ImGui_CalcTextSize(ctx, time_text)
-        local text_x = x + (text_width - text_w) / 2
-        local text_y = y + (height - text_h) / 2
-        local outline_color = 0x000000FF
-        r.ImGui_DrawList_AddText(draw_list, text_x - 1, text_y, outline_color, time_text)
-        r.ImGui_DrawList_AddText(draw_list, text_x + 1, text_y, outline_color, time_text)
-        r.ImGui_DrawList_AddText(draw_list, text_x, text_y - 1, outline_color, time_text)
-        r.ImGui_DrawList_AddText(draw_list, text_x, text_y + 1, outline_color, time_text)
-        r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0xFFFFFFFF, time_text)
-    else
-        local text = "PROGRESS......"
-        local text_size_w, text_size_h = r.ImGui_CalcTextSize(ctx, text)
-        local text_x = x + (text_width - text_size_w) / 2
-        local text_y = y + (height - text_size_h) / 2
-        r.ImGui_DrawList_AddText(draw_list, text_x, text_y, 0x888888FF, text)
+        local toggle_hovered = r.ImGui_IsItemHovered(ctx)
+        local toggle_color = ui_settings.time_display_compact and 0x8ED26BFF or 0x6A6A6AFF
+        local toggle_border = toggle_hovered and 0xFFFFFFFF or 0xC0C0C0FF
+        r.ImGui_DrawList_AddCircleFilled(draw_list, toggle_x + toggle_size * 0.5, toggle_y + toggle_size * 0.5, toggle_size * 0.5 - 1, toggle_color)
+        r.ImGui_DrawList_AddCircle(draw_list, toggle_x + toggle_size * 0.5, toggle_y + toggle_size * 0.5, toggle_size * 0.5 - 1, toggle_border, 0, 1)
+        -- Reserve the bar's own rectangle and nothing more. The cursor is still parked on the
+        -- toggle at the right-hand end of the bar, one row down, so a Dummy from there reserved
+        -- a second bar's worth of height underneath - the empty strip that sat under the bar.
+        r.ImGui_SetCursorScreenPos(ctx, x, y)
+        r.ImGui_Dummy(ctx, width, height)
     end
-    r.ImGui_SetCursorScreenPos(ctx, toggle_x, toggle_y)
-    r.ImGui_InvisibleButton(ctx, "##time_display_toggle", toggle_size, toggle_size)
-    if r.ImGui_IsItemClicked(ctx, 0) then
-        ui_settings.time_display_compact = not ui_settings.time_display_compact
-    end
-    local toggle_hovered = r.ImGui_IsItemHovered(ctx)
-    local toggle_color = ui_settings.time_display_compact and 0x8ED26BFF or 0x6A6A6AFF
-    local toggle_border = toggle_hovered and 0xFFFFFFFF or 0xC0C0C0FF
-    r.ImGui_DrawList_AddCircleFilled(draw_list, toggle_x + toggle_size * 0.5, toggle_y + toggle_size * 0.5, toggle_size * 0.5 - 1, toggle_color)
-    r.ImGui_DrawList_AddCircle(draw_list, toggle_x + toggle_size * 0.5, toggle_y + toggle_size * 0.5, toggle_size * 0.5 - 1, toggle_border, 0, 1)
-    -- Reserve the bar's own rectangle and nothing more. The cursor is still parked on the
-    -- toggle at the right-hand end of the bar, one row down, so a Dummy from there reserved
-    -- a second bar's worth of height underneath - the empty strip that sat under the bar.
-    r.ImGui_SetCursorScreenPos(ctx, x, y)
-    r.ImGui_Dummy(ctx, width, height)
     -- What the transport actually needs, so both layouts can reserve exactly that instead
     -- of a constant. It does not change while a divider is dragged, so reading it back a
     -- frame later is safe; only the font and the button height move it at all.
@@ -14925,6 +15274,8 @@ function tkmb_ui.draw_topbar()
                     current_state = "T"
                 elseif ui_settings.compact_view then
                     current_state = "C"
+                elseif ui_settings.group_by_folder then
+                    current_state = "G"
                 else
                     current_state = "F"
                 end
@@ -14937,12 +15288,17 @@ function tkmb_ui.draw_topbar()
                     if current_state == "T" then
                         file_location.flat_view = true
                         ui_settings.compact_view = false
+                        ui_settings.group_by_folder = false
                         search_filter.cached_location = ""
                     elseif current_state == "F" then
+                        ui_settings.group_by_folder = true
+                    elseif current_state == "G" then
+                        ui_settings.group_by_folder = false
                         ui_settings.compact_view = true
                     elseif tree_available then
                         file_location.flat_view = false
                         ui_settings.compact_view = false
+                        ui_settings.group_by_folder = false
                         search_filter.search_term = ""
                         search_filter.filtered_files = {}
                         tree_cache.cache = {}
@@ -14952,6 +15308,7 @@ function tkmb_ui.draw_topbar()
                     else
                         -- Compact back to Flat: no tree to fall back to here.
                         ui_settings.compact_view = false
+                        ui_settings.group_by_folder = false
                         file_location.flat_view = true
                     end
                     save_options()
@@ -14965,10 +15322,12 @@ function tkmb_ui.draw_topbar()
                         label = "Tree view"
                     elseif current_state == "F" then
                         label = "Flat view"
+                    elseif current_state == "G" then
+                        label = "Flat view, grouped by folder"
                     else
                         label = "Compact view"
                     end
-                    local cycle = tree_available and "Tree -> Flat -> Compact" or "Flat -> Compact"
+                    local cycle = tree_available and "Tree -> Flat -> Grouped -> Compact" or "Flat -> Grouped -> Compact"
                     r.ImGui_SetTooltip(ctx, "View mode: " .. label .. "\nClick to cycle " .. cycle)
                 end
 
@@ -15681,6 +16040,34 @@ function tkmb_ui.draw_main_content()
         end
         if r.ImGui_IsItemHovered(ctx) then
             r.ImGui_SetTooltip(ctx, "Send keys that are not used by a text field to REAPER,\nso global shortcuts (e.g. closing this script) keep working while the browser has focus.\nKeys with a REAPER shortcut (Space, arrows, ...) then no longer control the browser.")
+        end
+
+        r.ImGui_Spacing(ctx)
+        local grid_changed, new_grid = r.ImGui_Checkbox(ctx, "Folder Pane as Image Grid", ui_settings.folder_grid)
+        if grid_changed then
+            ui_settings.folder_grid = new_grid
+            save_options()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Show the folder locations as picture tiles instead of buttons.\nRight-click a folder to set its image; a file called cover.png or\ncover.jpg inside the folder is picked up automatically.")
+        end
+        if ui_settings.folder_grid then
+            r.ImGui_SetNextItemWidth(ctx, 160)
+            local size_changed, new_size = r.ImGui_SliderInt(ctx, "Tile size", ui_settings.folder_tile_size or 96, 48, 200)
+            if size_changed then
+                ui_settings.folder_tile_size = new_size
+                save_options()
+            end
+        end
+
+        r.ImGui_Spacing(ctx)
+        local progress_changed, new_progress = r.ImGui_Checkbox(ctx, "Show Progress Bar", ui_settings.show_progress_bar)
+        if progress_changed then
+            ui_settings.show_progress_bar = new_progress
+            save_options()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Show the playback progress bar and time readout at the bottom of the transport.")
         end
 
         r.ImGui_Spacing(ctx)
@@ -17367,6 +17754,120 @@ function tkmb_ui.draw_waveform(divider_h, max_height)
     end
 end
 
+
+
+function tkmb_ui.truncate(text, max_w)
+    if r.ImGui_CalcTextSize(ctx, text) <= max_w then return text end
+    local out = text
+    while #out > 1 and r.ImGui_CalcTextSize(ctx, out .. "...") > max_w do
+        out = out:sub(1, #out - 1)
+    end
+    return out .. "..."
+end
+
+-- One tile in the folder grid. Drawn as an InvisibleButton with the picture painted on top
+-- rather than as a child window: that way it stays an ordinary item, so the drag-to-reorder
+-- and the right-click menu that the folder buttons already have keep working unchanged.
+--
+-- The name sits inside the tile along the bottom, on a dark band, with the picture above it.
+-- Underneath the tile it read as loose text floating between the rows rather than as part of
+-- the button, and over artwork it needs the band to stay legible at all.
+function tkmb_ui.draw_folder_tile(i, location, folder_name, is_selected, tw, th, plate_color)
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    r.ImGui_InvisibleButton(ctx, "##tkfolder_tile_" .. i, tw, th)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    if r.ImGui_IsItemClicked(ctx, 0) then
+        tkmb_ui.select_location(i, location)
+    end
+
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+    local band_h = line_h + 4
+    local text_col = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
+    r.ImGui_DrawList_AddRectFilled(dl, x, y, x + tw, y + th, plate_color, 4)
+
+    local tex = tkmb_thumb.texture(tkmb_thumb.for_folder(location))
+    if tex and r.ImGui_DrawList_AddImage then
+        local img_h = math.max(8, th - band_h)
+        local iw, ih = 0, 0
+        if r.ImGui_Image_GetSize then
+            local ok, a, b = pcall(r.ImGui_Image_GetSize, tex)
+            if ok then iw, ih = a or 0, b or 0 end
+        end
+        local dw, dh = tw, img_h
+        if iw > 0 and ih > 0 then
+            local s = math.min(tw / iw, img_h / ih)
+            dw, dh = iw * s, ih * s
+        end
+        local ix, iy = x + (tw - dw) * 0.5, y + (img_h - dh) * 0.5
+        r.ImGui_DrawList_AddImage(dl, tex, ix, iy, ix + dw, iy + dh)
+        -- The band is what makes the name readable whatever the artwork does underneath it.
+        r.ImGui_DrawList_AddRectFilled(dl, x, y + th - band_h, x + tw, y + th, 0x000000B4, 4)
+        local label = tkmb_ui.truncate(folder_name, tw - 6)
+        local lw = r.ImGui_CalcTextSize(ctx, label)
+        r.ImGui_DrawList_AddText(dl, x + (tw - lw) * 0.5, y + th - band_h + 2, 0xFFFFFFFF, label)
+    else
+        -- Nothing to show but the colour, so the name takes the middle of the tile and the
+        -- band would only be an empty stripe.
+        local label = tkmb_ui.truncate(folder_name, tw - 8)
+        local lw, lh = r.ImGui_CalcTextSize(ctx, label)
+        r.ImGui_DrawList_AddText(dl, x + (tw - lw) * 0.5, y + (th - lh) * 0.5, text_col, label)
+    end
+
+    if is_selected or hovered then
+        local accent = hsv_to_color(ui_settings.accent_hue, 1.0, 1.0)
+        r.ImGui_DrawList_AddRect(dl, x, y, x + tw, y + th,
+            is_selected and accent or 0xFFFFFF88, 4, 0, is_selected and 2 or 1)
+    end
+end
+-- Picking a folder, lifted out of the button that used to be the only way to do it: the
+-- image grid needs the very same thing to happen when a tile is clicked.
+function tkmb_ui.select_location(i, location)
+    file_location.selected_location_index = i
+    file_location.current_location = location
+    if file_location.search_all then
+        file_location.search_all = false
+        if file_location.prev_flat_view ~= nil then
+            file_location.flat_view = file_location.prev_flat_view
+            file_location.prev_flat_view = nil
+        end
+    end
+    clear_file_selection()
+
+    if search_filter.last_sort_column >= 0 then
+        search_filter.remembered_sort_column = search_filter.last_sort_column
+        search_filter.remembered_sort_direction = search_filter.last_sort_direction
+    end
+
+    if file_location.flat_view then
+        local flat = get_flat_file_list(location)
+        if not flat or #flat == 0 then
+            refresh_file_cache(location)
+            flat = get_flat_file_list(location)
+        end
+        presort_flat_files(flat)
+        if not file_location.current_files or #file_location.current_files == 0 then
+            file_location.current_files = read_directory_recursive(location, false)
+        end
+    else
+        tree_cache.cache = {} 
+        file_location.current_files = read_directory_recursive(location, false)
+        search_filter.cached_location = ""
+        search_filter.cached_flat_files = {}
+        cached_metadata = {}
+        category_cache = {}
+        cached_cat_counts = {}
+        cached_cat_counts_loc = ""
+        cached_cat_filter = {}
+        cached_cat_filter_key = ""
+    end
+
+    file_location.last_folder_location = location
+    file_location.last_folder_index = i
+
+    save_options()
+end
+
 -- The two layout drivers. Every region is drawn by the same tkmb_ui.draw_* function
 -- in both; all that differs is the order and what they are nested in.
 function tkmb_ui.layout_classic()
@@ -17598,6 +18099,10 @@ function loop()
         ui.pending_view_mode = nil
         save_options()
     end
+    -- Rescaling a cover decodes the whole image, so the grid builds a couple per frame
+    -- and lets the rest fill in over the next few rather than stalling on the frame
+    -- that first shows them.
+    tkmb_thumb.budget = 2
     process_lufs_analysis_queue()
     tkmb_peaks.process()
     if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
@@ -17852,10 +18357,23 @@ function loop()
             if ui.image_viewer_img then
                 ui.image_viewer_img = nil
             end
-            ui.image_viewer_img = r.ImGui_CreateImage(ui.image_viewer_path)
-            if ui.image_viewer_img then
-                r.ImGui_Attach(ctx, ui.image_viewer_img)
+            -- ImGui_CreateImage raises on a format it cannot decode - a hard error that
+            -- takes the whole script down, not a nil return. Anything the file list is
+            -- willing to show can end up here, so the failure has to be caught and turned
+            -- into a message in the viewer instead.
+            local ok_img, img = false, nil
+            if tkmb_thumb.can_display(ui.image_viewer_path) then
+                ok_img, img = pcall(r.ImGui_CreateImage, ui.image_viewer_path)
+            end
+            if ok_img and img then
+                ui.image_viewer_img = img
+                pcall(r.ImGui_Attach, ctx, img)
                 ui.image_viewer_img_path = ui.image_viewer_path
+                ui.image_viewer_error = nil
+            else
+                ui.image_viewer_img = nil
+                ui.image_viewer_img_path = ui.image_viewer_path
+                ui.image_viewer_error = "This image format cannot be displayed."
             end
         end
 
@@ -17866,7 +18384,8 @@ function loop()
         if v_visible then
             if ui.image_viewer_img then
                 local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
-                local img_w, img_h = r.ImGui_Image_GetSize(ui.image_viewer_img)
+                local ok_size, img_w, img_h = pcall(r.ImGui_Image_GetSize, ui.image_viewer_img)
+                if not ok_size then img_w, img_h = 0, 0 end
                 if img_w > 0 and img_h > 0 then
                     local img_aspect = img_w / img_h
                     local view_aspect = avail_w / avail_h
@@ -17882,12 +18401,16 @@ function loop()
                     if ox > 0 then r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + ox) end
                     local oy = (avail_h - dh) / 2
                     if oy > 0 then r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + oy) end
-                    r.ImGui_Image(ctx, ui.image_viewer_img, dw, dh)
+                    if not pcall(r.ImGui_Image, ctx, ui.image_viewer_img, dw, dh) then
+                        ui.image_viewer_img = nil
+                        ui.image_viewer_error = "This image could not be drawn."
+                    end
                 else
                     r.ImGui_Text(ctx, "Afbeelding wordt geladen...")
                 end
             else
-                r.ImGui_Text(ctx, "Kan afbeelding niet laden.")
+                r.ImGui_Text(ctx, ui.image_viewer_error or "Kan afbeelding niet laden.")
+                r.ImGui_TextDisabled(ctx, ui.image_viewer_path)
             end
             r.ImGui_End(ctx)
         end
@@ -17896,6 +18419,7 @@ function loop()
             ui.image_viewer_path = ""
             ui.image_viewer_img = nil
             ui.image_viewer_img_path = nil
+            ui.image_viewer_error = nil
         end
     end
 
