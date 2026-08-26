@@ -46,6 +46,9 @@ local C = {
     scene_w      = 78,
     fade         = 0.005,
     follow_lead  = 1.20,
+    -- Payload types a dragged file can arrive under, in the order they are tried.
+    drop_types   = { "TK_WORKBENCH_MEDIA_FILE", "REAPER_MEDIAFOLDER", "text/uri-list",
+                     "UTF8_STRING", "TEXT", "FILE_PATH", "FILES" },
 }
 
 local L = {
@@ -1053,6 +1056,12 @@ end
 
 function H.assign_paths(lane, row, paths)
     if not paths or #paths == 0 then return end
+    -- One drop can arrive twice: as an ImGui payload and again through the
+    -- TK_DRAG protocol. Ignore an identical repeat on the same cell.
+    local stamp = tostring(lane) .. "/" .. tostring(row) .. "/" .. table.concat(paths, "|")
+    local now = r.time_precise()
+    if L.last_drop == stamp and (now - (L.last_drop_at or 0)) < 0.5 then return end
+    L.last_drop, L.last_drop_at = stamp, now
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     local added = 0
@@ -1132,8 +1141,31 @@ function H.move_slot(from_lane, from_slot, to_lane, to_row, copy)
     L.status = copy and "Clip copied" or "Clip moved"
 end
 
--- OS file drop (REAPER's own Media Explorer, Windows Explorer). Only reaches a
--- floating window; docked contexts are covered by the TK drag protocol below.
+-- Turns whatever a drop carried into a list of paths that exist on disk. A text
+-- payload can be newline or NUL separated, quoted, or a file:// URI.
+function H.payload_paths(payload)
+    local paths = {}
+    local text = tostring(payload or "")
+    if text == "" then return paths end
+    text = text:gsub("%z", "\n"):gsub("\r", "")
+    for line in text:gmatch("[^\n]+") do
+        local candidate = line:match("^%s*(.-)%s*$") or ""
+        candidate = candidate:gsub('^"', ""):gsub('"$', ""):gsub("^<", ""):gsub(">$", "")
+        if candidate:lower():match("^file://") then
+            candidate = candidate:gsub("^%a+://", ""):gsub("^localhost/", "")
+            candidate = candidate:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end)
+            candidate = candidate:gsub("^/(%a:)", "%1")
+        end
+        if candidate ~= "" and r.file_exists(candidate) then paths[#paths + 1] = candidate end
+    end
+    return paths
+end
+
+-- A file drop from outside. REAPER's own Media Explorer does not deliver the
+-- plain file payload the way Windows Explorer does, so the named types are asked
+-- for as well, and if it is none of those, GetDragDropPayload reports whatever
+-- type is actually in flight and that one is accepted. This is the sweep TK Kit
+-- Maker uses, which is why the Media Explorer has always worked there.
 function H.accept_file_drop(lane, row)
     if not r.ImGui_BeginDragDropTarget then return end
     if not r.ImGui_BeginDragDropTarget(UI.ctx) then return end
@@ -1149,14 +1181,32 @@ function H.accept_file_drop(lane, row)
     end
     local paths = {}
     if r.ImGui_AcceptDragDropPayloadFiles and r.ImGui_GetDragDropPayloadFile then
-        local ok, count = pcall(r.ImGui_AcceptDragDropPayloadFiles, UI.ctx, 0)
-        if ok and type(count) == "number" then
-            for index = 0, count - 1 do
-                local got, _, filename = pcall(r.ImGui_GetDragDropPayloadFile, UI.ctx, index)
+        -- Two returns: the flag first, then the count. Reading the flag as the
+        -- count is why this route silently never fired.
+        local accepted, count = r.ImGui_AcceptDragDropPayloadFiles(UI.ctx)
+        if accepted and tonumber(count) then
+            for index = 0, tonumber(count) - 1 do
+                local got, filename = r.ImGui_GetDragDropPayloadFile(UI.ctx, index)
                 if got and type(filename) == "string" and filename ~= "" then
                     paths[#paths + 1] = filename
                 end
             end
+        end
+    end
+    if #paths == 0 and r.ImGui_AcceptDragDropPayload then
+        for _, payload_type in ipairs(C.drop_types) do
+            local ok, payload = r.ImGui_AcceptDragDropPayload(UI.ctx, payload_type)
+            if ok then
+                paths = H.payload_paths(payload)
+                if #paths > 0 then break end
+            end
+        end
+    end
+    if #paths == 0 and r.ImGui_GetDragDropPayload and r.ImGui_AcceptDragDropPayload then
+        local ok, payload_type = r.ImGui_GetDragDropPayload(UI.ctx)
+        if ok and payload_type and payload_type ~= "" then
+            local got, payload = r.ImGui_AcceptDragDropPayload(UI.ctx, payload_type)
+            if got then paths = H.payload_paths(payload) end
         end
     end
     r.ImGui_EndDragDropTarget(UI.ctx)

@@ -1,7 +1,8 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.3.0
+-- @version 0.3.1
 -- @changelog:
+--   + Launcher: Dropping a file onto a slot now works from REAPER's own Media Explorer and from the Windows Explorer, which it never did: the cell only ever asked for the plain file payload, which the Media Explorer does not use, and a pcall that shifted the return values by one meant that single route never fired for any source either
 --   + Added a Launcher view that plays clips as a quantized clip grid, so a project can be jammed with like a session view instead of only browsed
 --   + Launcher lanes are hidden tracks that send into a real project track, which keeps every clip running through that track's own FX chain and routing
 --   + Launcher clips play along with the song on the project's own bar grid, and a launched clip only takes over its own track, so every other track keeps playing the arrangement
