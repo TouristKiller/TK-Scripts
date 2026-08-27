@@ -1,90 +1,59 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.3.1
+-- @version 0.4.0
 -- @changelog:
---   + Launcher: Dropping a file onto a slot now works from REAPER's own Media Explorer and from the Windows Explorer, which it never did: the cell only ever asked for the plain file payload, which the Media Explorer does not use, and a pcall that shifted the return values by one meant that single route never fired for any source either
---   + Added a Launcher view that plays clips as a quantized clip grid, so a project can be jammed with like a session view instead of only browsed
---   + Launcher lanes are hidden tracks that send into a real project track, which keeps every clip running through that track's own FX chain and routing
---   + Launcher clips play along with the song on the project's own bar grid, and a launched clip only takes over its own track, so every other track keeps playing the arrangement
---   + Launcher clips are scheduled onto the timeline ahead of the play cursor instead of being muted in real time, so switching clips lands exactly on the bar
---   + Added a Launcher "Mute song" toggle that silences the whole arrangement while the clips keep playing, which muting the tracks themselves cannot do because the clips arrive on a send
---   + Fixed Launcher mutes only covering items past the switching point, which left everything earlier in the song audible and showed up as half a track being muted and the other half not, most visibly after an arrangement loop came round
---   + Launcher mutes now leave items the user muted themselves untracked, so handing a track back can never unmute something that was already off
---   + Launcher Reset now also drains the stored mute mirror, so items whose bookkeeping was lost still get their original state back
---   + Added a per lane "A" button that mutes only that track's arrangement while its clips stay audible, for taking one track out of the song without taking the whole song out
---   + Added a Launcher Reset button that puts everything the launcher touched back at once, which is the recovery route when a lane, a mute or a takeover is left in an unexpected state
---   + Launcher lane tracks are kept at the end of the track list, so a track added while the launcher is open no longer lands behind the hidden tracks and leaves a gap in the visible track numbering
---   + Launcher lane tracks are gathered under one hidden "TK LAUNCHER" folder track, so making them visible shows a single collapsible group instead of a row of loose tracks
---   + Added a Launcher "Show tracks" toggle that reveals the TK LAUNCHER folder and its lanes in the arrange view for inspection, reading its state from the tracks so it stays honest if they are toggled from the Track Manager
---   + A Launcher lane whose track was deleted is now marked as dead straight away, cannot be launched, and can be cleared with one button, instead of silently sitting there until the project is reopened
---   + A clip that has gone from the project, by undo or by hand, is marked as such in its slot and refuses to launch, rather than sitting there looking playable; it is deliberately not removed, because redoing brings the clip back and an emptied slot would not
---   + Dead Launcher lanes are deliberately not removed automatically, because undoing the track deletion brings the track back under the same id and the lane keeps working, while an automatic removal would have thrown its clips away
---   + Added a Launcher "+ Scene" button that takes a slice of the arrangement at the edit cursor into a scene row, creating a lane for every track that has an item there, so a section of a song becomes playable in one click
---   + The Launcher grid can be played from the keyboard: number keys launch scenes, three rows of letters launch the first eight lanes like a pad controller, arrows move an outlined cell and Enter fires it, and holding Shift turns any of those into a stop
---   + Delete or Backspace empties the outlined Launcher slot, through the undo history so a mistaken press is one Ctrl+Z away
---   + Launcher grid keys are ignored while Ctrl or Alt is held, so a shortcut stays a shortcut: Ctrl+Z was launching whatever sat on the Z key instead of undoing
---   + Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z are passed on to REAPER from the Launcher, which otherwise never sees them while the window has focus
---   + Each clip and scene tooltip names the key that fires it, because a shortcut nobody can see does not exist
---   + Added follow actions per scene: a scene plays a set number of times and then moves on to the next, previous, first, random or itself, so a grid of scenes plays a song by itself
---   + Added follow actions per clip as well, moving on within their own lane, so one column can work its way through its clips while the rest of the grid is left alone
---   + A clip's round is measured by what it actually is: a loop by its loop length, a retriggering one-shot by the bar its pattern spans, and a plain one-shot by its own length
---   + Added a Follow switch that stops scenes moving on by themselves without clearing what they were set to, so a scene can be auditioned on its own while the chain stays intact
---   + A scene reached through a follow action now reports what it started and stopped, the same as one launched by hand, instead of only naming itself
---   + A launched Launcher clip now starts at full level: its fade in is cleared and its auto-fade is switched off outright, where before it was set to a zero length that REAPER recalculated back to its default on the next edit, easing every clip in
---   + Launcher clips created during playback are now announced to REAPER as finished items rather than only refreshing the arrange, so the audio engine sees them in time to have their start buffered
---   + Added a Launcher lead setting for how far ahead a clip is put on the timeline before it plays, because a clip created too close to its boundary misses the start of its own audio; a launch that cannot make that deadline now waits for the next boundary rather than coming in late
---   + The Launcher lead defaults to Auto, derived from REAPER's own media buffer size, since that buffer is what decides how much run-up a clip needs; the tooltip reports the buffer it read and the figure it arrived at
---   + Added a Launcher media buffer panel that explains what the buffer does to launch response, sets it to a chosen value, and can put back the value it had before the launcher ever touched it, since it is a global REAPER preference rather than project data
---   + Launch quantize, clip run-up and the media buffer are gathered behind one Timing button, which carries the current quantize in its label since that is the one reached for mid-jam
---   + The Launcher now mutes the song by default when it opens and remembers that choice per project, since jamming over a silent arrangement is the common case
---   + Added a "Write scene chain to arrangement" command that walks those same follow actions without playing them and writes the result at the edit cursor, bounded by a length in bars, so the arrangement can never disagree with what the launcher plays
---   + Writing a retriggering one-shot into the arrangement now lays down the whole pattern instead of a single hit at the start of the scene, so what is written matches what the launcher plays
---   + Renamed the two write commands to say plainly which writes one scene and which follows the chain, since the difference was easy to miss
---   + Added a gain slider per clip that takes effect while the clip is playing, because clips gathered from different sources go through one track and often sit a long way apart in level
---   + Launching a Launcher scene now stops the lanes that have no clip in that row, so a scene behaves as a section of the song instead of letting the previous scene play through it
---   + Fixed Launcher clips blinking forever without starting when they were launched in the last bar of an arrangement loop: the boundary they waited for lay at the loop end, which the transport jumps back before ever reaching, so such a launch is now carried over to the top of the next pass
---   + Launcher scene rows show their length in bars, taken from the longest clip in the row rounded up, which is the span every clip in that scene needs before it has come round once
---   + Launcher scenes and single clips can be written back into the arrangement at the edit cursor, each clip landing on its own track, and the cursor parks at the end so scenes can be chained into a song
---   + Added recording of a live performance: armed, the clips you play are kept rather than cleared away when they finish, and afterwards the take can be kept onto its own tracks or discarded
---   + Recording needed almost no machinery because a playing clip is already an item at the right place in time, so what is recorded is exactly what was heard, including loop lengths and retriggered hits
---   + Keeping a recorded take now also hands over the mutes on the tracks it landed on, so the arrangement it replaced stays out of the way instead of being restored on the next Reset and playing on top of the recording
---   + Stopping a Launcher recording now also captures the clips that are still playing, up to the point reached, instead of only the ones that had already finished, which is why a take could come out empty
---   + Stopping a Launcher recording lets the bar finish rather than cutting the take off mid bar, and trims everything in it to that same line so the take is a whole number of bars; pressing stop again ends it immediately
---   + Fixed Launcher recording losing everything that finished during the take, which is every clip a scene change replaced, so recording a run of scenes kept only whatever happened to be playing when it was stopped
---   + Fixed a retriggered one-shot being recorded as only its last few hits: spent hits are cleared on their own path rather than through the harvest, which recording was not honouring
---   + The Launcher record button counts the clips still sounding as well as the ones already gathered, since a clip that has not finished yet is part of the take too and a counter stuck on zero reads as recording not working
---   + Each lane header shows how much of the take it has contributed while recording, with a plus for a clip still sounding, so a lane that stops contributing shows up while it happens instead of after the take is kept
---   + A clip that could not be captured when a recording stopped is now reported instead of quietly missing from the take
---   + Launcher clips can be dragged straight onto the arrange view, landing on the track and position under the mouse, reusing the same drop hit test and snap the Items view already used
---   + While dragging a Launcher clip onto the arrange the edit cursor follows the snapped drop position as a landing marker, with the target track and bar shown underneath, and it is put back if the drag is cancelled
---   + Dragging a Launcher clip onto the arrange is done with Alt held, which keeps it apart from launching: both gestures start with the same press, and with the transport stopped a clip is already playing before a drag can be recognised
---   + Alt-dragging a Launcher clip onto another slot moves it there, across lanes as well as rows, with Ctrl held to copy instead, so a grid can be rearranged without clearing and refilling slots
---   + Releasing an Alt-drag over the launcher window itself no longer drops the clip into the arrange underneath it
---   + Looping clips written to the arrangement all take the scene length, so the short ones loop until the longest clip in that scene has come round once
---   + Launcher clips launched inside an arrangement loop now keep playing when the loop comes round, and start cleanly at the loop point on every following pass, instead of falling silent until the play cursor returned to where the clip was launched
---   + Launcher cells now draw the clip itself, reusing the waveform and MIDI previews from the Items view, with a Compact toggle for a dense name-only grid
---   + Clips can be renamed and given a colour, either from twelve swatches or picked freely, which the cell, its waveform and its play marker all follow, falling back to the track colour when none is set
---   + The Launcher grid scrolls in both directions once it no longer fits, with scrollbars of its own, shift or ctrl plus the wheel for sideways, and both the scene column and the lane headers frozen so you can always see which row and which track you are looking at
---   + The "hide content scrollbar" setting now applies to the Launcher grid as well
---   + Lane columns used to be squeezed into the available width instead of overflowing, which is why there was nothing to scroll
---   + The play position bar on a playing Launcher clip is now readable and has a strip of its own along the bottom of the cell: it used to be a hairline in the same colour as the cell it was drawn on, running straight through the clip name
---   + The play position bar and the scene length now follow how often a clip actually comes round rather than how long its item is, which differ whenever a loop was stretched out in the arrangement: a one bar loop dragged to four bars still repeats every bar
---   + Clip lengths are read from the clip itself whenever they are needed instead of being remembered from when it was added, so a project tempo change no longer leaves the play position bar, the scene length and the moment scenes switch working from stale figures
---   + Launcher slots now take clips from anywhere: drag a file in from TK Media Browser or the Workbench media browser, drop one from REAPER's Media Explorer or Explorer onto a floating window, or pick a file from the slot menu
---   + Launcher file drags from the TK browsers use the ExtState drag protocol rather than an OS drag, so dropping a clip keeps working while the window is docked
---   + Launcher audio dropped in from a file is stretched to the project tempo with pitch preserved, reading the tempo from the file's metadata or its name, because the media browser's own tempo sync never runs when the launcher builds the item itself
---   + Added a per clip "Retrigger every" setting from 1/16 to 2 bars, so a one-shot such as a kick can be played in time even though tempo matching cannot help a sample that has no tempo of its own; each hit is placed ahead of the play cursor and is as exact as a launch
---   + A retriggering one-shot can now fire on chosen steps of the bar rather than on every one, so a snare can sit on two and four; the steps are anchored to the project grid, so the pattern lands the same way whenever it is started
---   + Fixed a retriggered one-shot staying silent for its first bar: its repeats were only scheduled once the clip started, giving the earliest of them no run-up, so they are now put down at the same moment the clip itself is
---   + A clip added from a trimmed arrange item now loops the trimmed length instead of the whole source, so the clip is what the arrange showed rather than what the source happens to contain: audio is wrapped in a section and MIDI is rendered into a new in-project source, neither of which touches the item it came from
---   + Fixed clips and voices being created already selected, inherited from the item they were copied from, which made a following "add selected item(s)" pick up the launcher's own copies and fill an extra row for every clip already added
---   + Fixed a trimmed MIDI clip never being shortened at all: whether an in-project MIDI item is trimmed cannot be read from its source length, because REAPER reports that as the item's own length, so the check always said no. MIDI clips are now rendered to a fresh source unconditionally, which is a no-op when nothing was trimmed
---   + Rendering a MIDI clip now shows its hidden lane track for the length of the operation, because a REAPER action will not touch an item on a track it cannot see, and moves the clip clear of the others first so the render can never take in the clip stacked beside it
---   + Launcher clips are now stored stacked at the start of the project instead of spread out an hour past the end, so a hidden lane track never reaches further than its longest single clip and adding clips no longer stretches the project length, the arrange scrollbar or a render set to project length
---   + Launcher voices claim a few minutes of timeline at a time and grow while they play, instead of reserving an hour the moment a clip is launched
---   + Launcher mirrors the mute states it changes into the project, so an interrupted session hands the arrangement back on the next load instead of leaving tracks silent
---   + That mirror is now merged rather than overwritten, so losing track of a mute in memory, by a project switch or a kept take, no longer erases the only record of it and leave items muted with no way back
---   + Reset reports how many muted items it put back, or says plainly that there was nothing left to restore
+--   + Launcher: Every track is a lane, in track order
+--   + Launcher: Lane tracks made with the first clip, removed with the last
+--   + Launcher: Bitwig layout - scenes as columns, rows at track height
+--   + Launcher: Lanes and arrange scroll in step
+--   + Launcher: Volume fader and solo in the lane headers
+--   + Launcher: Session key and mode, with scale-degree or root fitting
+--   + Launcher: Clip key read from metadata, file name, folder or notes
+--   + Launcher: Transposed clips marked, chord names in the clip menu
+--   + Launcher: Tempo and Key submenus in the clip menu
+--   + Launcher: Bar and time signature in the grid corner, odd meters supported
+--   + Launcher: Clip sets saved to file and loaded by track name
+--   + Launcher: Clip set library with a folder per production
+--   + Launcher: Sync BPM reads ACID beat counts
+--   + Launcher: Toolbar grouped, with an overflow menu
+--   + Launcher: Title bar and toolbar fold away from the grid corner
+--   + Launcher: Coloured lane headers and a theme colour for empty clip tiles
+--   + Settings window sizes itself
+--   + Launcher: Files dropped from REAPER's Media Explorer and the Windows Explorer
+--   + Launcher: Clips taken from the TK browsers, files, and arrange items
+--   + Launcher: Audio stretched to the project tempo, read from metadata or file name
+--   + Launcher: Retrigger every 1/16 to 2 bars, on chosen steps of the bar
+--   + Launcher: A clip from a trimmed arrange item loops the trimmed length
+--   + Launcher: Cells draw the clip, with a Compact name-only toggle
+--   + Launcher: Clips renamed and coloured, freely or from twelve swatches
+--   + Launcher: Grid scrolls both ways, shift or ctrl plus the wheel for sideways
+--   + Launcher: Play position bar along the bottom of a playing cell
+--   + Launcher: Clip lengths read live, so a tempo change is followed
+--   + Launcher: Clips dragged onto the arrange with Alt, the cursor marking the landing
+--   + Launcher: Alt-drag between slots to move, ctrl to copy
+--   + Launcher: Clips keep playing across an arrangement loop
+--   + Launcher: Scenes and clips written back to the arrangement at the edit cursor
+--   + Launcher: Write scene chain follows the follow actions without playing them
+--   + Launcher: Scene rows show their length in bars
+--   + Launcher: Recording of a live performance, kept or discarded afterwards
+--   + Launcher: Recording finishes the bar and captures the clips still playing
+--   + Launcher: Record button and lane headers count what has been gathered
+--   + Launcher: Follow actions per scene and per clip, with a Follow switch
+--   + Launcher: Gain slider per clip
+--   + Launcher: A scene stops the lanes with no clip in that row
+--   + Launcher: Launch quantize, clip run-up and media buffer behind one Timing button
+--   + Launcher: Clip run-up defaults to Auto, from REAPER's media buffer size
+--   + Launcher: Grid played from the keyboard, Delete clears a slot, Ctrl+Z passed through
+--   + Launcher: "+ Scene" takes a slice of the arrangement into a scene row
+--   + Launcher: Mute song toggle, on by default and remembered per project
+--   + Launcher: Per lane "A" button mutes that track's arrangement only
+--   + Launcher: Reset puts everything the launcher touched back
+--   + Launcher: Dead lanes and missing clips are marked and refuse to launch
+--   + Launcher: Lane tracks gathered in a hidden TK LAUNCHER folder, with a Show tracks toggle
+--   + Launcher: Mute states mirrored into the project, so an interrupted session recovers
+--   + Launcher: Clips scheduled onto the timeline ahead of the cursor, landing on the bar
+--   + Launcher: Lanes are hidden tracks feeding the real track, keeping its FX and routing
+--   + Added a Launcher view that plays clips as a quantized clip grid
 --   + Added smart clip-state filters and persistent sorting for Items and Source Media
 --   + Added preview volume, loop preview and optional hidden content scrollbar
 --   + Added Source Media selection of all uses, batch clip renaming and missing-media relinking
@@ -151,9 +120,16 @@ local UI_SCALE_OPTIONS = {
     { label = "175%", value = 1.75 },
     { label = "200%", value = 2.0 },
 }
+-- The settings window lays out to this width and sizes itself to it. Nothing
+-- inside may ask the window how wide it is: an auto-fitting window whose
+-- content stretches to the window can never shrink, it can only creep.
+-- The widest row is the two columns of launcher switches, about 490.
+local SETTINGS_WIDTH = 500
+
 local THEME_COLOR_FIELDS = {
     { key = "window_bg", label = "Window" },
     { key = "child_bg", label = "Panel" },
+    { key = "clip_bg", label = "Clip Tile" },
     { key = "popup_bg", label = "Popup" },
     { key = "frame_bg", label = "Frame" },
     { key = "frame_hover", label = "Frame Hover" },
@@ -173,6 +149,7 @@ local THEME_COLOR_FIELDS = {
 local COLORS = {
     window_bg = Theme.colors.window_bg,
     child_bg = Theme.colors.child_bg,
+    clip_bg = Theme.colors.clip_bg or Theme.colors.child_bg,
     card_bg = Theme.colors.frame_bg,
     card_hover = Theme.colors.frame_hover,
     card_selected = Theme.colors.header,
@@ -300,6 +277,7 @@ end
 local function sync_theme_colors()
     COLORS.window_bg = Theme.colors.window_bg
     COLORS.child_bg = Theme.colors.child_bg
+    COLORS.clip_bg = Theme.colors.clip_bg or Theme.colors.child_bg
     COLORS.card_bg = Theme.colors.frame_bg
     COLORS.card_hover = Theme.colors.frame_hover
     COLORS.card_selected = Theme.colors.header
@@ -1491,7 +1469,6 @@ local function view_button(label, value, count)
 end
 
 local function draw_header()
-    local available = r.ImGui_GetContentRegionAvail(ctx)
     local close_size = rounded(14)
     local settings_size = rounded(14)
     local gap = rounded(8)
@@ -1499,9 +1476,19 @@ local function draw_header()
     local sources_width = rounded(VIEW_WIDTHS.sources)
     local launcher_width = rounded(VIEW_WIDTHS.launcher)
     local tabs_width = items_width + sources_width + launcher_width + rounded(14)
-    local right_width = tabs_width + settings_size + close_size + gap * 3
+    -- Two gaps, not three: one before the settings dot and one before the close
+    -- dot. The spacing inside the tabs is already part of tabs_width, and the
+    -- extra gap was leaving the two dots sitting short of the right edge.
+    local right_width = tabs_width + settings_size + close_size + gap * 2
     r.ImGui_TextColored(ctx, COLORS.accent, SCRIPT_NAME)
-    r.ImGui_SameLine(ctx, math.max(rounded(120), available - right_width))
+    -- Measured from the window frame rather than from the content edge: the
+    -- content edge sits a whole window padding short of the border, and no
+    -- offset based on the available width can reach past it. The margin is the
+    -- one number to turn if the dots want to sit closer in or further out.
+    local margin = rounded(4)
+    local window_width = r.ImGui_GetWindowWidth(ctx)
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosX(ctx, math.max(rounded(120), window_width - right_width - margin))
     view_button("Items", "items", #state.items)
     r.ImGui_SameLine(ctx, 0, rounded(7))
     view_button("Source Media", "sources", #state.sources)
@@ -1567,6 +1554,65 @@ local function draw_theme_settings_body()
         r.SetExtState(EXT_SECTION, "hide_content_scrollbar", hide_scrollbar and "1" or "0", true)
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Keep mouse-wheel scrolling without showing the content scrollbar") end
+    -- Laid out in two columns rather than one long line: these grew one at a
+    -- time onto the same row until the last of them fell off the right edge.
+    -- Each option opens and closes its own disabled scope, so a switch is greyed
+    -- by what it actually depends on.
+    r.ImGui_Spacing(ctx)
+    r.ImGui_TextColored(ctx, COLORS.text_dim, "Launcher")
+    local sideways = Launcher.scenes_as_columns()
+    local sync = Launcher.scroll_sync()
+
+    local function option(label, value, apply, tooltip, enabled)
+        r.ImGui_TableNextColumn(ctx)
+        local greyed = enabled == false
+        if greyed and r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, true) end
+        local changed, now = r.ImGui_Checkbox(ctx, label, value)
+        if changed then apply(now) end
+        if greyed and r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, greyed and "Needs Scenes as columns, where a lane is a row" or tooltip)
+        end
+    end
+
+    -- Fixed-fit columns, so the table reports the width it needs instead of
+    -- asking the window how wide it is while the window is asking the table.
+    if r.ImGui_BeginTable(ctx, "##launcher_options", 2, r.ImGui_TableFlags_SizingFixedFit()) then
+        r.ImGui_TableNextRow(ctx)
+        option("Colour lane headers", Launcher.color_headers(),
+            function(value) Launcher.set_color_headers(value) end,
+            "Fill each lane header with its track's colour\ninstead of showing a stripe down its left edge")
+        option("Volume in the lane header", Launcher.lane_volume(),
+            function(value) Launcher.set_lane_volume(value) end,
+            "Put the track's fader at the foot of its lane header,\n"
+            .. "so the track panel can be collapsed out of the way.\n"
+            .. "Only where the row is tall enough to hold one.")
+        option("Scenes as columns", sideways,
+            function(value) Launcher.set_scenes_as_columns(value) end,
+            "Turn the grid on its side, with a lane per row and a\nscene per column, the way Bitwig lays it out.\nClips keep their size.")
+
+        r.ImGui_TableNextRow(ctx)
+        option("Lane height follows the track", Launcher.lane_track_height(),
+            function(value) Launcher.set_lane_track_height(value) end,
+            "Give each lane row the height REAPER gives its track,\nso the grid lines up with the track panel beside it",
+            sideways)
+        option("Line up with the first track", Launcher.align_to_arrange(),
+            function(value) Launcher.set_align_to_arrange(value) end,
+            "Grow the header row until the first lane starts where its\ntrack does, so changing the ruler height above the tracks\ndoes not put the two out of step. It can only add space:\nwhere the grid starts below the track, fold this window's\nown bars away with the caret in the corner.",
+            sideways)
+
+        r.ImGui_TableNextRow(ctx)
+        option("Scroll with the arrange", sync ~= "off",
+            function(value) Launcher.set_scroll_sync(value and "follow" or "off") end,
+            "Scrolling the arrange scrolls the grid to the same track",
+            sideways)
+        option("and the arrange with the grid", sync == "both",
+            function(value) Launcher.set_scroll_sync(value and "both" or "follow") end,
+            "Scrolling the grid scrolls the arrange as well.\nLeave it off and the launcher never moves your arrange by itself.",
+            sideways and sync ~= "off")
+        r.ImGui_EndTable(ctx)
+    end
+    r.ImGui_Spacing(ctx)
     r.ImGui_SetNextItemWidth(ctx, rounded(150))
     local color_labels = { type = "Type", peaks = "Track peaks", tiles = "Track tiles" }
     if r.ImGui_BeginCombo(ctx, "##settings_clip_color_mode", color_labels[state.color_mode] or "Track peaks") then
@@ -1633,7 +1679,7 @@ local function draw_theme_settings_body()
     r.ImGui_TextColored(ctx, COLORS.text_dim, "Preview")
     draw_theme_preview()
     r.ImGui_Spacing(ctx)
-    local child_visible = r.ImGui_BeginChild(ctx, "##project_clips_theme_colors", 0, rounded(282), 1)
+    local child_visible = r.ImGui_BeginChild(ctx, "##project_clips_theme_colors", rounded(SETTINGS_WIDTH - 16), rounded(282), 1)
     if child_visible then
         local color_flags = r.ImGui_ColorEditFlags_NoInputs()
         for _, field in ipairs(THEME_COLOR_FIELDS) do
@@ -1687,14 +1733,30 @@ end
 
 local function draw_theme_settings()
     if not state.theme_settings_open then return end
-    r.ImGui_SetNextWindowSize(ctx, rounded(360), rounded(720), r.ImGui_Cond_Always())
-    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
+    -- Auto-fit works from the size the window already had, so a smaller scale
+    -- creeps towards the new width over several frames. Handing it a size of
+    -- zero means "fit now", which makes the change land in one go. Only on the
+    -- frame the scale actually changes, so the window is left alone otherwise.
+    if state.settings_scale ~= UIScale.value() then
+        state.settings_scale = UIScale.value()
+        if r.ImGui_SetNextWindowSize then
+            r.ImGui_SetNextWindowSize(ctx, 0, 0, r.ImGui_Cond_Always())
+        end
+    end
+    -- The window measures its own contents instead of being given a size: a
+    -- fixed number is a guess that goes stale the moment a switch is added, and
+    -- that is exactly how the last two rows ended up cut off. Not resizable
+    -- either - there is nothing to resize, it is always exactly as big as what
+    -- is in it.
+    local window_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse()
+        | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoScrollbar()
+        | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_AlwaysAutoResize()
     local visible, open = r.ImGui_Begin(ctx, "Settings##project_clips", state.theme_settings_open, window_flags)
     state.theme_settings_open = open
     if visible then
         r.ImGui_TextColored(ctx, COLORS.accent, "Settings")
         local close_size = rounded(14)
-        r.ImGui_SameLine(ctx, math.max(rounded(140), r.ImGui_GetWindowWidth(ctx) - close_size - rounded(16)))
+        r.ImGui_SameLine(ctx, rounded(SETTINGS_WIDTH) - close_size)
         local draw_list = r.ImGui_GetWindowDrawList(ctx)
         local close_x, close_y = r.ImGui_GetCursorScreenPos(ctx)
         local hovered = r.ImGui_IsMouseHoveringRect(ctx, close_x, close_y, close_x + close_size, close_y + close_size)
@@ -2244,10 +2306,21 @@ local function draw_window()
     local visible
     visible, state.open = r.ImGui_Begin(ctx, SCRIPT_NAME, state.open, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse())
     if visible then
-        draw_header()
-        r.ImGui_Separator(ctx)
-        draw_toolbar()
-        r.ImGui_Separator(ctx)
+        -- Folded away from the caret in the grid corner, and only in the
+        -- launcher view: the title bar carries the view tabs, so hiding it
+        -- anywhere else would leave no way back.
+        -- Asked outright rather than by comparing numbers: the states are a
+        -- set of two switches, and "toolbar without title bar" does not sit
+        -- anywhere on a line through the other three.
+        local chrome = state.view_mode == "launcher" and Launcher.chrome() or 0
+        if chrome == 0 or chrome == 1 then
+            draw_header()
+            r.ImGui_Separator(ctx)
+        end
+        if chrome == 0 or chrome == 3 then
+            draw_toolbar()
+            r.ImGui_Separator(ctx)
+        end
         local launcher_mode = state.view_mode == "launcher"
         local status_text = launcher_mode and Launcher.status() or state.status
         local empty = not launcher_mode and (state.view_mode == "sources" and #state.sources == 0 or #state.groups == 0)

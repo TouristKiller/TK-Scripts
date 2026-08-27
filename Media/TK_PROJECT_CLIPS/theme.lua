@@ -324,6 +324,10 @@ copy_colors = function(source)
   local target = {}
   for key, value in pairs(source) do target[key] = value end
   target.popup_bg = target.popup_bg or target.child_bg
+  -- The launcher's empty clip tiles. Falls back to the panel colour, which
+  -- is what they were drawn in before, so every preset and every theme saved
+  -- without it looks exactly as it did.
+  target.clip_bg = target.clip_bg or target.child_bg
   target.header = target.header or target.frame_hover
   target.header_hover = target.header_hover or target.accent_soft
   target.separator = target.separator or target.border
