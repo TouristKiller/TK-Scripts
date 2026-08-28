@@ -49,7 +49,19 @@ function Presets.defaults()
   return {
     schema = Presets.SCHEMA,
     name = "",
-    display = { beats = true, details = true, progress = true, section_color = false },
+    display = {
+      beats = true,
+      details = true,
+      progress = true,
+      section_color = false,
+      end_of_song = true,
+      details_columns = 1,
+      chord_countdown = false,
+      chord_remaining = false,
+      roman_degree = false,
+      record_status = false,
+      midi_feedback = false
+    },
     cues = { warn_bars = 2, flash_on_change = true, count_in_last_bar = true },
     -- Which cues are heard, not which sounds they use: the sounds come in the
     -- next step, and land in a "sounds" table beside this one.
@@ -62,7 +74,19 @@ function Presets.defaults()
     -- to: a preset that travels to another machine must not go silent.
     sounds = { warn = "", count_in = "", go = "", beat = "", accent = "" },
     sections = {},
-    chord_source = "none"
+    chord_source = "auto",
+    chords = {
+      enabled = true,
+      show_current = true,
+      show_next = true,
+      prefer_flats = false,
+      include_bass = true,
+      minimum_confidence = 0.55,
+      minimum_duration = 0.05,
+      attack_tolerance = 0.1,
+      key_mode = "off",
+      key_root = 0
+    }
   }
 end
 
@@ -73,12 +97,33 @@ function Presets.normalize(preset)
   local out = Presets.defaults()
   if type(preset) ~= "table" then return out end
   out.name = tostring(preset.name or "")
-  out.chord_source = tostring(preset.chord_source or "none")
+  out.chord_source = tostring(preset.chord_source or "auto")
+  if out.chord_source == "none" then out.chord_source = "auto" end
+
+  local chords = type(preset.chords) == "table" and preset.chords or {}
+  out.chords.enabled = chords.enabled ~= false
+  out.chords.show_current = chords.show_current ~= false
+  out.chords.show_next = chords.show_next ~= false
+  out.chords.prefer_flats = chords.prefer_flats == true
+  out.chords.include_bass = chords.include_bass ~= false
+  out.chords.minimum_confidence = math.max(0.35, math.min(0.9, tonumber(chords.minimum_confidence) or 0.55))
+  out.chords.minimum_duration = math.max(0, math.min(0.5, tonumber(chords.minimum_duration) or 0.05))
+  out.chords.attack_tolerance = math.max(0, math.min(0.25, tonumber(chords.attack_tolerance) or 0.1))
+  local key_mode = tostring(chords.key_mode or "off")
+  out.chords.key_mode = (key_mode == "auto" or key_mode == "major" or key_mode == "minor") and key_mode or "off"
+  out.chords.key_root = clamp_int(chords.key_root, 0, 11, 0)
 
   local display = type(preset.display) == "table" and preset.display or {}
   out.display.beats = display.beats ~= false
   out.display.details = display.details ~= false
   out.display.progress = display.progress ~= false
+  out.display.end_of_song = display.end_of_song ~= false
+  out.display.details_columns = clamp_int(display.details_columns, 1, 2, 1)
+  out.display.chord_countdown = display.chord_countdown == true
+  out.display.chord_remaining = display.chord_remaining == true
+  out.display.roman_degree = display.roman_degree == true
+  out.display.record_status = display.record_status == true
+  out.display.midi_feedback = display.midi_feedback == true
   -- Off unless asked for: region colours are chosen for the arrange view, and
   -- not every project has ones that mean anything on a dark panel.
   out.display.section_color = display.section_color == true
@@ -251,7 +296,9 @@ function Presets.export(preset, name)
   local root = Presets.root()
   if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(root, 0) end
   local base = sanitize(name ~= "" and name or preset.name)
-  local ok, blob = pcall(json.encode, Presets.normalize(preset))
+  local portable = Presets.normalize(preset)
+  portable.chord_source = "auto"
+  local ok, blob = pcall(json.encode, portable)
   if not ok then return false, "Could not encode the preset" end
   local path = root .. base .. Presets.EXT
   local file = io.open(path, "wb")

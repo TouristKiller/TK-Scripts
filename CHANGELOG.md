@@ -2,6 +2,18 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.9.3] - 2026-08-29
+
+### TK Workbench
+#### Toegevoegd
+- **Cue MIDI-akkoorden**: Cue toont het huidige en volgende akkoord vanuit een gekozen MIDI-track. Herkenning ondersteunt extensies, altered-akkoorden, inversies, slash bass, rootless hints, instelbare aanslaggroepering, toonsoortcontext en alternatieve kandidaten.
+- **Expliciete akkoordcues**: MIDI-tekstevents in de vorm `CHORD: F#m11` kunnen de automatische herkenning overschrijven.
+- **Studie- en opnameweergave**: Optionele regels tonen de aftelling naar het volgende akkoord, resterende akkoordduur, Romeinse trap, opname/preroll-status en live MIDI-feedback zoals `MATCH`, `ADD` en `OUT`.
+
+#### Gewijzigd
+- **Cue side-dock layout**: De smalle verticale weergave blijft op iedere vensterbreedte behouden. Huidig en volgend akkoord staan onafhankelijk onder elkaar en alle informatieregels kunnen afzonderlijk worden verborgen.
+- **Render Hub loudnessmeting**: Automatische meting na renderen kan worden uitgeschakeld terwijl handmatig meten beschikbaar blijft. Render- en meettijd worden afzonderlijk bijgehouden.
+
 ## [TK Mixer 1.4.0] - 2026-08-08
 
 ### TK Mixer

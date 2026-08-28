@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.9.1
+-- @version 0.9.3
 -- @changelog:
+-- v0.9.3
+--   + Cue: shows the current and next chord from a MIDI track, with text-event overrides, configurable recognition, key context and alternative candidates. The narrow dock layout now keeps the full rehearsal view at every width, with independent visibility controls and optional countdown, duration, Roman degree, recording state and live MIDI feedback
+--   + Render Hub: automatic loudness measurement after rendering can be disabled while manual measurement remains available, and rendered and measured timestamps are tracked separately
 -- v0.9.1
 --   + Transport / Control Room: the metronome volume moves the whole click again, not just the accented beat. REAPER keeps two levels for the metronome - VOL 0.25 0.125 in the project file, the first for the accented beat and the second for every other one - and its settings window shows that second level relative to the first. Writing only the first, which is what one slider labelled Volume naturally does, left B, C and D exactly where they were while the window reported their relative gain climbing: pull the slider most of the way down and it reads +54 dB, which from the outside looks like a volume control that turns three of the four beats up. Both levels now move together and keep their balance, the balance survives a trip through silence rather than being flattened on the way back, and a REAPER that only exposes the one level still works as it did. Reported on the forum
 -- v0.9.0

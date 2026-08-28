@@ -4,6 +4,7 @@ local UIScale = require("core.ui_scale")
 local Engine = require("core.cue_engine")
 local Presets = require("core.cue_presets")
 local Audio = require("core.cue_audio")
+local ChordTimeline = require("core.chord_timeline")
 
 local M = {
   id = "cue",
@@ -28,8 +29,204 @@ local state = {
   sections_open = false,
   sounds_open = false,
   export_open = false,
-  export_name = ""
+  export_name = "",
+  chord_project = nil,
+  chord_source_guid = nil,
+  chord_source_name = nil,
+  chord_events = {},
+  chord_current = nil,
+  chord_next = nil,
+  chord_scan_at = 0,
+  midi_sequence = nil,
+  midi_notes = {},
+  record_start = nil
 }
+
+local AUTO_CHORD_TRACKS = { chords = true, chord = true, ["tk chords"] = true }
+local CHORD_NOTE_NAMES = {
+  sharp = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" },
+  flat = { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" }
+}
+
+local function track_name(track)
+  if not track then return "" end
+  if r.GetTrackName then
+    local ok, name = r.GetTrackName(track)
+    if ok then return tostring(name or "") end
+  end
+  if r.GetSetMediaTrackInfo_String then
+    local ok, name = r.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+    if ok then return tostring(name or "") end
+  end
+  return ""
+end
+
+local function automatic_chord_track()
+  for index = 0, (r.CountTracks and r.CountTracks(0) or 0) - 1 do
+    local track = r.GetTrack(0, index)
+    if AUTO_CHORD_TRACKS[track_name(track):lower()] then return track end
+  end
+  return nil
+end
+
+local function track_has_midi(track)
+  for index = 0, (track and r.CountTrackMediaItems(track) or 0) - 1 do
+    local item = r.GetTrackMediaItem(track, index)
+    local take = item and r.GetActiveTake(item) or nil
+    if take and r.TakeIsMIDI(take) then return true end
+  end
+  return false
+end
+
+local function chord_tracks()
+  local tracks = {}
+  for index = 0, (r.CountTracks and r.CountTracks(0) or 0) - 1 do
+    local track = r.GetTrack(0, index)
+    tracks[#tracks + 1] = {
+      track = track,
+      guid = r.GetTrackGUID and r.GetTrackGUID(track) or "",
+      name = track_name(track),
+      number = index + 1,
+      has_midi = track_has_midi(track)
+    }
+  end
+  return tracks
+end
+
+local function chord_source_label(preset)
+  local source = tostring(preset.chord_source or "auto")
+  if source == "auto" then
+    local track = automatic_chord_track()
+    return track and ("Auto: " .. track_name(track)) or "Auto: no matching track"
+  end
+  local track = ChordTimeline.track(source)
+  return track and track_name(track) or "Missing track"
+end
+
+local function chord_options(preset)
+  local settings = preset.chords or {}
+  return {
+    minimum_duration = settings.minimum_duration,
+    attack_tolerance = settings.attack_tolerance,
+    chord_options = {
+      prefer_flats = settings.prefer_flats,
+      include_bass = settings.include_bass,
+      minimum_confidence = settings.minimum_confidence,
+      key_mode = settings.key_mode,
+      key_root = settings.key_root
+    }
+  }
+end
+
+local function rescan_chords()
+  state.chord_scan_at = 0
+end
+
+local function chord_track(preset)
+  local source = tostring(preset.chord_source or "auto")
+  if source ~= "" and source ~= "auto" then return ChordTimeline.track(source) end
+  return automatic_chord_track()
+end
+
+local function refresh_chords(preset, position)
+  local project = r.EnumProjects and r.EnumProjects(-1, "") or 0
+  if state.chord_project ~= project then
+    state.chord_project = project
+    state.chord_source_guid = nil
+    state.chord_source_name = nil
+    state.chord_events = {}
+    state.chord_scan_at = 0
+  end
+  if not preset.chords.enabled then
+    state.chord_source_guid = nil
+    state.chord_source_name = nil
+    state.chord_events = {}
+    state.chord_current = nil
+    state.chord_next = nil
+    return
+  end
+  local now = r.time_precise and r.time_precise() or os.clock()
+  if now >= state.chord_scan_at then
+    local track = chord_track(preset)
+    local guid = track and r.GetTrackGUID and r.GetTrackGUID(track) or nil
+    state.chord_source_guid = guid
+    state.chord_source_name = track and track_name(track) or nil
+    state.chord_events = guid and ChordTimeline.build(guid, chord_options(preset)) or {}
+    state.chord_scan_at = now + 0.25
+  end
+  state.chord_current, state.chord_next = ChordTimeline.at(state.chord_events, position)
+end
+
+local function poll_midi_notes(enabled)
+  if not r.MIDI_GetRecentInputEvent then return end
+  local newest = r.MIDI_GetRecentInputEvent(0) or 0
+  if state.midi_sequence == nil then state.midi_sequence = newest; return end
+  if not enabled then state.midi_sequence = newest; return end
+  if newest == 0 or newest == state.midi_sequence then return end
+  local pending = {}
+  for index = 0, 127 do
+    local sequence, message = r.MIDI_GetRecentInputEvent(index)
+    if not sequence or sequence == 0 or sequence == state.midi_sequence then break end
+    pending[#pending + 1] = message
+  end
+  state.midi_sequence = newest
+  for index = #pending, 1, -1 do
+    local message = pending[index]
+    if type(message) == "string" and #message >= 3 then
+      local kind = message:byte(1) & 0xF0
+      local pitch, velocity = message:byte(2), message:byte(3)
+      if kind == 0x90 and velocity > 0 then
+        state.midi_notes[pitch] = true
+      elseif kind == 0x80 or kind == 0x90 then
+        state.midi_notes[pitch] = nil
+      end
+    end
+  end
+end
+
+local function beats_until(position, target, denominator)
+  if not target or target <= position then return nil end
+  local start_qn = r.TimeMap2_timeToQN and r.TimeMap2_timeToQN(0, position) or position
+  local stop_qn = r.TimeMap2_timeToQN and r.TimeMap2_timeToQN(0, target) or target
+  return math.max(0, (stop_qn - start_qn) * (tonumber(denominator) or 4) / 4)
+end
+
+local function beat_text(value)
+  if not value then return "-" end
+  local rounded = math.ceil(value - 0.0001)
+  return rounded == 1 and "1 beat" or string.format("%d beats", rounded)
+end
+
+local function roman_degree(chord)
+  if not chord or chord.key_root == nil or (chord.key_mode ~= "major" and chord.key_mode ~= "minor") then return nil end
+  local interval = (chord.root - chord.key_root) % 12
+  local numerals = { [0] = "I", [1] = "bII", [2] = "II", [3] = "bIII", [4] = "III", [5] = "IV",
+    [6] = "#IV", [7] = "V", [8] = "bVI", [9] = "VI", [10] = "bVII", [11] = "VII" }
+  local numeral = numerals[interval]
+  local quality = tostring(chord.quality or "")
+  if quality:find("minor", 1, true) or quality:find("diminished", 1, true) or quality == "half_diminished" then
+    numeral = numeral:lower()
+  end
+  if quality:find("diminished", 1, true) or quality == "half_diminished" then numeral = numeral .. "°" end
+  return numeral
+end
+
+local function midi_feedback(chord, prefer_flats)
+  if not chord or type(chord.tones) ~= "table" then return "NO CHORD", Theme.colors.text_dim end
+  local expected, played = {}, {}
+  for _, pitch in ipairs(chord.tones) do expected[pitch % 12] = true end
+  for pitch in pairs(state.midi_notes) do played[pitch % 12] = true end
+  if next(played) == nil then return "PLAY", Theme.colors.text_dim end
+  local names = prefer_flats and CHORD_NOTE_NAMES.flat or CHORD_NOTE_NAMES.sharp
+  local missing, outside = {}, {}
+  for class in pairs(expected) do if not played[class] then missing[#missing + 1] = names[class + 1] end end
+  for class in pairs(played) do if not expected[class] then outside[#outside + 1] = names[class + 1] end end
+  table.sort(missing)
+  table.sort(outside)
+  if #outside > 0 then return "OUT " .. table.concat(outside, " "), Theme.colors.danger end
+  if #missing > 0 then return "ADD " .. table.concat(missing, " "), Theme.colors.warning end
+  return "MATCH", GO
+end
 
 -- What a project gets when it has no cue setup of its own. Kept in Workbench's
 -- own settings rather than in REAPER's ext state, because it is a preference
@@ -129,6 +326,24 @@ local function centered(ctx, draw_list, text, color, x, y, width)
   r.ImGui_DrawList_AddText(draw_list, x + math.max(0, (width - text_width(ctx, text)) * 0.5), y, color, text)
 end
 
+local function fitted_top_text(ctx, draw_list, text, color, x, y, width, height)
+  text = tostring(text or "")
+  if text == "" then return end
+  local base = r.ImGui_GetFontSize and (tonumber(r.ImGui_GetFontSize(ctx)) or 13) or 13
+  local wanted = base * (width / text_width(ctx, text))
+  local font, size = get_font(ctx, math.max(base, math.min(wanted, height)))
+  local scale = size / base
+  local drawn_w = text_width(ctx, text) * scale
+  r.ImGui_DrawList_PushClipRect(draw_list, x, y, x + width, y + height, true)
+  if font and r.ImGui_DrawList_AddTextEx then
+    local ok = pcall(r.ImGui_DrawList_AddTextEx, draw_list, font, size,
+      x + math.max(0, (width - drawn_w) * 0.5), y - math.floor(size * 0.22), color, text)
+    if ok then r.ImGui_DrawList_PopClipRect(draw_list); return end
+  end
+  r.ImGui_DrawList_AddText(draw_list, x + math.max(0, (width - text_width(ctx, text)) * 0.5), y, color, text)
+  r.ImGui_DrawList_PopClipRect(draw_list)
+end
+
 --------------------------------------------------------------------------------
 -- what the three stages look like
 --------------------------------------------------------------------------------
@@ -212,6 +427,56 @@ local function draw_cell(ctx, draw_list, label, value, x, y, width, height)
   r.ImGui_DrawList_PopClipRect(draw_list)
 end
 
+local function draw_readout(ctx, draw_list, label, value, x, y, width, height)
+  local label_h = UIScale.round(17)
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
+  centered(ctx, draw_list, label, Theme.colors.text_dim, x, y + UIScale.round(4), width)
+  fitted_top_text(ctx, draw_list, value, Theme.colors.text, x + UIScale.round(6), y + label_h + UIScale.round(2),
+    width - UIScale.round(12), height - label_h - UIScale.round(5))
+end
+
+local function draw_chord_band(ctx, draw_list, current, next_event, x, y, width, height, show_current, show_next)
+  local label_h = UIScale.round(17)
+  local current_h = show_current and show_next and math.floor(height * 0.58) or height
+  local divider_y = y + current_h
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + UIScale.px(3), y + height, Theme.colors.accent, UIScale.px(2))
+  if show_current then
+    centered(ctx, draw_list, "CURRENT CHORD", Theme.colors.text_dim, x, y + UIScale.round(5), width)
+    fitted_top_text(ctx, draw_list, current and current.name or "-", current and Theme.colors.text or Theme.colors.text_dim,
+      x + UIScale.round(10), y + label_h + UIScale.round(3), width - UIScale.round(20),
+      current_h - label_h - UIScale.round(6))
+  end
+  if show_current and show_next then
+    r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(10), divider_y, x + width - UIScale.round(10), divider_y,
+      Theme.colors.border, UIScale.px(1))
+  end
+  if show_next then
+    local next_y = show_current and divider_y or y
+    centered(ctx, draw_list, "NEXT CHORD", Theme.colors.text_dim, x, next_y + UIScale.round(4), width)
+    fitted_top_text(ctx, draw_list, next_event and next_event.name or "-", next_event and Theme.colors.accent or Theme.colors.text_dim,
+      x + UIScale.round(10), next_y + label_h + UIScale.round(3), width - UIScale.round(20),
+      height - (show_current and current_h or 0) - label_h - UIScale.round(6))
+  end
+end
+
+local function draw_study_panel(ctx, draw_list, rows, x, y, width, row_height)
+  local height = #rows * row_height
+  r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, Theme.colors.frame_bg, UIScale.px(4))
+  for index, row in ipairs(rows) do
+    local row_y = y + (index - 1) * row_height
+    if index > 1 then
+      r.ImGui_DrawList_AddLine(draw_list, x + UIScale.round(10), row_y, x + width - UIScale.round(10), row_y,
+        Theme.colors.border, UIScale.px(1))
+    end
+    r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(10), row_y + UIScale.round(7), Theme.colors.text_dim, row[1])
+    local value = tostring(row[2] or "-")
+    r.ImGui_DrawList_AddText(draw_list, x + width - UIScale.round(10) - text_width(ctx, value),
+      row_y + UIScale.round(7), row[3] or Theme.colors.text, value)
+  end
+  return height
+end
+
 --------------------------------------------------------------------------------
 -- settings, on the right-click rather than in a toolbar
 --------------------------------------------------------------------------------
@@ -239,11 +504,19 @@ local function draw_settings_popup(app, preset)
   if r.ImGui_IsItemHovered(ctx) then
     r.ImGui_SetTooltip(ctx, "Shown when the panel is wide enough for it")
   end
+  if preset.display.details then
+    changed, value = r.ImGui_Checkbox(ctx, "Details in two columns", preset.display.details_columns == 2)
+    if changed then preset.display.details_columns = value and 2 or 1; save_preset(app) end
+  end
   changed, value = r.ImGui_Checkbox(ctx, "Section progress bar", preset.display.progress == true)
   if changed then preset.display.progress = value; save_preset(app) end
   if r.ImGui_IsItemHovered(ctx) then
     r.ImGui_SetTooltip(ctx, "How far through the current section you are, in bars")
   end
+  changed, value = r.ImGui_Checkbox(ctx, "Show end of song", preset.display.end_of_song == true)
+  if changed then preset.display.end_of_song = value; save_preset(app) end
+  changed, value = r.ImGui_Checkbox(ctx, "Show recording status", preset.display.record_status == true)
+  if changed then preset.display.record_status = value; save_preset(app) end
   changed, value = r.ImGui_Checkbox(ctx, "Use the region colour", preset.display.section_color == true)
   if changed then preset.display.section_color = value; save_preset(app) end
   if r.ImGui_IsItemHovered(ctx) then
@@ -252,6 +525,122 @@ local function draw_settings_popup(app, preset)
   end
   changed, value = r.ImGui_Checkbox(ctx, "Flash on a section change", preset.cues.flash_on_change == true)
   if changed then preset.cues.flash_on_change = value; save_preset(app) end
+
+  r.ImGui_Separator(ctx)
+  if r.ImGui_BeginMenu(ctx, "Chords") then
+    changed, value = r.ImGui_Checkbox(ctx, "Show chords", preset.chords.enabled == true)
+    if changed then
+      preset.chords.enabled = value
+      save_preset(app)
+      rescan_chords()
+    end
+    changed, value = r.ImGui_Checkbox(ctx, "Show current chord", preset.chords.show_current == true)
+    if changed then preset.chords.show_current = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Show next chord", preset.chords.show_next == true)
+    if changed then preset.chords.show_next = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Countdown to next chord", preset.display.chord_countdown == true)
+    if changed then preset.display.chord_countdown = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Remaining chord duration", preset.display.chord_remaining == true)
+    if changed then preset.display.chord_remaining = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Roman chord degree", preset.display.roman_degree == true)
+    if changed then preset.display.roman_degree = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Live MIDI feedback", preset.display.midi_feedback == true)
+    if changed then
+      preset.display.midi_feedback = value
+      if not value then state.midi_notes = {} end
+      save_preset(app)
+    end
+
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(210))
+    if r.ImGui_BeginCombo(ctx, "Source track", chord_source_label(preset)) then
+      if r.ImGui_Selectable(ctx, "Auto (Chords / Chord / TK Chords)", preset.chord_source == "auto") then
+        preset.chord_source = "auto"
+        save_preset(app)
+        rescan_chords()
+      end
+      for _, entry in ipairs(chord_tracks()) do
+        local label = string.format("%d. %s%s", entry.number, entry.name ~= "" and entry.name or "(unnamed)",
+          entry.has_midi and "" or " (no MIDI)")
+        if r.ImGui_Selectable(ctx, label, preset.chord_source == entry.guid) then
+          preset.chord_source = entry.guid
+          save_preset(app)
+          rescan_chords()
+        end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+
+    changed, value = r.ImGui_Checkbox(ctx, "Use flat note names", preset.chords.prefer_flats == true)
+    if changed then
+      preset.chords.prefer_flats = value
+      save_preset(app)
+      rescan_chords()
+    end
+    changed, value = r.ImGui_Checkbox(ctx, "Show slash bass", preset.chords.include_bass == true)
+    if changed then
+      preset.chords.include_bass = value
+      save_preset(app)
+      rescan_chords()
+    end
+
+    local key_names = preset.chords.prefer_flats and CHORD_NOTE_NAMES.flat or CHORD_NOTE_NAMES.sharp
+    local key_mode = preset.chords.key_mode
+    local key_label = key_mode == "off" and "Off" or (key_mode == "auto" and "Auto (analyze track)"
+      or (key_names[preset.chords.key_root + 1] .. (key_mode == "major" and " major" or " minor")))
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(190))
+    if r.ImGui_BeginCombo(ctx, "Key context", key_label) then
+      if r.ImGui_Selectable(ctx, "Off", key_mode == "off") then
+        preset.chords.key_mode = "off"
+        save_preset(app)
+        rescan_chords()
+      end
+      if r.ImGui_Selectable(ctx, "Auto (analyze track)", key_mode == "auto") then
+        preset.chords.key_mode = "auto"
+        save_preset(app)
+        rescan_chords()
+      end
+      for root = 0, 11 do
+        for _, mode in ipairs({ "major", "minor" }) do
+          local label = key_names[root + 1] .. (mode == "major" and " major" or " minor")
+          if r.ImGui_Selectable(ctx, label, key_mode == mode and preset.chords.key_root == root) then
+            preset.chords.key_mode = mode
+            preset.chords.key_root = root
+            save_preset(app)
+            rescan_chords()
+          end
+        end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
+
+    local confidence = math.floor(preset.chords.minimum_confidence * 100 + 0.5)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+    changed, value = r.ImGui_SliderInt(ctx, "Minimum confidence", confidence, 35, 90, "%d%%")
+    if changed then
+      preset.chords.minimum_confidence = value / 100
+      save_preset(app)
+      rescan_chords()
+    end
+
+    local duration = math.floor(preset.chords.minimum_duration * 1000 + 0.5)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+    changed, value = r.ImGui_SliderInt(ctx, "Minimum chord length", duration, 0, 500, "%d ms")
+    if changed then
+      preset.chords.minimum_duration = value / 1000
+      save_preset(app)
+      rescan_chords()
+    end
+
+    local tolerance = math.floor(preset.chords.attack_tolerance * 1000 + 0.5)
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(150))
+    changed, value = r.ImGui_SliderInt(ctx, "Attack tolerance", tolerance, 0, 250, "%d ms")
+    if changed then
+      preset.chords.attack_tolerance = value / 1000
+      save_preset(app)
+      rescan_chords()
+    end
+    r.ImGui_EndMenu(ctx)
+  end
 
   r.ImGui_Separator(ctx)
   if r.ImGui_BeginMenu(ctx, "Cue click") then
@@ -335,6 +724,7 @@ local function draw_settings_popup(app, preset)
     local settings = user_defaults(app)
     settings.defaults = Presets.copy(preset)
     settings.defaults.sections = {}   -- section names belong to a song, not to a default
+    settings.defaults.chord_source = "auto"
     if app.save_settings then app.save_settings() end
     app.status = "Saved as the default cue setup for new projects"
   end
@@ -556,6 +946,14 @@ function M.init(app)
   state.previous = nil
   state.preset = nil
   state.preset_project = nil
+  state.chord_project = nil
+  state.chord_events = {}
+  state.chord_current = nil
+  state.chord_next = nil
+  state.chord_scan_at = 0
+  state.midi_sequence = nil
+  state.midi_notes = {}
+  state.record_start = nil
 end
 
 -- Reading the project and pushing the schedule happens here rather than in the
@@ -563,7 +961,13 @@ end
 -- are looking at Media Browser. The draw uses whatever this left behind.
 function M.update(app)
   local preset = ensure_preset(app)
+  local was_recording = state.previous and state.previous.recording
   local now = Engine.read({ warn_bars = preset.cues.warn_bars }, state.previous)
+  if now.recording and not was_recording then
+    state.record_start = r.GetCursorPosition and r.GetCursorPosition() or now.position
+  elseif not now.recording then
+    state.record_start = nil
+  end
   state.previous = now
   local here = Presets.section(preset, now.section and now.section.name or "")
   if here.warn_bars ~= preset.cues.warn_bars then
@@ -571,6 +975,17 @@ function M.update(app)
   end
   now.warn_bars = here.warn_bars
   now.label = here.label
+  refresh_chords(preset, now.position)
+  poll_midi_notes(preset.display.midi_feedback)
+  now.chord_current = state.chord_current
+  now.chord_next = state.chord_next
+  now.chord_source_name = state.chord_source_name
+  now.chord_countdown = beat_text(beats_until(now.position, now.chord_next and now.chord_next.start, now.timesig_den))
+  now.chord_remaining = beat_text(beats_until(now.position, now.chord_current and now.chord_current.stop, now.timesig_den))
+  now.roman_degree = roman_degree(now.chord_current)
+  now.record_status = now.recording and state.record_start and now.position < state.record_start - 0.001 and "PREROLL"
+    or (now.recording and "REC" or nil)
+  now.midi_feedback, now.midi_feedback_color = midi_feedback(now.chord_current, preset.chords.prefer_flats)
   state.now = now
   if now.entered and preset.cues.flash_on_change then
     state.flash_at = r.time_precise and r.time_precise() or os.clock()
@@ -608,23 +1023,49 @@ function M.draw(app)
   local line_h = r.ImGui_GetTextLineHeight(ctx)
   local dots_h = preset.display.beats and UIScale.round(10) or 0
   local progress_h = preset.display.progress and UIScale.round(6) or 0
-  local grid_h = UIScale.round(38)
-  local wide = avail_w >= UIScale.round(340)
-  local show_grid = preset.display.details and wide
+  local side_layout = true
+  local show_current_chord = preset.chords.show_current == true
+  local show_next_chord = preset.chords.show_next == true
+  local show_chord_panel = now.chord_source_name and (show_current_chord or show_next_chord)
+  local chord_h = show_chord_panel and UIScale.round(show_current_chord and show_next_chord and 180 or 104) or 0
+  local study_rows = {}
+  if preset.display.chord_countdown then study_rows[#study_rows + 1] = { "NEXT CHORD", now.chord_countdown } end
+  if preset.display.chord_remaining then study_rows[#study_rows + 1] = { "CHORD LEFT", now.chord_remaining } end
+  if preset.display.roman_degree then study_rows[#study_rows + 1] = { "DEGREE", now.roman_degree or "-" } end
+  if preset.display.record_status then
+    study_rows[#study_rows + 1] = { "TRANSPORT", now.record_status or "READY",
+      now.record_status == "REC" and Theme.colors.danger or (now.record_status == "PREROLL" and Theme.colors.warning or Theme.colors.text_dim) }
+  end
+  if preset.display.midi_feedback then
+    study_rows[#study_rows + 1] = { "MIDI", now.midi_feedback, now.midi_feedback_color }
+  end
+  local study_row_h = UIScale.round(30)
+  local study_h = #study_rows * study_row_h
+  local grid_h = UIScale.round(46)
+  local show_grid = preset.display.details
+  local bar_h = side_layout and UIScale.round(36) or line_h
+  local next_name_h = side_layout and UIScale.round(42) or line_h
+  local phrase_h = side_layout and UIScale.round(30) or line_h
+  local next_block_h = side_layout and (line_h + UIScale.round(3) + next_name_h + gap + phrase_h)
+    or (line_h + gap + line_h)
+  local show_section_next = now.next_section ~= nil or preset.display.end_of_song == true
+  local detail_columns = preset.display.details_columns == 2 and 2 or 1
+  local detail_rows = math.ceil(4 / detail_columns)
+  local status_h = show_grid and (grid_h * detail_rows + gap * (detail_rows - 1)) or 0
 
   local below = (progress_h > 0 and progress_h + gap or 0)
+    + (chord_h > 0 and chord_h + gap or 0)
+    + (study_h > 0 and study_h + gap or 0)
     + (dots_h > 0 and dots_h + gap or 0)
-    + line_h + gap            -- bar and beat
-    + UIScale.px(1) + gap     -- the rule
-    + line_h + gap            -- what is next
-    + line_h                  -- how far off it is
-    + (show_grid and (gap + grid_h) or 0)
+    + bar_h + gap             -- bar and beat
+    + (show_section_next and (UIScale.px(1) + gap + next_block_h) or 0)
+    + (show_grid and (gap + status_h) or 0)
   local budget = avail_h - below - pad * 2
-  local section_h = math.max(UIScale.round(22), math.min(UIScale.round(110), budget - gap))
+  local section_h = math.max(UIScale.round(22), math.min(UIScale.round(76), budget - gap))
   -- The space under the name grows with the name. Eight pixels sits well under
   -- a 24px section title and looks like a collision under a 110px one, which is
   -- the size this panel reaches the moment it is given any width at all.
-  local name_gap = math.max(gap, math.floor(section_h * 0.2))
+  local name_gap = gap
   if section_h + name_gap > budget then
     section_h = math.max(UIScale.round(22), budget - name_gap)
   end
@@ -648,8 +1089,18 @@ function M.draw(app)
   local cy = y + pad
 
   if now.section_count == 0 then
-    cy = cy + big_text(ctx, draw_list, "NO SECTIONS", Theme.colors.text_dim, cx, cy, width, section_h) + name_gap
+    fitted_top_text(ctx, draw_list, "NO SECTIONS", Theme.colors.text_dim, cx, cy, width, section_h)
+    cy = cy + section_h + name_gap
     centered(ctx, draw_list, "Mark the song up with regions or markers", Theme.colors.text_dim, cx, cy, width)
+    cy = cy + line_h + gap
+    if chord_h > 0 then
+      draw_chord_band(ctx, draw_list, now.chord_current, now.chord_next, cx, cy, width, chord_h,
+        show_current_chord, show_next_chord)
+      cy = cy + chord_h + gap
+    end
+    if study_h > 0 then
+      draw_study_panel(ctx, draw_list, study_rows, cx, cy, width, study_row_h)
+    end
   else
     local tint = preset.display.section_color and section_color(now.section) or nil
     local name_color = Theme.colors.text
@@ -660,8 +1111,8 @@ function M.draw(app)
     if name == "" then name = now.section and "(unnamed)" or "-" end
     -- The band it reports back, not the one that was measured: a font is not
     -- obliged to be exactly the size it was asked for.
-    local band = big_text(ctx, draw_list, name:upper(), name_color, cx, cy, width, section_h)
-    cy = cy + band + name_gap
+    fitted_top_text(ctx, draw_list, name:upper(), name_color, cx, cy, width, section_h)
+    cy = cy + section_h + name_gap
 
     if progress_h > 0 then
       local into = tonumber(now.bars_into_section) or 0
@@ -672,6 +1123,17 @@ function M.draw(app)
       cy = cy + progress_h + gap
     end
 
+    if chord_h > 0 then
+      draw_chord_band(ctx, draw_list, now.chord_current, now.chord_next, cx, cy, width, chord_h,
+        show_current_chord, show_next_chord)
+      cy = cy + chord_h + gap
+    end
+
+    if study_h > 0 then
+      draw_study_panel(ctx, draw_list, study_rows, cx, cy, width, study_row_h)
+      cy = cy + study_h + gap
+    end
+
     if preset.display.beats then
       draw_beats(ctx, draw_list, now, color, cx, cy, width)
       cy = cy + dots_h + gap
@@ -680,23 +1142,32 @@ function M.draw(app)
     local where = string.format("BAR %d  \u{00b7}  BEAT %d/%d", now.bar, now.beat,
       math.floor(tonumber(now.beats_per_bar) or 4))
     if not now.playing and not now.recording then where = where .. "  \u{00b7}  CURSOR" end
-    centered(ctx, draw_list, where, Theme.colors.text_dim, cx, cy, width)
-    cy = cy + line_h + gap
+    if side_layout then
+      big_text(ctx, draw_list, where, Theme.colors.text, cx, cy, width, bar_h)
+    else
+      centered(ctx, draw_list, where, Theme.colors.text_dim, cx, cy, width)
+    end
+    cy = cy + bar_h + gap
 
-    r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx + width, cy, Theme.colors.border, UIScale.px(1))
-    cy = cy + UIScale.px(1) + gap
-
-    local next_name = now.next_section
-      and Presets.section(preset, tostring(now.next_section.name or "")).label or ""
-    if next_name == "" then next_name = now.next_section and "(unnamed)" or "END OF SONG" end
-    centered(ctx, draw_list, "NEXT  \u{00b7}  " .. next_name:upper(),
-      now.next_section and color or Theme.colors.text_dim, cx, cy, width)
-    cy = cy + line_h + gap
-
-    local phrase = bars_phrase(now.bars_to_change)
-    if now.stage == "go" then phrase = "GO" end
-    centered(ctx, draw_list, phrase, now.stage == "run" and Theme.colors.text_dim or color, cx, cy, width)
-    cy = cy + line_h
+    if show_section_next then
+      r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx + width, cy, Theme.colors.border, UIScale.px(1))
+      cy = cy + UIScale.px(1) + gap
+      local next_name = now.next_section
+        and Presets.section(preset, tostring(now.next_section.name or "")).label or ""
+      if next_name == "" then next_name = now.next_section and "(unnamed)" or "END OF SONG" end
+      local phrase = bars_phrase(now.bars_to_change)
+      if now.stage == "go" then phrase = "GO" end
+      if side_layout then
+        centered(ctx, draw_list, "UP NEXT", Theme.colors.text_dim, cx, cy, width)
+        cy = cy + line_h + UIScale.round(3)
+        big_text(ctx, draw_list, next_name:upper(), now.next_section and color or Theme.colors.text_dim,
+          cx, cy, width, next_name_h)
+        cy = cy + next_name_h + gap
+        big_text(ctx, draw_list, phrase, now.stage == "run" and Theme.colors.text_dim or color,
+          cx, cy, width, phrase_h)
+        cy = cy + phrase_h
+      end
+    end
 
     local ahead_label, ahead_value = "AHEAD", "-"
     if now.next_change and now.bars_to_next_change then
@@ -718,15 +1189,52 @@ function M.draw(app)
         -- of thing you only misread once, on stage.
         { ahead_label, ahead_value }
       }
-      local cell_gap = UIScale.round(5)
-      local cell_w = (width - cell_gap * 3) / 4
-      for index, cell in ipairs(cells) do
-        draw_cell(ctx, draw_list, cell[1], cell[2], cx + (index - 1) * (cell_w + cell_gap), cy, cell_w, grid_h)
+      if side_layout then
+        if detail_columns == 2 then
+          local cell_w = (width - gap) / 2
+          for index, cell in ipairs(cells) do
+            local column = (index - 1) % 2
+            local row = math.floor((index - 1) / 2)
+            draw_readout(ctx, draw_list, cell[1], cell[2], cx + column * (cell_w + gap),
+              cy + row * (grid_h + gap), cell_w, grid_h)
+          end
+          cy = cy + status_h
+        else
+          for index, cell in ipairs(cells) do
+            draw_readout(ctx, draw_list, cell[1], cell[2], cx, cy, width, grid_h)
+            cy = cy + grid_h + (index < #cells and gap or 0)
+          end
+        end
+      else
+        local cell_gap = UIScale.round(5)
+        local cell_w = (width - cell_gap * 3) / 4
+        for index, cell in ipairs(cells) do
+          draw_cell(ctx, draw_list, cell[1], cell[2], cx + (index - 1) * (cell_w + cell_gap), cy, cell_w, grid_h)
+        end
       end
     end
   end
 
-  if hovered and now.next_change and now.bars_to_next_change then
+  if hovered and show_chord_panel then
+    local current_detail = show_current_chord and now.chord_current and (now.chord_current.manual
+      and (now.chord_current.name .. " (MIDI text override)")
+      or string.format("%s (%d%% confidence)", now.chord_current.name,
+        math.floor((now.chord_current.confidence or 0) * 100 + 0.5))) or (show_current_chord and "none" or "hidden")
+    local next_detail = show_next_chord and now.chord_next and (now.chord_next.name
+      .. (now.chord_next.manual and " (MIDI text override)" or "")) or (show_next_chord and "none" or "hidden")
+    local alternatives = {}
+    for _, alternative in ipairs(show_current_chord and now.chord_current and now.chord_current.alternatives or {}) do
+      alternatives[#alternatives + 1] = alternative.name
+    end
+    if #alternatives > 0 then current_detail = current_detail .. "\nAlternatives: " .. table.concat(alternatives, ", ") end
+    alternatives = {}
+    for _, alternative in ipairs(show_next_chord and now.chord_next and now.chord_next.alternatives or {}) do
+      alternatives[#alternatives + 1] = alternative.name
+    end
+    if #alternatives > 0 then next_detail = next_detail .. "\nNext alternatives: " .. table.concat(alternatives, ", ") end
+    r.ImGui_SetTooltip(ctx, string.format("Chord track: %s\nCurrent: %s\nNext: %s\n\nRight-click for the cue settings",
+      now.chord_source_name, current_detail, next_detail))
+  elseif hovered and now.next_change and now.bars_to_next_change then
     local what = now.next_change.tempo_changes and string.format("%g BPM", now.next_change.tempo)
       or string.format("%d/%d", now.next_change.timesig_num, now.next_change.timesig_den)
     r.ImGui_SetTooltip(ctx, string.format("%s in %d bars\nRight-click for the cue settings",
@@ -744,15 +1252,23 @@ function M.shutdown(app)
   state.previous = nil
   state.flash_at = nil
   state.now = nil
+  state.chord_events = {}
+  state.chord_current = nil
+  state.chord_next = nil
+  state.midi_sequence = nil
+  state.midi_notes = {}
+  state.record_start = nil
 end
 
 function M.handle_action(app, verb)
   verb = tostring(verb or ""):lower()
   if verb == "refresh" then
     Engine.invalidate()
+    ChordTimeline.invalidate()
     state.previous = nil
     state.preset = nil
     state.preset_project = nil
+    state.chord_scan_at = 0
   elseif verb == "sections" then
     state.sections_open = true
   else

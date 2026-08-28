@@ -760,6 +760,7 @@ function store.normalize(value)
         lufs = tonumber(entry.lufs),
         tp = tonumber(entry.tp),
         clip = tonumber(entry.clip),
+        measured_at = tonumber(entry.measured_at),
         missing = entry.missing == true
       }
     end
@@ -855,6 +856,7 @@ function store.record_render(paths, preset_name, auto_measure)
     entry.lufs = measured and measured.lufs or nil
     entry.tp = measured and (measured.tp or measured.peak) or nil
     entry.clip = measured and measured.clip or nil
+    entry.measured_at = measured and (entry.lufs or entry.tp) and util.now() or nil
     if not existing then table.insert(state.data.history, 1, entry) end
     if size then written = written + 1 end
     -- Only decode the file when REAPER did not already hand over the numbers.
@@ -2330,7 +2332,8 @@ function view.draw_check_row(app, entry, profile)
   local clicked = r.ImGui_Selectable(ctx, util.basename(entry.path), false)
   r.ImGui_PopStyleColor(ctx)
   if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, entry.path .. "\n" .. fmt.date(entry.at) .. (reason and ("\n" .. reason) or "") .. "\n\nClick to show in the file browser.")
+    local measured = entry.measured_at and fmt.date(entry.measured_at) or (entry.lufs and "date unavailable" or "not measured")
+    r.ImGui_SetTooltip(ctx, entry.path .. "\nRendered: " .. fmt.date(entry.at) .. "\nMeasured: " .. measured .. (reason and ("\n" .. reason) or "") .. "\n\nClick to show in the file browser.")
   end
   if clicked then util.show_file(entry.path) end
   local detail
@@ -2365,6 +2368,14 @@ end
 function view.draw_check(app, settings, list_h)
   local ctx = app.ctx
   local profile, profile_index = loud.profile(settings)
+  local changed, auto_measure = r.ImGui_Checkbox(ctx, "Measure automatically after rendering", settings.auto_measure ~= false)
+  if changed then
+    settings.auto_measure = auto_measure
+    if app.save_settings then app.save_settings() end
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Measure LUFS-I and true peak after rendering.\nTurn this off to finish without REAPER's normalization scan.")
+  end
   r.ImGui_SetNextItemWidth(ctx, -1)
   if r.ImGui_BeginCombo(ctx, "##render_hub_profile", profile.name) then
     for index, candidate in ipairs(PROFILES) do
@@ -2648,6 +2659,7 @@ function M.update(app)
   if entry then
     entry.lufs = lufs
     entry.tp = peak
+    entry.measured_at = (lufs or peak) and util.now() or nil
     entry.missing = util.file_size(job.path) == nil
     store.save()
   end
