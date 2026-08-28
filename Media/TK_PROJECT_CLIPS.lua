@@ -1,7 +1,21 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.4.0
+-- @version 0.5.0
 -- @changelog:
+--   + Launcher: Record what you play into an empty slot, one button, on the launch quantize
+--   + Launcher: Clips can click-stop, click-restart, or play only while held
+--   + Launcher: Hold-to-play uses a small gate effect the script writes and installs itself
+--   + Launcher: A clip can be played at 0.25x to 2x, pitch preserved
+--   + Launcher: An empty slot can make a blank MIDI clip of 1 to 8 bars
+--   + Launcher: A MIDI clip opens in the MIDI editor from its own menu, and its picture follows the notes
+--   + Launcher: An FX button per lane header - your TK FX Browser folders, then Category, Developer, Folders, All plugins, Favorites, Recent and FX chains
+--   + Launcher: The fader and FX button show in the upright layout too
+--   + Launcher: Envelope lanes under a track keep the rows below them level
+--   + Launcher: Launch quantize counts real bar lines, so a meter change cannot drift off them
+--   + Launcher: Clip menu regrouped, launch mode is now Trigger
+--   + Automation tab: the project's automation items, one card per pool, with a curve and where it is used
+--   + Automation: go to any instance, insert pooled or unpooled on any envelope, rename a pool, select every instance
+--   + Automation: take envelopes included, sorting by name, uses or length, positions in bars
 --   + Launcher: Every track is a lane, in track order
 --   + Launcher: Lane tracks made with the first clip, removed with the last
 --   + Launcher: Bitwig layout - scenes as columns, rows at track height
@@ -176,6 +190,8 @@ local saved_item_sort = r.GetExtState(EXT_SECTION, "item_sort")
 if not ({ position = true, name = true, length = true })[saved_item_sort] then saved_item_sort = "position" end
 local saved_source_sort = r.GetExtState(EXT_SECTION, "source_sort")
 if not ({ name = true, uses = true, length = true, type = true })[saved_source_sort] then saved_source_sort = "name" end
+local saved_automation_sort = r.GetExtState(EXT_SECTION, "automation_sort")
+if not ({ name = true, uses = true, length = true })[saved_automation_sort] then saved_automation_sort = "name" end
 local saved_view_mode = r.GetExtState(EXT_SECTION, "view_mode")
 if not ({ items = true, sources = true, launcher = true })[saved_view_mode] then saved_view_mode = "items" end
 
@@ -187,6 +203,7 @@ local state = {
     status_filter = saved_status_filter,
     item_sort = saved_item_sort,
     source_sort = saved_source_sort,
+    automation_sort = saved_automation_sort,
     sort_descending = r.GetExtState(EXT_SECTION, "sort_descending") == "1",
     hide_content_scrollbar = r.GetExtState(EXT_SECTION, "hide_content_scrollbar") == "1",
     selected_track_only = false,
@@ -197,6 +214,7 @@ local state = {
     items = {},
     groups = {},
     sources = {},
+    automation = {},
     waveform_cache = {},
     midi_cache = {},
     signature = "",
@@ -515,6 +533,108 @@ local function project_signature()
     }, "|")
 end
 
+-- Automation items, gathered by pool rather than by instance. Pooling is the
+-- whole point of them: ten copies of one pool are one thing used ten times,
+-- the way a source file is in the Source Media view, so a row is a pool and
+-- its instances hang underneath.
+local function automation_pools()
+    local pools, ordered = {}, {}
+    if not r.CountAutomationItems then return ordered end
+    local search = state.search:lower()
+
+    local function gather(env, track, track_name, prefix)
+        do
+            local _, env_name = r.GetEnvelopeName(env, "")
+            env_name = (prefix or "") .. (env_name or "Envelope")
+            for slot = 0, (r.CountAutomationItems(env) or 0) - 1 do
+                local id = math.floor(r.GetSetAutomationItemInfo(env, slot, "D_POOL_ID", 0, false) or -1)
+                local ok, name = r.GetSetAutomationItemInfo_String(env, slot, "P_POOL_NAME", "", false)
+                if not ok or not name or name == "" then name = "Pool " .. tostring(id) end
+                local pool = pools[id]
+                if not pool then
+                    pool = { id = id, name = name, uses = {}, length = 0 }
+                    pools[id] = pool
+                    ordered[#ordered + 1] = pool
+                end
+                local length = r.GetSetAutomationItemInfo(env, slot, "D_LENGTH", 0, false) or 0
+                if length > pool.length then pool.length = length end
+                pool.uses[#pool.uses + 1] = {
+                    env = env,
+                    slot = slot,
+                    track = track,
+                    track_name = track_name,
+                    env_name = env_name,
+                    position = r.GetSetAutomationItemInfo(env, slot, "D_POSITION", 0, false) or 0,
+                    length = length,
+                    rate = r.GetSetAutomationItemInfo(env, slot, "D_PLAYRATE", 0, false) or 1,
+                    loops = (r.GetSetAutomationItemInfo(env, slot, "D_LOOPSRC", 0, false) or 0) > 0.5,
+                }
+            end
+        end
+    end
+
+    local function sweep_track(track, track_name)
+        for index = 0, (r.CountTrackEnvelopes(track) or 0) - 1 do
+            gather(r.GetTrackEnvelope(track, index), track, track_name)
+        end
+    end
+
+    local master = r.GetMasterTrack(0)
+    if master then sweep_track(master, "Master") end
+    for index = 0, (r.CountTracks(0) or 0) - 1 do
+        local track = r.GetTrack(0, index)
+        if track and not is_launcher_track(track) then
+            sweep_track(track, get_track_name(track, index))
+        end
+    end
+
+    -- Take envelopes as well. Rarer than track ones, but a pool can live there
+    -- and a bay that quietly leaves some out is worse than no bay.
+    if r.CountTakeEnvelopes then
+        for index = 0, (r.CountMediaItems(0) or 0) - 1 do
+            local item = r.GetMediaItem(0, index)
+            local take = item and r.GetActiveTake(item)
+            local track = item and r.GetMediaItemTrack(item)
+            if take and track and not is_launcher_track(track) then
+                local track_index = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 1) - 1
+                local where = get_track_name(track, track_index)
+                for slot = 0, (r.CountTakeEnvelopes(take) or 0) - 1 do
+                    gather(r.GetTakeEnvelope(take, slot), track, where, "Take: ")
+                end
+            end
+        end
+    end
+
+    -- Searched on the pool's own name and on where it is used, which is what
+    -- someone actually remembers about one.
+    local kept = {}
+    for _, pool in ipairs(ordered) do
+        local hit = search == "" or pool.name:lower():find(search, 1, true)
+        if not hit then
+            for _, use in ipairs(pool.uses) do
+                if use.env_name:lower():find(search, 1, true)
+                    or use.track_name:lower():find(search, 1, true) then hit = true break end
+            end
+        end
+        if hit then kept[#kept + 1] = pool end
+    end
+
+    local key = state.automation_sort or "name"
+    table.sort(kept, function(left, right)
+        local a, b
+        if key == "uses" then a, b = #left.uses, #right.uses
+        elseif key == "length" then a, b = left.length, right.length
+        else a, b = left.name:lower(), right.name:lower() end
+        -- Ties fall back to the name, which is the order someone can follow,
+        -- and then to the id, which is what keeps two pools of the same name
+        -- from swapping places between frames and making the grid flicker.
+        if a == b then a, b = left.name:lower(), right.name:lower() end
+        if a == b then a, b = left.id, right.id end
+        if state.sort_descending then return a > b end
+        return a < b
+    end)
+    return kept
+end
 local function scan_project()
     local items = {}
     local groups = {}
@@ -650,8 +770,29 @@ local function scan_project()
     state.items = items
     state.groups = ordered_groups
     state.sources = sources
+    state.automation = automation_pools()
 end
 
+-- Adding or removing an automation item changes nothing the project signature
+-- watches, so the tab would sit there stale. Counted only while it is the tab
+-- on show, since it means walking every envelope on every track. A rename goes
+-- through our own menu, which clears the signature outright.
+local function automation_signature()
+    if state.view_mode ~= "automation" or not r.CountAutomationItems then return "" end
+    local total = 0
+    local function count(track)
+        for index = 0, (r.CountTrackEnvelopes(track) or 0) - 1 do
+            total = total + (r.CountAutomationItems(r.GetTrackEnvelope(track, index)) or 0)
+        end
+    end
+    local master = r.GetMasterTrack(0)
+    if master then count(master) end
+    for index = 0, (r.CountTracks(0) or 0) - 1 do
+        local track = r.GetTrack(0, index)
+        if track then count(track) end
+    end
+    return tostring(total)
+end
 local function refresh_if_needed()
     local now = r.time_precise()
     if now - state.last_scan < 0.2 then return end
@@ -664,7 +805,7 @@ local function refresh_if_needed()
             state.signature = ""
         end
     end
-    local signature = table.concat({ project_signature(), state.search, state.filter, state.status_filter, state.item_sort, state.source_sort, tostring(state.sort_descending), tostring(state.selected_track_only) }, "|")
+    local signature = table.concat({ project_signature(), state.search, state.filter, state.status_filter, state.item_sort, state.source_sort, tostring(state.sort_descending), tostring(state.selected_track_only), automation_signature() }, "|")
     if signature ~= state.signature then
         state.signature = signature
         scan_project()
@@ -1449,7 +1590,7 @@ local function filter_button(label, value, width)
     end
 end
 
-local VIEW_WIDTHS = { items = 74, sources = 112, launcher = 82 }
+local VIEW_WIDTHS = { items = 74, sources = 112, automation = 100, launcher = 82 }
 
 local function view_button(label, value, count)
     local active = state.view_mode == value
@@ -1475,7 +1616,8 @@ local function draw_header()
     local items_width = rounded(VIEW_WIDTHS.items)
     local sources_width = rounded(VIEW_WIDTHS.sources)
     local launcher_width = rounded(VIEW_WIDTHS.launcher)
-    local tabs_width = items_width + sources_width + launcher_width + rounded(14)
+    local automation_width = rounded(VIEW_WIDTHS.automation)
+    local tabs_width = items_width + sources_width + automation_width + launcher_width + rounded(22)
     -- Two gaps, not three: one before the settings dot and one before the close
     -- dot. The spacing inside the tabs is already part of tabs_width, and the
     -- extra gap was leaving the two dots sitting short of the right edge.
@@ -1492,6 +1634,8 @@ local function draw_header()
     view_button("Items", "items", #state.items)
     r.ImGui_SameLine(ctx, 0, rounded(7))
     view_button("Source Media", "sources", #state.sources)
+    r.ImGui_SameLine(ctx)
+    view_button("Automation", "automation", #state.automation)
     r.ImGui_SameLine(ctx, 0, rounded(7))
     view_button("Launcher", "launcher", nil)
     r.ImGui_SameLine(ctx, 0, gap)
@@ -1582,6 +1726,10 @@ local function draw_theme_settings_body()
         option("Colour lane headers", Launcher.color_headers(),
             function(value) Launcher.set_color_headers(value) end,
             "Fill each lane header with its track's colour\ninstead of showing a stripe down its left edge")
+        option("Clear the take after recording", Launcher.record_tidy(),
+            function(value) Launcher.set_record_tidy(value) end,
+            "Once a recorded slot has its clip, remove the take\n"
+            .. "from the arrangement. The audio stays on disk.")
         option("Volume in the lane header", Launcher.lane_volume(),
             function(value) Launcher.set_lane_volume(value) end,
             "Put the track's fader at the foot of its lane header,\n"
@@ -1817,7 +1965,9 @@ local function draw_toolbar()
     local compact_group_width = state.view_mode == "items" and rounded(26) or 0
     local compact_combo_width = math.max(rounded(72), math.floor((available - direction_width - compact_group_width - gap * (state.view_mode == "items" and 4 or 1)) / (state.view_mode == "items" and 2 or 1)))
     r.ImGui_SetNextItemWidth(ctx, compact and available or math.max(rounded(150), math.min(rounded(320), available * 0.35)))
-    local search_hint = state.view_mode == "sources" and "Search source name, path or type" or "Search clips or tracks"
+    local search_hint = state.view_mode == "sources" and "Search source name, path or type"
+        or state.view_mode == "automation" and "Search pool name, track or envelope"
+        or "Search clips or tracks"
     local changed, search = r.ImGui_InputTextWithHint(ctx, "##search", search_hint, state.search)
     if changed then state.search = search; state.signature = "" end
     if not compact then r.ImGui_SameLine(ctx) end
@@ -1854,17 +2004,21 @@ local function draw_toolbar()
     local active_sort_width = compact and (state.view_mode == "items" and compact_combo_width or available - direction_width - gap) or sort_width
     r.ImGui_SetNextItemWidth(ctx, active_sort_width)
     local sort_options = state.view_mode == "items" and { { "Position", "position" }, { "Name", "name" }, { "Length", "length" } }
+        or state.view_mode == "automation" and { { "Name", "name" }, { "Uses", "uses" }, { "Length", "length" } }
         or { { "Name", "name" }, { "Uses", "uses" }, { "Length", "length" }, { "Type", "type" } }
-    local sort_key = state.view_mode == "items" and state.item_sort or state.source_sort
+    local sort_key = state.view_mode == "items" and state.item_sort
+        or state.view_mode == "automation" and state.automation_sort or state.source_sort
     local sort_label = "Sort"
     for _, option in ipairs(sort_options) do if option[2] == sort_key then sort_label = option[1]; break end end
     if r.ImGui_BeginCombo(ctx, "##project_clips_sort", sort_label) then
         for _, option in ipairs(sort_options) do
             local selected = sort_key == option[2]
             if r.ImGui_Selectable(ctx, option[1], selected) then
-                if state.view_mode == "items" then state.item_sort = option[2] else state.source_sort = option[2] end
+                local field = state.view_mode == "items" and "item_sort"
+                    or state.view_mode == "automation" and "automation_sort" or "source_sort"
+                state[field] = option[2]
                 state.signature = ""
-                r.SetExtState(EXT_SECTION, state.view_mode == "items" and "item_sort" or "source_sort", option[2], true)
+                r.SetExtState(EXT_SECTION, field, option[2], true)
             end
             if selected then r.ImGui_SetItemDefaultFocus(ctx) end
         end
@@ -2212,6 +2366,293 @@ local function draw_source_card(entry)
     if not context_open and state.suppress_drag_guid ~= entry.guid then begin_item_drag(entry) end
 end
 
+-- The shape a pool holds, read from the first place it is used. Points inside
+-- an automation item are addressed with the item's index offset rather than
+-- the envelope's own, which is what the 0x10000000 is for.
+local function pool_points(pool)
+    if pool.points then return pool.points end
+    local points = {}
+    local use = pool.uses and pool.uses[1]
+    if use and r.CountEnvelopePointsEx then
+        local slot = 0x10000000 + use.slot
+        local count = r.CountEnvelopePointsEx(use.env, slot) or 0
+        local low, high
+        for index = 0, count - 1 do
+            local ok, time, value = r.GetEnvelopePointEx(use.env, slot, index)
+            if ok then
+                points[#points + 1] = { time = time or 0, value = value or 0 }
+                if not low or value < low then low = value end
+                if not high or value > high then high = value end
+            end
+        end
+        points.low, points.high = low or 0, high or 0
+        points.span = use.length > 0 and use.length or 1
+        -- Against the envelope's own range where REAPER states one, so two
+        -- pools on the same envelope can be compared at a glance. Falling back
+        -- to what the points themselves cover keeps a shape visible on an
+        -- envelope that reports no range.
+        if r.GetEnvelopeInfo_Value then
+            local floor = r.GetEnvelopeInfo_Value(use.env, "D_MINVALUE")
+            local ceiling = r.GetEnvelopeInfo_Value(use.env, "D_MAXVALUE")
+            if floor and ceiling and ceiling > floor then
+                points.low, points.high = floor, ceiling
+                points.scaled_to_envelope = true
+            end
+        end
+    end
+    pool.points = points
+    return points
+end
+
+-- Normalised to the points' own range rather than the envelope's, so the shape
+-- reads whether it is a volume sweep or a two-value switch.
+local function draw_pool_preview(draw_list, pool, x, y, width, height)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, COLORS.child_bg, scaled(3))
+    local points = pool_points(pool)
+    if #points == 0 then
+        r.ImGui_DrawList_AddText(draw_list, x + scaled(6), y + height * 0.5 - scaled(6), COLORS.text_dim, "no points")
+        return
+    end
+    local low, high = points.low, points.high
+    local range = (high - low)
+    local pad = scaled(3)
+    local function place(point)
+        local across = points.span > 0 and math.min(1, math.max(0, point.time / points.span)) or 0
+        local up = range > 0.000001 and ((point.value - low) / range) or 0.5
+        return x + across * width, y + height - pad - up * (height - pad * 2)
+    end
+    if #points == 1 then
+        local px, py = place(points[1])
+        r.ImGui_DrawList_AddCircleFilled(draw_list, x + width * 0.5, py, scaled(2), COLORS.accent)
+        return
+    end
+    local previous_x, previous_y = place(points[1])
+    for index = 2, #points do
+        local px, py = place(points[index])
+        r.ImGui_DrawList_AddLine(draw_list, previous_x, previous_y, px, py, COLORS.accent, scaled(1.4))
+        previous_x, previous_y = px, py
+    end
+end
+-- Where a pool is used, in a form short enough for a card. One place names it,
+-- several say how many, because a pool used in twelve places is not a list.
+local function pool_where(pool)
+    local uses = pool.uses
+    if #uses == 0 then return "unused" end
+    if #uses == 1 then return uses[1].track_name .. "  |  " .. uses[1].env_name end
+    local envelopes, count = {}, 0
+    for _, use in ipairs(uses) do
+        local key = use.track_name .. "|" .. use.env_name
+        if not envelopes[key] then envelopes[key] = true count = count + 1 end
+    end
+    return tostring(#uses) .. " uses on " .. tostring(count) .. (count == 1 and " envelope" or " envelopes")
+end
+
+local function jump_to_use(use)
+    if not use then return end
+    r.SetEditCurPos(use.position, true, false)
+    if use.track and r.SetOnlyTrackSelected then r.SetOnlyTrackSelected(use.track) end
+    r.UpdateArrange()
+end
+
+-- Put another instance of this pool on the envelope it came from, at the edit
+-- cursor. The point of pooling: the copy is the same automation, so editing one
+-- edits them all.
+local function insert_pool_at_cursor(pool)
+    local use = pool.uses and pool.uses[1]
+    if not use or not r.InsertAutomationItem then
+        state.status = "This REAPER cannot insert automation items"
+        return
+    end
+    insert_pool_on(pool, use.env, use.length)
+end
+
+-- Every envelope in the project that could take a pool, so one can be put
+-- somewhere it has never been. Pool ids are project wide, so this works across
+-- tracks - but the points are read in the target envelope's own range, which is
+-- why it is a menu of its own rather than something the plain insert does.
+local function envelope_targets()
+    local targets = {}
+    local function add(track, track_name)
+        for index = 0, (r.CountTrackEnvelopes(track) or 0) - 1 do
+            local env = r.GetTrackEnvelope(track, index)
+            local _, name = r.GetEnvelopeName(env, "")
+            targets[#targets + 1] = { env = env, track = track, label = track_name .. "  |  " .. (name or "Envelope") }
+        end
+    end
+    local master = r.GetMasterTrack(0)
+    if master then add(master, "Master") end
+    for index = 0, (r.CountTracks(0) or 0) - 1 do
+        local track = r.GetTrack(0, index)
+        if track and not is_launcher_track(track) then add(track, get_track_name(track, index)) end
+    end
+    return targets
+end
+
+local function insert_pool_on(pool, env, length)
+    if not r.InsertAutomationItem then
+        state.status = "This REAPER cannot insert automation items"
+        return
+    end
+    r.Undo_BeginBlock()
+    local at = r.GetCursorPosition() or 0
+    local slot = r.InsertAutomationItem(env, pool.id, at, length)
+    r.Undo_EndBlock("Insert automation item", -1)
+    r.UpdateArrange()
+    state.status = slot and slot >= 0 and ("Inserted " .. pool.name) or "Could not insert that pool"
+    state.signature = ""
+end
+
+-- A copy that is its own pool, the way the Project Bay's Unpooled insert works.
+-- There is no call to detach a pooled item, so a fresh empty pool is made and
+-- the points are carried across one at a time.
+local function insert_pool_unpooled(pool, env, length)
+    local use = pool.uses and pool.uses[1]
+    if not use or not r.InsertAutomationItem or not r.InsertEnvelopePointEx then
+        state.status = "This REAPER cannot insert automation items"
+        return
+    end
+    r.Undo_BeginBlock()
+    local at = r.GetCursorPosition() or 0
+    local slot = r.InsertAutomationItem(env, -1, at, length)
+    if not slot or slot < 0 then
+        r.Undo_EndBlock("Insert automation item", -1)
+        state.status = "Could not insert that pool"
+        return
+    end
+    local from, into = 0x10000000 + use.slot, 0x10000000 + slot
+    local count = r.CountEnvelopePointsEx(use.env, from) or 0
+    for index = 0, count - 1 do
+        local ok, time, value, shape, tension, selected = r.GetEnvelopePointEx(use.env, from, index)
+        if ok then
+            r.InsertEnvelopePointEx(env, into, time, value, shape or 0, tension or 0, selected or false, true)
+        end
+    end
+    if r.Envelope_SortPointsEx then r.Envelope_SortPointsEx(env, into) end
+    r.Undo_EndBlock("Insert automation item", -1)
+    r.UpdateArrange()
+    state.status = "Inserted " .. pool.name .. " as its own pool"
+    state.signature = ""
+end
+
+-- Every instance of this pool, selected in the arrange at once, which is what
+-- the Project Bay's Usage entry is for.
+local function select_pool_uses(pool)
+    local touched = 0
+    for _, use in ipairs(pool.uses) do
+        r.GetSetAutomationItemInfo(use.env, use.slot, "D_UISEL", 1, true)
+        touched = touched + 1
+    end
+    r.UpdateArrange()
+    state.status = touched == 1 and "Selected 1 automation item"
+        or ("Selected " .. tostring(touched) .. " automation items")
+end
+
+-- Bars and beats, the way the Project Bay lists them, falling back to seconds
+-- on a REAPER that will not format them.
+local function bars_text(position, length)
+    if r.format_timestr_len then
+        local span = r.format_timestr_len(length, "", position, 2)
+        local at = r.format_timestr_pos and r.format_timestr_pos(position, "", 2)
+        if span and at then return at .. "   " .. span end
+        if span then return span end
+    end
+    return string.format("%.2f s", length)
+end
+local function rename_pool(pool, name)
+    if not name or name == "" then return end
+    r.Undo_BeginBlock()
+    for _, use in ipairs(pool.uses) do
+        r.GetSetAutomationItemInfo_String(use.env, use.slot, "P_POOL_NAME", name, true)
+    end
+    r.Undo_EndBlock("Rename automation pool", -1)
+    pool.name = name
+    state.signature = ""
+end
+
+local function draw_pool_card(pool)
+    local card_width = rounded(CARD_WIDTH)
+    local card_height = rounded(CARD_HEIGHT)
+    local preview_height = rounded(PREVIEW_HEIGHT)
+    local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_InvisibleButton(ctx, "##pool_" .. tostring(pool.id), card_width, card_height)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local background = hovered and COLORS.card_hover or COLORS.card_bg
+    r.ImGui_DrawList_AddRectFilled(draw_list, cursor_x, cursor_y, cursor_x + card_width, cursor_y + card_height, background, scaled(5))
+    r.ImGui_DrawList_AddRect(draw_list, cursor_x, cursor_y, cursor_x + card_width, cursor_y + card_height,
+        hovered and COLORS.accent or COLORS.border, scaled(5), 0, scaled(1))
+    draw_pool_preview(draw_list, pool, cursor_x + scaled(10), cursor_y + scaled(7), card_width - scaled(18), preview_height)
+    r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(80), COLORS.text,
+        truncate_text(pool.name, card_width - scaled(20)))
+    r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(99), COLORS.text_dim,
+        truncate_text(pool_where(pool), card_width - scaled(20)))
+    local count = tostring(#pool.uses)
+    local count_width = r.ImGui_CalcTextSize(ctx, count)
+    r.ImGui_DrawList_AddText(draw_list, cursor_x + card_width - count_width - scaled(10), cursor_y + scaled(80), COLORS.accent, count)
+    local first = pool.uses[1]
+    r.ImGui_DrawList_AddText(draw_list, cursor_x + scaled(10), cursor_y + scaled(116), COLORS.text_dim,
+        truncate_text(bars_text(first and first.position or 0, pool.length), card_width - scaled(20)))
+
+    if hovered and r.ImGui_IsMouseDoubleClicked(ctx, 0) then jump_to_use(pool.uses[1]) end
+    if r.ImGui_BeginPopupContextItem(ctx, "##pool_ctx_" .. tostring(pool.id)) then
+        r.ImGui_TextColored(ctx, COLORS.text_dim, pool.name)
+        r.ImGui_Separator(ctx)
+        if r.ImGui_BeginMenu(ctx, "Insert at edit cursor") then
+            if r.ImGui_MenuItem(ctx, "Pooled") then insert_pool_at_cursor(pool) end
+            if r.ImGui_MenuItem(ctx, "Unpooled") then
+                local use = pool.uses[1]
+                if use then insert_pool_unpooled(pool, use.env, use.length) end
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        if r.ImGui_BeginMenu(ctx, "Insert on another envelope") then
+            for index, target in ipairs(envelope_targets()) do
+                if r.ImGui_MenuItem(ctx, target.label .. "##target" .. index) then
+                    insert_pool_on(pool, target.env, pool.length)
+                end
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        if r.ImGui_MenuItem(ctx, "Select every instance") then select_pool_uses(pool) end
+        if r.ImGui_BeginMenu(ctx, "Go to") then
+            for index, use in ipairs(pool.uses) do
+                local label = string.format("%s  |  %s  |  %.2f s", use.track_name, use.env_name, use.position)
+                if r.ImGui_MenuItem(ctx, label .. "##go" .. index) then jump_to_use(use) end
+            end
+            r.ImGui_EndMenu(ctx)
+        end
+        r.ImGui_Separator(ctx)
+        r.ImGui_SetNextItemWidth(ctx, rounded(180))
+        local changed, typed = r.ImGui_InputText(ctx, "##pool_name" .. tostring(pool.id), pool.name)
+        if changed then rename_pool(pool, typed) end
+        r.ImGui_EndPopup(ctx)
+    end
+    if hovered then
+        r.ImGui_SetTooltip(ctx, pool.name .. "\n" .. pool_where(pool)
+            .. "\nDouble click to go there  |  right click for more")
+    end
+end
+
+local function draw_automation()
+    local available = r.ImGui_GetContentRegionAvail(ctx)
+    local card_width = rounded(CARD_WIDTH)
+    local card_height = rounded(CARD_HEIGHT)
+    local gap = rounded(8)
+    local columns = math.max(1, math.floor((available + gap) / (card_width + gap)))
+    if r.ImGui_BeginTable(ctx, "automation_pools", columns, r.ImGui_TableFlags_SizingFixedFit()) then
+        for index, pool in ipairs(state.automation) do
+            r.ImGui_TableNextColumn(ctx)
+            r.ImGui_PushID(ctx, index)
+            if r.ImGui_IsRectVisible(ctx, card_width, card_height) then
+                draw_pool_card(pool)
+            else
+                r.ImGui_Dummy(ctx, card_width, card_height)
+            end
+            r.ImGui_PopID(ctx)
+        end
+        r.ImGui_EndTable(ctx)
+    end
+end
 local function draw_sources()
     local available = r.ImGui_GetContentRegionAvail(ctx)
     local card_width = rounded(CARD_WIDTH)
@@ -2323,9 +2764,13 @@ local function draw_window()
         end
         local launcher_mode = state.view_mode == "launcher"
         local status_text = launcher_mode and Launcher.status() or state.status
-        local empty = not launcher_mode and (state.view_mode == "sources" and #state.sources == 0 or #state.groups == 0)
+        local empty = not launcher_mode and (state.view_mode == "sources" and #state.sources == 0
+            or state.view_mode == "automation" and #state.automation == 0
+            or state.view_mode == "items" and #state.groups == 0)
         if empty then
-            local empty_label = state.view_mode == "sources" and "No matching source media" or "No matching project clips"
+            local empty_label = state.view_mode == "sources" and "No matching source media"
+                or state.view_mode == "automation" and "No automation items in this project"
+                or "No matching project clips"
             local message = state.selected_track_only and not r.GetSelectedTrack(0, 0) and "Select a track to show its media" or empty_label
             r.ImGui_TextColored(ctx, COLORS.text_dim, message)
         else
@@ -2338,6 +2783,8 @@ local function draw_window()
                     Launcher.draw()
                 elseif state.view_mode == "sources" then
                     draw_sources()
+                elseif state.view_mode == "automation" then
+                    draw_automation()
                 else
                     for _, group in ipairs(state.groups) do draw_group(group) end
                 end

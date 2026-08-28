@@ -44,6 +44,10 @@ local C = {
     cell_h       = 30,
     cell_h_big   = 64,
     scene_w      = 78,
+    -- Half the space between two clip tiles: a table puts this much on each
+    -- side of every cell. ImGui's own default is 4 across and 2 down, which is
+    -- both uneven and roomier than a grid of clips wants.
+    cell_gap     = 1,
     fade         = 0.005,
     follow_lead  = 1.20,
     -- Payload types a dragged file can arrive under, in the order they are tried.
@@ -230,10 +234,10 @@ end
 
 -- Centre text on a point using its real measured height, snapped to whole
 -- pixels so glyphs stay crisp at any UI scale.
-function H.text_centered(draw_list, center_x, center_y, color, text)
+function H.text_centered(draw_list, center_x, center_y, color, text, nudge)
     local text_width, text_height = r.ImGui_CalcTextSize(UI.ctx, text)
     local x = math.floor(center_x - text_width * 0.5 + 0.5)
-    local y = math.floor(center_y - text_height * 0.5 + 0.5)
+    local y = math.floor(center_y - text_height * 0.5 + (nudge or 0) + 0.5)
     r.ImGui_DrawList_AddText(draw_list, x, y, color, text)
 end
 
@@ -404,25 +408,101 @@ function H.quantize_qn(time)
     return value * H.qn_per_bar(time)
 end
 
-function H.boundary_after(from_time, allow_now)
+-- REAPER numbers measures from one in TimeMap_QNToMeasures and from zero in
+-- TimeMap_GetMeasureInfo. Rather than take that on trust, ask both about the
+-- same measure once and keep the difference. An off-by-one here would put
+-- every launch a whole bar out, which is exactly the kind of fault that looks
+-- like a timing problem and is not one.
+function H.measure_offset()
+    if L.measure_offset then return L.measure_offset end
+    L.measure_offset = -1
+    if r.TimeMap_QNToMeasures and r.TimeMap_GetMeasureInfo then
+        local measure, from_qn = r.TimeMap_QNToMeasures(0, 8)
+        if measure and from_qn then
+            for _, guess in ipairs({ -1, 0 }) do
+                local _, qn = r.TimeMap_GetMeasureInfo(0, measure + guess)
+                if qn and math.abs(qn - from_qn) < 0.001 then
+                    L.measure_offset = guess
+                    break
+                end
+            end
+        end
+    end
+    return L.measure_offset
+end
+-- Where a time sits counted in real measures - the ones REAPER draws - with
+-- the fraction through the current one. Measures are not a fixed number of
+-- quarter notes: after a 4/4 to 3/4 change, counting quarter notes from the
+-- start of the song has drifted off the bar lines for good.
+function H.measure_pos(time)
+    if not r.TimeMap_QNToMeasures then return nil end
+    local qn = r.TimeMap2_timeToQN(0, time)
+    local measure, from_qn, to_qn = r.TimeMap_QNToMeasures(0, qn)
+    if not (measure and from_qn and to_qn) or to_qn <= from_qn then return nil end
+    return measure + H.measure_offset() + (qn - from_qn) / (to_qn - from_qn)
+end
+
+-- The way back. Everything goes through quarter notes rather than the time
+-- TimeMap_GetMeasureInfo hands back, so a fraction of a measure and a whole one
+-- are worked out the same way.
+function H.measure_pos_time(pos)
+    if not r.TimeMap_GetMeasureInfo then return nil end
+    local whole = math.floor(pos)
+    local _, from_qn, to_qn = r.TimeMap_GetMeasureInfo(0, whole)
+    if not (from_qn and to_qn) or to_qn <= from_qn then return nil end
+    return r.TimeMap2_QNToTime(0, from_qn + (pos - whole) * (to_qn - from_qn))
+end
+
+-- Where a time sits on the launch grid, counted in lines. The four places that
+-- need a boundary want different things from it - the line before, the next
+-- one, the nearest one - and expressing all of them as arithmetic on one index
+-- keeps that difference where it belongs and out of the grid itself.
+--
+-- Bar line mode counts the measures REAPER actually draws. Every other setting
+-- is a fixed number of quarter notes counted from the start of the song, which
+-- is the same thing only while the meter never changes; after a 4/4 to 3/4
+-- change that count has drifted off the bar lines for good.
+function H.grid_index(from_time)
+    -- Every positive setting is a count of bars, whole or fractional, so all of
+    -- them ride the real measures. Only the beat setting is a raw note value.
+    local value = L.quantize or 1
+    if value > 0 then
+        local pos = H.measure_pos(from_time)
+        if pos then return pos / value end
+    end
     local step = H.quantize_qn(from_time)
-    if step <= 0 then
+    if step <= 0 then return nil end
+    return r.TimeMap2_timeToQN(0, from_time) / step
+end
+
+-- The time of one whole line. from_time only says which grid is meant; on the
+-- quarter note grids it also carries the meter the step was measured in.
+function H.grid_time(from_time, line)
+    local value = L.quantize or 1
+    if value > 0 then
+        local time = H.measure_pos_time(line * value)
+        if time then return time end
+    end
+    local step = H.quantize_qn(from_time)
+    if step <= 0 then return from_time end
+    return r.TimeMap2_QNToTime(0, line * step)
+end
+function H.boundary_after(from_time, allow_now)
+    local index = H.grid_index(from_time)
+    if not index then
         return allow_now and from_time or (from_time + H.lead())
     end
-    local from_qn = r.TimeMap2_timeToQN(0, from_time)
-    local index = math.floor(from_qn / step)
-    if not allow_now then index = index + 1 end
-    local time = r.TimeMap2_QNToTime(0, index * step)
+    local line = math.floor(index)
+    if not allow_now then line = line + 1 end
+    local time = H.grid_time(from_time, line)
     if allow_now then
-        if time < from_time - 0.001 then
-            time = r.TimeMap2_QNToTime(0, (index + 1) * step)
-        end
+        if time < from_time - 0.001 then time = H.grid_time(from_time, line + 1) end
         return time
     end
     local guard = 0
     while time - from_time < H.lead() and guard < 64 do
-        index = index + 1
-        time = r.TimeMap2_QNToTime(0, index * step)
+        line = line + 1
+        time = H.grid_time(from_time, line)
         guard = guard + 1
     end
     return time
@@ -870,6 +950,26 @@ function H.slot_entry(slot, color)
     end
     entry.is_midi = slot.is_midi
     entry.track_color = color
+    -- The drawn preview is cached under this key, and a clip's guid does not
+    -- change when its notes do - so editing one in the MIDI editor left the old
+    -- picture on screen until the script was restarted. The notes' own hash goes
+    -- into the key, looked at a few times a second rather than every frame:
+    -- reading it walks the take, and only what is on screen gets here at all.
+    if slot.is_midi and r.MIDI_GetHash then
+        local now = r.time_precise()
+        if not slot.midi_checked or now - slot.midi_checked > 0.4 then
+            slot.midi_checked = now
+            local item = H.item_from_guid(slot.guid)
+            local take = item and r.GetActiveTake(item) or nil
+            if take and r.TakeIsMIDI(take) then
+                local ok, hash = r.MIDI_GetHash(take, true, "")
+                if ok and hash and hash ~= slot.midi_hash then
+                    slot.midi_hash = hash
+                    entry.cache_key = slot.guid .. "|launcher|" .. hash
+                end
+            end
+        end
+    end
     return entry
 end
 
@@ -1041,9 +1141,13 @@ function H.trim_midi_source(item)
     r.SetMediaItemInfo_Value(glued, "B_MUTE", muted)
     r.SetMediaItemInfo_Value(glued, "B_LOOPSRC", looped)
     r.SetMediaItemInfo_Value(glued, "D_LENGTH", length)
-    -- A different item means the render happened; that is as much as can
-    -- honestly be checked here.
-    return glued, glued ~= item
+    -- Judged on the result, not on the mechanism. Glue handing back a fresh
+    -- item only says something happened; what matters is whether the take still
+    -- needs trimming afterwards. A recorded clip comes in already gluable, so
+    -- the old test could call a perfectly trimmed clip a failure.
+    local glued_take = r.GetActiveTake(glued)
+    if not glued_take then return glued, false end
+    return glued, not H.is_trimmed(glued, glued_take)
 end
 
 -- An item trimmed shorter than its source is a window onto that source. REAPER's
@@ -1313,25 +1417,82 @@ end
 -- Sets the library item's playrate and keeps its length honest: the item covers
 -- the same audio, so the length moves with the rate it is played at. Everything
 -- downstream reads the length back off the item, so nothing else needs telling.
-function H.set_slot_rate(lane, row, rate)
-    local slot = H.slot(lane, row)
-    local item = slot and H.item_from_guid(slot.guid) or nil
-    local take = item and r.GetActiveTake(item) or nil
-    if not take or not rate or rate <= 0 then return false end
+-- Playing a take faster or slower. The item is kept as long as what it now
+-- plays, so a clip that took two bars at half speed takes one at full.
+function H.apply_take_rate(item, take, rate)
     local current = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
     if current <= 0 then current = 1 end
     local length = r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0
-    r.Undo_BeginBlock()
     r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
     r.SetMediaItemTakeInfo_Value(take, "B_PPITCH", 1)
     if length > 0 then
         r.SetMediaItemInfo_Value(item, "D_LENGTH", math.max(0.05, length * current / rate))
     end
+end
+
+function H.set_slot_rate(lane, row, rate)
+    local slot = H.slot(lane, row)
+    local item = slot and H.item_from_guid(slot.guid) or nil
+    local take = item and r.GetActiveTake(item) or nil
+    if not take or not rate or rate <= 0 then return false end
+    r.Undo_BeginBlock()
+    H.apply_take_rate(item, take, rate)
     r.Undo_EndBlock("Change launcher clip playrate", -1)
     r.UpdateArrange()
     slot.tempo_matched = math.abs(rate - 1) > 0.0005 and true or nil
     if not slot.tempo_matched then slot.tempo_guessed = nil end
     H.save()
+    return true
+end
+
+-- Speed is a multiplier laid over whatever the clip already sits at, not a rate
+-- of its own. A clip stretched to the project tempo keeps that stretch when it
+-- is played at half speed; setting the rate outright would throw it away.
+C.speeds = { 0.25, 0.5, 0.75, 1, 1.5, 2 }
+
+C.new_clip_bars = { 1, 2, 4, 8 }
+
+-- How a clip answers to being played. Toggle is the default because a second
+-- click meaning stop is what everything else does; restart is Ableton's default
+-- and a gesture worth keeping; gate needs the clip gate effect, since letting go
+-- has to be heard now and the timeline is written ahead.
+C.launch_modes = {
+    { key = "toggle",  label = "Click starts, click stops",
+      hint = "A second click stops it on the next bar line" },
+    { key = "restart", label = "Click starts, click restarts",
+      hint = "A second click fires it again from the top" },
+    { key = "gate",    label = "Hold to play",
+      hint = "Plays while the mouse is held and stops the moment it is let go" },
+}
+
+function H.launch_mode_label(key)
+    for _, entry in ipairs(C.launch_modes) do
+        if entry.key == key then return entry.label end
+    end
+    return C.launch_modes[1].label
+end
+
+function H.slot_speed(slot)
+    return slot and slot.speed or 1
+end
+
+function H.set_slot_speed(lane, row, speed)
+    local slot = H.slot(lane, row)
+    local item = slot and H.item_from_guid(slot.guid) or nil
+    local take = item and r.GetActiveTake(item) or nil
+    if not take or not speed or speed <= 0 then return false end
+    local was = H.slot_speed(slot)
+    if math.abs(speed - was) < 0.0005 then return false end
+    local current = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+    if current <= 0 then current = 1 end
+    r.Undo_BeginBlock()
+    H.apply_take_rate(item, take, current * speed / was)
+    r.Undo_EndBlock("Change launcher clip speed", -1)
+    r.UpdateArrange()
+    slot.speed = math.abs(speed - 1) > 0.0005 and speed or nil
+    slot.length, slot.loop_len = nil, nil
+    H.save()
+    L.status = string.format("%s at %gx", slot.name or "Clip", speed)
     return true
 end
 
@@ -2707,6 +2868,11 @@ function H.commit(lane, row, time)
     }
     H.fill_hits(lane, lane.pending, time)
     H.schedule_owner(lane, "launcher", time)
+    -- Anything launched here is meant to be heard, so the gate must be open.
+    -- Releasing a held clip leaves it shut - that is what makes the silence
+    -- immediate - and nothing else would ever open it again, so every later
+    -- clip in that lane would play into a closed door.
+    H.open_gate_for(lane)
     return true
 end
 
@@ -2913,9 +3079,30 @@ function H.launch_time()
     return time, false, false
 end
 
-function H.roll_transport()
-    if (r.GetPlayState() & 1) == 1 then return end
+-- Started from where the clip was put, not from wherever REAPER last left off.
+-- Launching with the transport stopped writes the voice at the edit cursor, but
+-- pressing play does not have to begin there - that depends on a preference -
+-- and when the two disagree the clip sits somewhere the take never reaches.
+function H.roll_transport(at)
+    -- The seek happens whether or not the transport is already rolling. It is
+    -- only ever asked for when the clip was placed at the edit cursor rather
+    -- than at the play position, and then the two must be brought together: a
+    -- clip sitting eighty seconds from the play cursor is never heard and never
+    -- lands in a take. Deciding that from the play state was the mistake - it
+    -- can read stopped one moment and playing the next.
+    local rolling = (r.GetPlayState() & 1) == 1
+    if rolling then
+        if at and r.SetEditCurPos then r.SetEditCurPos(at, false, true) end
+        return
+    end
+    -- The third argument is the one that matters: it seeks the play position,
+    -- not just the edit cursor. Without it REAPER starts wherever it likes -
+    -- usually where it last stopped - and the clip sits somewhere the take
+    -- never reaches. Done again after the play command, because a stopped
+    -- transport has no position to seek until it has one.
+    if at and r.SetEditCurPos then r.SetEditCurPos(at, false, true) end
     if r.OnPlayButton then r.OnPlayButton() else r.Main_OnCommand(1007, 0) end
+    if at and r.SetEditCurPos then r.SetEditCurPos(at, false, true) end
     -- The transport needs a moment to report "playing"; without this grace
     -- period the next update() would read "stopped" and harvest the voice we
     -- just scheduled.
@@ -2946,7 +3133,7 @@ function H.launch(lane, row)
         L.status = "Could not launch that slot"
         return
     end
-    if needs_roll then H.roll_transport() end
+    if needs_roll then H.roll_transport(time) end
     r.UpdateArrange()
     local slot = H.slot(lane, row)
     L.status = "Launched " .. (slot and slot.name or "clip")
@@ -3054,13 +3241,16 @@ function H.launch_scene(row)
         return
     end
     if launched > 0 then H.begin_scene_run(row, time) else L.scene_run = nil end
-    if needs_roll and launched > 0 then H.roll_transport() end
+    if needs_roll and launched > 0 then H.roll_transport(time) end
     r.UpdateArrange()
     L.status = "Scene " .. tostring(row) .. ": " .. tostring(launched) .. " playing"
         .. (stopped > 0 and (", " .. tostring(stopped) .. " stopped") or "")
 end
 
-function H.stop_lane(lane)
+-- Given a time, the lane ends there; given none, on the next bar line. A gate
+-- released mid-bar wants the first: the sound has already stopped, and a voice
+-- left running to the bar line would be kept as part of the take.
+function H.stop_lane(lane, at)
     lane.run = nil
     local now = H.schedule_pos()
     if not now then
@@ -3069,16 +3259,21 @@ function H.stop_lane(lane)
         r.UpdateArrange()
         return
     end
-    local time = H.boundary_after(now, false)
+    local time = at or H.boundary_after(now, false)
     r.PreventUIRefresh(1)
     H.cancel_pending(lane)
+    H.remember_stopped_voice(lane, lane.current, time)
     H.close_voice_at(lane.current, time)
     -- A deliberately muted arrangement stays muted; stopping the clip is not a
     -- request to hand the track back.
     if not lane.hold then H.schedule_owner(lane, "arrangement", time) end
     r.PreventUIRefresh(-1)
     r.UpdateArrange()
-    L.status = lane.hold and "Lane stops on the next boundary" or "Lane returns to the arrangement on the next boundary"
+    if at then
+        L.status = lane.hold and "Lane stopped" or "Lane returned to the arrangement"
+    else
+        L.status = lane.hold and "Lane stops on the next boundary" or "Lane returns to the arrangement on the next boundary"
+    end
 end
 
 function H.stop_all_quantized()
@@ -3181,6 +3376,8 @@ function H.save(quiet)
                 loop = slot.loop and true or false,
                 loop_len = slot.loop_len,
                 tempo_matched = slot.tempo_matched and true or nil,
+                speed = slot.speed or nil,
+                launch_mode = slot.launch_mode or nil,
                 tempo_guessed = slot.tempo_guessed and true or nil,
                 key = slot.key and { root = slot.key.root, mode = slot.key.mode } or nil,
                 key_guessed = slot.key_guessed and true or nil,
@@ -4021,6 +4218,10 @@ function H.slot_export(slot)
         offset = r.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") or 0,
         span = length * rate,
         loop = slot.loop and true or false,
+        -- Carried as its own field: the span above is in source seconds, so the
+        -- next project works out its own tempo stretch and would otherwise lose
+        -- the speed the clip was deliberately set to.
+        speed = slot.speed or nil,
         key = slot.key and { root = slot.key.root, mode = slot.key.mode } or nil,
         repeat_qn = slot.repeat_qn,
         steps = H.steps_to_text(slot.steps),
@@ -4245,9 +4446,18 @@ function H.apply_stored_slot(lane, row, stored)
     slot.plays = tonumber(stored.plays)
     slot.color = tonumber(stored.color)
     slot.gain = tonumber(stored.gain)
+    local speed = tonumber(stored.speed)
     local item = H.item_from_guid(slot.guid)
     local take = item and r.GetActiveTake(item) or nil
     if not take then return end
+    -- After the tempo stretch below, so the two multiply rather than fight.
+    local function set_speed()
+        if not speed or speed <= 0 or math.abs(speed - 1) < 0.0005 then return end
+        local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+        if rate <= 0 then rate = 1 end
+        H.apply_take_rate(item, take, rate * speed)
+        slot.speed = speed
+    end
     local span = tonumber(stored.span)
     if span and span > 0 then
         local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
@@ -4260,6 +4470,7 @@ function H.apply_stored_slot(lane, row, stored)
             r.SetMediaItemInfo_Value(item, "D_LENGTH", math.max(0.05, span / rate))
         end
     end
+    set_speed()
     if slot.name then r.GetSetMediaItemTakeInfo_String(take, "P_NAME", slot.name, true) end
 end
 
@@ -4291,6 +4502,7 @@ function H.import_set(path, create_missing)
     -- Timing belongs to the set, but only where there is nothing to disturb.
     if was_empty then
         L.quantize = tonumber(data.quantize) or L.quantize
+        if L.quantize < 0 and L.quantize ~= -1 then L.quantize = 1 end
         if type(data.follow) == "boolean" then L.follow_enabled = data.follow end
         if type(data.tempo_sync) == "boolean" then L.tempo_sync = data.tempo_sync end
         if type(data.big_cells) == "boolean" then L.big_cells = data.big_cells end
@@ -4805,6 +5017,8 @@ function H.load()
                             loop = slot.loop ~= false,
                             loop_len = tonumber(slot.loop_len),
                             tempo_matched = slot.tempo_matched and true or nil,
+                            speed = tonumber(slot.speed),
+                            launch_mode = slot.launch_mode,
                             tempo_guessed = slot.tempo_guessed and true or nil,
                             key = H.key_from(slot.key),
                             key_guessed = slot.key_guessed and true or nil,
@@ -4955,6 +5169,123 @@ function H.draw_clip_key_menu(lane, row, slot)
     end
 end
 
+-- Opened unless this very lane is being held right now. Cheap: it does nothing
+-- at all on a lane that has no gate, which is nearly all of them.
+function H.open_gate_for(lane)
+    if not lane then return end
+    local held = L.gate_held
+    if held and L.lanes[held.lane] == lane then return end
+    if not H.lane_gate(lane, false) then return end
+    H.set_lane_gate(lane, true)
+end
+-- Holding a clip open. The timeline voice runs on as usual - it has to, it is
+-- already written - and the gate is what you actually hear stop. Closing it and
+-- stopping the lane are two separate things: one is immediate, the other lands
+-- on the next bar line and tidies up.
+function H.gate_press(lane, lane_index, row)
+    local held = L.gate_held
+    if held and (held.lane ~= lane_index or held.row ~= row) then H.gate_release() end
+    L.gate_held = { lane = lane_index, row = row }
+    H.set_lane_gate(lane, true)
+    if not H.slot_is_live(lane, row) then H.launch(lane, row) end
+end
+
+function H.gate_release()
+    local held = L.gate_held
+    if not held then return end
+    L.gate_held = nil
+    local lane = L.lanes[held.lane]
+    if not lane then return end
+    H.set_lane_gate(lane, false)
+    -- Ended where the finger let go, in heard time. Not the scheduling
+    -- position: that runs ahead by the output latency, so it would keep a
+    -- sliver more than was played - and a voice whose bar line has not arrived
+    -- yet lies entirely beyond it, which closing throws away outright. The gate
+    -- has already silenced the sound, so trimming here is not heard.
+    H.stop_lane(lane, H.heard_pos())
+end
+
+-- The release is watched here as well as in the cell. A cell scrolled out of
+-- view is not drawn, and a mouse let go over another window is not the cell's to
+-- notice - either way the sound must stop.
+function H.watch_gate()
+    if not L.gate_held then return end
+    if r.ImGui_IsMouseDown and r.ImGui_IsMouseDown(UI.ctx, 0) then return end
+    H.gate_release()
+end
+-- What a click on a clip that is already going should do. Stopping is the
+-- default because that is what a second click means everywhere else; restarting
+-- is kept as a choice because retriggering a clip on the beat is a gesture of
+-- its own, and Ableton makes it the default for the same reason.
+function H.slot_is_live(lane, row)
+    if lane.pending and lane.pending.row == row then return "pending" end
+    if lane.current and lane.current.row == row and not lane.current.closing then
+        return "playing"
+    end
+    return nil
+end
+
+-- A click on a clip, whatever state it is in.
+function H.click_slot(lane, lane_index, row, slot)
+    local live = H.slot_is_live(lane, row)
+    if live == "pending" then
+        -- Waiting for its bar line and clicked again: take the queue back rather
+        -- than stop a lane that may still be playing something else.
+        H.cancel_pending(lane)
+        L.status = (slot.name or "Clip") .. " no longer queued"
+        return
+    end
+    if live == "playing" and (slot.launch_mode or "toggle") ~= "restart" then
+        H.stop_lane(lane)
+        return
+    end
+    H.launch(lane, row)
+end
+-- A blank MIDI clip to draw into, the way a session view makes one from an
+-- empty slot. Its length follows the scene it lands in, so a grid stays square;
+-- an empty scene falls back to a single bar.
+function H.new_midi_clip(lane, lane_index, row, bars)
+    local track = H.ensure_lane_track(lane)
+    if not track then
+        L.status = "Could not make a lane track for this clip"
+        return false
+    end
+    if not r.CreateNewMIDIItemInProj then
+        L.status = "This REAPER cannot create MIDI items"
+        return false
+    end
+    local position = r.GetCursorPosition() or 0
+    -- Given a number of bars, or left to follow the scene it lands in. Ableton
+    -- makes every new clip one bar and lets you drag the loop brace afterwards;
+    -- until this launcher can do that dragging, choosing up front matters more.
+    local length = H.bars_to_time(position, bars or H.scene_bars(row, position) or 1)
+    if not length or length <= 0 then length = 2 end
+    r.Undo_BeginBlock()
+    local park = H.park_position()
+    local blank = r.CreateNewMIDIItemInProj(track, park, park + length, false)
+    local made = blank and H.assign_slot(lane, row, blank) or false
+    -- The clip is a copy of this one, so the original goes; the same dance the
+    -- recorded takes do.
+    if H.valid_item(blank) then r.DeleteTrackMediaItem(track, blank) end
+    r.Undo_EndBlock("New launcher MIDI clip", -1)
+    r.UpdateArrange()
+    if not made then
+        L.status = "Could not make an empty clip"
+        return false
+    end
+    local slot = H.slot(lane, row)
+    if slot then
+        slot.name = "MIDI"
+        local item = H.item_from_guid(slot.guid)
+        local take = item and r.GetActiveTake(item)
+        if take then r.GetSetMediaItemTakeInfo_String(take, "P_NAME", slot.name, true) end
+    end
+    H.save()
+    -- Opened straight away: an empty clip is only useful once there is
+    -- something in it, and that is the next thing anyone would do.
+    H.edit_slot_midi(lane, row)
+    return true
+end
 function H.slot_context(lane, lane_index, row, slot)
     if not r.ImGui_BeginPopupContextItem(UI.ctx, "##launch_ctx_" .. lane_index .. "_" .. row) then return false end
     if slot then
@@ -4963,16 +5294,26 @@ function H.slot_context(lane, lane_index, row, slot)
         if length_text then
             r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Loops " .. length_text)
         end
+        if slot.trim_failed then
+            r.ImGui_TextColored(UI.ctx, UI.colors.warning or UI.colors.danger, "Loops the whole source: trimming this clip failed")
+        end
         r.ImGui_Separator(UI.ctx)
         if r.ImGui_MenuItem(UI.ctx, "Launch") then H.launch(lane, row) end
         if r.ImGui_MenuItem(UI.ctx, "Stop lane") then H.stop_lane(lane) end
         r.ImGui_Separator(UI.ctx)
-        if r.ImGui_MenuItem(UI.ctx, "Rename...") then H.ask_rename(lane, row) end
-        if r.ImGui_MenuItem(UI.ctx, "Colour...") then
-            L.colour_target = { lane = lane, row = row }
-            L.colour_request = true
+        -- When it plays. The trigger decides what a click does; the rest decide
+        -- what happens once it has started.
+        local mode = slot.launch_mode or "toggle"
+        if r.ImGui_BeginMenu(UI.ctx, "Trigger: " .. H.launch_mode_label(mode)) then
+            for _, entry in ipairs(C.launch_modes) do
+                if r.ImGui_MenuItem(UI.ctx, entry.label, nil, mode == entry.key) then
+                    slot.launch_mode = entry.key ~= "toggle" and entry.key or nil
+                    H.save()
+                end
+                if r.ImGui_IsItemHovered(UI.ctx) then r.ImGui_SetTooltip(UI.ctx, entry.hint) end
+            end
+            r.ImGui_EndMenu(UI.ctx)
         end
-        r.ImGui_Separator(UI.ctx)
         if r.ImGui_MenuItem(UI.ctx, "Loop clip", nil, slot.loop) then
             slot.loop = not slot.loop
             H.save()
@@ -4992,20 +5333,6 @@ function H.slot_context(lane, lane_index, row, slot)
                     slot.plays = times
                     H.save()
                 end
-            end
-            r.ImGui_EndMenu(UI.ctx)
-        end
-        if r.ImGui_BeginMenu(UI.ctx, "Gain") then
-            local db = 20 * math.log(math.max(0.0001, slot.gain or 1), 10)
-            r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(160))
-            local changed, value = r.ImGui_SliderDouble(UI.ctx, "dB##clip_gain", db, -24, 12, "%.1f")
-            if changed then
-                slot.gain = (math.abs(value) < 0.05) and nil or 10 ^ (value / 20)
-                H.save()
-            end
-            if r.ImGui_MenuItem(UI.ctx, "Reset to 0 dB") then
-                slot.gain = nil
-                H.save()
             end
             r.ImGui_EndMenu(UI.ctx)
         end
@@ -5044,8 +5371,31 @@ function H.slot_context(lane, lane_index, row, slot)
             r.ImGui_EndMenu(UI.ctx)
         end
         r.ImGui_Separator(UI.ctx)
-        if slot.trim_failed then
-            r.ImGui_TextColored(UI.ctx, UI.colors.warning or UI.colors.danger, "Loops the whole source: trimming this clip failed")
+        -- How it sounds. Speed and tempo are both the rate it runs at, so they
+        -- sit together instead of three groups apart.
+        if r.ImGui_BeginMenu(UI.ctx, "Gain") then
+            local db = 20 * math.log(math.max(0.0001, slot.gain or 1), 10)
+            r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(160))
+            local changed, value = r.ImGui_SliderDouble(UI.ctx, "dB##clip_gain", db, -24, 12, "%.1f")
+            if changed then
+                slot.gain = (math.abs(value) < 0.05) and nil or 10 ^ (value / 20)
+                H.save()
+            end
+            if r.ImGui_MenuItem(UI.ctx, "Reset to 0 dB") then
+                slot.gain = nil
+                H.save()
+            end
+            r.ImGui_EndMenu(UI.ctx)
+        end
+        local speed = H.slot_speed(slot)
+        if r.ImGui_BeginMenu(UI.ctx, string.format("Speed: %gx", speed)) then
+            for _, value in ipairs(C.speeds) do
+                if r.ImGui_MenuItem(UI.ctx, string.format("%gx", value), nil,
+                        math.abs(value - speed) < 0.0005) then
+                    H.set_slot_speed(lane, row, value)
+                end
+            end
+            r.ImGui_EndMenu(UI.ctx)
         end
         if slot.tempo_matched or slot.sectioned or not slot.is_midi then
             if r.ImGui_BeginMenu(UI.ctx, "Tempo: " .. (slot.tempo_matched and "stretched to the project" or "as recorded")) then
@@ -5068,6 +5418,16 @@ function H.slot_context(lane, lane_index, row, slot)
             end
         end
         r.ImGui_Separator(UI.ctx)
+        if r.ImGui_MenuItem(UI.ctx, "Rename...") then H.ask_rename(lane, row) end
+        if r.ImGui_MenuItem(UI.ctx, "Colour...") then
+            L.colour_target = { lane = lane, row = row }
+            L.colour_request = true
+        end
+        r.ImGui_Separator(UI.ctx)
+        -- What is in the slot: opening it, or putting something else there.
+        if slot.is_midi and r.ImGui_MenuItem(UI.ctx, "Edit in MIDI editor") then
+            H.edit_slot_midi(lane, row)
+        end
         if r.ImGui_MenuItem(UI.ctx, "Replace with selected item") then
             H.assign_from_selection(lane, row)
         end
@@ -5084,8 +5444,27 @@ function H.slot_context(lane, lane_index, row, slot)
             r.UpdateArrange()
         end
     else
+        if H.slot_mark(lane_index, row) then
+            if r.ImGui_MenuItem(UI.ctx, "Cancel recording into this slot") then
+                H.cancel_slot_record(lane_index, row)
+            end
+            r.ImGui_Separator(UI.ctx)
+        end
         if r.ImGui_MenuItem(UI.ctx, "Add selected item(s) here") then H.assign_from_selection(lane, row) end
         if r.ImGui_MenuItem(UI.ctx, "Add file...") then H.pick_file(lane, row) end
+        if r.ImGui_BeginMenu(UI.ctx, "New empty MIDI clip") then
+            for _, bars in ipairs(C.new_clip_bars) do
+                local label = bars == 1 and "1 bar" or (tostring(bars) .. " bars")
+                if r.ImGui_MenuItem(UI.ctx, label) then
+                    H.new_midi_clip(lane, lane_index, row, bars)
+                end
+            end
+            r.ImGui_Separator(UI.ctx)
+            if r.ImGui_MenuItem(UI.ctx, "As long as this scene") then
+                H.new_midi_clip(lane, lane_index, row)
+            end
+            r.ImGui_EndMenu(UI.ctx)
+        end
     end
     r.ImGui_EndPopup(UI.ctx)
     return true
@@ -5248,8 +5627,45 @@ function H.draw_cell(lane, lane_index, row, box_height)
     end
     H.accept_file_drop(lane, row)
 
+    local record_dot = false
     if not slot then
-        if hovered then
+        -- A record ring in every empty slot of an armed track, the way a session
+        -- view shows one. Hit-tested by hand like the badges in a header: the
+        -- cell is one item and its click already means something else.
+        local mark = H.slot_mark(lane_index, row)
+        if mark or H.track_armed(H.target_track(lane)) then
+            local radius = math.min(UI.scaled(7), math.min(width, height) * 0.22)
+            local dot_x, dot_y = x + width * 0.5, y + height * 0.5
+            record_dot = r.ImGui_IsMouseHoveringRect
+                and r.ImGui_IsMouseHoveringRect(UI.ctx, dot_x - radius - UI.scaled(3),
+                    dot_y - radius - UI.scaled(3), dot_x + radius + UI.scaled(3), dot_y + radius + UI.scaled(3))
+            local waiting = mark and not mark.to
+            local ink = UI.colors.danger
+            if not mark then ink = record_dot and UI.colors.danger or H.mix(background, UI.colors.danger, 0.55) end
+            if waiting and blink then ink = H.mix(ink, 0xFFFFFFFF, 0.45) end
+            -- Hollow and blinking while the count-in runs, solid once the take
+            -- is actually being written, so the two states cannot be confused.
+            local counting_in = mark and not mark.to and L.rec_arm and mark.from == L.rec_arm
+            if mark and not counting_in then
+                r.ImGui_DrawList_AddCircleFilled(draw_list, dot_x, dot_y, radius, ink)
+            else
+                r.ImGui_DrawList_AddCircle(draw_list, dot_x, dot_y, radius, ink, 0, UI.scaled(1.6))
+            end
+            if record_dot then
+                local counting = mark and not mark.to and L.rec_arm and mark.from == L.rec_arm
+                local says
+                if counting then
+                    says = "Counting in  |  the take starts on the next bar"
+                elseif waiting then
+                    says = "Recording  |  click again to stop on the nearest bar"
+                elseif mark then
+                    says = "Finishing  |  the clip lands in a moment"
+                else
+                    says = "Record into this slot  |  starts on the next bar"
+                end
+                r.ImGui_SetTooltip(UI.ctx, says)
+            end
+        elseif hovered then
             H.text_centered(draw_list, x + width * 0.5, y + height * 0.5, UI.colors.text_dim, "+")
         end
     else
@@ -5319,11 +5735,31 @@ function H.draw_cell(lane, lane_index, row, box_height)
     -- recognised the clip may already be playing -- with the transport stopped it
     -- starts the moment it is launched. So the two gestures are separated up
     -- front by a held modifier instead of afterwards.
+    -- A gate clip answers to the press, not the release, so it is dealt with
+    -- before the ordinary click gesture gets a look in.
+    if slot and slot.launch_mode == "gate" and not L.alt_down then
+        local pressed = r.ImGui_IsItemActivated and r.ImGui_IsItemActivated(UI.ctx)
+        if pressed then
+            L.cursor.lane, L.cursor.row = lane_index, row
+            H.gate_press(lane, lane_index, row)
+        end
+    end
     if L.alt_down then
         if slot then H.begin_clip_drag(lane, row, slot) end
     elseif r.ImGui_IsItemClicked(UI.ctx, 0) then
         L.cursor.lane, L.cursor.row = lane_index, row
-        if slot then H.launch(lane, row) else H.assign_from_selection(lane, row) end
+        if slot then
+            if slot.launch_mode ~= "gate" then H.click_slot(lane, lane_index, row, slot) end
+        elseif record_dot then
+            local mark = H.slot_mark(lane_index, row)
+            if mark and not mark.to then
+                H.slot_record_stop(lane_index, row)
+            elseif not mark then
+                H.slot_record_start(lane_index, row)
+            end
+        else
+            H.assign_from_selection(lane, row)
+        end
     end
     H.slot_context(lane, lane_index, row, slot)
     if hovered and slot then
@@ -5449,13 +5885,23 @@ end
 -- scale. Clamped at both ends - a track collapsed to nothing would leave a row
 -- with no room for a clip in it, and a very tall one would push the rest of the
 -- grid off screen.
+-- How much room a track takes in the track panel, envelope lanes included.
+-- REAPER reports two heights: one of I_TCPH and I_WNDH counts the envelope
+-- lanes shown under a track and the other does not. Rather than trust which is
+-- which, the taller wins - with no envelopes showing the two are equal and
+-- nothing changes.
 function H.lane_row_height(lane)
     if not L.lane_track_height then return H.cell_height() end
     local track = H.target_track(lane)
     if not track then return H.cell_height() end
-    local height = r.GetMediaTrackInfo_Value(track, "I_TCPH") or 0
+    local height = math.max(r.GetMediaTrackInfo_Value(track, "I_TCPH") or 0,
+        r.GetMediaTrackInfo_Value(track, "I_WNDH") or 0)
     if height <= 0 then return H.cell_height() end
     return math.max(UI.rounded(22), math.min(height, UI.rounded(400)))
+end
+function H.lane_draw_height(target)
+    if not L.lane_track_height then return target end
+    return math.max(UI.rounded(18), target - (L.row_overhead or 0))
 end
 
 -- What a table row costs on top of the cell drawn inside it. Measured rather
@@ -5471,14 +5917,6 @@ function H.note_row_pitch(y, drawn)
         end
     end
     L.last_row_y, L.last_row_height = y, drawn
-end
-
--- The height to draw a cell at so that the row it sits in ends up the height the
--- track is. Only while following the track: everywhere else the cell height is
--- the answer and there is nothing to line up with.
-function H.lane_draw_height(target)
-    if not L.lane_track_height then return target end
-    return math.max(UI.rounded(18), target - (L.row_overhead or 0))
 end
 
 --------------------------------------------------------------------------------
@@ -5515,6 +5953,24 @@ function H.chrome_label(value)
     return C.chrome_states[1].label
 end
 
+-- Opened out in the grid's own window, for the same reason the chrome menu is:
+-- a popup asked for from inside the table gets an id the grid cannot match.
+function H.draw_fx_popup()
+    if L.fx_request then
+        r.ImGui_OpenPopup(UI.ctx, "##launch_fx")
+        L.fx_lane = L.fx_request
+        L.fx_request = nil
+    end
+    if not r.ImGui_BeginPopup(UI.ctx, "##launch_fx") then return end
+    local lane = L.lanes[L.fx_lane or 0]
+    local track = lane and H.target_track(lane)
+    if track then
+        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, H.lane_label(lane))
+        r.ImGui_Separator(UI.ctx)
+        H.draw_fx_menu(track)
+    end
+    r.ImGui_EndPopup(UI.ctx)
+end
 -- Opened out in the grid's own window; see the caret in the corner.
 function H.draw_chrome_popup()
     if L.chrome_request then
@@ -5887,6 +6343,277 @@ function H.draw_grid_corner(box_width, box_height)
     end
 end
 
+-- The FX folders TK FX Browser keeps, read straight from its own file so there
+-- is no second list to maintain. Derived from where this module sits rather
+-- than from a folder name, and read once: the browser's folders do not change
+-- while a session runs.
+function H.fx_folder_file()
+    local here = debug.getinfo(1, "S").source:match("@?(.*[\\/])")
+    if not here then return nil end
+    -- .../TK Scripts/Media/TK_PROJECT_CLIPS/ -> .../TK Scripts/
+    local root = here:match("^(.*[\\/])[^\\/]+[\\/][^\\/]+[\\/]$")
+    if not root then return nil end
+    return root .. "FX" .. C.sep .. "custom_folders.json"
+end
+
+function H.fx_folders()
+    if L.fx_folders ~= nil then return L.fx_folders end
+    L.fx_folders = false
+    local path = H.fx_folder_file()
+    if not path then return false end
+    local file = io.open(path, "r")
+    if not file then return false end
+    local content = file:read("*a")
+    file:close()
+    local ok, data = pcall(UI.json.decode, content)
+    if not ok or type(data) ~= "table" then return false end
+    -- Sorted by key, which is what the numbered prefixes in those names are for.
+    local names = {}
+    for name in pairs(data) do names[#names + 1] = name end
+    if #names == 0 then return false end
+    table.sort(names)
+    L.fx_folders = { data = data, order = names }
+    return L.fx_folders
+end
+
+-- The plugin list Sexan's FX Browser Parser builds, which is the same list TK
+-- FX Browser and the Workbench racks use. Read rather than rebuilt: working it
+-- out from the installed names gives a Developer list full of JSFX suffixes
+-- like "12ch" and no Category at all, because REAPER hands neither to a script.
+function H.fx_source()
+    if L.fx_source ~= nil then return L.fx_source end
+    L.fx_source = false
+    local path = r.GetResourcePath() .. C.sep .. "Scripts" .. C.sep .. "Sexan_Scripts"
+        .. C.sep .. "FX" .. C.sep .. "Sexan_FX_Browser_ParserV7.lua"
+    local probe = io.open(path, "r")
+    if not probe then return false end
+    probe:close()
+    if not pcall(dofile, path) then return false end
+    if type(ReadFXFile) ~= "function" then return false end
+    local ok, plugins, categories = pcall(ReadFXFile)
+    if not ok or type(categories) ~= "table" then return false end
+    -- The parser hands back its own headings; only these four are of use here.
+    local wanted = { ["CATEGORY"] = "category", ["DEVELOPER"] = "developer",
+        ["FOLDERS"] = "folders", ["ALL PLUGINS"] = "all" }
+    local groups = {}
+    for _, category in ipairs(categories) do
+        local kind = wanted[tostring(category and category.name or ""):upper()]
+        if kind and type(category.list) == "table" then
+            local bucket = {}
+            for _, entry in ipairs(category.list) do
+                local label = tostring(entry and entry.name or "")
+                local list = type(entry and entry.fx) == "table" and entry.fx or {}
+                if label ~= "" and #list > 0 then
+                    bucket[#bucket + 1] = { label = label, plugins = list }
+                end
+            end
+            table.sort(bucket, function(a, b) return a.label:lower() < b.label:lower() end)
+            groups[kind] = bucket
+        end
+    end
+    if not next(groups) then return false end
+    L.fx_source = { groups = groups, plugins = type(plugins) == "table" and plugins or {} }
+    return L.fx_source
+end
+-- Favourites and recents live in TK FX Browser's own folder, next to the
+-- custom folders we already read, so this is the dependency we already have
+-- rather than a new one on any single script.
+function H.fx_user_list(file)
+    local base = H.fx_folder_file()
+    if not base then return nil end
+    local path = base:gsub("custom_folders%.json$", file)
+    local handle = io.open(path, "r")
+    if not handle then return nil end
+    local names = {}
+    for line in handle:lines() do
+        local name = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" then names[#names + 1] = name end
+    end
+    handle:close()
+    if #names == 0 then return nil end
+    return names
+end
+
+-- Our own recents, so the list still works for someone without the browser and
+-- reflects what was added from here. Merged in front of the shared one.
+function H.recent_fx()
+    local mine = {}
+    for name in (r.GetExtState(C.ext_section, "fx_recent") or ""):gmatch("[^\n]+") do
+        if name ~= "" then mine[#mine + 1] = name end
+    end
+    local seen = {}
+    for _, name in ipairs(mine) do seen[name] = true end
+    for _, name in ipairs(H.fx_user_list("recent_plugins.txt") or {}) do
+        if not seen[name] then mine[#mine + 1] = name seen[name] = true end
+    end
+    return mine
+end
+
+function H.note_recent_fx(name)
+    local kept = { name }
+    for line in (r.GetExtState(C.ext_section, "fx_recent") or ""):gmatch("[^\n]+") do
+        if line ~= "" and line ~= name and #kept < 20 then kept[#kept + 1] = line end
+    end
+    r.SetExtState(C.ext_section, "fx_recent", table.concat(kept, "\n"), true)
+end
+
+-- REAPER's own chain folder, walked once. Nothing else owns these.
+function H.fx_chains()
+    if L.fx_chains ~= nil then return L.fx_chains end
+    L.fx_chains = false
+    local root = r.GetResourcePath() .. C.sep .. "FXChains"
+    local found = {}
+    local function walk(folder, prefix)
+        local index = 0
+        while true do
+            local name = r.EnumerateFiles and r.EnumerateFiles(folder, index)
+            if not name then break end
+            if name:lower():sub(-9) == ".rfxchain" then
+                found[#found + 1] = prefix .. name
+            end
+            index = index + 1
+        end
+        index = 0
+        while true do
+            local name = r.EnumerateSubdirectories and r.EnumerateSubdirectories(folder, index)
+            if not name then break end
+            walk(folder .. C.sep .. name, prefix .. name .. "/")
+            index = index + 1
+        end
+    end
+    walk(root, "")
+    if #found == 0 then return false end
+    table.sort(found, function(a, b) return a:lower() < b:lower() end)
+    L.fx_chains = found
+    return found
+end
+
+-- A chain is added by its name like any other FX; REAPER wants the bare file
+-- name when the path with folders does not take.
+function H.add_fx_chain(track, relative)
+    if not track or not relative then return end
+    r.Undo_BeginBlock()
+    local index = r.TrackFX_AddByName(track, relative, false, -1)
+    if index < 0 then
+        local bare = relative:match("([^/\\]+)$")
+        if bare and bare ~= relative then index = r.TrackFX_AddByName(track, bare, false, -1) end
+    end
+    r.Undo_EndBlock("Add FX chain", -1)
+    L.status = index >= 0 and ("Added " .. relative) or ("Could not add " .. relative)
+end
+function H.add_fx(track, name)
+    if not track or not name or name == "" then return end
+    r.Undo_BeginBlock()
+    local index = r.TrackFX_AddByName(track, name, false, -1)
+    r.Undo_EndBlock("Add FX", -1)
+    if index and index >= 0 then
+        H.note_recent_fx(name)
+        L.status = "Added " .. name
+        r.TrackFX_Show(track, index, 3)
+    else
+        L.status = "Could not add " .. name
+    end
+end
+
+function H.open_fx_chain(track)
+    if not track then return end
+    r.TrackFX_Show(track, 0, 1)
+end
+
+-- One folder and everything under it. Recursive, because the browser's folders
+-- nest a few levels deep.
+function H.draw_fx_folder(track, node, key)
+    local plugins = node.plugins
+    if type(plugins) == "table" then
+        for index, name in ipairs(plugins) do
+            if r.ImGui_MenuItem(UI.ctx, name .. "##fx" .. key .. index) then H.add_fx(track, name) end
+        end
+    end
+    local subfolders = node.subfolders
+    if type(subfolders) ~= "table" then return end
+    local names = {}
+    for name in pairs(subfolders) do names[#names + 1] = name end
+    table.sort(names)
+    for index, name in ipairs(names) do
+        if r.ImGui_BeginMenu(UI.ctx, name .. "##sub" .. key .. index) then
+            H.draw_fx_folder(track, subfolders[name], key .. "_" .. index)
+            r.ImGui_EndMenu(UI.ctx)
+        end
+    end
+end
+
+-- A plain list of plugins as menu entries.
+function H.draw_fx_list(track, names, key)
+    for index, name in ipairs(names) do
+        if r.ImGui_MenuItem(UI.ctx, tostring(name) .. "##" .. key .. index) then
+            H.add_fx(track, tostring(name))
+        end
+    end
+end
+
+function H.draw_fx_group(track, bucket, key)
+    for index, entry in ipairs(bucket) do
+        if r.ImGui_BeginMenu(UI.ctx, entry.label .. "##" .. key .. index) then
+            H.draw_fx_list(track, entry.plugins, key .. index .. "_")
+            r.ImGui_EndMenu(UI.ctx)
+        end
+    end
+end
+
+-- Your own folders first, then the parser's four headings in the order the FX
+-- browser shows them, then the way out to the chain.
+function H.draw_fx_menu(track)
+    local mine = H.fx_folders()
+    if mine then
+        for index, name in ipairs(mine.order) do
+            if r.ImGui_BeginMenu(UI.ctx, name .. "##top" .. index) then
+                H.draw_fx_folder(track, mine.data[name], tostring(index))
+                r.ImGui_EndMenu(UI.ctx)
+            end
+        end
+        r.ImGui_Separator(UI.ctx)
+    end
+    local quick = {
+        { "Favorites", H.fx_user_list("favorite_plugins.txt") },
+        { "Recent", H.recent_fx() },
+    }
+    local shown = false
+    for _, entry in ipairs(quick) do
+        local names = entry[2]
+        if names and #names > 0 then
+            shown = true
+            if r.ImGui_BeginMenu(UI.ctx, entry[1]) then
+                H.draw_fx_list(track, names, entry[1])
+                r.ImGui_EndMenu(UI.ctx)
+            end
+        end
+    end
+    local chains = H.fx_chains()
+    if chains and r.ImGui_BeginMenu(UI.ctx, "FX chains") then
+        shown = true
+        for index, relative in ipairs(chains) do
+            local label = relative:gsub("%.RfxChain$", ""):gsub("%.rfxchain$", "")
+            if r.ImGui_MenuItem(UI.ctx, label .. "##chain" .. index) then
+                H.add_fx_chain(track, relative)
+            end
+        end
+        r.ImGui_EndMenu(UI.ctx)
+    end
+    if shown then r.ImGui_Separator(UI.ctx) end
+    local source = H.fx_source()
+    if source then
+        for _, heading in ipairs({ { "Category", "category" }, { "Developer", "developer" },
+                { "Folders", "folders" }, { "All plugins", "all" } }) do
+            local bucket = source.groups[heading[2]]
+            if bucket and #bucket > 0 and r.ImGui_BeginMenu(UI.ctx, heading[1]) then
+                H.draw_fx_group(track, bucket, heading[2])
+                r.ImGui_EndMenu(UI.ctx)
+            end
+        end
+        r.ImGui_Separator(UI.ctx)
+    end
+    if r.ImGui_MenuItem(UI.ctx, "Open FX chain...") then H.open_fx_chain(track) end
+end
 -- Solo reads and writes REAPER's own field rather than a copy of our own, so
 -- the header agrees with the track panel however the solo got there.
 function H.lane_soloed(lane)
@@ -6062,16 +6789,17 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
     local top_h = height - strip
     r.ImGui_DrawList_AddText(draw_list, x + UI.scaled(10),
         math.floor(y + (top_h - label_height) * 0.5 + 0.5), label_color,
-        H.truncate(H.lane_label(lane), width - UI.scaled(76)))
+        H.truncate(H.lane_label(lane), width - UI.scaled(80)))
 
     -- The two little squares at the right of a header. Drawn on top of the
     -- header button rather than as widgets of their own, so the header keeps a
     -- single ImGui id and the clicks stay ours to sort out.
     local badge = UI.rounded(16)
     local badge_y = math.floor(y + (top_h - badge) * 0.5 + 0.5)
-    local function draw_badge(right_inset, glyph, active, active_bg, tip, on_click)
-        local bx = math.floor(x + width - UI.scaled(right_inset) + 0.5)
-        local over = r.ImGui_IsMouseHoveringRect(UI.ctx, bx, badge_y, bx + badge, badge_y + badge)
+    -- One drawer for every square in a header, so the rule that decides black
+    -- or white text cannot drift apart between them.
+    local function draw_badge_at(bx, by, glyph, active, active_bg, tip, on_click)
+        local over = r.ImGui_IsMouseHoveringRect(UI.ctx, bx, by, bx + badge, by + badge)
         -- On a tinted header a badge cannot borrow the theme's dark tile: on a
         -- dark track colour it would vanish into it. It is lifted off the
         -- background it actually sits on, and its glyph read back off that.
@@ -6083,24 +6811,41 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
         else
             bg = over and UI.colors.card_hover or UI.colors.child_bg
         end
-        r.ImGui_DrawList_AddRectFilled(draw_list, bx, badge_y, bx + badge, badge_y + badge, bg, UI.scaled(3))
+        r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + badge, by + badge, bg, UI.scaled(3))
         local edge = over and UI.colors.accent or (tinted and H.mix(background, ink, 0.45) or UI.colors.border)
-        r.ImGui_DrawList_AddRect(draw_list, bx, badge_y, bx + badge, badge_y + badge, edge, UI.scaled(3), 0, UI.scaled(1))
+        r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + badge, by + badge, edge, UI.scaled(3), 0, UI.scaled(1))
         local glyph_ink = active and UI.colors.badge_text or (tinted and H.readable_on(bg) or UI.colors.text_dim)
-        H.text_centered(draw_list, bx + badge * 0.5, badge_y + badge * 0.5, glyph_ink, glyph)
+        local mid_x, mid_y = bx + badge * 0.5, by + badge * 0.5
+        if glyph == "stop" then
+            -- A square rather than a letter, but the same box and the same ink.
+            local half = badge * 0.28
+            r.ImGui_DrawList_AddRectFilled(draw_list, mid_x - half, mid_y - half, mid_x + half, mid_y + half, glyph_ink)
+        else
+            -- Nudged up a pixel. Centring puts the middle of the line box on
+            -- the middle of the badge, but a capital has no descender, so its
+            -- ink does not fill that box evenly and reads as sitting low.
+            -- One number, here, if it ever wants adjusting.
+            H.text_centered(draw_list, mid_x, mid_y, glyph_ink, glyph, -UI.scaled(1))
+        end
         if over and r.ImGui_IsMouseClicked(UI.ctx, 0) then on_click() end
         if over then r.ImGui_SetTooltip(UI.ctx, tip) end
         return over
     end
 
+    local function draw_badge(right_inset, glyph, active, active_bg, tip, on_click)
+        return draw_badge_at(math.floor(x + width - UI.scaled(right_inset) + 0.5), badge_y,
+            glyph, active, active_bg, tip, on_click)
+    end
+
+    local track_for_fx = H.target_track(lane)
     local silenced = H.lane_silenced(lane)
-    local badge_hovered = draw_badge(44, "A", silenced, UI.colors.danger,
+    local badge_hovered = draw_badge(46, "A", silenced, UI.colors.danger,
         silenced and "This track's arrangement is muted, clips still play\nClick to let the arrangement through"
             or "Mute this track's arrangement, keep its clips audible",
         function() H.toggle_lane_arrangement(lane) end)
 
     local soloed = H.lane_soloed(lane)
-    local solo_hovered = draw_badge(64, "S", soloed, UI.colors.accent,
+    local solo_hovered = draw_badge(68, "S", soloed, UI.colors.accent,
         soloed and "Soloed  |  click to release" or "Solo this track",
         function() H.toggle_lane_solo(lane) end)
     badge_hovered = badge_hovered or solo_hovered
@@ -6111,21 +6856,36 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
         local text_width, text_height = r.ImGui_CalcTextSize(UI.ctx, text)
         local count_ink = count > 0 and UI.colors.accent or UI.colors.text_dim
         if tinted then count_ink = count > 0 and ink or H.mix(background, ink, 0.72) end
-        r.ImGui_DrawList_AddText(draw_list, x + width - UI.scaled(82) - text_width,
+        r.ImGui_DrawList_AddText(draw_list, x + width - UI.scaled(86) - text_width,
             math.floor(y + (top_h - text_height) * 0.5 + 0.5), count_ink, text)
     end
 
-    local stop_x = x + width - UI.scaled(15)
-    local stop_y = y + top_h * 0.5
-    local stop_size = UI.scaled(4)
-    local stop_ink = owned and UI.colors.danger or UI.colors.text_dim
-    if tinted and not owned then stop_ink = H.mix(background, ink, 0.72) end
-    r.ImGui_DrawList_AddRectFilled(draw_list, stop_x - stop_size, stop_y - stop_size, stop_x + stop_size, stop_y + stop_size, stop_ink)
+    local stop_hovered = draw_badge(24, "stop", owned, UI.colors.danger,
+        owned and "The launcher owns this track  |  click to hand it back"
+            or "Stop this lane",
+        function() H.stop_lane(lane) end)
+    badge_hovered = badge_hovered or stop_hovered
     local on_fader = false
     if strip > 0 then
-        on_fader = H.draw_lane_volume(lane, lane_index, x + UI.scaled(6),
-            math.floor(y + top_h + strip * 0.5 + 0.5), width - UI.scaled(12),
-            background, ink, tinted)
+        local mid = math.floor(y + top_h + strip * 0.5 + 0.5)
+        local box = UI.rounded(16)
+        local fx_x = math.floor(x + width - UI.scaled(6) - box + 0.5)
+        local fx_y = math.floor(mid - box * 0.5 + 0.5)
+        on_fader = H.draw_lane_volume(lane, lane_index, x + UI.scaled(6), mid,
+            width - UI.scaled(18) - box, background, ink, tinted)
+        -- The picker sits beside the fader rather than on the row above: the
+        -- name, the solo, the arrangement badge and the stop square already
+        -- have that row full.
+        local count = track_for_fx and r.TrackFX_GetCount(track_for_fx) or 0
+        local over_fx = draw_badge_at(fx_x, fx_y, count > 0 and tostring(count) or "fx",
+            false, nil,
+            count > 0 and (tostring(count) .. " FX on this track  |  right click for the chain")
+                or "Add FX  |  right click for the chain",
+            function() L.fx_request = lane_index end)
+        if over_fx then
+            on_fader = true
+            if r.ImGui_IsMouseClicked(UI.ctx, 1) then H.open_fx_chain(track_for_fx) end
+        end
     end
     if not badge_hovered and not on_fader and r.ImGui_IsItemClicked(UI.ctx, 0) then
         H.stop_lane(lane)
@@ -6146,6 +6906,10 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
         end
         local track = H.target_track(lane)
         local at_unity = not track or math.abs((r.GetMediaTrackInfo_Value(track, "D_VOL") or 1) - 1) < 0.0005
+        if r.ImGui_BeginMenu(UI.ctx, "Add FX") then
+            H.draw_fx_menu(track)
+            r.ImGui_EndMenu(UI.ctx)
+        end
         if r.ImGui_MenuItem(UI.ctx, "Reset volume to 0 dB", nil, false, not at_unity) then
             H.reset_lane_volume(lane)
         end
@@ -6178,6 +6942,563 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
 end
 
 --------------------------------------------------------------------------------
+-- the clip gate
+--------------------------------------------------------------------------------
+-- A voice is written onto the timeline about a second and a half ahead of the
+-- play cursor, so letting go of a key cannot stop it there - the audio is
+-- already buffered. An effect in the signal path can, because it works on the
+-- sound as it passes. This is that effect: carried as text, written into
+-- REAPER's own Effects folder the first time a lane needs one.
+--
+-- It goes on the hidden lane track, before the send that feeds the real track.
+-- Not on the TK LAUNCHER folder: lane tracks have their main send off and reach
+-- their target through an explicit send, so no audio passes through the folder.
+C.gate_file = "TK_Clip_Gate.jsfx"
+C.gate_name = "TK Clip Gate"
+C.gate_mark = "TK_CLIP_GATE_VERSION:3"
+C.gate_source = [==[
+desc:TK Clip Gate
+// TK_CLIP_GATE_VERSION:3
+// Carried by TK Project Clips and written into REAPER's Effects folder when a
+// lane first needs one. It does one thing: open or shut. The launcher owns the
+// slider; nothing here is meant to be reached for by hand.
+
+slider1:open=1<0,1,1>-Open
+
+@init
+gain = 1;
+target = 1;
+// Five milliseconds: long enough to lose the click, short enough to feel
+// immediate under a finger.
+ramp = 1 / max(1, srate * 0.005);
+// One slot per note per channel, to remember what was let through. Shutting the
+// gate has to send a note off for each of them, or the instrument downstream
+// holds that note for ever - it never hears the clip stop.
+held = 0;
+memset(held, 0, 16 * 128);
+was_open = 1;
+
+@slider
+target = open;
+
+@block
+opened = target >= 0.5;
+while (midirecv(offs, msg1, msg2, msg3)) (
+  status = msg1 & 0xF0;
+  chan = msg1 & 0x0F;
+  status == 0x90 && msg3 > 0 ? (
+    // A note on only passes while the gate is open, and is remembered so it can
+    // be turned off again.
+    opened ? ( held[chan * 128 + msg2] = 1; midisend(offs, msg1, msg2, msg3); );
+  ) : (status == 0x80 || (status == 0x90 && msg3 == 0)) ? (
+    // A note off always passes: swallowing one is how notes get stuck.
+    held[chan * 128 + msg2] = 0;
+    midisend(offs, msg1, msg2, msg3);
+  ) : (
+    opened ? midisend(offs, msg1, msg2, msg3);
+  );
+);
+was_open && !opened ? (
+  // Everything that was let through, turned off by name.
+  i = 0;
+  loop(16 * 128,
+    held[i] ? (
+      midisend(0, 0x80 + floor(i / 128), i - floor(i / 128) * 128, 0);
+      held[i] = 0;
+    );
+    i += 1;
+  );
+  // And then the blunt instrument, on every channel: all notes off, all sound
+  // off. The list above can only turn off what it saw, and a note that reached
+  // the instrument another way - running status, a channel that was already
+  // sounding, a note this effect was added underneath - would hang for ever.
+  // Two controllers cost nothing and there is no polite way to leave a note on.
+  ch = 0;
+  loop(16,
+    midisend(0, 0xB0 + ch, 123, 0);
+    midisend(0, 0xB0 + ch, 120, 0);
+    ch += 1;
+  );
+);
+was_open = opened;
+
+@sample
+gain < target ? gain = min(target, gain + ramp) : gain = max(target, gain - ramp);
+i = 0;
+while (i < num_ch) (
+  spl(i) *= gain;
+  i += 1;
+);
+]==]
+
+function H.install_gate()
+    if L.gate_installed then return true end
+    local path = r.GetResourcePath() .. C.sep .. "Effects" .. C.sep .. C.gate_file
+    local existing = io.open(path, "rb")
+    if existing then
+        local body = existing:read("*a") or ""
+        existing:close()
+        -- Rewritten only when the version marker has moved on, so a user who
+        -- has been poking at it keeps their copy until it actually matters.
+        if body:find(C.gate_mark, 1, true) then
+            L.gate_installed = true
+            return true
+        end
+    end
+    local file = io.open(path, "wb")
+    if not file then return false end
+    file:write(C.gate_source)
+    file:close()
+    L.gate_installed = true
+    return true
+end
+
+-- The gate on a lane, if it has one. Found by name rather than remembered, so
+-- deleting it by hand in the FX chain is survivable.
+function H.lane_gate(lane, create)
+    local track = lane and H.lane_track(lane)
+    if not track then return nil end
+    for index = 0, (r.TrackFX_GetCount(track) or 0) - 1 do
+        local ok, name = r.TrackFX_GetFXName(track, index, "")
+        if ok and name and name:find(C.gate_name, 1, true) then return index, track end
+    end
+    if not create then return nil end
+    if not H.install_gate() then return nil end
+    local index = r.TrackFX_AddByName(track, C.gate_file, false, -1)
+    if index < 0 then index = r.TrackFX_AddByName(track, C.gate_name, false, -1) end
+    if index < 0 then return nil end
+    return index, track
+end
+
+function H.set_lane_gate(lane, open)
+    local index, track = H.lane_gate(lane, true)
+    if not index then return false end
+    r.TrackFX_SetParam(track, index, 0, open and 1 or 0)
+    return true
+end
+
+-- Whether any clip in this lane asks for one.
+function H.lane_wants_gate(lane)
+    for _, slot in ipairs(lane.slots or {}) do
+        if slot.launch_mode == "gate" then return true end
+    end
+    return false
+end
+
+-- Added where it is wanted and taken away where it is not, the same way the
+-- hidden track itself comes and goes. Walked a few times a second, not every
+-- frame: it reads every effect on every lane.
+function H.sync_lane_gates()
+    local now = r.time_precise()
+    if L.gate_checked and now - L.gate_checked < 0.5 then return end
+    L.gate_checked = now
+    for _, lane in ipairs(L.lanes) do
+        local wanted = H.lane_wants_gate(lane)
+        local index, track = H.lane_gate(lane, false)
+        if wanted and not index then
+            -- Opened as it arrives. The default is open, but a chain restored
+            -- from the project can bring back whatever it was left on.
+            if H.lane_gate(lane, true) then H.set_lane_gate(lane, true) end
+        elseif index and not wanted then
+            r.TrackFX_Delete(track, index)
+        elseif index then
+            -- A gate left shut by a release that nothing followed. Opening it
+            -- here catches whatever the launch path missed.
+            local held = L.gate_held
+            if not (held and L.lanes[held.lane] == lane) then H.set_lane_gate(lane, true) end
+        end
+    end
+end
+--------------------------------------------------------------------------------
+-- recording into a slot
+--------------------------------------------------------------------------------
+-- Playing a part straight into an empty slot, the way a session view does. What
+-- REAPER cannot do is hand a script the audio while it is still being written,
+-- so a slot does not fill the moment you stop it: the bars are marked while the
+-- transport rolls and every marked slot is cut out of the take once recording
+-- stops. One pass can therefore fill several slots across several lanes.
+
+-- The line a recording starts or stops on: always the next one, never the one
+-- being stood on. Two reasons it is not H.boundary_after. That one may return
+-- the current line, which would start the take under your fingers instead of
+-- giving you the bar you asked for; and it adds the media buffer lead, which a
+-- clip needs because it is written ahead of the play cursor, while a recording
+-- is written behind it and needs none. With the lead in, clicking shortly
+-- before a line would silently cost you a whole extra bar.
+function H.record_boundary(from_time)
+    local index = H.grid_index(from_time)
+    if not index then return from_time end
+    return H.grid_time(from_time, math.floor(index) + 1)
+end
+-- Editing a clip's notes without going looking for the lane track it lives on.
+-- Opening the editor is a REAPER action, and an action will not touch an item
+-- on a track it cannot see, so the lane is shown for as long as the editor is
+-- open and hidden again the moment it closes. Hiding it straight away would
+-- risk taking the editor down with it.
+function H.edit_slot_midi(lane, row)
+    local slot = H.slot(lane, row)
+    local item = slot and H.item_from_guid(slot.guid)
+    if not item then
+        L.status = "That clip is not in the project any more"
+        return
+    end
+    local track = r.GetMediaItemTrack(item)
+    local hidden = track and (r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") or 0) < 0.5
+    if hidden then
+        r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
+        r.TrackList_AdjustWindows(false)
+    end
+    local kept = {}
+    for index = 0, r.CountSelectedMediaItems(0) - 1 do
+        kept[#kept + 1] = r.GetSelectedMediaItem(0, index)
+    end
+    r.SelectAllMediaItems(0, false)
+    r.SetMediaItemSelected(item, true)
+    -- Item: Open in built-in MIDI editor
+    r.Main_OnCommand(40153, 0)
+    r.SelectAllMediaItems(0, false)
+    for _, previous in ipairs(kept) do
+        if H.valid_item(previous) then r.SetMediaItemSelected(previous, true) end
+    end
+    if hidden then L.midi_edit = { track = track } end
+    L.status = "Editing " .. (slot.name or "clip")
+end
+
+-- The lane goes back into hiding once the editor is gone. Watched rather than
+-- hooked, the same as the transport: nothing tells a script the window closed.
+function H.watch_midi_editor()
+    local watching = L.midi_edit
+    if not watching then return end
+    if r.MIDIEditor_GetActive and r.MIDIEditor_GetActive() then return end
+    if H.valid_track(watching.track) then
+        r.SetMediaTrackInfo_Value(watching.track, "B_SHOWINTCP", 0)
+        r.TrackList_AdjustWindows(false)
+    end
+    L.midi_edit = nil
+end
+-- Where a recording ends: the nearest line, not the next one. Stopping is a
+-- reaction, so the click lands a moment after the bar you meant to be your
+-- last. Always rounding forward then hands you that whole next bar, empty. In
+-- the first half of a bar the line just passed is meant; in the second half the
+-- bar being played is.
+function H.record_stop_boundary(from_time)
+    local index = H.grid_index(from_time)
+    if not index then return from_time end
+    return H.grid_time(from_time, math.floor(index + 0.5))
+end
+function H.track_armed(track)
+    if not track then return false end
+    return (r.GetMediaTrackInfo_Value(track, "I_RECARM") or 0) > 0.5
+end
+
+function H.slot_mark(lane_index, row)
+    for _, mark in ipairs(L.slot_rec or {}) do
+        if mark.lane == lane_index and mark.row == row then return mark end
+    end
+    return nil
+end
+
+function H.lane_recording(lane_index)
+    for _, mark in ipairs(L.slot_rec or {}) do
+        if mark.lane == lane_index and not mark.to then return mark end
+    end
+    return nil
+end
+
+
+-- REAPER's transport, as actions. Named here because they are the one place
+-- this feature reaches out and moves the transport.
+C.record_action = 1013
+C.play_action = 1007
+
+-- One button does the lot, the way a session view works: this marks the bar the
+-- take begins on, gets the transport rolling, and punches in when that bar
+-- arrives. Recording is not started on the click itself - that would give you
+-- no run-up at all, which is the whole point of a launch quantize.
+function H.slot_record_start(lane_index, row)
+    local lane = L.lanes[lane_index]
+    local track = lane and H.target_track(lane)
+    if not track then return false end
+    if not H.track_armed(track) then
+        L.status = "Arm " .. H.lane_label(lane) .. " in REAPER first"
+        return false
+    end
+    local recording = (r.GetPlayState() & 4) == 4
+    local playing = (r.GetPlayState() & 1) == 1
+    if not playing then r.Main_OnCommand(C.play_action, 0) end
+    -- One lane records one thing at a time; a second slot closes the first.
+    local running = H.lane_recording(lane_index)
+    local now = playing and H.schedule_pos() or r.GetCursorPosition()
+    local at = now and H.record_boundary(now) or nil
+    -- A lane handing over to another slot ends where the new one begins, so the
+    -- two meet on the line with no gap and no overlap.
+    if running then running.to = at end
+    if not recording then L.rec_arm = at end
+    L.slot_rec = L.slot_rec or {}
+    L.slot_rec[#L.slot_rec + 1] = { lane = lane_index, row = row, from = at, track = track }
+    L.status = at and ("Recording into " .. H.lane_label(lane) .. " from the next bar")
+        or ("Recording into " .. H.lane_label(lane))
+    return true
+end
+
+-- Punched in a hair before the line rather than on it: REAPER takes a moment to
+-- open the file, and the clip is cut to the line afterwards anyway, so a little
+-- extra in front of it costs nothing while a little missing would.
+function H.punch_in_when_due()
+    if not L.rec_arm then return end
+    if (r.GetPlayState() & 4) == 4 then L.rec_arm = nil return end
+    local now = H.schedule_pos()
+    if not now then return end
+    if now >= L.rec_arm - 0.05 then
+        r.Main_OnCommand(C.record_action, 0)
+        L.rec_arm = nil
+    end
+end
+function H.slot_record_stop(lane_index, row)
+    local mark = row and H.slot_mark(lane_index, row) or H.lane_recording(lane_index)
+    if not mark or mark.to then return false end
+    local now = H.schedule_pos()
+    -- Never before it began; a stop that early leaves nothing, and the harvest
+    -- drops it as empty rather than making a clip of no length.
+    local at = now and H.record_stop_boundary(now) or mark.from
+    mark.to = math.max(at, mark.from or at)
+    return true
+end
+
+-- A mark that never reached its own start line has nothing in it.
+function H.drop_empty_marks(until_time)
+    local kept = {}
+    for _, mark in ipairs(L.slot_rec or {}) do
+        local ends = mark.to or until_time
+        if mark.from and ends and ends - mark.from > 0.05 and mark.from < until_time then
+            kept[#kept + 1] = mark
+        end
+    end
+    L.slot_rec = kept
+    return kept
+end
+
+-- The take recording left behind, and how much of the marked stretch it really
+-- holds. Overlap rather than containment: a take can begin a few milliseconds
+-- after the bar line it was aimed at, and demanding that it cover the mark
+-- exactly threw away good recordings over a rounding.
+function H.recorded_item(track, from, to)
+    local best, best_overlap, best_from, best_to
+    for index = 0, (r.CountTrackMediaItems(track) or 0) - 1 do
+        local item = r.GetTrackMediaItem(track, index)
+        local at = r.GetMediaItemInfo_Value(item, "D_POSITION") or 0
+        local finish = at + (r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0)
+        local low, high = math.max(at, from), math.min(finish, to)
+        local overlap = high - low
+        if overlap > 0.05 and (not best_overlap or overlap > best_overlap) then
+            best, best_overlap, best_from, best_to = item, overlap, low, high
+        end
+    end
+    return best, best_from, best_to
+end
+
+-- Taking a mark back before the take is cut up. Nothing recorded is lost by
+-- this: the take on the track keeps whatever was played.
+function H.cancel_slot_record(lane_index, row)
+    local kept = {}
+    for _, mark in ipairs(L.slot_rec or {}) do
+        if not (mark.lane == lane_index and mark.row == row) then kept[#kept + 1] = mark end
+    end
+    L.slot_rec = kept
+    L.status = "Recording mark removed"
+end
+function H.harvest_slot_records()
+    local marks = L.slot_rec or {}
+    if #marks == 0 then return 0 end
+    -- Only what actually came back is struck off; the rest stays for another
+    -- try, since the reason for a miss is usually that REAPER has not finished
+    -- writing the file yet.
+    local taken, missed, left = 0, 0, {}
+    -- Which takes were used up and which must stay. One take can feed several
+    -- slots, so it is only cleared away once every slot that wanted it has had
+    -- it - and never while one of them still has to try again.
+    local used, spare = {}, {}
+    r.Undo_BeginBlock()
+    -- Deliberately not wrapped in PreventUIRefresh. Trimming a MIDI clip has to
+    -- show the hidden lane track for a moment, because a REAPER action will not
+    -- touch an item on a track it cannot see - and that showing does not take
+    -- effect while refreshing is held off, so the trim would fail every time.
+    -- This runs once, after recording, so the flicker costs nothing.
+    for _, mark in ipairs(marks) do
+        local lane = L.lanes[mark.lane]
+        local source, have_from, have_to
+        if lane and H.valid_track(mark.track) then
+            source, have_from, have_to = H.recorded_item(mark.track, mark.from, mark.to)
+        end
+        if not lane then
+            L.rec_why = "that lane is gone"
+        elseif not H.valid_track(mark.track) then
+            L.rec_why = "that track is gone"
+        elseif not source then
+            L.rec_why = string.format("no take on %s covering %.2f to %.2f s",
+                H.track_name(mark.track, "track"), mark.from or -1, mark.to or -1)
+        end
+        if source then
+            -- Cut from a copy, so the take the user just played stays whole.
+            -- Cut to the part the take really holds, not the part asked for.
+            local cut_from = have_from or mark.from
+            local cut_to = have_to or mark.to
+            local slice = H.copy_item(source, mark.track, cut_from)
+            if slice then
+                local start = r.GetMediaItemInfo_Value(source, "D_POSITION") or 0
+                r.SetMediaItemInfo_Value(slice, "D_POSITION", cut_from)
+                r.SetMediaItemInfo_Value(slice, "D_LENGTH", cut_to - cut_from)
+                local take = r.GetActiveTake(slice)
+                if take then
+                    local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+                    local was = r.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") or 0
+                    r.SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", was + (cut_from - start) * rate)
+                end
+                if H.assign_slot(lane, mark.row, slice) then
+                    taken = taken + 1
+                    used[source] = mark.track
+                else
+                    missed = missed + 1
+                    left[#left + 1] = mark
+                    spare[source] = true
+                    L.rec_why = "the take could not be turned into a clip"
+                end
+                r.DeleteTrackMediaItem(mark.track, slice)
+            else
+                missed = missed + 1
+                left[#left + 1] = mark
+                spare[source] = true
+                L.rec_why = "the take could not be copied"
+            end
+        else
+            missed = missed + 1
+            left[#left + 1] = mark
+        end
+    end
+    -- The take on the track, once every slot has taken its cut. The audio
+    -- itself stays on disk; this only clears the item out of the arrangement.
+    -- Only once nothing is waiting any more. A mark left over will be tried
+    -- again, and it can hardly succeed against a take that has been thrown away.
+    local cleared = 0
+    if L.record_tidy and #left == 0 then
+        for item, track in pairs(used) do
+            if not spare[item] and H.valid_item(item) and H.valid_track(track) then
+                r.DeleteTrackMediaItem(track, item)
+                cleared = cleared + 1
+            end
+        end
+    end
+    L.slot_rec = left
+    r.Undo_EndBlock("Record launcher clips", -1)
+    r.UpdateArrange()
+    H.save()
+    if taken > 0 then
+        L.status = taken == 1 and "Recorded 1 clip"
+            or ("Recorded " .. tostring(taken) .. " clips")
+        if missed > 0 then L.status = L.status .. ", " .. tostring(missed) .. " had nothing to take" end
+        if cleared > 0 then
+            L.status = L.status .. ", " .. tostring(cleared)
+                .. (cleared == 1 and " take cleared from the arrangement" or " takes cleared from the arrangement")
+        end
+    elseif missed > 0 then
+        L.status = "Nothing was recorded into those slots"
+    end
+    return taken
+end
+
+-- Watched rather than hooked: REAPER tells a script nothing when recording
+-- ends, so the state is compared with what it was last time round.
+function H.watch_recording()
+    local state = r.GetPlayState()
+    local recording = (state & 4) == 4
+    local was = L.was_recording
+    L.was_recording = recording
+    if recording then
+        -- Every mark closed and its last bar line gone by: nothing more is being
+        -- played into the grid, so recording stops itself and the clips appear.
+        -- Recording is one thing for the whole project, so this waits for the
+        -- last lane rather than punching out on the first.
+        local marks = L.slot_rec or {}
+        if #marks > 0 then
+            local latest, open = nil, false
+            for _, mark in ipairs(marks) do
+                if not mark.to then open = true break end
+                if not latest or mark.to > latest then latest = mark.to end
+            end
+            local now = H.schedule_pos()
+            if not open and latest and now and now >= latest then
+                r.Main_OnCommand(C.record_action, 0)
+            end
+        end
+        if not was then
+            -- A new take measures itself from scratch.
+            L.rec_end = nil
+            -- Recording has just begun, so anything armed beforehand starts
+            -- here, on the first line at or after this point.
+            local began = H.schedule_pos()
+            for _, mark in ipairs(L.slot_rec or {}) do
+                if not mark.from and began then mark.from = H.record_boundary(began) end
+            end
+        end
+        -- How far the take has got. Kept every frame because once the transport
+        -- stops there is nothing left to ask: the play position is gone and the
+        -- edit cursor has jumped back to where playback began.
+        --
+        -- The furthest seen, not the last seen. On the frame the user presses
+        -- stop REAPER still reports itself as recording while the play position
+        -- has already snapped back to the start, and that one reading would
+        -- otherwise wipe out every good one before it. A play position never
+        -- runs backwards during a take, so anything that does is that snap.
+        local at = H.schedule_pos()
+        if at and at > (L.rec_end or 0) then L.rec_end = at end
+        L.rec_frames = (L.rec_frames or 0) + 1
+        L.rec_state = state
+        return
+    end
+    if was then
+        -- Not harvested on the spot: REAPER is still closing the file it wrote,
+        -- and the item on the track is not finished until it has.
+        L.harvest_at = r.time_precise() + 0.25
+        L.harvest_tries = 0
+        L.rec_seen = L.rec_frames or 0
+        L.rec_frames = 0
+    end
+    if not L.harvest_at or r.time_precise() < L.harvest_at then return end
+    local ended = L.rec_end or 0
+    for _, mark in ipairs(L.slot_rec or {}) do
+        if mark.from and (not mark.to or mark.to > ended) then mark.to = ended end
+    end
+    local before = #(L.slot_rec or {})
+    L.slot_rec_last = {}
+    for index, mark in ipairs(L.slot_rec or {}) do L.slot_rec_last[index] = mark end
+    if #H.drop_empty_marks(ended) == 0 then
+        L.harvest_at = nil
+        if before > 0 then
+            local first = (L.slot_rec_last or {})[1] or {}
+            L.status = string.format(
+                "Nothing recorded: mark %.2f..%.2f, take ran to %.2f s, %d frames of recording seen (state %s)",
+                first.from or -1, first.to or -1, ended, L.rec_seen or 0, tostring(L.rec_state))
+        end
+        return
+    end
+    if H.harvest_slot_records() > 0 then
+        L.harvest_at = nil
+        return
+    end
+    -- Nothing came back yet. A few more tries before giving up, in case the
+    -- file is large enough that closing it takes a moment.
+    L.harvest_tries = (L.harvest_tries or 0) + 1
+    if L.harvest_tries >= 20 then
+        L.harvest_at = nil
+        -- Dropped rather than left standing. Marks that survive a failure make
+        -- the grid look stuck, and get harvested by the next unrelated stop.
+        L.slot_rec = {}
+        L.status = "Recording not picked up: " .. (L.rec_why or "reason unknown")
+    else
+        L.harvest_at = r.time_precise() + 0.25
+    end
+end
+--------------------------------------------------------------------------------
 -- public interface
 --------------------------------------------------------------------------------
 
@@ -6187,6 +7508,7 @@ function Launcher.init(context)
     -- lives with the script rather than in the project file.
     L.color_headers = r.GetExtState(C.ext_section, "color_headers") == "1"
     L.lane_volume = r.GetExtState(C.ext_section, "lane_volume") ~= "0"
+    L.record_tidy = r.GetExtState(C.ext_section, "record_tidy") == "1"
     L.scenes_as_columns = r.GetExtState(C.ext_section, "scenes_as_columns") == "1"
     L.lane_track_height = r.GetExtState(C.ext_section, "lane_track_height") == "1"
     L.align_to_arrange = r.GetExtState(C.ext_section, "align_to_arrange") == "1"
@@ -6239,6 +7561,11 @@ function Launcher.update()
     end
     if L.tidy_wanted then H.tidy_lane_tracks() end
     H.keep_lane_order()
+    H.watch_gate()
+    H.sync_lane_gates()
+    H.watch_midi_editor()
+    H.punch_in_when_due()
+    H.watch_recording()
     local now = H.schedule_pos()
     if not now then
         if r.time_precise() >= L.roll_guard then
@@ -6352,6 +7679,51 @@ end
 -- What is still sounding when recording stops is most of the take, and it has
 -- not been cleared away yet, so it would never reach the capture. A copy of the
 -- part that has played is taken instead, and the clip itself carries on.
+-- A voice stopped part way through a take. Remembered here and cut out when the
+-- take is finished, rather than left to the harvest that comes round later:
+-- whether that harvest reaches it before the take ends depends on timing the
+-- player has no reason to think about, and when it does not, the clip is simply
+-- missing from what was recorded.
+function H.remember_stopped_voice(lane, voice, until_time)
+    if not L.recording or not voice or not voice.started then return end
+    L.stopped_voices = L.stopped_voices or {}
+    L.stopped_voices[#L.stopped_voices + 1] = { lane = lane, voice = voice, at = until_time }
+end
+
+-- What of a voice was inside the take, copied out and set aside. Bounded twice:
+-- by where the voice was stopped and by where the take ends, whichever is
+-- earlier. Items the harvest has already taken are gone from the voice by then,
+-- so there is nothing here to take twice.
+function H.capture_span(lane, voice, until_time)
+    local target = H.target_track(lane)
+    local lane_track = H.lane_track(lane)
+    if not target or not lane_track or not voice or not until_time then return 0 end
+    local taken = 0
+    local function snapshot(media)
+        if not H.valid_item(media) then return end
+        local position = r.GetMediaItemInfo_Value(media, "D_POSITION") or 0
+        local length = r.GetMediaItemInfo_Value(media, "D_LENGTH") or 0
+        local finish = math.min(position + length, until_time)
+        if finish - position < 0.01 then return end
+        local copy = H.copy_item(media, lane_track, position)
+        if not copy then return end
+        r.SetMediaItemInfo_Value(copy, "D_LENGTH", finish - position)
+        r.SetMediaItemInfo_Value(copy, "B_MUTE", 1)
+        r.SetMediaItemInfo_Value(copy, "B_LOOPSRC",
+            (r.GetMediaItemInfo_Value(media, "B_LOOPSRC") or 0) > 0.5 and 1 or 0)
+        if r.UpdateItemInProject then r.UpdateItemInProject(copy) end
+        L.captured[#L.captured + 1] = { item = copy, track = target }
+        -- The original stays on the lane track; noting it here keeps the sweep
+        -- from taking the same performance a second time.
+        L.take_sources = L.take_sources or {}
+        L.take_sources[media] = true
+        taken = taken + 1
+    end
+    snapshot(voice.item)
+    snapshot(voice.wrap)
+    for _, media in ipairs(voice.hits or {}) do snapshot(media) end
+    return taken
+end
 function H.capture_playing(lane, now)
     local target = H.target_track(lane)
     local lane_track = H.lane_track(lane)
@@ -6372,6 +7744,8 @@ function H.capture_playing(lane, now)
         r.SetMediaItemInfo_Value(copy, "B_LOOPSRC", (r.GetMediaItemInfo_Value(media, "B_LOOPSRC") or 0) > 0.5 and 1 or 0)
         if r.UpdateItemInProject then r.UpdateItemInProject(copy) end
         L.captured[#L.captured + 1] = { item = copy, track = target }
+        L.take_sources = L.take_sources or {}
+        L.take_sources[media] = true
         taken = taken + 1
     end
     -- Everything of this lane that is still on the timeline and has sounded,
@@ -6402,12 +7776,81 @@ end
 -- The next boundary on the grid, with no run-up applied: this is where the take
 -- ends, not where something has to be scheduled.
 function H.next_musical_boundary(from)
-    local step = H.quantize_qn(from)
-    if step <= 0 then return from end
-    local index = math.floor(r.TimeMap2_timeToQN(0, from) / step) + 1
-    return r.TimeMap2_QNToTime(0, index * step)
+    local index = H.grid_index(from)
+    if not index then return from end
+    return H.grid_time(from, math.floor(index) + 1)
 end
 
+-- An item the take has claimed is no longer the launcher's to clean up. The
+-- voice that was playing it still points at it, and the next tidy-up would
+-- delete it - by then it may already have been moved onto a real track, so the
+-- recording would simply vanish. Copied items do not need this; swept ones do,
+-- because the take keeps the very item that was playing.
+function H.forget_item(item)
+    if not item then return end
+    local function detach(voice)
+        if not voice then return end
+        if voice.item == item then voice.item = nil end
+        if voice.wrap == item then voice.wrap = nil end
+        for index = #(voice.hits or {}), 1, -1 do
+            if voice.hits[index] == item then table.remove(voice.hits, index) end
+        end
+    end
+    for _, lane in ipairs(L.lanes) do
+        detach(lane.current)
+        detach(lane.pending)
+        for _, voice in ipairs(lane.retired or {}) do detach(voice) end
+    end
+end
+-- The last word on what a take contains, and the one that cannot be argued
+-- with: whatever is sitting on a lane track that is not one of its clips is
+-- something the launcher put there to be played. The bookkeeping of voices
+-- above is quicker and knows more, but it depends on a chain - closing,
+-- harvesting, retiring - and if a link in that chain runs at the wrong moment
+-- the clip is silently missing from the take. This looks at the timeline
+-- itself.
+function H.sweep_take_leftovers(from_time, until_time)
+    local already = {}
+    for _, entry in ipairs(L.captured) do already[entry.item] = true end
+    -- Anything the copying routes already took a copy of. Without this the
+    -- performance is captured twice: once as their copy, once as the original
+    -- still lying on the lane track.
+    for item in pairs(L.take_sources or {}) do already[item] = true end
+    local taken = 0
+    for _, lane in ipairs(L.lanes) do
+        local track = H.lane_track(lane)
+        local target = H.target_track(lane)
+        if track and target then
+            local library = {}
+            for _, slot in ipairs(lane.slots or {}) do library[slot.guid] = true end
+            for index = 0, (r.CountTrackMediaItems(track) or 0) - 1 do
+                local item = r.GetTrackMediaItem(track, index)
+                local guid = item and r.BR_GetMediaItemGUID and r.BR_GetMediaItemGUID(item)
+                local position = item and (r.GetMediaItemInfo_Value(item, "D_POSITION") or 0)
+                local length = item and (r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0)
+                -- No window is asked of it. The take's start and end are worked
+                -- out from the play cursor, and that cursor moves for reasons of
+                -- its own - a loop coming round is enough - so a window can end
+                -- up nowhere near where the clips were actually played. An item
+                -- on a lane track that is not one of its clips can only be there
+                -- because the launcher put it there to sound; that is the whole
+                -- test.
+                if item and not already[item] and not (guid and library[guid]) then
+                    if until_time and position < until_time
+                        and position + length > until_time then
+                        H.trim_to(item, until_time)
+                    end
+                    r.SetMediaItemInfo_Value(item, "B_MUTE", 1)
+                    L.captured[#L.captured + 1] = { item = item, track = target }
+                    H.forget_item(item)
+                    already[item] = true
+                    taken = taken + 1
+                end
+            end
+        end
+    end
+    return taken
+end
 function H.finish_recording(at)
     L.recording = false
     L.record_stop_at = nil
@@ -6419,6 +7862,17 @@ function H.finish_recording(at)
             snapped = snapped + (lane_taken or 0)
             missed = missed + (lane_missed or 0)
         end
+        -- Anything stopped part way through, taken up to wherever it was
+        -- stopped or the end of the take, whichever came first.
+        for _, entry in ipairs(L.stopped_voices or {}) do
+            snapped = snapped + H.capture_span(entry.lane, entry.voice, math.min(entry.at or at, at))
+        end
+        -- And then the timeline itself, for anything the bookkeeping lost.
+        snapped = snapped + H.sweep_take_leftovers(L.record_from, at)
+    else
+        -- Stopped with no play position to work from. The timeline still knows
+        -- what was put on it.
+        snapped = snapped + H.sweep_take_leftovers(nil, nil)
         -- Everything ends on the same line, so the take is a whole number of
         -- bars however the individual clips happened to be running.
         for _, entry in ipairs(L.captured) do
@@ -6441,6 +7895,7 @@ function H.finish_recording(at)
     if missed > 0 then
         L.status = L.status .. "  (" .. tostring(missed) .. " could not be captured)"
     end
+    L.stopped_voices, L.take_sources = {}, {}
     r.UpdateArrange()
 end
 
@@ -6460,6 +7915,9 @@ function H.set_recording(on)
     if on then
         L.recording = true
         L.record_stop_at = nil
+        -- Where the take began, for bounding what it may claim later.
+        L.record_from = H.heard_pos()
+        L.stopped_voices, L.take_sources = {}, {}
         L.status = "Recording: clips you play are kept"
         return
     end
@@ -6533,7 +7991,7 @@ function H.draw_timing_popup()
     if not r.ImGui_BeginPopup(UI.ctx, "##launch_timing") then return end
 
     r.ImGui_TextColored(UI.ctx, UI.colors.accent, "Launch quantize")
-    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Clips wait for this boundary on the project's own bar grid.")
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Clips wait for this boundary, on the measures REAPER itself draws.")
     r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(120))
     local label = "1 bar"
     for _, option in ipairs(QUANTIZE_OPTIONS) do
@@ -7047,8 +8505,13 @@ function H.fire_cell(lane_index, row, stop)
     if not lane then return end
     if stop then
         H.stop_lane(lane)
-    elseif H.slot(lane, row) then
-        H.launch(lane, row)
+        return
+    end
+    -- The same rule as a click, so a key pressed twice behaves the way the
+    -- mouse does. Shift is still there to stop a lane outright.
+    local slot = H.slot(lane, row)
+    if slot then
+        H.click_slot(lane, lane_index, row, slot)
     else
         H.assign_from_selection(lane, row)
     end
@@ -7197,16 +8660,15 @@ function Launcher.draw()
     if hidden and r.ImGui_StyleVar_ScrollbarSize then
         r.ImGui_PushStyleVar(UI.ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
     end
-    -- ImGui's own cell padding is 4 across and 2 down, so the tiles sat twice as
-    -- far apart sideways as they did up and down. Squared off against the
-    -- vertical, which is the one that has to keep step with the track heights.
+    -- Set outright rather than taken from the theme: ImGui's own is 4 across
+    -- and 2 down, which is uneven and roomier than a grid of clips wants. The
+    -- row pitch that follows from it is measured, not assumed, so the rows keep
+    -- lining up with the track heights whatever this is set to.
     local padded = false
-    if r.ImGui_StyleVar_CellPadding and r.ImGui_GetStyleVar then
-        local _, pad_y = r.ImGui_GetStyleVar(UI.ctx, r.ImGui_StyleVar_CellPadding())
-        if pad_y then
-            r.ImGui_PushStyleVar(UI.ctx, r.ImGui_StyleVar_CellPadding(), pad_y, pad_y)
-            padded = true
-        end
+    if r.ImGui_StyleVar_CellPadding then
+        local gap = UI.rounded(C.cell_gap)
+        r.ImGui_PushStyleVar(UI.ctx, r.ImGui_StyleVar_CellPadding(), gap, gap)
+        padded = true
     end
     if r.ImGui_BeginTable(UI.ctx, "launcher_grid", columns, flags) then
         local head_w = UI.rounded(sideways and C.cell_w or C.scene_w)
@@ -7219,7 +8681,12 @@ function Launcher.draw()
         H.handle_keys()
         r.ImGui_TableNextRow(UI.ctx)
         r.ImGui_TableNextColumn(UI.ctx)
-        H.draw_grid_corner(head_w, UI.rounded(C.cell_h) + H.align_offset())
+        -- Turned on its side a lane header is as tall as a clip row, with room
+        -- to spare for the fader strip. Upright it is one cell tall, which is
+        -- not, so it gets that strip added on when the fader is switched on.
+        local head_extra = (not sideways and L.lane_volume) and UI.rounded(18) or 0
+        local head_h = UI.rounded(C.cell_h) + head_extra
+        H.draw_grid_corner(head_w, head_h + H.align_offset())
         if sideways then
             -- Scenes across the top, one clip column each.
             for row = 1, L.rows do
@@ -7259,7 +8726,7 @@ function Launcher.draw()
             for lane_index, lane in ipairs(L.lanes) do
                 r.ImGui_TableNextColumn(UI.ctx)
                 r.ImGui_PushID(UI.ctx, lane_index)
-                H.draw_lane_header(lane, lane_index)
+                H.draw_lane_header(lane, lane_index, UI.rounded(C.cell_w), head_h)
                 r.ImGui_PopID(UI.ctx)
             end
             for row = 1, L.rows do
@@ -7277,6 +8744,7 @@ function Launcher.draw()
         r.ImGui_EndTable(UI.ctx)
     end
     H.draw_chrome_popup()
+    H.draw_fx_popup()
     if padded then r.ImGui_PopStyleVar(UI.ctx) end
     if hidden and r.ImGui_StyleVar_ScrollbarSize then r.ImGui_PopStyleVar(UI.ctx) end
     -- Cleared after every cell has had its chance to see the release.
@@ -7285,6 +8753,15 @@ end
 -- Read and set from the Settings window, which lives in the main script.
 function Launcher.color_headers()
     return L.color_headers and true or false
+end
+
+function Launcher.record_tidy()
+    return L.record_tidy and true or false
+end
+
+function Launcher.set_record_tidy(value)
+    L.record_tidy = value and true or false
+    r.SetExtState(C.ext_section, "record_tidy", L.record_tidy and "1" or "0", true)
 end
 
 function Launcher.lane_volume()
