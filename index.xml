@@ -1015,8 +1015,11 @@ v0.2.51
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.9.5" author="TouristKiller" time="2026-08-25T14:29:00Z">
+        <version name="1.9.6" author="TouristKiller" time="2026-08-29T18:29:45Z">
             <changelog><![CDATA[
+            v1.9.6:
+            + Fixed: the 8 px divider below pinned master/tracks could inherit the next track's overlay at certain track heights; pinned tracks are now detected through REAPER's B_TCPPIN state
+
             v1.9.5:
             + Added a Labels setting to show or hide the record-arm, solo, and mute status dots
 

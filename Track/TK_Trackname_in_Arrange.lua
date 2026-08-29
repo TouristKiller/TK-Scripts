@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.5
+-- @version 1.9.6
 -- @changelog 
 --[[
+v1.9.6:
++ Fixed: the 8 px divider below pinned master/tracks could inherit the next track's overlay at certain track heights; pinned tracks are now detected through REAPER's B_TCPPIN state
+
 v1.9.5:
 + Added a Labels setting to show or hide the record-arm, solo, and mute status dots
 
@@ -4633,33 +4636,15 @@ function loop()
                 end
             end
             
-            local all_tracks = {}
             for i = 0, track_count - 1 do
                 local track = r.GetTrack(0, i)
-                if track then
+                if track and r.GetMediaTrackInfo_Value(track, "B_TCPPIN") == 1 then
                     local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
                     local track_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
-                    all_tracks[#all_tracks + 1] = {
-                        index = i,
-                        y = track_y,
-                        height = track_height,
-                        bottom = track_y + track_height
-                    }
+                    pinned_status[i] = true
+                    pinned_tracks_height = math.max(pinned_tracks_height, track_y + track_height)
                 end
             end
-            
-            table.sort(all_tracks, function(a, b) return a.y < b.y end)
-            
-            local expected_y = pinned_tracks_height
-            for _, track_info in ipairs(all_tracks) do
-                local gap = track_info.y - expected_y
-                if gap >= -3 and gap < 10 then
-                    pinned_status[track_info.index] = true
-                    expected_y = track_info.bottom
-                end
-            end
-            
-            pinned_tracks_height = expected_y
             
             if pinned_tracks_height > 0 then
                 pinned_tracks_height = pinned_tracks_height + 8
