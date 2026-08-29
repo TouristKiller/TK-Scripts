@@ -1,7 +1,13 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.5.0
+-- @version 0.5.1
 -- @changelog:
+--   + Launcher: MIDI clips can follow chord roots or scale degrees from a guide track
+--   + Launcher: Session Key Off plus Fit every clip now restores original pitches
+--   + Launcher: Captured, fitted and followed MIDI clips keep independent sources
+--   + Launcher: Lane headers can rename and colour their linked project tracks
+--   + Launcher: Retriggered one-shots keep playing across transport loops
+--   + Launcher: Recording, MIDI editor updates and clip indicators are more reliable
 --   + Launcher: Record what you play into an empty slot, one button, on the launch quantize
 --   + Launcher: Clips can click-stop, click-restart, or play only while held
 --   + Launcher: Hold-to-play uses a small gate effect the script writes and installs itself
@@ -2739,6 +2745,27 @@ local function pop_theme(theme_stack)
     Theme.pop(ctx, theme_stack)
 end
 
+local function draw_footer(status_text, chord_text, chord_tooltip)
+    local available = r.ImGui_GetContentRegionAvail(ctx)
+    local start_x = r.ImGui_GetCursorPosX(ctx)
+    local gap = rounded(12)
+    local chord_width = math.min(r.ImGui_CalcTextSize(ctx, chord_text), available * 0.52)
+    local status_width = math.max(0, available - chord_width - (status_text ~= "" and chord_text ~= "" and gap or 0))
+    local status_shown = status_text ~= "" and status_width >= rounded(18)
+    if status_shown then
+        local shown = truncate_text(status_text, status_width)
+        r.ImGui_TextColored(ctx, COLORS.accent, shown)
+        if shown ~= status_text and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, status_text) end
+    end
+    if chord_text ~= "" then
+        local shown = truncate_text(chord_text, chord_width)
+        if status_shown then r.ImGui_SameLine(ctx, 0, gap) end
+        r.ImGui_SetCursorPosX(ctx, start_x + available - chord_width)
+        r.ImGui_TextColored(ctx, COLORS.text, shown)
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, chord_tooltip) end
+    end
+end
+
 local function draw_window()
     state.cache_budget = 4
     local scaled_font_pushed = push_scaled_font()
@@ -2764,6 +2791,9 @@ local function draw_window()
         end
         local launcher_mode = state.view_mode == "launcher"
         local status_text = launcher_mode and Launcher.status() or state.status
+        local chord_text, chord_tooltip = "", ""
+        if launcher_mode then chord_text, chord_tooltip = Launcher.chord_status() end
+        local footer_visible = status_text ~= "" or chord_text ~= ""
         local empty = not launcher_mode and (state.view_mode == "sources" and #state.sources == 0
             or state.view_mode == "automation" and #state.automation == 0
             or state.view_mode == "items" and #state.groups == 0)
@@ -2778,7 +2808,7 @@ local function draw_window()
             if launcher_mode then
                 scroll_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse()
             end
-            if r.ImGui_BeginChild(ctx, "clip_scroll", 0, status_text ~= "" and -rounded(28) or 0, 0, scroll_flags) then
+            if r.ImGui_BeginChild(ctx, "clip_scroll", 0, footer_visible and -rounded(28) or 0, 0, scroll_flags) then
                 if launcher_mode then
                     Launcher.draw()
                 elseif state.view_mode == "sources" then
@@ -2791,7 +2821,7 @@ local function draw_window()
                 r.ImGui_EndChild(ctx)
             end
         end
-        if status_text ~= "" then r.ImGui_TextColored(ctx, COLORS.accent, status_text) end
+        if footer_visible then draw_footer(status_text, chord_text, chord_tooltip) end
         r.ImGui_End(ctx)
     end
     draw_theme_settings()

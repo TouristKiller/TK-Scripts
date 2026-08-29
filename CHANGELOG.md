@@ -2,6 +2,22 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Project Clips 0.5.1] - 2026-08-29
+
+### TK Project Clips
+#### Toegevoegd
+- **Chord Follow**: MIDI-clips kunnen de grondtoon of schaaltrap van akkoorden op een gekozen guide-track volgen. Het huidige en volgende akkoord verschijnen in de footer en guide-items kunnen vanuit de launcher worden aangemaakt.
+- **Lane-bediening**: Lane-headers kunnen de gekoppelde projecttrack hernoemen en van kleur voorzien.
+
+#### Gewijzigd
+- **Key-fit workflow**: Toonsoortdetectie, toegepaste key-fit en Chord Follow worden afzonderlijk bijgehouden en duidelijker op clips weergegeven. Met Session Key op Off herstelt "Fit every clip now" alle eerder gefitte clips naar hun originele pitches.
+- **MIDI-bronnen**: Opgenomen, gefitte en door Chord Follow verwerkte MIDI-clips krijgen onafhankelijke bronnen, zodat het wijzigen van één clip geen andere clip meer verandert.
+- **Clipweergave**: Key-fit- en Chord Follow-indicatoren zijn beter zichtbaar en namen blijven leesbaar in lage clipcellen.
+
+#### Bugfixes
+- **Recording en MIDI-editor**: Opgenomen clips blijven correct aan hun slot gekoppeld en wijzigingen vanuit de MIDI-editor worden betrouwbaar bijgewerkt.
+- **Transportloop retriggering**: Geretriggerde one-shots blijven op iedere passage van een actieve tijdselectieloop spelen.
+
 ## [TK Workbench 0.9.3] - 2026-08-29
 
 ### TK Workbench

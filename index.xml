@@ -697,13 +697,23 @@ v0.2.51
 
  <category name="Media">
     <reapack name="TK_PROJECT_CLIPS.lua" type="script" desc="TK Project Clips">
-        <version name="0.5.0" author="TouristKiller" time="2026-08-28T21:09:32Z">
+        <version name="0.5.1" author="TouristKiller" time="2026-08-29T16:28:10Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS.lua</source>
         <source file="TK_PROJECT_CLIPS/launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/launcher.lua</source>
+        <source file="TK_PROJECT_CLIPS/chord_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/chord_engine.lua</source>
+        <source file="TK_PROJECT_CLIPS/chord_timeline.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/chord_timeline.lua</source>
         <source file="TK_PROJECT_CLIPS/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/theme.lua</source>
         <source file="TK_PROJECT_CLIPS/ui_scale.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/ui_scale.lua</source>
         <source file="TK_PROJECT_CLIPS/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/json.lua</source>
         <changelog><![CDATA[
+            v0.5.1
+            + Chord Follow lets MIDI clips follow chord roots or scale degrees from a guide track
+            + Session Key Off plus Fit every clip now restores every fitted clip to its original pitches
+            + Captured, fitted and followed MIDI clips keep independent sources
+            + Lane headers can rename and colour their linked project tracks
+            + Recording, MIDI editor updates and clip indicators are more reliable
+            + Retriggered one-shots keep playing across transport loops
+            v0.5.0
             + Launcher: Record what you play into an empty slot, one button, on the launch quantize
             + Launcher: Clips can click-stop, click-restart, or play only while held
             + Launcher: Hold-to-play uses a small gate effect the script writes and installs itself

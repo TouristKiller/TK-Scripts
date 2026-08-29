@@ -25,6 +25,7 @@
 --     loop start instead of restarting it halfway.
 
 local r = reaper
+local ChordTimeline = require("chord_timeline")
 local Launcher = {}
 local H = {}
 local UI = {}
@@ -89,9 +90,14 @@ local L = {
     key               = nil,      -- the session's key, nil until one is set
     key_style         = "scale",  -- "scale" maps degrees, "root" only transposes
     key_sync          = true,
+    guide_guid        = nil,
+    guide_events      = nil,
+    guide_scan_at     = 0,
     file_prompt       = nil,
     chain_prompt      = nil,
     rename_prompt     = nil,
+    lane_name_prompt  = nil,
+    lane_colour_prompt = nil,
     colour_target     = nil,
     colour_request    = false,
     track_count       = -1,
@@ -201,6 +207,130 @@ function H.track_name(track, fallback)
     if name and name ~= "" then return name end
     local index = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") or 0)
     return "Track " .. tostring(index)
+end
+
+function H.guide_track()
+    return H.track_from_guid(L.guide_guid)
+end
+
+function H.refresh_guide(force)
+    local track = H.guide_track()
+    if not track then
+        L.guide_events = nil
+        return nil
+    end
+    local now = r.time_precise()
+    if not force and L.guide_events and now < (L.guide_scan_at or 0) then return L.guide_events end
+    local chord_options = { include_bass = true, allow_rootless = true, minimum_confidence = 0.55 }
+    if L.key and (L.key.mode == "major" or L.key.mode == "minor") then
+        chord_options.key_root = L.key.root
+        chord_options.key_mode = L.key.mode
+    end
+    L.guide_events = ChordTimeline.build(L.guide_guid, {
+        minimum_duration = 0.05,
+        attack_tolerance = 0.03,
+        include_muted = true,
+        chord_options = chord_options,
+    }, force) or {}
+    L.guide_scan_at = now + 0.25
+    return L.guide_events
+end
+
+function H.guide_at(position)
+    if not L.guide_guid then return nil, nil end
+    position = position or 0
+    local events = H.refresh_guide(false) or {}
+    local current, next_chord = ChordTimeline.at(events, position)
+    if current then return current, next_chord end
+    for _, event in ipairs(events) do
+        if event.start <= position then
+            current = event
+        elseif not next_chord then
+            next_chord = event
+            break
+        end
+    end
+    return current, next_chord
+end
+
+function H.chord_root(chord)
+    if not chord then return nil end
+    if tonumber(chord.root) then return math.floor(tonumber(chord.root)) % 12 end
+    local letter, accidental = tostring(chord.name or ""):match("^%s*([A-Ga-g])([#b]?)")
+    return letter and H.note_number(letter, accidental) or nil
+end
+
+function H.set_guide_track(track)
+    L.guide_guid = H.valid_track(track) and r.GetTrackGUID(track) or nil
+    L.guide_events = nil
+    L.guide_scan_at = 0
+    ChordTimeline.invalidate()
+    H.save()
+end
+
+function H.is_chord_item(item)
+    if not H.valid_item(item) then return false end
+    local ok, value = r.GetSetMediaItemInfo_String(item, "P_EXT:TK_PROJECT_CLIPS_CHORD_ITEM", "", false)
+    return ok and value == "1"
+end
+
+function H.remove_chord_items(track, undo)
+    if not H.valid_track(track) then return 0 end
+    if undo then r.Undo_BeginBlock() end
+    local removed = 0
+    for index = r.CountTrackMediaItems(track) - 1, 0, -1 do
+        local item = r.GetTrackMediaItem(track, index)
+        if H.is_chord_item(item) then
+            r.DeleteTrackMediaItem(track, item)
+            removed = removed + 1
+        end
+    end
+    if undo then
+        r.Undo_EndBlock("Remove chord guide items", -1)
+        r.UpdateArrange()
+    end
+    return removed
+end
+
+function H.chord_item_color()
+    local native = r.GetThemeColor("col_mi_label", 0)
+    local red, green, blue = r.ColorFromNative(native)
+    local brightness = red * 0.299 + green * 0.587 + blue * 0.114
+    local level = brightness >= 128 and 24 or 235
+    return (r.ColorToNative(level, level, level) or 0) | 0x1000000
+end
+
+function H.create_chord_items()
+    local track = H.guide_track()
+    if not track then return end
+    local events = H.refresh_guide(true) or {}
+    if #events == 0 then
+        L.status = "No chords recognized on the guide track"
+        return
+    end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    H.remove_chord_items(track, false)
+    local made = 0
+    for index, event in ipairs(events) do
+        local stop = events[index + 1] and events[index + 1].start or event.stop
+        if stop and stop > event.start then
+            local item = r.AddMediaItemToTrack(track)
+            if item then
+                r.SetMediaItemInfo_Value(item, "D_POSITION", event.start)
+                r.SetMediaItemInfo_Value(item, "D_LENGTH", math.max(0.05, stop - event.start))
+                r.SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", H.chord_item_color())
+                r.GetSetMediaItemInfo_String(item, "P_NOTES", event.name, true)
+                r.GetSetMediaItemInfo_String(item, "P_EXT:TK_PROJECT_CLIPS_CHORD_ITEM", "1", true)
+                r.SetMediaItemSelected(item, false)
+                made = made + 1
+            end
+        end
+    end
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Create chord guide items", -1)
+    r.UpdateArrange()
+    L.status = "Created " .. tostring(made) .. " chord items"
 end
 
 function H.item_name(item, fallback)
@@ -2274,6 +2404,55 @@ function H.run_rename_prompt()
     L.status = "Renamed to " .. answer
 end
 
+function H.ask_lane_name(lane)
+    L.lane_name_prompt = lane
+end
+
+function H.run_lane_name_prompt()
+    local lane = L.lane_name_prompt
+    if not lane then return end
+    L.lane_name_prompt = nil
+    local track = H.target_track(lane)
+    if not track or not r.GetUserInputs then return end
+    local current = H.track_name(track, lane.name)
+    local ok, answer = r.GetUserInputs("Rename lane and track", 1, "Name:,extrawidth=180", current)
+    if not ok then return end
+    answer = tostring(answer or ""):match("^%s*(.-)%s*$")
+    if answer == "" or answer == current then return end
+    r.Undo_BeginBlock()
+    r.GetSetMediaTrackInfo_String(track, "P_NAME", answer, true)
+    lane.name = answer
+    local hidden = H.lane_track(lane)
+    if hidden then r.GetSetMediaTrackInfo_String(hidden, "P_NAME", H.lane_track_name(track), true) end
+    H.save()
+    r.Undo_EndBlock("Rename launcher lane and track", -1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    L.status = "Renamed lane and track to " .. answer
+end
+
+function H.ask_lane_colour(lane)
+    L.lane_colour_prompt = lane
+end
+
+function H.run_lane_colour_prompt()
+    local lane = L.lane_colour_prompt
+    if not lane then return end
+    L.lane_colour_prompt = nil
+    local track = H.target_track(lane)
+    if not track or not r.GR_SelectColor then return end
+    local red, green, blue = r.ColorFromNative(r.GetTrackColor(track))
+    local ok, colour = r.GR_SelectColor(r.GetMainHwnd(), r.ColorToNative(red, green, blue))
+    if ok == 0 then return end
+    r.Undo_BeginBlock()
+    r.SetTrackColor(track, colour | 0x1000000)
+    if r.MarkProjectDirty then r.MarkProjectDirty(0) end
+    r.Undo_EndBlock("Set launcher lane and track colour", -1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    L.status = "Changed lane and track colour"
+end
+
 function H.run_chain_prompt()
     local prompt = L.chain_prompt
     if not prompt then return end
@@ -2728,6 +2907,7 @@ function H.build_wrap(lane, voice)
     if not lane_track or not library then return end
     local wrap = H.copy_item(library, lane_track, loop_start)
     if not wrap then return end
+    H.apply_chord_follow(wrap, H.slot_by_guid(voice.slot_guid))
     r.SetMediaItemInfo_Value(wrap, "B_MUTE", 0)
     r.SetMediaItemInfo_Value(wrap, "B_LOOPSRC", 1)
     r.SetMediaItemInfo_Value(wrap, "D_LENGTH", voice.at - loop_start)
@@ -2831,6 +3011,7 @@ function H.commit(lane, row, time)
 
     local voice = H.copy_item(library, lane_track, time)
     if not voice then return false end
+    H.apply_chord_follow(voice, slot)
     r.SetMediaItemInfo_Value(voice, "B_MUTE", 0)
     r.SetMediaItemInfo_Value(voice, "B_LOOPSRC", slot.loop and 1 or 0)
     local item_length, loop_length = H.slot_lengths(slot)
@@ -2954,6 +3135,7 @@ function H.fill_hits(lane, voice, from)
         if time > from and H.step_on(slot_of_voice, voice.next_hit_qn) then
             local hit = H.copy_item(library, lane_track, time)
             if hit then
+                H.apply_chord_follow(hit, H.slot_by_guid(voice.slot_guid))
                 r.SetMediaItemInfo_Value(hit, "B_MUTE", 0)
                 r.SetMediaItemInfo_Value(hit, "B_LOOPSRC", 0)
                 r.SetMediaItemInfo_Value(hit, "D_LENGTH", math.max(0.01, voice.length or 0.01))
@@ -2977,13 +3159,17 @@ function H.extend_repeats(lane, heard)
     local lane_track = H.lane_track(lane)
     if not library or not lane_track then return end
     voice.hits = voice.hits or {}
+    local loop_start, loop_end = H.loop_region()
     -- Spent hits are cleared here rather than through the harvest, so recording
     -- has to be honoured here as well. Without it a retriggered one-shot kept
     -- only the few hits that happened to still be alive when the take ended.
     for index = #voice.hits, 1, -1 do
         local media = voice.hits[index]
         local finish = H.item_end(media)
-        if not finish or heard > finish + C.harvest_pad then
+        local position = H.valid_item(media) and r.GetMediaItemInfo_Value(media, "D_POSITION") or nil
+        local repeats_with_transport = position and loop_start
+            and position >= loop_start and position < loop_end
+        if not repeats_with_transport and (not finish or heard > finish + C.harvest_pad) then
             if L.recording and voice.started and H.valid_item(media) then
                 r.SetMediaItemInfo_Value(media, "B_MUTE", 1)
                 L.captured[#L.captured + 1] = { item = media, track = H.target_track(lane) }
@@ -3357,6 +3543,7 @@ function H.save(quiet)
         key = L.key and { root = L.key.root, mode = L.key.mode } or nil,
         key_style = L.key_style,
         key_sync = L.key_sync and true or false,
+        guide_guid = L.guide_guid,
         lanes = {},
     }
     for row, entry in pairs(L.scenes or {}) do
@@ -3391,6 +3578,7 @@ function H.save(quiet)
                 plays = slot.plays,
                 color = slot.color,
                 gain = slot.gain,
+                chord_follow = slot.chord_follow,
             }
         end
         data.lanes[#data.lanes + 1] = {
@@ -3578,6 +3766,99 @@ function H.map_pitch(pitch, from, to, style)
     while result < 0 do result = result + 12 end
     while result > 127 do result = result - 12 end
     return result
+end
+
+function H.degree_index(key, pitch_class)
+    if not key then return nil end
+    local relative = (pitch_class - key.root) % 12
+    for index, degree in ipairs(H.mode_entry(key.mode).degrees) do
+        if degree == relative then return index end
+    end
+    return nil
+end
+
+function H.shift_scale_degree(pitch, key, degree_shift)
+    local degrees = H.mode_entry(key.mode).degrees
+    local relative = pitch - key.root
+    local octave = math.floor(relative / 12)
+    local pitch_class = relative % 12
+    local index, offset = 1, pitch_class
+    for step = #degrees, 1, -1 do
+        if pitch_class >= degrees[step] then
+            index, offset = step, pitch_class - degrees[step]
+            break
+        end
+    end
+    local absolute = octave * #degrees + index - 1 + degree_shift
+    local target_octave = math.floor(absolute / #degrees)
+    local target_index = (absolute % #degrees) + 1
+    local result = key.root + target_octave * 12 + degrees[target_index] + offset
+    while result < 0 do result = result + 12 end
+    while result > 127 do result = result - 12 end
+    return result
+end
+
+function H.slot_by_guid(guid)
+    for _, lane in ipairs(L.lanes) do
+        for _, slot in ipairs(lane.slots or {}) do
+            if slot.guid == guid then return slot end
+        end
+    end
+    return nil
+end
+
+function H.detach_midi_source(media)
+    local take = H.valid_item(media) and r.GetActiveTake(media) or nil
+    if not take or not r.TakeIsMIDI(take) or not r.MIDI_GetAllEvts or not r.MIDI_SetAllEvts then return false end
+    local ok, events = r.MIDI_GetAllEvts(take, "")
+    if not ok then return false end
+    local track = r.GetMediaItemTrack(media)
+    local position = r.GetMediaItemInfo_Value(media, "D_POSITION") or 0
+    local length = math.max(0.05, r.GetMediaItemInfo_Value(media, "D_LENGTH") or 0.05)
+    local temporary = r.CreateNewMIDIItemInProj(track, position, position + length, false)
+    local temporary_take = temporary and r.GetActiveTake(temporary) or nil
+    if not temporary_take then return false end
+    local written = r.MIDI_SetAllEvts(temporary_take, events)
+    if written then r.MIDI_Sort(temporary_take) end
+    local source = written and r.GetMediaItemTake_Source(temporary_take) or nil
+    if source then r.SetMediaItemTake_Source(take, source) end
+    r.DeleteTrackMediaItem(track, temporary)
+    return source ~= nil
+end
+
+function H.apply_chord_follow(media, slot)
+    if not H.valid_item(media) or not slot or not slot.is_midi or not slot.chord_follow then return end
+    local source_root = slot.key_applied and slot.key_applied.root
+        or (slot.key and slot.key.root) or slot.root
+    if source_root == nil then return end
+    if not H.detach_midi_source(media) then return end
+    local take = r.GetActiveTake(media)
+    local notes = H.midi_notes(take)
+    if notes < 1 then return end
+    local pitches = {}
+    for index = 0, notes - 1 do
+        local ok, _, _, start_ppq, _, _, pitch = r.MIDI_GetNote(take, index)
+        local result = ok and pitch or 60
+        if ok then
+            local chord = select(1, H.guide_at(r.MIDI_GetProjTimeFromPPQPos(take, start_ppq)))
+            local target_root = H.chord_root(chord)
+            if target_root ~= nil then
+                local source_degree = slot.chord_follow == "scale" and H.degree_index(L.key, source_root) or nil
+                local target_degree = slot.chord_follow == "scale" and H.degree_index(L.key, target_root) or nil
+                if source_degree and target_degree then
+                    local shift = target_degree - source_degree
+                    if shift > 3 then shift = shift - 7 elseif shift < -3 then shift = shift + 7 end
+                    result = H.shift_scale_degree(pitch, L.key, shift)
+                else
+                    local shift = target_root - source_root
+                    if shift > 6 then shift = shift - 12 elseif shift < -6 then shift = shift + 12 end
+                    result = math.max(0, math.min(127, pitch + shift))
+                end
+            end
+        end
+        pitches[index + 1] = result
+    end
+    H.write_pitches(take, notes, function(index) return pitches[index] end)
 end
 
 function H.pitch_list(text)
@@ -4150,7 +4431,22 @@ end
 
 function H.fit_all_to_key()
     if not L.key then
-        L.status = "Set the session key first"
+        local restored, changed = 0, 0
+        for _, lane in ipairs(L.lanes) do
+            for _, slot in ipairs(lane.slots) do
+                if slot.key_applied then
+                    if H.unfit_slot_key(lane, slot.row) then
+                        restored = restored + 1
+                    else
+                        changed = changed + 1
+                    end
+                end
+            end
+        end
+        L.status = string.format("%d clips restored to their own key", restored)
+        if changed > 0 then
+            L.status = L.status .. string.format(", %d changed since fitting", changed)
+        end
         return
     end
     local fitted, unknown = 0, 0
@@ -4229,6 +4525,7 @@ function H.slot_export(slot)
         plays = slot.plays,
         color = slot.color,
         gain = slot.gain,
+        chord_follow = slot.chord_follow,
     }
 end
 
@@ -4446,6 +4743,8 @@ function H.apply_stored_slot(lane, row, stored)
     slot.plays = tonumber(stored.plays)
     slot.color = tonumber(stored.color)
     slot.gain = tonumber(stored.gain)
+    slot.chord_follow = stored.chord_follow == "root" and "root"
+        or (stored.chord_follow == "scale" and "scale" or nil)
     local speed = tonumber(stored.speed)
     local item = H.item_from_guid(slot.guid)
     local take = item and r.GetActiveTake(item) or nil
@@ -4855,6 +5154,34 @@ function H.draw_key_popup()
     r.ImGui_EndPopup(UI.ctx)
 end
 
+function H.draw_guide_popup()
+    if not r.ImGui_BeginPopup(UI.ctx, "##launch_guide") then return end
+    local track = H.guide_track()
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "MIDI chord guide track")
+    local current, next_chord = H.guide_at(H.schedule_pos() or r.GetCursorPosition())
+    if current then r.ImGui_Text(UI.ctx, "Current: " .. current.name) end
+    if next_chord then r.ImGui_Text(UI.ctx, "Next: " .. next_chord.name) end
+    r.ImGui_Separator(UI.ctx)
+    if r.ImGui_MenuItem(UI.ctx, "No guide track", nil, track == nil) then H.set_guide_track(nil) end
+    for index = 0, r.CountTracks(0) - 1 do
+        local candidate = r.GetTrack(0, index)
+        if candidate and not H.is_lane_track(candidate) then
+            if r.ImGui_MenuItem(UI.ctx, H.track_name(candidate, "Track"), nil, candidate == track) then
+                H.set_guide_track(candidate)
+            end
+        end
+    end
+    if track then
+        r.ImGui_Separator(UI.ctx)
+        if r.ImGui_MenuItem(UI.ctx, "Create/update chord items") then H.create_chord_items() end
+        if r.ImGui_MenuItem(UI.ctx, "Remove chord items") then
+            local removed = H.remove_chord_items(track, true)
+            L.status = "Removed " .. tostring(removed) .. " chord items"
+        end
+    end
+    r.ImGui_EndPopup(UI.ctx)
+end
+
 function H.draw_set_popup()
     if not r.ImGui_BeginPopup(UI.ctx, "##launch_set") then return end
     if not L.library then H.scan_library() end
@@ -4950,6 +5277,9 @@ function H.project_changed()
     L.lanes = {}
     L.loaded = false
     L.status = ""
+    L.guide_events = nil
+    L.guide_scan_at = 0
+    ChordTimeline.invalidate()
     return true
 end
 
@@ -4958,6 +5288,9 @@ function H.load()
     L.proj = r.EnumProjects(-1, "")
     L.lanes = {}
     L.orphans = {}
+    L.guide_guid = nil
+    L.guide_events = nil
+    L.guide_scan_at = 0
     local retval, encoded = r.GetProjExtState(0, C.proj_section, "grid")
     local data = nil
     if retval and retval > 0 and encoded and encoded ~= "" then
@@ -4982,6 +5315,7 @@ function H.load()
         L.key = H.key_from(data.key)
         L.key_style = data.key_style == "root" and "root" or "scale"
         L.key_sync = data.key_sync ~= false
+        L.guide_guid = H.track_from_guid(data.guide_guid) and data.guide_guid or nil
         for _, stored in ipairs(data.lanes or {}) do
             -- The target track is what a lane is; the hidden track that carries
             -- its clips only exists once it has some, so a lane without one is
@@ -5035,6 +5369,8 @@ function H.load()
                             plays = tonumber(slot.plays),
                             color = tonumber(slot.color),
                             gain = tonumber(slot.gain),
+                            chord_follow = slot.chord_follow == "root" and "root"
+                                or (slot.chord_follow == "scale" and "scale" or nil),
                         }
                     end
                 end
@@ -5416,6 +5752,24 @@ function H.slot_context(lane, lane_index, row, slot)
                 H.draw_clip_key_menu(lane, row, slot)
                 r.ImGui_EndMenu(UI.ctx)
             end
+            local chord_follow = slot.chord_follow or "off"
+            local chord_label = chord_follow == "scale" and "Scale degree"
+                or (chord_follow == "root" and "Root" or "Off")
+            if r.ImGui_BeginMenu(UI.ctx, "Chord follow: " .. chord_label) then
+                if r.ImGui_MenuItem(UI.ctx, "Off", nil, chord_follow == "off") then
+                    slot.chord_follow = nil
+                    H.save()
+                end
+                if r.ImGui_MenuItem(UI.ctx, "Root", nil, chord_follow == "root") then
+                    slot.chord_follow = "root"
+                    H.save()
+                end
+                if r.ImGui_MenuItem(UI.ctx, "Scale degree", nil, chord_follow == "scale", L.key ~= nil) then
+                    slot.chord_follow = "scale"
+                    H.save()
+                end
+                r.ImGui_EndMenu(UI.ctx)
+            end
         end
         r.ImGui_Separator(UI.ctx)
         if r.ImGui_MenuItem(UI.ctx, "Rename...") then H.ask_rename(lane, row) end
@@ -5549,9 +5903,9 @@ end
 function H.draw_key_mark(draw_list, slot, x, y, width, background)
     if not slot or not slot.key_applied then return end
     local ink = H.mix(background, H.readable_on(background), 0.75)
-    local size = UI.scaled(3)
-    local right = x + width - UI.scaled(5)
-    local top = y + UI.scaled(4)
+    local size = UI.scaled(5)
+    local right = x + width - UI.scaled(7)
+    local top = y + UI.scaled(7)
     if (slot.key_applied.style or "scale") == "root" then
         local shift = H.key_shift(slot) or 0
         if shift == 0 then
@@ -5565,11 +5919,65 @@ function H.draw_key_mark(draw_list, slot, x, y, width, background)
                 right + size, top - size * 0.6, right, top + size, ink)
         end
     else
-        local bar = UI.scaled(1.2)
+        local bar = UI.scaled(2)
         r.ImGui_DrawList_AddRectFilled(draw_list, right - size, top - size * 0.4,
             right + size, top - size * 0.4 + bar, ink)
         r.ImGui_DrawList_AddRectFilled(draw_list, right - size, top + size * 0.6,
             right + size, top + size * 0.6 + bar, ink)
+    end
+end
+
+function H.draw_chord_follow_mark(draw_list, slot, x, y, width, height, background)
+    if not slot or not slot.is_midi then return end
+    local active = slot.chord_follow == "root" or slot.chord_follow == "scale"
+    local badge_width = UI.scaled(28)
+    local badge_height = math.min(UI.scaled(18), height - UI.scaled(4))
+    if badge_height < UI.scaled(12) then return end
+    local badge_right = x + width - UI.scaled(slot.key_applied and 16 or 3)
+    local badge_left = badge_right - badge_width
+    local badge_top = y + UI.scaled(2)
+    local badge_bottom = badge_top + badge_height
+    local badge_bg = active and H.mix(background, H.readable_on(background), 0.22)
+        or H.mix(background, H.readable_on(background), 0.10)
+    local ink = H.readable_on(badge_bg)
+    if not active then ink = H.mix(badge_bg, ink, 0.58) end
+    r.ImGui_DrawList_AddRectFilled(draw_list, badge_left, badge_top, badge_right, badge_bottom,
+        badge_bg, UI.scaled(3))
+    r.ImGui_DrawList_AddRect(draw_list, badge_left, badge_top, badge_right, badge_bottom,
+        active and ink or H.mix(badge_bg, ink, 0.38), UI.scaled(3), 0, UI.scaled(active and 1.5 or 1))
+    local size = badge_height * 0.34
+    local center_y = (badge_top + badge_bottom) * 0.5
+    local chord_x = badge_left + badge_width * 0.31
+    local radius = math.max(UI.scaled(1.2), size * 0.22)
+    local left_x, left_y = chord_x - size * 0.55, center_y + size * 0.55
+    local top_x, top_y = chord_x, center_y - size * 0.55
+    local lower_x, lower_y = chord_x + size * 0.55, center_y + size * 0.55
+    local stroke = UI.scaled(1.6)
+    r.ImGui_DrawList_AddLine(draw_list, left_x, left_y, top_x, top_y, ink, stroke)
+    r.ImGui_DrawList_AddLine(draw_list, top_x, top_y, lower_x, lower_y, ink, stroke)
+    r.ImGui_DrawList_AddLine(draw_list, lower_x, lower_y, left_x, left_y, ink, stroke)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, left_x, left_y, radius, ink)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, top_x, top_y, radius, ink)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, lower_x, lower_y, radius, ink)
+    if slot.chord_follow == "root" then
+        local arrow_x = badge_left + badge_width * 0.70
+        r.ImGui_DrawList_AddLine(draw_list, arrow_x - size * 0.5, center_y,
+            arrow_x + size * 0.25, center_y, ink, UI.scaled(2))
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, arrow_x + size * 0.1, center_y - size * 0.45,
+            arrow_x + size * 0.1, center_y + size * 0.45, arrow_x + size * 0.75, center_y, ink)
+    elseif slot.chord_follow == "scale" then
+        local bar_x = badge_left + badge_width * 0.61
+        local bar_right = badge_right - UI.scaled(4)
+        r.ImGui_DrawList_AddLine(draw_list, bar_x, center_y - size * 0.3,
+            bar_right, center_y - size * 0.3, ink, UI.scaled(2))
+        r.ImGui_DrawList_AddLine(draw_list, bar_x, center_y + size * 0.3,
+            bar_right, center_y + size * 0.3, ink, UI.scaled(2))
+    else
+        local cross_x = badge_left + badge_width * 0.72
+        r.ImGui_DrawList_AddLine(draw_list, cross_x - size * 0.55, center_y - size * 0.55,
+            cross_x + size * 0.55, center_y + size * 0.55, ink, UI.scaled(2))
+        r.ImGui_DrawList_AddLine(draw_list, cross_x - size * 0.55, center_y + size * 0.55,
+            cross_x + size * 0.55, center_y - size * 0.55, ink, UI.scaled(2))
     end
 end
 
@@ -5671,21 +6079,23 @@ function H.draw_cell(lane, lane_index, row, box_height)
     else
         -- The play position bar owns a strip along the bottom, so nothing else
         -- is laid out into it and the name cannot be struck through.
-        local bar_strip = UI.scaled(8)
         local _, text_height = r.ImGui_CalcTextSize(UI.ctx, "A")
-        local label_y = math.floor(y + (height - bar_strip - text_height) * 0.5 + 0.5)
+        local bar_strip = height >= text_height + UI.scaled(12) and UI.scaled(8) or 0
+        local label_y = math.floor(y + math.max(UI.scaled(1), (height - bar_strip - text_height) * 0.5) + 0.5)
         if L.big_cells then
             -- Waveform on top, name underneath, the same reading order as the
             -- cards in the Items view.
             local pad = UI.scaled(4)
-            label_y = y + height - bar_strip - text_height - UI.scaled(2)
+            label_y = math.max(y + UI.scaled(1), y + height - bar_strip - text_height - UI.scaled(2))
             if visible and UI.preview then
                 local preview_height = (label_y - UI.scaled(4)) - (y + pad)
                 if preview_height > UI.scaled(8) then
                     UI.preview(draw_list, H.slot_entry(slot, color), x + pad, y + pad, width - pad * 2, preview_height)
                 end
             end
-            r.ImGui_DrawList_AddLine(draw_list, x + UI.scaled(4), label_y - UI.scaled(3), x + width - UI.scaled(4), label_y - UI.scaled(3), UI.colors.border, UI.scaled(1))
+            if label_y - UI.scaled(3) > y then
+                r.ImGui_DrawList_AddLine(draw_list, x + UI.scaled(4), label_y - UI.scaled(3), x + width - UI.scaled(4), label_y - UI.scaled(3), UI.colors.border, UI.scaled(1))
+            end
         end
         local glyph_x = x + UI.scaled(8)
         local glyph_y = label_y + text_height * 0.5
@@ -5701,10 +6111,13 @@ function H.draw_cell(lane, lane_index, row, box_height)
         end
         r.ImGui_DrawList_AddText(draw_list, x + UI.scaled(20), label_y, UI.colors.text, H.truncate(slot.name, width - UI.scaled(30)))
         if slot.is_midi and not L.big_cells then
-            r.ImGui_DrawList_AddRectFilled(draw_list, x + width - UI.scaled(9), y + UI.scaled(9), x + width - UI.scaled(5), y + UI.scaled(13), UI.colors.accent_soft)
+            local midi_y = math.min(y + UI.scaled(15), y + height - UI.scaled(5))
+            r.ImGui_DrawList_AddRectFilled(draw_list, x + width - UI.scaled(9), midi_y, x + width - UI.scaled(5), midi_y + UI.scaled(4), UI.colors.accent_soft)
         end
         H.draw_key_mark(draw_list, slot, x, y, width, background)
-        if playing and H.valid_item(lane.current.item) and H.slot_loop(slot) > 0 then
+        H.draw_chord_follow_mark(draw_list, slot, x, y, width, height, background)
+        if playing and height >= text_height + UI.scaled(10)
+            and H.valid_item(lane.current.item) and H.slot_loop(slot) > 0 then
             local heard = H.heard_pos()
             local start = r.GetMediaItemInfo_Value(lane.current.item, "D_POSITION")
             -- For a retriggering one-shot the grid is the beat, not the sample.
@@ -5783,6 +6196,8 @@ function H.draw_cell(lane, lane_index, row, box_height)
             return
         end
         r.ImGui_SetTooltip(UI.ctx, slot.name .. key_hint .. H.key_state_text(slot) .. follow_note
+            .. (slot.is_midi and ("\nChord follow: " .. (slot.chord_follow == "scale" and "scale degree"
+                or (slot.chord_follow == "root" and "root" or "off"))) or "")
             .. "\nClick to launch  |  right-click for options"
             .. "\nAlt-drag to another slot to move it, onto the arrange to place it"
             .. "\nDelete empties the outlined slot"
@@ -6900,6 +7315,9 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
     if r.ImGui_BeginPopupContextItem(UI.ctx, "##launch_head_ctx_" .. lane_index) then
         r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, H.lane_label(lane))
         r.ImGui_Separator(UI.ctx)
+        if r.ImGui_MenuItem(UI.ctx, "Rename lane and track...") then H.ask_lane_name(lane) end
+        if r.ImGui_MenuItem(UI.ctx, "Change lane and track colour...") then H.ask_lane_colour(lane) end
+        r.ImGui_Separator(UI.ctx)
         if r.ImGui_MenuItem(UI.ctx, "Stop lane") then H.stop_lane(lane) end
         if r.ImGui_MenuItem(UI.ctx, "Mute this track's arrangement", nil, H.lane_silenced(lane)) then
             H.toggle_lane_arrangement(lane)
@@ -7148,19 +7566,25 @@ function H.edit_slot_midi(lane, row)
         r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 1)
         r.TrackList_AdjustWindows(false)
     end
-    local kept = {}
-    for index = 0, r.CountSelectedMediaItems(0) - 1 do
-        kept[#kept + 1] = r.GetSelectedMediaItem(0, index)
+    local kept = L.midi_edit and L.midi_edit.selected or {}
+    local hidden_tracks = L.midi_edit and L.midi_edit.hidden_tracks or {}
+    if hidden then
+        local known = false
+        for _, hidden_track in ipairs(hidden_tracks) do
+            if hidden_track == track then known = true break end
+        end
+        if not known then hidden_tracks[#hidden_tracks + 1] = track end
+    end
+    if not L.midi_edit then
+        for index = 0, r.CountSelectedMediaItems(0) - 1 do
+            kept[#kept + 1] = r.GetSelectedMediaItem(0, index)
+        end
     end
     r.SelectAllMediaItems(0, false)
     r.SetMediaItemSelected(item, true)
     -- Item: Open in built-in MIDI editor
     r.Main_OnCommand(40153, 0)
-    r.SelectAllMediaItems(0, false)
-    for _, previous in ipairs(kept) do
-        if H.valid_item(previous) then r.SetMediaItemSelected(previous, true) end
-    end
-    if hidden then L.midi_edit = { track = track } end
+    L.midi_edit = { hidden_tracks = hidden_tracks, selected = kept }
     L.status = "Editing " .. (slot.name or "clip")
 end
 
@@ -7170,9 +7594,17 @@ function H.watch_midi_editor()
     local watching = L.midi_edit
     if not watching then return end
     if r.MIDIEditor_GetActive and r.MIDIEditor_GetActive() then return end
-    if H.valid_track(watching.track) then
-        r.SetMediaTrackInfo_Value(watching.track, "B_SHOWINTCP", 0)
-        r.TrackList_AdjustWindows(false)
+    local tracks_hidden = false
+    for _, track in ipairs(watching.hidden_tracks or {}) do
+        if H.valid_track(track) then
+            r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", 0)
+            tracks_hidden = true
+        end
+    end
+    if tracks_hidden then r.TrackList_AdjustWindows(false) end
+    r.SelectAllMediaItems(0, false)
+    for _, previous in ipairs(watching.selected or {}) do
+        if H.valid_item(previous) then r.SetMediaItemSelected(previous, true) end
     end
     L.midi_edit = nil
 end
@@ -7548,6 +7980,8 @@ function Launcher.update()
     H.run_file_prompt()
     H.run_chain_prompt()
     H.run_rename_prompt()
+    H.run_lane_name_prompt()
+    H.run_lane_colour_prompt()
     H.run_set_prompt()
     H.run_match_prompt()
     H.run_library_prompt()
@@ -7707,6 +8141,7 @@ function H.capture_span(lane, voice, until_time)
         if finish - position < 0.01 then return end
         local copy = H.copy_item(media, lane_track, position)
         if not copy then return end
+        H.detach_midi_source(copy)
         r.SetMediaItemInfo_Value(copy, "D_LENGTH", finish - position)
         r.SetMediaItemInfo_Value(copy, "B_MUTE", 1)
         r.SetMediaItemInfo_Value(copy, "B_LOOPSRC",
@@ -7739,6 +8174,7 @@ function H.capture_playing(lane, now)
             missed = missed + 1
             return
         end
+        H.detach_midi_source(copy)
         r.SetMediaItemInfo_Value(copy, "D_LENGTH", math.max(0.01, math.min(length, now - position)))
         r.SetMediaItemInfo_Value(copy, "B_MUTE", 1)
         r.SetMediaItemInfo_Value(copy, "B_LOOPSRC", (r.GetMediaItemInfo_Value(media, "B_LOOPSRC") or 0) > 0.5 and 1 or 0)
@@ -7836,6 +8272,7 @@ function H.sweep_take_leftovers(from_time, until_time)
                 -- because the launcher put it there to sound; that is the whole
                 -- test.
                 if item and not already[item] and not (guid and library[guid]) then
+                    H.detach_midi_source(item)
                     if until_time and position < until_time
                         and position + length > until_time then
                         H.trim_to(item, until_time)
@@ -7869,10 +8306,6 @@ function H.finish_recording(at)
         end
         -- And then the timeline itself, for anything the bookkeeping lost.
         snapped = snapped + H.sweep_take_leftovers(L.record_from, at)
-    else
-        -- Stopped with no play position to work from. The timeline still knows
-        -- what was put on it.
-        snapped = snapped + H.sweep_take_leftovers(nil, nil)
         -- Everything ends on the same line, so the take is a whole number of
         -- bars however the individual clips happened to be running.
         for _, entry in ipairs(L.captured) do
@@ -7882,6 +8315,10 @@ function H.finish_recording(at)
             end
         end
         r.PreventUIRefresh(-1)
+    else
+        -- Stopped with no play position to work from. The timeline still knows
+        -- what was put on it.
+        snapped = snapped + H.sweep_take_leftovers(nil, nil)
     end
     -- Muted the moment recording stops, so a captured take cannot sound again
     -- on the next pass while you are still deciding what to do with it.
@@ -8339,6 +8776,27 @@ function H.toolbar_items()
             if r.ImGui_MenuItem(UI.ctx, key_label .. "...") then H.request_popup("##launch_key") end
         end })
 
+    local guide_track = H.guide_track()
+    add({ group = 3, width = UI.rounded(88),
+        draw = function()
+            if guide_track then
+                r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.accent_soft)
+                r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Border(), UI.colors.accent)
+            end
+            if r.ImGui_Button(UI.ctx, "Chords", UI.rounded(88), UI.rounded(26)) then
+                r.ImGui_OpenPopup(UI.ctx, "##launch_guide")
+            end
+            if guide_track then r.ImGui_PopStyleColor(UI.ctx, 2) end
+            if r.ImGui_IsItemHovered(UI.ctx) then
+                r.ImGui_SetTooltip(UI.ctx, guide_track
+                    and ("Chord guide: " .. H.track_name(guide_track, "Track"))
+                    or "Choose a MIDI track that describes the session harmony")
+            end
+        end,
+        menu = function()
+            if r.ImGui_MenuItem(UI.ctx, "Chord guide...") then H.request_popup("##launch_guide") end
+        end })
+
     local tempo_sync = L.tempo_sync
     add({ group = 3, width = UI.rounded(84),
         draw = function()
@@ -8430,6 +8888,7 @@ function Launcher.draw_toolbar()
     -- from the overflow menu still has to find its window here.
     H.draw_timing_popup()
     H.draw_key_popup()
+    H.draw_guide_popup()
     H.draw_set_popup()
 end
 
@@ -8831,6 +9290,18 @@ end
 
 function Launcher.status()
     return L.status
+end
+
+function Launcher.chord_status()
+    local track = H.guide_track()
+    if not track then return "", "" end
+    local current, next_chord = H.guide_at(H.schedule_pos() or r.GetCursorPosition())
+    local text = current and current.name or "-"
+    if next_chord then text = text .. "  >  " .. next_chord.name end
+    local tooltip = "Guide: " .. H.track_name(track, "Track")
+        .. "\nCurrent: " .. (current and current.name or "no recognized chord")
+        .. "\nNext: " .. (next_chord and next_chord.name or "-")
+    return text, tooltip
 end
 
 function Launcher.is_active()
