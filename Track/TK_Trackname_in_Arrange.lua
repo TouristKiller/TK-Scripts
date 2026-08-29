@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.6
+-- @version 1.9.7
 -- @changelog 
 --[[
+v1.9.7:
++ Fixed: a visible but unpinned master track could incorrectly clip the top of the first track's color overlay; master pinning now uses REAPER's B_TCPPIN state
+
 v1.9.6:
 + Fixed: the 8 px divider below pinned master/tracks could inherit the next track's overlay at certain track heights; pinned tracks are now detected through REAPER's B_TCPPIN state
 
@@ -4626,14 +4629,10 @@ function loop()
             local master_track = r.GetMasterTrack(0)
             local master_visible = r.GetMasterTrackVisibility() & (1<<0) ~= 0
             
-            if master_visible then
-                local master_y = r.GetMediaTrackInfo_Value(master_track, "I_TCPY") / screen_scale
+            if master_visible and r.GetMediaTrackInfo_Value(master_track, "B_TCPPIN") == 1 then
                 local master_height = r.GetMediaTrackInfo_Value(master_track, "I_WNDH") / screen_scale
-                
-                if math.abs(master_y) < 1 then
-                    pinned_status[-1] = true
-                    pinned_tracks_height = master_height
-                end
+                pinned_status[-1] = true
+                pinned_tracks_height = master_height
             end
             
             for i = 0, track_count - 1 do
