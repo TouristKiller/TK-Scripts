@@ -21,6 +21,7 @@
 -- allocate 10k arrays.
 
 local r = reaper
+local SampleShape = require("core.sample_shape")
 local M = {}
 
 local ENV_RATE     = 1000   -- coarse envelope resolution (Hz) = 1 ms per point
@@ -85,7 +86,7 @@ local function scratch_array(name, need)
   return slot.buf
 end
 
-local env_amp, hull, mag, mono, hp_env = {}, {}, {}, {}, {}
+local env_amp, shape_env, hull, mag, mono, hp_env = {}, {}, {}, {}, {}, {}
 
 local hann = {}
 for i = 1, FFT_SIZE do
@@ -313,6 +314,7 @@ local function analyze_source(src)
   for i = peak_i, direct_end do direct = direct + env_amp[i] * env_amp[i] end
   for i = direct_end + 1, math.min(env_n, decay_i) do tail = tail + env_amp[i] * env_amp[i] end
   local tail_ratio = direct > 1e-12 and (tail / direct) or 0
+  local shape = SampleShape.measure_envelope(env_amp, ENV_RATE, len, shape_env, env_n)
 
   -- 2. Samples around the onset, for attack, spectrum and width. Already in
   --    hand on the single-read path; otherwise one more read.
@@ -438,6 +440,7 @@ local function analyze_source(src)
     hf_ratio   = hf / total,
     width      = width,
     bands      = bands,
+    shape      = shape,
   }
 end
 

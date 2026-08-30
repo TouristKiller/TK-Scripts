@@ -32,14 +32,14 @@ local M = {}
 
 local CACHE_DIR   = r.GetResourcePath() .. "/TK_Kit_Maker"
 local CACHE_PATH  = CACHE_DIR .. "/tag_cache.tsv"
-local CACHE_TAG   = "TKKM-TAGS-1"
+local CACHE_TAG   = "TKKM-TAGS-2"
 local MAX_ENTRIES = 200000
 local FLUSH_EVERY = 200
-local FIELDS      = 19 -- 12 scalars + 7 band energies, see serialize()/parse_line()
+local FIELDS      = 23
 -- Byte size, written after the bands so caches from before it existed still
 -- load -- they simply carry no stamp, and nothing claims to know whether they
 -- are stale.
-local SIZE_FIELD  = 20
+local SIZE_FIELD  = 24
 
 -- Time budget per UI frame, in milliseconds.
 --
@@ -172,7 +172,7 @@ local function key_of(path)
   return (tostring(path or ""):gsub("\\", "/"))
 end
 
-local function parse_line(line)
+local function parse_line(line, fields, size_field)
   local path = line:match("([^\t]*)$")
   if not path or path == "" then return nil end
 
@@ -183,20 +183,24 @@ local function parse_line(line)
   end
   if n == 0 then return nil end
   if n == 1 and nums[1] == "-" then return path, false end
-  if n < FIELDS then return nil end
+  if n < fields then return nil end
 
   local v = {}
-  for i = 1, FIELDS do
+  for i = 1, fields do
     v[i] = tonumber(nums[i])
     if not v[i] then return nil end
   end
-  return path, {
+  local value = {
     dur = v[1], nch = v[2], attack_ms = v[3], decay_ms = v[4], decay10_ms = v[5],
     crest_db = v[6], centroid = v[7], flat = v[8], pitch = v[9],
     tail_ratio = v[10], hf_ratio = v[11], width = v[12],
     bands = { v[13], v[14], v[15], v[16], v[17], v[18], v[19] },
-    size = tonumber(nums[SIZE_FIELD]),
+    size = tonumber(nums[size_field]),
   }
+  if fields >= FIELDS then
+    value.shape = { onsets = v[20], spread = v[21] ~= 0, regular = v[22] ~= 0, sustain = v[23] }
+  end
+  return path, value
 end
 
 -- Byte size of a file, or nil. Used as the "has this changed" stamp: cheap,
@@ -218,12 +222,18 @@ local function load_cache()
   loaded = true
   local f = io.open(CACHE_PATH, "r")
   if not f then return end
-  if f:read("*l") ~= CACHE_TAG then
+  local tag = f:read("*l")
+  local fields, size_field
+  if tag == CACHE_TAG then
+    fields, size_field = FIELDS, SIZE_FIELD
+  elseif tag == "TKKM-TAGS-1" then
+    fields, size_field = 19, 20
+  else
     f:close()
     return
   end
   for line in f:lines() do
-    local path, value = parse_line(line)
+    local path, value = parse_line(line, fields, size_field)
     if path then
       cache[path] = value
       entries = entries + 1
@@ -238,13 +248,15 @@ end
 
 local function serialize(m)
   local b = m.bands or {}
+  local s = m.shape or {}
   return string.format(
     "%.5g\t%d\t%.5g\t%.5g\t%.5g\t%.5g\t%.5g\t%.5g\t%.5g\t%.5g\t%.5g\t%.5g"
-      .. "\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%d",
+      .. "\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%d\t%d\t%d\t%.5g\t%d",
     m.dur or 0, m.nch or 1, m.attack_ms or 0, m.decay_ms or 0, m.decay10_ms or 0,
     m.crest_db or 0, m.centroid or 0, m.flat or 0, m.pitch or 0,
     m.tail_ratio or 0, m.hf_ratio or 0, m.width or 0,
     b[1] or 0, b[2] or 0, b[3] or 0, b[4] or 0, b[5] or 0, b[6] or 0, b[7] or 0,
+    s.onsets or 0, s.spread and 1 or 0, s.regular and 1 or 0, s.sustain or 0,
     m.size or 0)
 end
 

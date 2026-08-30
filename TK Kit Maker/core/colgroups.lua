@@ -178,4 +178,58 @@ function M.rename(collections, from, to)
   return n
 end
 
+function M.remove(collections, group)
+  local key = key_of(group)
+  local removed = {}
+  if key == "" then return removed end
+  for i = #(collections or {}), 1, -1 do
+    if key_of(collections[i].group) == key then
+      table.insert(removed, 1, table.remove(collections, i))
+    end
+  end
+  return removed
+end
+
+function M.select(collections, selected, anchor_id, clicked_id, ctrl, shift)
+  local out = {}
+  if ctrl then
+    for id, value in pairs(selected or {}) do
+      if value then out[id] = true end
+    end
+  end
+
+  if shift then
+    local first, last
+    for i, collection in ipairs(collections or {}) do
+      if collection.id == anchor_id then first = i end
+      if collection.id == clicked_id then last = i end
+    end
+    if not first then first = last end
+    if first and last then
+      if first > last then first, last = last, first end
+      for i = first, last do out[collections[i].id] = true end
+    end
+    return out, anchor_id or clicked_id, clicked_id
+  end
+
+  if ctrl then
+    if out[clicked_id] then
+      out[clicked_id] = nil
+      local primary
+      for _, collection in ipairs(collections or {}) do
+        if out[collection.id] then primary = collection.id break end
+      end
+      if not primary then
+        out[clicked_id] = true
+        primary = clicked_id
+      end
+      return out, clicked_id, primary
+    end
+    out[clicked_id] = true
+    return out, clicked_id, clicked_id
+  end
+
+  return { [clicked_id] = true }, clicked_id, clicked_id
+end
+
 return M

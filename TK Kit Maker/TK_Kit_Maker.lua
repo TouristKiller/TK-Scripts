@@ -1,7 +1,24 @@
 -- @description TK Kit Maker
 -- @author TouristKiller & Flurmechanik
--- @version 0.2.51
+-- @version 0.2.52
 -- @changelog:
+--   0.2.52
+--   # Generated kit names now keep "A" and "The" at the beginning instead of
+--     putting them at the end of the name.
+--   + Multiple kits can now be selected in the Kit Browser: Ctrl-click toggles
+--     individual kits and Shift-click selects a range.
+--   + Right-click a selected kit to remove the whole selection from the
+--     browser at once. Kit folders and samples on disk are left untouched.
+--   + An imported kit group can also be removed at once from its group header.
+--   + Random kit names can use either all three word lists every time, or make
+--     only the second list optional. The first and third lists are always used.
+--   # A cover image deleted from disk no longer stops Kit Maker on startup.
+--     Its stale browser reference is removed before ReaImGui tries to load it.
+--   + Browser sorting by transient and frequency, in both directions. Existing
+--     sample analysis is reused; unanalysed samples stay at the end of the list.
+--   + All, Loop and One-shot filters in the Browser, Folder Explosion and each
+--     Builder pool, using cached waveform shape and filename evidence.
+--
 --   0.2.51
 --   # Export to MIDI now plays what the sequencer plays. It did not, in three
 --     different ways, and all three came down to one thing: two notes of the

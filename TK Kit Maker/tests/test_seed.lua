@@ -133,6 +133,20 @@ check("kit 1 is the seed itself", Engine.seed_for({ seed = 84213 }, 1) == 84213)
 check("kit 34 is seed + 33", Engine.seed_for({ seed = 84213 }, 34) == 84246)
 check("no seed means no seed", Engine.seed_for({}, 3) == nil)
 
+local Wordlist = require("core.wordlist")
+Rng.use(84213)
+local with_a = Wordlist.suggest_name(KIT, { seed_word = "a", word_count = 2 })
+local with_the = Wordlist.suggest_name(KIT, { seed_word = "the", word_count = 2 })
+check("A stays at the beginning", with_a:match("^A ") ~= nil, with_a)
+check("The stays at the beginning", with_the:match("^The ") ~= nil, with_the)
+check("articles do not replace a name word", #({ with_a:gsub("%S+", "") }) > 0 and select(2, with_a:gsub("%S+", "")) == 3, with_a)
+local fixed_name = Wordlist.suggest_name(KIT, { word_count = 3 })
+local variable_name = Wordlist.suggest_name(KIT, {})
+check("fixed mode uses three words", select(2, fixed_name:gsub("%S+", "")) == 3, fixed_name)
+local variable_count = select(2, variable_name:gsub("%S+", ""))
+check("variable mode uses two or three words", variable_count == 2 or variable_count == 3, variable_name)
+Rng.clear()
+
 -- 7. The fingerprint must not depend on the order it is handed the files. The
 -- Builder walks its pools with pairs(), whose order is not stable even between
 -- two runs of the same script -- so an order-sensitive hash would have given

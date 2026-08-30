@@ -238,6 +238,12 @@ check("renaming the empty group moves nothing", G.rename(safe, "", "Oops") == 0)
 check("so the loose one stays loose", ids(G.build(safe).ungrouped) == "a",
   ids(G.build(safe).ungrouped))
 
+local removable = { col("kit1", "Imported"), col("keep", "Other"), col("kit2", "imported") }
+local removed = G.remove(removable, "IMPORTED")
+check("removing a group returns all of its kits", ids(removed) == "kit1,kit2", ids(removed))
+check("removing a group leaves other kits alone", ids(removable) == "keep", ids(removable))
+check("removing an empty group does nothing", #G.remove(removable, "") == 0, ids(removable))
+
 -- --------------------------------------------------------------------------
 -- 8. Collapsed state comes in by key, so it survives a differently spelled name.
 -- --------------------------------------------------------------------------
@@ -246,6 +252,20 @@ local b9 = G.build(lib, { ["samples from mars"] = true })
 check("the group reads as collapsed", b9.groups[1].collapsed == true, b9.groups[1].collapsed)
 check("an empty library is fine", #G.build({}).groups == 0)
 check("and no library at all", #G.build(nil).ungrouped == 0)
+
+print("multiple selection")
+local selectable = { col("a"), col("b"), col("c"), col("d") }
+local selection, anchor, primary = G.select(selectable, nil, nil, "b", false, false)
+check("plain click selects one", selection.b and not selection.a and primary == "b", primary)
+selection, anchor, primary = G.select(selectable, selection, anchor, "d", true, false)
+check("control click adds one", selection.b and selection.d and primary == "d", primary)
+selection, anchor, primary = G.select(selectable, selection, anchor, "b", true, false)
+check("control click removes one", not selection.b and selection.d and primary == "d", primary)
+selection, anchor, primary = G.select(selectable, selection, "b", "d", false, true)
+check("shift click selects a range", selection.b and selection.c and selection.d and not selection.a, primary)
+selection, anchor, primary = G.select(selectable, selection, anchor, "c", true, false)
+selection, anchor, primary = G.select(selectable, selection, anchor, "c", true, false)
+check("the last selected kit stays selected", selection.c and primary == "c", primary)
 
 print()
 print(fail == 0 and "ALL CHECKS PASSED" or (fail .. " CHECK(S) FAILED"))

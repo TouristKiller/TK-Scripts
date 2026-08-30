@@ -121,6 +121,20 @@ check("unknown lengths stay last in both directions",
   leaves(up):match("unknown_a%.wav, unknown_b%.wav$") ~= nil and
   leaves(dn):match("unknown_a%.wav, unknown_b%.wav$") ~= nil)
 
+local measured = { ["/x/soft.wav"] = 0.1, ["/x/mid.wav"] = 0.5, ["/x/hard.wav"] = 0.9 }
+local character_files = { "/x/hard.wav", "/x/unknown.wav", "/x/soft.wav", "/x/mid.wav" }
+local metric = function(path) return measured[path] end
+check("transients sort soft to hard", leaves(Sort.apply(character_files, "transient", false, metric)) ==
+  "soft.wav, mid.wav, hard.wav, unknown.wav", leaves(Sort.apply(character_files, "transient", false, metric)))
+check("transients sort hard to soft", leaves(Sort.apply(character_files, "transient", true, metric)) ==
+  "hard.wav, mid.wav, soft.wav, unknown.wav", leaves(Sort.apply(character_files, "transient", true, metric)))
+check("frequency uses the same numeric ordering", leaves(Sort.apply(character_files, "frequency", false, metric)) ==
+  "soft.wav, mid.wav, hard.wav, unknown.wav", leaves(Sort.apply(character_files, "frequency", false, metric)))
+check("new sort labels show direction", Sort.button_label("transient", false) == "Soft-Hard"
+  and Sort.button_label("transient", true) == "Hard-Soft"
+  and Sort.button_label("frequency", false) == "Low-High"
+  and Sort.button_label("frequency", true) == "High-Low")
+
 -- --------------------------------------------------------------------------
 -- 6. Stability. Equal keys must not swap places between calls, or the list
 --    flickers and rows move out from under the pointer.

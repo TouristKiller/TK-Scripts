@@ -222,28 +222,34 @@ function M.suggest_name(script_path, opts)
   end
 
   local seed_tokens = split_seed(seed)
+  local article = nil
+  if seed_tokens[1] and (seed_tokens[1]:lower() == "a" or seed_tokens[1]:lower() == "the") then
+    article = table.remove(seed_tokens, 1)
+  end
   local parts = {}
   for _, token in ipairs(seed_tokens) do
     parts[#parts + 1] = token
     add_used(token)
   end
 
+  local function finish(value)
+    return article and (article .. " " .. value) or value
+  end
+
   local target_count = prefer_three and 3 or 2
   if #parts >= target_count then
     local out = {}
     for i = 1, target_count do out[i] = parts[i] end
-    return table.concat(out, " ")
+    return finish(table.concat(out, " "))
   end
 
   if #parts == 0 then
     local first = pick_not_used(dlist)
     parts[#parts + 1] = first
-    if target_count == 3 and Rng.random() < 0.52 then
-      parts[#parts + 1] = pick_not_used(dlist)
-    elseif target_count == 3 then
+    if target_count == 3 then
       parts[#parts + 1] = pick_not_used(nlist)
     end
-    parts[#parts + 1] = pick_not_used(target_count == 3 and tlist or nlist)
+    parts[#parts + 1] = pick_not_used(tlist)
   else
     local first_seed = parts[1]
     local first_is_descriptor = is_descriptor(first_seed)
@@ -267,7 +273,7 @@ function M.suggest_name(script_path, opts)
     table.remove(parts)
   end
 
-  return table.concat(parts, " ")
+  return finish(table.concat(parts, " "))
 end
 
 function M.random_name(script_path)

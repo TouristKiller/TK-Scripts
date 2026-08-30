@@ -20,6 +20,7 @@ local Sort = require("core.sortlist")
 local Groups = require("core.colgroups")
 local WavCues = require("core.wavcues")
 local Peaks = require("core.peaks")
+local SampleShape = require("core.sample_shape")
 
 local M = {}
 
@@ -62,9 +63,20 @@ local function is_image_file(path)
   return ext ~= nil and IMAGE_EXT[ext:lower()] == true
 end
 
+local function file_exists(path)
+  if not path or path == "" then return false end
+  if r.file_exists then return r.file_exists(path) end
+  local file = io.open(path, "rb")
+  if file then file:close() return true end
+  return false
+end
+
 local function validate_cover_image(state, path)
   if not is_image_file(path) then
     return false, "Selected file is not a supported image."
+  end
+  if not file_exists(path) then
+    return false, "Selected image no longer exists."
   end
   if not r.ImGui_CreateImage then
     return false, "Image loading API is not available."
@@ -270,6 +282,12 @@ local function set_selected_collection(state, id)
   end
 end
 
+local function set_single_kit_selection(state, id)
+  set_selected_collection(state, id)
+  state.kit_multi_selected = id and { [id] = true } or {}
+  state.kit_selection_anchor = id
+end
+
 local function mode_label(state)
   return state.browser_mode == "kits" and "Kit Browser" or "Sample Pack Browser"
 end
@@ -281,7 +299,12 @@ local function switch_browser_mode(app, mode)
 
   state.browser_mode = mode
   if mode == "kits" then
-    set_selected_collection(state, state.kit_selected_id or (state.kit_collections[1] and state.kit_collections[1].id or nil))
+    local id = state.kit_selected_id or (state.kit_collections[1] and state.kit_collections[1].id or nil)
+    if id and not next(state.kit_multi_selected) then
+      set_single_kit_selection(state, id)
+    else
+      set_selected_collection(state, id)
+    end
   else
     set_selected_collection(state, state.sample_selected_id or (state.collections[1] and state.collections[1].id or nil))
   end
@@ -318,6 +341,61 @@ local function ordered_collections(state)
   return ordered
 end
 
+local function selectable_collections(state)
+  local built = Groups.build(active_collections(state), state.collapsed_groups,
+    state.collections_flat == true)
+  local ordered, seen = {}, {}
+  local function add(list)
+    for _, collection in ipairs(list) do
+      if not seen[collection.id] then
+        seen[collection.id] = true
+        ordered[#ordered + 1] = collection
+      end
+    end
+  end
+  add(built.pinned)
+  for _, group in ipairs(built.groups) do
+    if not group.collapsed then add(group.items) end
+  end
+  add(built.ungrouped)
+  return ordered
+end
+
+local function collection_selected(state, id)
+  return state.browser_mode == "kits"
+    and state.kit_multi_selected[id] == true
+    or state.selected_id == id
+end
+
+local function selected_kit_count(state)
+  local count = 0
+  for _, collection in ipairs(state.kit_collections) do
+    if state.kit_multi_selected[collection.id] then count = count + 1 end
+  end
+  return count
+end
+
+local function select_collection(app, collection, force_single)
+  local state = app.browser
+  if state.browser_mode == "kits" then
+    local ctrl, shift = false, false
+    if not force_single and r.ImGui_GetKeyMods then
+      local mods = r.ImGui_GetKeyMods(app.ctx)
+      ctrl = r.ImGui_Mod_Ctrl and (mods & r.ImGui_Mod_Ctrl()) ~= 0
+      shift = r.ImGui_Mod_Shift and (mods & r.ImGui_Mod_Shift()) ~= 0
+    end
+    local selected, anchor, primary = Groups.select(selectable_collections(state),
+      state.kit_multi_selected, state.kit_selection_anchor, collection.id, ctrl, shift)
+    state.kit_multi_selected = selected
+    state.kit_selection_anchor = anchor
+    set_selected_collection(state, primary)
+  else
+    set_selected_collection(state, collection.id)
+  end
+  save(app)
+  refresh_collection(app, false)
+end
+
 local function truncate_text(text, max_chars)
   local s = tostring(text or "")
   local n = as_number(max_chars) or 24
@@ -328,6 +406,10 @@ end
 
 local function cover_texture(state, path)
   if not path or path == "" then return nil end
+  if not file_exists(path) then
+    state.cover_cache[path] = nil
+    return nil, true
+  end
   local cached = state.cover_cache[path]
   if cached and cached ~= false and r.ImGui_ValidatePtr then
     local ok, valid = pcall(r.ImGui_ValidatePtr, cached, "ImGui_Image*")
@@ -358,6 +440,19 @@ local function cached_seconds(path)
   return nil
 end
 
+local function cached_sort_value(path, mode)
+  if mode == "length" then return cached_seconds(path) end
+  if mode == "transient" then
+    local axes = Tags.axes(path)
+    return axes and axes.att01 or nil
+  end
+  if mode == "frequency" then
+    local metrics = Tags.get(path)
+    return metrics and metrics.centroid or nil
+  end
+  return nil
+end
+
 -- Builds the list you look at.
 --
 -- state.filtered_files keeps the scan order and is what the heatmap and the
@@ -372,12 +467,15 @@ local function refresh_sort(app, force)
   -- Sorting by length can only place a file whose length is known, and the
   -- cache fills in the background. Counting the cache in blocks re-sorts as the
   -- answers come in without redoing it on every single one.
-  local progress = (mode == "length") and math.floor(Duration.cache_size() / 128) or 0
+  local analysis_sort = mode == "transient" or mode == "frequency"
+  local progress = (mode == "length") and math.floor(Duration.cache_size() / 128)
+    or (analysis_sort and (math.floor(Tags.cache_size() / 32) .. ":" .. tostring(state.analysis_job == nil)) or 0)
   local key = table.concat({ mode, tostring(desc), tostring(#files), tostring(progress) }, "|")
   if not force and state.sort_key == key then return end
 
   state.sort_key = key
-  state.display_files = Sort.apply(files, mode, desc, mode == "length" and cached_seconds or nil)
+  state.display_files = Sort.apply(files, mode, desc,
+    mode ~= "name" and function(path) return cached_sort_value(path, mode) end or nil)
 end
 
 -- Reads a few lengths per frame while length sorting is on, so a pack that has
@@ -421,6 +519,7 @@ local function apply_filter(app)
 
   local search = (state.search or ""):lower()
   local tag_key = Tags.filter_key(state.tag_filter)
+  local shape_mode = state.shape_mode or "all"
 
   -- The name-filtered set is cached on its own key. The tag chips are counted
   -- over it, so they describe what is actually in front of you instead of the
@@ -457,6 +556,19 @@ local function apply_filter(app)
       end
       state.filter_cache[fkey] = filtered
     end
+  end
+
+  if shape_mode ~= "all" then
+    local fkey = nkey .. "|" .. tag_key .. "|shape:" .. shape_mode .. ":" .. tostring(Tags.cache_size())
+    local shaped = state.filter_cache[fkey]
+    if not shaped then
+      shaped = {}
+      for _, f in ipairs(filtered) do
+        if SampleShape.matches(f, shape_mode, Tags.get(f), true) then shaped[#shaped + 1] = f end
+      end
+      state.filter_cache[fkey] = shaped
+    end
+    filtered = shaped
   end
 
   state.filtered_files = filtered
@@ -503,6 +615,12 @@ refresh_collection = function(app, force_scan)
     state.selected_file = nil
     state.last_scan_label = nil
     return
+  end
+
+  if col.cover_path and not file_exists(col.cover_path) then
+    state.cover_cache[col.cover_path] = nil
+    col.cover_path = nil
+    save(app)
   end
 
   if (not col.cover_path or col.cover_path == "") then
@@ -1504,7 +1622,11 @@ local function add_collection(app)
 
   local id = make_collection(app, folder)
   if not id then return end
-  set_selected_collection(app.browser, id)
+  if app.browser.browser_mode == "kits" then
+    set_single_kit_selection(app.browser, id)
+  else
+    set_selected_collection(app.browser, id)
+  end
   save(app)
   refresh_collection(app, false)
 end
@@ -1609,7 +1731,13 @@ local function add_subfolders_as_collections(app)
     end
   end
 
-  if first then set_selected_collection(state, first) end
+  if first then
+    if kits then
+      set_single_kit_selection(state, first)
+    else
+      set_selected_collection(state, first)
+    end
+  end
   state.preview_error = string.format("Added %d %s%s under \"%s\".",
     added, what, added == 1 and "" or "s", group)
   save(app)
@@ -1636,6 +1764,94 @@ local function remove_selected_collection(app)
   table.remove(collections, idx)
   local next_id = collections[1] and collections[1].id or nil
   set_selected_collection(state, next_id)
+  if state.browser_mode == "kits" then
+    state.kit_multi_selected = next_id and { [next_id] = true } or {}
+    state.kit_selection_anchor = next_id
+  end
+  save(app)
+  refresh_collection(app, false)
+end
+
+local function remove_selected_kits(app)
+  local state = app.browser
+  local count = selected_kit_count(state)
+  if count == 0 then return end
+  if r.ShowMessageBox then
+    local answer = r.ShowMessageBox(
+      string.format("Remove %d selected kits from the browser?\n\nThe kit folders and samples will not be deleted.", count),
+      "Remove selected kits", 1)
+    if answer ~= 1 then return end
+  end
+
+  local collections = state.kit_collections
+  for i = #collections, 1, -1 do
+    local col = collections[i]
+    if state.kit_multi_selected[col.id] then
+      local key = collection_key(col)
+      state.scan_cache[key] = nil
+      local prefix = key .. "|"
+      for cache_key in pairs(state.filter_cache) do
+        if cache_key:sub(1, #prefix) == prefix then state.filter_cache[cache_key] = nil end
+      end
+      table.remove(collections, i)
+    end
+  end
+
+  local next_id = collections[1] and collections[1].id or nil
+  set_selected_collection(state, next_id)
+  state.kit_multi_selected = next_id and { [next_id] = true } or {}
+  state.kit_selection_anchor = next_id
+  state.preview_error = string.format("Removed %d selected kits from the browser.", count)
+  save(app)
+  refresh_collection(app, false)
+end
+
+local function remove_collection_group(app, group)
+  local state = app.browser
+  local count = #group.items
+  if count == 0 then return end
+  local selected_id = state.selected_id
+
+  if r.ShowMessageBox then
+    local answer = r.ShowMessageBox(
+      string.format("Remove %d kits in \"%s\" from the browser?\n\nThe kit folders and samples will not be deleted.",
+        count, group.name),
+      "Remove multiple kits", 1)
+    if answer ~= 1 then return end
+  end
+
+  local removed = Groups.remove(active_collections(state), group.name)
+  for _, col in ipairs(removed) do
+    state.kit_multi_selected[col.id] = nil
+    local key = collection_key(col)
+    state.scan_cache[key] = nil
+    local prefix = key .. "|"
+    for cache_key in pairs(state.filter_cache) do
+      if cache_key:sub(1, #prefix) == prefix then
+        state.filter_cache[cache_key] = nil
+      end
+    end
+  end
+
+  state.collapsed_groups[group.key] = nil
+  local collections = active_collections(state)
+  local next_id = nil
+  for _, col in ipairs(collections) do
+    if state.kit_multi_selected[col.id] then next_id = col.id break end
+  end
+  if not next_id then
+    for _, col in ipairs(collections) do
+      if col.id == selected_id then next_id = selected_id break end
+    end
+  end
+  set_selected_collection(state, next_id or (collections[1] and collections[1].id or nil))
+  local active_id = state.selected_id
+  if active_id and not next(state.kit_multi_selected) then
+    state.kit_multi_selected[active_id] = true
+  end
+  state.kit_selection_anchor = active_id
+  state.preview_error = string.format("Removed %d kit%s from the browser.",
+    #removed, #removed == 1 and "" or "s")
   save(app)
   refresh_collection(app, false)
 end
@@ -2149,7 +2365,13 @@ local function draw_collection_context_menu(app, col)
     end
 
     r.ImGui_Separator(ctx)
-    if r.ImGui_MenuItem(ctx, "Remove Collection##" .. col.id) then
+    local selected_count = not is_packs and selected_kit_count(state) or 0
+    if selected_count > 1 and r.ImGui_MenuItem(ctx,
+        string.format("Remove %d selected kits##remove_selected_%s", selected_count, col.id)) then
+      remove_selected_kits(app)
+      r.ImGui_CloseCurrentPopup(ctx)
+    end
+    if r.ImGui_MenuItem(ctx, (is_packs and "Remove Collection##" or "Remove Kit##") .. col.id) then
       state.selected_id = col.id
       remove_selected_collection(app)
       r.ImGui_CloseCurrentPopup(ctx)
@@ -2659,6 +2881,14 @@ local function draw_group_header(app, group, id_suffix)
       state.collapsed_groups[group.key] = nil
       save(app)
     end
+    if state.browser_mode == "kits" then
+      r.ImGui_Separator(ctx)
+      if r.ImGui_MenuItem(ctx, string.format("Remove all %d kits##colgrp_remove_%s",
+          #group.items, group.key)) then
+        remove_collection_group(app, group)
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+    end
     r.ImGui_EndPopup(ctx)
   end
 
@@ -2704,20 +2934,22 @@ local function draw_collections_panel(app, panel_h)
   local built = Groups.build(collections, state.collapsed_groups, state.collections_flat == true)
 
   local function draw_row(c)
-    local selected = state.selected_id == c.id
+    local selected = collection_selected(state, c.id)
     local prefix = c.pinned and "* " or "  "
     local cover = c.cover_path and " [cover]" or ""
     local label = prefix .. truncate_text(c.name, 40) .. cover .. "##" .. c.id
     if r.ImGui_Selectable(ctx, label, selected) then
-      state.selected_id = c.id
-      save(app)
-      refresh_collection(app, false)
+      select_collection(app, c, false)
     end
     if r.ImGui_IsItemHovered(ctx) then
       local tip = c.name .. "\n" .. c.path
       if c.group then tip = tip .. "\nGroup: " .. c.group end
       if c.cover_path then tip = tip .. "\nCover: " .. c.cover_path end
       r.ImGui_SetTooltip(ctx, tip)
+    end
+    if r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 1)
+        and not collection_selected(state, c.id) then
+      select_collection(app, c, true)
     end
     if r.ImGui_BeginPopupContextItem(ctx, "##col_ctx_" .. c.id) then
       r.ImGui_EndPopup(ctx)
@@ -2837,7 +3069,7 @@ local function draw_collections_panel(app, panel_h)
       r.ImGui_PushID(ctx, c.id)
       r.ImGui_BeginGroup(ctx)
 
-      local selected = state.selected_id == c.id
+      local selected = collection_selected(state, c.id)
       local bg = selected and Theme.colors.accent_soft or Theme.colors.frame_bg
       local border = selected and Theme.colors.accent or Theme.colors.border
       local tile_h = tile_w
@@ -2853,7 +3085,13 @@ local function draw_collections_panel(app, panel_h)
       if tile_visible then
         local cover_inset = 2
         local cover_path = c.cover_path
-        local tex = cover_texture(state, cover_path)
+        local tex, cover_missing = cover_texture(state, cover_path)
+        if cover_missing then
+          c.cover_path = nil
+          cover_path = nil
+          state.preview_error = "Cover image file no longer exists and has been removed."
+          save(app)
+        end
         local cover_drawn = false
         if tex and r.ImGui_Image then
           local img_w, img_h = 0, 0
@@ -2925,9 +3163,7 @@ local function draw_collections_panel(app, panel_h)
       r.ImGui_EndGroup(ctx)
 
       if pressed_tile then
-        state.selected_id = c.id
-        save(app)
-        refresh_collection(app, false)
+        select_collection(app, c, false)
       end
       if r.ImGui_IsItemHovered(ctx) then
         local tip = c.name .. "\n" .. c.path
@@ -2938,6 +3174,7 @@ local function draw_collections_panel(app, panel_h)
         end
       end
       if open_ctx then
+        if not collection_selected(state, c.id) then select_collection(app, c, true) end
         r.ImGui_OpenPopup(ctx, "##col_ctx_" .. c.id)
       end
       draw_collection_context_menu(app, c)
@@ -3052,6 +3289,11 @@ local function step_analysis(app)
   local state = app.browser
   local job = state.analysis_job
   if not job then return end
+  local shape_batch = math.floor(Tags.cache_size() / 32)
+  if state.shape_mode ~= "all" and state.shape_analysis_batch ~= shape_batch then
+    state.shape_analysis_batch = shape_batch
+    apply_filter(app)
+  end
   if not job:step(Tags.frame_budget()) then
     -- Kept so a change to the analyser can be compared against a number rather
     -- than a feeling: rescan the same pack and read this off.
@@ -3060,6 +3302,7 @@ local function step_analysis(app)
     end
     state.analysis_job = nil
     state.analysis_count = Tags.count_analyzed(state.files)
+    if state.shape_mode ~= "all" then apply_filter(app) end
   end
 end
 
@@ -3255,8 +3498,14 @@ local function draw_sort_popup(app)
   -- Named after what you get, not "Ascending" -- which of A-Z and Z-A is
   -- "ascending" is obvious for names and a coin flip for lengths.
   Theme.label(ctx, "Order")
-  local up_label = (mode == "length") and "Shortest first" or "A to Z"
-  local down_label = (mode == "length") and "Longest first" or "Z to A"
+  local up_label = mode == "length" and "Shortest first"
+    or mode == "transient" and "Softest first"
+    or mode == "frequency" and "Lowest first"
+    or "A to Z"
+  local down_label = mode == "length" and "Longest first"
+    or mode == "transient" and "Hardest first"
+    or mode == "frequency" and "Highest first"
+    or "Z to A"
   if r.ImGui_MenuItem(ctx, up_label .. "##sort_asc", nil, not desc) then
     state.sort_desc = false
     changed = true
@@ -4965,6 +5214,20 @@ local function draw_samples_panel(app)
   draw_tag_filter(app)
 
   r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 84)
+  local shape_label = state.shape_mode == "loop" and "Loop" or state.shape_mode == "oneshot" and "One-shot" or "All"
+  if r.ImGui_BeginCombo(ctx, "##shape_filter", shape_label) then
+    for _, option in ipairs({ { "all", "All" }, { "loop", "Loop" }, { "oneshot", "One-shot" } }) do
+      if r.ImGui_Selectable(ctx, option[2] .. "##shape_" .. option[1], state.shape_mode == option[1]) then
+        state.shape_mode = option[1]
+        save(app)
+        apply_filter(app)
+      end
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+
+  r.ImGui_SameLine(ctx)
   if state.last_scan_label then
     -- Just the figures: this row is crowded, and what they mean fits in a
     -- tooltip better than in a word repeated on every redraw.
@@ -5555,6 +5818,8 @@ function M.init(app)
     selected_id = loaded.selected_id,
     sample_selected_id = loaded.sample_selected_id or loaded.selected_id,
     kit_selected_id = loaded.kit_selected_id,
+    kit_multi_selected = loaded.kit_selected_id and { [loaded.kit_selected_id] = true } or {},
+    kit_selection_anchor = loaded.kit_selected_id,
     manager_visible = loaded.manager_visible == true,
     manager_mode = loaded.manager_mode == "make" and "make" or "view",
     search = loaded.search or "",
@@ -5610,7 +5875,8 @@ function M.init(app)
     tag_unmeasured = 0,
     sample_view = loaded.sample_view or "list",
     list_flat = loaded.list_flat == true,
-    sort_mode = (loaded.sort_mode == "length") and "length" or "name",
+    sort_mode = (loaded.sort_mode == "length" or loaded.sort_mode == "transient" or loaded.sort_mode == "frequency")
+      and loaded.sort_mode or "name",
     sort_desc = loaded.sort_desc == true,
     display_files = {},
     sort_key = nil,

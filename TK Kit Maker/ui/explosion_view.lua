@@ -15,6 +15,7 @@ local Tags     = require("core.tags")
 local Rng      = require("core.rng")
 local Character = require("ui.character")
 local PatternPresets = require("ui.pattern_presets")
+local SampleShape = require("core.sample_shape")
 
 local M = {}
 
@@ -32,9 +33,11 @@ function M.init(app)
     alias         = "",
     kit_name      = "",
     name_seed     = "",
+    name_mode     = "variable",
     count         = 16,
     start_note    = 36,
     recursive     = true,
+    shape_mode    = "all",
     stitched      = false,
     stitched_only = false,
     max_sample_seconds = 0,
@@ -62,6 +65,13 @@ local function rescan_preview(state)
   end
   local pool = { folders = { state.source_folder }, recursive = state.recursive }
   local files = Scanner.scan_pool(pool)
+  if state.shape_mode ~= "all" then
+    local shaped = {}
+    for _, path in ipairs(files) do
+      if SampleShape.matches(path, state.shape_mode, Tags.get(path), true) then shaped[#shaped + 1] = path end
+    end
+    files = shaped
+  end
   state.found_files = #files
   state.files = files
   -- Computed here rather than per frame: a seed only describes a kit together
@@ -138,6 +148,18 @@ function M.draw(app)
 
   local rec_changed, rec_value = r.ImGui_Checkbox(ctx, "Include subfolders##expl_recursive", state.recursive)
   if rec_changed then state.recursive = rec_value; rescan_preview(state) end
+  r.ImGui_SameLine(ctx)
+  r.ImGui_SetNextItemWidth(ctx, 100)
+  local shape_label = state.shape_mode == "loop" and "Loop" or state.shape_mode == "oneshot" and "One-shot" or "All"
+  if r.ImGui_BeginCombo(ctx, "##expl_shape", shape_label) then
+    for _, option in ipairs({ { "all", "All" }, { "loop", "Loop" }, { "oneshot", "One-shot" } }) do
+      if r.ImGui_Selectable(ctx, option[2] .. "##expl_shape_" .. option[1], state.shape_mode == option[1]) then
+        state.shape_mode = option[1]
+        rescan_preview(state)
+      end
+    end
+    r.ImGui_EndCombo(ctx)
+  end
   r.ImGui_SameLine(ctx)
   if Theme.ghost_button(ctx, "Rescan##expl_rescan") then rescan_preview(state) end
   if state.found_files ~= nil then
@@ -274,6 +296,19 @@ function M.draw(app)
   local seed_changed, seed_value = r.ImGui_InputTextWithHint(ctx, "Start word##expl_name_seed", "optional", state.name_seed or "")
   if seed_changed then state.name_seed = trim(seed_value) end
 
+  local name_mode = state.name_mode == "three" and "three" or "variable"
+  local name_mode_label = name_mode == "three" and "Always 3 words" or "Variable: 2 or 3 words"
+  r.ImGui_SetNextItemWidth(ctx, field_w)
+  if r.ImGui_BeginCombo(ctx, "Name structure##expl_name_mode", name_mode_label) then
+    if r.ImGui_Selectable(ctx, "Variable: list 1 + optional list 2 + list 3", name_mode == "variable") then
+      state.name_mode = "variable"
+    end
+    if r.ImGui_Selectable(ctx, "Always 3: list 1 + list 2 + list 3", name_mode == "three") then
+      state.name_mode = "three"
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+
   if Theme.ghost_button(ctx, "Generate kit name##expl_name_generate") then
     local pattern_specs = nil
     if state.pattern ~= "" then
@@ -281,6 +316,7 @@ function M.draw(app)
     end
     local kitdef, pools = Engine.kitdef_from_explosion({
       source_folder = state.source_folder,
+      shape_mode    = state.shape_mode,
       recursive     = state.recursive,
       alias         = state.alias,
       count         = state.count,
@@ -290,6 +326,7 @@ function M.draw(app)
       max_sample_seconds = state.max_sample_seconds,
       pattern       = pattern_specs,
       name_seed     = state.name_seed,
+      name_mode     = state.name_mode,
     })
     state.kit_name = Engine.suggest_kit_name(kitdef, pools, app.script_path, state.name_seed)
   end
@@ -463,6 +500,7 @@ function M.draw(app)
     end
     local kitdef, pools = Engine.kitdef_from_explosion({
       source_folder = state.source_folder,
+      shape_mode    = state.shape_mode,
       recursive     = state.recursive,
       alias         = state.alias,
       count         = state.count,
@@ -473,6 +511,7 @@ function M.draw(app)
       max_sample_seconds = state.max_sample_seconds,
       pattern       = pattern_specs,
       name_seed     = state.name_seed,
+      name_mode     = state.name_mode,
       name_prefix   = (trim(state.kit_name) ~= "") and trim(state.kit_name) or nil,
       length_bias   = state.length_bias,
       tag_bias      = state.tag_bias,

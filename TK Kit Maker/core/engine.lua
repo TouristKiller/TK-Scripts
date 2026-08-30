@@ -15,6 +15,7 @@ local Categories = require("core.categories")
 local Bias     = require("core.bias")
 local Tags     = require("core.tags")
 local Rng      = require("core.rng")
+local SampleShape = require("core.sample_shape")
 
 local M = {}
 
@@ -53,6 +54,7 @@ function M.suggest_kit_name(kitdef, pools, script_path, seed_word)
   return Wordlist.suggest_name(script_path, {
     seed_word = seed_word,
     context_words = context,
+    word_count = kitdef and kitdef.name_mode == "three" and 3 or nil,
   })
 end
 
@@ -71,11 +73,13 @@ end
 -- Each view carries its own use_up bag so no-repeat picking works within it.
 local function effective_pool(pool, max_seconds, spec, sort_by_length)
   local has_limit = max_seconds and max_seconds > 0
-  if not has_limit and not spec and not sort_by_length then return pool end
+  local shape_mode = pool.shape_mode or "all"
+  if not has_limit and not spec and not sort_by_length and shape_mode == "all" then return pool end
 
   local key = tostring(has_limit and max_seconds or 0) .. "|"
     .. (spec and (spec.keyword and ("k:" .. spec.keyword:lower()) or ("c:" .. spec.category)) or "")
     .. (sort_by_length and "|len" or "")
+    .. "|shape:" .. shape_mode .. ":" .. tostring(Tags.cache_size())
 
   pool._views = pool._views or {}
   local view = pool._views[key]
@@ -83,6 +87,7 @@ local function effective_pool(pool, max_seconds, spec, sort_by_length)
     local kept = {}
     for i, f in ipairs(pool.files) do
       local keep = not spec or Categories.matches(f, spec)
+      if keep then keep = SampleShape.matches(f, shape_mode, Tags.get(f), true) end
       if keep and has_limit then
         local d = Duration.seconds(f)
         keep = not d or d <= max_seconds
@@ -425,6 +430,7 @@ function M.kitdef_from_explosion(opts)
     recursive = opts.recursive ~= false,
     files = {},
     mode = "repeat",
+    shape_mode = opts.shape_mode or "all",
     _bag = {},
   }
 
@@ -455,6 +461,7 @@ function M.kitdef_from_explosion(opts)
     name_prefix = opts.name_prefix,
     name_numbered = false,
     name_seed = opts.name_seed,
+    name_mode = opts.name_mode == "three" and "three" or "variable",
     -- Not the same thing as name_seed, which is a start *word* for the kit name
     -- generator. This one makes the whole pick reproducible.
     seed = opts.seed,

@@ -42,6 +42,7 @@ function M.save(name, kitdef, pools)
       folders = pool.folders,
       recursive = pool.recursive,
       mode = pool.mode,
+      shape_mode = pool.shape_mode,
       folder_bias = pool.folder_bias,
       -- A fixed pool's file list is not a cache: it *is* the pool. It was cut
       -- out of a heatmap cell, so there is no folder to rebuild it from and it
@@ -80,6 +81,7 @@ function M.load(name)
     -- it was saved with, because nothing would rescan it back.
     if not pool.fixed then pool.files = {} end
     pool.files = pool.files or {}
+    pool.shape_mode = (pool.shape_mode == "loop" or pool.shape_mode == "oneshot") and pool.shape_mode or "all"
     pool._bag = {}
     pools[id] = pool
   end

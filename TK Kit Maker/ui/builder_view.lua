@@ -38,7 +38,7 @@ local function new_export()
 end
 
 function M.new_kitdef()
-  return { name_prefix = nil, slots = {}, naming = new_naming(), export = new_export() }
+  return { name_prefix = nil, name_mode = "variable", slots = {}, naming = new_naming(), export = new_export() }
 end
 
 function M.init(app)
@@ -85,6 +85,7 @@ local function load_preset(app, name)
     -- Presets written before character bias existed have no config at all, and
     -- one written by a future version may have a partial one; normalise both.
     kitdef.export = kitdef.export or {}
+    kitdef.name_mode = kitdef.name_mode == "three" and "three" or "variable"
     kitdef.export.tag_bias = Character.sanitize(kitdef.export.tag_bias)
     for _, slot in ipairs(kitdef.slots or {}) do
       if slot.tag_bias ~= nil then
@@ -118,6 +119,7 @@ local function add_pool(app)
     recursive = true,
     files = {},
     mode = "repeat",
+    shape_mode = "all",
     folder_bias = Bias.new_folder_config(),
     _bag = {},
   }
@@ -383,6 +385,18 @@ local function draw_pools(app)
         if r.ImGui_BeginCombo(ctx, "Mode##mode", mode_label) then
           if r.ImGui_Selectable(ctx, "Repeat (repeats allowed)##mode_repeat", pool.mode ~= "use_up") then pool.mode = "repeat" end
           if r.ImGui_Selectable(ctx, "Use up (no repeats + reshuffle)##mode_useup", pool.mode == "use_up") then pool.mode = "use_up" end
+          r.ImGui_EndCombo(ctx)
+        end
+
+        r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 60))
+        local shape_label = pool.shape_mode == "loop" and "Loop" or pool.shape_mode == "oneshot" and "One-shot" or "All"
+        if r.ImGui_BeginCombo(ctx, "Sample type##shape", shape_label) then
+          for _, option in ipairs({ { "all", "All" }, { "loop", "Loop" }, { "oneshot", "One-shot" } }) do
+            if r.ImGui_Selectable(ctx, option[2] .. "##pool_shape_" .. option[1], pool.shape_mode == option[1]) then
+              pool.shape_mode = option[1]
+              pool._views = nil
+            end
+          end
           r.ImGui_EndCombo(ctx)
         end
 

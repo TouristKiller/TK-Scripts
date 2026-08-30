@@ -14,9 +14,13 @@
 local M = {}
 
 M.MODES = {
-  { id = "name",   label = "Name" },
-  { id = "length", label = "Length" },
+  { id = "name",      label = "Name" },
+  { id = "length",    label = "Length" },
+  { id = "transient", label = "Transient" },
+  { id = "frequency", label = "Frequency" },
 }
+
+local NUMERIC_MODES = { length = true, transient = true, frequency = true }
 
 -- A key that sorts "Kick 2" before "Kick 10".
 --
@@ -51,20 +55,20 @@ M.leaf_of = leaf_of
 -- length has not been read cannot be placed. Those go last in BOTH directions:
 -- treating "not known" as zero would park every unmeasured file at the top the
 -- moment you sorted longest-first, which reads as the sort having failed.
-function M.apply(files, mode, descending, duration_of)
+function M.apply(files, mode, descending, value_of)
   local out = {}
   for i = 1, #(files or {}) do out[i] = files[i] end
-  if mode ~= "name" and mode ~= "length" then return out end
+  if mode ~= "name" and not NUMERIC_MODES[mode] then return out end
 
   -- Keys are worked out once per file rather than inside the comparator, which
   -- runs it O(n log n) times -- on a pack of ten thousand that is the
   -- difference between instant and a visible stall.
-  local key, secs = {}, {}
+  local key, values = {}, {}
   for i = 1, #out do
     local f = out[i]
     key[f] = M.natural_key(leaf_of(f))
-    if mode == "length" and duration_of then
-      secs[f] = duration_of(f)
+    if NUMERIC_MODES[mode] and value_of then
+      values[f] = value_of(f)
     end
   end
 
@@ -78,9 +82,9 @@ function M.apply(files, mode, descending, duration_of)
   end
 
   local cmp
-  if mode == "length" then
+  if NUMERIC_MODES[mode] then
     cmp = function(a, b)
-      local sa, sb = secs[a], secs[b]
+      local sa, sb = values[a], values[b]
       if sa == nil or sb == nil then
         if sa == sb then return fallback(a, b) end
         return sb == nil          -- a known length always beats an unknown one
@@ -116,6 +120,12 @@ end
 function M.button_label(mode, descending)
   if mode == "length" then
     return descending and "Long-Short" or "Short-Long"
+  end
+  if mode == "transient" then
+    return descending and "Hard-Soft" or "Soft-Hard"
+  end
+  if mode == "frequency" then
+    return descending and "High-Low" or "Low-High"
   end
   return descending and "Z-A" or "A-Z"
 end

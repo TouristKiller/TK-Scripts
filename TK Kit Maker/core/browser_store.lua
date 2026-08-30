@@ -43,6 +43,7 @@ local function default_state()
     -- staring at a pack that looks half empty.
     sort_mode = "name",
     sort_desc = false,
+    shape_mode = "all",
     grid_x = "tone",
     grid_y = "decay",
     grid_size = 4,
@@ -80,8 +81,15 @@ local function sanitize(state)
   out.sample_view = (state.sample_view == "grid") and "grid" or "list"
   out.list_flat = state.list_flat == true
   out.collections_flat = state.collections_flat == true
-  out.sort_mode = (state.sort_mode == "length") and "length" or "name"
+  if state.sort_mode == "length" or state.sort_mode == "transient" or state.sort_mode == "frequency" then
+    out.sort_mode = state.sort_mode
+  else
+    out.sort_mode = "name"
+  end
   out.sort_desc = state.sort_desc == true
+  if state.shape_mode == "loop" or state.shape_mode == "oneshot" then
+    out.shape_mode = state.shape_mode
+  end
   if state.grid_x == "tone" or state.grid_x == "decay" or state.grid_x == "transient" then
     out.grid_x = state.grid_x
   end

@@ -213,6 +213,19 @@ local function draw_batch_options(app)
   local seed_changed, seed_value = r.ImGui_InputTextWithHint(ctx, "Start word##export_name_seed", "optional", kitdef.name_seed or "")
   if seed_changed then kitdef.name_seed = trim(seed_value) end
 
+  local name_mode = kitdef.name_mode == "three" and "three" or "variable"
+  local name_mode_label = name_mode == "three" and "Always 3 words" or "Variable: 2 or 3 words"
+  r.ImGui_SetNextItemWidth(ctx, fit_w(ctx, 240, 80))
+  if r.ImGui_BeginCombo(ctx, "Name structure##export_name_mode", name_mode_label) then
+    if r.ImGui_Selectable(ctx, "Variable: list 1 + optional list 2 + list 3", name_mode == "variable") then
+      kitdef.name_mode = "variable"
+    end
+    if r.ImGui_Selectable(ctx, "Always 3: list 1 + list 2 + list 3", name_mode == "three") then
+      kitdef.name_mode = "three"
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+
   local can_suggest = not kitdef.name_prefix or kitdef.name_prefix == ""
   r.ImGui_BeginDisabled(ctx, not can_suggest)
   if r.ImGui_Button(ctx, "Generate kit name##export_name_generate", 130, 0) then
