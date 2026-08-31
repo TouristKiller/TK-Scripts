@@ -93,6 +93,12 @@ local L = {
     guide_guid        = nil,
     guide_events      = nil,
     guide_scan_at     = 0,
+    -- The automation clip being drawn into out in the arrange, if any, and the
+    -- envelope ranges read for the ones that are only playing.
+    autom_edit        = nil,
+    env_ranges        = nil,
+    autom_files       = nil,
+    autom_save_prompt = nil,
     file_prompt       = nil,
     chain_prompt      = nil,
     rename_prompt     = nil,
@@ -114,14 +120,73 @@ local L = {
     drag_out          = nil,
     rects             = {},
     rect_count        = 0,
+    midi_enabled      = false,
+    midi_window_open  = false,
+    midi_device_name  = "",
+    midi_channel      = 0,
+    midi_base_note    = 36,
+    midi_layout       = "pads",
+    midi_keyboard_mode = "octaves",
+    midi_pad_mode     = "clips",
+    midi_columns      = 8,
+    midi_rows         = 8,
+    midi_orientation  = "lanes",
+    midi_lane_bank    = 0,
+    midi_scene_bank   = 0,
+    midi_last_retval  = nil,
+    midi_pressed      = {},
+    midi_commands     = {},
+    midi_command_pressed = {},
+    midi_learn        = nil,
+    midi_base_learn   = false,
+    midi_learn_retval = nil,
+    midi_presets      = {},
+    midi_preset_name  = "",
+    midi_preset_selected = nil,
+    -- Lighting the pads of a Launchpad: which output, whether to send at all,
+    -- which family it belongs to, and the grid it lays its notes out in.
+    midi_out_name     = "",
+    midi_out_index    = nil,
+    midi_feedback     = false,
+    midi_lp_family    = "mk3",
+    midi_lp_origin    = nil,
+    midi_lp_step      = nil,
+    lp_map            = nil,
+    lp_shadow         = nil,
+    lp_sent           = nil,
 }
+
+local MIDI_COMMANDS = {
+    { key = "lane_prev", label = "Previous lane bank" },
+    { key = "lane_next", label = "Next lane bank" },
+    { key = "scene_prev", label = "Previous scene bank" },
+    { key = "scene_next", label = "Next scene bank" },
+    { key = "launch_scene", label = "Launch active scene" },
+    { key = "stop_lane", label = "Stop active lane" },
+    { key = "stop_all", label = "Stop all" },
+    { key = "record", label = "Record" },
+}
+
+for row = 1, C.max_rows do
+    MIDI_COMMANDS[#MIDI_COMMANDS + 1] = {
+        key = "launch_scene_" .. tostring(row),
+        label = "Launch scene " .. tostring(row),
+        scene = row,
+    }
+end
 
 -- What happens when a scene has played its rounds. One rule, used by both the
 -- player and the writer, so a written arrangement can never disagree with what
 -- you hear.
+-- Where a clip or a scene goes once it has played. "Next scene" is the row
+-- straight below, empty or not; "Next scene with a clip" walks on until it
+-- finds one, which is what you want when a lane only speaks up now and then.
+-- That second one is a clip's business: a scene chain already skips the scenes
+-- that are empty, because an empty scene is not a section of a song.
 local FOLLOW_OPTIONS = {
     { key = "stop",   label = "Stop" },
     { key = "next",   label = "Next scene" },
+    { key = "fill",   label = "Next scene with a clip", clips_only = true },
     { key = "prev",   label = "Previous scene" },
     { key = "first",  label = "First scene" },
     { key = "self",   label = "Repeat this scene" },
@@ -1007,6 +1072,14 @@ end
 -- callers already had to cope with for a lane whose track the user deleted.
 function H.ensure_lane_track(lane)
     if not lane then return nil end
+    -- An envelope lane keeps its clips on the hidden track of the lane it
+    -- hangs under. It has no audio of its own to route anywhere, and a second
+    -- hidden track per envelope would be a track list nobody asked for.
+    if lane.parent then
+        local shared = H.ensure_lane_track(lane.parent)
+        lane.lane_guid = lane.parent.lane_guid
+        return shared
+    end
     local track = H.lane_track(lane)
     if track then return track end
     local target = H.target_track(lane)
@@ -1045,8 +1118,14 @@ end
 -- copy or a stray left by a previous session all live on this track, and none
 -- of them are slots.
 function H.prune_lane_track(lane)
-    if not lane or not lane.lane_guid then return false end
+    if not lane then return false end
+    if lane.parent then return H.prune_lane_track(lane.parent) end
+    if not lane.lane_guid then return false end
     if #lane.slots > 0 then return false end
+    -- The envelope lanes under it keep their anchors on the same track.
+    for _, sub in ipairs(lane.envs or {}) do
+        if #sub.slots > 0 or sub.current or sub.pending then return false end
+    end
     if lane.current or lane.pending or lane.switch or lane.hold then return false end
     local track = H.lane_track(lane)
     if not track then
@@ -1057,6 +1136,7 @@ function H.prune_lane_track(lane)
     H.release_now(lane)
     r.DeleteTrack(track)
     lane.lane_guid = nil
+    for _, sub in ipairs(lane.envs or {}) do sub.lane_guid = nil end
     H.prune_folder()
     H.fix_folder_depths()
     return true
@@ -1110,7 +1190,7 @@ end
 function H.refresh_missing(now)
     if L.checked and now - L.checked < 0.5 then return end
     L.checked = now
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         for _, slot in ipairs(lane.slots) do
             slot.missing = H.item_from_guid(slot.guid) == nil
         end
@@ -1178,6 +1258,13 @@ end
 -- project tempo changes, and a stored number of seconds silently goes stale.
 -- The stored value is kept as a fallback and refreshed here.
 function H.slot_lengths(slot)
+    -- An automation clip is as long as its bars say, whatever the item that
+    -- carries its guid happens to measure.
+    if H.autom(slot) then
+        local length = H.autom_length(slot)
+        slot.length, slot.loop_len = length, length
+        return length, length
+    end
     local item = H.item_from_guid(slot.guid)
     local take = item and r.GetActiveTake(item) or nil
     if item and take then
@@ -1325,6 +1412,10 @@ function H.apply_section(item)
 end
 
 function H.assign_slot(lane, row, source_item)
+    if H.is_env_lane(lane) and not L.autom_building then
+        L.status = "That is an automation lane; it takes curves, not media"
+        return false
+    end
     local lane_track = H.ensure_lane_track(lane)
     if not lane_track or not H.valid_item(source_item) then return false end
     H.clear_slot(lane, row)
@@ -1461,6 +1552,10 @@ end
 -- one works off the edit cursor and the track selection, both of which belong to
 -- the user while they are jamming.
 function H.assign_path(lane, row, path)
+    if H.is_env_lane(lane) then
+        L.status = "That is an automation lane; it takes curves, not files"
+        return false
+    end
     local lane_track = H.ensure_lane_track(lane)
     if not lane_track or not path or path == "" then return false end
     local source = r.PCM_Source_CreateFromFile(path)
@@ -1688,7 +1783,7 @@ function H.assign_paths(lane, row, paths)
 end
 
 function H.find_slot_by_guid(guid)
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         for _, slot in ipairs(lane.slots) do
             if slot.guid == guid then return lane, slot end
         end
@@ -1702,6 +1797,13 @@ end
 function H.move_slot(from_lane, from_slot, to_lane, to_row, copy)
     if not from_lane or not from_slot or not to_lane then return end
     if from_lane == to_lane and from_slot.row == to_row and not copy then return end
+    -- A curve belongs in an automation lane and a sound does not, whichever
+    -- way round the drag went.
+    if H.is_env_lane(to_lane) ~= (H.autom(from_slot) ~= nil) then
+        L.status = H.autom(from_slot) and "An automation clip belongs in an automation lane"
+            or "That is an automation lane; it takes curves, not media"
+        return
+    end
     local item = H.item_from_guid(from_slot.guid)
     if not item then return end
     local lane_track = H.ensure_lane_track(to_lane)
@@ -1727,6 +1829,8 @@ function H.move_slot(from_lane, from_slot, to_lane, to_row, copy)
                 length = from_slot.length,
                 loop = from_slot.loop,
                 tempo_matched = from_slot.tempo_matched,
+                kind = from_slot.kind,
+                autom = H.copy_autom(from_slot.autom),
             }
         end
     else
@@ -1742,6 +1846,16 @@ function H.move_slot(from_lane, from_slot, to_lane, to_row, copy)
     end
     -- The lane it came from may have just lost its last clip.
     if not copy and from_lane ~= to_lane then H.prune_lane_track(from_lane) end
+    -- A clip that landed in another automation lane takes that lane's
+    -- parameter: the lane is what the cells under it automate.
+    if H.is_env_lane(to_lane) then
+        local landed = H.slot(to_lane, to_row)
+        local autom = H.autom(landed)
+        if autom and not H.same_target(autom.target, to_lane.target) then
+            autom.target = to_lane.target
+            landed.name = H.autom_target_label(to_lane.target)
+        end
+    end
     r.PreventUIRefresh(-1)
     r.Undo_EndBlock(copy and "Copy launcher clip" or "Move launcher clip", -1)
     r.UpdateArrange()
@@ -1936,7 +2050,7 @@ end
 
 function H.scene_bars(row, position)
     local longest = 0
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         local slot = H.slot(lane, row)
         local length = slot and H.slot_loop(slot) or 0
         if length > longest then longest = length end
@@ -1951,7 +2065,7 @@ function H.scene_bars(row, position)
 end
 
 function H.scene_filled(row)
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         if H.slot(lane, row) then return true end
     end
     return false
@@ -2005,7 +2119,7 @@ function H.next_scene_after(row)
         if value == row then index = position break end
     end
     if not index then return rows[1] end
-    if follow == "next" then return rows[(index % #rows) + 1] end
+    if follow == "next" or follow == "fill" then return rows[(index % #rows) + 1] end
     if follow == "prev" then return rows[((index - 2) % #rows) + 1] end
     return nil
 end
@@ -2021,15 +2135,37 @@ function H.lane_rows(lane)
     return rows
 end
 
+-- What a clip hands over to once it has played its rounds. Read literally: the
+-- scene below this one, the one above it, the first. The rows of the grid are
+-- the scenes, so "next scene" means the cell one row down in this same lane -
+-- and a lane that has nothing there is a lane sitting that scene out, which is
+-- stopping rather than hunting further down for the next clip it can find.
+--
+-- Random is the exception. A random empty row would only ever mean stop, so
+-- that one still picks from the rows this lane has actually filled.
+-- Follow is one switch for the whole grid, and it is in the toolbar. Turned off
+-- there, every one of these settings is stored and ignored, which reads exactly
+-- like a follow action that does not work.
+function H.draw_follow_warning()
+    if L.follow_enabled then return end
+    r.ImGui_Separator(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, UI.colors.warning or UI.colors.danger,
+        "Follow is switched off for the whole grid")
+    if r.ImGui_MenuItem(UI.ctx, "Switch follow on") then
+        L.follow_enabled = true
+        H.save()
+        L.status = "Follow is on: clips and scenes hand over again"
+    end
+end
+
 function H.next_slot_after(lane, row)
     local slot = H.slot(lane, row)
     local follow = slot and slot.follow or "stop"
     if follow == "stop" then return nil end
     if follow == "self" then return row end
-    local rows = H.lane_rows(lane)
-    if #rows == 0 then return nil end
-    if follow == "first" then return rows[1] end
     if follow == "random" then
+        local rows = H.lane_rows(lane)
+        if #rows == 0 then return nil end
         if #rows == 1 then return rows[1] end
         local pick, guard = rows[math.random(#rows)], 0
         while pick == row and guard < 8 do
@@ -2038,14 +2174,22 @@ function H.next_slot_after(lane, row)
         end
         return pick
     end
-    local index = nil
-    for position, value in ipairs(rows) do
-        if value == row then index = position break end
+    -- Past the empty rows to the next clip this lane has, and round to the top
+    -- when there is none below: that makes a lane with a handful of clips play
+    -- through them for as long as you leave it alone.
+    if follow == "fill" then
+        for step = 1, L.rows do
+            local at = ((row - 1 + step) % L.rows) + 1
+            if H.slot(lane, at) then return at end
+        end
+        return nil
     end
-    if not index then return rows[1] end
-    if follow == "next" then return rows[(index % #rows) + 1] end
-    if follow == "prev" then return rows[((index - 2) % #rows) + 1] end
-    return nil
+    local wanted = nil
+    if follow == "first" then wanted = 1
+    elseif follow == "next" then wanted = row + 1
+    elseif follow == "prev" then wanted = row - 1 end
+    if not wanted or wanted < 1 or wanted > L.rows then return nil end
+    return H.slot(lane, wanted) and wanted or nil
 end
 
 -- How long one round of a clip lasts, which is not the same thing for all three
@@ -2090,10 +2234,24 @@ function H.update_clip_follow(lane, now)
     lane.run = nil
     r.PreventUIRefresh(1)
     if next_row then
-        H.commit(lane, next_row, finish)
+        -- A clip that hands over to the next one takes its curves with it. An
+        -- envelope lane that reaches the end of its own run moves on alone;
+        -- pulling the track's clip along behind a curve is not what a follow
+        -- action on that curve means.
+        if H.is_env_lane(lane) then
+            H.commit(lane, next_row, finish)
+        else
+            H.commit_group(lane, next_row, finish)
+        end
     else
         H.close_voice_at(lane.current, finish)
         if not lane.hold then H.schedule_owner(lane, "arrangement", finish) end
+        -- A clip that has played its rounds takes its curves with it.
+        for _, sub in ipairs(H.stopped_with(lane)) do
+            sub.run = nil
+            H.cancel_pending(sub)
+            H.close_voice_at(sub.current, finish)
+        end
     end
     r.PreventUIRefresh(-1)
 end
@@ -2198,6 +2356,20 @@ end
 -- to lay down the same grid the launcher would have played. Without this a kick
 -- set to retrigger came out as one lonely hit at the start of the scene.
 function H.write_clip(target, slot, position, length, into)
+    -- A curve is written as an automation item on the same envelope it would
+    -- have been launched onto. It is not media, so it never joins the selection
+    -- the written clips get.
+    local autom = H.autom(slot)
+    if autom then
+        if not H.valid_track(target) then return nil end
+        local env = H.autom_env(target, autom.target, true)
+        if not env then return nil end
+        local clip = H.autom_length(slot, position)
+        H.autom_insert(env, autom.target, slot, position, clip,
+            slot.loop and math.max(clip, length) or nil,
+            C.autom_write_name .. ": " .. (slot.name or "clip"))
+        return nil
+    end
     local library = H.item_from_guid(slot.guid)
     if not H.valid_track(target) or not library then return nil end
     local item_length = select(1, H.slot_lengths(slot))
@@ -2243,7 +2415,7 @@ function H.write_scene(row)
     local written = {}
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         local slot = H.slot(lane, row)
         if slot then H.write_clip(H.target_track(lane), slot, position, length, written) end
     end
@@ -2275,7 +2447,7 @@ function H.write_slot(lane, row)
     r.PreventUIRefresh(-1)
     r.Undo_EndBlock("Write launcher clip to arrangement", -1)
     r.UpdateArrange()
-    L.status = #written > 0 and ("Wrote " .. slot.name) or "Could not write that clip"
+    L.status = (#written > 0 or H.autom(slot)) and ("Wrote " .. slot.name) or "Could not write that clip"
 end
 
 -- Dragging a clip onto the arrange. ImGui only supplies the drag itself; the
@@ -2336,7 +2508,7 @@ function H.update_drag_out()
     r.PreventUIRefresh(-1)
     r.Undo_EndBlock("Drop launcher clip on arrange", -1)
     r.UpdateArrange()
-    L.status = #written > 0 and ("Dropped " .. slot.name) or "Could not drop that clip"
+    L.status = (#written > 0 or H.autom(slot)) and ("Dropped " .. slot.name) or "Could not drop that clip"
 end
 
 -- The written arrangement follows exactly the rule the player follows, so the
@@ -2358,7 +2530,7 @@ function H.write_chain(row, max_bars)
         for _ = 1, H.scene_plays(row) do
             if bars_done >= max_bars then break end
             local length = H.bars_to_time(position, bars)
-            for _, lane in ipairs(L.lanes) do
+            for _, lane in ipairs(H.holders()) do
                 local slot = H.slot(lane, row)
                 if slot then
                     if H.write_clip(H.target_track(lane), slot, position, length, all) then written = written + 1 end
@@ -2470,7 +2642,7 @@ end
 
 function H.clear_scene(row)
     r.Undo_BeginBlock()
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         H.clear_slot(lane, row)
         H.prune_lane_track(lane)
     end
@@ -2545,6 +2717,11 @@ end
 -- leaving items muted with nothing left to restore them from. Entries are
 -- dropped only where the mute has actually been put back.
 function H.save_restore_state()
+    if L.defer_restore_save then
+        L.restore_save_dirty = true
+        return
+    end
+    L.restore_save_dirty = false
     local merged = {}
     local order = {}
     local retval, encoded = r.GetProjExtState(0, C.proj_section, "restore")
@@ -2849,6 +3026,10 @@ function H.kill_voice(voice, lane)
     H.delete_item(voice.wrap)
     for _, media in ipairs(voice.hits or {}) do H.delete_item(media) end
     voice.item, voice.wrap, voice.hits = nil, nil, nil
+    if voice.ai then
+        H.autom_delete(voice.ai)
+        voice.ai = nil
+    end
 end
 
 function H.capture_voice(voice, lane)
@@ -2863,6 +3044,15 @@ function H.capture_voice(voice, lane)
     take(voice.wrap)
     for _, media in ipairs(voice.hits or {}) do take(media) end
     voice.item, voice.wrap, voice.hits = nil, nil, nil
+    -- A curve that was playing while the take ran stays where it is and keeps
+    -- what it did to the parameter. Renamed, so the stray sweep leaves it alone.
+    if voice.ai then
+        local index = H.autom_index(voice.ai)
+        if index and r.GetSetAutomationItemInfo_String then
+            r.GetSetAutomationItemInfo_String(voice.ai.env, index, "P_POOL_NAME", C.autom_write_name, true)
+        end
+        voice.ai = nil
+    end
 end
 
 -- The loop the transport is repeating over, if any. A clip launched inside it
@@ -2890,6 +3080,10 @@ function H.voice_end(voice)
         local finish = H.item_end(media)
         if finish and (not latest or finish > latest) then latest = finish end
     end
+    if voice.ai then
+        local finish = H.autom_end(voice.ai)
+        if finish and (not latest or finish > latest) then latest = finish end
+    end
     -- A retriggering one-shot keeps producing hits, so it is never finished
     -- until it is closed off.
     if voice.repeat_qn and not voice.closing then return math.huge end
@@ -2900,6 +3094,9 @@ end
 -- time round the clip is already playing when the loop comes back.
 function H.build_wrap(lane, voice)
     if not voice or voice.wrap or not voice.looped then return end
+    -- Only media is filled in behind the loop start. An automation clip
+    -- launched inside a loop region starts where it was launched on every pass.
+    if voice.ai then return end
     local loop_start, loop_end = H.loop_region()
     if not loop_start or voice.at - loop_start < 0.05 or voice.at >= loop_end then return end
     local lane_track = H.lane_track(lane)
@@ -2980,6 +3177,19 @@ function H.close_voice_at(voice, time)
         end
     end
     if voice.hits then voice.closing = true end
+    -- A curve ends the same way a clip does: cut off on the boundary if it is
+    -- already running, dropped outright if it had not started yet.
+    if voice.ai then
+        local at = H.autom_start(voice.ai)
+        if not at then
+            voice.ai = nil
+        elseif at >= time then
+            H.autom_delete(voice.ai)
+            voice.ai = nil
+        else
+            H.autom_trim(voice.ai, time)
+        end
+    end
     return restore
 end
 
@@ -2999,6 +3209,7 @@ end
 
 function H.commit(lane, row, time)
     local slot = H.slot(lane, row)
+    if H.autom(slot) then return H.commit_autom(lane, row, time, slot) end
     local lane_track = H.lane_track(lane)
     local library = slot and H.item_from_guid(slot.guid) or nil
     if not slot or not lane_track or not library then return false end
@@ -3063,6 +3274,10 @@ function H.extend_voice(lane, heard)
     local voice = lane.current
     if not voice or voice.closing or not voice.looped then return end
     if lane.pending or lane.switch then return end
+    if voice.ai then
+        H.autom_extend(voice.ai, heard)
+        return
+    end
     if not H.valid_item(voice.item) then return end
     local position = r.GetMediaItemInfo_Value(voice.item, "D_POSITION") or 0
     local length = r.GetMediaItemInfo_Value(voice.item, "D_LENGTH") or 0
@@ -3076,10 +3291,10 @@ end
 function H.run_queued(heard)
     local loop_start = H.loop_region()
     if not loop_start then
-        for _, lane in ipairs(L.lanes) do lane.queued = nil end
+        for _, lane in ipairs(H.holders()) do lane.queued = nil end
         return
     end
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         local queued = lane.queued
         if queued then
             lane.queued = nil
@@ -3127,7 +3342,7 @@ function H.fill_hits(lane, voice, from)
     local lane_track = H.lane_track(lane)
     if not library or not lane_track then return end
     voice.hits = voice.hits or {}
-    local horizon = from + H.lead() + 3
+    local horizon = from + H.lead() + 1
     local guard = 0
     while voice.next_hit_qn and guard < 32 do
         local time = r.TimeMap2_QNToTime(0, voice.next_hit_qn)
@@ -3240,7 +3455,1162 @@ function H.harvest_lane(lane, force)
 end
 
 function H.harvest_all(force)
-    for _, lane in ipairs(L.lanes) do H.harvest_lane(lane, force) end
+    for _, lane in ipairs(H.holders()) do H.harvest_lane(lane, force) end
+end
+
+--------------------------------------------------------------------------------
+-- automation clips
+--------------------------------------------------------------------------------
+
+-- A clip that is a curve rather than media. The slot still owns a library item
+-- -- a blank, muted one on the lane track -- so everything the grid already does
+-- by guid keeps working: undo, "this clip is gone", dragging between slots, the
+-- set files. Launching it does not copy that item anywhere; it puts an
+-- automation item on an envelope of the lane's own target track, on the same
+-- bar line every other clip lands on.
+--
+-- The curve is the launcher's own data (times as a fraction of the clip, values
+-- normalised to 0..1) rather than a REAPER pool. A pool only exists while an
+-- instance of it does, so keeping clips as pools would mean parking an instance
+-- somewhere for every slot, and a pool's numbers are read in whatever envelope
+-- it lands on. As fractions the same clip can be pointed at another parameter,
+-- and it stretches when the clip is made longer or the tempo changes.
+--
+-- Automation goes on the target track, not on the hidden lane track: a send
+-- carries audio, not a fader move. So an automation clip does not take the
+-- track off the arrangement the way a media clip does - the song keeps playing
+-- underneath, which is the point of automating it.
+
+C.autom_voice_name = "TK clip voice"  -- pool name of a playing instance
+C.autom_edit_name  = "TK clip edit"   -- pool name of the one being drawn into
+C.autom_write_name = "TK clip"        -- pool name of one written to the arrangement
+C.autom_targets = {
+    { kind = "vol", label = "Volume", chunk = "<VOLENV2", action = 40406, min = 0, max = 2 },
+    { kind = "pan", label = "Pan",    chunk = "<PANENV2", action = 40407, min = -1, max = 1 },
+}
+
+function H.autom(slot)
+    if not slot or slot.kind ~= "automation" then return nil end
+    return slot.autom
+end
+
+-- Automation clips do not sit in the track's own lane. They sit in a lane of
+-- their own underneath it, one per envelope, the way the arrange puts envelope
+-- lanes under a track -- so a curve can run while the track's own clip plays,
+-- instead of taking its place.
+--
+-- Such a lane is deliberately shaped like a lane: slots, current, pending,
+-- retired, run, queued. The engine takes one without knowing the difference.
+-- It carries its parent's two track guids as well, so every accessor that reads
+-- those keeps working unchanged: the target track is the same track, and the
+-- anchors live on the same hidden track.
+
+function H.is_env_lane(holder)
+    return holder ~= nil and holder.parent ~= nil
+end
+
+function H.env_lanes(lane)
+    return (lane and lane.envs) or {}
+end
+
+-- Every lane and every envelope lane under it, in the order they are drawn.
+-- Rebuilt rather than kept: lanes themselves are rebuilt from the track list
+-- whenever the project changes, and a stale list of holders would outlive them.
+function H.holders()
+    local list = {}
+    for _, lane in ipairs(L.lanes) do
+        list[#list + 1] = lane
+        for _, sub in ipairs(lane.envs or {}) do list[#list + 1] = sub end
+    end
+    return list
+end
+
+-- A number that is never a lane index. The cursor, the record marks and the
+-- keyboard grid all count lanes, and none of them may take an envelope lane for
+-- one; ImGui only wants the id to be unique.
+function H.env_lane_id(lane_index, sub_index)
+    return -((lane_index or 0) * 64 + (sub_index or 1))
+end
+
+function H.same_target(first, second)
+    if not first or not second or first.kind ~= second.kind then return false end
+    if first.kind == "fx" then
+        return first.fx == second.fx and (first.param or 0) == (second.param or 0)
+    end
+    return true
+end
+
+function H.env_lane_label(sub)
+    return H.autom_target_label(sub and sub.target)
+end
+
+function H.env_lane_for(lane, target, create)
+    if not lane or H.is_env_lane(lane) then return nil end
+    for _, sub in ipairs(lane.envs or {}) do
+        if H.same_target(sub.target, target) then return sub end
+    end
+    if not create then return nil end
+    lane.envs = lane.envs or {}
+    local sub = {
+        parent = lane,
+        target = target,
+        name = H.autom_target_label(target),
+        follow_parent = true,
+        paused = false,
+        track_guid = lane.track_guid,
+        lane_guid = lane.lane_guid,
+        slots = {},
+        retired = {},
+        owner = "arrangement",
+    }
+    lane.envs[#lane.envs + 1] = sub
+    return sub
+end
+
+-- Emptied, then dropped. The clips go with it: an envelope lane is the clips,
+-- and leaving them somewhere invisible would be worse than saying goodbye.
+function H.remove_env_lane(sub)
+    local lane = sub and sub.parent
+    if not lane then return end
+    r.Undo_BeginBlock()
+    H.harvest_lane(sub, true)
+    for index = #sub.slots, 1, -1 do
+        H.clear_slot(sub, sub.slots[index].row)
+    end
+    for index = #(lane.envs or {}), 1, -1 do
+        if lane.envs[index] == sub then table.remove(lane.envs, index) end
+    end
+    H.prune_lane_track(lane)
+    r.Undo_EndBlock("Remove launcher automation lane", -1)
+    r.UpdateArrange()
+    H.save()
+    L.status = "Automation lane removed"
+end
+
+function H.autom_ready()
+    return (r.InsertAutomationItem and r.CountAutomationItems and r.InsertEnvelopePointEx
+        and r.GetSetAutomationItemInfo and r.GetEnvelopeStateChunk) and true or false
+end
+
+function H.autom_kind(target)
+    for _, entry in ipairs(C.autom_targets) do
+        if entry.kind == (target and target.kind) then return entry end
+    end
+    return nil
+end
+
+function H.autom_target_label(target)
+    if not target then return "nothing" end
+    local entry = H.autom_kind(target)
+    if entry then return entry.label end
+    local fx = target.fx_name and (target.fx_name .. ": ") or ""
+    return fx .. (target.param_name or ("parameter " .. tostring(target.param or 0)))
+end
+
+function H.fx_index_by_guid(track, guid)
+    if not guid or not r.TrackFX_GetFXGUID then return nil end
+    for index = 0, (r.TrackFX_GetCount(track) or 0) - 1 do
+        if r.TrackFX_GetFXGUID(track, index) == guid then return index end
+    end
+    return nil
+end
+
+-- The envelope a clip points at, made if it is not there yet. An FX parameter
+-- has GetFXEnvelope, which creates one on request; volume and pan have no call
+-- of their own, so they go through the action that shows them - and only when
+-- the envelope is really absent, because that action is a toggle.
+function H.autom_env(track, target, create)
+    if not H.valid_track(track) or not target then return nil end
+    local entry = H.autom_kind(target)
+    if not entry then
+        local index = H.fx_index_by_guid(track, target.fx)
+        if not index or not r.GetFXEnvelope then return nil end
+        return r.GetFXEnvelope(track, index, math.floor(target.param or 0), create and true or false)
+    end
+    local env = r.GetTrackEnvelopeByChunkName(track, entry.chunk)
+    if env or not create then return env end
+    local selected = {}
+    for index = 0, (r.CountSelectedTracks(0) or 0) - 1 do
+        selected[#selected + 1] = r.GetSelectedTrack(0, index)
+    end
+    r.SetOnlyTrackSelected(track)
+    r.Main_OnCommand(entry.action, 0)
+    env = r.GetTrackEnvelopeByChunkName(track, entry.chunk)
+    r.SetTrackSelected(track, false)
+    for _, kept in ipairs(selected) do
+        if H.valid_track(kept) then r.SetTrackSelected(kept, true) end
+    end
+    return env
+end
+
+-- An envelope you are about to draw into has to be on screen, and in a lane of
+-- its own. Making one through the action leaves it visible, GetFXEnvelope does
+-- not, and either can end up drawn over the track's own items - which on a
+-- track of ordinary height is a curve you cannot get a mouse on. Its own lane
+-- is also where every other program puts one, and it is what the grid's
+-- alignment already measures.
+function H.env_show(env)
+    if not env or not r.BR_EnvAlloc or not r.BR_EnvSetProperties then return end
+    local handle = r.BR_EnvAlloc(env, false)
+    if not handle then return end
+    local active, visible, armed, in_lane, lane_height, shape,
+        _, _, _, _, fader = r.BR_EnvGetProperties(handle)
+    if active and visible and in_lane then
+        r.BR_EnvFree(handle, false)
+        return
+    end
+    -- Height 0 means "whatever REAPER uses", which is what a lane made by hand
+    -- gets; only a lane squeezed to nothing is given a workable size.
+    local height = (lane_height and lane_height > 0 and lane_height < 24) and 0 or lane_height or 0
+    r.BR_EnvSetProperties(handle, true, true, armed, true, height, shape, fader)
+    r.BR_EnvFree(handle, true)
+    if r.TrackList_AdjustWindows then r.TrackList_AdjustWindows(false) end
+    r.UpdateArrange()
+end
+
+-- What the parameter's own range is. SWS knows it exactly, including the
+-- project's volume envelope range; without it the ranges above are the fallback
+-- and an FX parameter is 0..1, which it always is.
+function H.env_range(env, target)
+    -- Cached per envelope: a launch converts every point in the curve, and
+    -- allocating an SWS envelope handle for each of them is work for nothing.
+    -- Ranges are a project setting, so the cache is dropped when a project is.
+    L.env_ranges = L.env_ranges or {}
+    local key = tostring(env)
+    local cached = L.env_ranges[key]
+    if cached then return cached[1], cached[2] end
+    local entry = H.autom_kind(target)
+    local low, high = entry and entry.min or 0, entry and entry.max or 1
+    if r.BR_EnvAlloc then
+        local handle = r.BR_EnvAlloc(env, false)
+        if handle then
+            local _, _, _, _, _, _, minimum, maximum = r.BR_EnvGetProperties(handle)
+            r.BR_EnvFree(handle, false)
+            if type(minimum) == "number" and type(maximum) == "number" and maximum > minimum then
+                low, high = minimum, maximum
+            end
+        end
+    end
+    L.env_ranges[key] = { low, high }
+    return low, high
+end
+
+function H.env_to_unit(env, target, value)
+    local mode = r.GetEnvelopeScalingMode and r.GetEnvelopeScalingMode(env) or 0
+    local real = value or 0
+    if mode ~= 0 and r.ScaleFromEnvelopeMode then real = r.ScaleFromEnvelopeMode(mode, real) end
+    local low, high = H.env_range(env, target)
+    if high <= low then return 0 end
+    return math.max(0, math.min(1, (real - low) / (high - low)))
+end
+
+function H.unit_to_env(env, target, unit)
+    local low, high = H.env_range(env, target)
+    local real = low + math.max(0, math.min(1, unit or 0)) * (high - low)
+    local mode = r.GetEnvelopeScalingMode and r.GetEnvelopeScalingMode(env) or 0
+    if mode ~= 0 and r.ScaleToEnvelopeMode then real = r.ScaleToEnvelopeMode(mode, real) end
+    return real
+end
+
+-- A new clip starts as a flat line where the parameter stands now, so drawing
+-- into it is a change from what you were already hearing.
+function H.autom_flat(env, target)
+    local unit = 0.5
+    if env and r.Envelope_Evaluate then
+        local _, value = r.Envelope_Evaluate(env, r.GetCursorPosition() or 0, 0, 0)
+        if type(value) == "number" then unit = H.env_to_unit(env, target, value) end
+    end
+    return { { t = 0, v = unit }, { t = 1, v = unit } }
+end
+
+-- A copy deep enough that two slots never share a curve: the grid hands these
+-- tables straight to the menus, and a copied clip has to be its own from then on.
+function H.copy_autom(autom)
+    if type(autom) ~= "table" then return nil end
+    local target = autom.target or {}
+    local points = {}
+    for _, point in ipairs(autom.points or {}) do
+        points[#points + 1] = { t = point.t, v = point.v, s = point.s, n = point.n }
+    end
+    return {
+        bars = autom.bars,
+        target = { kind = target.kind, fx = target.fx, param = target.param,
+                   fx_name = target.fx_name, param_name = target.param_name },
+        points = points,
+    }
+end
+
+-- The same table read back off disk, where every field is whatever the file
+-- said it was. A curve that does not survive this is a flat line, not an error.
+function H.read_autom(stored)
+    local target = type(stored) == "table" and type(stored.target) == "table" and stored.target or {}
+    local kind = target.kind == "fx" and "fx" or (H.autom_kind(target) and target.kind or "vol")
+    local points = {}
+    local listed = (type(stored) == "table" and type(stored.points) == "table") and stored.points or {}
+    for _, point in ipairs(listed) do
+        local at = type(point) == "table" and tonumber(point.t) or nil
+        local value = type(point) == "table" and tonumber(point.v) or nil
+        if at and value then
+            points[#points + 1] = {
+                t = math.max(0, math.min(1, at)),
+                v = math.max(0, math.min(1, value)),
+                s = tonumber(point.s) and math.floor(tonumber(point.s)) or nil,
+                n = tonumber(point.n),
+            }
+        end
+    end
+    if #points == 0 then points = { { t = 0, v = 0.5 }, { t = 1, v = 0.5 } } end
+    return {
+        bars = math.max(1, math.floor(tonumber(type(stored) == "table" and stored.bars) or 1)),
+        target = {
+            kind = kind,
+            fx = type(target.fx) == "string" and target.fx or nil,
+            param = tonumber(target.param) and math.floor(tonumber(target.param)) or nil,
+            fx_name = type(target.fx_name) == "string" and target.fx_name or nil,
+            param_name = type(target.param_name) == "string" and target.param_name or nil,
+        },
+        points = points,
+    }
+end
+
+-- REAPER's own automation item files: the ones the envelope lane's "Load/save
+-- automation item" saves, in the AutomationItems folder of the resource path,
+-- subfolders and all. Read once per session, the same way the FX chains are.
+--
+-- The format is a header and a list of points:
+--   SRCLEN <length in QN>
+--   PPT <position in QN> <value> <shape> <tension> ...
+-- and the values are already normalised 0..1, because a pool has to be able to
+-- land on any envelope. That is exactly how a clip stores its curve, so a file
+-- comes in without being converted at all.
+function H.autom_files()
+    if L.autom_files ~= nil then return L.autom_files end
+    L.autom_files = false
+    if not r.EnumerateFiles then return false end
+    local root = r.GetResourcePath() .. C.sep .. "AutomationItems"
+    local function walk(folder, name)
+        local node = { name = name, files = {}, folders = {} }
+        local index = 0
+        while true do
+            local file = r.EnumerateFiles(folder, index)
+            if not file then break end
+            if file:lower():sub(-15) == ".reaperautoitem" then
+                node.files[#node.files + 1] = { name = file:sub(1, -16), path = folder .. C.sep .. file }
+            end
+            index = index + 1
+        end
+        index = 0
+        while true do
+            local sub = r.EnumerateSubdirectories and r.EnumerateSubdirectories(folder, index)
+            if not sub then break end
+            local child = walk(folder .. C.sep .. sub, sub)
+            if child then node.folders[#node.folders + 1] = child end
+            index = index + 1
+        end
+        if #node.files == 0 and #node.folders == 0 then return nil end
+        table.sort(node.files, function(a, b) return a.name:lower() < b.name:lower() end)
+        table.sort(node.folders, function(a, b) return a.name:lower() < b.name:lower() end)
+        return node
+    end
+    L.autom_files = walk(root, "AutomationItems") or false
+    return L.autom_files
+end
+
+-- One file as a curve. Times come back as a fraction of the item's own length
+-- so the clip can be any number of bars, and the length itself is reported in
+-- quarter notes for whoever wants to keep it.
+function H.read_autom_file(path)
+    local file = io.open(path, "r")
+    if not file then return nil end
+    local content = file:read("*a")
+    file:close()
+    if not content then return nil end
+    local span = tonumber(content:match("SRCLEN%s+([%d%.%-]+)")) or 0
+    local points = {}
+    for at, value, shape, tension in content:gmatch("PPT%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)%s+([%d%.%-]+)") do
+        local position, level = tonumber(at), tonumber(value)
+        if position and level then
+            points[#points + 1] = {
+                t = span > 0 and math.max(0, math.min(1, position / span)) or 0,
+                v = math.max(0, math.min(1, level)),
+                s = tonumber(shape) and math.floor(tonumber(shape)) ~= 0 and math.floor(tonumber(shape)) or nil,
+                n = tonumber(tension) and math.abs(tonumber(tension)) > 0.0001 and tonumber(tension) or nil,
+            }
+        end
+    end
+    if #points == 0 then return nil end
+    table.sort(points, function(first, second) return first.t < second.t end)
+    return points, span
+end
+
+-- Whole quarter notes into bars, because a clip is a number of bars.
+function H.bars_from_qn(span)
+    local per_bar = H.qn_per_bar(H.meter_position())
+    if not span or span <= 0 or not per_bar or per_bar <= 0 then return nil end
+    return math.max(1, math.floor(span / per_bar + 0.5))
+end
+
+function H.apply_autom_file(holder, row, path, name)
+    local slot = H.slot(holder, row)
+    local autom = H.autom(slot)
+    if not autom then return false end
+    local points, span = H.read_autom_file(path)
+    if not points then
+        L.status = "Could not read " .. (name or path)
+        return false
+    end
+    autom.points = points
+    autom.bars = H.bars_from_qn(span) or autom.bars
+    if name and name ~= "" then slot.name = name end
+    H.save()
+    L.status = "Loaded " .. (name or "automation item") .. "  |  "
+        .. tostring(#points) .. " points, " .. tostring(H.autom_bars(slot))
+        .. (H.autom_bars(slot) == 1 and " bar" or " bars")
+    return true
+end
+
+-- A new clip straight from a file: made at the length the file says it is, so
+-- a four bar sweep arrives as a four bar clip.
+function H.new_autom_from_file(holder, row, target, path, name)
+    local points, span = H.read_autom_file(path)
+    if not points then
+        L.status = "Could not read " .. (name or path)
+        return false
+    end
+    local slot = H.new_autom_clip(holder, row, target, H.bars_from_qn(span))
+    if not slot then return false end
+    slot.autom.points = points
+    if name and name ~= "" then slot.name = name end
+    H.save()
+    L.status = "Loaded " .. (name or "automation item") .. " into its own lane"
+    return true
+end
+
+function H.autom_root()
+    return r.GetResourcePath() .. C.sep .. "AutomationItems"
+end
+
+-- Whatever a clip is called, made safe to be a file name. Windows keeps a short
+-- list of characters to itself, and a name that is nothing but those would
+-- otherwise write a file called ".ReaperAutoItem".
+function H.safe_file_name(name)
+    local text = tostring(name or "")
+    text = text:gsub('[<>:"/|?*]', " "):gsub("\\", " "):gsub("%c", " ")
+    text = text:gsub("%s+", " "):match("^%s*(.-)%s*$") or ""
+    if text == "" then text = "clip" end
+    return text
+end
+
+-- A clip written back out as one of REAPER's own automation items, so a curve
+-- you built here can be dropped on any envelope in any project later. The same
+-- three lines the loader reads: how long it is in quarter notes, the LFO header
+-- REAPER writes and ignores, and a point per line.
+function H.write_autom_file(path, slot)
+    local autom = H.autom(slot)
+    if not autom or not path or path == "" then return false end
+    local per_bar = H.qn_per_bar(H.meter_position())
+    if not per_bar or per_bar <= 0 then per_bar = 4 end
+    local span = per_bar * H.autom_bars(slot)
+    local lines = { string.format("SRCLEN %.10g", span), "LFO 0 0 0 0 0 0 0" }
+    for _, point in ipairs(H.autom_points(slot)) do
+        lines[#lines + 1] = string.format("PPT %.10g %.10g %d %.6g 0",
+            math.max(0, math.min(1, point.t or 0)) * span,
+            math.max(0, math.min(1, point.v or 0)),
+            math.floor(point.s or 0), point.n or 0)
+    end
+    local file = io.open(path, "w")
+    if not file then return false end
+    file:write(table.concat(lines, "\n") .. "\n")
+    file:close()
+    return true
+end
+
+function H.ask_autom_save(lane, row)
+    L.autom_save_prompt = { lane = lane, row = row }
+end
+
+-- Modal, so it runs from update() before the frame starts, the way every other
+-- dialog here does.
+function H.run_autom_save_prompt()
+    local prompt = L.autom_save_prompt
+    if not prompt then return end
+    L.autom_save_prompt = nil
+    local slot = H.slot(prompt.lane, prompt.row)
+    if not H.autom(slot) then return end
+    local folder = H.autom_root()
+    if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(folder, 0) end
+    local suggested = H.safe_file_name(slot.name) .. ".ReaperAutoItem"
+    local path = nil
+    if r.JS_Dialog_BrowseForSaveFile then
+        local nul = string.char(0)
+        local filter = "REAPER automation item (*.ReaperAutoItem)" .. nul .. "*.ReaperAutoItem" .. nul
+        local ok, chosen = r.JS_Dialog_BrowseForSaveFile("Save automation item", folder, suggested, filter)
+        if not ok or not chosen or chosen == "" then return end
+        path = chosen
+    else
+        -- Without js_ReaScriptAPI there is no save dialog, so the name is asked
+        -- for and the file lands in the folder itself.
+        if not r.GetUserInputs then return end
+        local ok, answer = r.GetUserInputs("Save automation item", 1, "Name:,extrawidth=180", slot.name or "")
+        if not ok then return end
+        answer = tostring(answer or ""):match("^%s*(.-)%s*$")
+        if answer == "" then return end
+        path = folder .. C.sep .. H.safe_file_name(answer) .. ".ReaperAutoItem"
+    end
+    if path:lower():sub(-15) ~= ".reaperautoitem" then path = path .. ".ReaperAutoItem" end
+    if not H.write_autom_file(path, slot) then
+        L.status = "Could not write " .. path
+        return
+    end
+    -- Read the folder again, so what you just saved is in the load menus.
+    L.autom_files = nil
+    L.status = "Saved " .. (path:match("([^/\\]+)$") or path)
+end
+
+-- The folder tree as menus. Files first, then the folders under them, which is
+-- how the FX browser lists its own folders.
+function H.draw_autom_file_menu(node, key, pick, nested)
+    if not node then return end
+    for index, file in ipairs(node.files) do
+        if r.ImGui_MenuItem(UI.ctx, file.name .. "##ai" .. key .. index) then pick(file) end
+    end
+    for index, folder in ipairs(node.folders) do
+        if r.ImGui_BeginMenu(UI.ctx, folder.name .. "##aidir" .. key .. index) then
+            H.draw_autom_file_menu(folder, key .. "_" .. index, pick, true)
+            r.ImGui_EndMenu(UI.ctx)
+        end
+    end
+    -- The folder is read once and kept, so there has to be a way to say that it
+    -- changed. Saving a shape out of REAPER's envelope lane is something you do
+    -- in the middle of a session, not before one.
+    if not nested then
+        r.ImGui_Separator(UI.ctx)
+        if r.ImGui_MenuItem(UI.ctx, "Look at the folder again##ai" .. key) then
+            L.autom_files = nil
+            L.status = "Automation items read again"
+        end
+    end
+end
+
+function H.autom_points(slot)
+    local autom = H.autom(slot)
+    local points = autom and autom.points
+    if type(points) ~= "table" or #points < 1 then return { { t = 0, v = 0.5 }, { t = 1, v = 0.5 } } end
+    return points
+end
+
+function H.autom_bars(slot)
+    local autom = H.autom(slot)
+    return math.max(1, math.floor(tonumber(autom and autom.bars) or 1))
+end
+
+-- Read from bars every time rather than from the library item: the item is only
+-- there to be a guid, and a clip written in bars has to follow the tempo.
+function H.autom_length(slot, position)
+    position = position or r.GetCursorPosition() or 0
+    local length = H.bars_to_time(position, H.autom_bars(slot))
+    if not length or length <= 0 then length = slot.length or 2 end
+    return math.max(0.05, length)
+end
+
+function H.autom_index(handle)
+    if not handle or not handle.env or not r.CountAutomationItems then return nil end
+    local count = r.CountAutomationItems(handle.env) or 0
+    for index = 0, count - 1 do
+        local pool = math.floor(r.GetSetAutomationItemInfo(handle.env, index, "D_POOL_ID", 0, false) or -1)
+        if pool == handle.pool then return index end
+    end
+    -- The pool id did not answer. An item still carrying our name and sitting
+    -- where we put it is the one we mean; it is only ever a moment old.
+    if not handle.name or not handle.at or not r.GetSetAutomationItemInfo_String then return nil end
+    for index = 0, count - 1 do
+        local ok, name = r.GetSetAutomationItemInfo_String(handle.env, index, "P_POOL_NAME", "", false)
+        if ok and name == handle.name then
+            local at = r.GetSetAutomationItemInfo(handle.env, index, "D_POSITION", 0, false) or -1
+            if math.abs(at - handle.at) < 0.002 then return index end
+        end
+    end
+    return nil
+end
+
+-- One instance of a clip's curve, laid down on an envelope. Every instance is
+-- its own pool: nothing here wants two of them to share their points, and an
+-- unpooled item can be thrown away without asking what else is using it.
+--
+-- The points go in while the item is still exactly one clip long. Written into
+-- an item already stretched out to a voice length they would be one long pass
+-- instead of the loop the clip is.
+function H.autom_insert(env, target, slot, position, clip_length, total_length, name)
+    if not H.autom_ready() or not env then return nil end
+    local index = r.InsertAutomationItem(env, -1, position, clip_length)
+    if not index or index < 0 then return nil end
+    -- A new automation item collects whatever the envelope already had under
+    -- it. The clip is the curve, not the track's own automation, so that goes.
+    if r.DeleteEnvelopePointRangeEx then
+        r.DeleteEnvelopePointRangeEx(env, index, position - 1, position + clip_length + 1)
+    end
+    local qn = r.TimeMap2_timeToQN(0, position + clip_length) - r.TimeMap2_timeToQN(0, position)
+    if qn > 0 then r.GetSetAutomationItemInfo(env, index, "D_POOL_QNLEN", qn, true) end
+    local function write(origin)
+        for _, point in ipairs(H.autom_points(slot)) do
+            local at = origin + math.max(0, math.min(1, point.t or 0)) * clip_length
+            r.InsertEnvelopePointEx(env, index, at, H.unit_to_env(env, target, point.v),
+                math.floor(point.s or 0), point.n or 0, false, true)
+        end
+        if r.Envelope_SortPointsEx then r.Envelope_SortPointsEx(env, index) end
+    end
+    write(position)
+    -- Points in an automation item are timed from the start of the project. If
+    -- that leaves the item empty they were wanted from its own start instead;
+    -- an item that came out with nothing in it would play as no automation at
+    -- all, which is the one outcome worth spending a second attempt on.
+    if r.CountEnvelopePointsEx and (r.CountEnvelopePointsEx(env, index) or 0) == 0 then
+        write(0)
+    end
+    if r.GetSetAutomationItemInfo_String and name then
+        r.GetSetAutomationItemInfo_String(env, index, "P_POOL_NAME", name, true)
+    end
+    if total_length and total_length > clip_length + 0.0001 then
+        r.GetSetAutomationItemInfo(env, index, "D_LOOPSRC", 1, true)
+        r.GetSetAutomationItemInfo(env, index, "D_LENGTH", total_length, true)
+    else
+        r.GetSetAutomationItemInfo(env, index, "D_LOOPSRC", 0, true)
+    end
+    local pool = math.floor(r.GetSetAutomationItemInfo(env, index, "D_POOL_ID", 0, false) or -1)
+    -- Where it went and what it is called are kept as a second way of finding
+    -- it back. A pool id is the sharp handle, but it is REAPER's number, and an
+    -- item we cannot find again is one we can neither trim nor remove.
+    return { env = env, pool = pool, at = position, name = name }
+end
+
+function H.autom_trim(handle, time)
+    local index = H.autom_index(handle)
+    if not index then return end
+    local at = r.GetSetAutomationItemInfo(handle.env, index, "D_POSITION", 0, false) or 0
+    local length = time - at
+    if length <= 0.0001 then return end
+    r.GetSetAutomationItemInfo(handle.env, index, "D_LENGTH", length, true)
+end
+
+function H.autom_end(handle)
+    local index = H.autom_index(handle)
+    if not index then return nil end
+    return (r.GetSetAutomationItemInfo(handle.env, index, "D_POSITION", 0, false) or 0)
+        + (r.GetSetAutomationItemInfo(handle.env, index, "D_LENGTH", 0, false) or 0)
+end
+
+function H.autom_start(handle)
+    local index = H.autom_index(handle)
+    if not index then return nil end
+    return r.GetSetAutomationItemInfo(handle.env, index, "D_POSITION", 0, false) or 0
+end
+
+function H.autom_extend(handle, heard)
+    local index = H.autom_index(handle)
+    if not index then return end
+    local at = r.GetSetAutomationItemInfo(handle.env, index, "D_POSITION", 0, false) or 0
+    local length = r.GetSetAutomationItemInfo(handle.env, index, "D_LENGTH", 0, false) or 0
+    if at + length - heard > C.voice_margin then return end
+    r.GetSetAutomationItemInfo(handle.env, index, "D_LENGTH", length + C.voice_extend, true)
+end
+
+-- REAPER has no call for removing an automation item. In the envelope's chunk
+-- an instance is a single POOLEDENVINST line whose first field is its pool, so
+-- the line goes and the chunk is put back. Checked afterwards: if the surgery
+-- missed, the item is shrunk away instead of being left playing.
+function H.autom_delete(handle)
+    if not handle or not handle.env then return true end
+    local index = H.autom_index(handle)
+    if not index then return true end
+    local ok, chunk = r.GetEnvelopeStateChunk(handle.env, "", false)
+    if ok and chunk and chunk ~= "" then
+        local lines = {}
+        for line in (chunk .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+        local marks = {}
+        for number, line in ipairs(lines) do
+            local first = line:match("^%s*POOLEDENVINST%s+(%S+)")
+            if first then marks[#marks + 1] = { at = number, pool = tonumber(first) } end
+        end
+        local chosen = nil
+        for _, mark in ipairs(marks) do
+            if mark.pool == handle.pool then chosen = mark.at break end
+        end
+        -- Falls back to counting them off in order, which is the order
+        -- CountAutomationItems reports them in.
+        if not chosen and marks[index + 1] then chosen = marks[index + 1].at end
+        if chosen then
+            table.remove(lines, chosen)
+            r.SetEnvelopeStateChunk(handle.env, table.concat(lines, "\n"), false)
+        end
+    end
+    local left = H.autom_index(handle)
+    if left then
+        r.GetSetAutomationItemInfo(handle.env, left, "D_LOOPSRC", 0, true)
+        r.GetSetAutomationItemInfo(handle.env, left, "D_LENGTH", 0.0001, true)
+        return false
+    end
+    return true
+end
+
+-- Voices left behind by a crash or a forced quit, found by the name their pool
+-- carries. Run on load, the same way stray media voices are swept.
+function H.sweep_stray_autom()
+    if not H.autom_ready() or not r.GetSetAutomationItemInfo_String then return end
+    local function sweep(env)
+        local guard = 0
+        while guard < 64 do
+            guard = guard + 1
+            local found = nil
+            local drawing = L.autom_edit and L.autom_edit.handle and L.autom_edit.handle.pool or nil
+            for index = 0, (r.CountAutomationItems(env) or 0) - 1 do
+                local ok, name = r.GetSetAutomationItemInfo_String(env, index, "P_POOL_NAME", "", false)
+                if ok and (name == C.autom_voice_name or name == C.autom_edit_name) then
+                    local pool = math.floor(r.GetSetAutomationItemInfo(env, index, "D_POOL_ID", 0, false) or -1)
+                    -- The one being drawn into right now is not a leftover.
+                    if pool ~= drawing then
+                        found = pool
+                        break
+                    end
+                end
+            end
+            if not found then return end
+            if not H.autom_delete({ env = env, pool = found }) then return end
+        end
+    end
+    for index = 0, (r.CountTracks(0) or 0) - 1 do
+        local track = r.GetTrack(0, index)
+        for slot = 0, (r.CountTrackEnvelopes(track) or 0) - 1 do
+            sweep(r.GetTrackEnvelope(track, slot))
+        end
+    end
+end
+
+-- Launching one. Mirrors H.commit: the outgoing voice is closed on the same
+-- boundary the new one starts on, and both edits are committed before the play
+-- cursor gets there.
+function H.commit_autom(lane, row, time, slot)
+    local autom = H.autom(slot)
+    local target = H.target_track(lane)
+    if not autom or not target then return false end
+    if not H.autom_ready() then
+        L.status = "This REAPER cannot place automation items"
+        return false
+    end
+    local env = H.autom_env(target, autom.target, true)
+    if not env then
+        L.status = "Could not find " .. H.autom_target_label(autom.target) .. " on " .. H.lane_label(lane)
+        return false
+    end
+    H.cancel_pending(lane)
+    local restore = H.close_voice_at(lane.current, time)
+    local length = H.autom_length(slot, time)
+    local handle = H.autom_insert(env, autom.target, slot, time, length,
+        slot.loop and C.voice_length or nil, C.autom_voice_name)
+    if not handle then
+        L.status = "Could not place that automation clip"
+        return false
+    end
+    lane.pending = {
+        ai = handle,
+        row = row,
+        at = time,
+        length = length,
+        looped = slot.loop and true or false,
+        slot_guid = slot.guid,
+        restore = restore,
+        hits = {},
+    }
+    -- A curve is not a takeover: the track's own items keep playing under it.
+    -- If a media clip in this lane had the arrangement muted, this hands it back.
+    if not lane.hold then H.schedule_owner(lane, "arrangement", time) end
+    -- The gate is a door on the track's audio. An envelope lane has none of
+    -- its own, and opening the track's from here would undo a held clip.
+    if not H.is_env_lane(lane) then H.open_gate_for(lane) end
+    return true
+end
+
+-- Making one. It never lands in the track's own lane: an automation clip goes
+-- into the envelope lane for its parameter, which is made if this is the first
+-- clip to want it. The library item is a blank MIDI item like an empty clip's,
+-- kept muted and parked; nothing ever plays it, it is what the slot is called by.
+function H.new_autom_clip(holder, row, target, bars)
+    if not H.autom_ready() or not r.CreateNewMIDIItemInProj then
+        L.status = "This REAPER cannot place automation items"
+        return false
+    end
+    local parent = H.is_env_lane(holder) and holder.parent or holder
+    local lane = H.env_lane_for(parent, target, true)
+    if not lane then
+        L.status = "Could not make an automation lane there"
+        return false
+    end
+    local track = H.target_track(lane)
+    local env = track and H.autom_env(track, target, true)
+    if not env then
+        L.status = "Could not make that envelope on " .. H.lane_label(lane)
+        return false
+    end
+    H.env_show(env)
+    local lane_track = H.ensure_lane_track(lane)
+    if not lane_track then
+        L.status = "Could not make a lane track for this clip"
+        return false
+    end
+    local position = r.GetCursorPosition() or 0
+    bars = bars or H.scene_bars(row, position) or 1
+    local length = H.bars_to_time(position, bars)
+    if not length or length <= 0 then length = 2 end
+    r.Undo_BeginBlock()
+    local park = H.park_position()
+    local blank = r.CreateNewMIDIItemInProj(lane_track, park, park + length, false)
+    -- The one item an envelope lane is allowed to be handed: its own anchor.
+    L.autom_building = true
+    local made = blank and H.assign_slot(lane, row, blank) or false
+    L.autom_building = nil
+    if H.valid_item(blank) then r.DeleteTrackMediaItem(lane_track, blank) end
+    r.Undo_EndBlock("New launcher automation clip", -1)
+    r.UpdateArrange()
+    local slot = made and H.slot(lane, row) or nil
+    if not slot then
+        L.status = "Could not make an automation clip"
+        return false
+    end
+    slot.kind = "automation"
+    -- The anchor happens to be MIDI; the clip is not, and every menu that reads
+    -- notes has to leave it alone. What trimming that blank item did or failed
+    -- to do is not this clip's business either.
+    slot.is_midi = false
+    slot.sectioned = nil
+    slot.trim_failed = nil
+    slot.name = H.autom_target_label(target)
+    slot.loop = true
+    slot.autom = { target = target, bars = bars, points = H.autom_flat(env, target) }
+    H.save()
+    L.status = slot.name .. " automation clip, in its own lane under "
+        .. H.lane_label(lane) .. "  |  right-click it and pick Edit curve to draw"
+    return slot
+end
+
+function H.repoint_env_lane(sub, target)
+    if not sub or not target then return end
+    sub.target = target
+    sub.name = H.autom_target_label(target)
+    for _, slot in ipairs(sub.slots) do
+        local autom = H.autom(slot)
+        if autom then
+            local was = H.autom_target_label(autom.target)
+            autom.target = target
+            if slot.name == was then slot.name = sub.name end
+        end
+    end
+    H.save()
+    L.status = "That lane now automates " .. sub.name
+end
+
+function H.repoint_autom(lane, row, target)
+    local slot = H.slot(lane, row)
+    local autom = H.autom(slot)
+    if not autom or not target then return end
+    local was = H.autom_target_label(autom.target)
+    autom.target = target
+    if slot.name == was then slot.name = H.autom_target_label(target) end
+    H.save()
+    L.status = slot.name .. " now automates " .. H.autom_target_label(target)
+end
+
+function H.set_autom_bars(lane, row, bars)
+    local slot = H.slot(lane, row)
+    local autom = H.autom(slot)
+    if not autom then return end
+    autom.bars = math.max(1, math.floor(bars or 1))
+    H.save()
+end
+
+-- The parameter you last moved, but only when it is on this lane's own track:
+-- a descriptor pointing at a plugin the track does not have would resolve to
+-- nothing at launch, and there is nothing useful to say about that afterwards.
+function H.last_touched_target(track)
+    if not r.GetLastTouchedFX or not H.valid_track(track) then return nil end
+    local ok, track_number, fx_index, param = r.GetLastTouchedFX()
+    if not ok or not track_number or track_number < 1 then return nil end
+    local touched = r.GetTrack(0, track_number - 1)
+    if touched ~= track then return nil end
+    local _, fx_name = r.TrackFX_GetFXName(track, fx_index, "")
+    local _, param_name = r.TrackFX_GetParamName(track, fx_index, param, "")
+    return {
+        kind = "fx",
+        fx = r.TrackFX_GetFXGUID and r.TrackFX_GetFXGUID(track, fx_index) or nil,
+        param = math.floor(param or 0),
+        fx_name = H.fx_short_name(fx_name),
+        param_name = param_name ~= "" and param_name or nil,
+    }
+end
+
+-- Drawing the curve happens in the arrange, where the envelope is: an
+-- automation item is put down at the edit cursor with the clip in it, and the
+-- toolbar grows a Done and a Cancel until you say which it is.
+function H.edit_autom(lane, row)
+    local slot = H.slot(lane, row)
+    local autom = H.autom(slot)
+    if not autom then
+        L.status = "That slot is not an automation clip"
+        return
+    end
+    if not H.autom_ready() then
+        L.status = "This REAPER cannot place automation items"
+        return
+    end
+    if L.autom_edit then H.finish_autom_edit(false) end
+    local track = H.target_track(lane)
+    local env = track and H.autom_env(track, autom.target, true)
+    if not env then
+        L.status = "Could not find " .. H.autom_target_label(autom.target) .. " on " .. H.lane_label(lane)
+        return
+    end
+    H.env_show(env)
+    local position = r.GetCursorPosition() or 0
+    local length = H.autom_length(slot, position)
+    r.Undo_BeginBlock()
+    local handle = H.autom_insert(env, autom.target, slot, position, length, nil, C.autom_edit_name)
+    r.Undo_EndBlock("Edit launcher automation clip", -1)
+    if not handle then
+        L.status = "Could not place that automation clip"
+        return
+    end
+    local index = H.autom_index(handle)
+    if index then r.GetSetAutomationItemInfo(handle.env, index, "D_UISEL", 1, true) end
+    if r.SetCursorContext then r.SetCursorContext(2, env) end
+    -- Scrolled to, not only placed: the cursor may well be off screen, and an
+    -- item you cannot see reads exactly like one that was never made.
+    if track and r.SetOnlyTrackSelected then r.SetOnlyTrackSelected(track) end
+    r.SetEditCurPos(position, true, false)
+    L.autom_edit = { guid = slot.guid, handle = handle, at = position, length = length, name = slot.name }
+    r.UpdateArrange()
+    L.status = "Drawing " .. slot.name .. " on " .. H.autom_target_label(autom.target)
+        .. " at " .. H.position_label(position) .. "  |  Curve done keeps it, Cancel throws it away"
+end
+
+-- Points come back the way they went in: by the item's own index, which counts
+-- in project time. Its length comes back too, so stretching the item in the
+-- arrange is how a clip is made longer.
+function H.autom_read(handle, index, target, position, length)
+    local env = handle.env
+    local at = r.GetSetAutomationItemInfo(env, index, "D_POSITION", 0, false) or position
+    -- How long the clip now is. The item is put down unlooped, so what is on
+    -- screen is one pass and its own length is the measure; a looped one would
+    -- be several passes, and only the pool length says how long one of them is.
+    local span = r.GetSetAutomationItemInfo(env, index, "D_LENGTH", 0, false) or 0
+    if (r.GetSetAutomationItemInfo(env, index, "D_LOOPSRC", 0, false) or 0) > 0.5 then
+        local qn = r.GetSetAutomationItemInfo(env, index, "D_POOL_QNLEN", 0, false) or 0
+        span = qn > 0 and (r.TimeMap2_QNToTime(0, r.TimeMap2_timeToQN(0, at) + qn) - at) or 0
+    end
+    if span <= 0 then span = length end
+    -- A point in an automation item is timed from the start of the project.
+    -- Read from the start of the item as well and the better answer kept: the
+    -- two only differ by the item's position, and a reading that throws every
+    -- point away is a reading that was measured from the wrong place.
+    local function gather(origin)
+        local found = {}
+        for point = 0, (r.CountEnvelopePointsEx(env, index) or 0) - 1 do
+            local ok, time, value, shape, tension = r.GetEnvelopePointEx(env, index, point)
+            if ok then
+                local fraction = ((time or 0) - origin) / span
+                if fraction > -0.0001 and fraction < 1.0001 then
+                    found[#found + 1] = {
+                        t = math.max(0, math.min(1, fraction)),
+                        v = H.env_to_unit(env, target, value or 0),
+                        s = (shape and shape ~= 0) and math.floor(shape) or nil,
+                        n = (tension and math.abs(tension) > 0.0001) and tension or nil,
+                    }
+                end
+            end
+        end
+        return found
+    end
+    local points = gather(at)
+    if #points == 0 and at > 0.0001 then points = gather(0) end
+    table.sort(points, function(first, second) return first.t < second.t end)
+    -- Rounded to whole bars, because that is the only length a clip has. Half a
+    -- bar longer in the arrange is a bar longer here, or no change at all.
+    local bars = nil
+    local per_bar = H.qn_per_bar(at)
+    if per_bar and per_bar > 0 then
+        local spanned = r.TimeMap2_timeToQN(0, at + span) - r.TimeMap2_timeToQN(0, at)
+        bars = math.max(1, math.floor(spanned / per_bar + 0.5))
+    end
+    return points, bars
+end
+
+function H.selected_autom_item()
+    local selected = {}
+    for track_index = -1, (r.CountTracks(0) or 0) - 1 do
+        local track = track_index < 0 and r.GetMasterTrack(0) or r.GetTrack(0, track_index)
+        for env_index = 0, (track and r.CountTrackEnvelopes(track) or 0) - 1 do
+            local env = r.GetTrackEnvelope(track, env_index)
+            for item_index = 0, (env and r.CountAutomationItems(env) or 0) - 1 do
+                if (r.GetSetAutomationItemInfo(env, item_index, "D_UISEL", 0, false) or 0) > 0.5 then
+                    selected[#selected + 1] = { env = env, index = item_index }
+                end
+            end
+        end
+    end
+    if #selected == 1 then return selected[1], 1 end
+    return nil, #selected
+end
+
+function H.import_selected_autom(lane, row)
+    if not H.is_env_lane(lane) then return false end
+    local selected, count = H.selected_autom_item()
+    if count == 0 then
+        L.status = "Select an automation item in the arrange first"
+        return false
+    end
+    if count > 1 then
+        L.status = "Select only one automation item"
+        return false
+    end
+    local track = H.target_track(lane)
+    local wanted_env = track and H.autom_env(track, lane.target, false)
+    if not wanted_env or selected.env ~= wanted_env then
+        L.status = "The selected automation item belongs to a different envelope"
+        return false
+    end
+    local position = r.GetSetAutomationItemInfo(selected.env, selected.index, "D_POSITION", 0, false) or 0
+    local length = r.GetSetAutomationItemInfo(selected.env, selected.index, "D_LENGTH", 0, false) or 0
+    local points, bars = H.autom_read({ env = selected.env }, selected.index, lane.target, position, length)
+    local slot = H.new_autom_clip(lane, row, lane.target, bars or 1)
+    if not slot then return false end
+    slot.autom.points = points
+    slot.autom.bars = bars or 1
+    H.save()
+    L.status = "Automation item added: " .. tostring(#points) .. " points, "
+        .. tostring(slot.autom.bars) .. (slot.autom.bars == 1 and " bar" or " bars")
+    return true
+end
+
+-- The item being drawn into can go without us: deleted by hand, or undone.
+-- Left standing, the toolbar would keep offering a Done for something that is
+-- not there and the clip's own Edit entry would stay greyed out for good.
+function H.watch_autom_edit()
+    local edit = L.autom_edit
+    if not edit then return end
+    if H.autom_index(edit.handle) then return end
+    L.autom_edit = nil
+    L.status = (edit.name or "That curve") .. " is no longer in the arrange, so the clip is as it was"
+end
+
+function H.finish_autom_edit(keep)
+    local edit = L.autom_edit
+    L.autom_edit = nil
+    if not edit then return end
+    if keep then
+        local _, slot = H.find_slot_by_guid(edit.guid)
+        local autom = H.autom(slot)
+        local index = H.autom_index(edit.handle)
+        if autom and index then
+            local points, bars = H.autom_read(edit.handle, index, autom.target, edit.at, edit.length)
+            if points and #points > 0 then
+                autom.points = points
+                if bars then autom.bars = bars end
+                H.save()
+                L.status = slot.name .. ": " .. tostring(#points) .. " points, " .. tostring(H.autom_bars(slot))
+                    .. (H.autom_bars(slot) == 1 and " bar" or " bars")
+            else
+                L.status = "That automation item has no points, so the clip is as it was"
+            end
+        end
+    else
+        L.status = "Curve left as it was"
+    end
+    H.autom_delete(edit.handle)
+    r.UpdateArrange()
+end
+
+function H.draw_autom_target_menu(track, pick, key)
+    for index, entry in ipairs(C.autom_targets) do
+        if r.ImGui_MenuItem(UI.ctx, entry.label .. "##" .. key .. index) then pick({ kind = entry.kind }) end
+    end
+    r.ImGui_Separator(UI.ctx)
+    local touched = H.last_touched_target(track)
+    if touched then
+        if r.ImGui_MenuItem(UI.ctx, H.autom_target_label(touched) .. "##" .. key .. "fx") then pick(touched) end
+    else
+        r.ImGui_MenuItem(UI.ctx, "Touch a plugin knob on this track first", nil, false, false)
+    end
+end
+
+-- Target first, then how long: the parameter is what the clip is, the length is
+-- a number you may well change again once the curve is drawn.
+function H.draw_new_autom_menu(lane, row)
+    local track = H.target_track(lane)
+    local function lengths(label, target, key)
+        if r.ImGui_BeginMenu(UI.ctx, label .. "##new_autom" .. key) then
+            for _, bars in ipairs(C.new_clip_bars) do
+                local text = bars == 1 and "1 bar" or (tostring(bars) .. " bars")
+                if r.ImGui_MenuItem(UI.ctx, text .. "##new_autom" .. key) then
+                    H.new_autom_clip(lane, row, target, bars)
+                end
+            end
+            r.ImGui_Separator(UI.ctx)
+            if r.ImGui_MenuItem(UI.ctx, "As long as this scene##new_autom" .. key) then
+                H.new_autom_clip(lane, row, target, nil)
+            end
+            -- A shape off the shelf. It brings its own length, so it does not
+            -- belong under the bar counts above but beside them.
+            local files = H.autom_files()
+            if files then
+                r.ImGui_Separator(UI.ctx)
+                if r.ImGui_BeginMenu(UI.ctx, "From an automation item##new_autom" .. key) then
+                    H.draw_autom_file_menu(files, "new" .. key, function(file)
+                        H.new_autom_from_file(lane, row, target, file.path, file.name)
+                    end)
+                    r.ImGui_EndMenu(UI.ctx)
+                end
+            end
+            r.ImGui_EndMenu(UI.ctx)
+        end
+    end
+    for index, entry in ipairs(C.autom_targets) do
+        lengths(entry.label, { kind = entry.kind }, tostring(index))
+    end
+    r.ImGui_Separator(UI.ctx)
+    local touched = H.last_touched_target(track)
+    if touched then
+        lengths(H.autom_target_label(touched), touched, "fx")
+    else
+        r.ImGui_MenuItem(UI.ctx, "Touch a plugin knob on this track first", nil, false, false)
+    end
+end
+
+-- The curve, drawn into a cell the way a waveform is. Square points are drawn
+-- square; every other shape reads as the line it mostly is.
+function H.draw_autom_curve(draw_list, slot, x, y, width, height, ink)
+    if width <= 2 or height <= 2 then return end
+    local top, bottom = y + UI.scaled(2), y + height - UI.scaled(2)
+    local span = bottom - top
+    if span <= 1 then return end
+    local floor_ink = (ink & 0xFFFFFF00) | 0x30
+    r.ImGui_DrawList_AddLine(draw_list, x, bottom, x + width, bottom, floor_ink, UI.scaled(1))
+    local thickness = UI.scaled(1.5)
+    local previous = nil
+    for _, point in ipairs(H.autom_points(slot)) do
+        local at = x + math.max(0, math.min(1, point.t or 0)) * width
+        local level = bottom - math.max(0, math.min(1, point.v or 0)) * span
+        if not previous then
+            if at > x + 0.5 then
+                r.ImGui_DrawList_AddLine(draw_list, x, level, at, level, ink, thickness)
+            end
+        elseif (previous.shape or 0) == 1 then
+            r.ImGui_DrawList_AddLine(draw_list, previous.x, previous.y, at, previous.y, ink, thickness)
+            r.ImGui_DrawList_AddLine(draw_list, at, previous.y, at, level, ink, thickness)
+        else
+            r.ImGui_DrawList_AddLine(draw_list, previous.x, previous.y, at, level, ink, thickness)
+        end
+        previous = { x = at, y = level, shape = point.s }
+    end
+    if previous and previous.x < x + width - 0.5 then
+        r.ImGui_DrawList_AddLine(draw_list, previous.x, previous.y, x + width, previous.y, ink, thickness)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -3295,6 +4665,43 @@ function H.roll_transport(at)
     L.roll_guard = r.time_precise() + 1.5
 end
 
+-- A clip and the curves that belong to it: the lane, plus the envelope lanes
+-- under it. Launching the clip launches the curves in its row with it. The
+-- other way round it does not work: firing a curve moves that one lane to that
+-- row and leaves everything else exactly as it was, which is what makes an
+-- envelope lane usable as a lane rather than as a second scene column.
+--
+-- Launching only ever starts things. A curve keeps running when the clip above
+-- it moves to a row that has none, because stopping in this launcher is always
+-- something you ask for: a stop square, a track stop (which takes its curves
+-- with it), or the empty cell of a scene, which is the scene's own rule.
+function H.group_of(holder)
+    local lane = H.is_env_lane(holder) and holder.parent or holder
+    local group = { lane }
+    for _, sub in ipairs(lane.envs or {}) do group[#group + 1] = sub end
+    return group, lane
+end
+
+-- Everything this row has in the group. Called for a track clip; an envelope
+-- lane launches on its own, so it never comes through here.
+function H.commit_group(holder, row, time)
+    local launched = false
+    for _, member in ipairs(H.group_of(holder)) do
+        if (not H.is_env_lane(member) or (member.follow_parent ~= false and not member.paused))
+            and H.slot(member, row) and H.commit(member, row, time) then launched = true end
+    end
+    return launched
+end
+
+function H.queue_group(holder, row)
+    for _, member in ipairs(H.group_of(holder)) do
+        if (not H.is_env_lane(member) or (member.follow_parent ~= false and not member.paused))
+            and H.slot(member, row) then
+            member.queued = { row = row }
+        end
+    end
+end
+
 function H.launch(lane, row)
     local slot_check = H.slot(lane, row)
     if slot_check and slot_check.missing then
@@ -3306,14 +4713,23 @@ function H.launch(lane, row)
         return
     end
     local time, needs_roll, at_wrap = H.launch_time()
+    -- A track clip takes the curves in its row along; a curve goes alone.
+    local alone = H.is_env_lane(lane)
     if at_wrap then
-        lane.queued = { row = row }
+        if alone then lane.queued = { row = row } else H.queue_group(lane, row) end
         local slot = H.slot(lane, row)
         L.status = "Queued " .. (slot and slot.name or "clip") .. " for the top of the loop"
         return
     end
     r.PreventUIRefresh(1)
-    local ok = H.commit(lane, row, time)
+    -- Written out: with "and ... or ...", a commit that returned false would
+    -- fall through and launch the whole group after all.
+    local ok
+    if alone then
+        ok = H.commit(lane, row, time)
+    else
+        ok = H.commit_group(lane, row, time)
+    end
     r.PreventUIRefresh(-1)
     if not ok then
         L.status = "Could not launch that slot"
@@ -3330,9 +4746,13 @@ end
 -- the previous scene would play straight through the next one.
 function H.scene_commit(row, time)
     local launched, stopped = 0, 0
-    for _, lane in ipairs(L.lanes) do
+    local already_deferred = L.defer_restore_save
+    L.defer_restore_save = true
+    for _, lane in ipairs(H.holders()) do
         if not H.lane_orphaned(lane) then
-            if H.slot(lane, row) then
+            if H.is_env_lane(lane) and lane.paused then
+                lane.queued = nil
+            elseif H.slot(lane, row) then
                 if H.commit(lane, row, time) then launched = launched + 1 end
             elseif lane.current or lane.pending then
                 lane.run = nil
@@ -3343,6 +4763,8 @@ function H.scene_commit(row, time)
             end
         end
     end
+    L.defer_restore_save = already_deferred
+    if not already_deferred and L.restore_save_dirty then H.save_restore_state() end
     return launched, stopped
 end
 
@@ -3388,7 +4810,7 @@ function H.update_follow()
         L.status = "Scene " .. tostring(next_row) .. ": " .. tostring(launched) .. " playing"
             .. (stopped > 0 and (", " .. tostring(stopped) .. " stopped") or "")
     else
-        for _, lane in ipairs(L.lanes) do
+        for _, lane in ipairs(H.holders()) do
             H.cancel_pending(lane)
             H.close_voice_at(lane.current, finish)
             if not lane.hold then H.schedule_owner(lane, "arrangement", finish) end
@@ -3403,9 +4825,11 @@ function H.launch_scene(row)
     local time, needs_roll, at_wrap = H.launch_time()
     if at_wrap then
         local queued = 0
-        for _, lane in ipairs(L.lanes) do
+        for _, lane in ipairs(H.holders()) do
             if not H.lane_orphaned(lane) then
-                if H.slot(lane, row) then
+                if H.is_env_lane(lane) and lane.paused then
+                    lane.queued = nil
+                elseif H.slot(lane, row) then
                     lane.queued = { row = row }
                     queued = queued + 1
                 elseif lane.current or lane.pending then
@@ -3436,17 +4860,38 @@ end
 -- Given a time, the lane ends there; given none, on the next bar line. A gate
 -- released mid-bar wants the first: the sound has already stopped, and a voice
 -- left running to the bar line would be kept as part of the take.
+-- Stopping a track stops what it was automating as well. Stopping one
+-- envelope lane leaves the rest of the group alone.
+function H.stopped_with(lane)
+    local also = {}
+    if not H.is_env_lane(lane) then
+        for _, sub in ipairs(lane.envs or {}) do also[#also + 1] = sub end
+    end
+    return also
+end
+
 function H.stop_lane(lane, at)
     lane.run = nil
+    lane.queued = nil
     local now = H.schedule_pos()
     if not now then
         H.harvest_lane(lane, true)
         H.release_now(lane)
+        for _, sub in ipairs(H.stopped_with(lane)) do
+            sub.run = nil
+            H.harvest_lane(sub, true)
+        end
         r.UpdateArrange()
         return
     end
     local time = at or H.boundary_after(now, false)
     r.PreventUIRefresh(1)
+    for _, sub in ipairs(H.stopped_with(lane)) do
+        sub.run = nil
+        sub.queued = nil
+        H.cancel_pending(sub)
+        H.close_voice_at(sub.current, time)
+    end
     H.cancel_pending(lane)
     H.remember_stopped_voice(lane, lane.current, time)
     H.close_voice_at(lane.current, time)
@@ -3455,7 +4900,12 @@ function H.stop_lane(lane, at)
     if not lane.hold then H.schedule_owner(lane, "arrangement", time) end
     r.PreventUIRefresh(-1)
     r.UpdateArrange()
-    if at then
+    if H.is_env_lane(lane) then
+        -- Nothing is handed back here: an automation lane never took the
+        -- arrangement off the track in the first place.
+        L.status = at and "Automation lane stopped"
+            or "Automation lane stops on the next boundary"
+    elseif at then
         L.status = lane.hold and "Lane stopped" or "Lane returned to the arrangement"
     else
         L.status = lane.hold and "Lane stops on the next boundary" or "Lane returns to the arrangement on the next boundary"
@@ -3470,7 +4920,7 @@ function H.stop_all_quantized()
     end
     local time = H.boundary_after(now, false)
     r.PreventUIRefresh(1)
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         H.cancel_pending(lane)
         H.close_voice_at(lane.current, time)
         if not lane.hold then H.schedule_owner(lane, "arrangement", time) end
@@ -3489,12 +4939,15 @@ function H.reset_all()
     r.PreventUIRefresh(1)
     L.arrangement_muted = false
     L.scene_run = nil
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         lane.hold = false
         H.harvest_lane(lane, true)
         H.release_now(lane)
     end
     H.restore_arrangement_mute()
+    -- Curves nothing is holding on to any more go the same way, apart from one
+    -- that is being drawn into: Reset is not a request to lose that.
+    H.sweep_stray_autom()
     -- Anything the live tables lost track of is still listed in the project
     -- mirror; this is what makes Reset a real safety net rather than a tidy up.
     local repaired = H.repair_restore_state()
@@ -3552,33 +5005,14 @@ function H.save(quiet)
         end
     end
     for _, lane in ipairs(L.lanes) do
-        local slots = {}
-        for _, slot in ipairs(lane.slots) do
-            slots[#slots + 1] = {
-                row = slot.row,
-                guid = slot.guid,
-                name = slot.name,
-                is_midi = slot.is_midi and true or false,
-                length = slot.length,
-                loop = slot.loop and true or false,
-                loop_len = slot.loop_len,
-                tempo_matched = slot.tempo_matched and true or nil,
-                speed = slot.speed or nil,
-                launch_mode = slot.launch_mode or nil,
-                tempo_guessed = slot.tempo_guessed and true or nil,
-                key = slot.key and { root = slot.key.root, mode = slot.key.mode } or nil,
-                key_guessed = slot.key_guessed and true or nil,
-                root = slot.root,
-                key_applied = slot.key_applied and
-                    { root = slot.key_applied.root, mode = slot.key_applied.mode, style = slot.key_applied.style } or nil,
-                pitches = slot.pitches,
-                repeat_qn = slot.repeat_qn,
-                steps = H.steps_to_text(slot.steps),
-                follow = slot.follow,
-                plays = slot.plays,
-                color = slot.color,
-                gain = slot.gain,
-                chord_follow = slot.chord_follow,
+        local envs = {}
+        for _, sub in ipairs(lane.envs or {}) do
+            envs[#envs + 1] = {
+                name = sub.name,
+                follow_parent = sub.follow_parent ~= false,
+                paused = sub.paused and true or nil,
+                target = H.read_autom({ target = sub.target }).target,
+                slots = H.saved_slots(sub),
             }
         end
         data.lanes[#data.lanes + 1] = {
@@ -3586,7 +5020,8 @@ function H.save(quiet)
             match = lane.match,
             track_guid = lane.track_guid,
             lane_guid = lane.lane_guid,
-            slots = slots,
+            slots = H.saved_slots(lane),
+            envs = #envs > 0 and envs or nil,
         }
     end
     local ok, encoded = pcall(UI.json.encode, data)
@@ -3594,6 +5029,43 @@ function H.save(quiet)
         r.SetProjExtState(0, C.proj_section, "grid", encoded)
         if not quiet and r.MarkProjectDirty then r.MarkProjectDirty(0) end
     end
+end
+
+-- One holder's clips as plain data. Written for lanes and for the envelope
+-- lanes under them, which store exactly the same thing.
+function H.saved_slots(holder)
+    local slots = {}
+    for _, slot in ipairs(holder.slots) do
+        slots[#slots + 1] = {
+            row = slot.row,
+            guid = slot.guid,
+            name = slot.name,
+            is_midi = slot.is_midi and true or false,
+            length = slot.length,
+            loop = slot.loop and true or false,
+            loop_len = slot.loop_len,
+            tempo_matched = slot.tempo_matched and true or nil,
+            speed = slot.speed or nil,
+            launch_mode = slot.launch_mode or nil,
+            tempo_guessed = slot.tempo_guessed and true or nil,
+            key = slot.key and { root = slot.key.root, mode = slot.key.mode } or nil,
+            key_guessed = slot.key_guessed and true or nil,
+            root = slot.root,
+            key_applied = slot.key_applied and
+                { root = slot.key_applied.root, mode = slot.key_applied.mode, style = slot.key_applied.style } or nil,
+            pitches = slot.pitches,
+            repeat_qn = slot.repeat_qn,
+            steps = H.steps_to_text(slot.steps),
+            follow = slot.follow,
+            plays = slot.plays,
+            color = slot.color,
+            gain = slot.gain,
+            chord_follow = slot.chord_follow,
+            kind = slot.kind,
+            autom = H.autom(slot) and H.copy_autom(slot.autom) or nil,
+        }
+    end
+    return slots
 end
 
 --------------------------------------------------------------------------------
@@ -3799,7 +5271,7 @@ function H.shift_scale_degree(pitch, key, degree_shift)
 end
 
 function H.slot_by_guid(guid)
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         for _, slot in ipairs(lane.slots or {}) do
             if slot.guid == guid then return slot end
         end
@@ -4499,6 +5971,21 @@ end
 -- which part of it this clip plays. The trim is written in source seconds rather
 -- than project seconds, so it survives landing in a project at another tempo.
 function H.slot_export(slot)
+    -- An automation clip has no file behind it: the curve is the clip, so it
+    -- travels in the set itself and lands in the next project as it stands.
+    local autom = H.autom(slot)
+    if autom then
+        return {
+            row = slot.row,
+            name = slot.name,
+            kind = "automation",
+            autom = H.copy_autom(autom),
+            loop = slot.loop and true or false,
+            follow = slot.follow,
+            plays = slot.plays,
+            color = slot.color,
+        }
+    end
     local path = H.slot_source_path(slot)
     if not path then return nil end
     local item = H.item_from_guid(slot.guid)
@@ -4553,6 +6040,14 @@ function H.set_payload()
         for _, slot in ipairs(lane.slots) do
             local exported = H.slot_export(slot)
             if exported then slots[#slots + 1] = exported else skipped = skipped + 1 end
+        end
+        -- The automation clips travel in the same list. They carry their own
+        -- parameter, so loading the set is what puts the envelope lanes back.
+        for _, sub in ipairs(lane.envs or {}) do
+            for _, slot in ipairs(sub.slots) do
+                local exported = H.slot_export(slot)
+                if exported then slots[#slots + 1] = exported else skipped = skipped + 1 end
+            end
         end
         data.lanes[#data.lanes + 1] = {
             name = lane.name,
@@ -4856,7 +6351,7 @@ function H.import_set(path, create_missing)
             missing_tracks[#missing_tracks + 1] = tostring(wanted)
         end
     end
-    local added, missing_files = 0, 0
+    local added, missing_files, missing_params = 0, 0, 0
     for index, entry in ipairs(data.lanes) do
         local track = resolved[index]
         if track then
@@ -4867,7 +6362,22 @@ function H.import_set(path, create_missing)
                     local row = math.floor(tonumber(stored.row) or 0)
                     local usable = row >= 1 and row <= L.rows
                         and type(stored.path) == "string" and r.file_exists(stored.path)
-                    if usable and H.assign_path(lane, row, stored.path) then
+                    if stored.kind == "automation" then
+                        -- The curve comes back whole; what may not be here is
+                        -- the plugin it points at, and then there is no
+                        -- envelope to put it on.
+                        local wanted = H.read_autom(stored.autom)
+                        local landed = row >= 1 and row <= L.rows
+                            and H.new_autom_clip(lane, row, wanted.target, wanted.bars) or nil
+                        local sub = H.env_lane_for(lane, wanted.target, false)
+                        if landed and sub and H.autom(landed) then
+                            landed.autom.points = wanted.points
+                            H.apply_stored_slot(sub, row, stored)
+                            added = added + 1
+                        else
+                            missing_params = missing_params + 1
+                        end
+                    elseif usable and H.assign_path(lane, row, stored.path) then
                         H.apply_stored_slot(lane, row, stored)
                         added = added + 1
                     else
@@ -4902,6 +6412,9 @@ function H.import_set(path, create_missing)
     end
     if missing_files > 0 then
         report[#report + 1] = string.format("%d clips skipped, their file was not found", missing_files)
+    end
+    if missing_params > 0 then
+        report[#report + 1] = string.format("%d automation clips skipped, their parameter is not on that track", missing_params)
     end
     L.status = table.concat(report, "; ")
     return true
@@ -5258,6 +6771,10 @@ function H.sweep_stray_voices()
         if track then
             local known = {}
             for _, slot in ipairs(lane.slots) do known[slot.guid] = true end
+            -- The envelope lanes under this one park their anchors here too.
+            for _, sub in ipairs(lane.envs or {}) do
+                for _, slot in ipairs(sub.slots) do known[slot.guid] = true end
+            end
             for index = r.CountTrackMediaItems(track) - 1, 0, -1 do
                 local item = r.GetTrackMediaItem(track, index)
                 if not known[r.BR_GetMediaItemGUID(item)] then
@@ -5277,6 +6794,10 @@ function H.project_changed()
     L.lanes = {}
     L.loaded = false
     L.status = ""
+    -- Its envelope belongs to the project we just left, and so does the item it
+    -- put there; that project sweeps it up when the launcher next opens on it.
+    L.autom_edit = nil
+    L.env_ranges = nil
     L.guide_events = nil
     L.guide_scan_at = 0
     ChordTimeline.invalidate()
@@ -5329,49 +6850,18 @@ function H.load()
                     slots = {},
                     owner = "arrangement",
                 }
-                for _, slot in ipairs(stored.slots or {}) do
-                    local item = H.item_from_guid(slot.guid)
-                    if item then
-                        r.SetMediaItemInfo_Value(item, "B_MUTE", 1)
-                        local slot_take = r.GetActiveTake(item)
-                        if not slot.loop_len and slot_take then
-                            slot.loop_len = H.loop_period(item, slot_take)
-                        end
-                        -- Also migrates libraries saved by an older layout.
-                        local parked = H.park_position()
-                        if (r.GetMediaItemInfo_Value(item, "D_POSITION") or 0) ~= parked then
-                            r.SetMediaItemInfo_Value(item, "D_POSITION", parked)
-                        end
-                        lane.slots[#lane.slots + 1] = {
-                            row = math.floor(tonumber(slot.row) or 1),
-                            guid = slot.guid,
-                            name = slot.name or "Clip",
-                            is_midi = slot.is_midi and true or false,
-                            length = tonumber(slot.length) or 0,
-                            loop = slot.loop ~= false,
-                            loop_len = tonumber(slot.loop_len),
-                            tempo_matched = slot.tempo_matched and true or nil,
-                            speed = tonumber(slot.speed),
-                            launch_mode = slot.launch_mode,
-                            tempo_guessed = slot.tempo_guessed and true or nil,
-                            key = H.key_from(slot.key),
-                            key_guessed = slot.key_guessed and true or nil,
-                            root = tonumber(slot.root) and math.floor(tonumber(slot.root)) % 12 or nil,
-                            key_applied = H.key_from(slot.key_applied) and {
-                                root = H.key_from(slot.key_applied).root,
-                                mode = H.key_from(slot.key_applied).mode,
-                                style = slot.key_applied.style == "root" and "root" or "scale",
-                            } or nil,
-                            pitches = type(slot.pitches) == "string" and slot.pitches or nil,
-                            repeat_qn = tonumber(slot.repeat_qn),
-                            steps = H.steps_from_text(slot.steps),
-                            follow = slot.follow,
-                            plays = tonumber(slot.plays),
-                            color = tonumber(slot.color),
-                            gain = tonumber(slot.gain),
-                            chord_follow = slot.chord_follow == "root" and "root"
-                                or (slot.chord_follow == "scale" and "scale" or nil),
-                        }
+                H.load_slots(lane, stored.slots)
+                -- The envelope lanes under this one, each with its own clips.
+                -- A lane whose parameter cannot be resolved is still kept: the
+                -- plugin may come back, and its clips are the user's work.
+                for _, kept in ipairs(stored.envs or {}) do
+                    local target = H.read_autom({ target = kept.target }).target
+                    local sub = H.env_lane_for(lane, target, true)
+                    if sub then
+                        if type(kept.name) == "string" and kept.name ~= "" then sub.name = kept.name end
+                        sub.follow_parent = kept.follow_parent ~= false
+                        sub.paused = kept.paused == true
+                        H.load_slots(sub, kept.slots)
                     end
                 end
                 L.lanes[#L.lanes + 1] = lane
@@ -5383,9 +6873,63 @@ function H.load()
     -- than showing the empty-project notice until the next tick comes round.
     H.follow_track_list()
     H.sweep_stray_voices()
+    H.sweep_stray_autom()
     -- If a previous session was interrupted mid takeover, give the arrangement
     -- its mute states back before anything else happens.
     H.repair_restore_state()
+end
+
+-- One holder's clips, read back off what H.saved_slots wrote. A clip whose
+-- library item is not in the project any more is dropped here rather than
+-- carried as a slot pointing at nothing.
+function H.load_slots(holder, stored_slots)
+    for _, slot in ipairs(stored_slots or {}) do
+        local item = H.item_from_guid(slot.guid)
+        if item then
+            r.SetMediaItemInfo_Value(item, "B_MUTE", 1)
+            local slot_take = r.GetActiveTake(item)
+            if not slot.loop_len and slot_take then
+                slot.loop_len = H.loop_period(item, slot_take)
+            end
+            -- Also migrates libraries saved by an older layout.
+            local parked = H.park_position()
+            if (r.GetMediaItemInfo_Value(item, "D_POSITION") or 0) ~= parked then
+                r.SetMediaItemInfo_Value(item, "D_POSITION", parked)
+            end
+            holder.slots[#holder.slots + 1] = {
+                row = math.floor(tonumber(slot.row) or 1),
+                guid = slot.guid,
+                name = slot.name or "Clip",
+                is_midi = slot.is_midi and true or false,
+                length = tonumber(slot.length) or 0,
+                loop = slot.loop ~= false,
+                loop_len = tonumber(slot.loop_len),
+                tempo_matched = slot.tempo_matched and true or nil,
+                speed = tonumber(slot.speed),
+                launch_mode = slot.launch_mode,
+                tempo_guessed = slot.tempo_guessed and true or nil,
+                key = H.key_from(slot.key),
+                key_guessed = slot.key_guessed and true or nil,
+                root = tonumber(slot.root) and math.floor(tonumber(slot.root)) % 12 or nil,
+                key_applied = H.key_from(slot.key_applied) and {
+                    root = H.key_from(slot.key_applied).root,
+                    mode = H.key_from(slot.key_applied).mode,
+                    style = slot.key_applied.style == "root" and "root" or "scale",
+                } or nil,
+                pitches = type(slot.pitches) == "string" and slot.pitches or nil,
+                repeat_qn = tonumber(slot.repeat_qn),
+                steps = H.steps_from_text(slot.steps),
+                follow = slot.follow,
+                plays = tonumber(slot.plays),
+                color = tonumber(slot.color),
+                gain = tonumber(slot.gain),
+                chord_follow = slot.chord_follow == "root" and "root"
+                    or (slot.chord_follow == "scale" and "scale" or nil),
+                kind = slot.kind == "automation" and "automation" or nil,
+                autom = slot.kind == "automation" and H.read_autom(slot.autom) or nil,
+            }
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -5510,7 +7054,7 @@ end
 function H.open_gate_for(lane)
     if not lane then return end
     local held = L.gate_held
-    if held and L.lanes[held.lane] == lane then return end
+    if held and held.holder == lane then return end
     if not H.lane_gate(lane, false) then return end
     H.set_lane_gate(lane, true)
 end
@@ -5520,9 +7064,12 @@ end
 -- on the next bar line and tidies up.
 function H.gate_press(lane, lane_index, row)
     local held = L.gate_held
-    if held and (held.lane ~= lane_index or held.row ~= row) then H.gate_release() end
-    L.gate_held = { lane = lane_index, row = row }
-    H.set_lane_gate(lane, true)
+    if held and (held.holder ~= lane or held.row ~= row) then H.gate_release() end
+    L.gate_held = { holder = lane, lane = lane_index, row = row }
+    -- An automation lane has no audio to shut. Its door is the automation item
+    -- itself, which is cut off where the finger let go, so the gate effect is
+    -- only for the lanes that carry sound.
+    if not H.is_env_lane(lane) then H.set_lane_gate(lane, true) end
     if not H.slot_is_live(lane, row) then H.launch(lane, row) end
 end
 
@@ -5530,14 +7077,18 @@ function H.gate_release()
     local held = L.gate_held
     if not held then return end
     L.gate_held = nil
-    local lane = L.lanes[held.lane]
+    local lane = held.holder or L.lanes[held.lane]
     if not lane then return end
-    H.set_lane_gate(lane, false)
+    if not H.is_env_lane(lane) then H.set_lane_gate(lane, false) end
     -- Ended where the finger let go, in heard time. Not the scheduling
     -- position: that runs ahead by the output latency, so it would keep a
     -- sliver more than was played - and a voice whose bar line has not arrived
-    -- yet lies entirely beyond it, which closing throws away outright. The gate
-    -- has already silenced the sound, so trimming here is not heard.
+    -- yet lies entirely beyond it, which closing throws away outright. So a tap
+    -- before the bar line cancels the launch instead of playing a moment of it.
+    -- For a clip the gate has already silenced the sound, so this trim is not
+    -- heard. For a curve there is nothing to silence: the automation item ends
+    -- here, the block already rendered keeps whatever it had, and the parameter
+    -- is back on the track's own envelope from the next one.
     H.stop_lane(lane, H.heard_pos())
 end
 
@@ -5546,6 +7097,7 @@ end
 -- notice - either way the sound must stop.
 function H.watch_gate()
     if not L.gate_held then return end
+    if L.gate_held.midi then return end
     if r.ImGui_IsMouseDown and r.ImGui_IsMouseDown(UI.ctx, 0) then return end
     H.gate_release()
 end
@@ -5574,6 +7126,10 @@ function H.click_slot(lane, lane_index, row, slot)
     if live == "playing" and (slot.launch_mode or "toggle") ~= "restart" then
         H.stop_lane(lane)
         return
+    end
+    if H.is_env_lane(lane) and lane.paused then
+        lane.paused = false
+        H.save()
     end
     H.launch(lane, row)
 end
@@ -5624,8 +7180,12 @@ function H.new_midi_clip(lane, lane_index, row, bars)
 end
 function H.slot_context(lane, lane_index, row, slot)
     if not r.ImGui_BeginPopupContextItem(UI.ctx, "##launch_ctx_" .. lane_index .. "_" .. row) then return false end
+    local autom = H.autom(slot)
     if slot then
         r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, slot.name)
+        if autom then
+            r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Automates " .. H.autom_target_label(autom.target))
+        end
         local length_text = H.clip_length_text(slot)
         if length_text then
             r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Loops " .. length_text)
@@ -5661,6 +7221,10 @@ function H.slot_context(lane, lane_index, row, slot)
                     H.save()
                 end
             end
+            -- Said here as well as in the toolbar: with follow switched off for
+            -- the grid, choosing one of these does nothing at all, and the
+            -- toolbar that says so can be folded away.
+            H.draw_follow_warning()
             r.ImGui_EndMenu(UI.ctx)
         end
         if r.ImGui_BeginMenu(UI.ctx, "Play " .. tostring(H.clip_plays(slot)) .. "x") then
@@ -5672,7 +7236,7 @@ function H.slot_context(lane, lane_index, row, slot)
             end
             r.ImGui_EndMenu(UI.ctx)
         end
-        if r.ImGui_BeginMenu(UI.ctx, "Retrigger every", not slot.loop) then
+        if r.ImGui_BeginMenu(UI.ctx, "Retrigger every", not slot.loop and not autom) then
             for _, option in ipairs(REPEAT_OPTIONS) do
                 local active = (slot.repeat_qn or 0) == option.qn
                 if r.ImGui_MenuItem(UI.ctx, option.label, nil, active) then
@@ -5706,10 +7270,59 @@ function H.slot_context(lane, lane_index, row, slot)
             end
             r.ImGui_EndMenu(UI.ctx)
         end
+        -- What the curve is: where it is drawn, how long it runs, and which
+        -- parameter it lands on. A media clip has none of these.
+        if autom then
+            r.ImGui_Separator(UI.ctx)
+            local editing = L.autom_edit ~= nil and L.autom_edit.guid == slot.guid
+            -- The way out of drawing sits here as well as in the toolbar: that
+            -- bar can be switched off, and this menu is where the clip is.
+            if editing then
+                if r.ImGui_MenuItem(UI.ctx, "Curve done") then H.finish_autom_edit(true) end
+                if r.ImGui_MenuItem(UI.ctx, "Cancel drawing") then H.finish_autom_edit(false) end
+            elseif r.ImGui_MenuItem(UI.ctx, "Edit curve...") then
+                H.edit_autom(lane, row)
+            end
+            if r.ImGui_IsItemHovered(UI.ctx) then
+                r.ImGui_SetTooltip(UI.ctx, "Puts the clip on its envelope at the edit cursor to draw into.\nCurve done takes it back in; Cancel throws it away. Both are here\nand in the toolbar. Making it longer or shorter there makes the\nclip longer or shorter.")
+            end
+            if r.ImGui_MenuItem(UI.ctx, "Save as automation item...") then
+                H.ask_autom_save(lane, row)
+            end
+            if r.ImGui_IsItemHovered(UI.ctx) then
+                r.ImGui_SetTooltip(UI.ctx, "Write this curve into REAPER's AutomationItems folder, so it can\nbe dropped on any envelope in any project - and picked up again\nby Load automation item here.")
+            end
+            local files = H.autom_files()
+            if files and r.ImGui_BeginMenu(UI.ctx, "Load automation item") then
+                H.draw_autom_file_menu(files, "slot" .. lane_index .. "_" .. row, function(file)
+                    H.apply_autom_file(lane, row, file.path, file.name)
+                end)
+                r.ImGui_EndMenu(UI.ctx)
+            end
+            if r.ImGui_IsItemHovered(UI.ctx) then
+                r.ImGui_SetTooltip(UI.ctx, "Replace this clip's curve with one of REAPER's own automation\nitems, and take its length with it.")
+            end
+            local bars = H.autom_bars(slot)
+            if r.ImGui_BeginMenu(UI.ctx, "Length: " .. tostring(bars) .. (bars == 1 and " bar" or " bars")) then
+                for _, choice in ipairs(C.new_clip_bars) do
+                    local text = choice == 1 and "1 bar" or (tostring(choice) .. " bars")
+                    if r.ImGui_MenuItem(UI.ctx, text, nil, bars == choice) then
+                        H.set_autom_bars(lane, row, choice)
+                    end
+                end
+                r.ImGui_EndMenu(UI.ctx)
+            end
+            if r.ImGui_BeginMenu(UI.ctx, "Point at") then
+                H.draw_autom_target_menu(H.target_track(lane), function(target)
+                    H.repoint_autom(lane, row, target)
+                end, "point")
+                r.ImGui_EndMenu(UI.ctx)
+            end
+        end
         r.ImGui_Separator(UI.ctx)
         -- How it sounds. Speed and tempo are both the rate it runs at, so they
         -- sit together instead of three groups apart.
-        if r.ImGui_BeginMenu(UI.ctx, "Gain") then
+        if not autom and r.ImGui_BeginMenu(UI.ctx, "Gain") then
             local db = 20 * math.log(math.max(0.0001, slot.gain or 1), 10)
             r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(160))
             local changed, value = r.ImGui_SliderDouble(UI.ctx, "dB##clip_gain", db, -24, 12, "%.1f")
@@ -5724,7 +7337,7 @@ function H.slot_context(lane, lane_index, row, slot)
             r.ImGui_EndMenu(UI.ctx)
         end
         local speed = H.slot_speed(slot)
-        if r.ImGui_BeginMenu(UI.ctx, string.format("Speed: %gx", speed)) then
+        if not autom and r.ImGui_BeginMenu(UI.ctx, string.format("Speed: %gx", speed)) then
             for _, value in ipairs(C.speeds) do
                 if r.ImGui_MenuItem(UI.ctx, string.format("%gx", value), nil,
                         math.abs(value - speed) < 0.0005) then
@@ -5733,7 +7346,7 @@ function H.slot_context(lane, lane_index, row, slot)
             end
             r.ImGui_EndMenu(UI.ctx)
         end
-        if slot.tempo_matched or slot.sectioned or not slot.is_midi then
+        if not autom and (slot.tempo_matched or slot.sectioned or not slot.is_midi) then
             if r.ImGui_BeginMenu(UI.ctx, "Tempo: " .. (slot.tempo_matched and "stretched to the project" or "as recorded")) then
                 H.draw_clip_tempo_menu(lane, row, slot)
                 r.ImGui_EndMenu(UI.ctx)
@@ -5782,10 +7395,10 @@ function H.slot_context(lane, lane_index, row, slot)
         if slot.is_midi and r.ImGui_MenuItem(UI.ctx, "Edit in MIDI editor") then
             H.edit_slot_midi(lane, row)
         end
-        if r.ImGui_MenuItem(UI.ctx, "Replace with selected item") then
+        if not autom and r.ImGui_MenuItem(UI.ctx, "Replace with selected item") then
             H.assign_from_selection(lane, row)
         end
-        if r.ImGui_MenuItem(UI.ctx, "Replace with file...") then H.pick_file(lane, row) end
+        if not autom and r.ImGui_MenuItem(UI.ctx, "Replace with file...") then H.pick_file(lane, row) end
         r.ImGui_Separator(UI.ctx)
         if r.ImGui_MenuItem(UI.ctx, "Write clip to arrangement at cursor") then H.write_slot(lane, row) end
         r.ImGui_Separator(UI.ctx)
@@ -5796,6 +7409,38 @@ function H.slot_context(lane, lane_index, row, slot)
             r.Undo_EndBlock("Clear launcher slot", -1)
             H.save()
             r.UpdateArrange()
+        end
+    elseif H.is_env_lane(lane) then
+        -- An empty cell in an envelope lane can only become one thing, and the
+        -- parameter is already decided by the lane it sits in.
+        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, H.lane_label(lane) .. "  |  " .. H.env_lane_label(lane))
+        r.ImGui_Separator(UI.ctx)
+        if r.ImGui_BeginMenu(UI.ctx, "New automation clip") then
+            for _, bars in ipairs(C.new_clip_bars) do
+                local label = bars == 1 and "1 bar" or (tostring(bars) .. " bars")
+                if r.ImGui_MenuItem(UI.ctx, label) then
+                    H.new_autom_clip(lane, row, lane.target, bars)
+                end
+            end
+            r.ImGui_Separator(UI.ctx)
+            if r.ImGui_MenuItem(UI.ctx, "As long as this scene") then
+                H.new_autom_clip(lane, row, lane.target, nil)
+            end
+            r.ImGui_EndMenu(UI.ctx)
+        end
+        local files = H.autom_files()
+        if files and r.ImGui_BeginMenu(UI.ctx, "From an automation item") then
+            H.draw_autom_file_menu(files, "envcell", function(file)
+                H.new_autom_from_file(lane, row, lane.target, file.path, file.name)
+            end)
+            r.ImGui_EndMenu(UI.ctx)
+        end
+        if r.ImGui_IsItemHovered(UI.ctx) then
+            r.ImGui_SetTooltip(UI.ctx, "REAPER's own automation items, from the AutomationItems folder\nin the resource path and everything under it. The file says how\nlong it is, so the clip arrives at that many bars.")
+        end
+        r.ImGui_Separator(UI.ctx)
+        if r.ImGui_MenuItem(UI.ctx, "Remove this automation lane and its clips") then
+            H.remove_env_lane(lane)
         end
     else
         if H.slot_mark(lane_index, row) then
@@ -5818,6 +7463,13 @@ function H.slot_context(lane, lane_index, row, slot)
                 H.new_midi_clip(lane, lane_index, row)
             end
             r.ImGui_EndMenu(UI.ctx)
+        end
+        if H.autom_ready() and r.ImGui_BeginMenu(UI.ctx, "New automation clip") then
+            H.draw_new_autom_menu(lane, row)
+            r.ImGui_EndMenu(UI.ctx)
+        end
+        if r.ImGui_IsItemHovered(UI.ctx) then
+            r.ImGui_SetTooltip(UI.ctx, "A clip that is a curve rather than a sound. Launching it puts an\nautomation item on that parameter's envelope, on the same bar line\neverything else lands on; stopping the lane takes it away again.")
         end
     end
     r.ImGui_EndPopup(UI.ctx)
@@ -5981,9 +7633,10 @@ function H.draw_chord_follow_mark(draw_list, slot, x, y, width, height, backgrou
     end
 end
 
-function H.draw_cell(lane, lane_index, row, box_height)
-    local width = UI.rounded(C.cell_w)
+function H.draw_cell(lane, lane_index, row, box_height, box_width)
+    local width = box_width or UI.rounded(C.cell_w)
     local height = box_height or H.cell_height()
+    local env_lane = H.is_env_lane(lane)
     local x, y = r.ImGui_GetCursorScreenPos(UI.ctx)
     -- Asked before the button, not after: IsRectVisible measures from wherever
     -- the cursor is, and the button moves it on to the next cell. Asked
@@ -6019,6 +7672,10 @@ function H.draw_cell(lane, lane_index, row, box_height)
     local border = UI.colors.border
     if playing then border = color elseif pending then border = blink and color or UI.colors.border end
     if slot and slot.missing then border = UI.colors.danger end
+    -- The clip whose curve is out in the arrange being drawn into, blinking so
+    -- it is clear which cell the automation item in front of you belongs to.
+    local drawing = slot ~= nil and L.autom_edit ~= nil and L.autom_edit.guid == slot.guid
+    if drawing and blink then border = UI.colors.accent end
     if drop_target then
         border = UI.colors.accent
         background = H.mix(background, UI.colors.accent, 0.35)
@@ -6040,8 +7697,8 @@ function H.draw_cell(lane, lane_index, row, box_height)
         -- A record ring in every empty slot of an armed track, the way a session
         -- view shows one. Hit-tested by hand like the badges in a header: the
         -- cell is one item and its click already means something else.
-        local mark = H.slot_mark(lane_index, row)
-        if mark or H.track_armed(H.target_track(lane)) then
+        local mark = not env_lane and H.slot_mark(lane_index, row) or nil
+        if not env_lane and (mark or H.track_armed(H.target_track(lane))) then
             local radius = math.min(UI.scaled(7), math.min(width, height) * 0.22)
             local dot_x, dot_y = x + width * 0.5, y + height * 0.5
             record_dot = r.ImGui_IsMouseHoveringRect
@@ -6087,8 +7744,13 @@ function H.draw_cell(lane, lane_index, row, box_height)
             -- cards in the Items view.
             local pad = UI.scaled(4)
             label_y = math.max(y + UI.scaled(1), y + height - bar_strip - text_height - UI.scaled(2))
-            if visible and UI.preview then
-                local preview_height = (label_y - UI.scaled(4)) - (y + pad)
+            local preview_height = (label_y - UI.scaled(4)) - (y + pad)
+            if visible and H.autom(slot) then
+                if preview_height > UI.scaled(8) then
+                    H.draw_autom_curve(draw_list, slot, x + pad, y + pad, width - pad * 2,
+                        preview_height, H.readable_on(background))
+                end
+            elseif visible and UI.preview then
                 if preview_height > UI.scaled(8) then
                     UI.preview(draw_list, H.slot_entry(slot, color), x + pad, y + pad, width - pad * 2, preview_height)
                 end
@@ -6114,12 +7776,22 @@ function H.draw_cell(lane, lane_index, row, box_height)
             local midi_y = math.min(y + UI.scaled(15), y + height - UI.scaled(5))
             r.ImGui_DrawList_AddRectFilled(draw_list, x + width - UI.scaled(9), midi_y, x + width - UI.scaled(5), midi_y + UI.scaled(4), UI.colors.accent_soft)
         end
+        -- A small rising line in the corner of a flat cell, where a big one
+        -- draws the whole curve: an automation clip has no waveform to tell it
+        -- apart from a media one.
+        if H.autom(slot) and not L.big_cells then
+            local mark_y = math.min(y + UI.scaled(15), y + height - UI.scaled(5))
+            r.ImGui_DrawList_AddLine(draw_list, x + width - UI.scaled(11), mark_y + UI.scaled(4),
+                x + width - UI.scaled(5), mark_y, UI.colors.accent_soft, UI.scaled(1.5))
+        end
         H.draw_key_mark(draw_list, slot, x, y, width, background)
         H.draw_chord_follow_mark(draw_list, slot, x, y, width, height, background)
-        if playing and height >= text_height + UI.scaled(10)
-            and H.valid_item(lane.current.item) and H.slot_loop(slot) > 0 then
+        local running = playing and (H.valid_item(lane.current.item)
+            or (lane.current.ai ~= nil and H.autom_index(lane.current.ai) ~= nil))
+        if running and height >= text_height + UI.scaled(10) and H.slot_loop(slot) > 0 then
             local heard = H.heard_pos()
-            local start = r.GetMediaItemInfo_Value(lane.current.item, "D_POSITION")
+            local start = lane.current.ai and H.autom_start(lane.current.ai)
+                or r.GetMediaItemInfo_Value(lane.current.item, "D_POSITION")
             -- For a retriggering one-shot the grid is the beat, not the sample.
             local span = H.slot_loop(slot)
             if span <= 0 then span = slot.length end
@@ -6171,7 +7843,7 @@ function H.draw_cell(lane, lane_index, row, box_height)
                 H.slot_record_start(lane_index, row)
             end
         else
-            H.assign_from_selection(lane, row)
+            if env_lane then H.import_selected_autom(lane, row) else H.assign_from_selection(lane, row) end
         end
     end
     H.slot_context(lane, lane_index, row, slot)
@@ -6195,7 +7867,26 @@ function H.draw_cell(lane, lane_index, row, box_height)
             r.ImGui_SetTooltip(UI.ctx, slot.name .. "\nThis clip is no longer in the project. Redo the deletion to get it\nback, or right-click to clear the slot.")
             return
         end
-        r.ImGui_SetTooltip(UI.ctx, slot.name .. key_hint .. H.key_state_text(slot) .. follow_note
+        local autom_note = ""
+        if H.autom(slot) then
+            local bars = H.autom_bars(slot)
+            autom_note = "\nAutomates " .. H.autom_target_label(H.autom(slot).target)
+                .. "  |  " .. tostring(bars) .. (bars == 1 and " bar" or " bars")
+                .. "\nStarts with the clip in this row above it. Clicked on its own it moves"
+                .. "\nonly this lane here, and leaves everything else playing."
+        elseif not env_lane then
+            -- What this clip will take along, so the link is visible before you
+            -- press anything.
+            local curves = 0
+            for _, sub in ipairs(lane.envs or {}) do
+                if H.slot(sub, row) then curves = curves + 1 end
+            end
+            if curves > 0 then
+                autom_note = "\nTakes " .. tostring(curves)
+                    .. (curves == 1 and " automation clip" or " automation clips") .. " in this row with it"
+            end
+        end
+        r.ImGui_SetTooltip(UI.ctx, slot.name .. key_hint .. H.key_state_text(slot) .. follow_note .. autom_note
             .. (slot.is_midi and ("\nChord follow: " .. (slot.chord_follow == "scale" and "scale degree"
                 or (slot.chord_follow == "root" and "root" or "off"))) or "")
             .. "\nClick to launch  |  right-click for options"
@@ -6215,7 +7906,7 @@ function H.draw_scene_cell(row, box_width, box_height)
     local hovered = r.ImGui_IsItemHovered(UI.ctx)
     local draw_list = r.ImGui_GetWindowDrawList(UI.ctx)
     local filled = false
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         if H.slot(lane, row) then filled = true break end
     end
     local background = hovered and UI.colors.card_hover or UI.colors.card_bg
@@ -6223,21 +7914,24 @@ function H.draw_scene_cell(row, box_width, box_height)
     r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, UI.colors.border, UI.scaled(4), 0, UI.scaled(1))
     local label = tostring(row)
     local label_width, label_height = r.ImGui_CalcTextSize(UI.ctx, label)
-    local label_x = x + UI.scaled(8)
-    r.ImGui_DrawList_AddText(draw_list, label_x, math.floor(y + (height - label_height) * 0.5 + 0.5), filled and UI.colors.text or UI.colors.text_dim, label)
+    -- The play triangle leads, the scene number follows it. Reading order is
+    -- what the cell does and then which one it is, and the space it used to
+    -- take at the right belongs to the bar count.
+    local size = UI.scaled(4)
+    local label_x = x + UI.scaled(20)
     if filled then
-        local glyph_x = x + width - UI.scaled(14)
+        local glyph_x = x + UI.scaled(10)
         local glyph_y = y + height * 0.5
-        local size = UI.scaled(4)
         r.ImGui_DrawList_AddTriangleFilled(draw_list, glyph_x - size * 0.6, glyph_y - size, glyph_x - size * 0.6, glyph_y + size, glyph_x + size, glyph_y, UI.colors.accent)
     end
+    r.ImGui_DrawList_AddText(draw_list, label_x, math.floor(y + (height - label_height) * 0.5 + 0.5), filled and UI.colors.text or UI.colors.text_dim, label)
     local bars = H.scene_bars(row)
     if bars then
         -- Only drawn when it actually fits beside the row number: a three digit
         -- bar count in a narrow column would otherwise run into it.
         local text = tostring(bars) .. "b"
         local text_width, text_height = r.ImGui_CalcTextSize(UI.ctx, text)
-        local text_x = x + width - text_width - UI.scaled(20)
+        local text_x = x + width - text_width - UI.scaled(8)
         if text_x > label_x + label_width + UI.scaled(6) then
             r.ImGui_DrawList_AddText(draw_list, math.floor(text_x + 0.5),
                 math.floor(y + (height - text_height) * 0.5 + 0.5), UI.colors.text_dim, text)
@@ -6251,11 +7945,13 @@ function H.draw_scene_cell(row, box_width, box_height)
         local settings = H.scene_settings(row)
         if r.ImGui_BeginMenu(UI.ctx, "When it has played") then
             for _, option in ipairs(FOLLOW_OPTIONS) do
-                if r.ImGui_MenuItem(UI.ctx, option.label, nil, settings.follow == option.key) then
+                if not option.clips_only
+                    and r.ImGui_MenuItem(UI.ctx, option.label, nil, settings.follow == option.key) then
                     settings.follow = option.key
                     H.save()
                 end
             end
+            H.draw_follow_warning()
             r.ImGui_EndMenu(UI.ctx)
         end
         if r.ImGui_BeginMenu(UI.ctx, "Play " .. tostring(H.scene_plays(row)) .. "x") then
@@ -6314,6 +8010,73 @@ function H.lane_row_height(lane)
     if height <= 0 then return H.cell_height() end
     return math.max(UI.rounded(22), math.min(height, UI.rounded(400)))
 end
+-- The track's own strip, without the envelope lanes underneath it. I_TCPH is
+-- the panel without them, I_WNDH the whole thing including them, so the two
+-- together say how the row has to be divided.
+function H.lane_body_height(lane)
+    if not L.lane_track_height then return H.cell_height() end
+    local track = H.target_track(lane)
+    if not track or #(lane.envs or {}) == 0 then return H.lane_row_height(lane) end
+    local panel = r.GetMediaTrackInfo_Value(track, "I_TCPH") or 0
+    if panel <= 0 then return H.lane_row_height(lane) end
+    return math.max(UI.rounded(22), math.min(panel, UI.rounded(400)))
+end
+
+-- What one envelope lane is worth on screen. The space the envelope lanes share
+-- is what the track's window height has over its panel height; our lanes split
+-- it evenly, which is right whenever they are the envelope lanes on show. A
+-- track with envelope lanes of its own as well is the one case this only
+-- approximates, and it costs nothing but a row that does not line up exactly.
+function H.env_row_height(sub)
+    local loose = math.max(UI.rounded(20), math.floor(H.cell_height() * 0.6))
+    if not L.lane_track_height then return loose end
+    local lane = sub and sub.parent
+    local track = lane and H.target_track(lane)
+    if not track then return loose end
+    local space = (r.GetMediaTrackInfo_Value(track, "I_WNDH") or 0)
+        - (r.GetMediaTrackInfo_Value(track, "I_TCPH") or 0)
+    local count = #(lane.envs or {})
+    if space <= 0 or count < 1 then return loose end
+    if not r.BR_EnvAlloc or not r.BR_EnvGetProperties then
+        return math.max(UI.rounded(20), math.min(math.floor(space / count), UI.rounded(400)))
+    end
+    local frame = r.ImGui_GetFrameCount and r.ImGui_GetFrameCount(UI.ctx) or 0
+    L.env_height_cache = L.env_height_cache or {}
+    local cached = L.env_height_cache[lane]
+    if cached and cached.frame == frame and cached.space == space and cached.count == count then
+        local height = cached.values[sub]
+        return height or loose
+    end
+    local heights = {}
+    local fixed, automatic = 0, 0
+    for index, member in ipairs(lane.envs or {}) do
+        local height = 0
+        local env = H.autom_env(track, member.target, false)
+        local handle = env and r.BR_EnvAlloc(env, false) or nil
+        if handle then
+            local _, visible, _, in_lane, lane_height = r.BR_EnvGetProperties(handle)
+            r.BR_EnvFree(handle, false)
+            if visible and in_lane and lane_height and lane_height > 0 then height = lane_height end
+        end
+        heights[index] = height
+        if height > 0 then fixed = fixed + height else automatic = automatic + 1 end
+    end
+    local values = {}
+    for candidate, member in ipairs(lane.envs or {}) do
+        local height = heights[candidate]
+        if automatic > 0 and fixed < space then
+            if height <= 0 then height = (space - fixed) / automatic end
+        elseif fixed > 0 then
+            height = height > 0 and (height * space / fixed) or (space / count)
+        else
+            height = space / count
+        end
+        values[member] = math.max(UI.rounded(20), math.min(math.floor(height + 0.5), UI.rounded(400)))
+    end
+    L.env_height_cache[lane] = { frame = frame, space = space, count = count, values = values }
+    return values[sub] or loose
+end
+
 function H.lane_draw_height(target)
     if not L.lane_track_height then return target end
     return math.max(UI.rounded(18), target - (L.row_overhead or 0))
@@ -6382,6 +8145,7 @@ function H.draw_fx_popup()
     if track then
         r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, H.lane_label(lane))
         r.ImGui_Separator(UI.ctx)
+        if H.draw_fx_current(track) then r.ImGui_Separator(UI.ctx) end
         H.draw_fx_menu(track)
     end
     r.ImGui_EndPopup(UI.ctx)
@@ -6578,7 +8342,12 @@ function H.lane_offsets()
     local offsets, y = {}, 0
     for index, lane in ipairs(L.lanes) do
         offsets[index] = y
-        y = y + H.lane_draw_height(H.lane_row_height(lane)) + (L.row_overhead or 0)
+        y = y + H.lane_draw_height(H.lane_body_height(lane)) + (L.row_overhead or 0)
+        -- The envelope lanes underneath take their own rows, and the arrange
+        -- they are lined up with counts them too.
+        for _, sub in ipairs(lane.envs or {}) do
+            y = y + H.lane_draw_height(H.env_row_height(sub)) + (L.row_overhead or 0)
+        end
     end
     return offsets, y
 end
@@ -6700,6 +8469,15 @@ function H.sync_scroll()
     end
 end
 
+-- Is the grid making any sound, or about to. Used to say whether the corner's
+-- stop square has anything to stop.
+function H.anything_playing()
+    for _, lane in ipairs(H.holders()) do
+        if lane.current or lane.pending or lane.queued then return true end
+    end
+    return false
+end
+
 function H.draw_grid_corner(box_width, box_height)
     local width = box_width or UI.rounded(C.scene_w)
     local height = box_height or UI.rounded(C.cell_h)
@@ -6717,13 +8495,45 @@ function H.draw_grid_corner(box_width, box_height)
     -- rows up with the arrange grows this cell downwards, and the readout
     -- belongs beside the scene buttons rather than halfway down the empty space.
     local band = math.min(height, UI.rounded(C.cell_h))
+    -- A stop square in the corner, beside the bar count. The toolbar has one
+    -- too, but that bar can be folded away and this readout cannot: wherever
+    -- you can see where the song is, you can stop it.
+    local stop_box = UI.rounded(15)
+    local over_stop = false
+    local stop_room = width >= stop_box + UI.rounded(52)
+    local reserve = stop_room and (stop_box + UI.scaled(6)) or 0
+    local centre = x + (width - reserve) * 0.5
     if line_height * 2 + UI.scaled(2) <= band then
-        H.text_centered(draw_list, x + width * 0.5, y + band * 0.5 - line_height * 0.55, ink, top)
-        H.text_centered(draw_list, x + width * 0.5, y + band * 0.5 + line_height * 0.55,
+        H.text_centered(draw_list, centre, y + band * 0.5 - line_height * 0.55, ink, top)
+        H.text_centered(draw_list, centre, y + band * 0.5 + line_height * 0.55,
             UI.colors.text_dim, meter)
     else
         -- One line when two will not fit: the bar is the half you glance at.
-        H.text_centered(draw_list, x + width * 0.5, y + band * 0.5, ink, top .. "  " .. meter)
+        H.text_centered(draw_list, centre, y + band * 0.5, ink, top .. "  " .. meter)
+    end
+    if stop_room then
+        local live = H.anything_playing()
+        local bx = math.floor(x + width - UI.scaled(4) - stop_box + 0.5)
+        local by = math.floor(y + band * 0.5 - stop_box * 0.5 + 0.5)
+        local over = r.ImGui_IsMouseHoveringRect
+            and r.ImGui_IsMouseHoveringRect(UI.ctx, bx, by, bx + stop_box, by + stop_box)
+        over_stop = over and true or false
+        r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + stop_box, by + stop_box,
+            over and UI.colors.card_hover or UI.colors.child_bg, UI.scaled(3))
+        r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + stop_box, by + stop_box,
+            over and UI.colors.accent or UI.colors.border, UI.scaled(3), 0, UI.scaled(1))
+        local inset = stop_box * 0.3
+        r.ImGui_DrawList_AddRectFilled(draw_list, bx + inset, by + inset,
+            bx + stop_box - inset, by + stop_box - inset,
+            live and (over and UI.colors.accent or UI.colors.text) or UI.colors.text_dim)
+        if over then
+            r.ImGui_SetTooltip(UI.ctx, live
+                and "Stop everything  |  every lane returns to the arrangement on the next boundary"
+                or "Stop everything  |  nothing is playing from the grid")
+            if r.ImGui_IsMouseClicked and r.ImGui_IsMouseClicked(UI.ctx, 0) then
+                H.stop_all_quantized()
+            end
+        end
     end
     -- A caret in the corner, folding the bars above away. Hit-tested by hand
     -- rather than as a widget: the corner itself is a plain spacer, so nothing
@@ -6753,7 +8563,7 @@ function H.draw_grid_corner(box_width, box_height)
     end
     if over_mark then
         r.ImGui_SetTooltip(UI.ctx, "Showing " .. H.chrome_label(chrome) .. " - click to choose")
-    elseif hovered then
+    elseif hovered and not over_stop then
         r.ImGui_SetTooltip(UI.ctx, "Where the song is, and the time signature it is counting in")
     end
 end
@@ -6933,6 +8743,51 @@ end
 function H.open_fx_chain(track)
     if not track then return end
     r.TrackFX_Show(track, 0, 1)
+end
+
+-- What the track already has, so the button answers "what is on here?" as well
+-- as "give me another". A click opens that plugin's own floating window, and
+-- closes it again if it was the one already showing.
+function H.toggle_fx_window(track, index)
+    if not track then return end
+    local open = r.TrackFX_GetOpen and r.TrackFX_GetOpen(track, index)
+    r.TrackFX_Show(track, index, open and 2 or 3)
+end
+
+function H.toggle_fx_bypass(track, index)
+    if not track then return end
+    local enabled = r.TrackFX_GetEnabled(track, index)
+    r.TrackFX_SetEnabled(track, index, not enabled)
+end
+
+-- The format prefix REAPER puts in front goes: a column of "VST3:" is noise
+-- when every line in the list is a plugin already.
+function H.fx_short_name(name)
+    name = tostring(name or "")
+    local rest = name:match("^[%a%d]+:%s+(.+)$")
+    return rest or name
+end
+
+function H.draw_fx_current(track)
+    local count = track and r.TrackFX_GetCount(track) or 0
+    if count <= 0 then return false end
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+        "On this track  -  click opens it, right click bypasses")
+    for index = 0, count - 1 do
+        local _, name = r.TrackFX_GetFXName(track, index, "")
+        local enabled = r.TrackFX_GetEnabled(track, index)
+        local offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, index)
+        local note = offline and "offline" or (not enabled and "bypassed") or nil
+        local open = r.TrackFX_GetOpen and r.TrackFX_GetOpen(track, index) or false
+        if r.ImGui_MenuItem(UI.ctx, H.fx_short_name(name) .. "##cur" .. index, note, open) then
+            H.toggle_fx_window(track, index)
+        end
+        -- Right click stays inside the popup, so a few can be flipped in one go.
+        if r.ImGui_IsItemHovered(UI.ctx) and r.ImGui_IsMouseClicked(UI.ctx, 1) then
+            H.toggle_fx_bypass(track, index)
+        end
+    end
+    return true
 end
 
 -- One folder and everything under it. Recursive, because the browser's folders
@@ -7150,6 +9005,102 @@ function H.draw_lane_volume(lane, lane_index, x, y, width, background, ink, tint
     return (over or dragging) and true or false
 end
 
+-- The header of an envelope lane. Set back from the track's own header the way
+-- the arrange sets an envelope lane back from its track: a dimmer fill, the
+-- track's colour only as a stripe, the parameter's name, and a stop square.
+-- Everything a lane header carries about audio -- solo, the fader, the FX
+-- picker, the arrangement badge -- belongs to the track, not to a curve.
+function H.draw_env_header(sub, id, box_width, box_height)
+    local width = box_width or UI.rounded(C.cell_w)
+    local height = box_height or UI.rounded(C.cell_h)
+    local x, y = r.ImGui_GetCursorScreenPos(UI.ctx)
+    r.ImGui_InvisibleButton(UI.ctx, "##launch_envhead_" .. id, width, height)
+    local hovered = r.ImGui_IsItemHovered(UI.ctx)
+    local draw_list = r.ImGui_GetWindowDrawList(UI.ctx)
+    local color = H.lane_color(sub)
+    local playing = sub.current ~= nil
+    local active = playing or sub.pending ~= nil or sub.queued ~= nil
+    local background = H.mix(UI.colors.child_bg, color, hovered and 0.24 or 0.13)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, background, UI.scaled(4))
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + UI.scaled(3), y + height,
+        H.mix(color, background, 0.35), UI.scaled(4))
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height,
+        playing and color or UI.colors.border, UI.scaled(4), 0,
+        playing and UI.scaled(2) or UI.scaled(1))
+    local ink = H.readable_on(background)
+    local _, text_height = r.ImGui_CalcTextSize(UI.ctx, "A")
+    local mid = math.floor(y + height * 0.5 + 0.5)
+    -- The same rising line an automation clip carries in its corner.
+    local mark = x + UI.scaled(9)
+    r.ImGui_DrawList_AddLine(draw_list, mark, mid + UI.scaled(3), mark + UI.scaled(7), mid - UI.scaled(3),
+        H.mix(ink, color, 0.45), UI.scaled(1.5))
+    r.ImGui_DrawList_AddText(draw_list, x + UI.scaled(21), math.floor(mid - text_height * 0.5 + 0.5),
+        ink, H.truncate(sub.name or H.env_lane_label(sub), width - UI.scaled(50)))
+
+    local box = UI.rounded(14)
+    local bx = math.floor(x + width - UI.scaled(6) - box + 0.5)
+    local by = math.floor(mid - box * 0.5 + 0.5)
+    local over = r.ImGui_IsMouseHoveringRect(UI.ctx, bx, by, bx + box, by + box)
+    r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + box, by + box,
+        over and UI.colors.card_hover or UI.colors.child_bg, UI.scaled(3))
+    r.ImGui_DrawList_AddRect(draw_list, bx, by, bx + box, by + box,
+        over and UI.colors.accent or UI.colors.border, UI.scaled(3), 0, UI.scaled(1))
+    local inset = box * 0.3
+    if sub.paused and not active then
+        local bar_width = math.max(1, UI.scaled(2))
+        local gap = UI.scaled(2)
+        local center = bx + box * 0.5
+        r.ImGui_DrawList_AddRectFilled(draw_list, center - gap - bar_width, by + inset,
+            center - gap, by + box - inset, UI.colors.accent)
+        r.ImGui_DrawList_AddRectFilled(draw_list, center + gap, by + inset,
+            center + gap + bar_width, by + box - inset, UI.colors.accent)
+    else
+        r.ImGui_DrawList_AddRectFilled(draw_list, bx + inset, by + inset, bx + box - inset, by + box - inset,
+            playing and color or UI.colors.text_dim)
+    end
+    if over then
+        r.ImGui_SetTooltip(UI.ctx, active and "Stop this automation lane"
+            or (sub.paused and "Resume automatic playback" or "Pause automatic playback"))
+        if r.ImGui_IsMouseClicked(UI.ctx, 0) then
+            if active then
+                H.stop_lane(sub)
+            else
+                sub.paused = not sub.paused
+                H.save()
+                L.status = sub.paused and "Automation lane paused" or "Automation lane resumed"
+            end
+        end
+    elseif hovered then
+        r.ImGui_SetTooltip(UI.ctx, (sub.name or "Automation") .. "  |  " .. H.lane_label(sub)
+            .. "\nAn automation lane: its clips run on this track's envelope while\nthe track's own clip keeps playing.\nRight-click for what it points at."
+            .. "\nFollow parent clip: " .. (sub.follow_parent ~= false and "on" or "off")
+            .. "\nAutomatic playback: " .. (sub.paused and "paused" or "ready"))
+    end
+    if r.ImGui_BeginPopupContextItem(UI.ctx, "##launch_envhead_ctx_" .. id) then
+        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, H.lane_label(sub) .. "  |  " .. H.env_lane_label(sub))
+        r.ImGui_Separator(UI.ctx)
+        if r.ImGui_MenuItem(UI.ctx, "Follow parent clip", nil, sub.follow_parent ~= false) then
+            sub.follow_parent = sub.follow_parent == false
+            H.save()
+        end
+        if r.ImGui_MenuItem(UI.ctx, "Stop lane") then H.stop_lane(sub) end
+        if r.ImGui_MenuItem(UI.ctx, "Show this envelope in the arrange") then
+            H.env_show(H.autom_env(H.target_track(sub), sub.target, true))
+        end
+        if r.ImGui_BeginMenu(UI.ctx, "Point at") then
+            H.draw_autom_target_menu(H.target_track(sub), function(target)
+                H.repoint_env_lane(sub, target)
+            end, "envhead" .. id)
+            r.ImGui_EndMenu(UI.ctx)
+        end
+        r.ImGui_Separator(UI.ctx)
+        if r.ImGui_MenuItem(UI.ctx, "Remove this automation lane and its clips") then
+            H.remove_env_lane(sub)
+        end
+        r.ImGui_EndPopup(UI.ctx)
+    end
+end
+
 function H.draw_lane_header(lane, lane_index, box_width, box_height)
     local width = box_width or UI.rounded(C.cell_w)
     local height = box_height or UI.rounded(C.cell_h)
@@ -7294,7 +9245,8 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
         local count = track_for_fx and r.TrackFX_GetCount(track_for_fx) or 0
         local over_fx = draw_badge_at(fx_x, fx_y, count > 0 and tostring(count) or "fx",
             false, nil,
-            count > 0 and (tostring(count) .. " FX on this track  |  right click for the chain")
+            count > 0 and (tostring(count)
+                .. " FX on this track  |  click to open one or add  |  right click for the chain")
                 or "Add FX  |  right click for the chain",
             function() L.fx_request = lane_index end)
         if over_fx then
@@ -7324,8 +9276,24 @@ function H.draw_lane_header(lane, lane_index, box_width, box_height)
         end
         local track = H.target_track(lane)
         local at_unity = not track or math.abs((r.GetMediaTrackInfo_Value(track, "D_VOL") or 1) - 1) < 0.0005
+        if track and (r.TrackFX_GetCount(track) or 0) > 0
+                and r.ImGui_BeginMenu(UI.ctx, "FX on this track") then
+            H.draw_fx_current(track)
+            r.ImGui_EndMenu(UI.ctx)
+        end
         if r.ImGui_BeginMenu(UI.ctx, "Add FX") then
             H.draw_fx_menu(track)
+            r.ImGui_EndMenu(UI.ctx)
+        end
+        -- An empty automation lane, ready to be filled. The other way round -
+        -- making a clip and letting it make its lane - is in the cell menus.
+        if H.autom_ready() and r.ImGui_BeginMenu(UI.ctx, "Add automation lane") then
+            H.draw_autom_target_menu(track, function(target)
+                local sub = H.env_lane_for(lane, target, true)
+                H.env_show(H.autom_env(track, target, true))
+                H.save()
+                L.status = sub and ("Automation lane on " .. H.autom_target_label(target)) or ""
+            end, "addenv" .. lane_index)
             r.ImGui_EndMenu(UI.ctx)
         end
         if r.ImGui_MenuItem(UI.ctx, "Reset volume to 0 dB", nil, false, not at_unity) then
@@ -7523,7 +9491,7 @@ function H.sync_lane_gates()
             -- A gate left shut by a release that nothing followed. Opening it
             -- here catches whatever the launch path missed.
             local held = L.gate_held
-            if not (held and L.lanes[held.lane] == lane) then H.set_lane_gate(lane, true) end
+            if not (held and held.holder == lane) then H.set_lane_gate(lane, true) end
         end
     end
 end
@@ -7949,6 +9917,33 @@ function Launcher.init(context)
     L.scroll_sync = (sync == "follow" or sync == "both") and sync or "off"
     L.set_show_all = r.GetExtState(C.ext_section, "set_show_all") == "1"
     L.set_create_tracks = r.GetExtState(C.ext_section, "set_create_tracks") == "1"
+    L.midi_enabled = r.GetExtState(C.ext_section, "midi_enabled") == "1"
+    L.midi_device_name = r.GetExtState(C.ext_section, "midi_device_name") or ""
+    L.midi_channel = math.max(0, math.min(16, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_channel")) or 0)))
+    L.midi_base_note = math.max(0, math.min(127, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_base_note")) or 36)))
+    local midi_layout = r.GetExtState(C.ext_section, "midi_layout")
+    L.midi_layout = ({ keyboard = true, pads = true, custom = true, launchpad = true })[midi_layout] and midi_layout or "pads"
+    local midi_keyboard_mode = r.GetExtState(C.ext_section, "midi_keyboard_mode")
+    L.midi_keyboard_mode = midi_keyboard_mode == "active" and "active" or "octaves"
+    local midi_pad_mode = r.GetExtState(C.ext_section, "midi_pad_mode")
+    L.midi_pad_mode = midi_pad_mode == "scenes" and "scenes" or "clips"
+    L.midi_columns = math.max(1, math.min(16, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_columns")) or 8)))
+    L.midi_rows = math.max(1, math.min(16, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_rows")) or 8)))
+    local midi_orientation = r.GetExtState(C.ext_section, "midi_orientation")
+    L.midi_orientation = midi_orientation == "scenes" and "scenes" or "lanes"
+    L.midi_lane_bank = math.max(0, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_lane_bank")) or 0))
+    L.midi_scene_bank = math.max(0, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_scene_bank")) or 0))
+    L.midi_out_name = r.GetExtState(C.ext_section, "midi_out_name") or ""
+    L.midi_feedback = r.GetExtState(C.ext_section, "midi_feedback") == "1"
+    local lp_family = r.GetExtState(C.ext_section, "midi_lp_family")
+    L.midi_lp_family = ({ mk3 = true, mk2 = true, classic = true })[lp_family] and lp_family or "mk3"
+    -- Empty means "whatever the family says", which is the case for everyone
+    -- whose device is not wired up in some way of its own.
+    L.midi_lp_origin = tonumber(r.GetExtState(C.ext_section, "midi_lp_origin"))
+    L.midi_lp_step = tonumber(r.GetExtState(C.ext_section, "midi_lp_step"))
+    H.load_midi_commands()
+    H.load_midi_presets()
+    H.reset_midi_input()
     return Launcher
 end
 
@@ -7962,11 +9957,16 @@ function Launcher.set_active(active)
         L.track_count = -1
         L.tidy_wanted = true
         L.status = ""
+        -- The output is looked up by name, so a device plugged in after the
+        -- last session still lands on the right index.
+        if L.midi_feedback then H.lp_start() end
         if L.mute_song_default and not L.arrangement_muted then
             local now = H.schedule_pos()
             H.set_arrangement_muted(true, now or r.GetCursorPosition())
         end
     else
+        H.finish_autom_edit(false)
+        H.lp_stop()
         H.reset_all()
         L.status = ""
     end
@@ -7980,6 +9980,7 @@ function Launcher.update()
     H.run_file_prompt()
     H.run_chain_prompt()
     H.run_rename_prompt()
+    H.run_autom_save_prompt()
     H.run_lane_name_prompt()
     H.run_lane_colour_prompt()
     H.run_set_prompt()
@@ -7995,9 +9996,12 @@ function Launcher.update()
     end
     if L.tidy_wanted then H.tidy_lane_tracks() end
     H.keep_lane_order()
+    H.handle_midi()
     H.watch_gate()
     H.sync_lane_gates()
     H.watch_midi_editor()
+    H.watch_autom_edit()
+    H.lp_refresh(false)
     H.punch_in_when_due()
     H.watch_recording()
     local now = H.schedule_pos()
@@ -8005,7 +10009,7 @@ function Launcher.update()
         if r.time_precise() >= L.roll_guard then
             -- Nothing is rolling, so anything still scheduled lands right away.
             if L.global_switch then H.apply_global_switch() end
-            for _, lane in ipairs(L.lanes) do
+            for _, lane in ipairs(H.holders()) do
                 if lane.switch then H.apply_switch(lane) end
                 H.harvest_lane(lane, true)
             end
@@ -8026,11 +10030,11 @@ function Launcher.update()
     -- A jump backwards means the arrangement loop came round.
     local heard = H.heard_pos()
     if heard and L.last_heard and heard < L.last_heard - 0.05 then
-        for _, lane in ipairs(L.lanes) do H.promote_wrap(lane, heard) end
+        for _, lane in ipairs(H.holders()) do H.promote_wrap(lane, heard) end
         H.run_queued(heard)
     end
     L.last_heard = heard
-    for _, lane in ipairs(L.lanes) do
+    for _, lane in ipairs(H.holders()) do
         if lane.pending and now >= lane.pending.at then
             -- The outgoing voice was trimmed to end exactly here, but it is
             -- still audible for one output-latency window, so it retires
@@ -8424,6 +10428,1340 @@ function H.discard_take()
     L.status = "Discarded " .. tostring(count) .. " captured clips"
 end
 
+function H.midi_preset_path()
+    return r.GetResourcePath() .. C.sep .. "Data" .. C.sep .. "TK_PROJECT_CLIPS_MIDI_PRESETS.json"
+end
+
+function H.sort_midi_presets()
+    table.sort(L.midi_presets, function(left, right)
+        return tostring(left.name):lower() < tostring(right.name):lower()
+    end)
+end
+
+function H.load_midi_presets()
+    L.midi_presets = {}
+    local file = io.open(H.midi_preset_path(), "r")
+    if not file then return end
+    local content = file:read("*a")
+    file:close()
+    local ok, data = pcall(UI.json.decode, content)
+    if not ok or type(data) ~= "table" or type(data.presets) ~= "table" then return end
+    for _, preset in ipairs(data.presets) do
+        if type(preset) == "table" and type(preset.name) == "string" and preset.name ~= "" then
+            L.midi_presets[#L.midi_presets + 1] = preset
+        end
+    end
+    H.sort_midi_presets()
+end
+
+function H.write_midi_presets()
+    local ok, encoded = pcall(UI.json.encode, { version = 1, presets = L.midi_presets })
+    if not ok or not encoded then return false end
+    local folder = r.GetResourcePath() .. C.sep .. "Data"
+    if r.RecursiveCreateDirectory then r.RecursiveCreateDirectory(folder, 0) end
+    local file = io.open(H.midi_preset_path(), "w")
+    if not file then return false end
+    file:write(encoded)
+    file:close()
+    return true
+end
+
+function H.midi_preset_snapshot(name)
+    local commands = {}
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local binding = L.midi_commands[command.key]
+        if binding then
+            commands[command.key] = {
+                kind = binding.kind,
+                number = binding.number,
+                channel = binding.channel,
+            }
+        end
+    end
+    return {
+        name = name,
+        enabled = L.midi_enabled,
+        device_name = L.midi_device_name,
+        channel = L.midi_channel,
+        base_note = L.midi_base_note,
+        layout = L.midi_layout,
+        keyboard_mode = L.midi_keyboard_mode,
+        pad_mode = L.midi_pad_mode,
+        columns = L.midi_columns,
+        rows = L.midi_rows,
+        orientation = L.midi_orientation,
+        lane_bank = L.midi_lane_bank,
+        scene_bank = L.midi_scene_bank,
+        out_name = L.midi_out_name,
+        feedback = L.midi_feedback,
+        lp_family = L.midi_lp_family,
+        lp_origin = L.midi_lp_origin,
+        lp_step = L.midi_lp_step,
+        commands = commands,
+    }
+end
+
+function H.save_midi_preset(name)
+    name = tostring(name or ""):match("^%s*(.-)%s*$")
+    if name == "" then
+        L.status = "Enter a MIDI preset name first"
+        return
+    end
+    local replacement = H.midi_preset_snapshot(name)
+    local replaced = false
+    for index, preset in ipairs(L.midi_presets) do
+        if preset.name:lower() == name:lower() then
+            L.midi_presets[index] = replacement
+            replaced = true
+            break
+        end
+    end
+    if not replaced then L.midi_presets[#L.midi_presets + 1] = replacement end
+    H.sort_midi_presets()
+    if not H.write_midi_presets() then
+        L.status = "Could not save MIDI presets"
+        return
+    end
+    L.midi_preset_name = name
+    L.midi_preset_selected = name
+    L.status = "MIDI preset saved: " .. name
+end
+
+function H.apply_midi_preset(preset)
+    if type(preset) ~= "table" then return end
+    if preset.enabled ~= nil then L.midi_enabled = preset.enabled and true or false end
+    if type(preset.device_name) == "string" then L.midi_device_name = preset.device_name end
+    L.midi_channel = math.max(0, math.min(16, math.floor(tonumber(preset.channel) or 0)))
+    L.midi_layout = ({ keyboard = true, pads = true, custom = true, launchpad = true })[preset.layout] and preset.layout or "pads"
+    L.midi_keyboard_mode = preset.keyboard_mode == "active" and "active" or "octaves"
+    L.midi_pad_mode = preset.pad_mode == "scenes" and "scenes" or "clips"
+    L.midi_columns = math.max(1, math.min(16, math.floor(tonumber(preset.columns) or 8)))
+    L.midi_rows = math.max(1, math.min(16, math.floor(tonumber(preset.rows) or 8)))
+    L.midi_orientation = preset.orientation == "scenes" and "scenes" or "lanes"
+    L.midi_base_note = math.max(0, math.min(H.midi_max_base_note(), math.floor(tonumber(preset.base_note) or 36)))
+    L.midi_lane_bank = math.max(0, math.floor(tonumber(preset.lane_bank) or 0))
+    L.midi_scene_bank = math.max(0, math.floor(tonumber(preset.scene_bank) or 0))
+    H.clamp_midi_banks()
+    L.midi_commands = {}
+    local seen = {}
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local binding = type(preset.commands) == "table" and preset.commands[command.key] or nil
+        local kind = type(binding) == "table" and binding.kind or nil
+        local number = type(binding) == "table" and tonumber(binding.number) or nil
+        local channel = type(binding) == "table" and tonumber(binding.channel) or nil
+        local signature = kind and number and channel and (kind .. ":" .. tostring(channel) .. ":" .. tostring(number)) or nil
+        if (kind == "note" or kind == "cc") and number and number >= 0 and number <= 127
+            and channel and channel >= 1 and channel <= 16 and not seen[signature] then
+            L.midi_commands[command.key] = { kind = kind, number = math.floor(number), channel = math.floor(channel) }
+            seen[signature] = true
+        end
+    end
+    -- The pad lighting travels with a preset too: which output it lit, and how
+    -- that device lays its grid out.
+    if type(preset.lp_family) == "string" then L.midi_lp_family = preset.lp_family end
+    L.midi_lp_origin = tonumber(preset.lp_origin)
+    L.midi_lp_step = tonumber(preset.lp_step)
+    r.SetExtState(C.ext_section, "midi_lp_family", L.midi_lp_family, true)
+    r.SetExtState(C.ext_section, "midi_lp_origin", tostring(L.midi_lp_origin or ""), true)
+    r.SetExtState(C.ext_section, "midi_lp_step", tostring(L.midi_lp_step or ""), true)
+    H.lp_stop()
+    if type(preset.out_name) == "string" then L.midi_out_name = preset.out_name end
+    L.midi_feedback = preset.feedback and true or false
+    r.SetExtState(C.ext_section, "midi_out_name", L.midi_out_name, true)
+    r.SetExtState(C.ext_section, "midi_feedback", L.midi_feedback and "1" or "0", true)
+    r.SetExtState(C.ext_section, "midi_enabled", L.midi_enabled and "1" or "0", true)
+    r.SetExtState(C.ext_section, "midi_device_name", L.midi_device_name, true)
+    r.SetExtState(C.ext_section, "midi_channel", tostring(L.midi_channel), true)
+    r.SetExtState(C.ext_section, "midi_base_note", tostring(L.midi_base_note), true)
+    H.save_midi_mapping()
+    if L.midi_feedback then H.lp_start() end
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local binding = L.midi_commands[command.key]
+        local value = binding and (binding.kind .. ":" .. tostring(binding.number) .. ":" .. tostring(binding.channel)) or ""
+        r.SetExtState(C.ext_section, "midi_command_" .. command.key, value, true)
+    end
+    L.midi_learn = nil
+    L.midi_base_learn = false
+    L.midi_learn_retval = nil
+    L.midi_preset_name = preset.name
+    L.midi_preset_selected = preset.name
+    H.reset_midi_input()
+    L.status = "MIDI preset loaded: " .. preset.name
+end
+
+function H.delete_midi_preset(name)
+    if not name then return end
+    for index, preset in ipairs(L.midi_presets) do
+        if preset.name == name then
+            table.remove(L.midi_presets, index)
+            if not H.write_midi_presets() then
+                L.status = "Could not update MIDI presets"
+                return
+            end
+            L.midi_preset_selected = nil
+            L.midi_preset_name = ""
+            L.status = "MIDI preset deleted: " .. name
+            return
+        end
+    end
+end
+
+function H.midi_inputs()
+    local inputs = {}
+    if not (r.GetNumMIDIInputs and r.GetMIDIInputName) then return inputs end
+    for device = 0, r.GetNumMIDIInputs() - 1 do
+        local ok, name = r.GetMIDIInputName(device, "")
+        if ok then inputs[#inputs + 1] = { device = device, name = name } end
+    end
+    return inputs
+end
+
+function H.midi_device()
+    if L.midi_device_name == "" then return nil end
+    for _, input in ipairs(H.midi_inputs()) do
+        if input.name == L.midi_device_name then return input.device end
+    end
+    return nil
+end
+
+function H.reset_midi_input()
+    if L.gate_held and L.gate_held.midi then H.gate_release() end
+    L.midi_last_retval = r.MIDI_GetRecentInputEvent and (r.MIDI_GetRecentInputEvent(0) or 0) or nil
+    L.midi_pressed = {}
+    L.midi_command_pressed = {}
+end
+
+function H.begin_midi_learn(command)
+    L.midi_base_learn = command == "base"
+    L.midi_learn = command ~= "base" and command or nil
+    L.midi_learn_retval = r.MIDI_GetRecentInputEvent and (r.MIDI_GetRecentInputEvent(0) or 0) or 0
+    L.midi_pressed = {}
+    L.midi_command_pressed = {}
+end
+
+function H.set_midi_enabled(enabled)
+    L.midi_enabled = enabled and true or false
+    r.SetExtState(C.ext_section, "midi_enabled", L.midi_enabled and "1" or "0", true)
+    if L.midi_feedback then
+        if L.midi_enabled then H.lp_start() else H.lp_stop() end
+    end
+    H.reset_midi_input()
+end
+
+function H.set_midi_device(name)
+    L.midi_device_name = name or ""
+    r.SetExtState(C.ext_section, "midi_device_name", L.midi_device_name, true)
+    H.reset_midi_input()
+end
+
+function H.midi_binding_text(binding)
+    if not binding then return "Not assigned" end
+    local kind = binding.kind == "cc" and "CC" or "Note"
+    return kind .. " " .. tostring(binding.number) .. "  Ch " .. tostring(binding.channel)
+end
+
+function H.load_midi_commands()
+    L.midi_commands = {}
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local stored = r.GetExtState(C.ext_section, "midi_command_" .. command.key)
+        local kind, number, channel = stored:match("^([a-z]+):(%d+):(%d+)$")
+        number, channel = tonumber(number), tonumber(channel)
+        if (kind == "note" or kind == "cc") and number and channel then
+            L.midi_commands[command.key] = { kind = kind, number = number, channel = channel }
+        end
+    end
+end
+
+function H.set_midi_command(key, binding)
+    if binding then
+        for _, command in ipairs(MIDI_COMMANDS) do
+            local other_key = command.key
+            local other = L.midi_commands[other_key]
+            if other and other_key ~= key and other.kind == binding.kind and other.channel == binding.channel
+                and other.number == binding.number then
+                L.midi_commands[other_key] = nil
+                r.SetExtState(C.ext_section, "midi_command_" .. other_key, "", true)
+            end
+        end
+    end
+    L.midi_commands[key] = binding
+    local value = ""
+    if binding then
+        value = binding.kind .. ":" .. tostring(binding.number) .. ":" .. tostring(binding.channel)
+    end
+    r.SetExtState(C.ext_section, "midi_command_" .. key, value, true)
+    L.midi_learn = nil
+    L.midi_learn_retval = nil
+    H.reset_midi_input()
+end
+
+function H.midi_bank_step(field, delta)
+    H.clamp_midi_banks()
+    local lane_span, scene_span = H.midi_geometry()
+    local span = field == "midi_lane_bank" and lane_span or scene_span
+    local total = field == "midi_lane_bank" and #L.lanes or L.rows
+    local maximum = math.max(0, math.ceil(total / span) - 1)
+    local value = math.max(0, math.min(maximum, L[field] + delta))
+    local label = field == "midi_lane_bank" and "lane" or "scene"
+    if value == L[field] then
+        L.status = "No " .. (delta < 0 and "previous " or "next ") .. label
+            .. " bank in the " .. L.midi_layout .. " MIDI layout"
+        return
+    end
+    L[field] = value
+    H.save_midi_mapping()
+    local lane_offset, scene_offset = H.midi_bank_offsets()
+    local lane_span_now, scene_span_now = H.midi_geometry()
+    L.status = "MIDI mapping: lanes " .. tostring(lane_offset + 1) .. "-"
+        .. tostring(math.min(#L.lanes, lane_offset + lane_span_now)) .. ", scenes "
+        .. tostring(scene_offset + 1) .. "-" .. tostring(math.min(L.rows, scene_offset + scene_span_now))
+end
+
+function H.run_midi_command(key)
+    if key == "lane_prev" then H.midi_bank_step("midi_lane_bank", -1) return end
+    if key == "lane_next" then H.midi_bank_step("midi_lane_bank", 1) return end
+    if key == "scene_prev" then H.midi_bank_step("midi_scene_bank", -1) return end
+    if key == "scene_next" then H.midi_bank_step("midi_scene_bank", 1) return end
+    local lane_offset, scene_offset = H.midi_bank_offsets()
+    if key == "launch_scene" then H.launch_scene(scene_offset + 1) return end
+    if key == "stop_lane" then
+        local lane = L.lanes[lane_offset + 1]
+        if lane then H.stop_lane(lane) end
+        return
+    end
+    if key == "stop_all" then H.stop_all_quantized() return end
+    if key == "record" then H.set_recording(not L.recording) return end
+    local scene = tonumber(key:match("^launch_scene_(%d+)$"))
+    if scene and scene <= L.rows then H.launch_scene(scene) end
+end
+
+function H.midi_command_available(command)
+    local octave_mode = L.midi_layout == "keyboard" and L.midi_keyboard_mode == "octaves"
+    local pad_scenes = L.midi_layout == "pads" and L.midi_pad_mode == "scenes"
+    local pad_clips = L.midi_layout == "pads" and L.midi_pad_mode == "clips"
+    if command.scene then return (octave_mode or pad_clips) and command.scene <= L.rows end
+    if pad_scenes and (command.key == "lane_prev" or command.key == "lane_next" or command.key == "stop_lane") then
+        return false
+    end
+    if command.key == "scene_prev" or command.key == "scene_next" or command.key == "launch_scene" then
+        return not octave_mode
+    end
+    return true
+end
+
+function H.handle_midi_command(kind, channel, number, value)
+    if L.midi_learn and value > 0 then
+        H.set_midi_command(L.midi_learn, { kind = kind, channel = channel, number = number })
+        L.status = "MIDI command assigned"
+        return true
+    end
+    local signature = kind .. ":" .. tostring(channel) .. ":" .. tostring(number)
+    if value <= 0 then
+        L.midi_command_pressed[signature] = nil
+        return false
+    end
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local binding = L.midi_commands[command.key]
+        if H.midi_command_available(command) and binding and binding.kind == kind
+            and binding.channel == channel and binding.number == number then
+            if not L.midi_command_pressed[signature] then
+                L.midi_command_pressed[signature] = true
+                H.run_midi_command(command.key)
+            end
+            return true
+        end
+    end
+    return false
+end
+
+--------------------------------------------------------------------------------
+-- Launchpad: a grid that lights up
+--------------------------------------------------------------------------------
+
+-- A Launchpad is not a row of notes. Its pads sit in a grid whose rows step by
+-- ten (11 to 88 on a Mini MK3, an X, a Pro MK3 and the RGB MK2) or by sixteen
+-- (0 to 119 on the older S and Mini), which is why they never fitted the
+-- layouts that count notes one after another. Two numbers describe all of them:
+-- the note of the top left pad, and what a row further down adds to it.
+--
+-- The lights are the other half of it. A script can reach a hardware output:
+-- StuffMIDIMessage with 16 plus the device index sends a note, and
+-- SendMIDIMessageToHardware sends the SysEx that puts a MK3 into programmer
+-- mode. So the grid can show what the launcher knows - what is filled, what is
+-- playing, what is still waiting for its bar line.
+--
+-- None of this could be tried on a real device here. Everything it leans on is
+-- therefore a setting rather than a constant: family, output, origin and row
+-- step are all in the MIDI window, and there is a test pattern that paints the
+-- grid in a known order, so that "the third row is blue and one pad to the
+-- left" is enough to put it right.
+
+C.lp_families = {
+    { key = "mk3",     label = "Mini MK3 / X / Pro MK3",  origin = 81, step = -10, palette = true,  programmer = true },
+    { key = "mk2",     label = "Launchpad MK2 (RGB)",     origin = 81, step = -10, palette = true,  programmer = false },
+    { key = "classic", label = "Launchpad S / Mini MK1",  origin = 0,  step = 16,  palette = false, programmer = false },
+}
+
+-- Which device is on the other end, read off the output's name. Only the model
+-- byte in the middle of the SysEx differs between them.
+C.lp_models = {
+    { match = "lpminimk3",         id = 0x0D },
+    { match = "launchpad mini mk3", id = 0x0D },
+    { match = "lpx",               id = 0x0C },
+    { match = "launchpad x",       id = 0x0C },
+    { match = "lppromk3",          id = 0x0E },
+    { match = "launchpad pro mk3", id = 0x0E },
+}
+
+-- The RGB models take a palette index. These are the hue groups, each with the
+-- bright entry the group starts on and a dimmer one two along, and the point on
+-- the colour wheel where one hands over to the next. The breakpoints are not
+-- evenly spread on purpose: the palette bunches the greens and blues together,
+-- and dividing the wheel into equal shares put pure blue on indigo. If a colour
+-- comes out wrong on a real board, it is one number on one of these lines.
+C.lp_palette = {
+    { upto = 0.045, bright = 5,  dim = 7 },   -- red
+    { upto = 0.11,  bright = 9,  dim = 11 },  -- orange
+    { upto = 0.21,  bright = 13, dim = 15 },  -- yellow
+    { upto = 0.28,  bright = 17, dim = 19 },  -- lime
+    { upto = 0.40,  bright = 21, dim = 23 },  -- green
+    { upto = 0.46,  bright = 29, dim = 31 },  -- spring
+    { upto = 0.55,  bright = 33, dim = 35 },  -- cyan
+    { upto = 0.61,  bright = 37, dim = 39 },  -- sky
+    { upto = 0.72,  bright = 41, dim = 43 },  -- blue
+    { upto = 0.77,  bright = 45, dim = 47 },  -- indigo
+    { upto = 0.82,  bright = 49, dim = 51 },  -- purple
+    { upto = 0.90,  bright = 53, dim = 55 },  -- magenta
+    { upto = 0.96,  bright = 57, dim = 59 },  -- pink
+    { upto = 1.01,  bright = 5,  dim = 7 },   -- and round to red again
+}
+
+function H.lp_family()
+    for _, entry in ipairs(C.lp_families) do
+        if entry.key == L.midi_lp_family then return entry end
+    end
+    return C.lp_families[1]
+end
+
+function H.lp_origin()
+    local value = tonumber(L.midi_lp_origin)
+    if not value then return H.lp_family().origin end
+    return math.max(0, math.min(127, math.floor(value)))
+end
+
+function H.lp_step()
+    local value = tonumber(L.midi_lp_step)
+    if not value or value == 0 then return H.lp_family().step end
+    return math.floor(value)
+end
+
+-- The note a pad carries. Rows count from the top, columns from the left, and
+-- column 9 is the strip of scene buttons down the right hand side.
+function H.lp_note(row, col)
+    local note = H.lp_origin() + row * H.lp_step() + col
+    if note < 0 or note > 127 then return nil end
+    return note
+end
+
+-- The way back, built once and kept until a setting moves.
+function H.lp_lookup()
+    if L.lp_map then return L.lp_map end
+    local map = {}
+    for row = 0, 7 do
+        for col = 0, 8 do
+            local note = H.lp_note(row, col)
+            if note then map[note] = { row = row, col = col } end
+        end
+    end
+    L.lp_map = map
+    return map
+end
+
+function H.lp_forget_map()
+    L.lp_map = nil
+    L.lp_shadow = nil
+end
+
+--------------------------------------------------------------------------------
+-- talking to the device
+--------------------------------------------------------------------------------
+
+function H.midi_outputs()
+    local outputs = {}
+    if not (r.GetNumMIDIOutputs and r.GetMIDIOutputName) then return outputs end
+    for device = 0, r.GetNumMIDIOutputs() - 1 do
+        local ok, name = r.GetMIDIOutputName(device, "")
+        if ok and name and name ~= "" then
+            outputs[#outputs + 1] = { index = device, name = name }
+        end
+    end
+    return outputs
+end
+
+function H.midi_out_device()
+    if L.midi_out_name == "" then return nil end
+    for _, output in ipairs(H.midi_outputs()) do
+        if output.name == L.midi_out_name then return output.index end
+    end
+    return nil
+end
+
+function H.lp_send(status, data1, data2)
+    local device = L.midi_out_index
+    if not device or not r.StuffMIDIMessage then return end
+    r.StuffMIDIMessage(16 + device, status, data1, data2)
+end
+
+-- SysEx needs the other call: StuffMIDIMessage carries three bytes and no more.
+function H.lp_sysex(bytes)
+    local device = L.midi_out_index
+    if not device or not r.SendMIDIMessageToHardware then return false end
+    local text = {}
+    for index = 1, #bytes do text[index] = string.char(bytes[index]) end
+    r.SendMIDIMessageToHardware(device, table.concat(text))
+    return true
+end
+
+function H.lp_model_id()
+    local name = (L.midi_out_name or ""):lower()
+    for _, model in ipairs(C.lp_models) do
+        if name:find(model.match, 1, true) then return model.id end
+    end
+    return nil
+end
+
+-- Programmer mode, so the pads answer to the note grid above rather than to
+-- whatever session layout the device woke up in. Only the MK3 generation needs
+-- it, and only if we can name the model.
+function H.lp_set_programmer(on)
+    if not H.lp_family().programmer then return end
+    local id = H.lp_model_id()
+    if not id then return end
+    H.lp_sysex({ 0xF0, 0x00, 0x20, 0x29, 0x02, id, 0x0E, on and 1 or 0, 0xF7 })
+end
+
+--------------------------------------------------------------------------------
+-- colours
+--------------------------------------------------------------------------------
+
+-- Where a colour sits on the wheel, 0 at red and going round through green and
+-- blue. Grey answers with nothing, because a grey pad is a pad with no hue to
+-- show and the state colour should stand in for it.
+function H.hue_of(color)
+    local red = ((color >> 24) & 0xFF) / 255
+    local green = ((color >> 16) & 0xFF) / 255
+    local blue = ((color >> 8) & 0xFF) / 255
+    local high = math.max(red, green, blue)
+    local low = math.min(red, green, blue)
+    local span = high - low
+    if span < 0.06 then return nil end
+    local hue
+    if high == red then hue = ((green - blue) / span) % 6
+    elseif high == green then hue = (blue - red) / span + 2
+    else hue = (red - green) / span + 4 end
+    return (hue / 6) % 1
+end
+
+-- A hue as this device can show it. The RGB models get the nearest of thirteen
+-- palette hues; the red and green ones get what two lamps can do, which is red,
+-- orange, amber and green and no more than that.
+function H.lp_colour(color, bright)
+    local family = H.lp_family()
+    local hue = color and H.hue_of(color) or nil
+    if family.palette then
+        if not hue then return bright and 3 or 1 end
+        for _, entry in ipairs(C.lp_palette) do
+            if hue < entry.upto then return bright and entry.bright or entry.dim end
+        end
+        return bright and 3 or 1
+    end
+    -- Velocity on the older boards is two lamps and two flags: sixteen times
+    -- the green, plus the red, plus twelve. Leave the flags off and the light
+    -- lands in a buffer nobody is showing, which looks exactly like a device
+    -- that is not listening.
+    local red, green = 3, 3
+    if hue then
+        if hue < 0.05 or hue > 0.92 then red, green = 3, 0
+        elseif hue < 0.10 then red, green = 3, 1
+        elseif hue < 0.19 then red, green = 3, 3
+        elseif hue < 0.45 then red, green = 0, 3
+        else red, green = 3, 2 end
+    end
+    if not bright then
+        red = red > 0 and 1 or 0
+        green = green > 0 and 1 or 0
+    end
+    return 16 * green + red + 12
+end
+
+function H.lp_off()
+    return H.lp_family().palette and 0 or 12
+end
+
+--------------------------------------------------------------------------------
+-- what the grid should look like
+--------------------------------------------------------------------------------
+
+function H.lp_cell_colour(row, col, blink)
+    local lane_offset, scene_offset = H.midi_bank_offsets()
+    local scene_row = scene_offset + row + 1
+    if scene_row > L.rows then return H.lp_off() end
+    if col == 8 then
+        -- The scene strip: white for a scene that has anything in it, bright
+        -- for the one that is running.
+        if not H.scene_filled(scene_row) then return H.lp_off() end
+        local running = L.scene_run and L.scene_run.row == scene_row
+        return H.lp_colour(nil, running and true or false)
+    end
+    local lane = L.lanes[lane_offset + col + 1]
+    if not lane then return H.lp_off() end
+    local slot = H.slot(lane, scene_row)
+    if not slot then
+        -- An armed track shows where a recording would land, the way the grid
+        -- draws its record ring in an empty cell.
+        if H.slot_mark(lane_offset + col + 1, scene_row) or H.track_armed(H.target_track(lane)) then
+            return blink and H.lp_colour(0xFF0000FF, true) or H.lp_off()
+        end
+        return H.lp_off()
+    end
+    local color = slot.color or H.lane_color(lane)
+    local live = H.slot_is_live(lane, scene_row)
+    if live == "pending" or (lane.queued and lane.queued.row == scene_row) then
+        return blink and H.lp_colour(color, true) or H.lp_off()
+    end
+    if live == "playing" then return H.lp_colour(color, true) end
+    return H.lp_colour(color, false)
+end
+
+-- Only what changed is sent. A Launchpad given all sixty-four pads several
+-- times a second falls behind and starts dropping messages, and the grid then
+-- lags a beat behind the music, which is worse than no lights at all.
+function H.lp_refresh(force)
+    -- The lights speak the Launchpad grid, so they only make sense while that
+    -- is the layout the notes come in on.
+    if L.midi_layout ~= "launchpad" then return end
+    if not L.midi_feedback or not L.midi_out_index then return end
+    local now = r.time_precise()
+    if not force and L.lp_sent and now - L.lp_sent < 0.05 then return end
+    L.lp_sent = now
+    local blink = (now % 0.6) < 0.3
+    L.lp_shadow = L.lp_shadow or {}
+    for row = 0, 7 do
+        for col = 0, 8 do
+            local note = H.lp_note(row, col)
+            if note then
+                local wanted = H.lp_cell_colour(row, col, blink)
+                if force or L.lp_shadow[note] ~= wanted then
+                    L.lp_shadow[note] = wanted
+                    H.lp_send(0x90, note, wanted)
+                end
+            end
+        end
+    end
+end
+
+function H.lp_clear()
+    local off = H.lp_off()
+    L.lp_shadow = {}
+    for row = 0, 7 do
+        for col = 0, 8 do
+            local note = H.lp_note(row, col)
+            if note then H.lp_send(0x90, note, off) end
+        end
+    end
+end
+
+-- Paint the grid in an order anyone can describe: row one red, then orange,
+-- yellow, green, cyan, blue, purple, white, and the scene strip white as well.
+-- What comes back from that says whether the origin, the row step and the
+-- palette are right, which is the whole of what cannot be checked from here.
+function H.lp_test_pattern()
+    if not L.midi_out_index then
+        L.status = "Choose a MIDI output first"
+        return
+    end
+    local hues = { 0xFF0000FF, 0xFF8000FF, 0xFFFF00FF, 0x00FF00FF,
+                   0x00FFFFFF, 0x0000FFFF, 0xFF00FFFF, 0xFFFFFFFF }
+    L.lp_shadow = {}
+    for row = 0, 7 do
+        for col = 0, 8 do
+            local note = H.lp_note(row, col)
+            if note then
+                local colour = col == 8 and H.lp_colour(nil, true)
+                    or H.lp_colour(hues[row + 1], col < 4)
+                L.lp_shadow[note] = colour
+                H.lp_send(0x90, note, colour)
+            end
+        end
+    end
+    L.status = "Test pattern sent: row 1 red, then orange, yellow, green, cyan, blue, purple, white."
+        .. " Left half bright, right half dim, scene strip white."
+end
+
+function H.lp_start()
+    if L.midi_layout ~= "launchpad" then return end
+    L.midi_out_index = H.midi_out_device()
+    H.lp_forget_map()
+    if not L.midi_out_index then return end
+    H.lp_set_programmer(true)
+    H.lp_refresh(true)
+end
+
+function H.lp_stop()
+    if L.midi_out_index then
+        H.lp_clear()
+        H.lp_set_programmer(false)
+    end
+    L.midi_out_index = nil
+    L.lp_shadow = nil
+end
+
+function H.set_midi_out(name)
+    H.lp_stop()
+    L.midi_out_name = name or ""
+    r.SetExtState(C.ext_section, "midi_out_name", L.midi_out_name, true)
+    if L.midi_feedback then H.lp_start() end
+end
+
+function H.set_midi_feedback(on)
+    L.midi_feedback = on and true or false
+    r.SetExtState(C.ext_section, "midi_feedback", L.midi_feedback and "1" or "0", true)
+    if L.midi_feedback then H.lp_start() else H.lp_stop() end
+end
+
+function H.set_lp_family(key)
+    H.lp_stop()
+    L.midi_lp_family = key
+    L.midi_lp_origin = nil
+    L.midi_lp_step = nil
+    r.SetExtState(C.ext_section, "midi_lp_family", key, true)
+    r.SetExtState(C.ext_section, "midi_lp_origin", "", true)
+    r.SetExtState(C.ext_section, "midi_lp_step", "", true)
+    H.lp_forget_map()
+    if L.midi_feedback then H.lp_start() end
+end
+
+function H.midi_geometry()
+    if L.midi_layout == "keyboard" then
+        if L.midi_keyboard_mode == "active" then return 12, 1, 12 end
+        local scenes = math.max(1, math.min(L.rows, math.floor((128 - L.midi_base_note) / 12)))
+        return 12, scenes, scenes * 12
+    end
+    if L.midi_layout == "pads" then
+        if L.midi_pad_mode == "scenes" then return 1, 8, 8 end
+        return 8, 1, 8
+    end
+    -- Eight lanes across and eight scenes down, whatever notes the pads carry.
+    if L.midi_layout == "launchpad" then return 8, 8, 64 end
+    local columns = math.max(1, math.min(16, L.midi_columns))
+    local rows = math.max(1, math.min(16, L.midi_rows))
+    local count = math.min(columns * rows, 128 - L.midi_base_note)
+    if L.midi_orientation == "scenes" then return rows, columns, count end
+    return columns, rows, count
+end
+
+function H.midi_requested_notes()
+    if L.midi_layout == "keyboard" then return 12 end
+    if L.midi_layout == "pads" then return 8 end
+    return math.min(128, L.midi_columns * L.midi_rows)
+end
+
+function H.midi_max_base_note()
+    return 128 - H.midi_requested_notes()
+end
+
+function H.midi_bank_offsets()
+    local lane_span, scene_span = H.midi_geometry()
+    return L.midi_lane_bank * lane_span, L.midi_scene_bank * scene_span
+end
+
+function H.clamp_midi_banks()
+    local lane_span, scene_span = H.midi_geometry()
+    local max_lane_bank = math.max(0, math.ceil(#L.lanes / lane_span) - 1)
+    local max_scene_bank = math.max(0, math.ceil(L.rows / scene_span) - 1)
+    L.midi_lane_bank = math.max(0, math.min(max_lane_bank, L.midi_lane_bank))
+    L.midi_scene_bank = math.max(0, math.min(max_scene_bank, L.midi_scene_bank))
+    if L.midi_layout == "pads" and L.midi_pad_mode == "scenes" then L.midi_lane_bank = 0 end
+end
+
+function H.save_midi_mapping()
+    H.clamp_midi_banks()
+    r.SetExtState(C.ext_section, "midi_layout", L.midi_layout, true)
+    r.SetExtState(C.ext_section, "midi_keyboard_mode", L.midi_keyboard_mode, true)
+    r.SetExtState(C.ext_section, "midi_pad_mode", L.midi_pad_mode, true)
+    r.SetExtState(C.ext_section, "midi_columns", tostring(L.midi_columns), true)
+    r.SetExtState(C.ext_section, "midi_rows", tostring(L.midi_rows), true)
+    r.SetExtState(C.ext_section, "midi_orientation", L.midi_orientation, true)
+    r.SetExtState(C.ext_section, "midi_lane_bank", tostring(L.midi_lane_bank), true)
+    r.SetExtState(C.ext_section, "midi_scene_bank", tostring(L.midi_scene_bank), true)
+    H.lp_forget_map()
+    H.reset_midi_input()
+end
+
+function H.midi_note_target(note)
+    H.clamp_midi_banks()
+    if L.midi_layout == "launchpad" then
+        local pad = H.lp_lookup()[note]
+        -- Column nine is the scene strip, and that is answered elsewhere.
+        if not pad or pad.col > 7 then return nil end
+        local lane_offset, scene_offset = H.midi_bank_offsets()
+        local lane_index = lane_offset + pad.col + 1
+        local row = scene_offset + pad.row + 1
+        if lane_index > #L.lanes or row > L.rows then return nil end
+        return lane_index, row
+    end
+    local offset = note - L.midi_base_note
+    local lane_span, scene_span, note_count = H.midi_geometry()
+    if offset < 0 or offset >= note_count then return nil end
+    local local_lane, local_scene
+    if L.midi_layout == "keyboard" then
+        local_lane = offset % 12
+        local_scene = L.midi_keyboard_mode == "octaves" and math.floor(offset / 12) or 0
+    elseif L.midi_layout == "custom" and L.midi_orientation == "scenes" then
+        local_scene = offset % scene_span
+        local_lane = math.floor(offset / scene_span)
+    else
+        local_lane = offset % lane_span
+        local_scene = math.floor(offset / lane_span)
+    end
+    local lane_offset, scene_offset = H.midi_bank_offsets()
+    local lane_index = lane_offset + local_lane + 1
+    local row = scene_offset + local_scene + 1
+    if lane_index > #L.lanes or row > L.rows then return nil end
+    return lane_index, row
+end
+
+function H.midi_scene_target(note)
+    -- The strip down the right hand side of a Launchpad launches scenes, which
+    -- is what it is labelled for on every model.
+    if L.midi_layout == "launchpad" then
+        local pad = H.lp_lookup()[note]
+        if not pad or pad.col ~= 8 then return nil end
+        local row = select(2, H.midi_bank_offsets()) + pad.row + 1
+        return row <= L.rows and row or nil
+    end
+    if L.midi_layout ~= "pads" or L.midi_pad_mode ~= "scenes" then return nil end
+    local offset = note - L.midi_base_note
+    if offset < 0 or offset >= 8 then return nil end
+    local row = L.midi_scene_bank * 8 + offset + 1
+    if row > L.rows then return nil end
+    return row
+end
+
+function H.handle_midi()
+    if (not L.midi_enabled and not L.midi_learn and not L.midi_base_learn)
+        or not r.MIDI_GetRecentInputEvent then return end
+    local wanted_device = H.midi_device()
+    if wanted_device == nil then return end
+    if L.midi_last_retval == nil then
+        H.reset_midi_input()
+        return
+    end
+    local learn_active = L.midi_learn ~= nil or L.midi_base_learn
+    local boundary_retval = learn_active and L.midi_learn_retval or L.midi_last_retval
+    local first_retval = nil
+    local events = {}
+    for index = 0, 127 do
+        local retval, rawmsg, _, device = r.MIDI_GetRecentInputEvent(index)
+        if index == 0 then first_retval = retval end
+        if retval == 0 or retval == boundary_retval then break end
+        if device == wanted_device and rawmsg and #rawmsg >= 3 then
+            events[#events + 1] = rawmsg
+        end
+    end
+    if first_retval and first_retval ~= 0 then
+        L.midi_last_retval = first_retval
+        if learn_active then L.midi_learn_retval = first_retval end
+    end
+    for index = #events, 1, -1 do
+        local rawmsg = events[index]
+        local status = rawmsg:byte(1)
+        local kind = status & 0xF0
+        local channel = (status & 0x0F) + 1
+        local note = rawmsg:byte(2)
+        local velocity = rawmsg:byte(3)
+        if L.midi_channel == 0 or channel == L.midi_channel then
+            local command_kind = kind == 0xB0 and "cc" or ((kind == 0x90 or kind == 0x80) and "note" or nil)
+            local command_value = kind == 0x80 and 0 or velocity
+            local command_handled = L.midi_base_learn and true or false
+            if L.midi_base_learn and kind == 0x90 and velocity > 0 then
+                local maximum = H.midi_max_base_note()
+                if note <= maximum then
+                    L.midi_base_note = note
+                    L.midi_base_learn = false
+                    L.midi_learn_retval = nil
+                    r.SetExtState(C.ext_section, "midi_base_note", tostring(note), true)
+                    H.save_midi_mapping()
+                    L.status = "MIDI base note set to " .. tostring(note)
+                else
+                    L.status = "MIDI note " .. tostring(note) .. " is too high; maximum is " .. tostring(maximum)
+                end
+            elseif not L.midi_base_learn then
+                command_handled = command_kind and H.handle_midi_command(command_kind, channel, note, command_value)
+            end
+            local scene_row = H.midi_scene_target(note)
+            local lane_index, row = H.midi_note_target(note)
+            local key = channel * 128 + note
+            if not command_handled and kind == 0x90 and velocity > 0 and not L.midi_pressed[key] then
+                if scene_row then
+                    L.midi_pressed[key] = { scene = scene_row }
+                    H.launch_scene(scene_row)
+                elseif lane_index then
+                    local lane = L.lanes[lane_index]
+                    local slot = lane and H.slot(lane, row) or nil
+                    if slot then
+                        L.cursor.lane, L.cursor.row = lane_index, row
+                        L.midi_pressed[key] = { lane = lane, row = row, gate = slot.launch_mode == "gate" }
+                        if slot.launch_mode == "gate" then
+                            H.gate_press(lane, lane_index, row)
+                            if L.gate_held then L.gate_held.midi = true end
+                        else
+                            H.click_slot(lane, lane_index, row, slot)
+                        end
+                    else
+                        L.status = "MIDI note " .. tostring(note) .. " maps to empty lane "
+                            .. tostring(lane_index) .. ", scene " .. tostring(row)
+                    end
+                end
+            elseif (kind == 0x80 or (kind == 0x90 and velocity == 0)) and L.midi_pressed[key] then
+                local pressed = L.midi_pressed[key]
+                L.midi_pressed[key] = nil
+                local held = L.gate_held
+                if pressed.gate and held and held.holder == pressed.lane and held.row == pressed.row then
+                    H.gate_release()
+                end
+            end
+        end
+    end
+end
+
+function H.draw_midi_bank(label, field, span, total)
+    local bank = L[field]
+    local maximum = math.max(0, math.ceil(total / span) - 1)
+    local start_index = bank * span + 1
+    local end_index = math.min(total, start_index + span - 1)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, label)
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    if r.ImGui_Button(UI.ctx, "-##" .. field, UI.rounded(24), UI.rounded(22)) and bank > 0 then
+        L[field] = bank - 1
+        H.save_midi_mapping()
+        bank = L[field]
+        start_index = bank * span + 1
+        end_index = math.min(total, start_index + span - 1)
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(4))
+    if r.ImGui_Button(UI.ctx, "+##" .. field, UI.rounded(24), UI.rounded(22)) and bank < maximum then
+        L[field] = bank + 1
+        H.save_midi_mapping()
+        bank = L[field]
+        start_index = bank * span + 1
+        end_index = math.min(total, start_index + span - 1)
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    r.ImGui_Text(UI.ctx, tostring(start_index) .. "-" .. tostring(end_index))
+end
+
+function H.draw_midi_command_row(command)
+    local binding = L.midi_commands[command.key]
+    local learning = L.midi_learn == command.key
+    local label = command.label
+    if command.key == "scene_prev" and (L.midi_layout ~= "custom" or select(2, H.midi_geometry()) == 1) then
+        label = "Previous scene"
+    elseif command.key == "scene_next" and (L.midi_layout ~= "custom" or select(2, H.midi_geometry()) == 1) then
+        label = "Next scene"
+    end
+    r.ImGui_TableNextRow(UI.ctx)
+    r.ImGui_TableNextColumn(UI.ctx)
+    r.ImGui_Text(UI.ctx, label)
+    r.ImGui_TableNextColumn(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, binding and UI.colors.text or UI.colors.text_dim, H.midi_binding_text(binding))
+    r.ImGui_TableNextColumn(UI.ctx)
+    if learning then
+        r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.accent_soft)
+        r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Border(), UI.colors.accent)
+    end
+    if r.ImGui_Button(UI.ctx, learning and "Waiting...##" .. command.key or "Learn##" .. command.key,
+        UI.rounded(78), UI.rounded(22)) then
+        if learning then
+            L.midi_learn = nil
+            L.midi_learn_retval = nil
+        else
+            H.begin_midi_learn(command.key)
+        end
+    end
+    if learning then r.ImGui_PopStyleColor(UI.ctx, 2) end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(5))
+    if r.ImGui_Button(UI.ctx, "Clear##" .. command.key, UI.rounded(52), UI.rounded(22)) then
+        H.set_midi_command(command.key, nil)
+    end
+end
+
+-- Everything a Launchpad needs, in the order you would set it up: which family
+-- it belongs to, where its grid starts, which output to light, and a pattern to
+-- prove it. The last two matter most: this could not be tried on a real device,
+-- so the window has to be able to tell you what it is doing.
+function H.draw_launchpad_setup()
+    local family = H.lp_family()
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+    if r.ImGui_BeginCombo(UI.ctx, "##lp_family", family.label) then
+        for _, entry in ipairs(C.lp_families) do
+            local selected = entry.key == L.midi_lp_family
+            if r.ImGui_Selectable(UI.ctx, entry.label, selected) then H.set_lp_family(entry.key) end
+            if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+        family.palette and "Colour palette" or "Red and green only")
+
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(120))
+    local origin_changed, origin = r.ImGui_InputInt(UI.ctx, "Top left pad", H.lp_origin())
+    if origin_changed then
+        L.midi_lp_origin = math.max(0, math.min(127, origin))
+        r.SetExtState(C.ext_section, "midi_lp_origin", tostring(L.midi_lp_origin), true)
+        H.lp_forget_map()
+        if L.midi_feedback then H.lp_start() end
+    end
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(120))
+    local step_changed, step = r.ImGui_InputInt(UI.ctx, "A row further down", H.lp_step())
+    if step_changed and step ~= 0 then
+        L.midi_lp_step = math.max(-32, math.min(32, step))
+        r.SetExtState(C.ext_section, "midi_lp_step", tostring(L.midi_lp_step), true)
+        H.lp_forget_map()
+        if L.midi_feedback then H.lp_start() end
+    end
+    local first, last = H.lp_note(0, 0), H.lp_note(7, 7)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+        "Pads " .. tostring(first or "?") .. " to " .. tostring(last or "?")
+        .. ", column nine launches scenes")
+
+    r.ImGui_Spacing(UI.ctx)
+    local outputs = H.midi_outputs()
+    local out_label = L.midi_out_name ~= "" and L.midi_out_name or "No output - the pads stay dark"
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+    if r.ImGui_BeginCombo(UI.ctx, "##lp_output", out_label) then
+        if r.ImGui_Selectable(UI.ctx, "No output - the pads stay dark", L.midi_out_name == "") then
+            H.set_midi_out("")
+        end
+        for _, output in ipairs(outputs) do
+            local selected = output.name == L.midi_out_name
+            if r.ImGui_Selectable(UI.ctx, output.name, selected) then H.set_midi_out(output.name) end
+            if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "The port the pads listen on. On Windows a Mini MK3 or an X calls it\nMIDIOUT2, and that second port is the one a DAW is meant to use.")
+    end
+
+    local feedback_changed, feedback = r.ImGui_Checkbox(UI.ctx, "Light the pads", L.midi_feedback)
+    if feedback_changed then H.set_midi_feedback(feedback) end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Empty is dark, a filled slot glows in its clip's colour, the one that\nis playing is bright, one waiting for its bar line blinks, and an armed\ntrack blinks red. Only pads that change are sent.")
+    end
+
+    if r.ImGui_Button(UI.ctx, "Test pattern", UI.rounded(110), UI.rounded(22)) then H.lp_test_pattern() end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Paints the grid in a known order: row 1 red, then orange, yellow,\ngreen, cyan, blue, purple, white. Left half bright, right half dim,\nand the scene strip white. What you see says whether the top left\npad, the row step and the colours are right.")
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    if r.ImGui_Button(UI.ctx, "All off", UI.rounded(80), UI.rounded(22)) then H.lp_clear() end
+    if family.programmer then
+        r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+        if r.ImGui_Button(UI.ctx, "Programmer mode", UI.rounded(150), UI.rounded(22)) then
+            H.lp_set_programmer(true)
+            L.status = H.lp_model_id() and "Programmer mode sent"
+                or "This output's name does not say which model it is, so no mode was sent"
+        end
+        if r.ImGui_IsItemHovered(UI.ctx) then
+            r.ImGui_SetTooltip(UI.ctx, "MK3 boards answer to the 11-88 grid only in programmer mode.\nIt is sent when the lights are switched on, and this asks again\nfor a board that was unplugged and put back.")
+        end
+    end
+    if not r.StuffMIDIMessage then
+        r.ImGui_TextColored(UI.ctx, UI.colors.danger, "This REAPER cannot send to a MIDI output")
+    elseif not r.SendMIDIMessageToHardware and family.programmer then
+        r.ImGui_TextColored(UI.ctx, UI.colors.warning or UI.colors.danger,
+            "No SysEx from this REAPER: put the board in programmer mode by hand")
+    end
+end
+
+-- The note the mapping counts from, with a Learn button beside it.
+function H.draw_midi_base_note()
+    local max_base_note = H.midi_max_base_note()
+    if L.midi_base_note > max_base_note then
+        L.midi_base_note = max_base_note
+        r.SetExtState(C.ext_section, "midi_base_note", tostring(L.midi_base_note), true)
+        H.save_midi_mapping()
+    end
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+    local note_changed, base_note = r.ImGui_SliderInt(UI.ctx, "Base note", L.midi_base_note, 0, max_base_note)
+    if note_changed then
+        L.midi_base_learn = false
+        L.midi_base_note = base_note
+        r.SetExtState(C.ext_section, "midi_base_note", tostring(base_note), true)
+        H.save_midi_mapping()
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    local base_learning = L.midi_base_learn
+    if base_learning then
+        r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.accent_soft)
+        r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Border(), UI.colors.accent)
+    end
+    if r.ImGui_Button(UI.ctx, base_learning and "Waiting...##base_note" or "Learn##base_note",
+        UI.rounded(82), UI.rounded(22)) then
+        if base_learning then
+            L.midi_base_learn = false
+            L.midi_learn_retval = nil
+        else
+            H.begin_midi_learn("base")
+        end
+    end
+    if base_learning then r.ImGui_PopStyleColor(UI.ctx, 2) end
+    if L.midi_base_learn then
+        r.ImGui_TextColored(UI.ctx, UI.colors.accent, "Press the first clip key on the selected controller")
+    end
+end
+
+function H.draw_midi_popup()
+    if not L.midi_window_open then return end
+    if r.ImGui_IsPopupOpen and not r.ImGui_IsPopupOpen(UI.ctx, "##launch_midi") then
+        r.ImGui_OpenPopup(UI.ctx, "##launch_midi")
+    end
+    if r.ImGui_SetNextWindowSize then
+        r.ImGui_SetNextWindowSize(UI.ctx, UI.rounded(540), 0, r.ImGui_Cond_Appearing())
+    end
+    if not r.ImGui_BeginPopup(UI.ctx, "##launch_midi") then return end
+    if r.ImGui_IsWindowFocused(UI.ctx)
+        and r.ImGui_IsKeyPressed(UI.ctx, r.ImGui_Key_Escape()) then
+        L.midi_window_open = false
+        r.ImGui_CloseCurrentPopup(UI.ctx)
+        r.ImGui_EndPopup(UI.ctx)
+        return
+    end
+    local available = r.MIDI_GetRecentInputEvent and r.GetNumMIDIInputs and r.GetMIDIInputName
+    r.ImGui_TextColored(UI.ctx, UI.colors.accent, "MIDI Setup")
+    r.ImGui_SameLine(UI.ctx)
+    r.ImGui_SetCursorPosX(UI.ctx, r.ImGui_GetWindowWidth(UI.ctx) - UI.rounded(30))
+    r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.danger)
+    r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_ButtonHovered(), H.mix(UI.colors.danger, 0xFFFFFFFF, 0.18))
+    r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_ButtonActive(), H.mix(UI.colors.danger, 0x000000FF, 0.18))
+    r.ImGui_PushStyleVar(UI.ctx, r.ImGui_StyleVar_FrameRounding(), UI.rounded(9))
+    local close_midi = r.ImGui_Button(UI.ctx, "##close_midi", UI.rounded(18), UI.rounded(18))
+    r.ImGui_PopStyleVar(UI.ctx)
+    r.ImGui_PopStyleColor(UI.ctx, 3)
+    if close_midi then
+        L.midi_window_open = false
+        r.ImGui_CloseCurrentPopup(UI.ctx)
+        r.ImGui_EndPopup(UI.ctx)
+        return
+    end
+    r.ImGui_Separator(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Presets")
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+    local preset_label = L.midi_preset_selected or "Choose preset"
+    if r.ImGui_BeginCombo(UI.ctx, "##midi_preset", preset_label) then
+        for _, preset in ipairs(L.midi_presets) do
+            local selected = preset.name == L.midi_preset_selected
+            if r.ImGui_Selectable(UI.ctx, preset.name, selected) then H.apply_midi_preset(preset) end
+            if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+    local preset_name_changed, preset_name = r.ImGui_InputText(UI.ctx, "##midi_preset_name", L.midi_preset_name)
+    if preset_name_changed then L.midi_preset_name = preset_name end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    if r.ImGui_Button(UI.ctx, "Save##midi_preset", UI.rounded(64), UI.rounded(22)) then
+        H.save_midi_preset(L.midi_preset_name)
+    end
+    if L.midi_preset_selected then
+        r.ImGui_SameLine(UI.ctx, 0, UI.rounded(6))
+        if r.ImGui_Button(UI.ctx, "Delete##midi_preset", UI.rounded(68), UI.rounded(22)) then
+            H.delete_midi_preset(L.midi_preset_selected)
+        end
+    end
+    r.ImGui_Separator(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Connection")
+    local changed, enabled = r.ImGui_Checkbox(UI.ctx, "Enable MIDI", L.midi_enabled)
+    if changed then H.set_midi_enabled(enabled) end
+    if not available then
+        r.ImGui_TextColored(UI.ctx, UI.colors.danger, "MIDI input API is not available")
+        r.ImGui_EndPopup(UI.ctx)
+        return
+    end
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+    local device_label = L.midi_device_name ~= "" and L.midi_device_name or "Choose controller"
+    if r.ImGui_BeginCombo(UI.ctx, "##midi_input", device_label) then
+        for _, input in ipairs(H.midi_inputs()) do
+            local selected = input.name == L.midi_device_name
+            if r.ImGui_Selectable(UI.ctx, input.name, selected) then H.set_midi_device(input.name) end
+            if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+    if L.midi_device_name ~= "" and H.midi_device() == nil then
+        r.ImGui_TextColored(UI.ctx, UI.colors.danger, "Controller is not available in REAPER")
+    end
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(120))
+    local channel_label = L.midi_channel == 0 and "Omni" or ("Channel " .. tostring(L.midi_channel))
+    if r.ImGui_BeginCombo(UI.ctx, "##midi_channel", channel_label) then
+        if r.ImGui_Selectable(UI.ctx, "Omni", L.midi_channel == 0) then
+            L.midi_channel = 0
+            r.SetExtState(C.ext_section, "midi_channel", "0", true)
+            H.reset_midi_input()
+        end
+        for channel = 1, 16 do
+            if r.ImGui_Selectable(UI.ctx, "Channel " .. tostring(channel), L.midi_channel == channel) then
+                L.midi_channel = channel
+                r.SetExtState(C.ext_section, "midi_channel", tostring(channel), true)
+                H.reset_midi_input()
+            end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+
+    r.ImGui_Spacing(UI.ctx)
+    r.ImGui_Separator(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Clip mapping")
+
+    local layout_labels = {
+        keyboard = "Keyboard - 12 lanes",
+        pads = "Pads - 8 lanes x 1 scene",
+        custom = "Grid - custom",
+        launchpad = "Launchpad - 8 x 8 with lights",
+    }
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+    if r.ImGui_BeginCombo(UI.ctx, "##midi_layout", layout_labels[L.midi_layout]) then
+        for _, layout in ipairs({ "keyboard", "pads", "custom", "launchpad" }) do
+            local selected = L.midi_layout == layout
+            if r.ImGui_Selectable(UI.ctx, layout_labels[layout], selected) then
+                L.midi_layout = layout
+                H.save_midi_mapping()
+            end
+            if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+
+    if L.midi_layout == "keyboard" then
+        local keyboard_labels = {
+            octaves = "Scene per octave",
+            active = "One octave - active scene",
+        }
+        r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+        if r.ImGui_BeginCombo(UI.ctx, "##midi_keyboard_mode", keyboard_labels[L.midi_keyboard_mode]) then
+            for _, mode in ipairs({ "octaves", "active" }) do
+                local selected = L.midi_keyboard_mode == mode
+                if r.ImGui_Selectable(UI.ctx, keyboard_labels[mode], selected) then
+                    L.midi_keyboard_mode = mode
+                    L.midi_scene_bank = 0
+                    H.save_midi_mapping()
+                end
+                if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+            end
+            r.ImGui_EndCombo(UI.ctx)
+        end
+    elseif L.midi_layout == "pads" then
+        local pad_labels = {
+            clips = "Clips in active scene",
+            scenes = "Launch scenes",
+        }
+        r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+        if r.ImGui_BeginCombo(UI.ctx, "##midi_pad_mode", pad_labels[L.midi_pad_mode]) then
+            for _, mode in ipairs({ "clips", "scenes" }) do
+                local selected = L.midi_pad_mode == mode
+                if r.ImGui_Selectable(UI.ctx, pad_labels[mode], selected) then
+                    L.midi_pad_mode = mode
+                    L.midi_lane_bank = 0
+                    L.midi_scene_bank = 0
+                    H.save_midi_mapping()
+                end
+                if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+            end
+            r.ImGui_EndCombo(UI.ctx)
+        end
+    elseif L.midi_layout == "custom" then
+        r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+        local columns_changed, columns = r.ImGui_SliderInt(UI.ctx, "Columns", L.midi_columns, 1, 16)
+        if columns_changed then
+            L.midi_columns = columns
+            H.save_midi_mapping()
+        end
+        r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(260))
+        local rows_changed, rows = r.ImGui_SliderInt(UI.ctx, "Rows", L.midi_rows, 1, 16)
+        if rows_changed then
+            L.midi_rows = rows
+            H.save_midi_mapping()
+        end
+        r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(180))
+        local orientation_label = L.midi_orientation == "scenes" and "Scenes across" or "Lanes across"
+        if r.ImGui_BeginCombo(UI.ctx, "##midi_orientation", orientation_label) then
+            if r.ImGui_Selectable(UI.ctx, "Lanes across", L.midi_orientation == "lanes") then
+                L.midi_orientation = "lanes"
+                H.save_midi_mapping()
+            end
+            if r.ImGui_Selectable(UI.ctx, "Scenes across", L.midi_orientation == "scenes") then
+                L.midi_orientation = "scenes"
+                H.save_midi_mapping()
+            end
+            r.ImGui_EndCombo(UI.ctx)
+        end
+    elseif L.midi_layout == "launchpad" then
+        H.draw_launchpad_setup()
+    end
+
+    -- A Launchpad has no base note: its grid is described by an origin and a
+    -- row step of its own, so the slider would be a control for nothing.
+    if L.midi_layout ~= "launchpad" then H.draw_midi_base_note() end
+
+    H.clamp_midi_banks()
+    local lane_span, scene_span, note_count = H.midi_geometry()
+    if L.midi_layout ~= "pads" or L.midi_pad_mode ~= "scenes" then
+        H.draw_midi_bank("Lanes", "midi_lane_bank", lane_span, math.max(1, #L.lanes))
+    end
+    if L.midi_layout ~= "keyboard" or L.midi_keyboard_mode == "active" then
+        H.draw_midi_bank("Scenes", "midi_scene_bank", scene_span, math.max(1, L.rows))
+    end
+    local lane_offset, scene_offset = H.midi_bank_offsets()
+    if L.midi_layout ~= "launchpad" then
+        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+            "Notes " .. tostring(L.midi_base_note) .. "-" .. tostring(L.midi_base_note + note_count - 1))
+    end
+    if L.midi_layout == "pads" and L.midi_pad_mode == "scenes" then
+        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+            "Mapping: scenes " .. tostring(scene_offset + 1) .. "-"
+            .. tostring(math.min(L.rows, scene_offset + scene_span)))
+    else
+        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+            "Mapping: lanes " .. tostring(lane_offset + 1) .. "-" .. tostring(math.min(#L.lanes, lane_offset + lane_span))
+            .. ", scenes " .. tostring(scene_offset + 1) .. "-" .. tostring(math.min(L.rows, scene_offset + scene_span)))
+    end
+
+    r.ImGui_Spacing(UI.ctx)
+    r.ImGui_Separator(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Command mapping")
+    if L.midi_learn then
+        r.ImGui_TextColored(UI.ctx, UI.colors.accent, "Press a MIDI note or CC on the selected controller")
+    end
+    local command_height = L.midi_layout == "keyboard" and L.midi_keyboard_mode == "octaves"
+        and UI.rounded(260) or UI.rounded(210)
+    local child_visible = r.ImGui_BeginChild(UI.ctx, "##midi_command_list", 0, command_height, 0)
+    if child_visible and r.ImGui_BeginTable(UI.ctx, "##midi_commands", 3, r.ImGui_TableFlags_SizingFixedFit()) then
+        r.ImGui_TableSetupColumn(UI.ctx, "Action", r.ImGui_TableColumnFlags_WidthFixed(), UI.rounded(178))
+        r.ImGui_TableSetupColumn(UI.ctx, "Assignment", r.ImGui_TableColumnFlags_WidthFixed(), UI.rounded(142))
+        r.ImGui_TableSetupColumn(UI.ctx, "##controls", r.ImGui_TableColumnFlags_WidthFixed(), UI.rounded(142))
+        for _, command in ipairs(MIDI_COMMANDS) do
+            if H.midi_command_available(command) then H.draw_midi_command_row(command) end
+        end
+        r.ImGui_EndTable(UI.ctx)
+    end
+    r.ImGui_EndChild(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+        "Command assignments take priority over clip notes. The input must be enabled in REAPER Preferences > MIDI Devices.")
+    r.ImGui_EndPopup(UI.ctx)
+end
+
 function H.draw_timing_popup()
     if not r.ImGui_BeginPopup(UI.ctx, "##launch_timing") then return end
 
@@ -8618,6 +11956,39 @@ function H.toolbar_items()
             end })
     end
 
+    -- Only while a curve is out in the arrange being drawn into. Kept, because
+    -- the way back from that state cannot be the first thing to fold away.
+    if L.autom_edit then
+        add({ group = 1, width = UI.rounded(96), keep = true,
+            draw = function()
+                r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.accent_soft)
+                r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Border(), UI.colors.accent)
+                if r.ImGui_Button(UI.ctx, "Curve done", UI.rounded(96), UI.rounded(26)) then
+                    H.finish_autom_edit(true)
+                end
+                r.ImGui_PopStyleColor(UI.ctx, 2)
+                if r.ImGui_IsItemHovered(UI.ctx) then
+                    r.ImGui_SetTooltip(UI.ctx, "Take " .. (L.autom_edit and L.autom_edit.name or "the curve")
+                        .. " back into its clip and clear it out of the arrange")
+                end
+            end,
+            menu = function()
+                if r.ImGui_MenuItem(UI.ctx, "Curve done") then H.finish_autom_edit(true) end
+            end })
+        add({ group = 1, width = UI.rounded(72), keep = true,
+            draw = function()
+                if r.ImGui_Button(UI.ctx, "Cancel", UI.rounded(72), UI.rounded(26)) then
+                    H.finish_autom_edit(false)
+                end
+                if r.ImGui_IsItemHovered(UI.ctx) then
+                    r.ImGui_SetTooltip(UI.ctx, "Leave the clip as it was and clear the drawing out of the arrange")
+                end
+            end,
+            menu = function()
+                if r.ImGui_MenuItem(UI.ctx, "Cancel the curve") then H.finish_autom_edit(false) end
+            end })
+    end
+
     add({ group = 1, width = UI.rounded(74), keep = true,
         draw = function()
             if r.ImGui_Button(UI.ctx, "Stop all", UI.rounded(74), UI.rounded(26)) then H.stop_all_quantized() end
@@ -8709,6 +12080,28 @@ function H.toolbar_items()
             if r.ImGui_MenuItem(UI.ctx, "One row fewer", nil, false, L.rows > 1) then
                 L.rows = L.rows - 1
                 H.save()
+            end
+        end })
+
+    add({ group = 3, width = UI.rounded(76),
+        draw = function()
+            if L.midi_enabled then
+                r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.accent_soft)
+                r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Border(), UI.colors.accent)
+            end
+            if r.ImGui_Button(UI.ctx, L.midi_enabled and "MIDI on" or "MIDI", UI.rounded(76), UI.rounded(26)) then
+                L.midi_window_open = true
+                r.ImGui_OpenPopup(UI.ctx, "##launch_midi")
+            end
+            if L.midi_enabled then r.ImGui_PopStyleColor(UI.ctx, 2) end
+            if r.ImGui_IsItemHovered(UI.ctx) then
+                local labels = { keyboard = "Keyboard", pads = "Pads 8 x 1", custom = "Custom grid" }
+                r.ImGui_SetTooltip(UI.ctx, "MIDI controller mapping: " .. (labels[L.midi_layout] or "Custom grid"))
+            end
+        end,
+        menu = function()
+            if r.ImGui_MenuItem(UI.ctx, "MIDI Setup...") then
+                H.request_popup("##launch_midi")
             end
         end })
 
@@ -8880,6 +12273,7 @@ function Launcher.draw_toolbar()
     -- Asked for from inside the overflow menu, opened out here where the popups
     -- themselves live.
     if L.popup_request then
+        if L.popup_request == "##launch_midi" then L.midi_window_open = true end
         r.ImGui_OpenPopup(UI.ctx, L.popup_request)
         L.popup_request = nil
     end
@@ -8887,6 +12281,7 @@ function Launcher.draw_toolbar()
     -- Drawn whether or not their buttons made it into the bar: a popup opened
     -- from the overflow menu still has to find its window here.
     H.draw_timing_popup()
+    H.draw_midi_popup()
     H.draw_key_popup()
     H.draw_guide_popup()
     H.draw_set_popup()
@@ -9109,7 +12504,11 @@ function Launcher.draw()
     -- sits under. Only the frame changes: a clip keeps its size either way, and
     -- every cell draws itself into the box it is given.
     local sideways = L.scenes_as_columns
-    local columns = sideways and (L.rows + 1) or (#L.lanes + 1)
+    -- Every lane plus the envelope lanes under it. Upright they are columns of
+    -- their own beside the track's; on its side they are rows underneath it,
+    -- which is where the arrange puts them.
+    local holders = H.holders()
+    local columns = sideways and (L.rows + 1) or (#holders + 1)
     -- The table owns both scroll directions, which is what lets it freeze the
     -- first column and the header row: a frozen row is only possible when the
     -- table is the thing scrolling, not the window around it.
@@ -9132,8 +12531,19 @@ function Launcher.draw()
     if r.ImGui_BeginTable(UI.ctx, "launcher_grid", columns, flags) then
         local head_w = UI.rounded(sideways and C.cell_w or C.scene_w)
         r.ImGui_TableSetupColumn(UI.ctx, "##head", r.ImGui_TableColumnFlags_WidthFixed(), head_w)
-        for index = 1, (sideways and L.rows or #L.lanes) do
-            r.ImGui_TableSetupColumn(UI.ctx, "##col" .. index, r.ImGui_TableColumnFlags_WidthFixed(), UI.rounded(C.cell_w))
+        if sideways then
+            for index = 1, L.rows do
+                r.ImGui_TableSetupColumn(UI.ctx, "##col" .. index,
+                    r.ImGui_TableColumnFlags_WidthFixed(), UI.rounded(C.cell_w))
+            end
+        else
+            for index, holder in ipairs(holders) do
+                -- An envelope lane is narrower than a track lane: it holds
+                -- curves, and it reads as something hanging off its neighbour.
+                local wide = H.is_env_lane(holder) and math.floor(C.cell_w * 0.66) or C.cell_w
+                r.ImGui_TableSetupColumn(UI.ctx, "##col" .. index,
+                    r.ImGui_TableColumnFlags_WidthFixed(), UI.rounded(wide))
+            end
         end
         if r.ImGui_TableSetupScrollFreeze then r.ImGui_TableSetupScrollFreeze(UI.ctx, 1, 1) end
         H.wheel_scroll()
@@ -9155,7 +12565,7 @@ function Launcher.draw()
             H.sync_scroll()
             L.last_row_y, L.last_row_height = nil, nil
             for lane_index, lane in ipairs(L.lanes) do
-                local drawn = H.lane_draw_height(H.lane_row_height(lane))
+                local drawn = H.lane_draw_height(H.lane_body_height(lane))
                 r.ImGui_TableNextRow(UI.ctx)
                 r.ImGui_TableNextColumn(UI.ctx)
                 local _, row_y = r.ImGui_GetCursorScreenPos(UI.ctx)
@@ -9174,6 +12584,23 @@ function Launcher.draw()
                     H.draw_cell(lane, lane_index, row, drawn)
                     r.ImGui_PopID(UI.ctx)
                 end
+                for sub_index, sub in ipairs(lane.envs or {}) do
+                    local sub_drawn = H.lane_draw_height(H.env_row_height(sub))
+                    local sub_id = H.env_lane_id(lane_index, sub_index)
+                    r.ImGui_TableNextRow(UI.ctx)
+                    r.ImGui_TableNextColumn(UI.ctx)
+                    local _, sub_y = r.ImGui_GetCursorScreenPos(UI.ctx)
+                    H.note_row_pitch(sub_y, sub_drawn)
+                    r.ImGui_PushID(UI.ctx, sub_id)
+                    H.draw_env_header(sub, lane_index .. "_" .. sub_index, head_w, sub_drawn)
+                    r.ImGui_PopID(UI.ctx)
+                    for row = 1, L.rows do
+                        r.ImGui_TableNextColumn(UI.ctx)
+                        r.ImGui_PushID(UI.ctx, sub_id * 1000 - row)
+                        H.draw_cell(sub, sub_id, row, sub_drawn)
+                        r.ImGui_PopID(UI.ctx)
+                    end
+                end
             end
             local tail = H.tail_gap()
             if tail > 0 then
@@ -9182,20 +12609,37 @@ function Launcher.draw()
                 r.ImGui_Dummy(UI.ctx, head_w, tail)
             end
         else
-            for lane_index, lane in ipairs(L.lanes) do
+            local lane_index, sub_index = 0, 0
+            local ids = {}
+            for index, holder in ipairs(holders) do
+                if H.is_env_lane(holder) then
+                    sub_index = sub_index + 1
+                    ids[index] = H.env_lane_id(lane_index, sub_index)
+                else
+                    lane_index, sub_index = lane_index + 1, 0
+                    ids[index] = lane_index
+                end
+            end
+            for index, holder in ipairs(holders) do
                 r.ImGui_TableNextColumn(UI.ctx)
-                r.ImGui_PushID(UI.ctx, lane_index)
-                H.draw_lane_header(lane, lane_index, UI.rounded(C.cell_w), head_h)
+                r.ImGui_PushID(UI.ctx, ids[index])
+                if H.is_env_lane(holder) then
+                    H.draw_env_header(holder, tostring(index),
+                        UI.rounded(math.floor(C.cell_w * 0.66)), head_h)
+                else
+                    H.draw_lane_header(holder, ids[index], UI.rounded(C.cell_w), head_h)
+                end
                 r.ImGui_PopID(UI.ctx)
             end
             for row = 1, L.rows do
                 r.ImGui_TableNextRow(UI.ctx)
                 r.ImGui_TableNextColumn(UI.ctx)
                 H.draw_scene_cell(row)
-                for lane_index, lane in ipairs(L.lanes) do
+                for index, holder in ipairs(holders) do
                     r.ImGui_TableNextColumn(UI.ctx)
-                    r.ImGui_PushID(UI.ctx, lane_index * 1000 + row)
-                    H.draw_cell(lane, lane_index, row)
+                    r.ImGui_PushID(UI.ctx, ids[index] * 1000 + row)
+                    H.draw_cell(holder, ids[index], row, nil,
+                        H.is_env_lane(holder) and UI.rounded(math.floor(C.cell_w * 0.66)) or nil)
                     r.ImGui_PopID(UI.ctx)
                 end
             end
@@ -9315,6 +12759,9 @@ function Launcher.shutdown()
     H.discard_take()
     L.recording = false
     L.record_stop_at = nil
+    -- The pads keep whatever they were last told, so they are cleared and the
+    -- device put back the way it was found.
+    H.lp_stop()
     if not L.active then return end
     H.reset_all()
     L.active = false
