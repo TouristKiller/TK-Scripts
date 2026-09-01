@@ -1,7 +1,11 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.6.0
+-- @version 0.6.1
 -- @changelog:
+--   + Launcher: A Launchpad is taken over in DAW mode now, the way Ableton and PlayTime do it: the board keeps its own Session and Custom buttons and its second port stays free for playing. Reported by AndreiMir
+--   + Launcher: Programmer mode is still on offer for a board that will not talk in DAW mode
+--   + Launcher: In DAW mode the scene strip on the right works as control changes, lit and read
+--   + Launcher: On the RGB boards a clip waiting for its bar line flashes and the playing clip pulses in hardware, instead of being blinked from the script
 --   + Launcher: Configurable MIDI control with Keyboard, Pads and Custom Grid layouts, banking and scene launching
 --   + Launcher: MIDI Learn for notes and commands, with reusable MIDI setup presets
 --   + Launcher: Launchpad layout - the 8 x 8 note grid of a Mini MK3, X, Pro MK3, MK2, S or Mini MK1, with the right hand strip launching scenes

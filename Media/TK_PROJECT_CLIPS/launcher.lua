@@ -149,6 +149,7 @@ local L = {
     midi_out_index    = nil,
     midi_feedback     = false,
     midi_lp_family    = "mk3",
+    midi_lp_mode      = "daw",
     midi_lp_origin    = nil,
     midi_lp_step      = nil,
     lp_map            = nil,
@@ -9939,6 +9940,8 @@ function Launcher.init(context)
     L.midi_lp_family = ({ mk3 = true, mk2 = true, classic = true })[lp_family] and lp_family or "mk3"
     -- Empty means "whatever the family says", which is the case for everyone
     -- whose device is not wired up in some way of its own.
+    local lp_mode = r.GetExtState(C.ext_section, "midi_lp_mode")
+    L.midi_lp_mode = lp_mode == "programmer" and "programmer" or "daw"
     L.midi_lp_origin = tonumber(r.GetExtState(C.ext_section, "midi_lp_origin"))
     L.midi_lp_step = tonumber(r.GetExtState(C.ext_section, "midi_lp_step"))
     H.load_midi_commands()
@@ -10495,6 +10498,7 @@ function H.midi_preset_snapshot(name)
         out_name = L.midi_out_name,
         feedback = L.midi_feedback,
         lp_family = L.midi_lp_family,
+        lp_mode = L.midi_lp_mode,
         lp_origin = L.midi_lp_origin,
         lp_step = L.midi_lp_step,
         commands = commands,
@@ -10559,6 +10563,8 @@ function H.apply_midi_preset(preset)
     -- The pad lighting travels with a preset too: which output it lit, and how
     -- that device lays its grid out.
     if type(preset.lp_family) == "string" then L.midi_lp_family = preset.lp_family end
+    L.midi_lp_mode = preset.lp_mode == "programmer" and "programmer" or "daw"
+    r.SetExtState(C.ext_section, "midi_lp_mode", L.midi_lp_mode, true)
     L.midi_lp_origin = tonumber(preset.lp_origin)
     L.midi_lp_step = tonumber(preset.lp_step)
     r.SetExtState(C.ext_section, "midi_lp_family", L.midi_lp_family, true)
@@ -10797,9 +10803,30 @@ end
 -- left" is enough to put it right.
 
 C.lp_families = {
-    { key = "mk3",     label = "Mini MK3 / X / Pro MK3",  origin = 81, step = -10, palette = true,  programmer = true },
-    { key = "mk2",     label = "Launchpad MK2 (RGB)",     origin = 81, step = -10, palette = true,  programmer = false },
-    { key = "classic", label = "Launchpad S / Mini MK1",  origin = 0,  step = 16,  palette = false, programmer = false },
+    { key = "mk3",     label = "Mini MK3 / X / Pro MK3",  origin = 81, step = -10, palette = true,  modes = true },
+    { key = "mk2",     label = "Launchpad MK2 (RGB)",     origin = 81, step = -10, palette = true,  modes = false },
+    { key = "classic", label = "Launchpad S / Mini MK1",  origin = 0,  step = 16,  palette = false, modes = false },
+}
+
+-- Two ways to take a MK3 board over, and they are not equal.
+--
+-- Programmer mode hands the whole surface to us, which sounds generous until
+-- you read what Novation says about it: the Setup entry is disabled and the
+-- board only returns to normal operation when Live mode is asked for again.
+-- Everything the device does by itself - its own layouts, its Session and
+-- Custom buttons, the note port for playing an instrument - is gone while we
+-- have it. Reported by AndreiMir, who put his finger on it by comparing with
+-- PlayTime 2.
+--
+-- DAW mode is what Ableton and PlayTime use instead. It switches on the Session
+-- layout, lights the Session button, and leaves the board itself alone: the
+-- mode buttons keep working and merely tell the DAW that the user pressed them,
+-- and the second MIDI port stays free for playing. The 8 x 8 grid carries the
+-- same notes either way. What differs is the strip on the right: notes in
+-- programmer mode, control changes with those same numbers in Session layout.
+C.lp_modes = {
+    { key = "daw",        label = "DAW mode - the board keeps its own buttons" },
+    { key = "programmer", label = "Programmer mode - the whole surface is ours" },
 }
 
 -- Which device is on the other end, read off the output's name. Only the model
@@ -10933,11 +10960,39 @@ end
 -- Programmer mode, so the pads answer to the note grid above rather than to
 -- whatever session layout the device woke up in. Only the MK3 generation needs
 -- it, and only if we can name the model.
-function H.lp_set_programmer(on)
-    if not H.lp_family().programmer then return end
+function H.lp_mode()
+    return L.midi_lp_mode == "programmer" and "programmer" or "daw"
+end
+
+-- In DAW mode the strip on the right sends and takes control changes rather
+-- than notes; the pads are notes either way.
+function H.lp_scene_is_cc()
+    return H.lp_family().modes and H.lp_mode() == "daw"
+end
+
+function H.lp_set_mode(on)
+    if not H.lp_family().modes then return end
     local id = H.lp_model_id()
     if not id then return end
-    H.lp_sysex({ 0xF0, 0x00, 0x20, 0x29, 0x02, id, 0x0E, on and 1 or 0, 0xF7 })
+    local head = { 0xF0, 0x00, 0x20, 0x29, 0x02, id }
+    local function send(...)
+        local message = { table.unpack(head) }
+        for _, byte in ipairs({ ... }) do message[#message + 1] = byte end
+        message[#message + 1] = 0xF7
+        H.lp_sysex(message)
+    end
+    if H.lp_mode() == "programmer" then
+        -- 0Eh: 1 is programmer, 0 puts it back in Live mode, which is the only
+        -- way back to normal operation.
+        send(0x0E, on and 1 or 0)
+        return
+    end
+    if on then
+        send(0x10, 1)   -- 10h: DAW mode, which enables the Session layout
+        send(0x00, 0)   -- 00h: and select that layout
+    else
+        send(0x10, 0)   -- back to standalone, the board's own business again
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -11002,35 +11057,44 @@ end
 -- what the grid should look like
 --------------------------------------------------------------------------------
 
+-- The colour a pad should be showing, and on which channel. The RGB boards
+-- flash and pulse in hardware - channel 2 flashes, channel 3 pulses, for notes
+-- and control changes alike - so a waiting clip is handed over to the board
+-- instead of being switched on and off from here twenty times a second. The red
+-- and green boards have no such thing, and blink the way they always did.
 function H.lp_cell_colour(row, col, blink)
+    local fancy = H.lp_family().palette
     local lane_offset, scene_offset = H.midi_bank_offsets()
     local scene_row = scene_offset + row + 1
-    if scene_row > L.rows then return H.lp_off() end
+    if scene_row > L.rows then return H.lp_off(), 0 end
     if col == 8 then
-        -- The scene strip: white for a scene that has anything in it, bright
+        -- The scene strip: white for a scene that has anything in it, pulsing
         -- for the one that is running.
-        if not H.scene_filled(scene_row) then return H.lp_off() end
+        if not H.scene_filled(scene_row) then return H.lp_off(), 0 end
         local running = L.scene_run and L.scene_run.row == scene_row
-        return H.lp_colour(nil, running and true or false)
+        if running and fancy then return H.lp_colour(nil, true), 2 end
+        return H.lp_colour(nil, running and true or false), 0
     end
     local lane = L.lanes[lane_offset + col + 1]
-    if not lane then return H.lp_off() end
+    if not lane then return H.lp_off(), 0 end
     local slot = H.slot(lane, scene_row)
     if not slot then
         -- An armed track shows where a recording would land, the way the grid
         -- draws its record ring in an empty cell.
         if H.slot_mark(lane_offset + col + 1, scene_row) or H.track_armed(H.target_track(lane)) then
-            return blink and H.lp_colour(0xFF0000FF, true) or H.lp_off()
+            if fancy then return H.lp_colour(0xFF0000FF, true), 1 end
+            return blink and H.lp_colour(0xFF0000FF, true) or H.lp_off(), 0
         end
-        return H.lp_off()
+        return H.lp_off(), 0
     end
     local color = slot.color or H.lane_color(lane)
     local live = H.slot_is_live(lane, scene_row)
     if live == "pending" or (lane.queued and lane.queued.row == scene_row) then
-        return blink and H.lp_colour(color, true) or H.lp_off()
+        if fancy then return H.lp_colour(color, true), 1 end
+        return blink and H.lp_colour(color, true) or H.lp_off(), 0
     end
-    if live == "playing" then return H.lp_colour(color, true) end
-    return H.lp_colour(color, false)
+    if live == "playing" then return H.lp_colour(color, true), fancy and 2 or 0 end
+    return H.lp_colour(color, false), 0
 end
 
 -- Only what changed is sent. A Launchpad given all sixty-four pads several
@@ -11050,10 +11114,15 @@ function H.lp_refresh(force)
         for col = 0, 8 do
             local note = H.lp_note(row, col)
             if note then
-                local wanted = H.lp_cell_colour(row, col, blink)
-                if force or L.lp_shadow[note] ~= wanted then
-                    L.lp_shadow[note] = wanted
-                    H.lp_send(0x90, note, wanted)
+                local wanted, lane_channel = H.lp_cell_colour(row, col, blink)
+                local status = ((col == 8 and H.lp_scene_is_cc()) and 0xB0 or 0x90) + lane_channel
+                -- The status byte is part of what the pad is showing: a strip
+                -- that went from note to control change, or a pad that went from
+                -- steady to pulsing, is a change like any other.
+                local state = status * 256 + wanted
+                if force or L.lp_shadow[note] ~= state then
+                    L.lp_shadow[note] = state
+                    H.lp_send(status, note, wanted)
                 end
             end
         end
@@ -11066,7 +11135,9 @@ function H.lp_clear()
     for row = 0, 7 do
         for col = 0, 8 do
             local note = H.lp_note(row, col)
-            if note then H.lp_send(0x90, note, off) end
+            if note then
+                H.lp_send((col == 8 and H.lp_scene_is_cc()) and 0xB0 or 0x90, note, off)
+            end
         end
     end
 end
@@ -11089,8 +11160,9 @@ function H.lp_test_pattern()
             if note then
                 local colour = col == 8 and H.lp_colour(nil, true)
                     or H.lp_colour(hues[row + 1], col < 4)
-                L.lp_shadow[note] = colour
-                H.lp_send(0x90, note, colour)
+                local status = (col == 8 and H.lp_scene_is_cc()) and 0xB0 or 0x90
+                L.lp_shadow[note] = status * 256 + colour
+                H.lp_send(status, note, colour)
             end
         end
     end
@@ -11103,14 +11175,14 @@ function H.lp_start()
     L.midi_out_index = H.midi_out_device()
     H.lp_forget_map()
     if not L.midi_out_index then return end
-    H.lp_set_programmer(true)
+    H.lp_set_mode(true)
     H.lp_refresh(true)
 end
 
 function H.lp_stop()
     if L.midi_out_index then
         H.lp_clear()
-        H.lp_set_programmer(false)
+        H.lp_set_mode(false)
     end
     L.midi_out_index = nil
     L.lp_shadow = nil
@@ -11127,6 +11199,16 @@ function H.set_midi_feedback(on)
     L.midi_feedback = on and true or false
     r.SetExtState(C.ext_section, "midi_feedback", L.midi_feedback and "1" or "0", true)
     if L.midi_feedback then H.lp_start() else H.lp_stop() end
+end
+
+function H.set_lp_mode(key)
+    -- Put the board back the way it was before changing how we take it over,
+    -- or it stays in the mode we are leaving.
+    H.lp_stop()
+    L.midi_lp_mode = key == "programmer" and "programmer" or "daw"
+    r.SetExtState(C.ext_section, "midi_lp_mode", L.midi_lp_mode, true)
+    H.lp_forget_map()
+    if L.midi_feedback then H.lp_start() end
 end
 
 function H.set_lp_family(key)
@@ -11231,15 +11313,19 @@ function H.midi_note_target(note)
     return lane_index, row
 end
 
-function H.midi_scene_target(note)
+function H.midi_scene_target(note, is_cc)
     -- The strip down the right hand side of a Launchpad launches scenes, which
-    -- is what it is labelled for on every model.
+    -- is what it is labelled for on every model. In DAW mode it arrives as a
+    -- control change carrying the number the note would have had, so the same
+    -- lookup answers both once the kind matches.
     if L.midi_layout == "launchpad" then
+        if (is_cc and true or false) ~= H.lp_scene_is_cc() then return nil end
         local pad = H.lp_lookup()[note]
         if not pad or pad.col ~= 8 then return nil end
         local row = select(2, H.midi_bank_offsets()) + pad.row + 1
         return row <= L.rows and row or nil
     end
+    if is_cc then return nil end
     if L.midi_layout ~= "pads" or L.midi_pad_mode ~= "scenes" then return nil end
     local offset = note - L.midi_base_note
     if offset < 0 or offset >= 8 then return nil end
@@ -11299,10 +11385,15 @@ function H.handle_midi()
             elseif not L.midi_base_learn then
                 command_handled = command_kind and H.handle_midi_command(command_kind, channel, note, command_value)
             end
-            local scene_row = H.midi_scene_target(note)
+            local scene_row = H.midi_scene_target(note, kind == 0xB0)
             local lane_index, row = H.midi_note_target(note)
             local key = channel * 128 + note
-            if not command_handled and kind == 0x90 and velocity > 0 and not L.midi_pressed[key] then
+            -- A button that sends control changes says 127 on the way down and
+            -- 0 on the way up. Only the way down launches, and it is not held
+            -- the way a pad can be.
+            if not command_handled and kind == 0xB0 and velocity > 0 and scene_row then
+                H.launch_scene(scene_row)
+            elseif not command_handled and kind == 0x90 and velocity > 0 and not L.midi_pressed[key] then
                 if scene_row then
                     L.midi_pressed[key] = { scene = scene_row }
                     H.launch_scene(scene_row)
@@ -11467,22 +11558,35 @@ function H.draw_launchpad_setup()
     end
     r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
     if r.ImGui_Button(UI.ctx, "All off", UI.rounded(80), UI.rounded(22)) then H.lp_clear() end
-    if family.programmer then
+    if family.modes then
         r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
-        if r.ImGui_Button(UI.ctx, "Programmer mode", UI.rounded(150), UI.rounded(22)) then
-            H.lp_set_programmer(true)
-            L.status = H.lp_model_id() and "Programmer mode sent"
+        if r.ImGui_Button(UI.ctx, "Send mode again", UI.rounded(130), UI.rounded(22)) then
+            H.lp_set_mode(true)
+            L.status = H.lp_model_id() and "Mode sent again"
                 or "This output's name does not say which model it is, so no mode was sent"
         end
         if r.ImGui_IsItemHovered(UI.ctx) then
-            r.ImGui_SetTooltip(UI.ctx, "MK3 boards answer to the 11-88 grid only in programmer mode.\nIt is sent when the lights are switched on, and this asks again\nfor a board that was unplugged and put back.")
+            r.ImGui_SetTooltip(UI.ctx, "The mode is sent when the lights go on. This asks again, for a\nboard that was unplugged and put back.")
+        end
+        r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(360))
+        local mode_label = H.lp_mode() == "programmer" and C.lp_modes[2].label or C.lp_modes[1].label
+        if r.ImGui_BeginCombo(UI.ctx, "##lp_mode", mode_label) then
+            for _, entry in ipairs(C.lp_modes) do
+                local selected = entry.key == H.lp_mode()
+                if r.ImGui_Selectable(UI.ctx, entry.label, selected) then H.set_lp_mode(entry.key) end
+                if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+            end
+            r.ImGui_EndCombo(UI.ctx)
+        end
+        if r.ImGui_IsItemHovered(UI.ctx) then
+            r.ImGui_SetTooltip(UI.ctx, "DAW mode is what Ableton and PlayTime use: the Session layout is\nswitched on and lit, and the board keeps its own Session and Custom\nbuttons and its second port for playing.\n\nProgrammer mode hands the whole surface over. Novation's own reference\nsays the board only returns to normal operation when it is switched\nback, so use it only if DAW mode will not talk to your board.")
         end
     end
     if not r.StuffMIDIMessage then
         r.ImGui_TextColored(UI.ctx, UI.colors.danger, "This REAPER cannot send to a MIDI output")
-    elseif not r.SendMIDIMessageToHardware and family.programmer then
+    elseif not r.SendMIDIMessageToHardware and family.modes then
         r.ImGui_TextColored(UI.ctx, UI.colors.warning or UI.colors.danger,
-            "No SysEx from this REAPER: put the board in programmer mode by hand")
+            "No SysEx from this REAPER: put the board in Session mode by hand")
     end
 end
 

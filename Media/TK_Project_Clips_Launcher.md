@@ -85,7 +85,14 @@ A Launchpad does not lay its pads out as consecutive notes: its rows step by ten
 
 Choose a **MIDI output** and switch on **Light the pads**. On Windows the port a DAW is meant to use is the second one, usually called MIDIOUT2. From then on the grid shows what the launcher knows: an empty slot is dark, a filled one glows in its clip's colour, the clip that is playing is bright, one waiting for its bar line blinks, and an armed track blinks red. The strip on the right lights for scenes that have something in them. Only pads that change colour are sent, so the board keeps up.
 
-The MK3 generation answers to that grid only in **programmer mode**, which is sent for you when the lights go on and undone when the Launcher closes. A board that was unplugged and put back can be asked again with the button of that name.
+**Mode** decides how much of the board the Launcher takes over, and MK3 boards give you the choice:
+
+- **DAW mode** switches on the Session layout and lights the Session button, which is what Ableton and PlayTime do. The board stays itself: its Session and Custom buttons keep working and simply tell the Launcher that you pressed them, and its second MIDI port stays free for playing an instrument. This is the default. In this mode the strip on the right sends and receives control changes rather than notes, which the Launcher handles for you.
+- **Programmer mode** hands the whole surface over. Novation's own reference is blunt about the cost: while it is on, the board's Setup entry is disabled and it only returns to normal operation when it is switched back. Use it only if DAW mode will not talk to your board.
+
+Either way the mode is sent when the lights go on and undone when the Launcher closes; **Send mode again** asks a second time, for a board that was unplugged and put back.
+
+On the RGB boards the flashing and pulsing is done by the board itself - a clip waiting for its bar line flashes, the one that is playing pulses - so those pads are set once instead of being switched on and off from the script.
 
 An S or a Mini MK1 has only red and green lamps, so on those the colour is the state rather than the clip's own colour: dark, green, amber, red.
 

@@ -708,7 +708,7 @@ v0.2.51
 
  <category name="Media">
     <reapack name="TK_PROJECT_CLIPS.lua" type="script" desc="TK Project Clips">
-        <version name="0.6.0" author="TouristKiller" time="2026-08-31T20:57:02Z">
+        <version name="0.6.1" author="TouristKiller" time="2026-09-01T19:25:29Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS.lua</source>
         <source file="TK_PROJECT_CLIPS/launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/launcher.lua</source>
         <source file="TK_PROJECT_CLIPS/chord_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/chord_engine.lua</source>
@@ -718,6 +718,11 @@ v0.2.51
         <source file="TK_PROJECT_CLIPS/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/json.lua</source>
         <source file="TK_Project_Clips_Launcher.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_Project_Clips_Launcher.pdf</source>
         <changelog><![CDATA[
+            v0.6.1
+            + Launcher: A Launchpad is taken over in DAW mode now, the way Ableton and PlayTime do it: the board keeps its own Session and Custom buttons and its second port stays free for playing. Reported by AndreiMir
+            + Launcher: Programmer mode is still on offer for a board that will not talk in DAW mode
+            + Launcher: In DAW mode the scene strip on the right works as control changes, lit and read
+            + Launcher: On the RGB boards a clip waiting for its bar line flashes and the playing clip pulses in hardware, instead of being blinked from the script
             v0.6.0
             + Launcher: Configurable MIDI control with Keyboard, Pads and Custom Grid layouts, banking and scene launching
             + Launcher: MIDI Learn for notes and commands, with reusable MIDI setup presets
