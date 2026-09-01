@@ -750,6 +750,7 @@ end
 
 function set_selected_tags_visibility(app, settings)
   ensure_visibility_snapshot()
+  local snapshot_tracks = state.visibility_snapshot.tracks
   local include = normalize_selected_tags(settings)
   local hidden = normalize_hidden_tags(settings)
   local include_lookup = tags_lookup(include)
@@ -770,17 +771,26 @@ function set_selected_tags_visibility(app, settings)
     local track = r.GetTrack(0, index)
     local guid = track_guid(track)
     local tags = guid and state.data.tracks[guid] or nil
+    local baseline = guid and snapshot_tracks[guid] or nil
+    if guid and not baseline then
+      baseline = {
+        tcp = r.GetMediaTrackInfo_Value(track, "B_SHOWINTCP") or 0,
+        mixer = r.GetMediaTrackInfo_Value(track, "B_SHOWINMIXER") or 0
+      }
+      snapshot_tracks[guid] = baseline
+    end
     -- No include tags means every track is in scope; a hide tag then vetoes.
     -- It vetoes an included track too, so the outcome does not depend on which
     -- chip happened to be clicked last.
     local visible = #include == 0 or track_matches_tags(tags, include_lookup)
     if visible and #hidden > 0 and track_matches_tags(tags, hidden_lookup) then visible = false end
-    -- A track whose GUID cannot be read matches nothing, and hiding a track
-    -- that no chip can ever bring back is the one outcome worth avoiding.
-    if not guid then visible = true end
-    r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", visible and 1 or 0)
-    r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", visible and 1 or 0)
-    if visible then shown = shown + 1 end
+    local tcp_visible = visible and baseline and (tonumber(baseline.tcp) or 0) > 0
+    local mixer_visible = visible and baseline and (tonumber(baseline.mixer) or 0) > 0
+    if baseline then
+      r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", tcp_visible and 1 or 0)
+      r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", mixer_visible and 1 or 0)
+    end
+    if tcp_visible or mixer_visible then shown = shown + 1 end
   end
   r.PreventUIRefresh(-1)
   r.TrackList_AdjustWindows(false)

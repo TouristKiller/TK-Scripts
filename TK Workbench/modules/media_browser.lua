@@ -53,6 +53,7 @@ local defaults = {
   preview_tape_speed = false,
   stop_preview_on_insert = true,
   tempo_sync = false,
+  tempo_sync_multiplier = 1.0,
   loop_preview = false,
   auto_play = false,
   auto_play_next = false,
@@ -210,6 +211,8 @@ function ensure_settings(app)
   settings.preview_restart_gap_ms = math.max(0, math.min(100, tonumber(settings.preview_restart_gap_ms) or defaults.preview_restart_gap_ms))
   settings.preview_pitch = math.max(-24, math.min(24, tonumber(settings.preview_pitch) or defaults.preview_pitch))
   settings.preview_rate = math.max(0.25, math.min(4, tonumber(settings.preview_rate) or defaults.preview_rate))
+  settings.tempo_sync_multiplier = tonumber(settings.tempo_sync_multiplier) or defaults.tempo_sync_multiplier
+  if settings.tempo_sync_multiplier ~= 0.5 and settings.tempo_sync_multiplier ~= 2.0 then settings.tempo_sync_multiplier = 1.0 end
   settings.preview_tape_speed = settings.preview_tape_speed == true
   settings.stop_preview_on_insert = settings.stop_preview_on_insert ~= false
   settings.trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(settings.trim_silence_threshold_db) or defaults.trim_silence_threshold_db))
@@ -2011,14 +2014,17 @@ end
 function effective_playrate(source, kind, settings)
   local rate = tonumber(settings.preview_rate) or defaults.preview_rate
   if kind == "audio" and settings.tempo_sync then
+    local multiplier = tonumber(settings.tempo_sync_multiplier) or defaults.tempo_sync_multiplier
+    local sync_rate = nil
     local file_bpm = read_embedded_bpm(source)
     local project_bpm = r.Master_GetTempo and r.Master_GetTempo() or nil
     if file_bpm and project_bpm and project_bpm > 0 then
-      rate = project_bpm / file_bpm
+      sync_rate = project_bpm / file_bpm
     elseif r.GetTempoMatchPlayRate then
       local ok, tempo_rate = r.GetTempoMatchPlayRate(source, 1, 0, 1)
-      if ok and tempo_rate and tempo_rate > 0 then rate = tempo_rate end
+      if ok and tempo_rate and tempo_rate > 0 then sync_rate = tempo_rate end
     end
+    rate = (sync_rate or 1.0) * multiplier
   end
   return math.max(0.25, math.min(8, rate))
 end
@@ -2050,7 +2056,7 @@ function display_playrate(settings)
       return rate
     end
   end
-  return settings.preview_rate
+  return tonumber(settings.tempo_sync_multiplier) or defaults.tempo_sync_multiplier
 end
 
 function apply_track_preview_rate(settings)
@@ -4474,6 +4480,23 @@ function draw_media_settings_popup(app, settings)
     if v then settings.preview_tape_speed = false end
     changed = true
     apply_preview_rate(settings)
+  end
+  if settings.tempo_sync then
+    local multiplier = tonumber(settings.tempo_sync_multiplier) or defaults.tempo_sync_multiplier
+    local multiplier_label = multiplier == 0.5 and "/2" or (multiplier == 2.0 and "2x" or "1x")
+    r.ImGui_SetNextItemWidth(ctx, UIScale.round(100))
+    if r.ImGui_BeginCombo(ctx, "Sync speed", multiplier_label) then
+      local values = {0.5, 1.0, 2.0}
+      local labels = {"/2", "1x", "2x"}
+      for i = 1, #values do
+        if r.ImGui_Selectable(ctx, labels[i], multiplier == values[i]) then
+          settings.tempo_sync_multiplier = values[i]
+          changed = true
+          apply_preview_rate(settings)
+        end
+      end
+      r.ImGui_EndCombo(ctx)
+    end
   end
   c, v = r.ImGui_Checkbox(ctx, "Tape-speed rate", settings.preview_tape_speed == true)
   if c then

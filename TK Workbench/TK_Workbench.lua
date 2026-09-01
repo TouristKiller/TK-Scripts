@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.9.3
+-- @version 0.9.4
 -- @changelog:
+-- v0.9.4
+--   + Media Browser: tempo-synced previews and inserted media can now play at half speed (/2), normal speed (1x) or double speed (2x)
+--   + Track Tags: tag filters now preserve each track's existing TCP and MCP visibility independently, so filtering no longer reveals tracks that were already hidden in either view
 -- v0.9.3
 --   + Cue: shows the current and next chord from a MIDI track, with text-event overrides, configurable recognition, key context and alternative candidates. The narrow dock layout now keeps the full rehearsal view at every width, with independent visibility controls and optional countdown, duration, Roman degree, recording state and live MIDI feedback
 --   + Render Hub: automatic loudness measurement after rendering can be disabled while manual measurement remains available, and rendered and measured timestamps are tracked separately
