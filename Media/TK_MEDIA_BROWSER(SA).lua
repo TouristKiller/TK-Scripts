@@ -1,8 +1,13 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 1.2.0
+-- @version 1.3.0
 -- @changelog:
 --[[
+v1.3.0:
++ Tree View: macOS AppleDouble metadata files whose names start with ._ are no longer shown or added by new scans, and are filtered from existing caches immediately
++ Sync: right-click the sync button to choose half-speed (/2), normal (1x) or double-speed (2x) tempo matching for previews and inserted media
++ Waveform: right-click the peak waveform and choose Reveal in Tree to return to the displayed file; the browser switches to Tree View, opens its parent folders and scrolls the file into view
+
 v1.2.0:
 + New: a fourth view mode, Grouped, on the Tree / Flat / Compact button (T -> F -> G -> C). It is the flat list with a collapsible header per folder, so a location reads as an overview of what is in it and opens where you want it, instead of being scrolled through as one long list. Folders start collapsed, and which ones you opened is remembered per location. Requested by Heavy
 + Grouped: the header names the folder relative to the location and counts the files in it, so two folders that happen to share a name stay apart. That path is worked out from the file itself rather than read from what the scan stored, which means no library has to be scanned again for this
@@ -1389,6 +1394,7 @@ local ui = {
     list_clipper = nil,
     scroll_to_top = false,
     scroll_selected_file = false,
+    reveal_tree_file = nil,
     last_playback_scroll_time = 0,
     follow_scroll_interval = 0.10,
     pitch_detection_enabled = true,
@@ -3528,6 +3534,7 @@ function get_ext_group(filename)
 end
 
 function is_file_visible(filename)
+    if filename:sub(1, 2) == "._" then return false end
     local g = get_ext_group(filename)
     if not g then return false end
     if g == "audio" then return ui_settings.filter_audio end
@@ -3538,10 +3545,6 @@ function is_file_visible(filename)
 end
 
 function filter_visible_files(list)
-    if ui_settings.filter_audio and ui_settings.filter_midi
-        and ui_settings.filter_video and ui_settings.filter_image then
-        return list
-    end
     local out = {}
     for i = 1, #list do
         local entry = list[i]
@@ -3642,6 +3645,7 @@ local function change_location(new_location)
 end
 
 local function has_supported_extension(filename)
+    if filename:sub(1, 2) == "._" then return false end
     local ext = string.lower(string.match(filename, "%.([^%.]+)$") or "")
     if ext and ext ~= "" then
         return supported_extensions["." .. ext] or false
@@ -8033,6 +8037,17 @@ local function refresh_effective_playrate(reference_path)
     return true
 end
 
+function set_tempo_match_multiplier(multiplier)
+    playback.use_original_speed = false
+    playback.tape_speed = false
+    playback.current_playrate = multiplier
+    playback.speed_manually_changed = true
+    playback.pending_sync_refresh = true
+    playback.last_sync_reference = nil
+    refresh_effective_playrate()
+    save_options()
+end
+
 local function get_cached_file_length(file_path)
     if not file_path or file_path == "" then
         return 0
@@ -10530,6 +10545,13 @@ function draw_file_list()
                                     label = label .. "  (" .. match_count .. ")"
                                 end
                                 label = label .. "###tk_tree_" .. folder_path
+                                if ui.reveal_tree_file then
+                                    local target = ui.reveal_tree_file:lower():gsub("\\", "/")
+                                    local folder = folder_path:lower():gsub("\\", "/"):gsub("/+$", "")
+                                    if target:sub(1, #folder + 1) == folder .. "/" then
+                                        r.ImGui_SetNextItemOpen(ctx, true, r.ImGui_Cond_Always())
+                                    end
+                                end
                                 local tree_open = r.ImGui_TreeNode(ctx, label)
                                 if r.ImGui_BeginPopupContextItem(ctx, "tree_folder_context_" .. folder_path) then
                                     render_lufs_folder_context_menu(folder_path)
@@ -10593,12 +10615,15 @@ function draw_file_list()
                             end
                         else
                             local show_file = is_file_visible(item.name)
+                            local file_path = path .. sep .. item.name
+                            if ui.reveal_tree_file and file_path:lower():gsub("\\", "/") == ui.reveal_tree_file:lower():gsub("\\", "/") then
+                                show_file = true
+                            end
                             if show_file and search_lower ~= "" then
                                 local name_lower = string.lower(item.name)
                                 show_file = string.find(name_lower, search_lower) ~= nil
                             end
                             if show_file then
-                                local file_path = path .. sep .. item.name
                                 local did_push_text = (item.name == playback.selected_file)
                                 if did_push_text then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
@@ -10633,6 +10658,14 @@ function draw_file_list()
                                     if playback.auto_play then
                                         play_media(file_path)
                                     end
+                                end
+                                if ui.reveal_tree_file and file_path:lower():gsub("\\", "/") == ui.reveal_tree_file:lower():gsub("\\", "/") then
+                                    playback.selected_file = item.name
+                                    playback.current_playing_file = file_path
+                                    if r.ImGui_SetScrollHereY then
+                                        r.ImGui_SetScrollHereY(ctx, 0.5)
+                                    end
+                                    ui.reveal_tree_file = nil
                                 end
                                 
                                 if r.ImGui_IsItemFocused(ctx) and playback.selected_file ~= item.name then
@@ -14855,6 +14888,16 @@ function tkmb_ui.draw_transport()
     end
 
     if r.ImGui_BeginPopupContextItem(ctx, "##SyncOptions") then
+        if r.ImGui_Selectable(ctx, "Tempo match /2", not playback.use_original_speed and math.abs((playback.current_playrate or 1.0) - 0.5) < 0.001) then
+            set_tempo_match_multiplier(0.5)
+        end
+        if r.ImGui_Selectable(ctx, "Tempo match 1x", not playback.use_original_speed and math.abs((playback.current_playrate or 1.0) - 1.0) < 0.001) then
+            set_tempo_match_multiplier(1.0)
+        end
+        if r.ImGui_Selectable(ctx, "Tempo match 2x", not playback.use_original_speed and math.abs((playback.current_playrate or 1.0) - 2.0) < 0.001) then
+            set_tempo_match_multiplier(2.0)
+        end
+        r.ImGui_Separator(ctx)
         if r.ImGui_Checkbox(ctx, "Start at next grid", playback.sync_wait_for_next_measure) then
             playback.sync_wait_for_next_measure = not playback.sync_wait_for_next_measure
             save_options()
@@ -17178,6 +17221,12 @@ function tkmb_ui.draw_waveform(divider_h, max_height)
     end
     r.ImGui_InvisibleButton(ctx, "##waveform_interaction", footer_width, footer_height)
     local waveform_item_hovered = r.ImGui_IsItemHovered(ctx)
+    if r.ImGui_BeginPopupContextItem(ctx, "##WaveformContext") then
+        if file_to_show and file_to_show ~= "" and r.ImGui_MenuItem(ctx, "Reveal in Tree") then
+            tkmb_ui.reveal_in_tree(file_to_show)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
 
     local accent_color = hsv_to_color(ui_settings.accent_hue)
     local text_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
@@ -17866,6 +17915,30 @@ function tkmb_ui.select_location(i, location)
     file_location.last_folder_index = i
 
     save_options()
+end
+
+function tkmb_ui.reveal_in_tree(file_path)
+    if not file_path or file_path == "" then return end
+    local target = file_path:lower():gsub("\\", "/")
+    local best_index, best_length = nil, 0
+    for i, location in ipairs(file_location.locations) do
+        local root = location:lower():gsub("\\", "/"):gsub("/+$", "")
+        if target:sub(1, #root + 1) == root .. "/" and #root > best_length then
+            best_index = i
+            best_length = #root
+        end
+    end
+    if not best_index then return end
+
+    ui.current_view_mode = "folders"
+    file_location.flat_view = false
+    file_location.saved_folder_flat_view = false
+    ui_settings.compact_view = false
+    ui_settings.group_by_folder = false
+    search_filter.search_term = ""
+    search_filter.filtered_files = {}
+    ui.reveal_tree_file = file_path
+    tkmb_ui.select_location(best_index, file_location.locations[best_index])
 end
 
 -- The two layout drivers. Every region is drawn by the same tkmb_ui.draw_* function

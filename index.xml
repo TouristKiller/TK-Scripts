@@ -751,12 +751,17 @@ v0.2.51
         </version>
     </reapack>
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
-        <version name="1.2.0" author="TouristKiller" time="2026-08-25T22:52:30Z">
+        <version name="1.3.0" author="TouristKiller" time="2026-09-01T17:47:06Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_MEDIA_BROWSER(SA).lua</source>
         <source file="json_tkmb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/json_tkmb.lua</source>
         <source file="tk_filename_categorizer.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/tk_filename_categorizer.lua</source>
         <source file="TKMBSETTINGS.png">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TKMBSETTINGS.png</source>
         <changelog><![CDATA[
+            v1.3.0:
+            + Tree View: macOS AppleDouble metadata files whose names start with ._ are no longer shown or added by new scans, and are filtered from existing caches immediately
+            + Sync: right-click the sync button to choose half-speed (/2), normal (1x) or double-speed (2x) tempo matching for previews and inserted media
+            + Waveform: right-click the peak waveform and choose Reveal in Tree to return to the displayed file; the browser switches to Tree View, opens its parent folders and scrolls the file into view
+
             v1.2.0:
             + New: a fourth view mode, Grouped, on the Tree / Flat / Compact button (T -> F -> G -> C). It is the flat list with a collapsible header per folder, so a location reads as an overview of what is in it and opens where you want it, instead of being scrolled through as one long list. Folders start collapsed, and which ones you opened is remembered per location. Requested by Heavy
             + Grouped: the header names the folder relative to the location and counts the files in it, so two folders that happen to share a name stay apart. That path is worked out from the file itself rather than read from what the scan stored, which means no library has to be scanned again for this
