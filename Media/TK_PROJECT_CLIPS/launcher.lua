@@ -99,6 +99,22 @@ local L = {
     env_ranges        = nil,
     autom_files       = nil,
     autom_save_prompt = nil,
+    -- The clip editor: which clip is open in it, and the two habits it keeps.
+    clip_edit         = nil,
+    clip_edit_open    = false,
+    clip_drag         = nil,
+    clip_pos_x        = nil,
+    clip_pos_y        = nil,
+    preview_fade_key  = nil,
+    preview_fade_warned = nil,
+    preview_refused   = nil,
+    preview           = nil,
+    clip_snap         = "beat",
+    clip_zoom         = false,
+    clip_lengths      = nil,
+    clip_peak_key     = nil,
+    clip_peak_data    = nil,
+    clip_peak_at      = nil,
     file_prompt       = nil,
     chain_prompt      = nil,
     rename_prompt     = nil,
@@ -754,8 +770,13 @@ function H.trim_to(item, time)
     local position = r.GetMediaItemInfo_Value(item, "D_POSITION") or 0
     local length = time - position
     if length <= 0.0001 then return false end
+    -- The fade the item already carries is the clip's own, so a clip with a
+    -- long fade out fades into the bar line it stops on. A fade runs inside its
+    -- item and ends where the item does, so this can never make a stop late;
+    -- it is only clamped so it cannot outlast what is left of the clip.
+    local fade = math.max(C.fade, r.GetMediaItemInfo_Value(item, "D_FADEOUTLEN") or 0)
     r.SetMediaItemInfo_Value(item, "D_LENGTH", length)
-    r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN", C.fade)
+    r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN", math.min(fade, length))
     r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN_AUTO", -1)
     if r.UpdateItemInProject then r.UpdateItemInProject(item) end
     return true
@@ -1161,6 +1182,27 @@ function H.slot_entry(slot, color)
     end
     entry.is_midi = slot.is_midi
     entry.track_color = color
+    -- Audio has the same problem as MIDI below: the guid does not change when
+    -- the clip editor moves the start, the end or the speed, so the picture in
+    -- the cell stayed the one drawn from the old bounds until the script was
+    -- restarted. Those three numbers go into the key. Comparing them costs
+    -- three comparisons a frame, and the key -- and with it the reading of the
+    -- peaks -- is only built again when one of them has actually moved.
+    if not slot.is_midi then
+        local offset = (slot.edit and slot.edit.offset) or 0
+        local length = (slot.edit and slot.edit.length) or 0
+        local speed = slot.speed or 1
+        -- Reversing swaps the source under the item, so the picture has to be
+        -- read again; pitch leaves the peaks alone and is not in here.
+        local back = (slot.edit and slot.edit.reverse) and 1 or 0
+        if slot.mark_offset ~= offset or slot.mark_length ~= length
+            or slot.mark_speed ~= speed or slot.mark_back ~= back then
+            slot.mark_offset, slot.mark_length = offset, length
+            slot.mark_speed, slot.mark_back = speed, back
+            entry.cache_key = string.format("%s|launcher|%.4f|%.4f|%.4f|%d",
+                slot.guid, offset, length, speed, back)
+        end
+    end
     -- The drawn preview is cached under this key, and a clip's guid does not
     -- change when its notes do - so editing one in the MIDI editor left the old
     -- picture on screen until the script was restarted. The notes' own hash goes
@@ -1832,6 +1874,13 @@ function H.move_slot(from_lane, from_slot, to_lane, to_row, copy)
                 tempo_matched = from_slot.tempo_matched,
                 kind = from_slot.kind,
                 autom = H.copy_autom(from_slot.autom),
+                fade_in = from_slot.fade_in,
+                fade_out = from_slot.fade_out,
+                fade_each = from_slot.fade_each,
+                pitch = from_slot.pitch,
+                edit = type(from_slot.edit) == "table"
+                    and { offset = from_slot.edit.offset, length = from_slot.edit.length,
+                          reverse = from_slot.edit.reverse } or nil,
             }
         end
     else
@@ -2349,6 +2398,11 @@ function H.write_one(library, target, slot, position, length, into)
     r.SetMediaItemInfo_Value(copy, "B_LOOPSRC", slot.loop and 1 or 0)
     r.SetMediaItemInfo_Value(copy, "D_LENGTH", math.max(0.05, length))
     r.SetMediaItemInfo_Value(copy, "D_VOL", slot.gain or 1)
+    -- The fades the clip carries, so what is written sounds like what played.
+    r.SetMediaItemInfo_Value(copy, "D_FADEINLEN", slot.fade_in or 0)
+    r.SetMediaItemInfo_Value(copy, "D_FADEOUTLEN", slot.fade_out or 0)
+    r.SetMediaItemInfo_Value(copy, "D_FADEINLEN_AUTO", -1)
+    r.SetMediaItemInfo_Value(copy, "D_FADEOUTLEN_AUTO", -1)
     if into then into[#into + 1] = copy end
     return copy
 end
@@ -3109,8 +3163,9 @@ function H.build_wrap(lane, voice)
     r.SetMediaItemInfo_Value(wrap, "B_MUTE", 0)
     r.SetMediaItemInfo_Value(wrap, "B_LOOPSRC", 1)
     r.SetMediaItemInfo_Value(wrap, "D_LENGTH", voice.at - loop_start)
-    r.SetMediaItemInfo_Value(wrap, "D_FADEINLEN", 0)
-    r.SetMediaItemInfo_Value(wrap, "D_FADEOUTLEN", C.fade)
+    local wrap_slot = H.slot_by_guid(voice.slot_guid)
+    r.SetMediaItemInfo_Value(wrap, "D_FADEINLEN", wrap_slot and wrap_slot.fade_in or 0)
+    r.SetMediaItemInfo_Value(wrap, "D_FADEOUTLEN", math.max(C.fade, (wrap_slot and wrap_slot.fade_out) or 0))
     r.SetMediaItemInfo_Value(wrap, "D_FADEINLEN_AUTO", -1)
     r.SetMediaItemInfo_Value(wrap, "D_FADEOUTLEN_AUTO", -1)
     if r.UpdateItemInProject then r.UpdateItemInProject(wrap) end
@@ -3225,14 +3280,27 @@ function H.commit(lane, row, time)
     if not voice then return false end
     H.apply_chord_follow(voice, slot)
     r.SetMediaItemInfo_Value(voice, "B_MUTE", 0)
-    r.SetMediaItemInfo_Value(voice, "B_LOOPSRC", slot.loop and 1 or 0)
     local item_length, loop_length = H.slot_lengths(slot)
-    r.SetMediaItemInfo_Value(voice, "D_LENGTH", slot.loop and C.voice_length or math.max(0.01, item_length))
-    -- No fade in: the clip begins on a boundary and has to arrive at full level.
-    -- A fade out is a different matter, that one covers a cut mid waveform.
-    r.SetMediaItemInfo_Value(voice, "D_FADEINLEN", 0)
+    -- A fade belongs to an item, and a loop is normally one item with the source
+    -- rolling round inside it - so a fade would only ever be heard on the way in
+    -- and on the way out of the whole thing. Fade every pass therefore lays the
+    -- passes down one item at a time, which is what the retrigger already does;
+    -- here the step is simply the length of the loop.
+    local pass_qn = nil
+    if slot.loop and slot.fade_each and (slot.fade_in or slot.fade_out) and loop_length > 0 then
+        local span = r.TimeMap2_timeToQN(0, time + loop_length) - r.TimeMap2_timeToQN(0, time)
+        if span > 0.01 then pass_qn = span end
+    end
+    r.SetMediaItemInfo_Value(voice, "B_LOOPSRC", (slot.loop and not pass_qn) and 1 or 0)
+    r.SetMediaItemInfo_Value(voice, "D_LENGTH", pass_qn and math.max(0.01, loop_length)
+        or (slot.loop and C.voice_length or math.max(0.01, item_length)))
+    -- A clip with no fade of its own begins on a boundary and has to arrive at
+    -- full level, so there is none; a short fade out is always there to cover a
+    -- cut mid waveform. A fade set in the clip editor is the clip's own voice
+    -- and wins, and the guard stays underneath it.
+    r.SetMediaItemInfo_Value(voice, "D_FADEINLEN", slot.fade_in or 0)
     r.SetMediaItemInfo_Value(voice, "D_FADEINDIR", 0)
-    r.SetMediaItemInfo_Value(voice, "D_FADEOUTLEN", C.fade)
+    r.SetMediaItemInfo_Value(voice, "D_FADEOUTLEN", math.max(C.fade, slot.fade_out or 0))
     r.SetMediaItemInfo_Value(voice, "D_FADEINLEN_AUTO", -1)
     r.SetMediaItemInfo_Value(voice, "D_FADEOUTLEN_AUTO", -1)
     r.SetMediaItemInfo_Value(voice, "D_VOL", slot.gain or 1)
@@ -3249,14 +3317,16 @@ function H.commit(lane, row, time)
         row = row,
         at = time,
         length = loop_length,
-        looped = slot.loop and true or false,
+        looped = (slot.loop and not pass_qn) and true or false,
         slot_guid = slot.guid,
         restore = restore,
         gain = slot.gain,
-        repeat_qn = (not slot.loop and slot.repeat_qn and slot.repeat_qn > 0) and slot.repeat_qn or nil,
-        steps = slot.steps,
-        next_hit_qn = (not slot.loop and slot.repeat_qn and slot.repeat_qn > 0)
-            and (r.TimeMap2_timeToQN(0, time) + slot.repeat_qn) or nil,
+        repeat_qn = pass_qn
+            or ((not slot.loop and slot.repeat_qn and slot.repeat_qn > 0) and slot.repeat_qn or nil),
+        -- A pass is never a step in a pattern: every one of them sounds.
+        steps = (not pass_qn) and slot.steps or nil,
+        next_hit_qn = (pass_qn or (not slot.loop and slot.repeat_qn and slot.repeat_qn > 0))
+            and (r.TimeMap2_timeToQN(0, time) + (pass_qn or slot.repeat_qn)) or nil,
         hits = {},
     }
     H.fill_hits(lane, lane.pending, time)
@@ -3355,7 +3425,13 @@ function H.fill_hits(lane, voice, from)
                 r.SetMediaItemInfo_Value(hit, "B_MUTE", 0)
                 r.SetMediaItemInfo_Value(hit, "B_LOOPSRC", 0)
                 r.SetMediaItemInfo_Value(hit, "D_LENGTH", math.max(0.01, voice.length or 0.01))
-                r.SetMediaItemInfo_Value(hit, "D_FADEINLEN", 0)
+                -- A hit is a clip of its own, so it carries the clip's fades.
+                -- This is also what makes a loop that fades every pass work:
+                -- every pass is one of these.
+                local hit_slot = H.slot_by_guid(voice.slot_guid)
+                r.SetMediaItemInfo_Value(hit, "D_FADEINLEN", (hit_slot and hit_slot.fade_in) or 0)
+                r.SetMediaItemInfo_Value(hit, "D_FADEOUTLEN",
+                    math.max(C.fade, (hit_slot and hit_slot.fade_out) or 0))
                 r.SetMediaItemInfo_Value(hit, "D_FADEINLEN_AUTO", -1)
                 r.SetMediaItemInfo_Value(hit, "D_FADEOUTLEN_AUTO", -1)
                 r.SetMediaItemInfo_Value(hit, "D_VOL", voice.gain or 1)
@@ -3508,10 +3584,6 @@ end
 
 function H.is_env_lane(holder)
     return holder ~= nil and holder.parent ~= nil
-end
-
-function H.env_lanes(lane)
-    return (lane and lane.envs) or {}
 end
 
 -- Every lane and every envelope lane under it, in the order they are drawn.
@@ -5064,6 +5136,13 @@ function H.saved_slots(holder)
             chord_follow = slot.chord_follow,
             kind = slot.kind,
             autom = H.autom(slot) and H.copy_autom(slot.autom) or nil,
+            fade_in = slot.fade_in,
+            fade_out = slot.fade_out,
+            fade_each = slot.fade_each and true or nil,
+            pitch = slot.pitch,
+            edit = type(slot.edit) == "table"
+                and { offset = slot.edit.offset, length = slot.edit.length,
+                      reverse = slot.edit.reverse and true or nil } or nil,
         }
     end
     return slots
@@ -6928,6 +7007,15 @@ function H.load_slots(holder, stored_slots)
                     or (slot.chord_follow == "scale" and "scale" or nil),
                 kind = slot.kind == "automation" and "automation" or nil,
                 autom = slot.kind == "automation" and H.read_autom(slot.autom) or nil,
+                fade_in = tonumber(slot.fade_in),
+                fade_out = tonumber(slot.fade_out),
+                fade_each = slot.fade_each and true or nil,
+                pitch = tonumber(slot.pitch),
+                edit = type(slot.edit) == "table" and tonumber(slot.edit.length) and {
+                    offset = math.max(0, tonumber(slot.edit.offset) or 0),
+                    length = tonumber(slot.edit.length),
+                    reverse = slot.edit.reverse and true or nil,
+                } or nil,
             }
         end
     end
@@ -7215,6 +7303,11 @@ function H.slot_context(lane, lane_index, row, slot)
             slot.loop = not slot.loop
             H.save()
         end
+        if slot.loop and (slot.fade_in or slot.fade_out)
+            and r.ImGui_MenuItem(UI.ctx, "Fade every pass", nil, slot.fade_each) then
+            slot.fade_each = not slot.fade_each or nil
+            H.save()
+        end
         if r.ImGui_BeginMenu(UI.ctx, "When it has played") then
             for _, option in ipairs(FOLLOW_OPTIONS) do
                 if r.ImGui_MenuItem(UI.ctx, option.label, nil, (slot.follow or "stop") == option.key) then
@@ -7396,6 +7489,12 @@ function H.slot_context(lane, lane_index, row, slot)
         if slot.is_midi and r.ImGui_MenuItem(UI.ctx, "Edit in MIDI editor") then
             H.edit_slot_midi(lane, row)
         end
+        if not autom and not slot.is_midi and r.ImGui_MenuItem(UI.ctx, "Edit clip...") then
+            H.request_clip_editor(lane, row)
+        end
+        if r.ImGui_IsItemHovered(UI.ctx) then
+            r.ImGui_SetTooltip(UI.ctx, "The file with a grid over it: where the clip starts, how long it is,\nits fades and its level. Nothing is written into the audio, so what\nyou set here is what plays and what lands in the arrange.")
+        end
         if not autom and r.ImGui_MenuItem(UI.ctx, "Replace with selected item") then
             H.assign_from_selection(lane, row)
         end
@@ -7475,6 +7574,1030 @@ function H.slot_context(lane, lane_index, row, slot)
     end
     r.ImGui_EndPopup(UI.ctx)
     return true
+end
+
+--------------------------------------------------------------------------------
+-- the clip editor
+--------------------------------------------------------------------------------
+
+-- What an audio clip is, drawn: the file's peaks with a grid over them, the part
+-- that plays marked out of it, and sliders for the four things that decide what
+-- you hear - where it starts, how long it is, its fades and its level.
+--
+-- Nothing here cuts into the audio. Start and length become a SECTION on the
+-- source, the way a clip trimmed in the arrange already arrives; the fades and
+-- the level are properties of the library item. That item is what every voice
+-- and every write to the arrangement copies, so what is set here is what plays
+-- and what lands in the arrange - one edit, not two.
+
+C.clip_snaps = {
+    { key = "off",     label = "No snap" },
+    { key = "bar",     label = "Bars", bar = true },
+    { key = "beat",    label = "Beats", beats = 1 },
+    { key = "half",    label = "1/2 beat", beats = 0.5 },
+    { key = "quarter", label = "1/4 beat", beats = 0.25 },
+}
+
+function H.clip_editor_ready()
+    return (r.PCM_Source_CreateFromFile and r.PCM_Source_GetPeaks and r.PCM_Source_Destroy) and true or false
+end
+
+-- The file behind a clip, however many sections deep it sits, and how long that
+-- file is. Read once per file and kept: it does not change while a session runs.
+function H.clip_file_length(path)
+    L.clip_lengths = L.clip_lengths or {}
+    local known = L.clip_lengths[path]
+    if known ~= nil then return known or nil end
+    local source = r.PCM_Source_CreateFromFile(path)
+    if not source then
+        L.clip_lengths[path] = false
+        return nil
+    end
+    local length = r.GetMediaSourceLength(source)
+    pcall(r.PCM_Source_Destroy, source)
+    if not length or length <= 0 then
+        L.clip_lengths[path] = false
+        return nil
+    end
+    L.clip_lengths[path] = length
+    return length
+end
+
+-- Peaks straight off the file rather than through an item, so the editor can
+-- show the whole of it and not only the part the clip happens to use now.
+-- Rebuilt when the window it is looking at moves, and never more than a few
+-- times a second: reading peaks while a slider is being dragged is the one way
+-- to make this window feel heavy.
+function H.clip_peaks(path, from, to, count)
+    if not H.clip_editor_ready() or not path or to <= from then return nil end
+    count = math.max(32, math.min(1200, math.floor(count or 400)))
+    local key = string.format("%s|%.4f|%.4f|%d", path, from, to, count)
+    if L.clip_peak_key == key then return L.clip_peak_data end
+    local now = r.time_precise()
+    if L.clip_peak_at and now - L.clip_peak_at < 0.08 and L.clip_peak_data then
+        return L.clip_peak_data
+    end
+    local source = r.PCM_Source_CreateFromFile(path)
+    if not source then return nil end
+    local channels = math.max(1, math.min(2, math.floor(r.GetMediaSourceNumChannels(source) or 1)))
+    local span = math.max(0.001, to - from)
+    local buffer = r.new_array(count * channels * 2)
+    buffer.clear()
+    local got = r.PCM_Source_GetPeaks(source, count / span, from, channels, count, 0, buffer)
+    pcall(r.PCM_Source_Destroy, source)
+    local peaks = {}
+    if got and got > 0 then
+        for sample = 1, count do
+            local peak = 0
+            for channel = 1, channels do
+                local at = ((sample - 1) * channels) + channel
+                peak = math.max(peak, math.abs(buffer[at] or 0), math.abs(buffer[(count * channels) + at] or 0))
+            end
+            peaks[sample] = math.max(0, math.min(1, peak))
+        end
+    end
+    if buffer.clear then buffer.clear() end
+    L.clip_peak_key, L.clip_peak_data, L.clip_peak_at = key, peaks, now
+    return peaks
+end
+
+-- Where the clip sits in its file. The launcher keeps this itself rather than
+-- asking REAPER to read a section back: the slot is then the one place that
+-- says what the clip is, and a clip that arrived already trimmed can be taken
+-- at what its source measures.
+-- The rate the clip's own take plays at. Section bounds are measured in the
+-- file's seconds, so everything here is multiplied by it.
+function H.clip_rate(slot)
+    local item = H.item_from_guid(slot.guid)
+    local take = item and r.GetActiveTake(item) or nil
+    local rate = take and r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+    return (rate and rate > 0) and rate or 1
+end
+
+function H.clip_bounds(slot)
+    local edit = slot and slot.edit
+    if type(edit) == "table" and tonumber(edit.length) and tonumber(edit.length) > 0 then
+        return math.max(0, tonumber(edit.offset) or 0), tonumber(edit.length)
+    end
+    local item = H.item_from_guid(slot.guid)
+    local take = item and r.GetActiveTake(item) or nil
+    if not take then return 0, 0 end
+    local source = r.GetMediaItemTake_Source(take)
+    if not source then return 0, 0 end
+    if (r.GetMediaSourceType(source, "") or "") == "SECTION" then
+        -- A section is already the answer: it is exactly the part that plays.
+        -- Where it sits in the file only SWS can say, and older builds cannot,
+        -- in which case the clip is taken to start at the top of the file.
+        local length = r.GetMediaSourceLength(source) or 0
+        local offset = 0
+        if r.CF_PCM_Source_GetSectionInfo then
+            local ok, from = pcall(r.CF_PCM_Source_GetSectionInfo, source)
+            if ok and tonumber(from) then offset = math.max(0, tonumber(from)) end
+        end
+        return offset, length
+    end
+    -- A plain file: what plays is the item, read back into the file's seconds.
+    local offset = r.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") or 0
+    local length = (r.GetMediaItemInfo_Value(item, "D_LENGTH") or 0) * H.clip_rate(slot)
+    if length <= 0 then length = r.GetMediaSourceLength(source) or 0 end
+    return offset, length
+end
+
+-- Lay a new section over the file. The item's own length follows it, at
+-- whatever rate the clip plays, so the grid and the loop stay in step.
+function H.set_clip_section(slot, offset, length, reverse)
+    local item = H.item_from_guid(slot.guid)
+    local take = item and r.GetActiveTake(item) or nil
+    local path = H.slot_source_path(slot)
+    if not take or not path or length <= 0 then return false end
+    if not (r.PCM_Source_CreateFromFile and r.PCM_Source_CreateFromType and r.CF_PCM_Source_SetSectionInfo) then
+        L.status = "This REAPER cannot trim a clip's source"
+        return false
+    end
+    local copy = r.PCM_Source_CreateFromFile(path)
+    if not copy then return false end
+    local section = r.PCM_Source_CreateFromType("SECTION")
+    if not section then
+        pcall(r.PCM_Source_Destroy, copy)
+        return false
+    end
+    -- The last argument is reverse. It has been in this call all along; the
+    -- editor simply never had a switch for it.
+    local ok = pcall(r.CF_PCM_Source_SetSectionInfo, section, copy, offset, length,
+        reverse and true or false)
+    if not ok then
+        pcall(r.PCM_Source_Destroy, section)
+        pcall(r.PCM_Source_Destroy, copy)
+        return false
+    end
+    r.SetMediaItemTake_Source(take, section)
+    r.SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", 0)
+    local rate = r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+    if rate <= 0 then rate = 1 end
+    r.SetMediaItemInfo_Value(item, "D_LENGTH", length / rate)
+    if r.UpdateItemInProject then r.UpdateItemInProject(item) end
+    slot.edit = { offset = offset, length = length, reverse = reverse and true or nil }
+    slot.sectioned = true
+    slot.entry = nil
+    return true
+end
+
+-- Snap in source seconds. The grid is the project's own, stretched by the rate
+-- the clip plays at, so a bar line here is a bar line when it sounds.
+function H.clip_snap_seconds(slot)
+    local entry
+    for _, option in ipairs(C.clip_snaps) do
+        if option.key == (L.clip_snap or "beat") then entry = option end
+    end
+    if not entry or entry.key == "off" then return nil end
+    local tempo = r.Master_GetTempo and r.Master_GetTempo() or 120
+    if not tempo or tempo <= 0 then return nil end
+    local beat = 60 / tempo
+    local rate = H.clip_rate(slot)
+    local beats = entry.beats
+    if entry.bar then beats = H.qn_per_bar(H.meter_position()) end
+    if not beats or beats <= 0 then return nil end
+    return beat * beats * rate
+end
+
+function H.clip_snapped(slot, seconds)
+    local step = H.clip_snap_seconds(slot)
+    if not step or step <= 0 then return seconds end
+    return math.floor(seconds / step + 0.5) * step
+end
+
+--------------------------------------------------------------------------------
+-- hearing it
+--------------------------------------------------------------------------------
+
+-- SWS has a preview engine of its own, and it is the right thing here: it plays
+-- a source through the audio device without touching the transport, the edit
+-- cursor or a single mute. The preview in the Items view predates it and works
+-- the other way round - solo the track, mute every other item, press play - and
+-- that would fight the launcher over the very things the launcher owns.
+--
+-- What it plays is a section built from the same file and the same bounds the
+-- editor is showing, with the clip's own rate, level and fades on it, routed
+-- through the lane's own track. So the button is not an approximation of the
+-- clip: it is the clip.
+
+function H.preview_ready()
+    return (r.CF_CreatePreview and r.CF_Preview_Play and r.CF_Preview_Stop
+        and r.PCM_Source_CreateFromFile and r.PCM_Source_CreateFromType) and true or false
+end
+
+function H.preview_playing()
+    if not L.preview or not r.CF_Preview_GetValue then return false, 0 end
+    local active, position = r.CF_Preview_GetValue(L.preview, "D_POSITION")
+    if not active then return false, 0 end
+    return true, position or 0
+end
+
+function H.stop_preview()
+    if L.preview and r.CF_Preview_Stop then pcall(r.CF_Preview_Stop, L.preview) end
+    L.preview = nil
+end
+
+-- What a running preview should be doing at this moment. Set on the live
+-- preview rather than only when it starts, so turning the speed up while it
+-- plays does what it says instead of waiting for the next press of Play.
+function H.tune_preview(slot)
+    if not L.preview or not r.CF_Preview_SetValue then return end
+    H.preview_set("D_VOLUME", slot.gain or 1)
+    H.preview_set("D_PLAYRATE", H.clip_rate(slot))
+    -- Read off the take rather than the slot, exactly as the rate is: the take
+    -- is what plays, and a clip can carry a pitch that was never set here.
+    H.preview_set("D_PITCH", H.clip_pitch(slot))
+    -- A looping preview rolls the source round without laying its fades on
+    -- again, so with fade every pass on it would play the one thing that
+    -- setting does not do: fade once and then run on flat. One pass is played
+    -- instead, because with that setting one pass is exactly what every round
+    -- will sound like.
+    H.preview_set("B_LOOP", (slot.loop and not slot.fade_each) and 1 or 0)
+    H.preview_set("D_FADEINLEN", slot.fade_in or 0)
+    H.preview_fade_out(slot.fade_out or 0)
+end
+
+-- The fade out is the one value whose name cannot be taken on trust. SWS's own
+-- preview example writes it as D_fadeout_len while everything around it is in
+-- capitals, and that example never looks at what SetValue answers - so a name
+-- that is simply wrong would sit there doing nothing and no one would hear it,
+-- a fade out at the very end being the easiest thing in the world to miss.
+--
+-- So both spellings are offered, the one that is taken is remembered, and if
+-- neither is, the status says so instead of leaving you wondering.
+function H.preview_fade_out(value)
+    if not L.preview or not r.CF_Preview_SetValue then return false end
+    local names = L.preview_fade_key and { L.preview_fade_key }
+        or { "D_FADEOUTLEN", "D_fadeout_len", "D_FADEOUT_LEN" }
+    for _, name in ipairs(names) do
+        if r.CF_Preview_SetValue(L.preview, name, value) ~= false then
+            if L.preview_fade_key ~= name then
+                L.preview_fade_key = name
+                L.status = "Preview fade out set through " .. name
+            end
+            return true
+        end
+    end
+    if not L.preview_fade_warned then
+        L.preview_fade_warned = true
+        L.status = "This SWS build takes no fade out for a preview, so the preview plays without one"
+    end
+    return false
+end
+
+-- Every value the preview is given, and whether it took it. SWS answers false
+-- for a name it does not know, so a key that is spelled wrong says so here
+-- instead of quietly doing nothing for the rest of the session.
+function H.preview_set(key, value)
+    if not L.preview or not r.CF_Preview_SetValue then return false end
+    local ok = r.CF_Preview_SetValue(L.preview, key, value)
+    if ok == false then
+        L.preview_refused = L.preview_refused or {}
+        if not L.preview_refused[key] then
+            L.preview_refused[key] = true
+            L.status = "The preview would not take " .. key .. "; that part of the clip is not previewed"
+        end
+    end
+    return ok ~= false
+end
+
+function H.start_preview(slot, lane, edit)
+    H.stop_preview()
+    if not H.preview_ready() or not edit or not edit.path then return end
+    local file = r.PCM_Source_CreateFromFile(edit.path)
+    if not file then return end
+    -- The part that plays, as its own source, so start and length need no
+    -- further arithmetic once it is running.
+    local source = file
+    local section = r.CF_PCM_Source_SetSectionInfo and r.PCM_Source_CreateFromType("SECTION") or nil
+    if section then
+        if pcall(r.CF_PCM_Source_SetSectionInfo, section, file, edit.offset, edit.length,
+                edit.reverse and true or false) then
+            -- The section has what it needs from the file source by now, so the
+            -- file source is handed back straight away. This is the order SWS's
+            -- own preview example uses.
+            pcall(r.PCM_Source_Destroy, file)
+            source = section
+        else
+            pcall(r.PCM_Source_Destroy, section)
+        end
+    end
+    local preview = r.CF_CreatePreview(source)
+    if not preview then
+        pcall(r.PCM_Source_Destroy, source)
+        return
+    end
+    local track = lane and H.target_track(lane) or nil
+    if track and r.CF_Preview_SetOutputTrack then
+        -- Through the lane's own track, so it comes out with the FX chain it
+        -- would have when launched.
+        r.CF_Preview_SetOutputTrack(preview, 0, track)
+    elseif r.CF_Preview_SetValue then
+        r.CF_Preview_SetValue(preview, "I_OUTCHAN", 0)
+    end
+    L.preview = preview
+    H.preview_set("B_PPITCH", 1)
+    H.tune_preview(slot)
+    r.CF_Preview_Play(preview)
+    -- Once more now that it is running. Some of these are only taken up by a
+    -- preview that has started - the pitch shifter is the one that gave this
+    -- away, playing at the default until the slider was nudged - and setting
+    -- them twice costs nothing.
+    H.tune_preview(slot)
+    -- The preview holds what it needs from here on, so the source is handed
+    -- back rather than left to the garbage collector.
+    pcall(r.PCM_Source_Destroy, source)
+end
+
+--------------------------------------------------------------------------------
+-- a knob
+--------------------------------------------------------------------------------
+
+-- ImGui has no knob, so here is one: an invisible button with a dial drawn over
+-- it. A quarter of the circle is left open at the bottom, which is where a knob
+-- reads from - the gap tells you where the bottom of the range is at a glance,
+-- and the pointer says where you are in it.
+--
+-- Dragged up and down rather than round, because chasing a pointer with the
+-- mouse is a fight; every knob in every plugin works this way. Ctrl makes it
+-- fine, and a double click puts it back to where it started life.
+C.knob_from = math.pi * 0.75      -- bottom left, going clockwise
+C.knob_span = math.pi * 1.5
+
+function H.knob(id, label, value, minimum, maximum, format, default, tint)
+    local size = UI.rounded(44)
+    local _, line = r.ImGui_CalcTextSize(UI.ctx, "A")
+    local height = size + line * 2 + UI.scaled(4)
+    local x, y = r.ImGui_GetCursorScreenPos(UI.ctx)
+    r.ImGui_InvisibleButton(UI.ctx, "##knob_" .. id, size, height)
+    local hovered = r.ImGui_IsItemHovered(UI.ctx)
+    local held = r.ImGui_IsItemActive(UI.ctx)
+    local changed = false
+    local range = maximum - minimum
+    if held and r.ImGui_GetMouseDelta then
+        local _, moved = r.ImGui_GetMouseDelta(UI.ctx)
+        if moved and moved ~= 0 then
+            local fine = r.ImGui_GetKeyMods and r.ImGui_Mod_Ctrl
+                and (r.ImGui_GetKeyMods(UI.ctx) & r.ImGui_Mod_Ctrl()) ~= 0
+            -- Two hundred pixels for the whole range, or sixteen hundred with
+            -- ctrl down, which is what a knob wants when the range is decibels.
+            local per_pixel = range / (fine and 1600 or 200)
+            value = math.max(minimum, math.min(maximum, value - moved * per_pixel))
+            changed = true
+        end
+    end
+    if default and hovered and r.ImGui_IsMouseDoubleClicked
+        and r.ImGui_IsMouseDoubleClicked(UI.ctx, 0) then
+        value, changed = default, true
+    end
+
+    local draw_list = r.ImGui_GetWindowDrawList(UI.ctx)
+    local cx = x + size * 0.5
+    local cy = y + line + size * 0.5
+    local radius = size * 0.38
+    local fraction = range > 0 and math.max(0, math.min(1, (value - minimum) / range)) or 0
+    local ink = tint or UI.colors.accent
+    local track = H.mix(UI.colors.child_bg, H.readable_on(UI.colors.child_bg), 0.25)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius + UI.scaled(3),
+        hovered and UI.colors.card_hover or UI.colors.child_bg)
+    -- The empty track, then the part that is filled in.
+    r.ImGui_DrawList_PathClear(draw_list)
+    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius, C.knob_from, C.knob_from + C.knob_span)
+    r.ImGui_DrawList_PathStroke(draw_list, track, 0, UI.scaled(3))
+    if fraction > 0.001 then
+        r.ImGui_DrawList_PathClear(draw_list)
+        r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, radius,
+            C.knob_from, C.knob_from + C.knob_span * fraction)
+        r.ImGui_DrawList_PathStroke(draw_list, ink, 0, UI.scaled(3))
+    end
+    local angle = C.knob_from + C.knob_span * fraction
+    local pointer = radius - UI.scaled(4)
+    r.ImGui_DrawList_AddLine(draw_list, cx + math.cos(angle) * pointer * 0.25,
+        cy + math.sin(angle) * pointer * 0.25,
+        cx + math.cos(angle) * pointer, cy + math.sin(angle) * pointer,
+        (hovered or held) and H.mix(ink, 0xFFFFFFFF, 0.3) or ink, UI.scaled(2))
+    r.ImGui_DrawList_AddCircle(draw_list, cx, cy, radius + UI.scaled(3),
+        (hovered or held) and UI.colors.accent or UI.colors.border, 0, UI.scaled(1))
+    H.text_centered(draw_list, cx, y + line * 0.5, UI.colors.text_dim, label)
+    H.text_centered(draw_list, cx, y + line + size + line * 0.5,
+        (hovered or held) and UI.colors.text or UI.colors.text_dim,
+        string.format(format or "%.2f", value))
+    return changed, value
+end
+
+-- The lane headers' fader, made general: a groove, the part of it that is used,
+-- and a knob on top. Same shapes and the same gestures, so a slider in the clip
+-- editor is recognisably the same control as the one in a lane header - drag to
+-- set, double click to put it back.
+function H.thin_slider(id, value, minimum, maximum, width, format, default)
+    local radius = UI.scaled(5)
+    local bar = UI.scaled(4)
+    local pad = radius + UI.scaled(3)
+    local _, line = r.ImGui_CalcTextSize(UI.ctx, "A")
+    local height = math.max(radius * 2 + UI.scaled(6), line + UI.scaled(6))
+    local x, y = r.ImGui_GetCursorScreenPos(UI.ctx)
+    r.ImGui_InvisibleButton(UI.ctx, "##thin_" .. id, width, height)
+    local hovered = r.ImGui_IsItemHovered(UI.ctx)
+    local held = r.ImGui_IsItemActive(UI.ctx)
+    local middle = y + height * 0.5
+    local left, right = x + pad, x + width - pad
+    local range = maximum - minimum
+    local changed = false
+    if range <= 0 or right <= left then return false, value end
+
+    -- Read before the drag, for the reason the lane fader gives: the second
+    -- press of a double click also reports as an ordinary click.
+    if default and hovered and r.ImGui_IsMouseDoubleClicked
+        and r.ImGui_IsMouseDoubleClicked(UI.ctx, 0) then
+        value, changed = default, true
+    elseif held and r.ImGui_GetMousePos then
+        -- Straight to where the pointer is: this is a position in a file, and
+        -- pointing at it is the gesture, not nudging towards it.
+        local mouse_x = r.ImGui_GetMousePos(UI.ctx)
+        local wanted = minimum + range * math.max(0, math.min(1, (mouse_x - left) / (right - left)))
+        if math.abs(wanted - value) > range * 0.00001 then
+            value, changed = wanted, true
+        end
+    end
+
+    local draw_list = r.ImGui_GetWindowDrawList(UI.ctx)
+    local fraction = math.max(0, math.min(1, (value - minimum) / range))
+    local knob_x = left + (right - left) * fraction
+    local groove = H.mix(UI.colors.child_bg, UI.colors.text, 0.10)
+    r.ImGui_DrawList_AddRectFilled(draw_list, left, middle - bar * 0.5, right, middle + bar * 0.5,
+        groove, bar * 0.5)
+    if knob_x > left then
+        r.ImGui_DrawList_AddRectFilled(draw_list, left, middle - bar * 0.5, knob_x, middle + bar * 0.5,
+            UI.colors.accent, bar * 0.5)
+    end
+    r.ImGui_DrawList_AddCircleFilled(draw_list, knob_x, middle, radius,
+        (hovered or held) and UI.colors.accent or UI.colors.text)
+    r.ImGui_DrawList_AddCircle(draw_list, knob_x, middle, radius, UI.colors.border, 0, UI.scaled(1))
+    if format then
+        local text = string.format(format, value)
+        local text_width = r.ImGui_CalcTextSize(UI.ctx, text)
+        r.ImGui_DrawList_AddText(draw_list, right - text_width, middle - line - UI.scaled(6),
+            (hovered or held) and UI.colors.text or UI.colors.text_dim, text)
+    end
+    return changed, value
+end
+
+-- Asked for from a cell menu, opened out here: a window asked for from inside
+-- the grid's table gets an id the grid cannot match, the same reason the FX and
+-- chrome popups are opened where they are.
+function H.request_clip_editor(lane, row)
+    local slot = H.slot(lane, row)
+    if not slot then return end
+    if not H.clip_editor_ready() then
+        L.status = "This REAPER cannot read peaks from a file"
+        return
+    end
+    local path = H.slot_source_path(slot)
+    if not path then
+        L.status = "That clip has no file behind it to edit"
+        return
+    end
+    local offset, length = H.clip_bounds(slot)
+    L.clip_edit = {
+        guid = slot.guid,
+        path = path,
+        file = H.clip_file_length(path) or (offset + length),
+        offset = offset,
+        length = length,
+        reverse = (slot.edit and slot.edit.reverse) and true or false,
+    }
+    -- The very first time, where the mouse is: that is where a popup would have
+    -- put itself, and it is where you are looking. After that the window keeps
+    -- wherever it was left.
+    if not L.clip_pos_x and r.ImGui_GetMousePos then
+        local mouse_x, mouse_y = r.ImGui_GetMousePos(UI.ctx)
+        if mouse_x then L.clip_pos_x, L.clip_pos_y = mouse_x, mouse_y end
+    end
+    L.clip_edit_open = true
+end
+
+function H.clip_edit_slot()
+    local edit = L.clip_edit
+    if not edit then return nil end
+    local lane, slot = H.find_slot_by_guid(edit.guid)
+    return slot, lane
+end
+
+-- The waveform, its grid, and what the clip takes out of it.
+function H.draw_clip_wave(slot, lane, edit, width, height)
+    local x, y = r.ImGui_GetCursorScreenPos(UI.ctx)
+    r.ImGui_InvisibleButton(UI.ctx, "##clip_wave", width, height)
+    local draw_list = r.ImGui_GetWindowDrawList(UI.ctx)
+    local color = slot.color or (lane and H.lane_color(lane)) or UI.colors.accent
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, x + width, y + height, UI.colors.child_bg, UI.scaled(4))
+    -- What the window looks at: the whole file, or only the part that plays.
+    local view_from, view_to = 0, math.max(0.01, edit.file)
+    if L.clip_zoom then
+        local pad = math.max(0.05, edit.length * 0.08)
+        view_from = math.max(0, edit.offset - pad)
+        view_to = math.min(edit.file, edit.offset + edit.length + pad)
+        if view_to <= view_from then view_to = view_from + 0.05 end
+    end
+    local span = view_to - view_from
+    -- Reverse turns the whole view round, not just the part between the
+    -- markers. Mirroring only the middle looks right until you drag the start:
+    -- the point it mirrors about moves with it, so the waveform slides along
+    -- under the mouse instead of the line travelling over it. Turning the whole
+    -- picture keeps the peaks still, and playback still reads left to right,
+    -- because the end of the clip is now the left hand edge.
+    local function place(seconds)
+        local fraction = (seconds - view_from) / span
+        if edit.reverse then fraction = 1 - fraction end
+        return x + fraction * width
+    end
+    local function seconds_at(px)
+        local fraction = (px - x) / width
+        if edit.reverse then fraction = 1 - fraction end
+        return view_from + fraction * span
+    end
+    -- The grid first, so the waveform sits on top of it.
+    local step = H.clip_snap_seconds(slot)
+    if not step or step <= 0 then
+        local tempo = r.Master_GetTempo and r.Master_GetTempo() or 120
+        step = tempo > 0 and (60 / tempo) or nil
+    end
+    if step and step > 0 and span / step < 400 then
+        local per_bar = math.max(1, math.floor((H.qn_per_bar(H.meter_position()) or 4) + 0.5))
+        local line = math.floor(view_from / step)
+        while line * step <= view_to do
+            local at = place(line * step)
+            local strong = (line % per_bar) == 0
+            r.ImGui_DrawList_AddLine(draw_list, at, y, at, y + height,
+                strong and H.mix(UI.colors.border, UI.colors.text, 0.35) or UI.colors.border,
+                UI.scaled(1))
+            line = line + 1
+        end
+    end
+    local middle = y + height * 0.5
+    r.ImGui_DrawList_AddLine(draw_list, x, middle, x + width, middle, UI.colors.border, UI.scaled(1))
+    local peaks = H.clip_peaks(edit.path, view_from, view_to, math.floor(width / UI.scaled(2)))
+    if peaks and #peaks > 0 then
+        local pitch = width / #peaks
+        local slice = span / #peaks
+        for index = 1, #peaks do
+            local at_time = view_from + (index - 0.5) * slice
+            local at = place(at_time)
+            -- Outside the clip the file is still drawn, only dimmed: seeing what
+            -- you are not using is half of what a trim is for.
+            local inside = at_time >= edit.offset and at_time <= edit.offset + edit.length
+            local reach = peaks[index] * height * 0.44
+            r.ImGui_DrawList_AddLine(draw_list, at, middle - reach, at, middle + reach,
+                inside and color or H.mix(UI.colors.child_bg, color, 0.30),
+                math.max(UI.scaled(1), pitch * 0.8))
+        end
+    else
+        H.text_centered(draw_list, x + width * 0.5, middle, UI.colors.text_dim,
+            peaks and "No peaks for this file" or "Reading peaks...")
+    end
+    -- Start and end, and the fades drawn as the ramps they are.
+    local from_x, to_x = place(edit.offset), place(edit.offset + edit.length)
+    local edge = H.readable_on(UI.colors.child_bg)
+    -- Turned round, the start sits on the right, so the two shaded ends are
+    -- taken from whichever line is nearer each side rather than by name.
+    local shade = (UI.colors.card_bg & 0xFFFFFF00) | 0x99
+    local left_x = math.min(from_x, to_x)
+    local right_x = math.max(from_x, to_x)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y, math.max(x, left_x), y + height, shade)
+    r.ImGui_DrawList_AddRectFilled(draw_list, math.min(x + width, right_x), y, x + width, y + height, shade)
+    -- The two edges are handles: grab either line and drag it. The sliders below
+    -- do the same thing, but a start point is something you place by looking at
+    -- the waveform, not by reading a number off it.
+    local grab = UI.scaled(7)
+    local mouse_x = r.ImGui_GetMousePos and select(1, r.ImGui_GetMousePos(UI.ctx)) or nil
+    local near_start = mouse_x and math.abs(mouse_x - from_x) <= grab
+    local near_end = mouse_x and math.abs(mouse_x - to_x) <= grab
+    if r.ImGui_IsItemActivated and r.ImGui_IsItemActivated(UI.ctx) then
+        -- Whichever edge the press was nearest to, and neither if it was not
+        -- near one: a click in the middle of the waveform should do nothing.
+        if near_start and (not near_end or math.abs(mouse_x - from_x) <= math.abs(mouse_x - to_x)) then
+            L.clip_drag = "start"
+        elseif near_end then
+            L.clip_drag = "end"
+        else
+            L.clip_drag = nil
+        end
+    end
+    local dragging = L.clip_drag and r.ImGui_IsItemActive and r.ImGui_IsItemActive(UI.ctx)
+    if dragging and mouse_x then
+        local seconds = seconds_at(mouse_x)
+        if L.clip_drag == "start" then H.set_clip_start(slot, edit, seconds)
+        else H.set_clip_end(slot, edit, seconds) end
+        from_x, to_x = place(edit.offset), place(edit.offset + edit.length)
+    end
+    if L.clip_drag and r.ImGui_IsItemDeactivated and r.ImGui_IsItemDeactivated(UI.ctx) then
+        L.clip_drag = nil
+        H.commit_clip_edit(slot)
+    end
+    if (near_start or near_end or dragging) and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeEW then
+        r.ImGui_SetMouseCursor(UI.ctx, r.ImGui_MouseCursor_ResizeEW())
+    end
+    local start_ink = (dragging and L.clip_drag == "start") and H.mix(UI.colors.accent, 0xFFFFFFFF, 0.35)
+        or (near_start and H.mix(UI.colors.accent, 0xFFFFFFFF, 0.2) or UI.colors.accent)
+    local end_ink = (dragging and L.clip_drag == "end") and H.mix(UI.colors.accent, 0xFFFFFFFF, 0.35)
+        or (near_end and H.mix(UI.colors.accent, 0xFFFFFFFF, 0.2) or UI.colors.accent)
+    r.ImGui_DrawList_AddLine(draw_list, from_x, y, from_x, y + height, start_ink, UI.scaled(2))
+    r.ImGui_DrawList_AddLine(draw_list, to_x, y, to_x, y + height, end_ink, UI.scaled(2))
+    if edit.reverse then
+        -- Said as well as shown: a flipped waveform is only obvious to someone
+        -- who knows what it looked like before.
+        local mid = (from_x + to_x) * 0.5
+        local top = y + UI.scaled(5)
+        local size = UI.scaled(5)
+        r.ImGui_DrawList_AddTriangleFilled(draw_list, mid + size, top,
+            mid + size, top + size * 2, mid - size, top + size, edge)
+        r.ImGui_DrawList_AddText(draw_list, mid + size + UI.scaled(5), top - UI.scaled(1),
+            edge, "reversed")
+    end
+    -- A tab at the top of each line, so they read as something to take hold of.
+    local tab = UI.scaled(6)
+    local inward = (to_x >= from_x) and 1 or -1
+    r.ImGui_DrawList_AddRectFilled(draw_list, from_x, y, from_x + tab * inward, y + tab, start_ink)
+    r.ImGui_DrawList_AddRectFilled(draw_list, to_x - tab * inward, y, to_x, y + tab, end_ink)
+    local rate = H.clip_rate(slot)
+    local fade_in = (slot.fade_in or 0) * rate
+    local fade_out = (slot.fade_out or 0) * rate
+    -- In playing order: reversed, the fade in is heard at what is the end of
+    -- the clip in the file, and the mirrored view puts that on the left again.
+    local play_start = edit.reverse and (edit.offset + edit.length) or edit.offset
+    local play_end = edit.reverse and edit.offset or (edit.offset + edit.length)
+    local step_in = edit.reverse and -fade_in or fade_in
+    local step_out = edit.reverse and -fade_out or fade_out
+    if fade_in > 0 then
+        r.ImGui_DrawList_AddLine(draw_list, place(play_start), y + height,
+            place(play_start + step_in), y, edge, UI.scaled(1))
+    end
+    if fade_out > 0 then
+        r.ImGui_DrawList_AddLine(draw_list, place(play_end - step_out), y,
+            place(play_end), y + height, edge, UI.scaled(1))
+    end
+    -- Where the preview has got to. What it reports is how long it has been
+    -- playing, not how far into the file it has reached: at twice the speed it
+    -- is halfway through the number when it is at the end of the audio. So the
+    -- rate turns its clock into a place in the file, and the clip's own start
+    -- puts that where it belongs on this axis.
+    local sounding, at = H.preview_playing()
+    if sounding then
+        local into = math.max(0, math.min(edit.length, (at or 0) * H.clip_rate(slot)))
+        local head = place(edit.reverse and (edit.offset + edit.length - into) or (edit.offset + into))
+        r.ImGui_DrawList_AddLine(draw_list, head, y, head, y + height, edge, UI.scaled(1.5))
+    end
+    r.ImGui_DrawList_AddRect(draw_list, x, y, x + width, y + height, UI.colors.border, UI.scaled(4))
+end
+
+function H.close_clip_editor()
+    H.stop_preview()
+    L.clip_edit_open = false
+    L.clip_edit = nil
+    L.clip_drag = nil
+    -- Written once, on the way out, rather than on every frame the window is
+    -- dragged: an ext state write per frame is a file write per frame.
+    if L.clip_pos_x and L.clip_pos_y then
+        r.SetExtState(C.ext_section, "clip_pos", string.format("%d %d",
+            math.floor(L.clip_pos_x), math.floor(L.clip_pos_y)), true)
+    end
+end
+
+-- A window of its own rather than a popup. A popup is placed wherever the mouse
+-- happens to be each time it opens, and a click anywhere else closes it - so it
+-- jumped across the screen every time you touched REAPER. This one stays where
+-- it is put, can be dragged by its background, and comes back in the same place
+-- next time, this session or the next.
+function H.draw_clip_editor()
+    if not L.clip_edit_open then return end
+    local slot, lane = H.clip_edit_slot()
+    local edit = L.clip_edit
+    if not slot or not edit or slot.missing then
+        H.close_clip_editor()
+        return
+    end
+    if L.clip_pos_x and L.clip_pos_y and r.ImGui_SetNextWindowPos then
+        r.ImGui_SetNextWindowPos(UI.ctx, L.clip_pos_x, L.clip_pos_y, r.ImGui_Cond_Appearing())
+    end
+    -- No size is asked for: the window is set to hug its contents, and the
+    -- widest of those is the waveform. That is what makes the frame the width
+    -- of the picture rather than of whatever text happens to be longest.
+    local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoScrollbar()
+        | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoSavedSettings()
+    local visible = r.ImGui_Begin(UI.ctx, "Edit clip##launch_clip_edit", nil, flags)
+    if not visible then return end
+    local shut = r.ImGui_IsWindowFocused(UI.ctx)
+        and r.ImGui_IsKeyPressed(UI.ctx, r.ImGui_Key_Escape())
+    r.ImGui_TextColored(UI.ctx, UI.colors.accent, "Edit clip")
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, H.truncate(slot.name or "Clip", UI.rounded(420)))
+    r.ImGui_SameLine(UI.ctx)
+    r.ImGui_SetCursorPosX(UI.ctx, r.ImGui_GetWindowWidth(UI.ctx) - UI.rounded(30))
+    r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.danger)
+    r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_ButtonHovered(), H.mix(UI.colors.danger, 0xFFFFFFFF, 0.18))
+    r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_ButtonActive(), H.mix(UI.colors.danger, 0x000000FF, 0.18))
+    r.ImGui_PushStyleVar(UI.ctx, r.ImGui_StyleVar_FrameRounding(), UI.rounded(9))
+    if r.ImGui_Button(UI.ctx, "##close_clip_edit", UI.rounded(18), UI.rounded(18)) then shut = true end
+    r.ImGui_PopStyleVar(UI.ctx)
+    r.ImGui_PopStyleColor(UI.ctx, 3)
+    r.ImGui_Separator(UI.ctx)
+
+    -- The waveform sets the width of the window: everything under it is laid
+    -- out inside that, and with the window set to hug its contents the two end
+    -- up the same. Nothing below may be wider, or it would push the frame out
+    -- past the picture.
+    local canvas = UI.rounded(660)
+    H.draw_clip_wave(slot, lane, edit, canvas, UI.rounded(150))
+
+    -- Snap and what the window is looking at, on one line above the sliders.
+    local snap_label = "Beats"
+    for _, option in ipairs(C.clip_snaps) do
+        if option.key == (L.clip_snap or "beat") then snap_label = option.label end
+    end
+    -- Two buttons rather than one that changes its word: a transport reads as a
+    -- transport, and a stop you have to notice is a stop you cannot find.
+    local playing = H.preview_playing()
+    if playing then
+        r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.accent_soft)
+        r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Border(), UI.colors.accent)
+    end
+    if r.ImGui_Button(UI.ctx, playing and "Playing" or "Play", UI.rounded(74), UI.rounded(22)) then
+        H.start_preview(slot, lane, edit)
+    end
+    if playing then r.ImGui_PopStyleColor(UI.ctx, 2) end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        local says = "Plays the part between the markers, with this clip's speed, level and\nfades, through its own track. It does not touch the transport, the edit\ncursor or anything that is muted."
+        if slot.loop and slot.fade_each then
+            says = says .. "\n\nFade every pass is on, so this plays one pass: the preview lays its fades\nat the start and the end of playing rather than on every round, and one\npass is what every round of this clip will sound like."
+        end
+        r.ImGui_SetTooltip(UI.ctx, H.preview_ready() and says
+            or "This REAPER has no preview engine; SWS provides it.")
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(6))
+    if not playing then
+        r.ImGui_BeginDisabled(UI.ctx)
+    end
+    if r.ImGui_Button(UI.ctx, "Stop", UI.rounded(60), UI.rounded(22)) then H.stop_preview() end
+    if not playing then
+        r.ImGui_EndDisabled(UI.ctx)
+    end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Stops the preview. Closing the window stops it too, and so does\nlaunching anything - the preview never outlives what you are doing.")
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(10))
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(120))
+    if r.ImGui_BeginCombo(UI.ctx, "##clip_snap", snap_label) then
+        for _, option in ipairs(C.clip_snaps) do
+            local selected = option.key == (L.clip_snap or "beat")
+            if r.ImGui_Selectable(UI.ctx, option.label, selected) then
+                L.clip_snap = option.key
+                r.SetExtState(C.ext_section, "clip_snap", option.key, true)
+            end
+            if selected then r.ImGui_SetItemDefaultFocus(UI.ctx) end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(10))
+    local zoom_changed, zoom = r.ImGui_Checkbox(UI.ctx, "Only the part that plays", L.clip_zoom or false)
+    if zoom_changed then
+        L.clip_zoom = zoom
+        r.SetExtState(C.ext_section, "clip_zoom", zoom and "1" or "0", true)
+    end
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, string.format(
+        "%.3f s to %.3f s of %.3f s  |  %.3f s long, %.3f s as it plays",
+        edit.offset, edit.offset + edit.length, edit.file,
+        edit.length, edit.length / H.clip_rate(slot)))
+
+    -- Start and length. The section is rebuilt when the slider is let go, not
+    -- while it is being dragged: every change of it builds a source.
+    -- Two points, not a point and a distance: moving the end of a clip is a
+    -- thing you do by ear, and having to work out the length first is a sum
+    -- nobody asked for. Side by side, and in the shape of the fader in a lane
+    -- header, because they are the same gesture.
+    local halfway = math.floor((canvas - UI.rounded(12)) * 0.5)
+    r.ImGui_Text(UI.ctx, "Start")
+    r.ImGui_SameLine(UI.ctx, halfway + UI.rounded(12))
+    r.ImGui_Text(UI.ctx, "End")
+    local start_changed, start_at = H.thin_slider("clip_start", edit.offset,
+        0, math.max(0.001, edit.file - 0.02), halfway, "%.3f s", 0)
+    if start_changed then H.set_clip_start(slot, edit, start_at) end
+    if r.ImGui_IsItemDeactivated and r.ImGui_IsItemDeactivated(UI.ctx) then H.commit_clip_edit(slot) end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(12))
+    local end_changed, end_at = H.thin_slider("clip_end", edit.offset + edit.length,
+        0.02, edit.file, halfway, "%.3f s", edit.file)
+    if end_changed then H.set_clip_end(slot, edit, end_at) end
+    if r.ImGui_IsItemDeactivated and r.ImGui_IsItemDeactivated(UI.ctx) then H.commit_clip_edit(slot) end
+
+    -- Fades and level land straight on the library item; they cost nothing.
+    -- A fade can take at most half the clip, measured in what you hear rather
+    -- than in the file, which is what these knobs are in.
+    local half = math.max(0.01, (edit.length / H.clip_rate(slot)) * 0.5)
+    local in_changed, fade_in = H.knob("fade_in", "Fade in", (slot.fade_in or 0) * 1000,
+        0, half * 1000, "%.0f ms", 0)
+    if in_changed then H.set_clip_fade(slot, fade_in / 1000, nil) end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(12))
+    local out_changed, fade_out = H.knob("fade_out", "Fade out", (slot.fade_out or 0) * 1000,
+        0, half * 1000, "%.0f ms", 0)
+    if out_changed then H.set_clip_fade(slot, nil, fade_out / 1000) end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(12))
+    local db = 20 * math.log(math.max(0.0001, slot.gain or 1), 10)
+    local gain_changed, gain = H.knob("gain", "Gain", db, -24, 12, "%.1f dB", 0)
+    if gain_changed then
+        slot.gain = (math.abs(gain) < 0.05) and nil or 10 ^ (gain / 20)
+        H.tune_preview(slot)
+        H.save()
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(12))
+    local pitch_changed, pitch = H.knob("pitch", "Pitch", H.clip_pitch(slot), -24, 24, "%.2f st", 0)
+    if pitch_changed then H.set_clip_pitch(slot, pitch) end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Semitones up or down without changing the speed. Drag up and down,\nctrl for fine, double click to put it back to nothing.")
+    end
+    -- The switches stand beside the knobs rather than under them: four dials in
+    -- a row is a face, and a face wants its labels next to it, not below.
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(18))
+    r.ImGui_BeginGroup(UI.ctx)
+    local speed = H.slot_speed(slot)
+    r.ImGui_SetNextItemWidth(UI.ctx, UI.rounded(120))
+    if r.ImGui_BeginCombo(UI.ctx, "Speed", string.format("%gx", speed)) then
+        for _, value in ipairs(C.speeds) do
+            if r.ImGui_Selectable(UI.ctx, string.format("%gx", value), math.abs(value - speed) < 0.0005) then
+                H.set_slot_speed(lane, slot.row, value)
+                -- Straight into the preview as well, so what you are hearing
+                -- changes with it rather than at the next press of Play.
+                H.tune_preview(slot)
+            end
+        end
+        r.ImGui_EndCombo(UI.ctx)
+    end
+    local reverse_changed, reverse = r.ImGui_Checkbox(UI.ctx, "Reverse", edit.reverse or false)
+    if reverse_changed then
+        edit.reverse = reverse
+        H.commit_clip_edit(slot)
+        if H.preview_playing() then H.start_preview(slot, lane, edit) end
+    end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Plays the part between the markers backwards. Between the markers the\nwaveform is drawn in the order it plays, so the shape flips with it.")
+    end
+    local each_changed, each = r.ImGui_Checkbox(UI.ctx, "Fade every pass", slot.fade_each or false)
+    if each_changed then
+        slot.fade_each = each or nil
+        H.save()
+    end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Off, a loop fades in once at the start and out at the end, the way one\nlooping item does in the arrange. On, every round through the loop gets\nboth - which means the loop is laid down a pass at a time.")
+    end
+    if slot.loop and slot.fade_each then
+        r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Play gives you one pass")
+    end
+    r.ImGui_EndGroup(UI.ctx)
+
+    r.ImGui_Separator(UI.ctx)
+    if r.ImGui_Button(UI.ctx, "Whole file", UI.rounded(100), UI.rounded(22)) then
+        edit.offset, edit.length = 0, edit.file
+        H.commit_clip_edit(slot)
+    end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Give the clip the file back, start to end")
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    if r.ImGui_Button(UI.ctx, "No fades", UI.rounded(90), UI.rounded(22)) then
+        H.set_clip_fade(slot, 0, 0)
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    if r.ImGui_Button(UI.ctx, "Normalise", UI.rounded(96), UI.rounded(22)) then
+        H.normalise_clip(slot, edit)
+    end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Sets the gain so the loudest point between the markers reaches 0 dB.\nThe audio is left alone; this is the gain slider being set for you.")
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
+    if r.ImGui_Button(UI.ctx, "Open in REAPER", UI.rounded(130), UI.rounded(22)) then
+        local item = H.item_from_guid(slot.guid)
+        if item then
+            H.set_lanes_visible(true)
+            r.SelectAllMediaItems(0, false)
+            r.SetMediaItemSelected(item, true)
+            r.UpdateArrange()
+            L.status = "The clip is selected on its lane track"
+        end
+    end
+    if r.ImGui_IsItemHovered(UI.ctx) then
+        r.ImGui_SetTooltip(UI.ctx, "Show the lane tracks and select this clip there, for the things\nREAPER's own editing does better than a window this size.")
+    end
+    -- Where it ended up this frame, kept so that closing and opening it again
+    -- puts it back rather than wherever the mouse was at the time.
+    if r.ImGui_GetWindowPos then
+        L.clip_pos_x, L.clip_pos_y = r.ImGui_GetWindowPos(UI.ctx)
+    end
+    r.ImGui_End(UI.ctx)
+    if shut then H.close_clip_editor() end
+end
+
+-- Either edge, wherever it was asked for from: a slider, or a handle dragged
+-- across the waveform. Snapped, kept inside the file, and never allowed past
+-- the other edge.
+function H.set_clip_start(slot, edit, seconds)
+    local limit = edit.offset + edit.length - 0.02
+    local wanted = H.clip_snapped(slot, math.max(0, math.min(limit, seconds)))
+    wanted = math.max(0, math.min(limit, wanted))
+    edit.length = edit.length + (edit.offset - wanted)
+    edit.offset = wanted
+end
+
+function H.set_clip_end(slot, edit, seconds)
+    local floor = edit.offset + 0.02
+    local wanted = H.clip_snapped(slot, math.max(floor, math.min(edit.file, seconds)))
+    wanted = math.max(floor, math.min(edit.file, wanted))
+    edit.length = wanted - edit.offset
+end
+
+function H.commit_clip_edit(slot)
+    local edit = L.clip_edit
+    if not edit or not slot then return end
+    r.Undo_BeginBlock()
+    local ok = H.set_clip_section(slot, edit.offset, edit.length, edit.reverse)
+    r.Undo_EndBlock("Edit launcher clip", -1)
+    if ok then
+        -- Trimming while it plays: the preview picks up the new bounds rather
+        -- than carrying on with the ones it started from.
+        if H.preview_playing() then
+            local _, lane = H.clip_edit_slot()
+            H.start_preview(slot, lane, edit)
+        end
+        H.save()
+        r.UpdateArrange()
+        L.status = string.format("%s: %.3f s from %.3f s", slot.name or "Clip", edit.length, edit.offset)
+    end
+end
+
+-- Fades belong to the library item, and the engine reads them from the slot, so
+-- both are written here and stay in step.
+-- Semitones on the take, with the rate left alone: this is the shift a sampler
+-- gives you, not a speed change. It rides in the item's chunk like the section
+-- does, so voices and anything written to the arrangement carry it too.
+function H.set_clip_pitch(slot, semitones)
+    local item = H.item_from_guid(slot.guid)
+    local take = item and r.GetActiveTake(item) or nil
+    if not take then return end
+    local wanted = math.max(-24, math.min(24, semitones or 0))
+    if math.abs(wanted) < 0.005 then wanted = 0 end
+    r.SetMediaItemTakeInfo_Value(take, "D_PITCH", wanted)
+    r.SetMediaItemTakeInfo_Value(take, "B_PPITCH", 1)
+    slot.pitch = wanted ~= 0 and wanted or nil
+    if r.UpdateItemInProject then r.UpdateItemInProject(item) end
+    H.tune_preview(slot)
+    H.save()
+end
+
+function H.clip_pitch(slot)
+    local item = H.item_from_guid(slot.guid)
+    local take = item and r.GetActiveTake(item) or nil
+    local pitch = take and r.GetMediaItemTakeInfo_Value(take, "D_PITCH") or slot.pitch or 0
+    return pitch or 0
+end
+
+-- Loud enough without touching a sample: the peaks of the part that plays are
+-- already read for the picture, so the loudest of them says how much room is
+-- left, and that becomes the clip's gain. Nothing is written into the audio,
+-- and turning it back is the gain slider.
+function H.normalise_clip(slot, edit)
+    local peaks = H.clip_peaks(edit.path, edit.offset, edit.offset + edit.length, 800)
+    if not peaks or #peaks == 0 then
+        L.status = "No peaks to measure yet; try again in a moment"
+        return
+    end
+    local loudest = 0
+    for _, peak in ipairs(peaks) do
+        if peak > loudest then loudest = peak end
+    end
+    if loudest <= 0.0001 then
+        L.status = "That part of the clip is silent"
+        return
+    end
+    -- The same range the gain slider has, so what it sets can be seen there.
+    local gain = math.max(10 ^ (-24 / 20), math.min(10 ^ (12 / 20), 1 / loudest))
+    slot.gain = math.abs(gain - 1) > 0.0005 and gain or nil
+    H.tune_preview(slot)
+    H.save()
+    L.status = string.format("%s: peak was %.1f dB, gain set to %+.1f dB", slot.name or "Clip",
+        20 * math.log(loudest, 10), 20 * math.log(gain, 10))
+end
+
+function H.set_clip_fade(slot, fade_in, fade_out)
+    if fade_in then slot.fade_in = fade_in > 0.0005 and fade_in or nil end
+    if fade_out then slot.fade_out = fade_out > 0.0005 and fade_out or nil end
+    local item = H.item_from_guid(slot.guid)
+    if item then
+        r.SetMediaItemInfo_Value(item, "D_FADEINLEN", slot.fade_in or 0)
+        r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN", slot.fade_out or 0)
+        r.SetMediaItemInfo_Value(item, "D_FADEINLEN_AUTO", -1)
+        r.SetMediaItemInfo_Value(item, "D_FADEOUTLEN_AUTO", -1)
+        if r.UpdateItemInProject then r.UpdateItemInProject(item) end
+    end
+    H.tune_preview(slot)
+    H.save()
 end
 
 -- Swatches for speed, a full picker for everything else. ColorEdit4 is given
@@ -9934,6 +11057,12 @@ function Launcher.init(context)
     L.midi_orientation = midi_orientation == "scenes" and "scenes" or "lanes"
     L.midi_lane_bank = math.max(0, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_lane_bank")) or 0))
     L.midi_scene_bank = math.max(0, math.floor(tonumber(r.GetExtState(C.ext_section, "midi_scene_bank")) or 0))
+    local clip_snap = r.GetExtState(C.ext_section, "clip_snap")
+    L.clip_snap = ({ off = true, bar = true, beat = true, half = true, quarter = true })[clip_snap]
+        and clip_snap or "beat"
+    L.clip_zoom = r.GetExtState(C.ext_section, "clip_zoom") == "1"
+    local clip_x, clip_y = (r.GetExtState(C.ext_section, "clip_pos") or ""):match("^(-?%d+) (-?%d+)$")
+    L.clip_pos_x, L.clip_pos_y = tonumber(clip_x), tonumber(clip_y)
     L.midi_out_name = r.GetExtState(C.ext_section, "midi_out_name") or ""
     L.midi_feedback = r.GetExtState(C.ext_section, "midi_feedback") == "1"
     local lp_family = r.GetExtState(C.ext_section, "midi_lp_family")
@@ -12752,6 +13881,7 @@ function Launcher.draw()
     end
     H.draw_chrome_popup()
     H.draw_fx_popup()
+    H.draw_clip_editor()
     if padded then r.ImGui_PopStyleVar(UI.ctx) end
     if hidden and r.ImGui_StyleVar_ScrollbarSize then r.ImGui_PopStyleVar(UI.ctx) end
     -- Cleared after every cell has had its chance to see the release.
@@ -12861,6 +13991,7 @@ function Launcher.shutdown()
     -- sweep on the next load would remove them without a word. Better to drop
     -- them here, where the button that could have saved them was in plain sight.
     H.discard_take()
+    H.close_clip_editor()
     L.recording = false
     L.record_stop_at = nil
     -- The pads keep whatever they were last told, so they are cleared and the

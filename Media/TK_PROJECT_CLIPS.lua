@@ -1,7 +1,18 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.6.1
+-- @version 0.6.2
 -- @changelog:
+--   + Launcher: Edit clip - a window on the file behind an audio clip, with its waveform, a grid over it and the part that plays marked out
+--   + Launcher: Start and end are set by dragging the lines in the waveform or the faders under it, snapped to bars, beats, half or quarter beats
+--   + Launcher: Fade in and fade out per clip, honoured by the voices as well, with the launcher's own short guard against clicks kept underneath
+--   + Launcher: Stopping a lane now fades into the bar line it stops on rather than losing the clip's own fade, and never takes any longer for it
+--   + Launcher: Fade every pass lays a loop down one pass at a time so every round fades, instead of once at each end
+--   + Launcher: Reverse, pitch in semitones and normalise, none of which write a thing into the audio
+--   + Launcher: Play and stop in the editor use the preview engine, through the lane's own track, without touching the transport or the edit cursor
+--   + Launcher: Fades, level, speed and pitch reach a running preview as you change them
+--   + Launcher: Fade in, fade out, gain and pitch are knobs - drag up and down, ctrl for fine, double click to clear
+--   + Launcher: The editor is a window of its own rather than a popup, so it stays where you put it and comes back there
+--   + Launcher: A clip's picture in the grid is redrawn when it is trimmed, sped up or reversed, instead of at the next restart
 --   + Launcher: A Launchpad is taken over in DAW mode now, the way Ableton and PlayTime do it: the board keeps its own Session and Custom buttons and its second port stays free for playing. Reported by AndreiMir
 --   + Launcher: Programmer mode is still on offer for a board that will not talk in DAW mode
 --   + Launcher: In DAW mode the scene strip on the right works as control changes, lit and read

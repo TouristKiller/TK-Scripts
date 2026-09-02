@@ -1,6 +1,6 @@
 # TK Project Clips - Clip Launcher
 
-A session view for REAPER. Version 0.6.0 - requires SWS, js_ReaScriptAPI and ReaImGui.
+A session view for REAPER. Version 0.6.2 - requires SWS, js_ReaScriptAPI and ReaImGui.
 
 ## What it is
 
@@ -128,10 +128,34 @@ Right-click any clip. The menu is grouped: what to do with it now, when it plays
 | Tempo | Stretched to the project, or played at its own recorded speed. |
 | Key | For MIDI clips: what key the Launcher thinks it is in, and what to do about it. See Session key. |
 | Rename / Colour | A name and colour of your own. The cell, its waveform and its play marker follow the colour; without one the clip uses the track colour. |
+| Edit clip... | For audio clips: the wave editor below. |
 | Edit in MIDI editor | Opens a MIDI clip in REAPER's editor. Its lane is shown for as long as the editor is open, because an action will not touch an item on a track it cannot see. The cell picture follows the notes as you change them. |
 | Replace with selected item / with file... | Swap the clip without clearing the slot first. |
 | Write clip to arrangement at cursor | See Getting clips into the arrangement. |
 | Clear slot | Empties it. If that was the lane's last clip, its hidden track goes too. |
+
+## Editing a clip
+
+**Edit clip...** in an audio clip's menu opens a window on the file behind it: its waveform with a grid over it, the part that plays marked out, and the fades drawn as the ramps they are. It closes with the red button or Escape. It is a window of its own rather than a popup, so clicking elsewhere in REAPER leaves it alone: drag it by its background to place it, and it comes back where you left it, this session and the next.
+
+| Control | What it does |
+| --- | --- |
+| Start / End | Which part of the file the clip is, as two points, side by side under the waveform. Drag the lines in the waveform to move them, or these sliders - the same thin groove and knob as the fader in a lane header, so drag sets and a double click puts it back to the end of the file it belongs to. Both snap the same way. The distance between them is the loop length, so a two bar loop is two bars because you put the points there. |
+| Fade in / Fade out | Up to half the clip each. A clip with no fade of its own still gets the few milliseconds the launcher puts on every voice to cover a cut mid waveform. Stopping a lane fades into the bar line it stops on, so the fade is heard without the stop arriving any later. |
+| Fade every pass | A loop is one item with the source going round inside it, so its fades are heard on the way in and on the way out of the whole thing - the same as one looping item in the arrange. Switch this on and every round gets both, by laying the loop down a pass at a time. Only offered once a fade is set. With it on, **Play** gives you a single pass rather than a rolling loop: the preview engine lays its fades at the start and the end of playing rather than on every round, and one pass is exactly what every round of the clip will sound like. |
+| Gain | The same level as in the clip menu, with the waveform beside it. |
+| Speed | The same 0.25x to 2x, pitch preserved. |
+| Pitch | Up or down in semitones without changing the speed, which is the shift a sampler gives you. It sits on the clip's take, so voices and anything written to the arrangement carry it. |
+| Reverse | Plays the part between the markers backwards. It is the same section on the source, only turned round, so nothing is written into the audio. The whole picture turns with it: the file is drawn right to left, which keeps the peaks still while you drag the markers over them, and playback still reads left to right because the end of the clip is now the left hand edge. A small arrow says **reversed** in case the shape alone is not obvious. |
+| Play / Stop | Hears the part between the markers, at the clip's speed, level, pitch and fades, through the lane's own track so the FX chain is on it. It uses SWS's preview engine, so it touches neither the transport, nor the edit cursor, nor anything that is muted - and a line runs across the waveform to show where it is. Trim while it plays and it picks up the new bounds; speed, level, pitch and fades reach the running preview as you change them. |
+| Snap | Bars, beats, half or quarter beats, or off. The grid is the project's own, stretched by the rate the clip plays at, so a bar line in the window is a bar line when it sounds. |
+| Only the part that plays | Switches the view between the whole file and the clip with a little air around it. |
+
+Fade in, fade out, gain and pitch are knobs: drag up and down, hold ctrl for fine, and double-click one to put it back to nothing. Nothing is written into the audio. Start and length become a section on the source, the way a clip trimmed in the arrange already arrives, and the fades and the level belong to the clip itself. That matters for where it ends up: every voice and every write to the arrangement copies that same clip, so what you set here is what plays **and** what lands in the arrange when you drag it out or write a scene.
+
+A clip that is playing at that moment keeps what it had - it is already on the timeline. The next launch has the edit.
+
+**Normalise** sets the gain so the loudest point between the markers reaches 0 dB - it measures the peaks that are already read for the picture and moves the gain slider, so the audio is untouched and the way back is that same slider. **Whole file** gives the clip the file back, **No fades** clears both, and **Open in REAPER** shows the lane tracks with this clip selected, for the editing a window this size should not try to do.
 
 ## Recording into a slot
 
