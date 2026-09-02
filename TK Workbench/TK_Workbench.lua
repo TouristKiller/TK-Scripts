@@ -1,7 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.9.4
+-- @version 0.9.5
 -- @changelog:
+-- v0.9.5
+--   + Media Browser: files can now be rated from one to five stars in list and tile view, with persistent ratings, a right-click rating menu and a minimum-rating filter
+--   + Media Browser: files can be sorted by name, rating or media type in ascending or descending order
 -- v0.9.4
 --   + Media Browser: tempo-synced previews and inserted media can now play at half speed (/2), normal speed (1x) or double speed (2x)
 --   + Track Tags: tag filters now preserve each track's existing TCP and MCP visibility independently, so filtering no longer reveals tracks that were already hidden in either view

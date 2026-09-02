@@ -9,11 +9,12 @@ local M = {
   id = "media_browser",
   title = "Media Browser",
   icon = "MED",
-  version = "0.1.6"
+  version = "0.1.7"
 }
 
 local resource_path = r.GetResourcePath()
 local locations_path = resource_path .. "/Scripts/TK_media_browser_locations.txt"
+local ratings_path = resource_path .. "/Scripts/TK_media_browser_ratings.txt"
 local cache_dir = resource_path .. "/Scripts/TK_Workbench_media_cache"
 local peak_debug_path = resource_path .. "/Scripts/TK_Workbench_media_peak_debug.txt"
 local ART_CACHE_MAX = 120
@@ -37,6 +38,9 @@ local defaults = {
   folder_browse = false,
   compact_list = false,
   tile_size = 0,
+  minimum_rating = 0,
+  sort_mode = "name",
+  sort_descending = false,
   auto_selected_category = "All",
   show_audio = true,
   show_midi = true,
@@ -109,6 +113,7 @@ local state = {
   filtered_file_count = 0,
   visible_file_count = 0,
   last_filter_key = nil,
+  ratings = {},
   metadata_cache = {},
   category_cache = {},
   category_counts = {},
@@ -223,6 +228,9 @@ function ensure_settings(app)
   settings.compact_list = settings.compact_list == true
   settings.tile_size = math.max(0, math.min(320, math.floor(tonumber(settings.tile_size) or 0)))
   if settings.tile_size > 0 and settings.tile_size < 64 then settings.tile_size = 64 end
+  settings.minimum_rating = math.max(0, math.min(5, math.floor(tonumber(settings.minimum_rating) or 0)))
+  if settings.sort_mode ~= "rating" and settings.sort_mode ~= "type" then settings.sort_mode = "name" end
+  settings.sort_descending = settings.sort_descending == true
   settings.folder_double_click_open = settings.folder_double_click_open == true
   settings.auto_selected_category = tostring(settings.auto_selected_category or defaults.auto_selected_category)
   if changed and app.save_settings then app.save_settings() end
@@ -365,6 +373,22 @@ function compact_tags(file)
   add(meta.sample_rate)
   add(meta.channels)
   return table.concat(parts, " - ")
+end
+
+function rating_text(rating, show_empty)
+  rating = math.max(0, math.min(5, math.floor(tonumber(rating) or 0)))
+  if rating == 0 and not show_empty then return "" end
+  return string.rep("★", rating) .. string.rep("☆", 5 - rating)
+end
+
+function draw_rating_menu(ctx, file)
+  local current = file_rating(file.path)
+  if not r.ImGui_BeginMenu(ctx, "Rating") then return end
+  for rating = 5, 1, -1 do
+    if r.ImGui_MenuItem(ctx, rating_text(rating, true), nil, current == rating) then set_file_rating(file.path, rating) end
+  end
+  if r.ImGui_MenuItem(ctx, "No rating", nil, current == 0) then set_file_rating(file.path, 0) end
+  r.ImGui_EndMenu(ctx)
 end
 
 -- Images follow what the Project Browser settled on after it hit the same two
@@ -923,6 +947,48 @@ function cache_unescape(value)
   return tostring(value or ""):gsub("%%09", "\t"):gsub("%%0D", "\r"):gsub("%%0A", "\n"):gsub("%%25", "%%")
 end
 
+function rating_key(path)
+  return normalize_path(path):lower()
+end
+
+function file_rating(path)
+  return state.ratings[rating_key(path)] or 0
+end
+
+function load_ratings()
+  state.ratings = {}
+  local file = io.open(ratings_path, "r")
+  if not file then return end
+  for line in file:lines() do
+    local rating, path = line:match("^(%d)\t(.*)$")
+    rating = tonumber(rating)
+    path = cache_unescape(path)
+    if rating and rating >= 1 and rating <= 5 and path ~= "" then state.ratings[rating_key(path)] = rating end
+  end
+  file:close()
+end
+
+function save_ratings()
+  local temp_path = ratings_path .. ".tmp"
+  local file = io.open(temp_path, "w")
+  if not file then return false end
+  local paths = {}
+  for path in pairs(state.ratings) do paths[#paths + 1] = path end
+  table.sort(paths)
+  for _, path in ipairs(paths) do file:write(tostring(state.ratings[path]), "\t", cache_escape(path), "\n") end
+  file:close()
+  os.remove(ratings_path)
+  return os.rename(temp_path, ratings_path) == true
+end
+
+function set_file_rating(path, rating)
+  local key = rating_key(path)
+  rating = math.max(0, math.min(5, math.floor(tonumber(rating) or 0)))
+  if rating == 0 then state.ratings[key] = nil else state.ratings[key] = rating end
+  state.last_filter_key = nil
+  return save_ratings()
+end
+
 function split_cache_line(line)
   line = tostring(line or "")
   local parts = {}
@@ -1262,7 +1328,24 @@ function add_folder_entry(folders, seen, path, count)
   folder.file_count = folder.file_count + (count or 1)
 end
 
-function build_folder_filter(files)
+function sort_media_files(files, settings)
+  local mode = settings.sort_mode or "name"
+  local descending = settings.sort_descending == true
+  table.sort(files, function(left, right)
+    local left_name = Text.lower(tostring(left.name or ""))
+    local right_name = Text.lower(tostring(right.name or ""))
+    local left_value = mode == "rating" and file_rating(left.path) or (mode == "type" and tostring(left.kind or "") or left_name)
+    local right_value = mode == "rating" and file_rating(right.path) or (mode == "type" and tostring(right.kind or "") or right_name)
+    if left_value ~= right_value then
+      if descending then return left_value > right_value end
+      return left_value < right_value
+    end
+    if left_name ~= right_name then return left_name < right_name end
+    return rating_key(left.path) < rating_key(right.path)
+  end)
+end
+
+function build_folder_filter(files, settings)
   local current = tostring(state.folder_path or "")
   local folders = {}
   local folder_seen = {}
@@ -1287,7 +1370,7 @@ function build_folder_filter(files)
     end
   end
   table.sort(folders, function(left, right) return left.name:lower() < right.name:lower() end)
-  table.sort(visible_files, function(left, right) return left.name:lower() < right.name:lower() end)
+  sort_media_files(visible_files, settings)
   local result = {}
   if current ~= "" then result[#result + 1] = { kind = "folder_up", path = folder_parent(current), name = "..", file_count = 0 } end
   for _, folder in ipairs(folders) do result[#result + 1] = folder end
@@ -1297,7 +1380,7 @@ function build_folder_filter(files)
 end
 
 function filter_key(settings)
-  return table.concat({ settings.search_term or "", tostring(settings.show_audio), tostring(settings.show_midi), tostring(settings.show_video), tostring(settings.show_image), tostring(settings.location_view_mode), tostring(settings.folder_browse), tostring(state.folder_path or ""), tostring(settings.auto_selected_category), tostring(#state.files), state.category_counts_key or "" }, "|")
+  return table.concat({ settings.search_term or "", tostring(settings.show_audio), tostring(settings.show_midi), tostring(settings.show_video), tostring(settings.show_image), tostring(settings.location_view_mode), tostring(settings.folder_browse), tostring(state.folder_path or ""), tostring(settings.auto_selected_category), tostring(settings.minimum_rating), tostring(settings.sort_mode), tostring(settings.sort_descending), tostring(#state.files), state.category_counts_key or "" }, "|")
 end
 
 function refresh_filter(settings)
@@ -1317,6 +1400,7 @@ function refresh_filter(settings)
     if include and settings.location_view_mode == "auto" and settings.auto_selected_category ~= "All" then
       include = category_for_file(file) == settings.auto_selected_category
     end
+    if include and file_rating(file.path) < settings.minimum_rating then include = false end
     -- Both sides through Text.lower, or a Cyrillic filename still only matches
     -- when the capitals are typed exactly as they appear.
     if include and term ~= "" and not (Text.lower(file.name):find(term, 1, true) or Text.lower(file.path):find(term, 1, true)) then include = false end
@@ -1324,8 +1408,9 @@ function refresh_filter(settings)
   end
   state.filtered_file_count = #result
   if folder_browse_active(settings) and term == "" then
-    state.filtered = build_folder_filter(result)
+    state.filtered = build_folder_filter(result, settings)
   else
+    sort_media_files(result, settings)
     state.filtered = result
     state.visible_file_count = #result
   end
@@ -4536,6 +4621,20 @@ function draw_media_settings_popup(app, settings)
   r.ImGui_Text(ctx, "Display")
   c, v = r.ImGui_Checkbox(ctx, "Compact list view", settings.compact_list == true)
   if c then settings.compact_list = v; changed = true end
+  local sort_labels = { name = "Name", rating = "Rating", type = "Type" }
+  r.ImGui_SetNextItemWidth(ctx, UIScale.round(120))
+  if r.ImGui_BeginCombo(ctx, "Sort", sort_labels[settings.sort_mode] or "Name") then
+    for _, mode in ipairs({ "name", "rating", "type" }) do
+      if r.ImGui_Selectable(ctx, sort_labels[mode], settings.sort_mode == mode) then
+        settings.sort_mode = mode
+        state.last_filter_key = nil
+        changed = true
+      end
+    end
+    r.ImGui_EndCombo(ctx)
+  end
+  c, v = r.ImGui_Checkbox(ctx, "Descending", settings.sort_descending == true)
+  if c then settings.sort_descending = v; state.last_filter_key = nil; changed = true end
   if r.ImGui_SliderInt then
     -- One slider rather than a list/grid switch, the same as the Project
     -- Browser: all the way down is the list exactly as it was, and above that
@@ -4694,7 +4793,8 @@ function draw_filter_buttons(ctx, settings, app, width)
     spacing_x = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing()) or spacing_x
   end
   local icon_w = UIScale.round(22)
-  local search_w = math.max(1, row_w - icon_w * 4 - spacing_x * 4)
+  local rating_w = UIScale.round(34)
+  local search_w = math.max(1, row_w - icon_w * 4 - rating_w - spacing_x * 5)
   local search_changed, search = UI.search_input(ctx, "##media_search", "Search", settings.search_term or "", search_w)
   if search_changed then settings.search_term = search; state.last_filter_key = nil; if app.save_settings then app.save_settings() end end
   r.ImGui_SameLine(ctx)
@@ -4705,6 +4805,15 @@ function draw_filter_buttons(ctx, settings, app, width)
   if draw_filter_toggle(ctx, "video", settings.show_video == true, "Video files") then settings.show_video = not (settings.show_video == true); changed = true end
   r.ImGui_SameLine(ctx)
   if draw_filter_toggle(ctx, "image", settings.show_image == true, "Picture files") then settings.show_image = not (settings.show_image == true); changed = true end
+  r.ImGui_SameLine(ctx)
+  local minimum_rating = math.floor(tonumber(settings.minimum_rating) or 0)
+  local rating_label = minimum_rating > 0 and ("★" .. tostring(minimum_rating)) or "☆"
+  if r.ImGui_Button(ctx, rating_label .. "##media_rating_filter", rating_w, UIScale.round(22)) then
+    settings.minimum_rating = (minimum_rating + 1) % 6
+    changed = true
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, minimum_rating > 0 and ("Show " .. tostring(minimum_rating) .. " stars and up\nRight-click to clear") or "Filter by minimum rating") end
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then settings.minimum_rating = 0; changed = true end
   if changed then state.last_filter_key = nil; if app.save_settings then app.save_settings() end end
 end
 
@@ -4921,14 +5030,27 @@ function draw_file_row(app, settings, file, index, width)
       r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(12), y + UIScale.round(11), 0x111111FF, file.kind:sub(1, 1):upper())
     end
   end
-  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + UIScale.round(4), x + width - UIScale.round(8), y + row_h - UIScale.round(4), true)
+  local rating = file_rating(file.path)
+  local stars = rating_text(rating, true)
+  local stars_w = UIScale.round(58)
+  local stars_x = x + width - UIScale.round(8) - stars_w
+  r.ImGui_DrawList_PushClipRect(draw_list, text_x, y + UIScale.round(4), x + width - UIScale.round(8) - stars_w, y + row_h - UIScale.round(4), true)
   r.ImGui_DrawList_AddText(draw_list, text_x, compact and y + UIScale.round(4) or y + UIScale.round(7), Theme.colors.text, file.name)
   if not compact then
     local tags = compact_tags(file)
     if tags ~= "" then r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(27), Theme.colors.text_dim, tags) end
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
-  if clicked then
+  if rating > 0 or hovered then r.ImGui_DrawList_AddText(draw_list, stars_x, compact and y + UIScale.round(4) or y + UIScale.round(7), rating > 0 and 0xFFCE54FF or Theme.colors.text_dim, stars) end
+  local rating_clicked = false
+  if clicked and r.ImGui_GetMousePos then
+    local mouse_x = r.ImGui_GetMousePos(ctx)
+    if mouse_x >= stars_x then
+      set_file_rating(file.path, math.max(1, math.min(5, math.ceil((mouse_x - stars_x) / (stars_w / 5)))))
+      rating_clicked = true
+    end
+  end
+  if clicked and not rating_clicked then
     local insert_on_click = shift_down(ctx)
     if insert_on_click then
       insert_file(app, file)
@@ -4953,10 +5075,11 @@ function draw_file_row(app, settings, file, index, width)
       select_file(app, file, index, false)
       state.cover_viewer_open = true
     end
+    draw_rating_menu(ctx, file)
     Sampler.draw_context_menu(ctx, app, file)
     r.ImGui_EndPopup(ctx)
   end
-  if hovered then r.ImGui_SetTooltip(ctx, file.path) end
+  if hovered then r.ImGui_SetTooltip(ctx, file.path .. "\nClick a star to rate") end
   if selected and state.scroll_selected_file and r.ImGui_SetScrollHereY then
     local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
     if ok then state.scroll_selected_file = false end
@@ -5082,6 +5205,15 @@ function mb_draw_file_tile(app, settings, file, index, size, tile_h)
     r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + box, by + box, kind_color, UIScale.px(3))
     r.ImGui_DrawList_AddText(draw_list, bx + box * 0.3, by + box * 0.2, 0x111111FF, file.kind:sub(1, 1):upper())
   end
+  local rating = file_rating(file.path)
+  local badge_w = UIScale.round(32)
+  local badge_h = UIScale.round(18)
+  local badge_x = x + size - badge_w - UIScale.round(5)
+  local badge_y = y + UIScale.round(5)
+  if rating > 0 or hovered then
+    r.ImGui_DrawList_AddRectFilled(draw_list, x + size - badge_w - UIScale.round(5), y + UIScale.round(5), x + size - UIScale.round(5), y + UIScale.round(5) + badge_h, 0x111111D8, UIScale.px(3))
+    r.ImGui_DrawList_AddText(draw_list, x + size - badge_w, y + UIScale.round(6), rating > 0 and 0xFFCE54FF or Theme.colors.text_dim, rating > 0 and ("★ " .. tostring(rating)) or "☆")
+  end
 
   local border = (selected or previewing) and Theme.colors.accent or Theme.colors.border
   r.ImGui_DrawList_AddRect(draw_list, x, y, x + size, y + tile_h, border, radius, 0, (selected or previewing) and UIScale.px(1.6) or UIScale.px(0.7))
@@ -5092,7 +5224,15 @@ function mb_draw_file_tile(app, settings, file, index, size, tile_h)
   r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(4), art_bottom + UIScale.round(2), Theme.colors.text, file.name)
   r.ImGui_DrawList_PopClipRect(draw_list)
 
-  if clicked then
+  local rating_clicked = false
+  if clicked and r.ImGui_GetMousePos then
+    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+    if mouse_x >= badge_x and mouse_x <= badge_x + badge_w and mouse_y >= badge_y and mouse_y <= badge_y + badge_h then
+      set_file_rating(file.path, (rating + 1) % 6)
+      rating_clicked = true
+    end
+  end
+  if clicked and not rating_clicked then
     if shift_down(ctx) then
       insert_file(app, file)
     elseif not state.selected_file or state.selected_file.path ~= file.path then
@@ -5115,10 +5255,11 @@ function mb_draw_file_tile(app, settings, file, index, size, tile_h)
       select_file(app, file, index, false)
       state.cover_viewer_open = true
     end
+    draw_rating_menu(ctx, file)
     Sampler.draw_context_menu(ctx, app, file)
     r.ImGui_EndPopup(ctx)
   end
-  if hovered then r.ImGui_SetTooltip(ctx, file.path) end
+  if hovered then r.ImGui_SetTooltip(ctx, file.path .. "\nClick the star badge to change rating") end
   r.ImGui_PopID(ctx)
 end
 
@@ -5343,6 +5484,7 @@ end
 
 function M.init(app)
   local settings = ensure_settings(app)
+  load_ratings()
   refresh_locations(settings)
 end
 

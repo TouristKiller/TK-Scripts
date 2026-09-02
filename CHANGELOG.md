@@ -2,6 +2,16 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.9.5] - 2026-09-02
+
+### TK Workbench
+#### Toegevoegd
+- **Media Browser ratings**: Mediabestanden kunnen in lijst- en tegelweergave met één tot vijf sterren worden beoordeeld. Ratings worden blijvend opgeslagen en zijn ook via het contextmenu instelbaar.
+
+#### Gewijzigd
+- **Ratingfilter**: De zoekbalk kan de browser beperken tot bestanden met een gekozen minimumaantal sterren.
+- **Sortering**: Mediabestanden kunnen oplopend of aflopend worden gesorteerd op naam, rating of mediatype.
+
 ## [TK Project Clips 0.5.1] - 2026-08-29
 
 ### TK Project Clips

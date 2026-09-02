@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="0.9.4" author="TouristKiller" time="2026-09-01T18:18:18Z">
+    <version name="0.9.5" author="TouristKiller" time="2026-09-02T18:37:08Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -154,6 +154,9 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
+            v0.9.5
+            + Media Browser: files can now be rated from one to five stars in list and tile view, with persistent ratings, a right-click rating menu and a minimum-rating filter
+            + Media Browser: files can be sorted by name, rating or media type in ascending or descending order
             v0.9.4
             + Media Browser: tempo-synced previews and inserted media can now play at half speed (/2), normal speed (1x) or double speed (2x)
             + Track Tags: tag filters now preserve each track's existing TCP and MCP visibility independently, so filtering no longer reveals tracks that were already hidden in either view
