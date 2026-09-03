@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.7
+-- @version 1.9.8
 -- @changelog 
 --[[
+v1.9.8:
++ Added optional master-gap fill with adjustable track-background matching for a seamless appearance at every master color intensity
+
 v1.9.7:
 + Fixed: a visible but unpinned master track could incorrectly clip the top of the first track's color overlay; master pinning now uses REAPER's B_TCPPIN state
 
@@ -635,6 +638,8 @@ local default_settings              = {
     master_gradient_enabled         = true,  
     master_gradient_start_alpha     = 1.0,
     master_gradient_end_alpha       = 0.0,
+    fill_master_gap                 = true,
+    master_gap_track_bg_opacity     = 1.0,
     text_hover_hide                 = false,
     text_hover_enabled              = false,
     auto_center                     = false,
@@ -1980,6 +1985,12 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Rec Color", settings.show_record_color) then
             settings.show_record_color = not settings.show_record_color
         end
+
+        r.ImGui_BeginDisabled(ctx, not settings.use_custom_master_color)
+        if r.ImGui_RadioButton(ctx, "Fill Master Gap", settings.fill_master_gap) then
+            settings.fill_master_gap = not settings.fill_master_gap
+        end
+        r.ImGui_EndDisabled(ctx)
         
         r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_Separator(ctx)
@@ -2112,6 +2123,9 @@ function ShowSettingsWindow()
                     r.ImGui_SameLine(ctx)
                     r.ImGui_SetCursorPosX(ctx, Slider_Collumn_2)
                     changed, settings.master_gradient_end_alpha = r.ImGui_SliderDouble(ctx, "Master End", settings.master_gradient_end_alpha, 0.0, 1.0)
+                end
+                if settings.fill_master_gap then
+                    changed, settings.master_gap_track_bg_opacity = r.ImGui_SliderDouble(ctx, "Gap Track BG Match", settings.master_gap_track_bg_opacity, 0.0, 1.0)
                 end
             end
             
@@ -3952,6 +3966,14 @@ function RenderGradientRect(draw_list, x1, y1, x2, y2, color, intensity)
         )
     end
 end
+
+function GetMasterTrackBackgroundColor(master_track)
+    local selected = r.IsTrackSelected(master_track)
+    local theme_color = selected and "selcol_tr2_bg" or "col_tr2_bg"
+    local native_color = r.GetThemeColor(theme_color, 0)
+    local red, green, blue = r.ColorFromNative(native_color)
+    return r.ImGui_ColorConvertDouble4ToU32(red / 255, green / 255, blue / 255, settings.master_gap_track_bg_opacity)
+end
   
 function RenderGradientOverlay(draw_list, track, track_y, track_height, color, window_y, is_parent, pinned_height)    
     local window_draw_list = r.ImGui_GetWindowDrawList(ctx)
@@ -4706,10 +4728,57 @@ function loop()
                                     start_color
                                 )
                                 ::skip_master_gradient::
+                                if settings.fill_master_gap then
+                                    local gap_y = track_y + track_height
+                                    if gap_y + 8 > clip_height then
+                                        local actual_gap_y = math.max(gap_y, clip_height)
+                                        r.ImGui_DrawList_AddRectFilled(
+                                            draw_list,
+                                            LEFT,
+                                            WY + actual_gap_y,
+                                            RIGHT - scroll_size,
+                                            WY + gap_y + 8,
+                                            GetMasterTrackBackgroundColor(track)
+                                        )
+                                        r.ImGui_DrawList_AddRectFilledMultiColor(
+                                            draw_list,
+                                            LEFT,
+                                            WY + actual_gap_y,
+                                            RIGHT - scroll_size,
+                                            WY + gap_y + 8,
+                                            start_color,
+                                            settings.gradient_direction == 1 and end_color or start_color,
+                                            settings.gradient_direction == 1 and end_color or start_color,
+                                            start_color
+                                        )
+                                    end
+                                end
                             else
                                 local red, green, blue, _ = r.ImGui_ColorConvertU32ToDouble4(settings.master_track_color)
                                 local color_with_alpha = r.ImGui_ColorConvertDouble4ToU32(red, green, blue, settings.master_overlay_alpha)
                                 RenderSolidOverlay(draw_list, track, track_y, track_height, color_with_alpha, WY, clip_height)
+                                if settings.fill_master_gap then
+                                    local gap_y = track_y + track_height
+                                    if gap_y + 8 > clip_height then
+                                        local actual_gap_y = math.max(gap_y, clip_height)
+                                        r.ImGui_DrawList_AddRectFilled(
+                                            draw_list,
+                                            LEFT,
+                                            WY + actual_gap_y,
+                                            RIGHT - scroll_size,
+                                            WY + gap_y + 8,
+                                            GetMasterTrackBackgroundColor(track)
+                                        )
+                                        r.ImGui_DrawList_AddRectFilled(
+                                            draw_list,
+                                            LEFT,
+                                            WY + actual_gap_y,
+                                            RIGHT - scroll_size,
+                                            WY + gap_y + 8,
+                                            color_with_alpha
+                                        )
+                                    end
+                                end
                             end
                         end
                         

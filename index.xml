@@ -996,8 +996,11 @@ v0.2.51
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.9.7" author="TouristKiller" time="2026-08-29T21:17:00Z">
+        <version name="1.9.8" author="TouristKiller" time="2026-09-03T21:40:58Z">
             <changelog><![CDATA[
+            v1.9.8:
+            + Added optional master-gap fill with adjustable track-background matching for a seamless appearance at every master color intensity
+
             v1.9.7:
             + Fixed: a visible but unpinned master track could incorrectly clip the top of the first track's color overlay; master pinning now uses REAPER's B_TCPPIN state
 
