@@ -132,6 +132,7 @@ local MAX_TRACK_CHANNELS = 128
 local MAX_METER_CHANNELS = 16
 
 function cr_bus_index(mode)
+  if mode == "mono" then return 1 end
   for index, id in ipairs(MONITOR_BUS_MODES) do
     if id == mode then return index - 1 end
   end
@@ -1462,7 +1463,7 @@ local function apply_monitor_mode(app, settings, master, index, mode, layout, ba
   end
   local ok = write_with_undo("Control Room: Monitor mode", function()
     local source_ok = r.SetTrackSendInfo_Value(master, 1, index, "I_SRCCHAN", Layouts.encode_src(src_channel, src_layout))
-    local mono_ok = r.SetTrackSendInfo_Value(master, 1, index, "B_MONO", mode == "mono" and 1 or 0)
+    local mono_ok = r.SetTrackSendInfo_Value(master, 1, index, "B_MONO", 0)
     local pan_ok = r.SetTrackSendInfo_Value(master, 1, index, "D_PAN", monitor_mode_pan(mode))
     return source_ok ~= false and mono_ok ~= false and pan_ok ~= false
   end)
@@ -1497,9 +1498,11 @@ end
 local function fold_bus_in_use(settings, master, mode)
   if not valid_track(master) then return false end
   mode = mode or "fold_stereo"
+  local bus_index = cr_bus_index(mode)
   for _, output in ipairs(monitor_outputs(master)) do
     local layout = monitor_format(settings, output.target, output.source)
-    if get_monitor_mode(settings, output.target, layout) == mode then return true end
+    local output_mode = get_monitor_mode(settings, output.target, layout)
+    if output_mode == mode or (bus_index and cr_bus_index(output_mode) == bus_index) then return true end
   end
   return false
 end

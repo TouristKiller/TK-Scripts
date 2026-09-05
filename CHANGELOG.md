@@ -2,6 +2,19 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.9.6] - 2026-09-05
+
+### TK Workbench
+#### Toegevoegd
+- **Ratings uit audiotags**: Media Browser neemt ratings over die door andere programma's zijn opgeslagen in MP3, WAV, FLAC, Opus en andere ondersteunde audiotags, waaronder foobar2000 POPM-ratings.
+- **Herkomst van ratings**: Lijsten, tegels, tooltips en het ratingmenu maken onderscheid tussen een rating uit het bestand, een Workbench-rating, een expliciete keuze voor No rating en een bestand dat nooit is beoordeeld.
+
+#### Gewijzigd
+- **Ratingvoorrang**: Een rating die in Workbench wordt gekozen blijft een lokale override. Met Use file rating wordt die override verwijderd en de rating uit de audiotag weer gebruikt.
+
+#### Bugfixes
+- **Control Room MONO**: MONO maakt nu betrouwbaar een monosom via de monitor processing bus, zonder een stereomonitor tot één hardwarekanaal terug te brengen.
+
 ## [TK Workbench 0.9.5] - 2026-09-02
 
 ### TK Workbench

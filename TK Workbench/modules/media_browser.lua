@@ -114,6 +114,10 @@ local state = {
   visible_file_count = 0,
   last_filter_key = nil,
   ratings = {},
+  embedded_ratings = {},
+  embedded_rating_queue = {},
+  embedded_rating_queued = {},
+  embedded_rating_queue_index = 1,
   metadata_cache = {},
   category_cache = {},
   category_counts = {},
@@ -382,12 +386,22 @@ function rating_text(rating, show_empty)
 end
 
 function draw_rating_menu(ctx, file)
-  local current = file_rating(file.path)
+  local key = rating_key(file.path)
+  local override = state.ratings[key]
+  local current = file_rating(file.path, true)
   if not r.ImGui_BeginMenu(ctx, "Rating") then return end
   for rating = 5, 1, -1 do
     if r.ImGui_MenuItem(ctx, rating_text(rating, true), nil, current == rating) then set_file_rating(file.path, rating) end
   end
-  if r.ImGui_MenuItem(ctx, "No rating", nil, current == 0) then set_file_rating(file.path, 0) end
+  if r.ImGui_MenuItem(ctx, "No rating", nil, override == 0) then set_file_rating(file.path, 0) end
+  local tagged = embedded_file_rating(file.path, true)
+  if tagged and override ~= nil then
+    if r.ImGui_MenuItem(ctx, "Use file rating " .. rating_text(tagged, true)) then clear_file_rating(file.path) end
+  elseif tagged then
+    r.ImGui_MenuItem(ctx, "Using file rating " .. rating_text(tagged, true), nil, true, false)
+  elseif override == nil then
+    r.ImGui_MenuItem(ctx, "Never rated", nil, false, false)
+  end
   r.ImGui_EndMenu(ctx)
 end
 
@@ -951,8 +965,169 @@ function rating_key(path)
   return normalize_path(path):lower()
 end
 
-function file_rating(path)
-  return state.ratings[rating_key(path)] or 0
+function mb_normalize_rating(value, scale)
+  local text = tostring(value or ""):gsub(",", ".")
+  local number = tonumber(text:match("[-+]?%d+%.?%d*"))
+  if not number or number <= 0 then return nil end
+  local rating
+  if scale == "popm" then
+    rating = math.ceil(math.min(255, number) * 5 / 255)
+  elseif scale == "unit" or (number < 1 and number > 0) then
+    rating = math.floor(number * 5 + 0.5)
+  elseif number <= 5 then
+    rating = math.floor(number + 0.5)
+  elseif number <= 100 then
+    rating = math.floor(number / 20 + 0.5)
+  elseif number <= 255 then
+    rating = math.ceil(number * 5 / 255)
+  end
+  if not rating or rating < 1 then return nil end
+  return math.min(5, rating)
+end
+
+function mb_parse_id3_rating(tag)
+  local header = tag and tag:sub(1, 10) or nil
+  if not header or #header < 10 or header:sub(1, 3) ~= "ID3" then return nil end
+  local version = header:byte(4) or 0
+  local flags = header:byte(6) or 0
+  local tag_size = mb_synchsafe(header, 7)
+  if tag_size <= 0 or tag_size > 50 * 1024 * 1024 or #tag < tag_size + 10 then return nil end
+  local body = tag:sub(11, tag_size + 10)
+  if (flags & 0x80) ~= 0 then body = body:gsub("\255\0", "\255") end
+  local pos, best = 1, nil
+  if (flags & 0x40) ~= 0 then
+    if version == 4 then pos = pos + mb_synchsafe(body, pos) else pos = pos + 4 + mb_be_int(body, pos, 4) end
+  end
+  local header_size = version == 2 and 6 or 10
+  while pos + header_size <= #body + 1 do
+    local id_size = version == 2 and 3 or 4
+    local frame_id = body:sub(pos, pos + id_size - 1)
+    if not frame_id:match("^[A-Z0-9]+$") then break end
+    local frame_size = version == 2 and mb_be_int(body, pos + 3, 3) or (version == 4 and mb_synchsafe(body, pos + 4) or mb_be_int(body, pos + 4, 4))
+    local frame_start = pos + header_size
+    if frame_size <= 0 or frame_start + frame_size - 1 > #body then break end
+    local data = body:sub(frame_start, frame_start + frame_size - 1)
+    if frame_id == "POPM" or frame_id == "POP" then
+      local separator = data:find("\0", 1, true)
+      local rating = separator and mb_normalize_rating(data:byte(separator + 1), "popm") or nil
+      if rating and (not best or rating > best) then best = rating end
+    elseif frame_id == "TXXX" or frame_id == "TXX" then
+      local clean = data:sub(2):gsub("\255\254", ""):gsub("\254\255", ""):gsub("\0", "")
+      local upper = clean:upper()
+      if upper:find("RATING", 1, true) then
+        local value = clean:match("([-+]?%d+[.,]?%d*)%s*$")
+        local rating = mb_normalize_rating(value, upper:find("FMPS", 1, true) and "unit" or nil)
+        if rating and (not best or rating > best) then best = rating end
+      end
+    end
+    pos = frame_start + frame_size
+  end
+  return best
+end
+
+function mb_id3_rating(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local header = file:read(10)
+  if not header or #header < 10 or header:sub(1, 3) ~= "ID3" then file:close(); return nil end
+  local tag_size = mb_synchsafe(header, 7)
+  if tag_size <= 0 or tag_size > 50 * 1024 * 1024 then file:close(); return nil end
+  local body = file:read(tag_size)
+  file:close()
+  if not body or #body < tag_size then return nil end
+  return mb_parse_id3_rating(header .. body)
+end
+
+function mb_wav_id3_rating(path)
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local header = file:read(12)
+  if not header or #header < 12 or (header:sub(1, 4) ~= "RIFF" and header:sub(1, 4) ~= "RF64") or header:sub(9, 12) ~= "WAVE" then file:close(); return nil end
+  while true do
+    local chunk_header = file:read(8)
+    if not chunk_header or #chunk_header < 8 then break end
+    local chunk_id = chunk_header:sub(1, 4)
+    local chunk_size = mb_le4(chunk_header, 5)
+    if chunk_size < 0 or chunk_size > 50 * 1024 * 1024 then break end
+    if chunk_id:upper() == "ID3 " then
+      local tag = file:read(chunk_size)
+      file:close()
+      return mb_parse_id3_rating(tag)
+    end
+    if file:seek("cur", chunk_size + (chunk_size % 2)) == nil then break end
+  end
+  file:close()
+  return nil
+end
+
+function mb_read_embedded_rating(path)
+  if not EXT.audio[extension(path)] then return nil end
+  local ext = extension(path)
+  local rating = ext == "mp3" and mb_id3_rating(path) or ((ext == "wav" or ext == "wave") and mb_wav_id3_rating(path) or nil)
+  local source = not rating and r.PCM_Source_CreateFromFile and r.PCM_Source_CreateFromFile(path) or nil
+  if source and r.GetMediaFileMetadata then
+    local keys = {
+      { "ID3:TXXX:RATING" }, { "ID3:TXXX:FMPS_RATING", "unit" },
+      { "VORBIS:RATING" }, { "VORBIS:FMPS_RATING", "unit" },
+      { "APE:RATING" }, { "APE:FMPS_RATING", "unit" },
+      { "XMP:xmp/Rating" }, { "XMP:Rating" }, { "RIFF:IRTD" },
+      { "INFO:IRTD" }, { "Generic:Rating" }, { "RATING" }
+    }
+    for _, entry in ipairs(keys) do
+      local ok, value = r.GetMediaFileMetadata(source, entry[1])
+      if ok and ok ~= 0 and value and value ~= "" then
+        local found = mb_normalize_rating(value, entry[2])
+        if found then rating = found; break end
+      end
+    end
+  end
+  if source and r.PCM_Source_Destroy then r.PCM_Source_Destroy(source) end
+  return rating
+end
+
+function embedded_file_rating(path, immediate)
+  local key = rating_key(path)
+  local cached = state.embedded_ratings[key]
+  if cached ~= nil then return cached or nil end
+  if immediate then
+    local rating = mb_read_embedded_rating(path)
+    state.embedded_ratings[key] = rating or false
+    state.embedded_rating_queued[key] = nil
+    if rating then state.last_filter_key = nil end
+    return rating
+  end
+  if EXT.audio[extension(path)] and not state.embedded_rating_queued[key] then
+    state.embedded_rating_queued[key] = true
+    state.embedded_rating_queue[#state.embedded_rating_queue + 1] = path
+  end
+  return nil
+end
+
+function process_embedded_rating_queue(limit)
+  local changed = false
+  for _ = 1, limit or 6 do
+    local path = state.embedded_rating_queue[state.embedded_rating_queue_index]
+    if not path then break end
+    state.embedded_rating_queue_index = state.embedded_rating_queue_index + 1
+    local key = rating_key(path)
+    state.embedded_rating_queued[key] = nil
+    if state.embedded_ratings[key] == nil then
+      local rating = mb_read_embedded_rating(path)
+      state.embedded_ratings[key] = rating or false
+      if rating then changed = true end
+    end
+  end
+  if state.embedded_rating_queue_index > #state.embedded_rating_queue then
+    state.embedded_rating_queue = {}
+    state.embedded_rating_queue_index = 1
+  end
+  if changed then state.last_filter_key = nil end
+end
+
+function file_rating(path, immediate)
+  local local_rating = state.ratings[rating_key(path)]
+  if local_rating ~= nil then return local_rating end
+  return embedded_file_rating(path, immediate) or 0
 end
 
 function load_ratings()
@@ -963,7 +1138,7 @@ function load_ratings()
     local rating, path = line:match("^(%d)\t(.*)$")
     rating = tonumber(rating)
     path = cache_unescape(path)
-    if rating and rating >= 1 and rating <= 5 and path ~= "" then state.ratings[rating_key(path)] = rating end
+    if rating and rating >= 0 and rating <= 5 and path ~= "" then state.ratings[rating_key(path)] = rating end
   end
   file:close()
 end
@@ -984,7 +1159,13 @@ end
 function set_file_rating(path, rating)
   local key = rating_key(path)
   rating = math.max(0, math.min(5, math.floor(tonumber(rating) or 0)))
-  if rating == 0 then state.ratings[key] = nil else state.ratings[key] = rating end
+  state.ratings[key] = rating
+  state.last_filter_key = nil
+  return save_ratings()
+end
+
+function clear_file_rating(path)
+  state.ratings[rating_key(path)] = nil
   state.last_filter_key = nil
   return save_ratings()
 end
@@ -1098,6 +1279,10 @@ function reset_scan()
   state.selected_index = nil
   state.selected_file = nil
   state.last_filter_key = nil
+  state.embedded_ratings = {}
+  state.embedded_rating_queue = {}
+  state.embedded_rating_queued = {}
+  state.embedded_rating_queue_index = 1
   state.metadata_cache = {}
   state.midi_note_cache = {}
   state.category_cache = {}
@@ -5030,7 +5215,9 @@ function draw_file_row(app, settings, file, index, width)
       r.ImGui_DrawList_AddText(draw_list, x + UIScale.round(12), y + UIScale.round(11), 0x111111FF, file.kind:sub(1, 1):upper())
     end
   end
-  local rating = file_rating(file.path)
+  local rating = file_rating(file.path, true)
+  local rating_override = state.ratings[rating_key(file.path)]
+  local explicitly_unrated = rating_override == 0
   local stars = rating_text(rating, true)
   local stars_w = UIScale.round(58)
   local stars_x = x + width - UIScale.round(8) - stars_w
@@ -5041,7 +5228,7 @@ function draw_file_row(app, settings, file, index, width)
     if tags ~= "" then r.ImGui_DrawList_AddText(draw_list, text_x, y + UIScale.round(27), Theme.colors.text_dim, tags) end
   end
   r.ImGui_DrawList_PopClipRect(draw_list)
-  if rating > 0 or hovered then r.ImGui_DrawList_AddText(draw_list, stars_x, compact and y + UIScale.round(4) or y + UIScale.round(7), rating > 0 and 0xFFCE54FF or Theme.colors.text_dim, stars) end
+  if rating > 0 or explicitly_unrated or hovered then r.ImGui_DrawList_AddText(draw_list, stars_x, compact and y + UIScale.round(4) or y + UIScale.round(7), rating > 0 and 0xFFCE54FF or Theme.colors.text_dim, stars) end
   local rating_clicked = false
   if clicked and r.ImGui_GetMousePos then
     local mouse_x = r.ImGui_GetMousePos(ctx)
@@ -5079,7 +5266,10 @@ function draw_file_row(app, settings, file, index, width)
     Sampler.draw_context_menu(ctx, app, file)
     r.ImGui_EndPopup(ctx)
   end
-  if hovered then r.ImGui_SetTooltip(ctx, file.path .. "\nClick a star to rate") end
+  if hovered then
+    local source = explicitly_unrated and "Workbench: explicitly no rating" or (rating_override ~= nil and "Rating: Workbench" or (rating > 0 and "Rating: file metadata" or "Never rated"))
+    r.ImGui_SetTooltip(ctx, file.path .. "\n" .. source .. "\nClick a star to rate")
+  end
   if selected and state.scroll_selected_file and r.ImGui_SetScrollHereY then
     local ok = pcall(r.ImGui_SetScrollHereY, ctx, 0.5)
     if ok then state.scroll_selected_file = false end
@@ -5205,12 +5395,14 @@ function mb_draw_file_tile(app, settings, file, index, size, tile_h)
     r.ImGui_DrawList_AddRectFilled(draw_list, bx, by, bx + box, by + box, kind_color, UIScale.px(3))
     r.ImGui_DrawList_AddText(draw_list, bx + box * 0.3, by + box * 0.2, 0x111111FF, file.kind:sub(1, 1):upper())
   end
-  local rating = file_rating(file.path)
+  local rating = file_rating(file.path, true)
+  local rating_override = state.ratings[rating_key(file.path)]
+  local explicitly_unrated = rating_override == 0
   local badge_w = UIScale.round(32)
   local badge_h = UIScale.round(18)
   local badge_x = x + size - badge_w - UIScale.round(5)
   local badge_y = y + UIScale.round(5)
-  if rating > 0 or hovered then
+  if rating > 0 or explicitly_unrated or hovered then
     r.ImGui_DrawList_AddRectFilled(draw_list, x + size - badge_w - UIScale.round(5), y + UIScale.round(5), x + size - UIScale.round(5), y + UIScale.round(5) + badge_h, 0x111111D8, UIScale.px(3))
     r.ImGui_DrawList_AddText(draw_list, x + size - badge_w, y + UIScale.round(6), rating > 0 and 0xFFCE54FF or Theme.colors.text_dim, rating > 0 and ("★ " .. tostring(rating)) or "☆")
   end
@@ -5259,7 +5451,10 @@ function mb_draw_file_tile(app, settings, file, index, size, tile_h)
     Sampler.draw_context_menu(ctx, app, file)
     r.ImGui_EndPopup(ctx)
   end
-  if hovered then r.ImGui_SetTooltip(ctx, file.path .. "\nClick the star badge to change rating") end
+  if hovered then
+    local source = explicitly_unrated and "Workbench: explicitly no rating" or (rating_override ~= nil and "Rating: Workbench" or (rating > 0 and "Rating: file metadata" or "Never rated"))
+    r.ImGui_SetTooltip(ctx, file.path .. "\n" .. source .. "\nClick the star badge to change rating")
+  end
   r.ImGui_PopID(ctx)
 end
 
@@ -5507,6 +5702,7 @@ function M.update(app)
   local active = app.settings and app.settings.active_module == M.id
   cleanup_retired_preview_sources(false)
   update_pending_preview(settings)
+  if active then process_embedded_rating_queue(6) end
   if state.activated and (active or state.scanning) then
     if is_project_files_location(selected_location(settings)) and state.loaded_location == PROJECT_FILES_LOCATION and state.project_files_signature ~= project_files_signature() then load_or_scan_location(settings, true) end
     scan_step(settings)
