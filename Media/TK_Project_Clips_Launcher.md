@@ -1,6 +1,6 @@
 # TK Project Clips - Clip Launcher
 
-A session view for REAPER. Version 0.6.2 - requires SWS, js_ReaScriptAPI and ReaImGui.
+A session view for REAPER. Version 0.6.3 - requires SWS, js_ReaScriptAPI and ReaImGui.
 
 ## What it is
 
@@ -75,19 +75,27 @@ Use **Learn** beside Base note, or beside any command, then play the note or pad
 | Record | The same button as in the toolbar: keep what you play instead of clearing it away. |
 | Launch scene 1 to 32 | One entry per row, for a controller with buttons to spare. |
 
-The bank readout under the layout says which lanes and scenes the controller is on at that moment, so you can see where a bank step has taken you. Holding a pad works too: a clip whose Trigger is **Hold to play** sounds while the pad is held and stops when you let go, exactly as with the mouse.
+The bank readout under the layout says which lanes and scenes the controller is on at that moment, so you can see where a bank step has taken you. Holding a pad works too: a clip whose Trigger is **Hold to play** sounds while the pad is held and stops when you let go, exactly as with the mouse. On an armed track, pressing the pad for an empty slot starts recording into that slot; press it again to stop on the nearest bar line.
 
 The MIDI Setup window stays open while you work; close it with the red button or Escape while it has focus. Save the whole setup as a preset to reuse the controller, layout, bank and learned assignments in another session. Presets can be loaded or deleted from the same window.
+
+### ReaLearn
+
+ReaLearn support is optional. At the bottom of MIDI Setup, choose **Install Core (8)** for bank navigation, Launch active scene, Stop active lane, Stop all and Record, or **Install Full (40)** to add direct actions for Launch scene 1 to 32. **Remove** takes every TK Project Clips ReaLearn action out of REAPER's Action List again.
+
+After installation, select **REAPER action** as the target in ReaLearn and search the Action List for **TK Project Clips**. Switching between Core and Full replaces the previous set, so no unused scene actions are left behind.
+
+TK Project Clips must be running with the Launcher view active. Commands are queued for the active project and then use the same quantized launch and stop paths as mouse and MIDI control. Stateful actions such as Record and the active scene publish their REAPER toggle state so ReaLearn can use it for feedback where supported.
 
 ### Launchpad
 
 A Launchpad does not lay its pads out as consecutive notes: its rows step by ten (Mini MK3, X, Pro MK3 and the RGB MK2, pads 11 to 88) or by sixteen (the older S and Mini, 0 to 119). Pick **Launchpad** as the layout and then the family, and the grid follows. **Top left pad** and **A row further down** are there for a board that numbers itself differently; leave them alone and the family decides.
 
-Choose a **MIDI output** and switch on **Light the pads**. On Windows the port a DAW is meant to use is the second one, usually called MIDIOUT2. From then on the grid shows what the launcher knows: an empty slot is dark, a filled one glows in its clip's colour, the clip that is playing is bright, one waiting for its bar line blinks, and an armed track blinks red. The strip on the right lights for scenes that have something in them. Only pads that change colour are sent, so the board keeps up.
+Choose a **MIDI output** and switch on **Light the pads**. On Windows the port a DAW is meant to use is the second one, usually called MIDIOUT2. From then on the grid shows what the launcher knows: an empty slot is dark, a filled one glows in its clip's colour, the clip that is playing is bright, one waiting for its bar line blinks, and an armed track blinks red. Press a blinking red pad to record into that slot, then press it again to stop. The strip on the right lights for scenes that have something in them. Learned command notes and CCs glow dimly, flash when pressed, and become bright while actions such as Record are active. Only pads that change colour are sent, so the board keeps up.
 
 **Mode** decides how much of the board the Launcher takes over, and MK3 boards give you the choice:
 
-- **DAW mode** switches on the Session layout and lights the Session button, which is what Ableton and PlayTime do. The board stays itself: its Session and Custom buttons keep working and simply tell the Launcher that you pressed them, and its second MIDI port stays free for playing an instrument. This is the default. In this mode the strip on the right sends and receives control changes rather than notes, which the Launcher handles for you.
+- **DAW mode** switches on the Session layout and lights the Session button, which is what Ableton and PlayTime do. Select the Launchpad's dedicated DAW input in **Connection** and its matching DAW output under the Launchpad settings; on Windows these are commonly the second MIDI ports. The regular MIDI port remains available for playing an instrument. This is the default. In this mode the strip on the right sends and receives control changes rather than notes, which the Launcher handles for you.
 - **Programmer mode** hands the whole surface over. Novation's own reference is blunt about the cost: while it is on, the board's Setup entry is disabled and it only returns to normal operation when it is switched back. Use it only if DAW mode will not talk to your board.
 
 Either way the mode is sent when the lights go on and undone when the Launcher closes; **Send mode again** asks a second time, for a board that was unplugged and put back.

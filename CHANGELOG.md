@@ -2,6 +2,21 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Project Clips 0.6.3] - 2026-09-06
+
+### TK Project Clips
+#### Toegevoegd
+- **ReaLearn-actions**: MIDI Setup kan optioneel acht kernacties of de volledige set van veertig REAPER-actions installeren. De actions sturen banks, scenes, Stop en Record via dezelfde gekwantiseerde commandoroute als MIDI Learn en kunnen weer volledig worden verwijderd.
+- **Controllerfeedback**: Aangeleerde MIDI-commando's lichten op, geven een korte drukfeedback en tonen actieve Record- en scenestatus waar de controller dat ondersteunt.
+
+#### Gewijzigd
+- **Launchpad DAW mode**: MIDI Setup benoemt expliciet de aparte DAW-input en -output die Launchpad-modellen hiervoor gebruiken.
+- **Auto run-up**: Automatische voorlooptijd past REAPER's globale mediabuffer niet langer aan.
+- **Lane-tracks**: Verborgen Launcher-tracks worden betrouwbaarder geconfigureerd wanneer ze worden aangemaakt of opnieuw gebruikt.
+
+#### Bugfixes
+- **Opnemen met pads**: Een leeg pad op een opnameklare track start nu opname in het betreffende clipslot; opnieuw indrukken stopt de opname op de dichtstbijzijnde maatlijn.
+
 ## [TK Workbench 0.9.6] - 2026-09-05
 
 ### TK Workbench

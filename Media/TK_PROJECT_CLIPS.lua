@@ -1,7 +1,14 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.6.2
+-- @version 0.6.3
 -- @changelog:
+--   + Launcher: Armed empty MIDI pads now start and stop recording into their clip slots
+--   + Launcher: Learned MIDI commands light up, flash when pressed and show active Record and scene states
+--   + Launcher: DAW mode now clearly identifies the Launchpad's dedicated input and output ports
+--   + Launcher: Optional ReaLearn actions install as a Core set of 8 or a Full set of 40, and can be removed again
+--   + Launcher: ReaLearn actions use the same quantized commands as MIDI control, with Record and scene feedback
+--   + Launcher: Auto run-up no longer changes REAPER's global media buffer preference
+--   + Launcher: Hidden lane tracks are configured more reliably when created or reused
 --   + Launcher: Edit clip - a window on the file behind an audio clip, with its waveform, a grid over it and the part that plays marked out
 --   + Launcher: Start and end are set by dragging the lines in the waveform or the faders under it, snapped to bars, beats, half or quarter beats
 --   + Launcher: Fade in and fade out per clip, honoured by the voices as well, with the launcher's own short guard against clicks kept underneath

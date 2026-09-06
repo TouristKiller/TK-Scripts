@@ -686,7 +686,7 @@ v0.2.51
 
  <category name="Media">
     <reapack name="TK_PROJECT_CLIPS.lua" type="script" desc="TK Project Clips">
-        <version name="0.6.2" author="TouristKiller" time="2026-09-02T19:37:05Z">
+        <version name="0.6.3" author="TouristKiller" time="2026-09-06T12:06:03Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS.lua</source>
         <source file="TK_PROJECT_CLIPS/launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/launcher.lua</source>
         <source file="TK_PROJECT_CLIPS/chord_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/chord_engine.lua</source>
@@ -694,8 +694,57 @@ v0.2.51
         <source file="TK_PROJECT_CLIPS/theme.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/theme.lua</source>
         <source file="TK_PROJECT_CLIPS/ui_scale.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/ui_scale.lua</source>
         <source file="TK_PROJECT_CLIPS/json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/json.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/bridge.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/bridge.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Previous lane bank.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Previous%20lane%20bank.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Next lane bank.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Next%20lane%20bank.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Previous scene bank.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Previous%20scene%20bank.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Next scene bank.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Next%20scene%20bank.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch active scene.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20active%20scene.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Stop active lane.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Stop%20active%20lane.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Stop all.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Stop%20all.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Record.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Record.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 1.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%201.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%202.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 3.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%203.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 4.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%204.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 5.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%205.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 6.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%206.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 7.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%207.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 8.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%208.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 9.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%209.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 10.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2010.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 11.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2011.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 12.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2012.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 13.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2013.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 14.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2014.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 15.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2015.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 16.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2016.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 17.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2017.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 18.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2018.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 19.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2019.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 20.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2020.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 21.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2021.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 22.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2022.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 23.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2023.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 24.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2024.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 25.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2025.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 26.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2026.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 27.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2027.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 28.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2028.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 29.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2029.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 30.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2030.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 31.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2031.lua</source>
+        <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 32.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2032.lua</source>
         <source file="TK_Project_Clips_Launcher.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_Project_Clips_Launcher.pdf</source>
         <changelog><![CDATA[
+            v0.6.3
+            + Launcher: Armed empty MIDI pads now start and stop recording into their clip slots
+            + Launcher: Learned MIDI commands light up, flash when pressed and show active Record and scene states
+            + Launcher: DAW mode now clearly identifies the Launchpad's dedicated input and output ports
+            + Launcher: Optional ReaLearn actions install as a Core set of 8 or a Full set of 40, and can be removed again
+            + Launcher: ReaLearn actions use the same quantized commands as MIDI control, with Record and scene feedback
+            + Launcher: Auto run-up no longer changes REAPER's global media buffer preference
+            + Launcher: Hidden lane tracks are configured more reliably when created or reused
             v0.6.2
             + Launcher: Edit clip - a window on the file behind an audio clip, with its waveform, a grid over it and the part that plays marked out
             + Launcher: Start and end are set by dragging the lines in the waveform or the faders under it, snapped to bars, beats, half or quarter beats

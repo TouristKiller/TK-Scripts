@@ -33,9 +33,11 @@ local UI = {}
 local C = {
     proj_section = "TK_PROJECT_CLIPS_LAUNCHER",
     ext_section  = "TK_PROJECT_CLIPS_LAUNCHER",
+    action_section = "TK_PROJECT_CLIPS_ACTIONS",
     track_ext    = "P_EXT:TK_CLIP_LAUNCHER",
     folder_ext   = "P_EXT:TK_CLIP_LAUNCHER_FOLDER",
-    min_lead     = 0.30,   -- floor; the working value is L.lead
+    min_lead     = 0.05,
+    auto_lead    = 0.30,
     harvest_pad  = 0.10,
     voice_length = 300,
     voice_extend = 300,
@@ -67,7 +69,7 @@ local L = {
     rows              = 8,
     quantize          = 1,
     follow_enabled    = true,
-    lead              = 0,   -- 0 = derive it from the media buffer
+    lead              = 0,   -- 0 = use the launcher lane minimum
     lanes             = {},
     status            = "",
     roll_guard        = 0,
@@ -153,6 +155,7 @@ local L = {
     midi_pressed      = {},
     midi_commands     = {},
     midi_command_pressed = {},
+    midi_command_flash = {},
     midi_learn        = nil,
     midi_base_learn   = false,
     midi_learn_retval = nil,
@@ -171,6 +174,10 @@ local L = {
     lp_map            = nil,
     lp_shadow         = nil,
     lp_sent           = nil,
+    external_action_ids = {},
+    external_action_states = {},
+    external_action_refresh = 0,
+    external_actions_mode = "off",
 }
 
 local MIDI_COMMANDS = {
@@ -229,11 +236,12 @@ local REPEAT_OPTIONS = {
 -- the deadline waits for the next boundary instead of arriving damaged.
 local LEAD_OPTIONS = {
     { label = "Auto",   value = 0 },
-    { label = "0.25 s", value = 0.25 },
+    { label = "0.05 s", value = 0.05 },
+    { label = "0.10 s", value = 0.10 },
+    { label = "0.15 s", value = 0.15 },
+    { label = "0.20 s", value = 0.20 },
+    { label = "0.30 s", value = 0.30 },
     { label = "0.5 s",  value = 0.5 },
-    { label = "1 s",    value = 1.0 },
-    { label = "1.5 s",  value = 1.5 },
-    { label = "2 s",    value = 2.0 },
 }
 
 -- A fixed set rather than a full picker: twelve hues that stay apart from each
@@ -549,9 +557,6 @@ end
 -- Boundary on the project's own bar grid. With allow_now the boundary the given
 -- time already sits on counts (used when the transport is stopped and there is
 -- no scheduling deadline yet).
--- REAPER reads media a window ahead of the play cursor and does not come back
--- for anything that appears inside it, so the run-up a clip needs tracks that
--- window: measured at a 1200 ms media buffer, 1.5 s worked and 1.0 s did not.
 function H.buffer_ms()
     if not r.SNM_GetIntConfigVar then return nil end
     local value = r.SNM_GetIntConfigVar("workbufmsex", -1)
@@ -560,9 +565,7 @@ function H.buffer_ms()
 end
 
 function H.auto_lead()
-    local buffer = H.buffer_ms()
-    if not buffer then return 1.5 end
-    return math.max(0.3, math.min(4.0, (buffer / 1000) + 0.3))
+    return C.auto_lead
 end
 
 -- The media buffer is a global REAPER preference, not project data, so the
@@ -576,18 +579,6 @@ function H.buffer_original()
     local stored = tonumber(r.GetExtState(C.ext_section, "media_buffer_original") or "")
     if stored and stored > 0 then return math.floor(stored) end
     return nil
-end
-
-function H.set_buffer_ms(value)
-    if not H.buffer_can_write() then return false end
-    value = math.floor(math.max(50, math.min(10000, value)))
-    if not H.buffer_original() then
-        local current = H.buffer_ms()
-        if current then r.SetExtState(C.ext_section, "media_buffer_original", tostring(current), true) end
-    end
-    local ok = r.SNM_SetIntConfigVar("workbufmsex", value)
-    L.status = ok and ("Media buffer set to " .. tostring(value) .. " ms") or "Could not change the media buffer"
-    return ok
 end
 
 function H.restore_buffer()
@@ -858,6 +849,12 @@ function H.lane_track_name(target)
     return "TK Launcher: " .. H.track_name(target, "Track")
 end
 
+function H.configure_lane_track(track)
+    if not H.valid_track(track) then return end
+    local flags = math.floor(r.GetMediaTrackInfo_Value(track, "I_PERFFLAGS") or 0)
+    if (flags & 1) == 0 then r.SetMediaTrackInfo_Value(track, "I_PERFFLAGS", flags | 1) end
+end
+
 function H.create_lane_track(target)
     local index = r.CountTracks(0)
     r.InsertTrackAtIndex(index, false)
@@ -869,6 +866,7 @@ function H.create_lane_track(target)
     r.SetMediaTrackInfo_Value(track, "B_SHOWINTCP", H.lanes_visible() and 1 or 0)
     r.SetMediaTrackInfo_Value(track, "B_SHOWINMIXER", 0)
     r.SetMediaTrackInfo_Value(track, "B_MAINSEND", 0)
+    H.configure_lane_track(track)
     local send = r.CreateTrackSend(track, target)
     if send and send >= 0 then
         r.SetTrackSendInfo_Value(track, 0, send, "I_MIDIFLAGS", 0)
@@ -1103,7 +1101,10 @@ function H.ensure_lane_track(lane)
         return shared
     end
     local track = H.lane_track(lane)
-    if track then return track end
+    if track then
+        H.configure_lane_track(track)
+        return track
+    end
     local target = H.target_track(lane)
     if not target then return nil end
     track = H.create_lane_track(target)
@@ -6226,6 +6227,7 @@ function H.follow_track_name(lane, track)
     if lane.name ~= name then lane.name = name end
     local hidden = H.lane_track(lane)
     if not hidden then return end
+    H.configure_lane_track(hidden)
     local wanted = H.lane_track_name(track)
     local _, current = r.GetSetMediaTrackInfo_String(hidden, "P_NAME", "", false)
     if current ~= wanted then
@@ -6903,6 +6905,7 @@ function H.load()
         L.quantize = tonumber(data.quantize) or 1
         L.follow_enabled = data.follow ~= false
         L.lead = tonumber(data.lead) or 0
+        if L.lead > 0.5 then L.lead = 0 end
         L.mute_song_default = data.mute_song ~= false
         L.big_cells = data.big_cells ~= false
         L.scenes = {}
@@ -11076,6 +11079,7 @@ function Launcher.init(context)
     H.load_midi_commands()
     H.load_midi_presets()
     H.reset_midi_input()
+    H.load_external_actions()
     return Launcher
 end
 
@@ -11097,6 +11101,7 @@ function Launcher.set_active(active)
             H.set_arrangement_muted(true, now or r.GetCursorPosition())
         end
     else
+        H.refresh_external_action_states(true, true)
         H.finish_autom_edit(false)
         H.lp_stop()
         H.reset_all()
@@ -11128,12 +11133,14 @@ function Launcher.update()
     end
     if L.tidy_wanted then H.tidy_lane_tracks() end
     H.keep_lane_order()
+    H.handle_external_actions()
     H.handle_midi()
     H.watch_gate()
     H.sync_lane_gates()
     H.watch_midi_editor()
     H.watch_autom_edit()
     H.lp_refresh(false)
+    H.refresh_external_action_states(false, false)
     H.punch_in_when_due()
     H.watch_recording()
     local now = H.schedule_pos()
@@ -11189,56 +11196,6 @@ function Launcher.update()
             H.extend_repeats(lane, heard)
         end
         H.harvest_lane(lane, false)
-    end
-end
-
--- Deliberately a panel with an explanation rather than a bare number: this
--- changes a REAPER preference that applies to every project, and it stays
--- changed after this script is closed.
-function H.draw_buffer_section()
-    local current = H.buffer_ms()
-    local original = H.buffer_original()
-    r.ImGui_TextColored(UI.ctx, UI.colors.accent, "Media buffer")
-    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "REAPER reads media this far ahead of the play cursor. A clip placed")
-    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "inside that window is missed, so the launcher gives every clip a")
-    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "run-up of the buffer plus a little. A smaller buffer means you can")
-    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "launch closer to the beat; a larger one is safer on a slow disk or")
-    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "a heavy project. It does not affect latency.")
-    r.ImGui_Spacing(UI.ctx)
-    r.ImGui_TextColored(UI.ctx, UI.colors.danger, "This is a global REAPER preference, not part of this project.")
-    r.ImGui_TextColored(UI.ctx, UI.colors.danger, "It stays changed after you close the launcher.")
-    r.ImGui_Spacing(UI.ctx)
-    r.ImGui_Separator(UI.ctx)
-    if current then
-        r.ImGui_Text(UI.ctx, "Now: " .. tostring(current) .. " ms  ->  run-up "
-            .. string.format("%.2f", H.auto_lead()) .. " s")
-    end
-    r.ImGui_Spacing(UI.ctx)
-    for _, value in ipairs({ 200, 400, 600, 800, 1200, 2000 }) do
-        local label = tostring(value) .. " ms"
-        local active = current == value
-        if active then
-            r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Button(), UI.colors.accent_soft)
-            r.ImGui_PushStyleColor(UI.ctx, r.ImGui_Col_Border(), UI.colors.accent)
-        end
-        if r.ImGui_Button(UI.ctx, label, UI.rounded(72), UI.rounded(24)) then H.set_buffer_ms(value) end
-        if active then r.ImGui_PopStyleColor(UI.ctx, 2) end
-        if r.ImGui_IsItemHovered(UI.ctx) then
-            r.ImGui_SetTooltip(UI.ctx, "Run-up would become " .. string.format("%.2f", math.max(0.3, math.min(4.0, value / 1000 + 0.3))) .. " s")
-        end
-        if value ~= 2000 then r.ImGui_SameLine(UI.ctx, 0, UI.rounded(4)) end
-    end
-    r.ImGui_Spacing(UI.ctx)
-    r.ImGui_Separator(UI.ctx)
-    if original then
-        if r.ImGui_Button(UI.ctx, "Restore your original (" .. tostring(original) .. " ms)", UI.rounded(240), UI.rounded(26)) then
-            H.restore_buffer()
-        end
-        if r.ImGui_IsItemHovered(UI.ctx) then
-            r.ImGui_SetTooltip(UI.ctx, "The value this preference had before the launcher first changed it")
-        end
-    else
-        r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "Unchanged by the launcher, so there is nothing to restore.")
     end
 end
 
@@ -11764,6 +11721,7 @@ function H.reset_midi_input()
     L.midi_last_retval = r.MIDI_GetRecentInputEvent and (r.MIDI_GetRecentInputEvent(0) or 0) or nil
     L.midi_pressed = {}
     L.midi_command_pressed = {}
+    L.midi_command_flash = {}
 end
 
 function H.begin_midi_learn(command)
@@ -11827,6 +11785,7 @@ function H.set_midi_command(key, binding)
     r.SetExtState(C.ext_section, "midi_command_" .. key, value, true)
     L.midi_learn = nil
     L.midi_learn_retval = nil
+    L.lp_shadow = nil
     H.reset_midi_input()
 end
 
@@ -11870,11 +11829,116 @@ function H.run_midi_command(key)
     if scene and scene <= L.rows then H.launch_scene(scene) end
 end
 
+function H.handle_external_actions()
+    local queue = r.GetExtState(C.action_section, "queue")
+    if not queue or queue == "" then return end
+    local allowed = {}
+    local remaining = {}
+    local project_key = tostring(r.EnumProjects(-1, ""))
+    for _, command in ipairs(MIDI_COMMANDS) do allowed[command.key] = true end
+    for entry in queue:gmatch("[^|]+") do
+        local target, key = entry:match("^(.*),([^,]+)$")
+        if target == project_key and allowed[key] then
+            H.run_midi_command(key)
+        else
+            remaining[#remaining + 1] = entry
+        end
+    end
+    r.SetExtState(C.action_section, "queue", table.concat(remaining, "|"), false)
+end
+
+function H.external_actions_folder()
+    local here = debug.getinfo(1, "S").source:match("@?(.*[\\/])") or ""
+    local parent = here:match("^(.*[\\/])TK_PROJECT_CLIPS[\\/]$")
+    return parent and (parent .. "TK_PROJECT_CLIPS_ACTIONS") or nil
+end
+
+function H.external_action_path(command)
+    local folder = H.external_actions_folder()
+    return folder and (folder .. C.sep .. "TK Project Clips - " .. command.label .. ".lua") or nil
+end
+
+function H.load_external_actions()
+    local mode = r.GetExtState(C.ext_section, "external_actions_mode")
+    if mode == "" and r.AddRemoveReaScript then
+        for index, command in ipairs(MIDI_COMMANDS) do
+            local path = H.external_action_path(command)
+            if path and r.file_exists(path) then
+                r.AddRemoveReaScript(false, 0, path, index == #MIDI_COMMANDS)
+            end
+        end
+        mode = "off"
+        r.SetExtState(C.ext_section, "external_actions_mode", mode, true)
+    end
+    L.external_actions_mode = mode == "core" and "core" or mode == "full" and "full" or "off"
+    L.external_action_ids = {}
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local command_id = tonumber(r.GetExtState(C.ext_section, "external_action_id_" .. command.key))
+        if command_id and command_id > 0 then L.external_action_ids[command.key] = command_id end
+    end
+end
+
+function H.set_external_actions(mode)
+    if not r.AddRemoveReaScript then
+        L.status = "This REAPER cannot manage ReaScript actions"
+        return
+    end
+    mode = mode == "core" and "core" or mode == "full" and "full" or "off"
+    H.refresh_external_action_states(true, true)
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local path = H.external_action_path(command)
+        if path and r.file_exists(path) then r.AddRemoveReaScript(false, 0, path, false) end
+        r.SetExtState(C.ext_section, "external_action_id_" .. command.key, "", true)
+    end
+    L.external_action_ids = {}
+    L.external_action_states = {}
+    local limit = mode == "core" and 8 or mode == "full" and #MIDI_COMMANDS or 0
+    for index = 1, limit do
+        local command = MIDI_COMMANDS[index]
+        local path = H.external_action_path(command)
+        if path and r.file_exists(path) then
+            local command_id = r.AddRemoveReaScript(true, 0, path, index == limit)
+            if command_id and command_id > 0 then
+                L.external_action_ids[command.key] = command_id
+                r.SetExtState(C.ext_section, "external_action_id_" .. command.key, tostring(command_id), true)
+            end
+        end
+    end
+    if limit == 0 then
+        local last = H.external_action_path(MIDI_COMMANDS[#MIDI_COMMANDS])
+        if last then r.AddRemoveReaScript(false, 0, last, true) end
+    end
+    L.external_actions_mode = mode
+    r.SetExtState(C.ext_section, "external_actions_mode", mode, true)
+    L.status = mode == "core" and "Installed 8 core ReaLearn actions"
+        or mode == "full" and "Installed all 40 ReaLearn actions"
+        or "Removed ReaLearn actions"
+end
+
+function H.refresh_external_action_states(force, clear)
+    if not r.SetToggleCommandState then return end
+    local now = r.time_precise()
+    if not force and now < L.external_action_refresh then return end
+    L.external_action_refresh = now + 0.1
+    local changed = false
+    for key, command_id in pairs(L.external_action_ids) do
+        local state = not clear and H.lp_command_active(key) and 1 or 0
+        if L.external_action_states[key] ~= state then
+            L.external_action_states[key] = state
+            r.SetToggleCommandState(0, command_id, state)
+            changed = true
+        end
+    end
+    if changed and r.RefreshToolbar2 then r.RefreshToolbar2(0, 0) end
+end
+
 function H.midi_command_available(command)
     local octave_mode = L.midi_layout == "keyboard" and L.midi_keyboard_mode == "octaves"
     local pad_scenes = L.midi_layout == "pads" and L.midi_pad_mode == "scenes"
     local pad_clips = L.midi_layout == "pads" and L.midi_pad_mode == "clips"
-    if command.scene then return (octave_mode or pad_clips) and command.scene <= L.rows end
+    if command.scene then
+        return (octave_mode or pad_clips or L.midi_layout == "launchpad") and command.scene <= L.rows
+    end
     if pad_scenes and (command.key == "lane_prev" or command.key == "lane_next" or command.key == "stop_lane") then
         return false
     end
@@ -11901,6 +11965,7 @@ function H.handle_midi_command(kind, channel, number, value)
             and binding.channel == channel and binding.number == number then
             if not L.midi_command_pressed[signature] then
                 L.midi_command_pressed[signature] = true
+                L.midi_command_flash[signature] = r.time_precise() + 0.15
                 H.run_midi_command(command.key)
             end
             return true
@@ -12226,6 +12291,40 @@ function H.lp_cell_colour(row, col, blink)
     return H.lp_colour(color, false), 0
 end
 
+function H.lp_command_binding(kind, number)
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local binding = L.midi_commands[command.key]
+        if H.midi_command_available(command) and binding and binding.kind == kind and binding.number == number then
+            return command, binding
+        end
+    end
+end
+
+function H.lp_command_active(key)
+    if key == "record" then return L.recording or L.record_stop_at ~= nil end
+    local lane_offset, scene_offset = H.midi_bank_offsets()
+    if key == "stop_lane" then
+        local lane = L.lanes[lane_offset + 1]
+        return lane and (lane.current ~= nil or lane.pending ~= nil or lane.queued ~= nil) or false
+    end
+    if key == "stop_all" then
+        for _, lane in ipairs(L.lanes) do
+            if lane.current or lane.pending or lane.queued then return true end
+        end
+        return false
+    end
+    if key == "launch_scene" then return L.scene_run and L.scene_run.row == scene_offset + 1 or false end
+    local scene = tonumber(key:match("^launch_scene_(%d+)$"))
+    return scene and L.scene_run and L.scene_run.row == scene or false
+end
+
+function H.lp_command_colour(command, binding)
+    local signature = binding.kind .. ":" .. tostring(binding.channel) .. ":" .. tostring(binding.number)
+    local flash = (L.midi_command_flash[signature] or 0) > r.time_precise()
+    local color = (command.key == "record" or command.key == "stop_all") and 0xFF0000FF or nil
+    return H.lp_colour(color, flash or H.lp_command_active(command.key))
+end
+
 -- Only what changed is sent. A Launchpad given all sixty-four pads several
 -- times a second falls behind and starts dropping messages, and the grid then
 -- lags a beat behind the music, which is worse than no lights at all.
@@ -12239,12 +12338,22 @@ function H.lp_refresh(force)
     L.lp_sent = now
     local blink = (now % 0.6) < 0.3
     L.lp_shadow = L.lp_shadow or {}
+    local represented = {}
     for row = 0, 7 do
         for col = 0, 8 do
             local note = H.lp_note(row, col)
             if note then
+                local kind = col == 8 and H.lp_scene_is_cc() and "cc" or "note"
+                local command, binding = H.lp_command_binding(kind, note)
                 local wanted, lane_channel = H.lp_cell_colour(row, col, blink)
-                local status = ((col == 8 and H.lp_scene_is_cc()) and 0xB0 or 0x90) + lane_channel
+                local status
+                if command then
+                    wanted = H.lp_command_colour(command, binding)
+                    status = (kind == "cc" and 0xB0 or 0x90) + binding.channel - 1
+                    represented[command.key] = true
+                else
+                    status = (kind == "cc" and 0xB0 or 0x90) + lane_channel
+                end
                 -- The status byte is part of what the pad is showing: a strip
                 -- that went from note to control change, or a pad that went from
                 -- steady to pulsing, is a change like any other.
@@ -12253,6 +12362,19 @@ function H.lp_refresh(force)
                     L.lp_shadow[note] = state
                     H.lp_send(status, note, wanted)
                 end
+            end
+        end
+    end
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local binding = L.midi_commands[command.key]
+        if binding and H.midi_command_available(command) and not represented[command.key] then
+            local status = (binding.kind == "cc" and 0xB0 or 0x90) + binding.channel - 1
+            local wanted = H.lp_command_colour(command, binding)
+            local shadow_key = "command:" .. command.key
+            local state = status * 65536 + binding.number * 256 + wanted
+            if force or L.lp_shadow[shadow_key] ~= state then
+                L.lp_shadow[shadow_key] = state
+                H.lp_send(status, binding.number, wanted)
             end
         end
     end
@@ -12267,6 +12389,13 @@ function H.lp_clear()
             if note then
                 H.lp_send((col == 8 and H.lp_scene_is_cc()) and 0xB0 or 0x90, note, off)
             end
+        end
+    end
+    for _, command in ipairs(MIDI_COMMANDS) do
+        local binding = L.midi_commands[command.key]
+        if binding then
+            local status = (binding.kind == "cc" and 0xB0 or 0x90) + binding.channel - 1
+            H.lp_send(status, binding.number, off)
         end
     end
 end
@@ -12539,8 +12668,20 @@ function H.handle_midi()
                             H.click_slot(lane, lane_index, row, slot)
                         end
                     else
-                        L.status = "MIDI note " .. tostring(note) .. " maps to empty lane "
-                            .. tostring(lane_index) .. ", scene " .. tostring(row)
+                        local mark = lane and not H.is_env_lane(lane) and H.slot_mark(lane_index, row) or nil
+                        if lane and not H.is_env_lane(lane)
+                            and (mark or H.track_armed(H.target_track(lane))) then
+                            L.cursor.lane, L.cursor.row = lane_index, row
+                            L.midi_pressed[key] = { lane = lane, row = row, record = true }
+                            if mark and not mark.to then
+                                H.slot_record_stop(lane_index, row)
+                            elseif not mark then
+                                H.slot_record_start(lane_index, row)
+                            end
+                        else
+                            L.status = "MIDI note " .. tostring(note) .. " maps to empty lane "
+                                .. tostring(lane_index) .. ", scene " .. tostring(row)
+                        end
                     end
                 end
             elseif (kind == 0x80 or (kind == 0x90 and velocity == 0)) and L.midi_pressed[key] then
@@ -12709,6 +12850,10 @@ function H.draw_launchpad_setup()
         end
         if r.ImGui_IsItemHovered(UI.ctx) then
             r.ImGui_SetTooltip(UI.ctx, "DAW mode is what Ableton and PlayTime use: the Session layout is\nswitched on and lit, and the board keeps its own Session and Custom\nbuttons and its second port for playing.\n\nProgrammer mode hands the whole surface over. Novation's own reference\nsays the board only returns to normal operation when it is switched\nback, so use it only if DAW mode will not talk to your board.")
+        end
+        if H.lp_mode() == "daw" then
+            r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
+                "DAW mode uses the Launchpad's dedicated DAW input and output ports.")
         end
     end
     if not r.StuffMIDIMessage then
@@ -12992,6 +13137,23 @@ function H.draw_midi_popup()
     r.ImGui_EndChild(UI.ctx)
     r.ImGui_TextColored(UI.ctx, UI.colors.text_dim,
         "Command assignments take priority over clip notes. The input must be enabled in REAPER Preferences > MIDI Devices.")
+    r.ImGui_Spacing(UI.ctx)
+    r.ImGui_Separator(UI.ctx)
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "ReaLearn actions")
+    if r.ImGui_Button(UI.ctx, "Install Core (8)", UI.rounded(118), UI.rounded(22)) then
+        H.set_external_actions("core")
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(6))
+    if r.ImGui_Button(UI.ctx, "Install Full (40)", UI.rounded(118), UI.rounded(22)) then
+        H.set_external_actions("full")
+    end
+    r.ImGui_SameLine(UI.ctx, 0, UI.rounded(6))
+    if r.ImGui_Button(UI.ctx, "Remove", UI.rounded(72), UI.rounded(22)) then
+        H.set_external_actions("off")
+    end
+    local action_mode = L.external_actions_mode == "core" and "Core installed"
+        or L.external_actions_mode == "full" and "Full set installed" or "Not installed"
+    r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, action_mode)
     r.ImGui_EndPopup(UI.ctx)
 end
 
@@ -13042,10 +13204,13 @@ function H.draw_timing_popup()
     r.ImGui_SameLine(UI.ctx, 0, UI.rounded(8))
     r.ImGui_TextColored(UI.ctx, UI.colors.text_dim, "in use: " .. string.format("%.2f", H.lead()) .. " s")
 
-    if H.buffer_can_write() then
+    local original_buffer = H.buffer_original()
+    if original_buffer and H.buffer_can_write() then
         r.ImGui_Spacing(UI.ctx)
         r.ImGui_Separator(UI.ctx)
-        H.draw_buffer_section()
+        if r.ImGui_Button(UI.ctx, "Restore original REAPER buffer (" .. tostring(original_buffer) .. " ms)") then
+            H.restore_buffer()
+        end
     end
     r.ImGui_EndPopup(UI.ctx)
 end
@@ -13338,7 +13503,7 @@ function H.toolbar_items()
             end
         end })
 
-    -- Quantize, run-up and buffer are one subject: when a clip is allowed to
+    -- Quantize and run-up are one subject: when a clip is allowed to
     -- start. They live behind one button, which carries the quantize in its
     -- label because that is the one you reach for mid-jam.
     local quantize_label = "1 bar"
@@ -13351,7 +13516,7 @@ function H.toolbar_items()
                 r.ImGui_OpenPopup(UI.ctx, "##launch_timing")
             end
             if r.ImGui_IsItemHovered(UI.ctx) then
-                r.ImGui_SetTooltip(UI.ctx, "Launch quantize, clip run-up and REAPER's media buffer")
+                r.ImGui_SetTooltip(UI.ctx, "Launch quantize and clip run-up")
             end
         end,
         menu = function()
@@ -13997,6 +14162,7 @@ function Launcher.shutdown()
     -- The pads keep whatever they were last told, so they are cleared and the
     -- device put back the way it was found.
     H.lp_stop()
+    H.refresh_external_action_states(true, true)
     if not L.active then return end
     H.reset_all()
     L.active = false
