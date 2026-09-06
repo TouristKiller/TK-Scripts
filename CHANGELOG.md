@@ -2,6 +2,12 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Workbench 0.9.7] - 2026-09-06
+
+### TK Workbench
+#### Bugfixes
+- **Media Browser performance**: Externe ratings worden niet langer opgehaald door tijdens normaal browsen de volledige audiobibliotheek te openen. Tagreads zijn nu vraaggestuurd, begrensd per frame en worden gebundeld wanneer sorteren of filteren op rating een bredere scan nodig maakt. Hierdoor blijven ook grote libraries responsief. Gemeld op het forum.
+
 ## [TK Project Clips 0.6.3] - 2026-09-06
 
 ### TK Project Clips

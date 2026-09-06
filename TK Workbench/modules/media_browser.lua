@@ -118,6 +118,8 @@ local state = {
   embedded_rating_queue = {},
   embedded_rating_queued = {},
   embedded_rating_queue_index = 1,
+  embedded_rating_changes = 0,
+  embedded_rating_loads_frame = 0,
   metadata_cache = {},
   category_cache = {},
   category_counts = {},
@@ -1090,10 +1092,17 @@ function embedded_file_rating(path, immediate)
   local cached = state.embedded_ratings[key]
   if cached ~= nil then return cached or nil end
   if immediate then
+    if state.embedded_rating_loads_frame >= 1 then
+      if EXT.audio[extension(path)] and not state.embedded_rating_queued[key] then
+        state.embedded_rating_queued[key] = true
+        state.embedded_rating_queue[#state.embedded_rating_queue + 1] = path
+      end
+      return nil
+    end
+    state.embedded_rating_loads_frame = state.embedded_rating_loads_frame + 1
     local rating = mb_read_embedded_rating(path)
     state.embedded_ratings[key] = rating or false
     state.embedded_rating_queued[key] = nil
-    if rating then state.last_filter_key = nil end
     return rating
   end
   if EXT.audio[extension(path)] and not state.embedded_rating_queued[key] then
@@ -1104,8 +1113,7 @@ function embedded_file_rating(path, immediate)
 end
 
 function process_embedded_rating_queue(limit)
-  local changed = false
-  for _ = 1, limit or 6 do
+  for _ = 1, limit or 1 do
     local path = state.embedded_rating_queue[state.embedded_rating_queue_index]
     if not path then break end
     state.embedded_rating_queue_index = state.embedded_rating_queue_index + 1
@@ -1114,20 +1122,26 @@ function process_embedded_rating_queue(limit)
     if state.embedded_ratings[key] == nil then
       local rating = mb_read_embedded_rating(path)
       state.embedded_ratings[key] = rating or false
-      if rating then changed = true end
+      if rating then state.embedded_rating_changes = state.embedded_rating_changes + 1 end
     end
   end
   if state.embedded_rating_queue_index > #state.embedded_rating_queue then
     state.embedded_rating_queue = {}
     state.embedded_rating_queue_index = 1
+    if state.embedded_rating_changes > 0 then state.last_filter_key = nil end
+    state.embedded_rating_changes = 0
+  elseif state.embedded_rating_changes >= 24 then
+    state.last_filter_key = nil
+    state.embedded_rating_changes = 0
   end
-  if changed then state.last_filter_key = nil end
 end
 
 function file_rating(path, immediate)
   local local_rating = state.ratings[rating_key(path)]
   if local_rating ~= nil then return local_rating end
-  return embedded_file_rating(path, immediate) or 0
+  if immediate then return embedded_file_rating(path, true) or 0 end
+  local cached = state.embedded_ratings[rating_key(path)]
+  return cached or 0
 end
 
 function load_ratings()
@@ -1283,6 +1297,7 @@ function reset_scan()
   state.embedded_rating_queue = {}
   state.embedded_rating_queued = {}
   state.embedded_rating_queue_index = 1
+  state.embedded_rating_changes = 0
   state.metadata_cache = {}
   state.midi_note_cache = {}
   state.category_cache = {}
@@ -1573,6 +1588,7 @@ function refresh_filter(settings)
   local key = filter_key(settings)
   if key == state.last_filter_key then return end
   local term = Text.lower(tostring(settings.search_term or ""))
+  local ratings_needed = settings.minimum_rating > 0 or settings.sort_mode == "rating"
   local auto_scope = settings.location_view_mode == "auto" and auto_category_scope(settings) or ""
   local result = {}
   for _, file in ipairs(state.files) do
@@ -1585,6 +1601,7 @@ function refresh_filter(settings)
     if include and settings.location_view_mode == "auto" and settings.auto_selected_category ~= "All" then
       include = category_for_file(file) == settings.auto_selected_category
     end
+    if include and ratings_needed then embedded_file_rating(file.path, false) end
     if include and file_rating(file.path) < settings.minimum_rating then include = false end
     -- Both sides through Text.lower, or a Cyrillic filename still only matches
     -- when the capitals are typed exactly as they appear.
@@ -5702,7 +5719,7 @@ function M.update(app)
   local active = app.settings and app.settings.active_module == M.id
   cleanup_retired_preview_sources(false)
   update_pending_preview(settings)
-  if active then process_embedded_rating_queue(6) end
+  if active then process_embedded_rating_queue(1) end
   if state.activated and (active or state.scanning) then
     if is_project_files_location(selected_location(settings)) and state.loaded_location == PROJECT_FILES_LOCATION and state.project_files_signature ~= project_files_signature() then load_or_scan_location(settings, true) end
     scan_step(settings)
@@ -5719,6 +5736,7 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  state.embedded_rating_loads_frame = 0
   mb_begin_image_frame(ctx)
   state.activated = true
   if r.ImGui_GetWindowPos and r.ImGui_GetWindowSize then

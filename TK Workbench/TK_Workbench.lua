@@ -1,10 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.9.6
+-- @version 0.9.7
 -- @changelog:
--- v0.9.6
---   + Media Browser: Ratings written by other applications are picked up from MP3, WAV, FLAC, Opus and other supported audio tags, including foobar2000 POPM ratings. A Workbench rating remains an explicit override, while the list, tiles and rating menu distinguish a file that was never rated from one deliberately set to No rating. Requested on the forum
---   + Control Room: MONO now produces a reliable mono sum through the monitor processing bus instead of depending on REAPER's hardware-send mono flag, while keeping both channels of each stereo monitor active. Reported on the forum
+-- v0.9.7
+--   + Media Browser: External rating detection no longer opens the entire audio library while browsing. Tag reads are now demand-driven, limited per frame and batched when rating sort or filtering needs a wider scan, restoring responsive browsing in large libraries. Reported on the forum
 
 local r = reaper
 
