@@ -1,7 +1,8 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.6.3
+-- @version 0.6.4
 -- @changelog:
+--   + Launcher: Recording-ready and queued Launchpad pads now blink in time with the project tempo
 --   + Launcher: Armed empty MIDI pads now start and stop recording into their clip slots
 --   + Launcher: Learned MIDI commands light up, flash when pressed and show active Record and scene states
 --   + Launcher: DAW mode now clearly identifies the Launchpad's dedicated input and output ports

@@ -12247,6 +12247,15 @@ function H.lp_off()
     return H.lp_family().palette and 0 or 12
 end
 
+function H.lp_blink(now)
+    local position = H.heard_pos()
+    if position then
+        local qn = r.TimeMap2_timeToQN(0, position)
+        return (qn % 1) < 0.5
+    end
+    return (now % 0.6) < 0.3
+end
+
 --------------------------------------------------------------------------------
 -- what the grid should look like
 --------------------------------------------------------------------------------
@@ -12276,7 +12285,6 @@ function H.lp_cell_colour(row, col, blink)
         -- An armed track shows where a recording would land, the way the grid
         -- draws its record ring in an empty cell.
         if H.slot_mark(lane_offset + col + 1, scene_row) or H.track_armed(H.target_track(lane)) then
-            if fancy then return H.lp_colour(0xFF0000FF, true), 1 end
             return blink and H.lp_colour(0xFF0000FF, true) or H.lp_off(), 0
         end
         return H.lp_off(), 0
@@ -12284,7 +12292,6 @@ function H.lp_cell_colour(row, col, blink)
     local color = slot.color or H.lane_color(lane)
     local live = H.slot_is_live(lane, scene_row)
     if live == "pending" or (lane.queued and lane.queued.row == scene_row) then
-        if fancy then return H.lp_colour(color, true), 1 end
         return blink and H.lp_colour(color, true) or H.lp_off(), 0
     end
     if live == "playing" then return H.lp_colour(color, true), fancy and 2 or 0 end
@@ -12336,7 +12343,7 @@ function H.lp_refresh(force)
     local now = r.time_precise()
     if not force and L.lp_sent and now - L.lp_sent < 0.05 then return end
     L.lp_sent = now
-    local blink = (now % 0.6) < 0.3
+    local blink = H.lp_blink(now)
     L.lp_shadow = L.lp_shadow or {}
     local represented = {}
     for row = 0, 7 do

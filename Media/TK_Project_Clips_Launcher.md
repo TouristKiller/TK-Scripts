@@ -1,6 +1,6 @@
 # TK Project Clips - Clip Launcher
 
-A session view for REAPER. Version 0.6.3 - requires SWS, js_ReaScriptAPI and ReaImGui.
+A session view for REAPER. Version 0.6.4 - requires SWS, js_ReaScriptAPI and ReaImGui.
 
 ## What it is
 

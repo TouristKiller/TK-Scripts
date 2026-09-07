@@ -685,7 +685,7 @@ v0.2.51
 
  <category name="Media">
     <reapack name="TK_PROJECT_CLIPS.lua" type="script" desc="TK Project Clips">
-        <version name="0.6.3" author="TouristKiller" time="2026-09-06T12:06:03Z">
+        <version name="0.6.4" author="TouristKiller" time="2026-09-07T14:59:36Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS.lua</source>
         <source file="TK_PROJECT_CLIPS/launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/launcher.lua</source>
         <source file="TK_PROJECT_CLIPS/chord_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/chord_engine.lua</source>
@@ -736,6 +736,8 @@ v0.2.51
         <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 32.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2032.lua</source>
         <source file="TK_Project_Clips_Launcher.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_Project_Clips_Launcher.pdf</source>
         <changelog><![CDATA[
+            v0.6.4
+            + Launcher: Recording-ready and queued Launchpad pads now blink in time with the project tempo
             v0.6.3
             + Launcher: Armed empty MIDI pads now start and stop recording into their clip slots
             + Launcher: Learned MIDI commands light up, flash when pressed and show active Record and scene states

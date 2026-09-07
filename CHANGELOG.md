@@ -2,6 +2,12 @@
 
 Alle belangrijke wijzigingen aan dit script pakket worden hieronder bijgehouden.
 
+## [TK Project Clips 0.6.4] - 2026-09-07
+
+### TK Project Clips
+#### Gewijzigd
+- **Launchpad-feedback**: Opnameklare en wachtende pads knipperen tijdens afspelen nu op de projectbeat en volgen automatisch tempoveranderingen. Bij stilstaand transport blijft de bestaande rustige knippering actief.
+
 ## [TK Workbench 0.9.7] - 2026-09-06
 
 ### TK Workbench
