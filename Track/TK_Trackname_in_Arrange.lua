@@ -1,8 +1,11 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.8
+-- @version 1.9.9
 -- @changelog 
 --[[
+v1.9.9:
++ Added individual color controls for the record-arm, solo, and mute status dots
+
 v1.9.8:
 + Added optional master-gap fill with adjustable track-background matching for a seamless appearance at every master color intensity
 
@@ -546,6 +549,9 @@ local default_settings              = {
     show_parent_label               = false,
     show_record_color               = true,
     show_status_dots                = true,
+    status_dot_arm_color            = 0xFF0000FF,
+    status_dot_solo_color           = 0xFF8C00FF,
+    status_dot_mute_color           = 0xFF0000FF,
     horizontal_offset               = 100,
     vertical_offset                 = 0,
     selected_font                   = 1,
@@ -1714,6 +1720,23 @@ function ShowSettingsWindow()
         if r.ImGui_RadioButton(ctx, "Status dots", settings.show_status_dots) then
             settings.show_status_dots = not settings.show_status_dots
         end
+
+        r.ImGui_BeginDisabled(ctx, not settings.show_status_dots)
+        settings.status_dot_arm_color = (settings.status_dot_arm_color & 0xFFFFFF00) | 0xFF
+        settings.status_dot_solo_color = (settings.status_dot_solo_color & 0xFFFFFF00) | 0xFF
+        settings.status_dot_mute_color = (settings.status_dot_mute_color & 0xFFFFFF00) | 0xFF
+        local status_dot_color_flags = r.ImGui_ColorEditFlags_NoInputs()
+        r.ImGui_Text(ctx, "Dot colors:")
+        r.ImGui_SameLine(ctx)
+        local color_changed, new_color = r.ImGui_ColorEdit3(ctx, "Arm##StatusDotArm", (settings.status_dot_arm_color >> 8) & 0xFFFFFF, status_dot_color_flags)
+        if color_changed then settings.status_dot_arm_color = ((new_color & 0xFFFFFF) << 8) | 0xFF end
+        r.ImGui_SameLine(ctx)
+        color_changed, new_color = r.ImGui_ColorEdit3(ctx, "Solo##StatusDotSolo", (settings.status_dot_solo_color >> 8) & 0xFFFFFF, status_dot_color_flags)
+        if color_changed then settings.status_dot_solo_color = ((new_color & 0xFFFFFF) << 8) | 0xFF end
+        r.ImGui_SameLine(ctx)
+        color_changed, new_color = r.ImGui_ColorEdit3(ctx, "Mute##StatusDotMute", (settings.status_dot_mute_color >> 8) & 0xFFFFFF, status_dot_color_flags)
+        if color_changed then settings.status_dot_mute_color = ((new_color & 0xFFFFFF) << 8) | 0xFF end
+        r.ImGui_EndDisabled(ctx)
         
         r.ImGui_Dummy(ctx, 0, 4)
         r.ImGui_Separator(ctx)
@@ -5266,7 +5289,7 @@ function loop()
                                     dot_x,
                                     dots_start_y + dot_size/2,
                                     dot_size/2,
-                                    0xFF0000FF
+                                    settings.status_dot_arm_color
                                 )
                             end
                             
@@ -5276,7 +5299,7 @@ function loop()
                                     dot_x,
                                     dots_start_y + dot_size + dot_spacing + dot_size/2,
                                     dot_size/2,
-                                    0x0000FFFF
+                                    settings.status_dot_solo_color
                                 )
                             end
                             
@@ -5286,7 +5309,7 @@ function loop()
                                     dot_x,
                                     dots_start_y + (dot_size * 2) + (dot_spacing * 2) + dot_size/2,
                                     dot_size/2,
-                                    0xFF8C00FF
+                                    settings.status_dot_mute_color
                                 )
                             end
                             

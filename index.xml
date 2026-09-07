@@ -1025,8 +1025,11 @@ v0.2.51
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="1.9.8" author="TouristKiller" time="2026-09-03T21:40:58Z">
+        <version name="1.9.9" author="TouristKiller" time="2026-09-07T00:00:00Z">
             <changelog><![CDATA[
+            v1.9.9:
+            + Added individual color controls for the record-arm, solo, and mute status dots
+
             v1.9.8:
             + Added optional master-gap fill with adjustable track-background matching for a seamless appearance at every master color intensity
 
