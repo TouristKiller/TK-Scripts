@@ -1,9 +1,19 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.9.7
+-- @version 0.9.8
 -- @changelog:
--- v0.9.7
---   + Media Browser: External rating detection no longer opens the entire audio library while browsing. Tag reads are now demand-driven, limited per frame and batched when rating sort or filtering needs a wider scan, restoring responsive browsing in large libraries. Reported on the forum
+-- v0.9.8
+--   + Time Machine (new module): Keeps a copy of every saved version of a project and says in plain words what changed between saves: tracks, plugins, items, envelopes, mixer settings, tempo, markers and the master. Versions are kept outside the project, in a "TK Time Machine" folder at a location of your choice, so the .rpp itself never grows. Saves are picked up in the background whenever Workbench runs, and copying and comparing are spread over frames so even very large projects do not stall the window
+--   + Time Machine: Anything from an older version can be put back into the open project: one plugin, an envelope, a track's items or mixer settings, a whole track, a deleted track or a marker. Right-click a line in the list of changes or use a track's Restore menu; every restore is a single undo step, and tracks and plugins are found by their id, so a restore lands on the right track even after reordering or renaming
+--   + Time Machine: "Versus now" compares a saved version with the project as it is, unsaved changes included. Select the newest version to see exactly what you changed since the last save, and undo any of it line by line
+--   + Time Machine: History shows every saved change to one track or one plugin, newest first, so a question like "when did that reverb disappear?" no longer means clicking through every version. Open it from a track's History button, by right-clicking a plugin, or with Track for the track selected in REAPER
+--   + Time Machine: Versions can be labelled ("Mix v1 sent to client") with a note, and labelled versions are never cleaned up. Other versions are thinned out automatically: every save is kept for a day, then one per hour for a week, then one per day, within a size limit per project
+--   + Time Machine: VST, VST3 and CLAP plugins store their settings as an unreadable blob, so the list can only say "state changed". Explain plugin changes loads both versions on a hidden temporary track and names the parameters that actually moved, or tells you only the plugin's private data changed. JSFX sliders are named straight from the effect's source, and hidden sliders that meters write their readings into are ignored, so a meter on the master no longer shows up as an edit
+--   + Time Machine: REAPER's own .rpp-bak backups (beside the project and in its Backups folder) can be imported, dated by when they were saved, to give a project a history from before Time Machine was installed
+--   + Time Machine: A history follows its project when the project is moved or renamed, a Save As starts a new history that remembers where it came from, and Link reconnects a history by hand. When the storage location is changed, existing histories can be moved along and are merged with any already there
+--   + Time Machine: An old version can be opened as a copy in a new tab and compared by ear with A/B, which switches between the two at the same play position (also available as an action for a shortcut). A track can be borrowed from any version of any project, with fresh ids and its media paths kept working. The list of changes can be copied as text, and a storage overview shows the space each history takes and cleans up histories whose project is gone
+--   + Track Recall: Time Machine can save a track as it was in an older version as a recall, without changing the track now. The track chunk handling moved into a shared core file for this; restoring recalls works exactly as before
+--   + Media Browser: Ratings in an ID3 chunk at the end of a WAV file are now found in WAVs larger than 50 MB. The scan stopped at the first chunk over 50 MB, which is normally the audio itself; now only the ID3 chunk is held to that limit
 
 local r = reaper
 
@@ -68,6 +78,7 @@ local module_names = {
   "action_clipboard",
   "script_launcher",
   "track_recall",
+  "time_machine",
   "idea_vault",
   "track_tags",
   "automation_item_manager",
@@ -691,6 +702,14 @@ local function draw_module_icon(draw_list, module, cx, cy, size, color)
     r.ImGui_DrawList_AddLine(draw_list, R(20), T(15), cx, MY(-2), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, cx, MY(3), L(21), B(14), color, W(2))
     r.ImGui_DrawList_AddLine(draw_list, cx, MY(3), R(21), B(14), color, W(2))
+  elseif id == "time_machine" then
+    -- A clock face with an arrow running back around it.
+    r.ImGui_DrawList_PathArcTo(draw_list, cx, cy, size * 0.34, math.pi * 0.95, math.pi * 2.55, 24)
+    r.ImGui_DrawList_PathStroke(draw_list, color, 0, W(2))
+    r.ImGui_DrawList_AddTriangleFilled(draw_list, L(6), MY(-1), L(15), MY(-1), L(10.5), MY(6), color)
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx, T(15), color, W(2))
+    r.ImGui_DrawList_AddLine(draw_list, cx, cy, MX(7), MY(5), color, W(2))
+    r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, RD(2), color, 12)
   elseif id == "idea_vault" then
     r.ImGui_DrawList_AddCircle(draw_list, cx, T(19), RD(9), color, 24, W(2))
     r.ImGui_DrawList_AddLine(draw_list, MX(-4), T(27), MX(-4), B(15), color, W(2))

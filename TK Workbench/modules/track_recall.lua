@@ -3,6 +3,7 @@ local Theme = require("core.theme")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
 local json = require("core.json")
+local TrackChunk = require("core.track_chunk")
 
 local M = {
   id = "track_recall",
@@ -29,43 +30,7 @@ local part_descriptions = {
   misc = "Mixer and track settings such as volume, pan, mute, solo, phase, record/monitor, automation mode, name and color."
 }
 
-local envelope_keys = {
-  VOLENV = true,
-  VOLENV2 = true,
-  VOLENV3 = true,
-  PANENV = true,
-  PANENV2 = true,
-  MUTEENV = true,
-  WIDTHENV = true,
-  WIDTHENV2 = true,
-  AUXVOLENV = true,
-  AUXPANENV = true,
-  AUXMUTEENV = true
-}
-
-local envelope_order = {
-  "VOLENV",
-  "VOLENV2",
-  "VOLENV3",
-  "PANENV",
-  "PANENV2",
-  "MUTEENV",
-  "WIDTHENV",
-  "WIDTHENV2",
-  "AUXVOLENV",
-  "AUXPANENV",
-  "AUXMUTEENV"
-}
-
-local misc_keys = {
-  NAME = true,
-  VOLPAN = true,
-  MUTESOLO = true,
-  IPHASE = true,
-  REC = true,
-  AUTOMODE = true,
-  PEAKCOL = true
-}
+local envelope_keys = TrackChunk.envelope_keys
 
 local state = {
   track_guid = nil,
@@ -173,172 +138,9 @@ local function selected_track_label(app, track)
   return name
 end
 
-local function starts_with(value, prefix)
-  return value:sub(1, #prefix) == prefix
-end
-
-local function split_lines(chunk)
-  local lines = {}
-  chunk = tostring(chunk or "")
-  for line in (chunk .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
-  if lines[#lines] == "" then table.remove(lines) end
-  return lines
-end
-
-local function join_lines(lines)
-  return table.concat(lines or {}, "\n") .. "\n"
-end
-
-local function line_section_key(line)
-  return tostring(line or ""):match("^<([%w_]+)")
-end
-
-local function root_line_key(line)
-  return tostring(line or ""):match("^(%S+)")
-end
-
-local function find_section_end(lines, start_index)
-  local depth = 0
-  for index = start_index, #lines do
-    local line = lines[index]
-    if starts_with(line, "<") then
-      depth = depth + 1
-    elseif starts_with(line, ">") then
-      depth = depth - 1
-      if depth <= 0 then return index end
-    end
-  end
-  return #lines
-end
-
-local function line_range(lines, start_index, end_index)
-  local result = {}
-  for index = start_index, end_index do result[#result + 1] = lines[index] end
-  return result
-end
-
-local function extract_sections(chunk, wanted)
-  local lines = split_lines(chunk)
-  local sections = {}
-  local depth = 0
-  local index = 1
-  while index <= #lines do
-    local line = lines[index]
-    local key = line_section_key(line)
-    if key and depth == 1 and wanted[key] then
-      local end_index = find_section_end(lines, index)
-      sections[#sections + 1] = { key = key, chunk = join_lines(line_range(lines, index, end_index)) }
-      index = end_index + 1
-    else
-      if starts_with(line, "<") then depth = depth + 1 elseif starts_with(line, ">") then depth = math.max(0, depth - 1) end
-      index = index + 1
-    end
-  end
-  return sections
-end
-
-local function extract_first_section(chunk, key)
-  local sections = extract_sections(chunk, { [key] = true })
-  return sections[1] and sections[1].chunk or nil
-end
-
-local function extract_root_lines(chunk, wanted)
-  local result = {}
-  local lines = split_lines(chunk)
-  local depth = 0
-  for _, line in ipairs(lines) do
-    if depth == 1 then
-      local key = root_line_key(line)
-      if key and wanted[key] then result[key] = line end
-    end
-    if starts_with(line, "<") then depth = depth + 1 elseif starts_with(line, ">") then depth = math.max(0, depth - 1) end
-  end
-  return result
-end
-
-local function section_list_chunks(sections)
-  local result = {}
-  for _, section in ipairs(sections or {}) do result[#result + 1] = section.chunk end
-  return result
-end
-
-local function remove_sections(lines, wanted)
-  local result = {}
-  local first_index = nil
-  local depth = 0
-  local index = 1
-  while index <= #lines do
-    local line = lines[index]
-    local key = line_section_key(line)
-    if key and depth == 1 and wanted[key] then
-      first_index = first_index or (#result + 1)
-      index = find_section_end(lines, index) + 1
-    else
-      result[#result + 1] = line
-      if starts_with(line, "<") then depth = depth + 1 elseif starts_with(line, ">") then depth = math.max(0, depth - 1) end
-      index = index + 1
-    end
-  end
-  return result, first_index
-end
-
-local function insert_chunk_strings(lines, insert_index, chunks)
-  local index = insert_index or #lines
-  for _, chunk in ipairs(chunks or {}) do
-    for _, line in ipairs(split_lines(chunk)) do
-      table.insert(lines, index, line)
-      index = index + 1
-    end
-  end
-  return lines
-end
-
-local function replace_sections(chunk, replacement)
-  local lines = split_lines(chunk)
-  local wanted = {}
-  local chunks = {}
-  replacement = replacement or {}
-  local order = { "FXCHAIN", "ITEM" }
-  for _, key in ipairs(envelope_order) do order[#order + 1] = key end
-  for _, key in ipairs(order) do
-    local value = replacement[key]
-    if value then
-      wanted[key] = true
-      for _, chunk_string in ipairs(value or {}) do chunks[#chunks + 1] = chunk_string end
-    end
-  end
-  for key, value in pairs(replacement) do
-    if not wanted[key] then
-      wanted[key] = true
-      for _, chunk_string in ipairs(value or {}) do chunks[#chunks + 1] = chunk_string end
-    end
-  end
-  local cleaned, insert_index = remove_sections(lines, wanted)
-  if not insert_index then insert_index = math.max(1, #cleaned) end
-  insert_chunk_strings(cleaned, insert_index, chunks)
-  return join_lines(cleaned)
-end
-
-local function replace_root_lines(chunk, values)
-  local lines = split_lines(chunk)
-  local depth = 0
-  for index, line in ipairs(lines) do
-    if depth == 1 then
-      local key = root_line_key(line)
-      if key and values and values[key] then lines[index] = values[key] end
-    end
-    if starts_with(line, "<") then depth = depth + 1 elseif starts_with(line, ">") then depth = math.max(0, depth - 1) end
-  end
-  return join_lines(lines)
-end
-
-local function keep_target_track_identity(source_chunk, target_chunk)
-  local source_lines = split_lines(source_chunk)
-  local target_lines = split_lines(target_chunk)
-  if #source_lines == 0 then return nil end
-  if target_lines[1] and starts_with(target_lines[1], "<TRACK") then source_lines[1] = target_lines[1] end
-  return replace_root_lines(join_lines(source_lines), extract_root_lines(target_chunk, { TRACKID = true }))
-end
+-- The chunk surgery lives in core/track_chunk.lua, shared with Time Machine.
+local extract_sections = TrackChunk.extract_sections
+local keep_target_track_identity = TrackChunk.keep_target_track_identity
 
 local function new_data()
   return { schema_version = 1, selected_state_id = nil, states = {} }
@@ -565,6 +367,36 @@ local function add_recall(app, track, name)
   app.status = "Saved Track Recall: " .. name
 end
 
+-- For other modules (Time Machine): store a chunk that did not come from the
+-- track as it is now, such as the same track in an older saved version.
+function M.add_recall_from_chunk(app, track, name, chunk)
+  if not track or type(chunk) ~= "string" or chunk == "" then return false end
+  load_for_track(track)
+  if not ensure_full_data(app, track) then return false end
+  local fx_chain = TrackChunk.extract_first_section(chunk, "FXCHAIN") or ""
+  local _, fx_count = fx_chain:gsub("\nBYPASS ", "")
+  local timestamp = now()
+  name = clean_name(name, "Recall " .. tostring(#state.data.states + 1))
+  state.data.states[#state.data.states + 1] = {
+    id = "recall_" .. tostring(timestamp) .. "_" .. tostring(#state.data.states + 1),
+    name = name,
+    created_at = timestamp,
+    updated_at = timestamp,
+    track_name = track_name(track),
+    track_color = r.GetTrackColor(track) or 0,
+    summary = {
+      fx = fx_count,
+      items = #extract_sections(chunk, { ITEM = true }),
+      envelopes = #extract_sections(chunk, envelope_keys)
+    },
+    sections = { full_chunk = chunk }
+  }
+  state.data.selected_state_id = state.data.states[#state.data.states].id
+  save_for_track(track)
+  state.dirty_filter = true
+  return true
+end
+
 local function multi_track_recall_name(track, base_name)
   return clean_name(track_name(track), "Track") .. " - " .. clean_name(base_name, "Recall")
 end
@@ -668,24 +500,7 @@ end
 
 local function build_partial_chunk(current_chunk, recall, options)
   local sections = recall.sections or {}
-  local source_chunk = sections.full_chunk or ""
-  if source_chunk == "" then return nil end
-  local replacement = {}
-  if options.fx then
-    local fx_chain = extract_first_section(source_chunk, "FXCHAIN")
-    if fx_chain then replacement.FXCHAIN = { fx_chain } end
-  end
-  if options.items then replacement.ITEM = section_list_chunks(extract_sections(source_chunk, { ITEM = true })) end
-  if options.envelopes then
-    for key in pairs(envelope_keys) do replacement[key] = {} end
-    for _, section in ipairs(extract_sections(source_chunk, envelope_keys)) do
-      replacement[section.key] = replacement[section.key] or {}
-      table.insert(replacement[section.key], section.chunk)
-    end
-  end
-  local chunk = replace_sections(current_chunk, replacement)
-  if options.misc then chunk = replace_root_lines(chunk, extract_root_lines(source_chunk, misc_keys)) end
-  return chunk
+  return TrackChunk.build_partial(current_chunk, sections.full_chunk or "", options)
 end
 
 local function restore_recall(app, track, recall, settings)

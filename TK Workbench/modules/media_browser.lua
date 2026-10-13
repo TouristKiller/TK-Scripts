@@ -1050,8 +1050,9 @@ function mb_wav_id3_rating(path)
     if not chunk_header or #chunk_header < 8 then break end
     local chunk_id = chunk_header:sub(1, 4)
     local chunk_size = mb_le4(chunk_header, 5)
-    if chunk_size < 0 or chunk_size > 50 * 1024 * 1024 then break end
+    if chunk_size < 0 then break end
     if chunk_id:upper() == "ID3 " then
+      if chunk_size > 50 * 1024 * 1024 then break end
       local tag = file:read(chunk_size)
       file:close()
       return mb_parse_id3_rating(tag)
