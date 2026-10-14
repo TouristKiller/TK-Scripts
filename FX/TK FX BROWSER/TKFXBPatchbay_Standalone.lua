@@ -1200,6 +1200,23 @@ function PatchbayDrawPinSymbol(draw_list, x1, y1, x2, y2, col)
     r.ImGui_DrawList_AddLine(draw_list, cx, rect_y + icon_h, cx, cy + h * 0.30, col, 1.4)
 end
 
+-- Two nodes joined by a cable: the view's own vocabulary, so it does not read
+-- as a second version of the schema strip beside it.
+function PatchbayDrawFxNodeSymbol(draw_list, x1, y1, x2, y2, col)
+    local w, h = x2 - x1, y2 - y1
+    local rad = math.max(1.6, w * 0.15)
+    local lx = x1 + w * 0.26
+    local rx = x1 + w * 0.74
+    local ty = y1 + h * 0.32
+    local by = y1 + h * 0.68
+    r.ImGui_DrawList_AddLine(draw_list, lx + rad, ty, rx - rad, ty, col, 1.2)
+    r.ImGui_DrawList_AddLine(draw_list, lx + rad, by, rx - rad, by, col, 1.2)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, lx, ty, rad, col)
+    r.ImGui_DrawList_AddCircle(draw_list, rx, ty, rad, col, 0, 1.2)
+    r.ImGui_DrawList_AddCircle(draw_list, lx, by, rad, col, 0, 1.2)
+    r.ImGui_DrawList_AddCircleFilled(draw_list, rx, by, rad, col)
+end
+
 function PatchbayDrawSchemaSymbol(draw_list, x1, y1, x2, y2, col)
     local w = x2 - x1
     local h = y2 - y1
@@ -3962,6 +3979,42 @@ function NotesReadWorkbench(key)
     return ""
 end
 
+-- TK Notes and the Workbench Notes module share one store now: a per-track
+-- P_EXT blob holding the whole note document. The two legacy namespaces read
+-- above are only still written by older installs, so a note edited today lives
+-- here and nowhere else.
+local NOTES_SHARED_TRACK_PEXT = "TK_NOTES_SHARED"
+local NOTES_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+function NotesBase64Decode(s)
+    if not s or s == "" then return "" end
+    s = s:gsub("[^" .. NOTES_B64 .. "=]", ""):gsub("=+$", "")
+    local out, acc, bits = {}, 0, 0
+    for i = 1, #s do
+        local idx = NOTES_B64:find(s:sub(i, i), 1, true)
+        if idx then
+            acc = acc * 64 + (idx - 1)
+            bits = bits + 6
+            if bits >= 8 then
+                bits = bits - 8
+                out[#out + 1] = string.char(math.floor(acc / (2 ^ bits)) % 256)
+                acc = acc % (2 ^ bits)
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+function NotesReadShared(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return "" end
+    if type(r.GetSetMediaTrackInfo_String) ~= "function" then return "" end
+    local ok, value = r.GetSetMediaTrackInfo_String(track, "P_EXT:" .. NOTES_SHARED_TRACK_PEXT, "", false)
+    if not ok or not value or value == "" then return "" end
+    local first = value:sub(1, 1)
+    if first == "{" or first == "[" then return value end
+    return NotesBase64Decode(value)
+end
+
 function NotesJsonDecode(str)
     if type(str) ~= "string" or str == "" then return nil end
     local pos = 1
@@ -4106,11 +4159,7 @@ function NotesTkText(guid)
     return NotesReadProjExt(guid)
 end
 
-function NotesWorkbenchText(guid)
-    local raw = NotesReadWorkbench(guid .. "::blocks")
-    if raw == "" then return "" end
-    local blocks = NotesJsonDecode(raw)
-    if type(blocks) ~= "table" then return "" end
+function NotesBlocksText(blocks)
     local sections = {}
     for _, block in ipairs(blocks) do
         if type(block) == "table" then
@@ -4125,6 +4174,24 @@ function NotesWorkbenchText(guid)
     return table.concat(sections, "\n\n")
 end
 
+function NotesWorkbenchText(guid)
+    local raw = NotesReadWorkbench(guid .. "::blocks")
+    if raw == "" then return "" end
+    local blocks = NotesJsonDecode(raw)
+    if type(blocks) ~= "table" then return "" end
+    return NotesBlocksText(blocks)
+end
+
+function NotesSharedText(track)
+    local raw = NotesReadShared(track)
+    if raw == "" then return "" end
+    local doc = NotesJsonDecode(raw)
+    if type(doc) ~= "table" then return "" end
+    local blocks = doc.blocks
+    if type(blocks) ~= "table" then return "" end
+    return NotesBlocksText(blocks)
+end
+
 function NotesStripMarkup(s)
     if not s or s == "" then return s end
     s = s:gsub("%*%*(.-)%*%*", "%1")
@@ -4132,8 +4199,15 @@ function NotesStripMarkup(s)
     return s
 end
 
-function NotesGetText(guid, source)
+function NotesGetText(target, source)
+    local guid = type(target) == "table" and target.guid or target
+    local track = type(target) == "table" and target.track or nil
     if not guid or guid == "" then return "" end
+    -- The shared store is where both apps write today, so it answers first and
+    -- the source buttons only pick which legacy namespace to fall back on, for a
+    -- note that was never reopened after the two stores were joined.
+    local shared = NotesSharedText(track)
+    if shared ~= "" then return NotesStripMarkup(shared) end
     if source == "workbench" then
         return NotesStripMarkup(NotesWorkbenchText(guid))
     end
@@ -4202,7 +4276,7 @@ function NotesRenderBodyAndFooter(ctx, cfg, source)
         r.ImGui_Text(ctx, target.name and target.name ~= "" and target.name or "Track")
         r.ImGui_PopStyleColor(ctx, 1)
         r.ImGui_Separator(ctx)
-        local text = NotesGetText(target.guid, source)
+        local text = NotesGetText(target, source)
         if r.ImGui_BeginChild(ctx, "##patchbay_notes_body", 0, body_h, 1) then
             if text and text ~= "" then
                 r.ImGui_TextWrapped(ctx, text)
@@ -4824,9 +4898,7 @@ function PatchbayFxSchemaBuildLayout(ctx, track, track_name, node_x1, node_y1, n
         total_w = math.floor(130 * dims.scale + 0.5)
         total_h = dims.item_h
     end
-    local f_w = PatchbayFxSchemaTextWidth(ctx, "F")
-    local x_w = PatchbayFxSchemaTextWidth(ctx, "X")
-    local para_text_w = math.max(f_w, x_w)
+    local para_text_w = PatchbayFxSchemaTextWidth(ctx, "Para")
     local para_w = math.max(12, math.floor(para_text_w + (dims.para_pad * 2) + 0.5))
     local panel_w = total_w + dims.para_gap + para_w + (dims.panel_pad * 2)
     local panel_h = total_h + (dims.panel_pad * 2)
@@ -4974,18 +5046,25 @@ function PatchbayFxSchemaRender(ctx, draw_list, layout)
     local divider_x = layout.x + dims.panel_pad + layout.content_w + (dims.para_gap * 0.5)
     local btn_text = panel_text
     r.ImGui_DrawList_AddLine(draw_list, divider_x, layout.y, divider_x, layout.y + layout.h, panel_border, 1.1)
-    local f_tw = PatchbayFxSchemaTextWidth(ctx, "F")
-    local x_tw = PatchbayFxSchemaTextWidth(ctx, "X")
-    local glyph_gap = math.max(1, math.floor(1 * dims.scale + 0.5))
-    local text_total_h = (text_h * 2) + glyph_gap
-    local text_y = btn_y + ((btn_h - text_total_h) * 0.5)
-    r.ImGui_DrawList_AddText(draw_list, btn_x + ((btn_w - f_tw) * 0.5), text_y, btn_text, "F")
-    r.ImGui_DrawList_AddText(draw_list, btn_x + ((btn_w - x_tw) * 0.5), text_y + text_h + glyph_gap, btn_text, "X")
+    local para_tw = PatchbayFxSchemaTextWidth(ctx, "Para")
+    r.ImGui_DrawList_AddText(draw_list, btn_x + ((btn_w - para_tw) * 0.5),
+        btn_y + ((btn_h - text_h) * 0.5), btn_text, "Para")
     r.ImGui_PushID(ctx, "fx_schema_popover")
     if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
     r.ImGui_SetCursorScreenPos(ctx, layout.x, layout.y)
     r.ImGui_InvisibleButton(ctx, "##fx_schema_panel", layout.w, layout.h)
-    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Read-only FX chain schema") end
+    -- The PFX button overlaps this panel and is submitted after it, so its own
+    -- region is excluded by hand rather than relying on ImGui to resolve two
+    -- overlapping items within the same frame.
+    local pmx, pmy = r.ImGui_GetMousePos(ctx)
+    local on_para = pmx >= btn_x and pmx <= btn_x + btn_w and pmy >= btn_y and pmy <= btn_y + btn_h
+    if r.ImGui_IsItemHovered(ctx) and not on_para then
+        r.ImGui_SetTooltip(ctx, "Open the FX node view for this track")
+    end
+    if r.ImGui_IsItemClicked(ctx, 0) and not on_para and layout.track
+        and r.ValidatePtr(layout.track, "MediaTrack*") then
+        PatchbayFxNodeEnter(r.GetTrackGUID(layout.track))
+    end
     if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
     r.ImGui_SetCursorScreenPos(ctx, btn_x, btn_y)
     r.ImGui_InvisibleButton(ctx, "##schema_paranormal", btn_w, btn_h)
@@ -5599,6 +5678,3917 @@ local function RenderNodePopup()
     end
 end
 
+-- ===========================================================================
+-- FX NODE VIEW
+--
+-- Dive into one track and see its FX chain the way Patchbay sees everything
+-- else: nodes with pins, joined by cables. Deliberately NOT a horizontal strip
+-- of boxes with bus bars for parallel -- that is Paranormal FX's vormtaal, and
+-- the abandoned TKFXBPatchbay_FXCHAIN prototype looked like a copy of it.
+--
+-- What a cable means here is the point. TK_Probe_FX_Pin_Mappings established on
+-- REAPER 7.75 that GetIOSize and GetPinMappings answer for FX inside containers
+-- at depth 1 and 2, and that pin mappings are one flat channel space, so a node
+-- can show its real channel layout -- a ReaComp's detector inputs sitting on
+-- channels 3 and 4 are visible here without opening anything.
+--
+-- This is the first increment: read-only. Moving, adding and deleting FX is the
+-- next one, and the mutation layer it needs already exists in the prototype
+-- (PatchbayMoveFxSerial and friends) untouched by anything visual.
+--
+-- All state lives on PB. The file sits a handful of locals under Lua's 200-per-
+-- chunk ceiling, so nothing here may introduce a top-level local.
+-- ===========================================================================
+
+PB.fx_view_guid = nil        -- track we are inside; nil means the track graph
+PB.fx_view_off_x = 0
+PB.fx_view_off_y = 0
+PB.fx_view_zoom = 1.0
+PB.fx_view_sel_api = nil
+PB.fx_view_fit_pending = false
+PB.fx_view_ctx_api = nil
+PB.fx_view_ctx_name = nil
+PB.fx_view_ctx_open = false
+PB.fx_view_rename_api = nil
+PB.fx_view_rename_text = ""
+PB.fx_view_cache = nil
+PB.fx_view_cache_key = nil
+PB.fx_view_cache_time = 0
+PB.fx_view_drag = nil
+PB.fx_view_ctx_is_container = false
+
+-- Reading the chain costs a GetIOSize plus a GetPinMappings per pin per FX, so
+-- a twenty-plugin track is a few hundred API calls -- too many to pay sixty
+-- times a second for a picture that changes when the user does something. The
+-- cache is dropped outright by every mutation below, and otherwise refreshes on
+-- a short timer so a change made in REAPER's own FX window still shows up.
+function PatchbayFxNodeInvalidate()
+    PB.fx_view_cache = nil
+    PB.fx_view_cache_key = nil
+end
+
+-- Custom folders are edited in TK FX BROWSER while this window is open, so the
+-- browse data is dropped whenever the add popup is opened afresh rather than
+-- being held for the life of the session.
+function PatchbayFxNodeInvalidateBrowse()
+    PB.fx_view_cat_groups = nil
+    PB.fx_view_custom_folders = nil
+end
+
+function PatchbayFxNodeCached(track, dims)
+    local key = string.format("%s|%d|%.3f", tostring(PB.fx_view_guid),
+        r.TrackFX_GetCount(track) or 0, dims.zoom)
+    local now = r.time_precise()
+    if PB.fx_view_cache and PB.fx_view_cache_key == key and (now - PB.fx_view_cache_time) < 0.25 then
+        return PB.fx_view_cache
+    end
+    PB.fx_view_cache = PatchbayFxNodeBuild(track, dims)
+    PB.fx_view_cache_key = key
+    PB.fx_view_cache_time = now
+    return PB.fx_view_cache
+end
+
+-- ---------------------------------------------------------------------------
+-- Folding a container shut
+--
+-- Not a global "show containers inline / dive into them" switch: which way you
+-- want it differs per container, not per session. The rack with twelve plugins
+-- is in the way; the one with two you want to see. So it folds per container
+-- and the choice is remembered.
+--
+-- Keyed on the FX GUID, never on the address. An api_id changes the moment
+-- anything before it moves, so a fold remembered by address would reappear on
+-- whichever plugin happened to slide into that slot.
+--
+-- Stored in its own project key rather than in the Patchbay layout string.
+-- That layout is read by every project that has ever been opened with this
+-- script, and a mistake in its encoder would take node positions with it; a
+-- mistake here costs a few folded containers.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_collapsed = nil
+PB.fx_view_collapsed_guid = nil
+
+function PatchbayFxNodeFoldKey(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return nil end
+    return r.GetTrackGUID(track)
+end
+
+function PatchbayFxNodeLoadFolds(track)
+    local guid = PatchbayFxNodeFoldKey(track)
+    if not guid then return {} end
+    if PB.fx_view_collapsed and PB.fx_view_collapsed_guid == guid then
+        return PB.fx_view_collapsed
+    end
+    local folds = {}
+    local _, raw = r.GetProjExtState(0, "TK_FXB_PATCHBAY", "fxfold::" .. guid)
+    for line in tostring(raw or ""):gmatch("([^\n]+)") do
+        if line ~= "" then folds[line] = true end
+    end
+    PB.fx_view_collapsed = folds
+    PB.fx_view_collapsed_guid = guid
+    return folds
+end
+
+function PatchbayFxNodeSaveFolds(track)
+    local guid = PatchbayFxNodeFoldKey(track)
+    if not guid or not PB.fx_view_collapsed then return end
+    local lines = {}
+    for fxguid, folded in pairs(PB.fx_view_collapsed) do
+        if folded then lines[#lines + 1] = fxguid end
+    end
+    table.sort(lines)
+    r.SetProjExtState(0, "TK_FXB_PATCHBAY", "fxfold::" .. guid, table.concat(lines, "\n"))
+end
+
+function PatchbayFxNodeIsFolded(track, fxguid)
+    if not fxguid or fxguid == "" then return false end
+    local folds = PatchbayFxNodeLoadFolds(track)
+    return folds[fxguid] == true
+end
+
+function PatchbayFxNodeToggleFold(track, fxguid)
+    if not fxguid or fxguid == "" then return end
+    local folds = PatchbayFxNodeLoadFolds(track)
+    folds[fxguid] = not folds[fxguid] or nil
+    PatchbayFxNodeSaveFolds(track)
+    PatchbayFxNodeInvalidate()
+end
+
+-- The triangle in a container's header. Sized off the header so it stays
+-- clickable when zoomed out.
+function PatchbayFxNodeFoldSpot(fx, dims)
+    local size = math.max(4, dims.head_h * 0.34)
+    return fx.x + dims.text_pad * 0.6 + size * 0.5, fx.y + dims.head_h * 0.5, size
+end
+
+function PatchbayFxNodeDrawFold(dl, fx, dims, col)
+    local cx, cy, size = PatchbayFxNodeFoldSpot(fx, dims)
+    if fx.folded then
+        -- pointing right: there is more behind this
+        r.ImGui_DrawList_AddTriangleFilled(dl,
+            cx - size * 0.4, cy - size * 0.6,
+            cx - size * 0.4, cy + size * 0.6,
+            cx + size * 0.6, cy, col)
+    else
+        r.ImGui_DrawList_AddTriangleFilled(dl,
+            cx - size * 0.6, cy - size * 0.4,
+            cx + size * 0.6, cy - size * 0.4,
+            cx, cy + size * 0.6, col)
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- How a node looks
+--
+-- Three things, all of them reading from data that is already here:
+--
+--  1. Colour comes from the plugin's CATEGORY in Sexan's own category file.
+--     Blue-blue-amber-teal reads as EQ, EQ, compressor, reverb without a single
+--     label being read. Colour that carries meaning, not colour as decoration.
+--  2. A node is a coloured header with the clean name, over a darker body that
+--     holds the pins and a small format badge. "VST3: FabFilter Pro-Q 3"
+--     becomes Pro-Q 3 with a VST3 chip, which is both prettier and shorter.
+--  3. Cables say something: dimmed and thin into a bypassed plugin, heavier
+--     when more than two channels run through them.
+--
+-- The old look came from PatchbayFxSchemaPalette, which is built for the schema
+-- popover: it forces monochrome and assumes it is drawing on its own light
+-- panel. That is why everything was a white box with near-black text.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_cat_of = nil
+
+-- Global on purpose: this file sits a few slots under Lua's 200-local ceiling
+-- per chunk, and a helper does not need to spend one of them.
+function PatchbayFxNodeHsv(h, s, v, a)
+    h = (h % 360) / 60
+    local i = math.floor(h)
+    local f = h - i
+    local p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
+    local rr, gg, bb
+    if i == 0 then rr, gg, bb = v, t, p
+    elseif i == 1 then rr, gg, bb = q, v, p
+    elseif i == 2 then rr, gg, bb = p, v, t
+    elseif i == 3 then rr, gg, bb = p, q, v
+    elseif i == 4 then rr, gg, bb = t, p, v
+    else rr, gg, bb = v, p, q end
+    return (math.floor(rr * 255) << 24) | (math.floor(gg * 255) << 16)
+        | (math.floor(bb * 255) << 8) | math.floor((a or 1) * 255)
+end
+
+-- Deliberate hues for the families you actually reach for; anything else is
+-- hashed to a stable hue so an unknown category still looks like itself every
+-- time rather than falling back to grey.
+function PatchbayFxNodeCatKnown(cat)
+    return PatchbayFxNodeCatHue(cat, true) ~= nil
+end
+
+-- `strict` asks only about the deliberate hues, not the hashed fallback: that
+-- is what lets a folder called "FX REVERB" outrank one called "Z_SAIKE".
+function PatchbayFxNodeCatHue(cat, strict)
+    if not cat or cat == "" then return nil end
+    local key = cat:lower()
+    local known = {
+        eq = 205, filter = 192, dynamics = 40, compressor = 38, ["channel strip"] = 48,
+        limiter = 25, gate = 55, expander = 55, reverb = 175, delay = 160, echo = 160,
+        modulation = 282, chorus = 272, flanger = 262, phaser = 292, tremolo = 300,
+        distortion = 12, saturation = 28, ["bit crusher"] = 8, amp = 18,
+        pitch = 322, harmony = 330, vocal = 340, ["de-esser"] = 348,
+        analyzer = 218, meter = 212, utility = 208, tools = 208,
+        -- Added after counting what the real collection actually produces:
+        -- these came back as hashed colours while plainly being categories.
+        sidechain = 135, duck = 135, ducking = 135,
+        spatial = 152, spacial = 152, pan = 152, panner = 152, width = 152,
+        clipper = 22, clip = 22, gain = 200, trim = 200,
+        ringmod = 300, vocoder = 310, spectrum = 218, tuner = 232,
+        generator = 266, keys = 118, piano = 112, organ = 124,
+        orchestral = 100, strings = 96, brass = 88, theory = 250,
+        rack = 208, multiband = 42, transient = 36, exciter = 26,
+        mastering = 45, imaging = 152, stereo = 152, surround = 142,
+        instrument = 118, synth = 128, sampler = 108, bass = 62,
+        -- Both spellings: the match is substring, so a label "Drum" never
+        -- finds the word "drums" -- it only works the other way round.
+        drum = 6, drums = 6,
+        guitar = 20, tape = 33, lofi = 14, noise = 200, restoration = 186,
+    }
+    if known[key] then return known[key] end
+    for word, hue in pairs(known) do
+        if key:find(word, 1, true) then return hue end
+    end
+    if strict then return nil end
+    local hash = 0
+    for i = 1, #key do hash = (hash * 31 + key:byte(i)) % 360 end
+    return hash
+end
+
+-- "03 FX" -> "FX", "FX REVERB" -> "REVERB", "Z_SAIKE" -> "SAIKE". Folder names
+-- carry ordering prefixes and grouping words that are not part of what the
+-- plugin IS.
+-- Sexan's CATEGORY buckets are written "Reverb"; folder names are shouted
+-- "REVERB". Both resolve to the same hue -- the lookup lowercases -- but they
+-- printed as two different chips on adjacent nodes. Twelve pairs in this
+-- collection differed by nothing but case.
+--
+-- Acronyms are spelled out rather than detected: a rule like "keep short
+-- all-caps runs" would preserve U-HE and title-case u-he, leaving the very
+-- duplicate this is meant to remove.
+function PatchbayFxNodeTitleCat(name)
+    local acronyms = {
+        EQ = true, FX = true, JS = true, MIDI = true, LFO = true, VU = true,
+        RMS = true, DI = true, AM = true, FM = true, MS = true, IR = true,
+        AI = true, IK = true
+    }
+    local out = tostring(name or ""):gsub("%a+", function(word)
+        local up = word:upper()
+        if acronyms[up] then return up end
+        return word:sub(1, 1):upper() .. word:sub(2):lower()
+    end)
+    return out
+end
+
+function PatchbayFxNodeCleanCat(name)
+    local out = tostring(name or "")
+    out = out:gsub("^%s*%d+[%s_%-]*", "")
+    out = out:gsub("^[Zz]_", "")
+    out = out:gsub("^FX%s+", "")
+    out = out:gsub("^%s*(.-)%s*$", "%1")
+    if out == "" then out = tostring(name or "") end
+    return PatchbayFxNodeTitleCat(out)
+end
+
+-- Sexan's CATEGORY group is filled from plugin metadata, which JS effects do
+-- not carry -- "JS: Abyss Reverb (Saike)" is in FOLDERS / FX REVERB and in the
+-- user's own folders, but nowhere in CATEGORY. So three sources are consulted
+-- in order of authority, and a plugin already placed is never re-placed:
+--
+--   1. CATEGORY          -- what the plugin says about itself
+--   2. the user's own custom folders  -- what THEY decided it is
+--   3. Sexan's FOLDERS   -- the browser's folders, same idea
+--
+-- Within 2 and 3, a folder whose name maps to a hue we know beats one that does
+-- not: "FX REVERB" is worth more than "Z_SAIKE", and both contain this plugin.
+function PatchbayFxNodeCategoryMap()
+    if PB.fx_view_cat_of then return PB.fx_view_cat_of end
+    local map = {}
+    local groups = PatchbayFxNodeLoadCategories(false)
+
+    local function place(fxname, label)
+        if not fxname or fxname == "" or not label or label == "" then return end
+        local clean = PatchbayFxNodeCleanCat(label)
+        local have = map[fxname]
+        if have == nil then map[fxname] = clean return end
+        -- Already placed by a weaker source: upgrade only from unknown to known.
+        if PatchbayFxNodeCatKnown(have) then return end
+        if PatchbayFxNodeCatKnown(clean) then map[fxname] = clean end
+    end
+
+    if groups then
+        for _, group in ipairs(groups) do
+            if group.name == "CATEGORY" then
+                for _, bucket in ipairs(group.buckets) do
+                    for _, fxname in ipairs(bucket.fx) do
+                        if map[fxname] == nil then
+                            map[fxname] = PatchbayFxNodeTitleCat(bucket.name)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local function walk_folders(list)
+        for _, entry in ipairs(list or {}) do
+            for _, fxname in ipairs(entry.fx or {}) do place(fxname, entry.name) end
+            if entry.subs then walk_folders(entry.subs) end
+        end
+    end
+    walk_folders(PatchbayFxNodeLoadCustomFolders(false))
+
+    if groups then
+        for _, group in ipairs(groups) do
+            if group.name == "FOLDERS" then
+                for _, bucket in ipairs(group.buckets) do
+                    for _, fxname in ipairs(bucket.fx) do place(fxname, bucket.name) end
+                end
+            end
+        end
+    end
+
+    PB.fx_view_cat_of = map
+    return map
+end
+
+-- An instrument is the most important thing a node can be, and REAPER spells it
+-- out in the prefix: VST3i, CLAPi, AUi. Sexan files them under INSTRUMENTS
+-- rather than in CATEGORY, so without this they would fall through to a hashed
+-- hue and read as "some effect".
+function PatchbayFxNodeIsInstrument(full_name)
+    if not full_name then return false end
+    local prefix = full_name:match("^(%a[%w]*):")
+    return prefix ~= nil and prefix:sub(-1) == "i"
+end
+
+function PatchbayFxNodeCategoryOf(full_name)
+    if not full_name or full_name == "" then return nil end
+    local hit = PatchbayFxNodeCategoryMap()[full_name]
+    if hit then return hit end
+    if PatchbayFxNodeIsInstrument(full_name) then return "Instrument" end
+    return nil
+end
+
+-- "VST3: FabFilter Pro-Q 3 (FabFilter)" -> "VST3"
+function PatchbayFxNodeFormatBadge(full_name)
+    if not full_name then return nil end
+    local prefix = full_name:match("^(%a[%w]*):")
+    if not prefix then return nil end
+    return prefix:upper()
+end
+
+-- bg, border, text for the header; bg for the body.
+function PatchbayFxNodeSkin(fx)
+    local light = PatchbayFxSchemaThemeIsLight()
+    local hue = PatchbayFxNodeCatHue(fx and fx.category)
+    local is_container = fx and fx.fx_type == "Container"
+    if is_container and not hue then hue = 150 end
+    if not hue then hue = 210 end
+
+    local sat = is_container and 0.30 or 0.52
+    if fx and fx.offline then
+        hue, sat = 0, 0.62
+    elseif fx and not fx.enabled then
+        sat = 0.05
+    end
+
+    if light then
+        return PatchbayFxNodeHsv(hue, sat * 0.75, 0.86, 1.0),   -- header
+               PatchbayFxNodeHsv(hue, sat * 0.20, 0.97, 1.0),   -- body
+               PatchbayFxNodeHsv(hue, sat * 0.85, 0.55, 1.0),   -- border
+               0x1A1A1AFF                                       -- text
+    end
+    return PatchbayFxNodeHsv(hue, sat, 0.46, 1.0),
+           PatchbayFxNodeHsv(hue, sat * 0.45, 0.14, 0.98),
+           PatchbayFxNodeHsv(hue, sat * 0.80, 0.72, 1.0),
+           (fx and not fx.enabled) and 0x9AA0A8FF or 0xF0F3F7FF
+end
+
+-- Cables. A run into a bypassed plugin is thin and faint -- the signal goes
+-- through untouched, and the picture should say so. More than two channels
+-- makes it heavier.
+function PatchbayFxNodeCableStyle(target_fx, base_col)
+    local thickness = 1.7
+    local col = base_col
+    if target_fx then
+        local ch = math.max(target_fx.pins and target_fx.pins.nin or 2, 2)
+        if ch > 2 then thickness = thickness + math.min(1.6, (ch - 2) * 0.45) end
+        if not target_fx.enabled or target_fx.offline then
+            thickness = 1.1
+            col = (col & 0xFFFFFF00) | 0x50
+        end
+    end
+    return col, thickness
+end
+
+-- ---------------------------------------------------------------------------
+-- Putting a node where you want it
+--
+-- One gesture, two outcomes, decided by where you let go:
+--
+--   released over a drop target  -> the chain is reordered (as before), and any
+--                                   position this node had is dropped, because
+--                                   the layout it was pinned against no longer
+--                                   exists
+--   released anywhere else       -> the node simply stays there
+--
+-- No modifier key, no second gesture to learn: the drop pads are lit while you
+-- drag, so "in the chain" and "just somewhere" are visibly different targets.
+--
+-- Positions are stored per FX GUID, in content space divided by the zoom, so
+-- they survive panning, zooming, and anything that renumbers the chain. They
+-- live in their own project key -- never in the Patchbay layout string, which
+-- every project depends on.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_pos = nil
+PB.fx_view_pos_guid = nil
+
+function PatchbayFxNodeLoadPositions(track)
+    local guid = PatchbayFxNodeFoldKey(track)
+    if not guid then return {} end
+    if PB.fx_view_pos and PB.fx_view_pos_guid == guid then return PB.fx_view_pos end
+    local out = {}
+    local _, raw = r.GetProjExtState(0, "TK_FXB_PATCHBAY", "fxpos::" .. guid)
+    for line in tostring(raw or ""):gmatch("([^\n]+)") do
+        local fxguid, xs, ys = line:match("^(.-)|([^|]+)|([^|]+)$")
+        local x, y = tonumber(xs or ""), tonumber(ys or "")
+        if fxguid and fxguid ~= "" and x and y then out[fxguid] = { x = x, y = y } end
+    end
+    PB.fx_view_pos = out
+    PB.fx_view_pos_guid = guid
+    return out
+end
+
+function PatchbayFxNodeSavePositions(track)
+    local guid = PatchbayFxNodeFoldKey(track)
+    if not guid or not PB.fx_view_pos then return end
+    local lines = {}
+    for fxguid, p in pairs(PB.fx_view_pos) do
+        if p and p.x and p.y then
+            lines[#lines + 1] = string.format("%s|%.1f|%.1f", fxguid, p.x, p.y)
+        end
+    end
+    table.sort(lines)
+    r.SetProjExtState(0, "TK_FXB_PATCHBAY", "fxpos::" .. guid, table.concat(lines, "\n"))
+end
+
+function PatchbayFxNodeSetPosition(track, fxguid, x, y)
+    if not fxguid or fxguid == "" then return end
+    local positions = PatchbayFxNodeLoadPositions(track)
+    positions[fxguid] = { x = x, y = y }
+    PatchbayFxNodeSavePositions(track)
+end
+
+function PatchbayFxNodeClearPosition(track, fxguid)
+    if not fxguid or fxguid == "" then return end
+    local positions = PatchbayFxNodeLoadPositions(track)
+    if positions[fxguid] == nil then return end
+    positions[fxguid] = nil
+    PatchbayFxNodeSavePositions(track)
+end
+
+function PatchbayFxNodeClearAllPositions(track)
+    PB.fx_view_pos = {}
+    PB.fx_view_pos_guid = PatchbayFxNodeFoldKey(track)
+    PatchbayFxNodeSavePositions(track)
+end
+
+function PatchbayFxNodeHasPositions(track)
+    local positions = PatchbayFxNodeLoadPositions(track)
+    return next(positions) ~= nil
+end
+
+-- The IN and OUT boxes are part of the picture rather than furniture: on a
+-- wide chain the useful place for the track's own connector is rarely hard
+-- left and hard right of everything. They pin through the very same store the
+-- nodes use, under two keys no FX can collide with -- REAPER's GUIDs are
+-- always braced, so nothing beginning with an underscore can ever be one.
+PATCHBAY_FX_EDGE_IN = "__edge_in__"
+PATCHBAY_FX_EDGE_OUT = "__edge_out__"
+PB.fx_view_edge_drag = nil
+
+function PatchbayFxNodeEdgeRect(layout, which)
+    if which == "in" then
+        if not layout.edge_in_x then return nil end
+        return layout.edge_in_x, layout.edge_in_y, layout.edge_w, layout.edge_h
+    end
+    if not layout.edge_out_x then return nil end
+    return layout.edge_out_x, layout.edge_out_y, layout.edge_w, layout.edge_h
+end
+
+-- OUT first: if the two are dragged on top of each other, the one you grab is
+-- the one drawn last, which is the one you can see.
+function PatchbayFxNodeEdgeAt(layout, mx, my)
+    for _, which in ipairs({ "out", "in" }) do
+        local x, y, w, h = PatchbayFxNodeEdgeRect(layout, which)
+        if x and y and mx >= x and mx <= x + w and my >= y and my <= y + h then
+            return which
+        end
+    end
+    return nil
+end
+
+-- Nothing may be pinned on top of something else. Same switch as the track
+-- graph (Prevent overlap), same outward ring search, same step -- you learn
+-- the behaviour once and it holds in both views.
+--
+-- It runs when you let go, not every frame: resolving continuously would make
+-- a layout creep about on its own, and a node you put somewhere on purpose
+-- has to stay there.
+-- Its own setting, deliberately not the track graph's. Sharing one switch
+-- read well on paper and was wrong in practice: turning overlap off for the
+-- track canvas -- where tracks are arranged by hand and free placement is the
+-- point -- silently turned it off in here too, with no way to have one without
+-- the other. Default on, because a chain read left to right has an order and
+-- boxes on top of each other hide it.
+function PatchbayFxNodePreventOverlap()
+    local cfg = GetConfig()
+    return cfg == nil or cfg.patchbay_fx_node_overlap ~= false
+end
+
+function PatchbayFxNodePreventOverlapToggle()
+    local cfg = GetConfig()
+    if not cfg then return end
+    cfg.patchbay_fx_node_overlap = not PatchbayFxNodePreventOverlap()
+    if _G.SaveConfig then _G.SaveConfig() end
+end
+
+-- Own rect test rather than the track graph's: this block is loaded on its
+-- own by the tests, and reaching outside it for two comparisons would tie the
+-- two together for no gain.
+function PatchbayFxNodeRectsHit(ax1, ay1, ax2, ay2, b, pad)
+    return ax1 < b.x2 + pad and ax2 > b.x1 - pad and ay1 < b.y2 + pad and ay2 > b.y1 - pad
+end
+
+-- What a dropped thing has to stay clear of: every top-level node and both
+-- edge boxes. Children are not listed -- a container's own box already covers
+-- them, and they cannot be pinned separately anyway.
+function PatchbayFxNodeObstacles(layout, skip_api, skip_edge)
+    local out = {}
+    for _, st in ipairs(layout.stages or {}) do
+        for _, fx in ipairs(st) do
+            if skip_api == nil or fx.api_id ~= skip_api then
+                out[#out + 1] = { x1 = fx.x, y1 = fx.y, x2 = fx.x + fx.w, y2 = fx.y + fx.h }
+            end
+        end
+    end
+    for _, which in ipairs({ "in", "out" }) do
+        if which ~= skip_edge then
+            local x, y, w, h = PatchbayFxNodeEdgeRect(layout, which)
+            if x and y then out[#out + 1] = { x1 = x, y1 = y, x2 = x + w, y2 = y + h } end
+        end
+    end
+    return out
+end
+
+-- The nearest free spot, searched outwards a ring at a time so the answer is
+-- the smallest nudge that works rather than the first one found. Returns the
+-- original position unchanged when it was already clear, and also when nothing
+-- within reach is free -- refusing the drop outright would be worse than a
+-- slight overlap in a canvas packed solid.
+function PatchbayFxNodeFreeSpot(obstacles, x, y, w, h, step)
+    local pad = 8
+    local function clear(dx, dy)
+        local ax1, ay1 = x + dx, y + dy
+        local ax2, ay2 = ax1 + w, ay1 + h
+        for _, b in ipairs(obstacles) do
+            if PatchbayFxNodeRectsHit(ax1, ay1, ax2, ay2, b, pad) then return false end
+        end
+        return true
+    end
+    if clear(0, 0) then return x, y, false end
+    step = math.max(4, step or 20)
+    for ring = 1, 40 do
+        local best_dx, best_dy, best_d2
+        for gx = -ring, ring do
+            for gy = -ring, ring do
+                if math.abs(gx) == ring or math.abs(gy) == ring then
+                    local dx, dy = gx * step, gy * step
+                    if clear(dx, dy) then
+                        local d2 = dx * dx + dy * dy
+                        if not best_d2 or d2 < best_d2 then
+                            best_dx, best_dy, best_d2 = dx, dy, d2
+                        end
+                    end
+                end
+            end
+        end
+        if best_dx then return x + best_dx, y + best_dy, true end
+    end
+    return x, y, false
+end
+
+-- The step the search moves in, in screen pixels, so the same gesture behaves
+-- the same however far the canvas is zoomed.
+function PatchbayFxNodeFreeStep(zoom)
+    local cfg = GetConfig()
+    local base = (cfg and cfg.patchbay_snap_to_grid == true) and (GRID or 40) or 20
+    return base * (zoom or 1)
+end
+
+-- Overlaps are settled where things are DRAWN, not only where they were let
+-- go. Resolving on drop alone was not enough, and the reason is that a drop is
+-- judged against the layout of that moment: pin a node in a gap, add one FX,
+-- and the flow slides straight under it again. Nothing was watching after the
+-- fact, and a layout saved before any of this existed was never looked at at
+-- all.
+--
+-- Doing it here is stable rather than creeping: the outcome is a function of
+-- the layout, so it comes out the same every frame, and what you stored stays
+-- exactly as you stored it.
+--
+-- Who gives way: a node still flowing with the chain never moves -- it is
+-- where the chain says it is, and nudging it would be the layout arguing with
+-- itself. The IN and OUT boxes settle first, then the pinned nodes, each in a
+-- fixed order so the picture never depends on which one was looked at first.
+function PatchbayFxNodeResolveOverlaps(layout, dims, skip_api, skip_edge)
+    local in_x, in_y = layout.edge_in_x, layout.edge_in_y
+    local out_x, out_y = layout.edge_out_x, layout.edge_out_y
+    if not PatchbayFxNodePreventOverlap() then return in_x, in_y, out_x, out_y end
+
+    local step = PatchbayFxNodeFreeStep(dims.zoom)
+    local function rect(x, y, w, h) return { x1 = x, y1 = y, x2 = x + w, y2 = y + h } end
+
+    local fixed, movers = {}, {}
+    for _, st in ipairs(layout.stages or {}) do
+        for _, fx in ipairs(st) do
+            if fx.pinned and fx.api_id ~= skip_api then
+                movers[#movers + 1] = fx
+            elseif fx.api_id ~= skip_api then
+                fixed[#fixed + 1] = rect(fx.x, fx.y, fx.w, fx.h)
+            end
+        end
+    end
+    table.sort(movers, function(a, b)
+        return tostring(a.fxguid) .. tostring(a.api_id) < tostring(b.fxguid) .. tostring(b.api_id)
+    end)
+
+    local ew, eh = layout.edge_w or 0, layout.edge_h or 0
+    if in_x and skip_edge ~= "in" then
+        in_x, in_y = PatchbayFxNodeFreeSpot(fixed, in_x, in_y, ew, eh, step)
+        fixed[#fixed + 1] = rect(in_x, in_y, ew, eh)
+    end
+    if out_x and skip_edge ~= "out" then
+        out_x, out_y = PatchbayFxNodeFreeSpot(fixed, out_x, out_y, ew, eh, step)
+        fixed[#fixed + 1] = rect(out_x, out_y, ew, eh)
+    end
+
+    for _, fx in ipairs(movers) do
+        local nx, ny = PatchbayFxNodeFreeSpot(fixed, fx.x, fx.y, fx.w, fx.h, step)
+        if nx ~= fx.x or ny ~= fx.y then PatchbayFxNodeShiftOne(fx, nx - fx.x, ny - fx.y) end
+        fixed[#fixed + 1] = rect(fx.x, fx.y, fx.w, fx.h)
+    end
+
+    layout.edge_in_x, layout.edge_in_y = in_x, in_y
+    layout.edge_out_x, layout.edge_out_y = out_x, out_y
+    return in_x, in_y, out_x, out_y
+end
+
+-- Applied after the automatic pass, so a node without a stored position keeps
+-- flowing with the chain and only the ones you moved stand still. Children move
+-- with their container: a container's contents are laid out inside it, and
+-- pinning a child to absolute coordinates would tear it out of its own box.
+function PatchbayFxNodeApplyPositions(track, stages, base_x, base_y, zoom)
+    local positions = PatchbayFxNodeLoadPositions(track)
+    if next(positions) == nil then return end
+    for _, st in ipairs(stages) do
+        for _, fx in ipairs(st) do
+            local p = fx.fxguid and positions[fx.fxguid]
+            if p then
+                local nx = base_x + p.x * zoom
+                local ny = base_y + p.y * zoom
+                local dx, dy = nx - fx.x, ny - fx.y
+                fx.x, fx.y = nx, ny
+                fx.pinned = true
+                if fx.child_stages then
+                    PatchbayFxNodeShiftStages(fx.child_stages, dx, dy)
+                end
+            end
+        end
+    end
+end
+
+function PatchbayFxNodeShiftStages(stages, dx, dy)
+    for _, st in ipairs(stages) do
+        st.x, st.y = (st.x or 0) + dx, (st.y or 0) + dy
+        for _, fx in ipairs(st) do
+            fx.x, fx.y = fx.x + dx, fx.y + dy
+            if fx.child_stages then PatchbayFxNodeShiftStages(fx.child_stages, dx, dy) end
+        end
+    end
+end
+
+-- Where a stage's cables actually attach. The old code read this off the
+-- stage's computed slot, which stops being true the moment a node is pinned
+-- somewhere else -- so it is measured from the nodes themselves instead.
+-- Moves a node and its contents. Used while dragging, so the thing under the
+-- cursor is the node itself rather than a label floating beside a node that
+-- has not budged -- which is how a Patchbay track node behaves, and the reason
+-- this view did not feel like one.
+function PatchbayFxNodeShiftOne(fx, dx, dy)
+    fx.x, fx.y = fx.x + dx, fx.y + dy
+    if fx.child_stages then PatchbayFxNodeShiftStages(fx.child_stages, dx, dy) end
+end
+
+function PatchbayFxNodeStageBounds(st, skip_api)
+    local left, right = math.huge, -math.huge
+    local top, bottom = math.huge, -math.huge
+    for _, fx in ipairs(st) do
+        if skip_api == nil or fx.api_id ~= skip_api then
+            if fx.x < left then left = fx.x end
+            if fx.x + fx.w > right then right = fx.x + fx.w end
+            if fx.y < top then top = fx.y end
+            if fx.y + fx.h > bottom then bottom = fx.y + fx.h end
+        end
+    end
+    if left == math.huge then
+        -- Skipping emptied the stage: fall back to where the dragged node sat
+        -- in the layout, so its gap stays put instead of vanishing.
+        local drag = PB.fx_view_drag
+        if drag and drag.layout_x then
+            return drag.layout_x, drag.layout_x + (drag.layout_w or 0),
+                   (drag.layout_y or 0) + (drag.layout_h or 0) * 0.5
+        end
+        return 0, 0, 0
+    end
+    return left, right, (top + bottom) * 0.5
+end
+
+-- ---------------------------------------------------------------------------
+-- Plugin screenshots in the nodes
+--
+-- Off by default; a button in the header turns it on, and the choice is kept in
+-- the config so the standalone remembers it too.
+--
+-- TK FX BROWSER's changelog records what happens if this is done naively: first
+-- "ImGui_CreateImage: excessive creation of short-lived resources", then an
+-- outright crash with "ImGui_Attach: exceeded maximum object attachment limit".
+-- Three rules keep this out of that hole:
+--
+--   1. a texture is created once and kept, keyed on its file
+--   2. at most a couple of new textures per frame, so a fast zoom or a chain
+--      that suddenly grows cannot burst the limit
+--   3. a hard cap with least-recently-used eviction, and nothing drawn in the
+--      current frame is ever evicted
+--
+-- The saving grace over the browser's grid is scale: a chain is a handful of
+-- plugins, not a scrolling wall of three thousand.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_shot_tex = nil     -- path -> { tex = , used = frame }
+PB.fx_view_shot_path = nil    -- fx name -> path, or false when there is none
+PB.fx_view_shot_count = 0
+PB.fx_view_shot_frame = 0
+PB.fx_view_shot_budget = 0
+
+function PatchbayFxNodeShotsOn()
+    local cfg = GetConfig()
+    return cfg ~= nil and cfg.patchbay_fx_node_screenshots == true
+end
+
+function PatchbayFxNodeShotsToggle()
+    local cfg = GetConfig()
+    if not cfg then return end
+    cfg.patchbay_fx_node_screenshots = not (cfg.patchbay_fx_node_screenshots == true)
+    if _G.SaveConfig then _G.SaveConfig() end
+    PatchbayFxNodeInvalidate()
+end
+
+-- TK FX BROWSER files its screenshots under the plugin's full name with
+-- everything but letters, digits, spaces and hyphens turned into underscores,
+-- so "VST: ReaEQ (Cockos)" is "VST_ ReaEQ _Cockos_.png".
+function PatchbayFxNodeShotFile(name)
+    return (tostring(name or ""):gsub("[^%w%s-]", "_"))
+end
+
+function PatchbayFxNodeShotLookup(full_name)
+    if not full_name or full_name == "" then return nil end
+    PB.fx_view_shot_path = PB.fx_view_shot_path or {}
+    local hit = PB.fx_view_shot_path[full_name]
+    if hit ~= nil then return hit or nil end
+
+    local dir = (r.GetResourcePath() .. "/Scripts/TK Scripts/FX/Screenshots/"):gsub("\\", "/")
+    -- Full name first, then the cleaned one: a plugin whose shot was filed
+    -- under its bare title still gets found.
+    local tries = { PatchbayFxNodeShotFile(full_name) }
+    local clean = PatchbayFxSchemaCleanName(full_name, "")
+    if clean ~= "" then tries[#tries + 1] = PatchbayFxNodeShotFile(clean) end
+    for _, base in ipairs(tries) do
+        if base ~= "" then
+            for _, ext in ipairs({ ".png", ".jpg" }) do
+                local path = dir .. base .. ext
+                if FileExists(path) then
+                    PB.fx_view_shot_path[full_name] = path
+                    return path
+                end
+            end
+        end
+    end
+    PB.fx_view_shot_path[full_name] = false
+    return nil
+end
+
+function PatchbayFxNodeShotBeginFrame()
+    PB.fx_view_shot_frame = (PB.fx_view_shot_frame or 0) + 1
+    PB.fx_view_shot_budget = 2
+end
+
+function PatchbayFxNodeShotEvict(ctx)
+    local cache = PB.fx_view_shot_tex
+    if not cache then return end
+    local oldest_key, oldest_used = nil, math.huge
+    for path, entry in pairs(cache) do
+        -- Never evict something the frame being built is using: that is the
+        -- "load it, drop it, load it again" loop that produced the browser's
+        -- short-lived-resource error.
+        if entry.used < PB.fx_view_shot_frame and entry.used < oldest_used then
+            oldest_key, oldest_used = path, entry.used
+        end
+    end
+    if not oldest_key then return end
+    local entry = cache[oldest_key]
+    if entry and entry.tex and r.ImGui_Detach then
+        pcall(r.ImGui_Detach, ctx, entry.tex)
+    end
+    cache[oldest_key] = nil
+    PB.fx_view_shot_count = math.max(0, (PB.fx_view_shot_count or 0) - 1)
+end
+
+function PatchbayFxNodeShotTexture(ctx, path)
+    if not path or not r.ImGui_CreateImage then return nil end
+    PB.fx_view_shot_tex = PB.fx_view_shot_tex or {}
+    local entry = PB.fx_view_shot_tex[path]
+    if entry then
+        if r.ImGui_ValidatePtr and r.ImGui_ValidatePtr(entry.tex, "ImGui_Image*") then
+            entry.used = PB.fx_view_shot_frame
+            return entry.tex
+        end
+        PB.fx_view_shot_tex[path] = nil
+        PB.fx_view_shot_count = math.max(0, (PB.fx_view_shot_count or 0) - 1)
+    end
+    -- Out of budget: nothing is drawn for this node this frame and it is picked
+    -- up on a later one. A node without its picture for two frames is nothing;
+    -- exceeding the attachment limit is a crash.
+    if (PB.fx_view_shot_budget or 0) <= 0 then return nil end
+    while (PB.fx_view_shot_count or 0) >= 24 do
+        local before = PB.fx_view_shot_count
+        PatchbayFxNodeShotEvict(ctx)
+        if PB.fx_view_shot_count >= before then return nil end
+    end
+    local ok, tex = pcall(r.ImGui_CreateImage, path)
+    if not ok or not tex then
+        PB.fx_view_shot_budget = PB.fx_view_shot_budget - 1
+        return nil
+    end
+    if r.ImGui_ValidatePtr and not r.ImGui_ValidatePtr(tex, "ImGui_Image*") then return nil end
+    pcall(r.ImGui_Attach, ctx, tex)
+    PB.fx_view_shot_tex[path] = { tex = tex, used = PB.fx_view_shot_frame }
+    PB.fx_view_shot_count = (PB.fx_view_shot_count or 0) + 1
+    PB.fx_view_shot_budget = PB.fx_view_shot_budget - 1
+    return tex
+end
+
+-- Fills the body, cropped to it rather than squashed: a plugin UI stretched to
+-- a different aspect ratio is unrecognisable, which defeats the point.
+function PatchbayFxNodeDrawShot(ctx, dl, fx, dims, x, y, w, h)
+    if w < 12 or h < 10 then return false end
+    local path = PatchbayFxNodeShotLookup(fx.full_name)
+    if not path then return false end
+    local tex = PatchbayFxNodeShotTexture(ctx, path)
+    if not tex then return false end
+    local iw, ih = 0, 0
+    if r.ImGui_Image_GetSize then iw, ih = r.ImGui_Image_GetSize(tex) end
+    local u0, v0, u1, v1 = 0, 0, 1, 1
+    if iw and ih and iw > 0 and ih > 0 then
+        local want, have = w / h, iw / ih
+        if have > want then
+            local keep = want / have
+            u0, u1 = (1 - keep) * 0.5, 1 - (1 - keep) * 0.5
+        else
+            local keep = have / want
+            v0, v1 = (1 - keep) * 0.5, 1 - (1 - keep) * 0.5
+        end
+    end
+    if r.ImGui_DrawList_AddImage then
+        r.ImGui_DrawList_AddImage(dl, tex, x, y, x + w, y + h, u0, v0, u1, v1, 0xFFFFFFFF)
+        -- Veiled, so the badge and category text over it stay readable.
+        r.ImGui_DrawList_AddRectFilled(dl, x, y, x + w, y + h, 0x00000060)
+        return true
+    end
+    return false
+end
+
+-- ---------------------------------------------------------------------------
+-- Following REAPER's track selection
+--
+-- Reads the selection straight from REAPER rather than from _G.TRACK: only the
+-- standalone maintains that global, and even there not every frame.
+--
+-- It switches on a CHANGE of selection, not on a difference from what is being
+-- shown. That distinction is the whole design: diving into a track deliberately
+-- -- by double-click, by the node icon, by the schema panel -- would otherwise
+-- be undone on the very next frame, because the view would differ from whatever
+-- happened to be selected and would jump straight back. Now an explicit choice
+-- stays put until you actually select something else, and nothing has to reach
+-- into REAPER and change its selection as a side effect.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_last_sel = nil
+
+function PatchbayFxNodeFollowOn()
+    local cfg = GetConfig()
+    return cfg == nil or cfg.patchbay_fx_node_follow ~= false
+end
+
+function PatchbayFxNodeFollowToggle()
+    local cfg = GetConfig()
+    if not cfg then return end
+    cfg.patchbay_fx_node_follow = not PatchbayFxNodeFollowOn()
+    if _G.SaveConfig then _G.SaveConfig() end
+end
+
+-- Returns the guid to switch to, or nil to stay where we are.
+function PatchbayFxNodeFollowPoll()
+    local sel = r.GetSelectedTrack and r.GetSelectedTrack(0, 0) or nil
+    local guid = nil
+    if sel and r.ValidatePtr(sel, "MediaTrack*") then guid = r.GetTrackGUID(sel) end
+    local changed = (guid ~= nil) and (guid ~= PB.fx_view_last_sel)
+    -- Recorded even while following is off, so switching it on does not then
+    -- act on a selection made minutes ago.
+    PB.fx_view_last_sel = guid
+    if not changed then return nil end
+    if not PatchbayFxNodeFollowOn() then return nil end
+    if guid == PB.fx_view_guid then return nil end
+    return guid
+end
+
+-- ---------------------------------------------------------------------------
+-- Patching by pin
+--
+-- What a cable between two pins MEANS here needs stating, because REAPER has no
+-- FX-to-FX connection to make. Every FX maps its pins onto the track's channel
+-- bus, and that is the only wiring there is. So dragging from A's output pin to
+-- B's input pin is read as:
+--
+--     make B's input pin listen to the channels A's output pin writes to
+--
+-- which is exactly the sidechain gesture: pull from whatever feeds channels 3/4
+-- to a compressor's detector input, and it is wired. TK_Probe_FX_Pin_Mappings
+-- established that SetPinMappings works for FX inside containers too, so this
+-- reaches everywhere the view does.
+--
+-- The IN node carries one pin per track channel, so the source of a cable can
+-- be the track itself rather than another plugin -- without that, there is
+-- nothing to drag FROM when the sidechain comes straight off the track.
+--
+-- Replacing, not adding: a detector input that is meant to hear channel 3
+-- should hear channel 3, not channels 1, 2 and 3. Right-click a pin to clear it.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_pin_drag = nil
+
+-- Drawn versus followed. A node shows at most twelve pins and the IN/OUT boxes
+-- at most sixteen channels, but the routing walk follows every pin and channel
+-- a 64-bit mask can name; anything past the drawn ones collapses onto the last
+-- drawn pin, which carries a "+N".
+PATCHBAY_FX_PIN_DRAW_MAX = 12
+PATCHBAY_FX_PIN_READ_MAX = 64
+PATCHBAY_FX_EDGE_DRAW_MAX = 16
+
+function PatchbayFxNodeTrackChannelsAll(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return 2 end
+    local n = math.floor(r.GetMediaTrackInfo_Value(track, "I_NCHAN") or 2)
+    if n < 2 then n = 2 end
+    if n > PATCHBAY_FX_PIN_READ_MAX then n = PATCHBAY_FX_PIN_READ_MAX end
+    return n
+end
+
+function PatchbayFxNodeTrackChannels(track)
+    return math.min(PatchbayFxNodeTrackChannelsAll(track), PATCHBAY_FX_EDGE_DRAW_MAX)
+end
+
+-- A bypassed or offline FX hands its input through untouched, so for the
+-- signal path it writes nothing -- whatever its output pins say. Same for every
+-- top-level FX while the track's whole chain is switched off.
+function PatchbayFxNodePasses(fx, chain_on)
+    return (not fx.enabled) or fx.offline or (chain_on == false and (fx.depth or 0) == 0)
+end
+
+function PatchbayFxNodeChainOn(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return true end
+    return r.GetMediaTrackInfo_Value(track, "I_FXEN") ~= 0
+end
+
+-- Pins on the IN and OUT boxes, one per track channel, laid out the same way a
+-- node's own pins are so a cable meets them at the same kind of point.
+function PatchbayFxNodeEdgePinY(y, h, index, total, dims)
+    if total <= 1 then return y + h * 0.5 end
+    local step = dims.pin_step
+    local reach = (total - 1) * step
+    if reach > h - dims.pin_r * 2 then
+        reach = math.max(0, h - dims.pin_r * 2)
+        step = reach / (total - 1)
+    end
+    return y + (h - reach) * 0.5 + step * (index - 1)
+end
+
+-- Every pin also records WHERE it sits in the signal path: `scope` is the
+-- container whose channel space it lives in (nil for the track), `stage` its
+-- position in that scope's run, and `stages` the run itself. A container's own
+-- pins belong to the scope around it -- they map the outer channels -- while
+-- its children get the container as their scope. PatchbayFxNodePinDropOk needs
+-- all three to refuse a cable that REAPER would wire differently from how it
+-- was drawn.
+function PatchbayFxNodeCollectPins(layout, dims, track)
+    local out = {}
+    local function walk(stages, scope)
+        for si, st in ipairs(stages) do
+            for _, fx in ipairs(st) do
+                local nin = math.min(fx.pins.nin, PATCHBAY_FX_PIN_DRAW_MAX)
+                for i = 1, nin do
+                    out[#out + 1] = { fx = fx, side = "in", index = i,
+                        x = fx.x, y = PatchbayFxNodePinY(fx, i, nin, dims),
+                        scope = scope, stage = si, stages = stages }
+                end
+                local nout = math.min(fx.pins.nout, PATCHBAY_FX_PIN_DRAW_MAX)
+                for i = 1, nout do
+                    out[#out + 1] = { fx = fx, side = "out", index = i,
+                        x = fx.x + fx.w, y = PatchbayFxNodePinY(fx, i, nout, dims),
+                        scope = scope, stage = si, stages = stages }
+                end
+                if fx.child_stages then walk(fx.child_stages, fx.api_id) end
+            end
+        end
+    end
+    walk(layout.stages, nil)
+    -- The track's own channels. The IN box's pins are outputs -- a cable can
+    -- start there. The OUT box's are inputs and stay display-only: dropping on
+    -- one would mean rewriting the SOURCE plugin's output, which is a different
+    -- operation from everything else here and is better left until it is asked
+    -- for. PatchbayFxNodePinDropOk already refuses any edge pin as a target.
+    local chans = PatchbayFxNodeTrackChannels(track)
+    for i = 1, chans do
+        -- One y per box. The two can be dragged apart, so a single shared row
+        -- would leave one set of pins floating beside a box it no longer
+        -- belongs to.
+        if layout.edge_in_x then
+            out[#out + 1] = { edge = "in", side = "out", index = i,
+                x = layout.edge_in_x + layout.edge_w,
+                y = PatchbayFxNodeEdgePinY(layout.edge_in_y, layout.edge_h, i, chans, dims),
+                scope = nil, stage = 0, stages = layout.stages }
+        end
+        if layout.edge_out_x then
+            out[#out + 1] = { edge = "out", side = "in", index = i,
+                x = layout.edge_out_x,
+                y = PatchbayFxNodeEdgePinY(layout.edge_out_y, layout.edge_h, i, chans, dims),
+                scope = nil, stage = #layout.stages + 1, stages = layout.stages }
+        end
+    end
+    return out
+end
+
+function PatchbayFxNodePinAt(pins, mx, my, dims)
+    local reach = math.max(6, dims.pin_r + 5)
+    local best, best_d = nil, reach * reach
+    for _, p in ipairs(pins) do
+        local dx, dy = mx - p.x, my - p.y
+        local d = dx * dx + dy * dy
+        if d <= best_d then best, best_d = p, d end
+    end
+    return best
+end
+
+-- The channels a pin is wired to, as a mask. An edge pin IS a channel.
+function PatchbayFxNodePinMask(track, pin)
+    if pin.edge then
+        local bit = pin.index - 1
+        if bit < 32 then return (1 << bit), 0 end
+        return 0, (1 << (bit - 32))
+    end
+    local isout = (pin.side == "out") and 1 or 0
+    local low, high = r.TrackFX_GetPinMappings(track, pin.fx.api_id, isout, pin.index - 1)
+    return math.floor(tonumber(low) or 0), math.floor(tonumber(high) or 0)
+end
+
+-- The channels a source pin writes, from what the model already read -- this
+-- runs for every candidate pin on every frame of a drag, so no API calls.
+function PatchbayFxNodePinWrites(pin)
+    if pin.edge then return { pin.index } end
+    local info = pin.fx and pin.fx.pins and pin.fx.pins.outs[pin.index]
+    return (info and info.chans) or {}
+end
+
+-- Only out -> in, never onto the plugin the cable came from, and only where
+-- REAPER would end up wiring exactly what was drawn. A connection is stored as
+-- "the input reads the channels the output writes", so it holds only if:
+--
+--   * both pins live in the same channel space. Inside a container, channel 3
+--     is the container's channel 3, not the track's -- a cable across the
+--     container wall would wire the right number in the wrong space.
+--   * the source runs strictly BEFORE the target. Earlier, the target reads
+--     the channel before the source has written it; in the same parallel stage
+--     both read the same input, so neither sees the other's output.
+--   * nothing in between overwrites those channels, and the source is not
+--     bypassed. Otherwise the target hears something else, and the cable that
+--     appears afterwards starts somewhere the user never dragged from.
+--
+-- Returns ok plus a reason; the reason is only for the cases worth explaining.
+function PatchbayFxNodePinDropOk(src, dst)
+    if not src or not dst then return false end
+    if src.side ~= "out" or dst.side ~= "in" then return false end
+    if dst.edge then return false end
+    if src.fx and dst.fx and src.fx.api_id == dst.fx.api_id then return false end
+    if src.scope ~= dst.scope then
+        return false, "Those two pins are on different sides of a container wall.\n\n" ..
+            "Inside a container the channels are the container's own, so wire " ..
+            "through the container's input or output pins instead."
+    end
+    if (src.stage or 0) >= (dst.stage or 0) then
+        return false, "That input is processed before (or alongside) this output, " ..
+            "so it can never hear it."
+    end
+    if src.fx and PatchbayFxNodePasses(src.fx) then
+        return false, string.format("%s is bypassed or offline, so it writes nothing.",
+            src.fx.name or "That FX")
+    end
+    local writes = PatchbayFxNodePinWrites(src)
+    if #writes == 0 then return false end
+    local want = {}
+    for _, ch in ipairs(writes) do want[ch] = true end
+    local stages = src.stages or {}
+    for si = (src.stage or 0) + 1, (dst.stage or 0) - 1 do
+        for _, fx in ipairs(stages[si] or {}) do
+            if not PatchbayFxNodePasses(fx) then
+                for _, info in pairs(fx.pins.outs or {}) do
+                    for _, ch in ipairs(info.chans or {}) do
+                        if want[ch] then
+                            return false, string.format(
+                                "Channel %d is overwritten by %s before it reaches that input.",
+                                ch, fx.name or "another FX")
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return true
+end
+
+-- REAPER does not see a pin change as a change. TrackFX_SetPinMappings moves
+-- the pin but leaves the FX state unmarked, so the undo block around it closed
+-- with nothing to record: no undo point at all, and Undo went straight past it
+-- to whatever came before (TK_Probe_Pin_Undo, REAPER 7.75 -- Begin/EndBlock,
+-- Undo_OnStateChangeEx2 with the FX flag and Undo_OnStateChange all failed).
+--
+-- Writing the FX's own name back, unchanged, inside the same block marks the
+-- state dirty and the point appears; Undo then restores the pin, since pins
+-- are part of the FX state REAPER snapshots. Measured with no plugin reload.
+-- The name rather than a parameter: a parameter write can land in an
+-- automation lane on a track in Write or Latch mode, and not every plugin has
+-- a parameter to write.
+function PatchbayFxNodeMarkPinsChanged(track, api_id)
+    if not r.TrackFX_GetNamedConfigParm or not r.TrackFX_SetNamedConfigParm then return end
+    local ok, name = r.TrackFX_GetNamedConfigParm(track, api_id, "renamed_name")
+    r.TrackFX_SetNamedConfigParm(track, api_id, "renamed_name", ok and tostring(name or "") or "")
+end
+
+function PatchbayFxNodeConnectPins(track, src, dst)
+    if IsAllLockedCfg(GetConfig()) then return false, "FX actions locked." end
+    if not r.TrackFX_SetPinMappings then return false, "This REAPER cannot set pin mappings." end
+    if not PatchbayFxNodePinDropOk(src, dst) then return false, nil end
+    local low, high = PatchbayFxNodePinMask(track, src)
+    if low == 0 and high == 0 then
+        return false, "That output is not connected to any channel."
+    end
+    r.Undo_BeginBlock()
+    local ok = r.TrackFX_SetPinMappings(track, dst.fx.api_id, 0, dst.index - 1, low, high)
+    PatchbayFxNodeMarkPinsChanged(track, dst.fx.api_id)
+    r.Undo_EndBlock("Patchbay: connect FX pin", -1)
+    PatchbayFxNodeInvalidate()
+    if ok == false then return false, "REAPER refused that connection." end
+    return true, nil
+end
+
+-- Puts a plugin's pins back where REAPER starts them: pin k on channel k, both
+-- sides. Clearing a pin sets it to nothing, which is not the same as putting it
+-- right -- so until now a mis-drag could only be undone in REAPER's own pin
+-- connector. Dragging is easy to get wrong; there has to be a way back.
+function PatchbayFxNodeResetPins(track, api_id)
+    if IsAllLockedCfg(GetConfig()) then return false, "FX actions locked." end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false, "Track is gone." end
+    if not r.TrackFX_SetPinMappings or not r.TrackFX_GetIOSize then
+        return false, "This REAPER cannot set pin mappings."
+    end
+    local _, nin, nout = r.TrackFX_GetIOSize(track, api_id)
+    nin = math.floor(tonumber(nin) or 0)
+    nout = math.floor(tonumber(nout) or 0)
+    if nin <= 0 and nout <= 0 then return false, "That FX has no pins." end
+    r.Undo_BeginBlock()
+    for p = 0, nin - 1 do
+        local low = (p < 32) and (1 << p) or 0
+        local high = (p >= 32) and (1 << (p - 32)) or 0
+        r.TrackFX_SetPinMappings(track, api_id, 0, p, low, high)
+    end
+    for p = 0, nout - 1 do
+        local low = (p < 32) and (1 << p) or 0
+        local high = (p >= 32) and (1 << (p - 32)) or 0
+        r.TrackFX_SetPinMappings(track, api_id, 1, p, low, high)
+    end
+    PatchbayFxNodeMarkPinsChanged(track, api_id)
+    r.Undo_EndBlock("Patchbay: reset FX pin routing", -1)
+    PatchbayFxNodeInvalidate()
+    return true, nil
+end
+
+function PatchbayFxNodeClearPin(track, pin)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not pin or pin.edge or not r.TrackFX_SetPinMappings then return false end
+    local isout = (pin.side == "out") and 1 or 0
+    r.Undo_BeginBlock()
+    r.TrackFX_SetPinMappings(track, pin.fx.api_id, isout, pin.index - 1, 0, 0)
+    PatchbayFxNodeMarkPinsChanged(track, pin.fx.api_id)
+    r.Undo_EndBlock("Patchbay: disconnect FX pin", -1)
+    PatchbayFxNodeInvalidate()
+    return true
+end
+
+function PatchbayFxNodeDrawPinDrag(ctx, dl, pins, drag, mx, my, dims, track)
+    local hot = PatchbayFxNodePinAt(pins, mx, my, dims)
+    -- Every pin that could take this cable, so the possibilities are visible
+    -- rather than discovered by trial.
+    for _, p in ipairs(pins) do
+        if PatchbayFxNodePinDropOk(drag, p) then
+            local on = (hot == p)
+            r.ImGui_DrawList_AddCircle(dl, p.x, p.y,
+                dims.pin_r + (on and 5 or 3), on and 0xFFD36BFF or 0xFFD36B80, 0, on and 2.4 or 1.4)
+        end
+    end
+    local col = (hot and PatchbayFxNodePinDropOk(drag, hot)) and 0xFFD36BFF or 0xFFFFFF99
+    PatchbayFxNodeCable(dl, drag.x, drag.y, mx, my, col, 2.2)
+    r.ImGui_DrawList_AddCircleFilled(dl, drag.x, drag.y, dims.pin_r + 1.5, col)
+    return hot
+end
+
+function PatchbayFxNodeDrawEdgePins(ctx, dl, layout, dims, track, ink)
+    local chans = PatchbayFxNodeTrackChannels(track)
+    local extra = PatchbayFxNodeTrackChannelsAll(track) - chans
+    local show = dims.zoom >= 0.75
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    for i = 1, chans do
+        -- The last drawn channel also stands for the ones past it.
+        local label = tostring(i)
+        if i == chans and extra > 0 then label = label .. " +" .. extra end
+        if layout.edge_in_x then
+            local py = PatchbayFxNodeEdgePinY(layout.edge_in_y, layout.edge_h, i, chans, dims)
+            local px = layout.edge_in_x + layout.edge_w
+            r.ImGui_DrawList_AddCircleFilled(dl, px, py, dims.pin_r, ink)
+            if show and chans > 2 then
+                r.ImGui_DrawList_AddText(dl, px + dims.pin_r + 4, py - text_h * 0.5, ink, label)
+            end
+        end
+        -- The OUT box takes the chain's channels back in, on its left edge.
+        if layout.edge_out_x then
+            local py = PatchbayFxNodeEdgePinY(layout.edge_out_y, layout.edge_h, i, chans, dims)
+            local px = layout.edge_out_x
+            r.ImGui_DrawList_AddCircleFilled(dl, px, py, dims.pin_r, ink)
+            if show and chans > 2 then
+                local tw = r.ImGui_CalcTextSize(ctx, label)
+                r.ImGui_DrawList_AddText(dl, px - dims.pin_r - 4 - tw, py - text_h * 0.5,
+                    ink, label)
+            end
+        end
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Drawing the routing that is actually there
+--
+-- Until now a cable only said "this plugin comes after that one". The real
+-- wiring -- which channel feeds which pin -- was readable from a label and a
+-- tooltip, and nowhere else. That is half of what the pin work was for: being
+-- able to change a mapping is worth little while you cannot see it.
+--
+-- The model is a walk of the chain carrying a source per channel. A run starts
+-- with the track's channels at its left edge; each output pin becomes the new
+-- source for the channels it writes; each input pin draws back to whatever
+-- currently feeds the channel it reads. That is the signal path.
+--
+-- WHAT COUNTS AS TRIVIAL: pin 1 on channel 1 and pin 2 on channel 2 -- the
+-- plain stereo path every plugin has. Everything else is drawn by default: a
+-- detector input on channel 3, an output pushed somewhere unusual, a crossed
+-- pair. Those are the ones worth seeing, and drawing the boring pair alongside
+-- would bury them. The button shows the lot regardless.
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeRoutingOn()
+    local cfg = GetConfig()
+    return cfg ~= nil and cfg.patchbay_fx_node_routing == true
+end
+
+function PatchbayFxNodeRoutingToggle()
+    local cfg = GetConfig()
+    if not cfg then return end
+    cfg.patchbay_fx_node_routing = not PatchbayFxNodeRoutingOn()
+    if _G.SaveConfig then _G.SaveConfig() end
+    PatchbayFxNodeInvalidate()
+end
+
+function PatchbayFxNodeChannelsOf(low, high)
+    local out = {}
+    low = math.floor(tonumber(low) or 0)
+    high = math.floor(tonumber(high) or 0)
+    for bit = 0, 31 do
+        if low & (1 << bit) ~= 0 then out[#out + 1] = bit + 1 end
+    end
+    for bit = 0, 31 do
+        if high & (1 << bit) ~= 0 then out[#out + 1] = bit + 33 end
+    end
+    return out
+end
+
+-- The main stereo path, and nothing else.
+function PatchbayFxNodePinIsTrivial(index, chans)
+    return index <= 2 and #chans == 1 and chans[1] == index
+end
+
+function PatchbayFxNodeLum(col)
+    return (((col >> 24) & 0xFF) * 0.299) + (((col >> 16) & 0xFF) * 0.587)
+         + (((col >> 8) & 0xFF) * 0.114)
+end
+
+-- One hue per channel, so two crossing cables are told apart at a glance -- but
+-- a hue alone will not do. Red carries 0.299 of the luminance that green
+-- carries at the same value, so channel 1 at a fixed brightness came out at an
+-- effective contrast of about 23 against the canvas while channel 3 sat at 154.
+-- The quiet cables were being drawn and simply could not be seen.
+--
+-- So the value is lifted (or dropped, on a light theme) until the cable clears
+-- a contrast floor, desaturating toward white or black once value alone has run
+-- out. Quiet cables stay quieter than loud ones -- they just stay visible.
+-- One appearance per channel, whatever a cable says about the routing. A
+-- deviating cable used to be brighter as well as differently coloured; with
+-- the width already levelled, the hue does the work on its own and a second
+-- axis only made the picture noisier. Every cable now gets what used to be
+-- the readable setting, so nothing became harder to see.
+--
+-- The contrast loop stays, because a hue is no guarantee of visibility: pure
+-- red carries a third of green's luminance at the same value, which is how a
+-- channel-1 cable once ended up drawn and invisible on a dark canvas.
+function PatchbayFxNodeChannelColor(ch)
+    local hue = ((ch - 1) * 47) % 360
+    local light = PatchbayFxSchemaThemeIsLight()
+    local bg_l = PatchbayFxNodeLum(_G.patchbay_grid_bg_col or 0x1A1A1AFF)
+    local floor = 105
+    local alpha = 0.95
+    local sat = 0.62
+    local v = light and 0.42 or 0.98
+    local col = PatchbayFxNodeHsv(hue, sat, v, alpha)
+    for _ = 1, 16 do
+        if math.abs(PatchbayFxNodeLum(col) - bg_l) * alpha >= floor then return col end
+        if light then
+            if v > 0.12 then v = v - 0.06 else sat = math.min(1, sat + 0.06) end
+        else
+            if v < 1 then v = math.min(1, v + 0.06) else sat = math.max(0.12, sat - 0.07) end
+        end
+        col = PatchbayFxNodeHsv(hue, sat, v, alpha)
+    end
+    return col
+end
+
+-- Reads the masks already collected onto each node, so the walk costs no extra
+-- API calls per frame.
+function PatchbayFxNodeRoutingCables(layout, dims, track, show_all)
+    local out = {}
+    local nchan = PatchbayFxNodeTrackChannels(track)
+    local nchan_all = PatchbayFxNodeTrackChannelsAll(track)
+    local chain_on = PatchbayFxNodeChainOn(track)
+
+    -- `scope` is the container this part of the walk is running inside, and it
+    -- travels with every cable born here. A container fills its whole body when
+    -- it is drawn, so a cable that ends inside one has to be drawn a second
+    -- time, after that body -- and it can only be found again if it says where
+    -- it belongs.
+    local function walk(stages, sources, scope)
+        for _, st in ipairs(stages) do
+            -- Reads first, then writes: everything in one parallel stage sees
+            -- the same input, which is what parallel means.
+            local writes = {}
+            for _, fx in ipairs(st) do
+                -- Pin positions use the full count: PatchbayFxNodePinY lays out
+                -- the drawn ones and stacks the rest on the last drawn pin.
+                local nin = fx.pins.nin
+                local nin_drawn = math.min(nin, PATCHBAY_FX_PIN_DRAW_MAX)
+                for i = 1, nin_drawn do
+                    local info = fx.pins.ins[i]
+                    if info and info.chans and #info.chans > 0 then
+                        local trivial = PatchbayFxNodePinIsTrivial(i, info.chans)
+                        if show_all or not trivial then
+                            local py = PatchbayFxNodePinY(fx, i, nin, dims)
+                            for _, ch in ipairs(info.chans) do
+                                for _, src in ipairs(sources[ch] or {}) do
+                                    out[#out + 1] = { x1 = src.x, y1 = src.y,
+                                        x2 = fx.x, y2 = py, ch = ch, trivial = trivial,
+                                        scope = scope }
+                                end
+                            end
+                        end
+                    end
+                end
+                -- Inside an open container the signal comes from the
+                -- container's OWN input pins, not from whatever fed it. A
+                -- container remaps the channels it is handed onto its own --
+                -- it is two channels wide until container_nch_in says
+                -- otherwise -- so a plugin in there reads the pin, not the
+                -- track. Drawing it that way also makes the two sides match:
+                -- outside -> pin -> inside, and inside -> pin -> outside.
+                -- Seeding from the outer sources instead short-circuited the
+                -- input pin and let the insides leak sideways onto anything
+                -- running parallel to the container.
+                local inner = nil
+                if fx.child_stages and #fx.children > 0 and not fx.folded then
+                    inner = {}
+                    for i = 1, #fx.pins.ins do
+                        inner[i] = { { x = fx.x, y = PatchbayFxNodePinY(fx, i, nin, dims) } }
+                    end
+                    walk(fx.child_stages, inner, fx.api_id)
+                end
+                local nout = fx.pins.nout
+                local passes = PatchbayFxNodePasses(fx, chain_on)
+                for i = 1, #fx.pins.outs do
+                    local info = fx.pins.outs[i]
+                    if info and info.chans then
+                        local py = PatchbayFxNodePinY(fx, i, nout, dims)
+                        local out_trivial = PatchbayFxNodePinIsTrivial(i, info.chans)
+                        -- An open container's own output pin k is fed from the
+                        -- container's internal channel k -- the PIN number, not
+                        -- the outer channel the pin happens to write. Looking
+                        -- it up by the outer channel was only right while pin
+                        -- k sat on channel k; remap container out 1 to channel
+                        -- 3 and the wrong insides were drawn into it. Once per
+                        -- pin, too, however many outer channels it feeds.
+                        if inner and #info.chans > 0 and (show_all or not out_trivial) then
+                            for _, src in ipairs(inner[i] or {}) do
+                                out[#out + 1] = { x1 = src.x, y1 = src.y,
+                                    x2 = fx.x + fx.w, y2 = py, ch = info.chans[1],
+                                    trivial = out_trivial, scope = fx.api_id }
+                            end
+                        end
+                        -- A bypassed or offline FX writes nothing: its input
+                        -- carries on as it was, so the next reader draws back
+                        -- past it to whatever fed it.
+                        if not passes then
+                            for _, ch in ipairs(info.chans) do
+                                -- Appended, not assigned: parallel lanes are summed,
+                                -- so a channel written by two of them has two
+                                -- sources. Overwriting made every lane but the last
+                                -- a dead end on screen -- a reverb feeding nothing.
+                                local w = writes[ch]
+                                if not w then w = {}; writes[ch] = w end
+                                w[#w + 1] = { x = fx.x + fx.w, y = py }
+                            end
+                        end
+                    end
+                end
+            end
+            for ch, list in pairs(writes) do sources[ch] = list end
+        end
+    end
+
+    -- Every track channel is followed; the ones past the drawn sixteen start
+    -- from (and end on) the last drawn edge pin, which carries a "+N".
+    local sources = {}
+    if layout.edge_in_x then
+        for ch = 1, nchan_all do
+            sources[ch] = { { x = layout.edge_in_x + layout.edge_w,
+                              y = PatchbayFxNodeEdgePinY(layout.edge_in_y, layout.edge_h,
+                                  math.min(ch, nchan), nchan, dims) } }
+        end
+    end
+    walk(layout.stages, sources, nil)
+
+    -- And out of the chain again: whatever writes a channel last is what the
+    -- OUT box receives. Without this the picture simply stopped at the final
+    -- plugin, as if the signal went nowhere.
+    if layout.edge_out_x then
+        for ch = 1, nchan_all do
+            local trivial = ch <= 2
+            if show_all or not trivial then
+                for _, src in ipairs(sources[ch] or {}) do
+                    out[#out + 1] = { x1 = src.x, y1 = src.y,
+                        x2 = layout.edge_out_x,
+                        y2 = PatchbayFxNodeEdgePinY(layout.edge_out_y, layout.edge_h,
+                            math.min(ch, nchan), nchan, dims),
+                        ch = ch, trivial = trivial }
+                end
+            end
+        end
+    end
+    return out
+end
+
+PATCHBAY_FX_ROUTE_W = 1.2
+
+-- ---------------------------------------------------------------------------
+-- MIDI
+--
+-- The cables above are audio pins only, so a synth that declares no audio
+-- inputs (Traveler: "2 out", nothing in) stood in the chain with nothing
+-- running into it, as if it played on its own. Its signal is the track's MIDI,
+-- and that gets a cable of its own: dashed and neutral grey, so it never reads
+-- as one more audio channel. Drawn whatever the Routing toggle says -- it is
+-- the only cable such a plugin has.
+--
+-- MIDI runs through the whole chain, so every instrument is fed from the
+-- track. Inside a container it arrives through the container: one cable from
+-- IN to the container, then on from the container's wall to the instrument.
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeHasInstrument(fx)
+    if fx.is_instrument then return true end
+    for _, c in ipairs(fx.children or {}) do
+        if PatchbayFxNodeHasInstrument(c) then return true end
+    end
+    return false
+end
+
+-- Where MIDI enters a node: on its left edge, level with the header, clear of
+-- the audio pins that sit around the middle of the body. A container takes it
+-- just under its header, which is also where the inner cables leave from.
+function PatchbayFxNodeMidiPoint(fx, dims)
+    if fx.fx_type == "Container" and fx.child_stages then
+        return fx.x, fx.y + dims.head_h
+    end
+    return fx.x, fx.y + dims.head_h * 0.5
+end
+
+function PatchbayFxNodeMidiCables(layout, dims)
+    local out = {}
+    local function walk(stages, sx, sy, scope)
+        for _, st in ipairs(stages) do
+            for _, fx in ipairs(st) do
+                if fx.is_instrument or (fx.fx_type == "Container" and PatchbayFxNodeHasInstrument(fx)) then
+                    local tx, ty = PatchbayFxNodeMidiPoint(fx, dims)
+                    out[#out + 1] = { x1 = sx, y1 = sy, x2 = tx, y2 = ty, scope = scope,
+                        faint = (not fx.enabled) or fx.offline }
+                    if fx.child_stages and not fx.folded then
+                        walk(fx.child_stages, tx, ty, fx.api_id)
+                    end
+                end
+            end
+        end
+    end
+    if layout.edge_in_x then
+        walk(layout.stages, layout.edge_in_x + layout.edge_w,
+            layout.edge_in_y + layout.edge_h - dims.pin_r * 2, nil)
+    end
+    return out
+end
+
+-- A bezier cut into dashes. Sampled by parameter, which bunches the dashes a
+-- little on the bends; at these lengths that is not visible.
+function PatchbayFxNodeDashedCable(dl, x1, y1, x2, y2, col, thick)
+    local cp = math.max(18, math.abs(x2 - x1) * 0.45)
+    local ax, ay, bx, by = x1 + cp, y1, x2 - cp, y2
+    local len = math.sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2) + cp
+    local n = math.max(8, math.floor(len / 5))
+    local function at(t)
+        local u = 1 - t
+        return u * u * u * x1 + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * x2,
+               u * u * u * y1 + 3 * u * u * t * ay + 3 * u * t * t * by + t * t * t * y2
+    end
+    local px, py = x1, y1
+    for i = 1, n do
+        local qx, qy = at(i / n)
+        if i % 2 == 1 then r.ImGui_DrawList_AddLine(dl, px, py, qx, qy, col, thick) end
+        px, py = qx, qy
+    end
+end
+
+function PatchbayFxNodeMidiColor(faint)
+    local col = PatchbayFxNodeCanvasInk(false)
+    if faint then col = (col & 0xFFFFFF00) | 0x50 end
+    return col
+end
+
+function PatchbayFxNodeDrawMidi(ctx, dl, layout, dims)
+    local cables = PatchbayFxNodeMidiCables(layout, dims)
+    PB.fx_view_midi = cables
+    if #cables == 0 then return 0 end
+    for _, c in ipairs(cables) do
+        PatchbayFxNodeDashedCable(dl, c.x1, c.y1, c.x2, c.y2,
+            PatchbayFxNodeMidiColor(c.faint), PATCHBAY_FX_ROUTE_W + 0.3)
+    end
+    -- Where it comes from, so the dashes do not seem to start out of nothing.
+    if layout.edge_in_x and dims.zoom >= 0.75 then
+        local x = layout.edge_in_x + layout.edge_w + dims.pin_r + 4
+        local y = layout.edge_in_y + layout.edge_h - dims.pin_r * 2
+        r.ImGui_DrawList_AddText(dl, x, y - r.ImGui_GetTextLineHeight(ctx) * 0.5,
+            PatchbayFxNodeMidiColor(false), "MIDI")
+    end
+    return #cables
+end
+
+function PatchbayFxNodeDrawRouting(ctx, dl, layout, dims, track)
+    local show_all = PatchbayFxNodeRoutingOn()
+    local cables = PatchbayFxNodeRoutingCables(layout, dims, track, show_all)
+    PB.fx_view_routing = cables
+    -- One width for all of them. A deviating cable used to be drawn heavier as
+    -- well as brighter, which said the same thing twice and read as clutter
+    -- rather than as emphasis. The channel colour carries it on its own.
+    for _, c in ipairs(cables) do
+        PatchbayFxNodeCable(dl, c.x1, c.y1, c.x2, c.y2,
+            PatchbayFxNodeChannelColor(c.ch), PATCHBAY_FX_ROUTE_W)
+    end
+    PatchbayFxNodeDrawMidi(ctx, dl, layout, dims)
+    return #cables
+end
+
+-- The cables that live inside this container, drawn again on top of its body.
+-- One pass under everything is not enough: a container is a node like any
+-- other and fills its whole box, children included, so turning Routing on made
+-- a container look emptier rather than fuller -- every cable in it was painted
+-- over the moment the box went down.
+--
+-- Clipped to the box, so the stretch that runs in from outside keeps the place
+-- the first pass gave it instead of being stamped across the nodes in between.
+function PatchbayFxNodeDrawRoutingInside(dl, fx)
+    local cables = PB.fx_view_routing
+    if not cables or fx.api_id == nil then return 0 end
+    local clip = r.ImGui_DrawList_PushClipRect ~= nil and r.ImGui_DrawList_PopClipRect ~= nil
+    if clip then
+        r.ImGui_DrawList_PushClipRect(dl, fx.x, fx.y, fx.x + fx.w, fx.y + fx.h, true)
+    end
+    local n = 0
+    for _, c in ipairs(cables) do
+        if c.scope == fx.api_id then
+            n = n + 1
+            PatchbayFxNodeCable(dl, c.x1, c.y1, c.x2, c.y2,
+                PatchbayFxNodeChannelColor(c.ch), PATCHBAY_FX_ROUTE_W)
+        end
+    end
+    for _, c in ipairs(PB.fx_view_midi or {}) do
+        if c.scope == fx.api_id then
+            n = n + 1
+            PatchbayFxNodeDashedCable(dl, c.x1, c.y1, c.x2, c.y2,
+                PatchbayFxNodeMidiColor(c.faint), PATCHBAY_FX_ROUTE_W + 0.3)
+        end
+    end
+    if clip then r.ImGui_DrawList_PopClipRect(dl) end
+    return n
+end
+
+function PatchbayFxNodeDims(zoom)
+    local z = math.max(0.35, math.min(2.5, zoom or 1))
+    return {
+        zoom = z,
+        node_w = math.floor(150 * z + 0.5),
+        node_h = math.floor(44 * z + 0.5),
+        pin_r = math.max(2, 4 * z),
+        pin_step = math.max(7, 13 * z),
+        col_gap = math.floor(76 * z + 0.5),
+        row_gap = math.floor(28 * z + 0.5),
+        pad = math.floor(16 * z + 0.5),
+        head_h = math.floor(20 * z + 0.5),
+        badge_h = math.floor(11 * z + 0.5),
+        text_pad = math.floor(9 * z + 0.5),
+        edge_w = math.floor(54 * z + 0.5)
+    }
+end
+
+-- ---------------------------------------------------------------------------
+-- Model
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeParm(track, addr, key)
+    if not r.TrackFX_GetNamedConfigParm then return nil end
+    local ok, v = r.TrackFX_GetNamedConfigParm(track, addr, key)
+    if not ok then return nil end
+    return tostring(v or "")
+end
+
+-- "1", "1,2", "3..8" or "-" for a pin that is connected to nothing. Kept short
+-- on purpose: this label sits next to a 4 px dot.
+function PatchbayFxNodeChannelLabel(low, high)
+    low = math.floor(tonumber(low) or 0)
+    high = math.floor(tonumber(high) or 0)
+    local chans = {}
+    for bit = 0, 31 do
+        if low & (1 << bit) ~= 0 then chans[#chans + 1] = bit + 1 end
+    end
+    for bit = 0, 31 do
+        if high & (1 << bit) ~= 0 then chans[#chans + 1] = bit + 33 end
+    end
+    if #chans == 0 then return "-", 0 end
+    if #chans > 2 then return chans[1] .. ".." .. chans[#chans], #chans end
+    return table.concat(chans, ","), #chans
+end
+
+function PatchbayFxNodePinInfo(track, addr)
+    local info = { nin = 2, nout = 2, ins = {}, outs = {}, known = false }
+    if not r.TrackFX_GetIOSize then return info end
+    local _, nin, nout = r.TrackFX_GetIOSize(track, addr)
+    if nin == nil and nout == nil then return info end
+    info.known = true
+    info.nin = math.max(0, math.floor(tonumber(nin) or 0))
+    info.nout = math.max(0, math.floor(tonumber(nout) or 0))
+    if not r.TrackFX_GetPinMappings then return info end
+    -- Every pin is READ, up to the 64 channels a mask can name; only drawing is
+    -- capped (PATCHBAY_FX_PIN_DRAW_MAX). Reading just the first twelve made a
+    -- 32-out Kontakt look as if pins 13+ wrote nothing, so the channels they
+    -- really write stayed hanging off their old source on screen. The cost is
+    -- paid once per cache refresh, not per frame.
+    -- The channel list is kept beside the label: the routing walk needs the
+    -- numbers, and asking REAPER again per frame would be the same question
+    -- twice.
+    for pin = 0, math.min(info.nin, PATCHBAY_FX_PIN_READ_MAX) - 1 do
+        local low, high = r.TrackFX_GetPinMappings(track, addr, 0, pin)
+        local label, count = PatchbayFxNodeChannelLabel(low, high)
+        info.ins[pin + 1] = { label = label, count = count,
+                              chans = PatchbayFxNodeChannelsOf(low, high) }
+    end
+    for pin = 0, math.min(info.nout, PATCHBAY_FX_PIN_READ_MAX) - 1 do
+        local low, high = r.TrackFX_GetPinMappings(track, addr, 1, pin)
+        local label, count = PatchbayFxNodeChannelLabel(low, high)
+        info.outs[pin + 1] = { label = label, count = count,
+                               chans = PatchbayFxNodeChannelsOf(low, high) }
+    end
+    return info
+end
+
+-- The container address arithmetic, same as PatchbayFxSchemaCollectContainer
+-- and the shipped Patchbay everywhere else: an address is an expression built
+-- from counts that shift whenever the chain changes, so it is resolved on every
+-- rebuild and never cached across frames.
+function PatchbayFxNodeMake(track, api, fx_id, sibling_count, diff, depth)
+    local _, raw_name = r.TrackFX_GetFXName(track, api, "")
+    local fx_type = PatchbayFxNodeParm(track, api, "fx_type") or ""
+    local node = {
+        api_id = api,
+        name = PatchbayFxSchemaCleanName(raw_name, "FX"),
+        full_name = tostring(raw_name or ""),
+        fx_type = fx_type,
+        enabled = r.TrackFX_GetEnabled(track, api),
+        offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, api) or false,
+        parallel = (PatchbayFxNodeParm(track, api, "parallel") or "0") ~= "0",
+        depth = depth,
+        fxguid = r.TrackFX_GetFXGUID and r.TrackFX_GetFXGUID(track, api) or nil,
+        category = PatchbayFxNodeCategoryOf(tostring(raw_name or "")),
+        badge = PatchbayFxNodeFormatBadge(tostring(raw_name or "")),
+        is_instrument = PatchbayFxNodeIsInstrument(tostring(raw_name or "")),
+        container_id = (fx_type == "Container") and fx_id or nil,
+        parent_fx_count = sibling_count,
+        previous_diff = (depth == 0) and 0 or diff,
+        stride = (depth == 0) and 1 or diff,
+        pins = PatchbayFxNodePinInfo(track, api),
+        children = {}
+    }
+    if fx_type == "Container" and depth < 4 then
+        node.children = PatchbayFxNodeCollectContainer(track, fx_id, sibling_count, diff, depth)
+    end
+    return node
+end
+
+function PatchbayFxNodeCollectContainer(track, container_id, parent_count, prev_diff, depth)
+    local out = {}
+    if not r.TrackFX_GetNamedConfigParm then return out end
+    local count = math.floor(tonumber(PatchbayFxNodeParm(track, 0x2000000 + container_id, "container_count")) or 0)
+    if count <= 0 then return out end
+    local diff = (depth == 0) and (parent_count + 1) or ((parent_count + 1) * prev_diff)
+    for i = 1, count do
+        local fx_id = container_id + diff * i
+        out[#out + 1] = PatchbayFxNodeMake(track, 0x2000000 + fx_id, fx_id, count, diff, depth + 1)
+    end
+    return out
+end
+
+function PatchbayFxNodeMarkFolds(track, list)
+    for _, fx in ipairs(list) do
+        fx.folded = (fx.fx_type == "Container") and #fx.children > 0
+            and PatchbayFxNodeIsFolded(track, fx.fxguid) or false
+        if #fx.children > 0 then PatchbayFxNodeMarkFolds(track, fx.children) end
+    end
+end
+
+function PatchbayFxNodeChain(track)
+    local out = {}
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return out end
+    local count = r.TrackFX_GetCount(track) or 0
+    for i = 0, count - 1 do
+        out[#out + 1] = PatchbayFxNodeMake(track, i, i + 1, count, count + 1, 0)
+    end
+    PatchbayFxNodeMarkFolds(track, out)
+    return out
+end
+
+-- A parallel FX joins the stage before it: same input, outputs summed. That is
+-- the one piece of chain structure REAPER does not hand over as a tree.
+function PatchbayFxNodeStages(list)
+    local stages = {}
+    for i = 1, #(list or {}) do
+        local fx = list[i]
+        if fx.parallel and #stages > 0 then
+            local st = stages[#stages]
+            st[#st + 1] = fx
+        else
+            stages[#stages + 1] = { fx }
+        end
+    end
+    return stages
+end
+
+-- ---------------------------------------------------------------------------
+-- Layout: measure bottom-up, then place top-down
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeMeasureOne(fx, dims)
+    if fx.fx_type == "Container" and #fx.children > 0 and not fx.folded then
+        local cw, ch, cstages = PatchbayFxNodeMeasure(fx.children, dims)
+        fx.child_stages = cstages
+        fx.child_w, fx.child_h = cw, ch
+        fx.w = cw + dims.pad * 2
+        fx.h = ch + dims.pad * 2 + dims.head_h
+    else
+        fx.w = dims.node_w
+        -- Rounded: a node on a half pixel renders its 1 px border blurred.
+        local body = PatchbayFxNodeShotsOn() and (dims.node_h * 1.45) or (dims.node_h * 0.55)
+        fx.h = math.floor(math.max(dims.node_h, dims.head_h + body) + 0.5)
+    end
+    -- A node has to be tall enough for its own pins, or a ReaComp's four inputs
+    -- pile up outside the box they belong to.
+    local rows = math.max(math.min(fx.pins.nin, PATCHBAY_FX_PIN_DRAW_MAX), math.min(fx.pins.nout, PATCHBAY_FX_PIN_DRAW_MAX), 2)
+    local needed = rows * dims.pin_step + dims.text_pad * 2
+    if fx.h < needed then fx.h = needed end
+end
+
+function PatchbayFxNodeMeasure(list, dims)
+    local stages = PatchbayFxNodeStages(list)
+    local total_w, total_h = 0, 0
+    for si = 1, #stages do
+        local st = stages[si]
+        local sw, sh = 0, 0
+        for i = 1, #st do
+            PatchbayFxNodeMeasureOne(st[i], dims)
+            if st[i].w > sw then sw = st[i].w end
+            sh = sh + st[i].h
+        end
+        sh = sh + dims.row_gap * (#st - 1)
+        st.w, st.h = sw, sh
+        total_w = total_w + sw
+        if sh > total_h then total_h = sh end
+    end
+    total_w = total_w + dims.col_gap * math.max(0, #stages - 1)
+    return total_w, total_h, stages
+end
+
+function PatchbayFxNodePlace(stages, x, y, band_h, dims)
+    local cx = x
+    for si = 1, #stages do
+        local st = stages[si]
+        st.x = cx
+        st.y = y + (band_h - st.h) * 0.5
+        local row_y = st.y
+        for i = 1, #st do
+            local fx = st[i]
+            fx.x = cx + (st.w - fx.w) * 0.5
+            fx.y = row_y
+            row_y = row_y + fx.h + dims.row_gap
+            if fx.child_stages then
+                PatchbayFxNodePlace(fx.child_stages, fx.x + dims.pad,
+                    fx.y + dims.head_h + dims.pad, fx.child_h, dims)
+            end
+        end
+        cx = cx + st.w + dims.col_gap
+    end
+end
+
+function PatchbayFxNodeBuild(track, dims)
+    local chain = PatchbayFxNodeChain(track)
+    local w, h, stages = PatchbayFxNodeMeasure(chain, dims)
+    return { chain = chain, stages = stages, w = w, h = h }
+end
+
+-- ---------------------------------------------------------------------------
+-- Drawing
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeCable(dl, x1, y1, x2, y2, col, thick)
+    local cp = math.max(18, math.abs(x2 - x1) * 0.45)
+    r.ImGui_DrawList_AddBezierCubic(dl, x1, y1, x1 + cp, y1, x2 - cp, y2, x2, y2, col, thick or 1.6)
+end
+
+-- Pins sit at a fixed spacing around the middle of the node, NOT spread across
+-- its full height. Stretching them to fill the box put a stereo pair hard
+-- against the top and bottom edges, where they read as corner decorations
+-- rather than as an in and an out belonging to that plugin.
+--
+-- A container is measured by its contents, so it can be hundreds of pixels
+-- tall; its pins belong to the header band, level with the name, or they float
+-- somewhere in the middle of its children.
+function PatchbayFxNodePinY(fx, index, total, dims)
+    local band_top = fx.y
+    local band_h = fx.h
+    if fx.fx_type == "Container" and #fx.children > 0 then band_h = dims.head_h end
+    if total <= 1 then return band_top + band_h * 0.5 end
+    local span = math.min(total, PATCHBAY_FX_PIN_DRAW_MAX)
+    local step = dims.pin_step
+    -- Many pins on a short header would overflow it, so the spacing gives way
+    -- before the band does.
+    local reach = (span - 1) * step
+    if reach > band_h - dims.pin_r * 2 then
+        reach = math.max(0, band_h - dims.pin_r * 2)
+        step = (span > 1) and (reach / (span - 1)) or 0
+    end
+    local top = band_top + (band_h - reach) * 0.5
+    return top + step * math.min(index - 1, span - 1)
+end
+
+-- Anything drawn OUTSIDE a node body -- pins, their channel labels, the cables
+-- between nodes -- sits on the canvas, not on the node. The schema palette is
+-- no use for that: it is built for drawing on the schema panel's own light
+-- background, so in monochrome on a dark theme it hands back near-black
+-- (0x1B1B1B) for a canvas that is 0x1A1A1A. The pins were being drawn all
+-- along; they were one step of grey away from the background.
+--
+-- A node inside a container is the exception: there the backdrop IS the
+-- container's fill, so the container passes its own colours down to its
+-- children instead of these.
+function PatchbayFxNodeCanvasInk(strong)
+    if PatchbayFxSchemaThemeIsLight() then
+        return strong and 0x1C1C1CFF or 0x5A5A5ADD
+    end
+    return strong and 0xE4E8EEFF or 0x99A0AACC
+end
+
+function PatchbayFxNodeDrawPins(ctx, dl, fx, dims, line_col, text_col)
+    local show_labels = dims.zoom >= 0.75
+    local nin = math.min(fx.pins.nin, PATCHBAY_FX_PIN_DRAW_MAX)
+    for i = 1, nin do
+        local py = PatchbayFxNodePinY(fx, i, nin, dims)
+        local info = fx.pins.ins[i]
+        -- A pin mapped to nothing is drawn hollow: an unfed sidechain input is
+        -- exactly the kind of thing a strip view cannot show.
+        local dead = (not info) or info.count == 0
+        if dead then
+            r.ImGui_DrawList_AddCircle(dl, fx.x, py, dims.pin_r, line_col, 0, 1.3)
+        else
+            r.ImGui_DrawList_AddCircleFilled(dl, fx.x, py, dims.pin_r, line_col)
+        end
+        if show_labels and info and nin > 2 then
+            local label = info.label
+            -- The last drawn pin stands for every pin past it as well.
+            if i == nin and fx.pins.nin > nin then
+                label = "+" .. (fx.pins.nin - nin) .. "  " .. label
+            end
+            local tw = r.ImGui_CalcTextSize(ctx, label)
+            r.ImGui_DrawList_AddText(dl, fx.x - dims.pin_r - 4 - tw,
+                py - r.ImGui_GetTextLineHeight(ctx) * 0.5, text_col, label)
+        end
+    end
+    local nout = math.min(fx.pins.nout, PATCHBAY_FX_PIN_DRAW_MAX)
+    for i = 1, nout do
+        local py = PatchbayFxNodePinY(fx, i, nout, dims)
+        local info = fx.pins.outs[i]
+        local dead = (not info) or info.count == 0
+        if dead then
+            r.ImGui_DrawList_AddCircle(dl, fx.x + fx.w, py, dims.pin_r, line_col, 0, 1.3)
+        else
+            r.ImGui_DrawList_AddCircleFilled(dl, fx.x + fx.w, py, dims.pin_r, line_col)
+        end
+        if show_labels and info and nout > 2 then
+            local label = info.label
+            if i == nout and fx.pins.nout > nout then
+                label = label .. "  +" .. (fx.pins.nout - nout)
+            end
+            r.ImGui_DrawList_AddText(dl, fx.x + fx.w + dims.pin_r + 4,
+                py - r.ImGui_GetTextLineHeight(ctx) * 0.5, text_col, label)
+        end
+    end
+end
+
+-- Chips are readable against ANYTHING behind them -- the body colour, a
+-- container's fill, a screenshot -- so their plate and ink are fixed to the
+-- theme rather than derived from the node's own colours. The format badge used
+-- the border for its plate and the header colour for its text, two values that
+-- can land a few luminance steps apart, and the category was bare text laid
+-- straight over a plugin screenshot.
+-- An instrument keeps whatever category its folder gives it -- "KEYS" says
+-- more than "Instrument" -- so the fact that it IS one is carried by the format
+-- chip instead. 429 of the 3030 plugins here are instruments and all but 23 of
+-- them already have a better label; overwriting that would have thrown the
+-- useful half away.
+function PatchbayFxNodeChipColors(instrument)
+    if instrument then
+        if PatchbayFxSchemaThemeIsLight() then return 0x1E7A3CFF, 0xF2FFF6FF end
+        return 0x6FDA92FF, 0x04180AFF
+    end
+    if PatchbayFxSchemaThemeIsLight() then
+        return 0xFFFFFFE0, 0x1A1A1AFF
+    end
+    return 0x000000C8, 0xF2F4F7FF
+end
+
+-- Draws at x when right_edge is nil, otherwise ending at right_edge. Returns
+-- the width it took, so the caller can see what room is left.
+function PatchbayFxNodeDrawChip(ctx, dl, text, x, y, dims, right_edge, instrument)
+    if not text or text == "" then return 0 end
+    local plate, ink = PatchbayFxNodeChipColors(instrument)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    local tw = r.ImGui_CalcTextSize(ctx, text)
+    local pad = math.max(2, 3 * dims.zoom)
+    local w = tw + pad * 2
+    local tx = right_edge and (right_edge - w + pad) or x
+    r.ImGui_DrawList_AddRectFilled(dl, tx - pad, y - 1, tx + tw + pad, y + text_h + 1,
+        plate, math.max(2, 3 * dims.zoom))
+    r.ImGui_DrawList_AddText(dl, tx, y, ink, text)
+    return w
+end
+
+function PatchbayFxNodeDrawOne(ctx, dl, fx, dims, ink_pin, ink_label)
+    local head_bg, body_bg, border, text_col = PatchbayFxNodeSkin(fx)
+    local selected = PB.fx_view_sel_api ~= nil and PB.fx_view_sel_api == fx.api_id
+    local is_container = fx.fx_type == "Container" and #fx.children > 0 and not fx.folded
+    local round = math.max(3, 6 * dims.zoom)
+    local label_h = math.min(dims.head_h, fx.h)
+
+    -- A shadow costs one rect and does more for depth than any gradient would.
+    -- Derived, not stored: the layout table is cached between frames, so a
+    -- flag set during a drag would still be on it after the drag ended.
+    local dragging = PB.fx_view_drag ~= nil and PB.fx_view_drag.active
+        and PB.fx_view_drag.api_id == fx.api_id
+    local shadow = math.max(1, (dragging and 6 or 2) * dims.zoom)
+    r.ImGui_DrawList_AddRectFilled(dl, fx.x + shadow, fx.y + shadow,
+        fx.x + fx.w + shadow, fx.y + fx.h + shadow, 0x00000055, round)
+
+    r.ImGui_DrawList_AddRectFilled(dl, fx.x, fx.y, fx.x + fx.w, fx.y + fx.h, body_bg, round)
+    local top_flags = r.ImGui_DrawFlags_RoundCornersTop and r.ImGui_DrawFlags_RoundCornersTop() or nil
+    r.ImGui_DrawList_AddRectFilled(dl, fx.x, fx.y, fx.x + fx.w, fx.y + label_h,
+        head_bg, round, top_flags)
+    local outline = border
+    local weight = 1.2
+    if dragging then outline, weight = 0xFFFFFFFF, 2.4
+    elseif selected then outline, weight = 0xFFD36BFF, 2.2 end
+    r.ImGui_DrawList_AddRect(dl, fx.x, fx.y, fx.x + fx.w, fx.y + fx.h, outline, round, nil, weight)
+    -- Straight after the body, so the routing inside is under the children and
+    -- over the box, exactly like the cables outside are under the nodes.
+    if is_container then PatchbayFxNodeDrawRoutingInside(dl, fx) end
+
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    local dot_room = math.max(3, 5 * dims.zoom) * 2 + 6
+    local fold_room = 0
+    if fx.fx_type == "Container" and #fx.children > 0 then
+        fold_room = math.max(4, dims.head_h * 0.34) + dims.text_pad * 0.6
+    end
+    local label = TruncateText(ctx, fx.name, fx.w - dims.text_pad * 2 - dot_room - fold_room)
+    r.ImGui_DrawList_AddText(dl, fx.x + dims.text_pad + fold_room,
+        fx.y + (label_h - text_h) * 0.5, text_col, label)
+
+    -- No screenshot on a container: its body is its children, and a plugin
+    -- picture behind them would only be noise.
+    if PatchbayFxNodeShotsOn() and fx.h > label_h + 8 and fx.fx_type ~= "Container" then
+        PatchbayFxNodeDrawShot(ctx, dl, fx, dims,
+            fx.x + 1, fx.y + label_h, fx.w - 2, fx.h - label_h - 1)
+    end
+
+    -- Format chip left, category chip right, both on the bottom edge of the
+    -- body. The prefix is stripped from the name above, so the badge is where
+    -- "which VST3" gets answered, and the category is what colour alone cannot
+    -- spell out.
+    if dims.zoom >= 0.7 and fx.h > label_h + text_h then
+        local chip_y = fx.y + fx.h - text_h - dims.text_pad * 0.35
+        local used = 0
+        if fx.badge then
+            used = PatchbayFxNodeDrawChip(ctx, dl, fx.badge,
+                fx.x + dims.text_pad, chip_y, dims, nil, fx.is_instrument)
+        end
+        if fx.category and dims.zoom >= 0.85 then
+            local room = fx.w - used - dims.text_pad * 3
+            if r.ImGui_CalcTextSize(ctx, fx.category) < room then
+                PatchbayFxNodeDrawChip(ctx, dl, fx.category, nil, chip_y, dims,
+                    fx.x + fx.w - dims.text_pad)
+            end
+        end
+    end
+    PatchbayFxNodeDrawBypass(dl, fx, dims, text_col)
+    PatchbayFxNodeDrawPins(ctx, dl, fx, dims, ink_pin, ink_label)
+    if is_container then
+        PatchbayFxNodeDrawStages(ctx, dl, fx.child_stages, dims,
+            fx.x + dims.pad, fx.y + dims.head_h + dims.pad + fx.child_h * 0.5,
+            fx.x + fx.w - dims.pad, border, text_col)
+    end
+    if fx.fx_type == "Container" and #fx.children > 0 then
+        PatchbayFxNodeDrawFold(dl, fx, dims, text_col)
+        if fx.folded then
+            local note = string.format("%d FX", #fx.children)
+            local nw = r.ImGui_CalcTextSize(ctx, note)
+            r.ImGui_DrawList_AddText(dl, fx.x + fx.w - dims.text_pad - nw,
+                fx.y + fx.h - text_h - dims.text_pad * 0.4, text_col, note)
+        end
+    end
+end
+
+-- Cables run stage to stage. A parallel stage gets a junction dot at each end:
+-- the split that feeds every lane, and the merge that sums them. That is the
+-- honest picture of what REAPER does, and it is a junction in a cable run
+-- rather than a bus bar drawn beside a strip.
+-- The serial links of a chain, worked out ONCE and used by both the drawing
+-- and the drop targets.
+--
+-- They used to be computed separately in two places, which is why the drop
+-- lines never sat where the cables ran: two bits of geometry drifting apart.
+-- A drop target now IS a cable -- you drop onto the connection you want to be
+-- part of, marked at its midpoint.
+--
+-- `skip_api` leaves out the node currently being carried, so the links describe
+-- the chain you are dropping into rather than the one your hand is in.
+-- `left_y` and `right_y` are where the run actually starts and ends, which is
+-- no longer the same height as its middle: the IN and OUT boxes can be moved.
+-- They default to mid_y, so a run inside a container is unaffected.
+function PatchbayFxNodeLinks(stages, dims, left_x, mid_y, right_x, skip_api, left_y, right_y)
+    local links = {}
+    local prev_x, prev_y = left_x, left_y or mid_y
+    for si = 1, #stages do
+        local st = stages[si]
+        local l, rr, m = PatchbayFxNodeStageBounds(st, skip_api)
+        local ax, bx = l, rr
+        if #st > 1 then
+            -- A parallel stage attaches at its split and merge junctions, not
+            -- at the boxes themselves.
+            ax = l - dims.col_gap * 0.35
+            bx = rr + dims.col_gap * 0.35
+        end
+        links[#links + 1] = { x1 = prev_x, y1 = prev_y, x2 = ax, y2 = m,
+                              dest = st[1].api_id, at_end = false, stage = st,
+                              jx = ax, jy = m }
+        prev_x, prev_y = bx, m
+    end
+    links[#links + 1] = { x1 = prev_x, y1 = prev_y, x2 = right_x, y2 = right_y or mid_y,
+                          dest = nil, at_end = true }
+    return links
+end
+
+function PatchbayFxNodeDrawStages(ctx, dl, stages, dims, left_x, mid_y, right_x, ink_line, ink_label,
+                                  left_y, right_y)
+    local line_col = ink_line or PatchbayFxNodeCanvasInk(false)
+    ink_label = ink_label or PatchbayFxNodeCanvasInk(true)
+    local links = PatchbayFxNodeLinks(stages, dims, left_x, mid_y, right_x, nil, left_y, right_y)
+
+    -- With the real routing on screen the symbolic cable is not just redundant,
+    -- it hides them: on a stereo node the two channel cables sit a few pixels
+    -- either side of it, and all three read as one thick line. So the
+    -- abstraction stands down for the thing it was standing in for.
+    local symbolic = not PatchbayFxNodeRoutingOn()
+    if symbolic then
+        for _, link in ipairs(links) do
+            local target = link.stage and link.stage[1] or nil
+            local col, thick = PatchbayFxNodeCableStyle(
+                (link.stage and #link.stage == 1) and target or nil, line_col)
+            PatchbayFxNodeCable(dl, link.x1, link.y1, link.x2, link.y2, col, thick)
+        end
+    end
+
+    for si = 1, #stages do
+        local st = stages[si]
+        -- The split and merge junctions belong to the symbolic picture too: with
+        -- real cables on, every lane is visibly fed from the same source
+        -- already, which is what the junction was drawing.
+        if symbolic and #st > 1 then
+            local l, rr, m = PatchbayFxNodeStageBounds(st, nil)
+            local jx = l - dims.col_gap * 0.35
+            local jx2 = rr + dims.col_gap * 0.35
+            r.ImGui_DrawList_AddCircleFilled(dl, jx, m, math.max(2, dims.pin_r * 0.8), line_col)
+            r.ImGui_DrawList_AddCircleFilled(dl, jx2, m, math.max(2, dims.pin_r * 0.8), line_col)
+            for i = 1, #st do
+                local fx = st[i]
+                local col, thick = PatchbayFxNodeCableStyle(fx, line_col)
+                PatchbayFxNodeCable(dl, jx, m, fx.x, fx.y + fx.h * 0.5, col, thick)
+                PatchbayFxNodeCable(dl, fx.x + fx.w, fx.y + fx.h * 0.5, jx2, m, line_col)
+            end
+        end
+        for i = 1, #st do
+            PatchbayFxNodeDrawOne(ctx, dl, st[i], dims, ink_label, ink_label)
+        end
+    end
+end
+
+function PatchbayFxNodeDrawEdge(ctx, dl, x, y, w, h, label, dims)
+    local bg, border, text_col = PatchbayFxSchemaPalette("panel")
+    r.ImGui_DrawList_AddRectFilled(dl, x, y, x + w, y + h, bg, math.max(3, 6 * dims.zoom))
+    r.ImGui_DrawList_AddRect(dl, x, y, x + w, y + h, border, math.max(3, 6 * dims.zoom), nil, 1.2)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    local tw = r.ImGui_CalcTextSize(ctx, label)
+    r.ImGui_DrawList_AddText(dl, x + (w - tw) * 0.5, y + (h - text_h) * 0.5, text_col, label)
+end
+
+-- ---------------------------------------------------------------------------
+-- Hit testing (read-only for now: selection and the container a click lands in)
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeHit(stages, mx, my)
+    local found = nil
+    for si = 1, #stages do
+        local st = stages[si]
+        for i = 1, #st do
+            local fx = st[i]
+            if mx >= fx.x and mx <= fx.x + fx.w and my >= fx.y and my <= fx.y + fx.h then
+                found = fx
+                if fx.child_stages then
+                    -- Innermost wins, so clicking a child does not select the
+                    -- container that happens to be drawn under it.
+                    local deeper = PatchbayFxNodeHit(fx.child_stages, mx, my)
+                    if deeper then found = deeper end
+                end
+            end
+        end
+    end
+    return found
+end
+
+-- ---------------------------------------------------------------------------
+-- The view
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeEnter(guid)
+    PB.fx_view_guid = guid
+    PB.fx_view_sel_api = nil
+    PB.fx_view_fit_pending = true
+end
+
+function PatchbayFxNodeExit()
+    PB.fx_view_guid = nil
+    PB.fx_view_sel_api = nil
+end
+
+function PatchbayFxNodeResolveTrack()
+    if not PB.fx_view_guid then return nil end
+    local n = r.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = r.GetTrack(0, i)
+        if r.GetTrackGUID(tr) == PB.fx_view_guid then return tr end
+    end
+    return nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Acting on an FX from the node view
+--
+-- The six functions below are lifted from the abandoned TKFXBPatchbay_FXCHAIN
+-- prototype with only their selection bookkeeping changed. They were always
+-- visual-agnostic -- they talk to REAPER, not to a layout -- which is exactly
+-- why replacing the prototype's strip drawing with nodes costs nothing here.
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeTarget(track, fx)
+    if not fx then return nil end
+    return { track = track, track_guid = PB.fx_view_guid, api_id = fx.api_id, name = fx.name }
+end
+
+function PatchbayFxNodeRename(target, name)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return false end
+    if not r.TrackFX_SetNamedConfigParm then return false end
+    name = tostring(name or ""):gsub("^%s*(.-)%s*$", "%1")
+    if name == "" then return false end
+    r.Undo_BeginBlock()
+    local ok = r.TrackFX_SetNamedConfigParm(target.track, target.api_id, "renamed_name", name)
+    r.Undo_EndBlock("Patchbay: rename FX", -1)
+    PatchbayFxNodeInvalidate()
+    return ok
+end
+
+-- Three ways to reach a wet parameter, because which one exists depends on the
+-- plugin: a real ":wet" parameter, the named config value, or the old
+-- wet/dry mix call. The second return says whether any of them answered.
+function PatchbayFxNodeGetWet(target)
+    if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return 1.0, false end
+    if r.TrackFX_GetParamFromIdent and r.TrackFX_GetParam then
+        local wet_param = r.TrackFX_GetParamFromIdent(target.track, target.api_id, ":wet")
+        if wet_param and wet_param >= 0 then
+            local val = r.TrackFX_GetParam(target.track, target.api_id, wet_param)
+            if type(val) == "number" then return math.max(0, math.min(1, val)), true end
+        end
+    end
+    if r.TrackFX_GetNamedConfigParm then
+        local ok, val = r.TrackFX_GetNamedConfigParm(target.track, target.api_id, "wet")
+        if ok and val and val ~= "" then
+            local wet = tonumber(val)
+            if wet then return math.max(0, math.min(1, wet)), true end
+        end
+    end
+    if r.TrackFX_GetWetDryMix then
+        local ok, wet = pcall(function() return r.TrackFX_GetWetDryMix(target.track, target.api_id) end)
+        if ok and type(wet) == "number" then return math.max(0, math.min(1, wet)), true end
+    end
+    return 1.0, false
+end
+
+function PatchbayFxNodeSetWet(target, wet)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return false end
+    wet = math.max(0, math.min(1, tonumber(wet) or 0))
+    r.Undo_BeginBlock()
+    local ok = false
+    if r.TrackFX_GetParamFromIdent and r.TrackFX_SetParam then
+        local wet_param = r.TrackFX_GetParamFromIdent(target.track, target.api_id, ":wet")
+        if wet_param and wet_param >= 0 then
+            r.TrackFX_SetParam(target.track, target.api_id, wet_param, wet)
+            ok = true
+        end
+    end
+    if not ok and r.TrackFX_SetNamedConfigParm then
+        local called = pcall(function() r.TrackFX_SetNamedConfigParm(target.track, target.api_id, "wet", string.format("%.6f", wet)) end)
+        if called then ok = true end
+    end
+    if not ok and r.TrackFX_SetWetDryMix then
+        local called = pcall(function() r.TrackFX_SetWetDryMix(target.track, target.api_id, wet, 1 - wet) end)
+        if called then ok = true end
+    end
+    r.Undo_EndBlock("Patchbay: set FX wet/dry", -1)
+    return ok
+end
+
+function PatchbayFxNodeSetBypass(target, bypassed)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return false end
+    if not r.TrackFX_SetEnabled then return false end
+    r.Undo_BeginBlock()
+    r.TrackFX_SetEnabled(target.track, target.api_id, not bypassed)
+    r.Undo_EndBlock("Patchbay: set FX bypass", -1)
+    PatchbayFxNodeInvalidate()
+    return true
+end
+
+function PatchbayFxNodeSetOffline(target, offline)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return false end
+    if not r.TrackFX_SetOffline then return false end
+    r.Undo_BeginBlock()
+    r.TrackFX_SetOffline(target.track, target.api_id, offline)
+    r.Undo_EndBlock("Patchbay: set FX offline", -1)
+    PatchbayFxNodeInvalidate()
+    return true
+end
+
+function PatchbayFxNodeDelete(target)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return false end
+    if not r.TrackFX_Delete then return false end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local ok = r.TrackFX_Delete(target.track, target.api_id)
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Patchbay: delete FX", -1)
+    -- Every address after the deleted one has just shifted, so a selection kept
+    -- by api_id now points at the wrong plugin. Drop it rather than move it.
+    PB.fx_view_sel_api = nil
+    PatchbayFxNodeInvalidate()
+    return ok ~= false
+end
+
+-- ---------------------------------------------------------------------------
+-- The bypass dot, and the popup behind a right-click
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeBypassSpot(fx, dims)
+    local rad = math.max(3, 5 * dims.zoom)
+    local head = math.min(dims.head_h, fx.h)
+    return fx.x + fx.w - dims.text_pad - rad, fx.y + head * 0.5, rad
+end
+
+function PatchbayFxNodeDrawBypass(dl, fx, dims, border)
+    local cx, cy, rad = PatchbayFxNodeBypassSpot(fx, dims)
+    if fx.enabled then
+        r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, rad, 0x6FD88AFF)
+    else
+        r.ImGui_DrawList_AddCircle(dl, cx, cy, rad, border, 0, 1.4)
+    end
+end
+
+function PatchbayFxNodePopups(ctx, track)
+    if PB.fx_view_ctx_open then
+        r.ImGui_OpenPopup(ctx, "PatchbayFxNodeCtx")
+        PB.fx_view_ctx_open = false
+    end
+    if PB.fx_view_ctx_api and r.ImGui_BeginPopup(ctx, "PatchbayFxNodeCtx") then
+        local target = { track = track, track_guid = PB.fx_view_guid, api_id = PB.fx_view_ctx_api }
+        if not r.ValidatePtr(track, "MediaTrack*") then
+            r.ImGui_TextDisabled(ctx, "Track is gone")
+            r.ImGui_EndPopup(ctx)
+            PB.fx_view_ctx_api = nil
+            return
+        end
+        r.ImGui_Text(ctx, tostring(PB.fx_view_ctx_name or "FX"))
+        r.ImGui_Separator(ctx)
+        if IsAllLockedCfg(GetConfig()) then
+            r.ImGui_TextDisabled(ctx, "FX actions locked")
+        else
+            local wet, wet_ok = PatchbayFxNodeGetWet(target)
+            if wet_ok then
+                r.ImGui_PushItemWidth(ctx, 190)
+                local changed, pct = r.ImGui_SliderDouble(ctx, "Wet", wet * 100, 0, 100, "%.0f%%")
+                r.ImGui_PopItemWidth(ctx)
+                if changed then PatchbayFxNodeSetWet(target, pct / 100) end
+            else
+                r.ImGui_TextDisabled(ctx, "Wet/Dry unavailable")
+            end
+            local bypassed = not r.TrackFX_GetEnabled(track, target.api_id)
+            local ch_b, new_b = r.ImGui_Checkbox(ctx, "Bypass", bypassed)
+            if ch_b then PatchbayFxNodeSetBypass(target, new_b) end
+            local offline = r.TrackFX_GetOffline and r.TrackFX_GetOffline(track, target.api_id) or false
+            local ch_o, new_o = r.ImGui_Checkbox(ctx, "Offline", offline)
+            if ch_o then PatchbayFxNodeSetOffline(target, new_o) end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Selectable(ctx, "Open FX window") then
+                if r.TrackFX_Show then r.TrackFX_Show(track, target.api_id, 3) end
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if r.ImGui_Selectable(ctx, "Rename FX...") then
+                PB.fx_view_rename_api = target.api_id
+                local _, raw = r.TrackFX_GetFXName(track, target.api_id, "")
+                PB.fx_view_rename_text = tostring(raw or "")
+                PB.fx_view_rename_open = true
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if r.ImGui_Selectable(ctx, "Reset pin routing") then
+                local ok, err = PatchbayFxNodeResetPins(track, PB.fx_view_ctx_api)
+                if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if r.ImGui_IsItemHovered and r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Put every pin back on its own channel")
+            end
+            r.ImGui_Separator(ctx)
+
+            -- Both are top-level only, so they are simply absent on a
+            -- plugin inside a container rather than offered and then refused.
+            local top_level = PB.fx_view_ctx_api ~= nil and PB.fx_view_ctx_api < 0x2000000
+            if top_level and not PB.fx_view_ctx_is_container
+                and r.ImGui_Selectable(ctx, "Wrap in new container") then
+                local ok, err = PatchbayFxNodeWrapInContainer(track, PB.fx_view_ctx_api)
+                if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+                PB.fx_view_ctx_api = nil
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if top_level and PB.fx_view_ctx_is_container
+                and r.ImGui_Selectable(ctx, "Unpack container") then
+                local ok, err = PatchbayFxNodeUnpackContainer(track, PB.fx_view_ctx_api)
+                if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+                PB.fx_view_ctx_api = nil
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Selectable(ctx, "Add FX after this...") then
+                local node = PB.fx_view_cache
+                    and PatchbayFxNodeFindByApi(PB.fx_view_cache.stages, target.api_id)
+                if node then
+                    PatchbayFxNodeOpenAdd("after", track, node, "after " .. tostring(node.name))
+                end
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if PB.fx_view_ctx_is_container and r.ImGui_Selectable(ctx, "Add FX inside this container...") then
+                local node = PB.fx_view_cache
+                    and PatchbayFxNodeFindByApi(PB.fx_view_cache.stages, target.api_id)
+                if node then
+                    PatchbayFxNodeOpenAdd("inside", track, node, "inside " .. tostring(node.name))
+                end
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Selectable(ctx, "Delete FX") then
+                PatchbayFxNodeDelete(target)
+                PB.fx_view_ctx_api = nil
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+
+    if PB.fx_view_rename_open then
+        r.ImGui_OpenPopup(ctx, "PatchbayFxNodeRename")
+        PB.fx_view_rename_open = false
+    end
+    if PB.fx_view_rename_api and r.ImGui_BeginPopup(ctx, "PatchbayFxNodeRename") then
+        if not r.ValidatePtr(track, "MediaTrack*") then
+            r.ImGui_TextDisabled(ctx, "Track is gone")
+            PB.fx_view_rename_api = nil
+        else
+            local changed, txt = r.ImGui_InputText(ctx, "Name", PB.fx_view_rename_text or "")
+            if changed then PB.fx_view_rename_text = txt end
+            if r.ImGui_Button(ctx, "Rename") then
+                PatchbayFxNodeRename({ track = track, track_guid = PB.fx_view_guid,
+                    api_id = PB.fx_view_rename_api }, PB.fx_view_rename_text)
+                PB.fx_view_rename_api = nil
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "Cancel") then
+                PB.fx_view_rename_api = nil
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Moving an FX by dragging it
+--
+-- The four move functions are the prototype's, unchanged in substance. They are
+-- the reason this whole rewrite was cheap: reordering a REAPER chain is fiddly
+-- address arithmetic plus parallel-flag bookkeeping, and none of it cares what
+-- the chain looks like on screen.
+--
+-- Three kinds of drop, and no more for now:
+--   serial     -- into a gap between stages, or at either end
+--   parallel   -- onto an existing node, joining its stage
+--   container  -- onto a container's header, appended at the end of it
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeSwapParallelInfo(track, src_api, dst_api)
+    if not r.TrackFX_GetNamedConfigParm or not r.TrackFX_SetNamedConfigParm then return end
+    local ok_src, src_par = r.TrackFX_GetNamedConfigParm(track, src_api, "parallel")
+    local ok_dst, dst_par = r.TrackFX_GetNamedConfigParm(track, dst_api, "parallel")
+    if ok_src and ok_dst then
+        r.TrackFX_SetNamedConfigParm(track, src_api, "parallel", tostring(dst_par or "0"))
+        r.TrackFX_SetNamedConfigParm(track, dst_api, "parallel", tostring(src_par or "0"))
+    end
+end
+
+-- Pulling an FX out from under a parallel neighbour would orphan that
+-- neighbour's flag, so the flag moves with the slot rather than with the plugin.
+function PatchbayFxNodeCheckNextParallel(track, source_api, next_api)
+    if not r.TrackFX_GetNamedConfigParm or not next_api then return end
+    if source_api < 0x2000000 then
+        local count = r.TrackFX_GetCount(track) or 0
+        if next_api >= count then return end
+    end
+    local ok, parallel = r.TrackFX_GetNamedConfigParm(track, next_api, "parallel")
+    local val = tostring(parallel or "0")
+    if ok and (val == "1" or val == "2") then
+        PatchbayFxNodeSwapParallelInfo(track, source_api, next_api)
+    end
+end
+
+function PatchbayFxNodeMoveSerial(track, source_api, dest_index, source_next_api)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
+    if not r.TrackFX_CopyToTrack then return false end
+    source_api = math.floor(tonumber(source_api) or -1)
+    dest_index = math.floor(tonumber(dest_index) or -1)
+    if source_api < 0 or dest_index < 0 then return false end
+    local count = r.TrackFX_GetCount(track) or 0
+    if source_api < 0x2000000 and source_api >= count then return false end
+    if dest_index < 0x2000000 and dest_index > count then dest_index = count end
+    -- A destination inside a container is passed through untouched: it is an
+    -- address, not a position in the top-level list.
+    -- Dropping a plugin back where it already sits is not a move.
+    local no_move_next = source_next_api or (source_api < 0x2000000 and source_api + 1 or nil)
+    if dest_index == source_api or dest_index == no_move_next then return false end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    PatchbayFxNodeCheckNextParallel(track, source_api, no_move_next)
+    if r.TrackFX_SetNamedConfigParm then
+        r.TrackFX_SetNamedConfigParm(track, source_api, "parallel", "0")
+    end
+    local ok = r.TrackFX_CopyToTrack(track, source_api, track, dest_index, true)
+    r.PreventUIRefresh(-1)
+    if ok ~= false then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+    end
+    r.Undo_EndBlock("Patchbay: move FX", -1)
+    PatchbayFxNodeInvalidate()
+    return ok ~= false
+end
+
+function PatchbayFxNodeMoveParallel(track, source_api, target_api, target_next_api, source_next_api)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
+    if not r.TrackFX_CopyToTrack or not r.TrackFX_SetNamedConfigParm then return false end
+    source_api = math.floor(tonumber(source_api) or -1)
+    target_api = math.floor(tonumber(target_api) or -1)
+    if source_api < 0 or target_api < 0 or source_api == target_api then return false end
+    local dest_index = (target_api < 0x2000000) and (target_api + 1) or target_next_api
+    if not dest_index or dest_index < 0 then return false end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    PatchbayFxNodeCheckNextParallel(track, source_api,
+        source_next_api or (source_api < 0x2000000 and source_api + 1 or nil))
+    -- "2" is REAPER's flag for "runs alongside the one before me".
+    r.TrackFX_SetNamedConfigParm(track, source_api, "parallel", "2")
+    local ok = r.TrackFX_CopyToTrack(track, source_api, track, dest_index, true)
+    r.PreventUIRefresh(-1)
+    if ok ~= false then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+    end
+    r.Undo_EndBlock("Patchbay: move FX to parallel", -1)
+    PatchbayFxNodeInvalidate()
+    return ok ~= false
+end
+
+-- The slot one past a container's last child. Rebuilt from live counts, never
+-- from anything remembered: adding to the chain moves every one of these.
+function PatchbayFxNodeApplyStageFlags(track, first_api, lane_count, stride)
+    if not r.TrackFX_SetNamedConfigParm then return end
+    first_api = math.floor(tonumber(first_api) or -1)
+    lane_count = math.floor(tonumber(lane_count) or 0)
+    stride = math.floor(tonumber(stride) or 1)
+    if first_api < 0 or lane_count < 2 then return end
+    if stride <= 0 then stride = 1 end
+    for i = 0, lane_count - 1 do
+        r.TrackFX_SetNamedConfigParm(track, first_api + (i * stride), "parallel",
+            (i == 0) and "0" or "2")
+    end
+end
+
+-- Reordering WITHIN a parallel stage. The lanes keep the same run of slots, so
+-- only their order changes -- which is why the flags are simply re-stamped over
+-- the same range afterwards rather than worked out per plugin.
+function PatchbayFxNodeReorderParallel(track, source_api, dest_index, first_api, lane_count, stride)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
+    if not r.TrackFX_CopyToTrack or not r.TrackFX_SetNamedConfigParm then return false end
+    source_api = math.floor(tonumber(source_api) or -1)
+    dest_index = math.floor(tonumber(dest_index) or -1)
+    stride = math.floor(tonumber(stride) or 1)
+    if stride <= 0 then stride = 1 end
+    if source_api < 0 or dest_index < 0 or lane_count < 2 then return false end
+    if dest_index == source_api or dest_index == source_api + stride then return false end
+    local count = r.TrackFX_GetCount(track) or 0
+    if source_api < 0x2000000 then
+        if source_api >= count then return false end
+        if dest_index > count then dest_index = count end
+    end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local ok = r.TrackFX_CopyToTrack(track, source_api, track, dest_index, true)
+    if ok ~= false then
+        PatchbayFxNodeApplyStageFlags(track, first_api, lane_count, stride)
+    end
+    r.PreventUIRefresh(-1)
+    if ok ~= false then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+    end
+    r.Undo_EndBlock("Patchbay: reorder parallel FX", -1)
+    PatchbayFxNodeInvalidate()
+    return ok ~= false
+end
+
+function PatchbayFxNodeContainerEndSlot(track, node)
+    if not node or not node.container_id then return nil end
+    if not r.TrackFX_GetNamedConfigParm then return nil end
+    local ok, raw = r.TrackFX_GetNamedConfigParm(track, 0x2000000 + node.container_id, "container_count")
+    local child_count = ok and math.floor(tonumber(raw) or 0) or 0
+    local parent_count = tonumber(node.parent_fx_count) or r.TrackFX_GetCount(track) or 0
+    local depth = tonumber(node.depth) or 0
+    local previous_diff = tonumber(node.previous_diff) or 0
+    local diff = (depth == 0) and (parent_count + 1) or ((parent_count + 1) * previous_diff)
+    if diff <= 0 then return nil end
+    return 0x2000000 + node.container_id + (diff * (child_count + 1))
+end
+
+function PatchbayFxNodeMoveIntoContainer(track, source_api, container_node, source_next_api)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false end
+    if not r.TrackFX_CopyToTrack or not r.TrackFX_SetNamedConfigParm then return false end
+    if source_api == container_node.api_id then return false end
+    local slot = PatchbayFxNodeContainerEndSlot(track, container_node)
+    if not slot then return false end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    PatchbayFxNodeCheckNextParallel(track, source_api,
+        source_next_api or (source_api < 0x2000000 and source_api + 1 or nil))
+    r.TrackFX_SetNamedConfigParm(track, source_api, "parallel", "0")
+    local ok = r.TrackFX_CopyToTrack(track, source_api, track, slot, true)
+    r.PreventUIRefresh(-1)
+    if ok ~= false then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+    end
+    r.Undo_EndBlock("Patchbay: move FX into container", -1)
+    PatchbayFxNodeInvalidate()
+    return ok ~= false
+end
+
+-- ---------------------------------------------------------------------------
+-- Where you may drop
+-- ---------------------------------------------------------------------------
+
+-- A node may not be dropped into itself or into anything it contains, or the
+-- move would try to reparent a container under its own child.
+-- ---------------------------------------------------------------------------
+-- Wrapping an FX in a container, and unpacking one
+--
+-- Both are the prototype's, with its selection bookkeeping swapped for this
+-- view's and the container slot taken from PatchbayFxNodeContainerEndSlot
+-- rather than a second copy of the same arithmetic.
+--
+-- Note which call takes which form of address: TrackFX_AddByName wants
+-- -1000 minus the slot, TrackFX_CopyToTrack wants the raw container address.
+-- Mixing those up is silent -- the FX simply lands somewhere else.
+--
+-- Both are top-level only for now. Wrapping an FX that already sits inside a
+-- container would need the parent's stride threaded through every step, and
+-- guessing at that is how addresses end up pointing at the wrong plugin.
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeWrapInContainer(track, api_id)
+    if IsAllLockedCfg(GetConfig()) then return false, "FX actions locked." end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false, "Track is gone." end
+    if not r.TrackFX_AddByName or not r.TrackFX_CopyToTrack or not r.TrackFX_SetNamedConfigParm then
+        return false, "Container actions are unavailable in this REAPER."
+    end
+    api_id = math.floor(tonumber(api_id) or -1)
+    if api_id < 0 or api_id >= 0x2000000 then
+        return false, "Wrapping is only available for top-level FX."
+    end
+    local count = r.TrackFX_GetCount(track) or 0
+    if api_id >= count then return false, "That FX no longer exists." end
+
+    -- The container inherits the plugin's place in any parallel stage, and the
+    -- plugin itself becomes serial inside it.
+    local _, source_parallel = r.TrackFX_GetNamedConfigParm(track, api_id, "parallel")
+    source_parallel = tostring(source_parallel or "0")
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local new_api = r.TrackFX_AddByName(track, "Container", false, -1000 - api_id)
+    local ok = new_api ~= nil and new_api >= 0
+    local container_api = api_id
+    if ok then
+        container_api = (new_api < 0x2000000) and new_api or api_id
+        -- Inserting ahead of the source pushes it one slot along.
+        local source_now = (container_api <= api_id) and (api_id + 1) or api_id
+        r.TrackFX_SetNamedConfigParm(track, container_api, "parallel", source_parallel)
+        r.TrackFX_SetNamedConfigParm(track, source_now, "parallel", "0")
+        local slot = PatchbayFxNodeContainerEndSlot(track, {
+            container_id = container_api + 1,
+            parent_fx_count = r.TrackFX_GetCount(track) or (count + 1),
+            previous_diff = 0,
+            depth = 0
+        })
+        ok = slot ~= nil and r.TrackFX_CopyToTrack(track, source_now, track, slot, true) ~= false
+    end
+    r.PreventUIRefresh(-1)
+    if ok then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+        PB.fx_view_sel_api = container_api
+    end
+    r.Undo_EndBlock("Patchbay: wrap FX in container", -1)
+    PatchbayFxNodeInvalidate()
+    if not ok then return false, "That FX could not be wrapped." end
+    return true, nil
+end
+
+function PatchbayFxNodeUnpackContainer(track, api_id)
+    if IsAllLockedCfg(GetConfig()) then return false, "FX actions locked." end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false, "Track is gone." end
+    if not r.TrackFX_CopyToTrack or not r.TrackFX_Delete or not r.TrackFX_SetNamedConfigParm then
+        return false, "Container actions are unavailable in this REAPER."
+    end
+    api_id = math.floor(tonumber(api_id) or -1)
+    if api_id < 0 or api_id >= 0x2000000 then
+        return false, "Unpacking is only available for top-level containers."
+    end
+    local _, fx_type = r.TrackFX_GetNamedConfigParm(track, api_id, "fx_type")
+    if tostring(fx_type or "") ~= "Container" then return false, "That is not a container." end
+
+    local container_id = api_id + 1
+    local _, raw_count = r.TrackFX_GetNamedConfigParm(track, 0x2000000 + container_id, "container_count")
+    local child_count = math.floor(tonumber(raw_count) or 0)
+    local _, container_parallel = r.TrackFX_GetNamedConfigParm(track, api_id, "parallel")
+    container_parallel = tostring(container_parallel or "0")
+
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local ok, moved = true, 0
+    while ok and moved < child_count do
+        -- Always the FIRST remaining child, resolved against a LIVE count: each
+        -- move changes the top-level total, and with it every address inside
+        -- the container. Working from a list captured up front would move the
+        -- wrong plugins after the first one.
+        local parent_count = r.TrackFX_GetCount(track) or 0
+        local child_api = 0x2000000 + container_id + (parent_count + 1)
+        if not r.TrackFX_GetFXName(track, child_api, "") then ok = false break end
+        local _, child_parallel = r.TrackFX_GetNamedConfigParm(track, child_api, "parallel")
+        child_parallel = tostring(child_parallel or "0")
+        local dest = api_id + moved + 1
+        ok = r.TrackFX_CopyToTrack(track, child_api, track, dest, true) ~= false
+        if ok then
+            -- The first one out takes over the container's own parallel state;
+            -- the rest keep whatever they had inside it.
+            r.TrackFX_SetNamedConfigParm(track, dest, "parallel",
+                (moved == 0) and container_parallel or child_parallel)
+            moved = moved + 1
+        end
+    end
+    if ok then ok = r.TrackFX_Delete(track, api_id) ~= false end
+    r.PreventUIRefresh(-1)
+    if ok then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+        PB.fx_view_sel_api = (moved > 0) and api_id or nil
+    end
+    r.Undo_EndBlock("Patchbay: unpack container", -1)
+    PatchbayFxNodeInvalidate()
+    if not ok then return false, "That container could not be unpacked." end
+    return true, nil
+end
+
+function PatchbayFxNodeContains(node, api)
+    if not node or not node.children then return false end
+    for _, child in ipairs(node.children) do
+        if child.api_id == api then return true end
+        if PatchbayFxNodeContains(child, api) then return true end
+    end
+    return false
+end
+
+-- Would dropping here actually move anything?
+--
+-- The same arithmetic PatchbayFxNodeMoveSerial uses to refuse a move, asked
+-- before the target is offered rather than after it is taken. The cable just
+-- before and just after the plugin you are carrying both put it back exactly
+-- where it came from, so showing a mark there promises something that will not
+-- happen.
+--
+-- The check is purely numeric on purpose: a container child's address is
+-- nowhere near a top-level index, so dragging one OUT of a container never
+-- looks like a no-op, which is right -- that is a real move.
+function PatchbayFxNodeDropIsNoOp(track, source, dest)
+    if not source or dest == nil then return false end
+    local src = source.api_id
+    return dest == src or dest == src + (source.stride or 1)
+end
+
+function PatchbayFxNodeCollectDropTargets(layout, dims, source, track)
+    local out = {}
+    local stages = layout.stages
+    local grab = math.max(11, 15 * dims.zoom)
+
+    -- One target per cable, centred on it. Dropping on a connection is the
+    -- thing you are actually asking for -- "put this plugin in here" -- and a
+    -- mark on the cable says where "here" is.
+    local skip = source and source.api_id or nil
+
+    -- Marks for one run of cables. `tail_dest` is the slot the last cable of
+    -- that run inserts into: the end of the track for the top level, the end of
+    -- the container for a run inside one.
+    local function add_serial(run, left_x, mid_y, right_x, tail_dest, left_y, right_y)
+        for _, link in ipairs(PatchbayFxNodeLinks(run, dims, left_x, mid_y, right_x, skip,
+                                                  left_y, right_y)) do
+            local dest = link.at_end and tail_dest or link.dest
+            if dest ~= nil and not PatchbayFxNodeDropIsNoOp(track, source, dest) then
+                local cx = (link.x1 + link.x2) * 0.5
+                local cy = (link.y1 + link.y2) * 0.5
+                out[#out + 1] = {
+                    kind = "serial", dest = dest,
+                    cx = cx, cy = cy,
+                    x = cx - grab, y = cy - grab, w = grab * 2, h = grab * 2
+                }
+            end
+        end
+    end
+
+    add_serial(stages, layout.link_left or 0, layout.link_mid or 0, layout.link_right or 0,
+        r.TrackFX_GetCount and (r.TrackFX_GetCount(track) or 0) or nil,
+        layout.link_left_y, layout.link_right_y)
+
+    -- The same again for the inside of every open container, on the anchors its
+    -- own cables are drawn from. Without this you could only ever append to a
+    -- container, never order what is already in it.
+    local function inner_serial(list)
+        for _, st in ipairs(list) do
+            for _, fx in ipairs(st) do
+                -- Never offer the insides of the container you are carrying, nor
+                -- of anything within it: that would be dropping a container into
+                -- its own belly. The node targets already refuse this; the serial
+                -- marks have to refuse it as well.
+                local carrying_it = source ~= nil
+                    and (fx.api_id == source.api_id or PatchbayFxNodeContains(source, fx.api_id))
+                if fx.child_stages and #fx.children > 0 and not fx.folded and not carrying_it then
+                    add_serial(fx.child_stages,
+                        fx.x + dims.pad,
+                        fx.y + dims.head_h + dims.pad + (fx.child_h or 0) * 0.5,
+                        fx.x + fx.w - dims.pad,
+                        PatchbayFxNodeContainerEndSlot(track, fx))
+                    inner_serial(fx.child_stages)
+                end
+            end
+        end
+    end
+    inner_serial(stages)
+
+    -- Onto a node: join its stage in parallel. Onto a container's header: move
+    -- inside it. Both walk the tree, so a nested container is a target too.
+    -- Order matters: PatchbayFxNodeFindDrop scans backwards, so whatever is
+    -- added LAST wins where regions overlap. A container therefore offers
+    --
+    --   its whole box   -> parallel with the container   (added first)
+    --   its header      -> inside the container          (added second)
+    --   its children    -> whatever each child offers    (added last)
+    --
+    -- which leaves the ring of padding around the children as the place to drop
+    -- something alongside a container. Without the box entry there was no way
+    -- to put anything parallel to a container at all: the header claimed the
+    -- only region a container had.
+    local function walk(list)
+        for _, st in ipairs(list) do
+            for _, fx in ipairs(st) do
+                local self_or_child = (source ~= nil) and
+                    (fx.api_id == source.api_id or PatchbayFxNodeContains(source, fx.api_id))
+                if not self_or_child then
+                    out[#out + 1] = { kind = "parallel", node = fx, stage = st,
+                        x = fx.x, y = fx.y, w = fx.w, h = fx.h }
+                    if fx.fx_type == "Container" and #fx.children > 0 then
+                        out[#out + 1] = { kind = "container", node = fx,
+                            x = fx.x, y = fx.y, w = fx.w, h = dims.head_h }
+                    end
+                end
+                if fx.child_stages then walk(fx.child_stages) end
+            end
+        end
+    end
+    walk(stages)
+    return out
+end
+
+function PatchbayFxNodeFindDrop(targets, mx, my)
+    -- Later entries are the deeper ones, so scanning backwards puts a nested
+    -- container ahead of the container drawn around it.
+    for i = #targets, 1, -1 do
+        local t = targets[i]
+        if mx >= t.x and mx <= t.x + t.w and my >= t.y and my <= t.y + t.h then return t end
+    end
+    return nil
+end
+
+function PatchbayFxNodeApplyDrop(track, source, target)
+    if not source or not target then return false end
+    local src_next = source.api_id + (source.stride or 1)
+    if target.kind == "serial" then
+        return PatchbayFxNodeMoveSerial(track, source.api_id, target.dest, src_next)
+    elseif target.kind == "parallel" then
+        local tgt = target.node
+        local stage = target.stage
+        local same_stage = false
+        if stage then
+            for _, fx in ipairs(stage) do
+                if fx.api_id == source.api_id then same_stage = true break end
+            end
+        end
+        if same_stage and #stage > 1 then
+            local stride = stage[1].stride or 1
+            -- Insert BEFORE the target when coming from below it, AFTER when
+            -- coming from above. Always using "after" is what broke dragging a
+            -- lane upwards: the slot after the lane above is the source's own.
+            local dest = (source.api_id > tgt.api_id) and tgt.api_id
+                or (tgt.api_id + stride)
+            return PatchbayFxNodeReorderParallel(track, source.api_id, dest,
+                stage[1].api_id, #stage, stride)
+        end
+        return PatchbayFxNodeMoveParallel(track, source.api_id, tgt.api_id,
+            tgt.api_id + (tgt.stride or 1), src_next)
+    elseif target.kind == "container" then
+        return PatchbayFxNodeMoveIntoContainer(track, source.api_id, target.node, src_next)
+    end
+    return false
+end
+
+-- A drop mark you have to hunt for is no better than none. These only appear
+-- while something is being dragged, so there is nothing to be shy about: solid
+-- amber, dark ring for contrast against both a light and a dark canvas, and a
+-- plus sign saying what dropping there does -- insert here.
+-- Amber reads beautifully on a dark canvas and vanishes on a light one, where
+-- it sits only 28 luminance steps from the background. So the mark follows the
+-- theme: bright amber on dark, deep amber on light, and the hovered state moves
+-- further from the background either way rather than simply getting brighter.
+function PatchbayFxNodeDropMarkColors(hot)
+    if PatchbayFxSchemaThemeIsLight() then
+        if hot then return 0x8F5200FF, 0xFFF2D8FF end
+        return 0xC77A00E8, 0xFFF2D8FF
+    end
+    if hot then return 0xFFE9A8FF, 0x1A1200FF end
+    return 0xFFD36BE8, 0x241A00DD
+end
+
+function PatchbayFxNodeDrawDropMark(dl, cx, cy, rad, hot)
+    local fill, ink = PatchbayFxNodeDropMarkColors(hot)
+    if hot then
+        -- A halo, so the one under the cursor is unmistakable among the rest.
+        r.ImGui_DrawList_AddCircle(dl, cx, cy, rad * 1.9, 0xFFD36B70, 0, math.max(2, rad * 0.35))
+    end
+    r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, rad + 1.5, 0x00000090)
+    r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, rad, fill)
+    local arm = rad * 0.52
+    local thick = math.max(1.6, rad * 0.26)
+    r.ImGui_DrawList_AddLine(dl, cx - arm, cy, cx + arm, cy, ink, thick)
+    r.ImGui_DrawList_AddLine(dl, cx, cy - arm, cx, cy + arm, ink, thick)
+end
+
+-- One source for the size, so the grab area can be checked against what is
+-- actually drawn: a mark you can see but cannot hit is a lie.
+function PatchbayFxNodeDropMarkRadius(dims, hot)
+    local rad = math.max(6, 9 * dims.zoom)
+    return hot and rad * 1.35 or rad
+end
+
+function PatchbayFxNodeDrawDropTargets(dl, targets, hovered, dims)
+    for _, t in ipairs(targets) do
+        local on = rawequal(t, hovered)
+        if t.kind == "serial" then
+            local cx, cy = t.cx or (t.x + t.w * 0.5), t.cy or (t.y + t.h * 0.5)
+            PatchbayFxNodeDrawDropMark(dl, cx, cy,
+                PatchbayFxNodeDropMarkRadius(dims, on), on)
+        elseif on then
+            local col = (t.kind == "container") and 0x6FD88AFF or 0xFFD36BFF
+            r.ImGui_DrawList_AddRect(dl, t.x, t.y, t.x + t.w, t.y + t.h, col,
+                math.max(3, 6 * dims.zoom), nil, 2.5)
+        end
+    end
+end
+
+-- The dragged node is re-found by address every frame rather than held onto:
+-- the layout is rebuilt whenever the chain changes, and a kept reference would
+-- go on describing a plugin that has already moved.
+function PatchbayFxNodeFindByApi(stages, api)
+    for _, st in ipairs(stages) do
+        for _, fx in ipairs(st) do
+            if fx.api_id == api then return fx end
+            if fx.child_stages then
+                local deeper = PatchbayFxNodeFindByApi(fx.child_stages, api)
+                if deeper then return deeper end
+            end
+        end
+    end
+    return nil
+end
+
+function PatchbayFxNodeDrawDragGhost(ctx, dl, mx, my, name)
+    local text_h = r.ImGui_GetTextLineHeight(ctx)
+    local tw = r.ImGui_CalcTextSize(ctx, name)
+    local pad = 6
+    local x, y = mx + 14, my + 10
+    r.ImGui_DrawList_AddRectFilled(dl, x, y, x + tw + pad * 2, y + text_h + pad, 0x000000C0, 4)
+    r.ImGui_DrawList_AddRect(dl, x, y, x + tw + pad * 2, y + text_h + pad, 0xFFD36BFF, 4, nil, 1.2)
+    r.ImGui_DrawList_AddText(dl, x + pad, y + pad * 0.5, 0xFFFFFFFF, name)
+end
+
+-- ---------------------------------------------------------------------------
+-- Adding an FX from the node view
+--
+-- The plugin list comes from Sexan's FX Browser parser, which TK FX BROWSER
+-- already loads: running as its module, ReadFXFile is simply a global that is
+-- there. The standalone has no such host, so it loads the parser itself. Both
+-- paths end at the same flat, searchable list.
+--
+-- Deliberately a search box rather than the prototype's cascading category
+-- menus: in a graph you are pointing at a spot and want a plugin in it, and
+-- typing three letters beats walking a folder tree. The category structure is
+-- still in the prototype if that turns out to be wrong.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_add_open = false
+PB.fx_view_add_focus = false
+PB.fx_view_add_filter = ""
+PB.fx_view_add_slot = nil
+PB.fx_view_add_label = ""
+PB.fx_view_add_items = nil
+PB.fx_view_add_error = nil
+
+local function PatchbayFxNodeStr(value)
+    if type(value) == "string" and value ~= "" then return value end
+    return nil
+end
+
+-- Only strings count, and only NAMED fields. The positional entry[1]/entry[2]
+-- fallback the prototype used is what made the real list unreadable: Sexan's
+-- FX_LIST is a flat array of ~3000 plugin strings, so entry[1]/entry[2] made
+-- the whole list look like one plugin called "Container" whose addname was
+-- "Video processor". Array members are entries in their own right and are
+-- walked, never read as this table's own fields.
+function PatchbayFxNodeAddEntry(entry)
+    if type(entry) == "string" then return entry, entry end
+    if type(entry) ~= "table" then return nil, nil end
+    local name = PatchbayFxNodeStr(entry.name) or PatchbayFxNodeStr(entry.fxname)
+        or PatchbayFxNodeStr(entry.fxName) or PatchbayFxNodeStr(entry.fname)
+        or PatchbayFxNodeStr(entry.FX_NAME)
+    local add = PatchbayFxNodeStr(entry.addname) or PatchbayFxNodeStr(entry.fullname) or name
+    if not name and not add then return nil, nil end
+    return (name or add), (add or name)
+end
+
+-- Sexan's list is a nest of category tables whose exact shape has changed
+-- across versions, so this walks whatever it is and keeps every leaf that looks
+-- like a plugin, de-duplicated by the name REAPER will be asked to add.
+-- Sexan's FX_LIST is a flat array of plugin strings; the category files have
+-- structure. This copes with both: an array part means "these are entries",
+-- named string fields describe the table itself and are never added.
+function PatchbayFxNodeFlatten(obj, items, seen, depth)
+    if depth > 8 then return end
+    if type(obj) == "string" then
+        if obj ~= "" and not seen[obj] then
+            items[#items + 1] = { display = obj, addname = obj }
+            seen[obj] = true
+        end
+        return
+    end
+    if type(obj) ~= "table" then return end
+
+    if #obj == 0 then
+        -- No array part, so this table can only be describing itself.
+        local display, addname = PatchbayFxNodeAddEntry(obj)
+        if display and addname and not seen[addname] then
+            items[#items + 1] = { display = display, addname = addname }
+            seen[addname] = true
+        end
+    else
+        for i = 1, #obj do
+            PatchbayFxNodeFlatten(obj[i], items, seen, depth + 1)
+        end
+    end
+
+    -- Sub-tables filed under a name (category-by-key structures) still count.
+    for key, value in pairs(obj) do
+        if type(key) ~= "number" and type(value) == "table" then
+            PatchbayFxNodeFlatten(value, items, seen, depth + 1)
+        end
+    end
+end
+
+function PatchbayFxNodeLoadAddItems(force)
+    if PB.fx_view_add_items and not force then return PB.fx_view_add_items end
+    if type(ReadFXFile) ~= "function" then
+        local parser = r.GetResourcePath() .. "/Scripts/Sexan_Scripts/FX/Sexan_FX_Browser_ParserV7.lua"
+        if not FileExists(parser) then
+            PB.fx_view_add_error = "Sexan FX Browser Parser V7 not found."
+            return nil
+        end
+        local ok, err = pcall(dofile, parser)
+        if not ok then
+            PB.fx_view_add_error = "Sexan parser error: " .. tostring(err)
+            return nil
+        end
+    end
+    local list
+    if type(ReadFXFile) == "function" then
+        local ok, res = pcall(ReadFXFile)
+        if ok then list = res end
+    end
+    -- MakeFXFiles rescans and is slow, so it is only reached when the cached
+    -- file is missing or unreadable.
+    if not list and type(MakeFXFiles) == "function" then
+        local ok, res = pcall(MakeFXFiles)
+        if ok then list = res end
+    end
+    if not list then
+        PB.fx_view_add_error = "Could not load the FX list."
+        return nil
+    end
+    local items, seen = {}, {}
+    PatchbayFxNodeFlatten(list, items, seen, 0)
+    table.sort(items, function(a, b)
+        return (a.display or ""):lower() < (b.display or ""):lower()
+    end)
+    PB.fx_view_add_items = items
+    PB.fx_view_add_error = nil
+    return items
+end
+
+-- Every whitespace-separated token must appear somewhere, so "fab pro q" finds
+-- FabFilter Pro-Q without caring about order or punctuation.
+function PatchbayFxNodeFilterAddItems(filter, max_items)
+    local items = PatchbayFxNodeLoadAddItems(false)
+    if not items then return {} end
+    filter = tostring(filter or ""):lower():gsub("^%s*(.-)%s*$", "%1")
+    max_items = max_items or 40
+    local out = {}
+    for i = 1, #items do
+        local item = items[i]
+        local hay = ((item.display or "") .. " " .. (item.addname or "")):lower()
+        local match = true
+        if filter ~= "" then
+            for token in filter:gmatch("%S+") do
+                if not hay:find(token, 1, true) then match = false break end
+            end
+        end
+        if match then
+            out[#out + 1] = item
+            if #out >= max_items then break end
+        end
+    end
+    return out
+end
+
+-- TrackFX_AddByName takes an insert position as -1000 minus the slot. The
+-- negative form is used for container slots too: TK_Probe_Container_Rack
+-- confirmed that on REAPER 7.75, and it is what the shipped Kit Maker relies
+-- on. (The old prototype passed a bare positive container address here, which
+-- is a different call entirely.)
+function PatchbayFxNodeAddSlot(kind, track, node)
+    if kind == "end" then
+        return -1000 - (r.TrackFX_GetCount(track) or 0)
+    elseif kind == "after" and node then
+        return -1000 - (node.api_id + (node.stride or 1))
+    elseif kind == "inside" and node then
+        local slot = PatchbayFxNodeContainerEndSlot(track, node)
+        if not slot then return nil end
+        return -1000 - slot
+    end
+    return nil
+end
+
+function PatchbayFxNodeAddFx(track, slot, addname)
+    if IsAllLockedCfg(GetConfig()) then return false, "FX actions locked." end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false, "Track is gone." end
+    addname = tostring(addname or "")
+    if addname == "" then return false, "No FX chosen." end
+    if slot == nil then return false, "Could not work out where to insert." end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local new_index = r.TrackFX_AddByName(track, addname, false, slot)
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock("Patchbay: add FX", -1)
+    PatchbayFxNodeInvalidate()
+    if not new_index or new_index < 0 then return false, "REAPER would not add that FX." end
+    return true, nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Browsing instead of searching
+--
+-- Sexan's category file already carries four of the five groupings: ALL
+-- PLUGINS, CATEGORY, DEVELOPER and FOLDERS, each a list of named buckets with
+-- an `fx` array. The fifth, TK FX BROWSER's own custom folders, lives in
+-- custom_folders.json next to this script in a different shape entirely --
+-- { name = { plugins = {...}, subfolders = { ... } } } -- and nests without
+-- limit, so it is normalised into the same node the others use.
+--
+-- The search box stays: typing filters the whole list flat and the menus step
+-- aside. Browsing is for when you do not know the name, searching for when you
+-- do, and neither is a good substitute for the other.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_cat_groups = nil
+PB.fx_view_custom_folders = nil
+
+function PatchbayFxNodeLoadCategories(force)
+    if PB.fx_view_cat_groups and not force then return PB.fx_view_cat_groups end
+    -- Loading the parser is the add-list's job; this only wants its second
+    -- return value, so it goes through the same function to avoid a second
+    -- dofile of Sexan's parser.
+    PatchbayFxNodeLoadAddItems(force)
+    if type(ReadFXFile) ~= "function" then return nil end
+    local ok, _, cat = pcall(ReadFXFile)
+    if not ok or type(cat) ~= "table" then return nil end
+    local groups = {}
+    for _, group in ipairs(cat) do
+        local gname = PatchbayFxNodeStr(group.name)
+        if gname and type(group.list) == "table" then
+            local buckets = {}
+            for _, bucket in ipairs(group.list) do
+                local bname = PatchbayFxNodeStr(bucket.name)
+                if bname and type(bucket.fx) == "table" and #bucket.fx > 0 then
+                    buckets[#buckets + 1] = { name = bname, fx = bucket.fx }
+                end
+            end
+            -- FX CHAINS and TRACK TEMPLATES come back with unnamed buckets and
+            -- no fx arrays; they are not plugins and are dropped here.
+            if #buckets > 0 then
+                groups[#groups + 1] = { name = gname, buckets = buckets }
+            end
+        end
+    end
+    PB.fx_view_cat_groups = groups
+    return groups
+end
+
+-- { name = { plugins = {..}, subfolders = { ... } } } into
+-- { name = ..., fx = {..}, subs = { ...same... } }
+function PatchbayFxNodeNormaliseFolders(node, depth)
+    if type(node) ~= "table" or depth > 6 then return {} end
+    local out = {}
+    for key, value in pairs(node) do
+        if type(key) == "string" and type(value) == "table" then
+            local entry = { name = key, fx = {}, subs = {} }
+            local plugins = value.plugins
+            if type(plugins) == "table" then
+                for _, p in ipairs(plugins) do
+                    if PatchbayFxNodeStr(p) then entry.fx[#entry.fx + 1] = p end
+                end
+            end
+            -- Older saves put plugin names straight in the array part.
+            for _, p in ipairs(value) do
+                if PatchbayFxNodeStr(p) then entry.fx[#entry.fx + 1] = p end
+            end
+            if type(value.subfolders) == "table" then
+                entry.subs = PatchbayFxNodeNormaliseFolders(value.subfolders, depth + 1)
+            end
+            if #entry.fx > 0 or #entry.subs > 0 then out[#out + 1] = entry end
+        end
+    end
+    table.sort(out, function(a, b) return a.name:lower() < b.name:lower() end)
+    return out
+end
+
+function PatchbayFxNodeLoadCustomFolders(force)
+    if PB.fx_view_custom_folders and not force then return PB.fx_view_custom_folders end
+    local path = (r.GetResourcePath() .. "/Scripts/TK Scripts/FX/custom_folders.json"):gsub("\\", "/")
+    if not FileExists(path) then
+        PB.fx_view_custom_folders = {}
+        return PB.fx_view_custom_folders
+    end
+    local file = io.open(path, "r")
+    if not file then
+        PB.fx_view_custom_folders = {}
+        return PB.fx_view_custom_folders
+    end
+    local raw = file:read("*a")
+    file:close()
+    local decoded = NotesJsonDecode(raw)
+    PB.fx_view_custom_folders = PatchbayFxNodeNormaliseFolders(decoded, 0)
+    return PB.fx_view_custom_folders
+end
+
+-- ---------------------------------------------------------------------------
+-- Menu rendering
+-- ---------------------------------------------------------------------------
+
+function PatchbayFxNodeMenuPick(ctx, track, addname, label)
+    if not r.ImGui_MenuItem(ctx, label) then return false end
+    local ok, err = PatchbayFxNodeAddFx(track, PB.fx_view_add_slot, addname)
+    if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+    return true
+end
+
+-- Every plugin in the bucket, however many. An earlier version capped these at
+-- 250 to keep a 1299-entry menu from being built, which was solving a problem
+-- nobody has: ImGui only walks the contents of a menu that is actually open,
+-- and scrolls it when it outgrows the screen. TK FX BROWSER and Sexan's own
+-- menus list the lot, and a cap here would only make this one worse than both.
+function PatchbayFxNodeMenuList(ctx, track, fx_list)
+    local picked = false
+    for i = 1, #fx_list do
+        local name = fx_list[i]
+        if PatchbayFxNodeStr(name) then
+            -- ## keeps duplicate labels from sharing an ID; a plugin can sit in
+            -- more than one folder.
+            if PatchbayFxNodeMenuPick(ctx, track, name, name .. "##m" .. i) then picked = true end
+        end
+    end
+    return picked
+end
+
+function PatchbayFxNodeMenuFolders(ctx, track, folders, depth)
+    local picked = false
+    for _, entry in ipairs(folders) do
+        local count = #entry.fx + #entry.subs
+        if count > 0 and r.ImGui_BeginMenu(ctx, entry.name .. "##f" .. depth .. entry.name) then
+            if #entry.subs > 0 and depth < 5 then
+                if PatchbayFxNodeMenuFolders(ctx, track, entry.subs, depth + 1) then picked = true end
+                if #entry.fx > 0 then r.ImGui_Separator(ctx) end
+            end
+            if PatchbayFxNodeMenuList(ctx, track, entry.fx) then picked = true end
+            r.ImGui_EndMenu(ctx)
+        end
+    end
+    return picked
+end
+
+function PatchbayFxNodeMenuBrowse(ctx, track)
+    local picked = false
+    local groups = PatchbayFxNodeLoadCategories(false)
+    if groups then
+        for _, group in ipairs(groups) do
+            if r.ImGui_BeginMenu(ctx, group.name .. "##g" .. group.name) then
+                for _, bucket in ipairs(group.buckets) do
+                    if r.ImGui_BeginMenu(ctx, string.format("%s (%d)##b%s", bucket.name, #bucket.fx, bucket.name)) then
+                        if PatchbayFxNodeMenuList(ctx, track, bucket.fx) then picked = true end
+                        r.ImGui_EndMenu(ctx)
+                    end
+                end
+                r.ImGui_EndMenu(ctx)
+            end
+        end
+    else
+        r.ImGui_TextDisabled(ctx, "No category data")
+    end
+
+    local custom = PatchbayFxNodeLoadCustomFolders(false)
+    if custom and #custom > 0 then
+        r.ImGui_Separator(ctx)
+        if r.ImGui_BeginMenu(ctx, "MY FOLDERS##custom") then
+            if PatchbayFxNodeMenuFolders(ctx, track, custom, 0) then picked = true end
+            r.ImGui_EndMenu(ctx)
+        end
+    end
+    return picked
+end
+
+function PatchbayFxNodeOpenAdd(kind, track, node, label)
+    local slot = PatchbayFxNodeAddSlot(kind, track, node)
+    PB.fx_view_add_slot = slot
+    PB.fx_view_add_label = label or "chain"
+    PB.fx_view_add_filter = ""
+    PB.fx_view_add_open = true
+    PB.fx_view_add_focus = true
+    PatchbayFxNodeInvalidateBrowse()
+end
+
+function PatchbayFxNodeAddPopup(ctx, track)
+    if PB.fx_view_add_open then
+        r.ImGui_OpenPopup(ctx, "PatchbayFxNodeAdd")
+        PB.fx_view_add_open = false
+    end
+    if not r.ImGui_BeginPopup(ctx, "PatchbayFxNodeAdd") then return end
+    r.ImGui_Text(ctx, "Add FX -- " .. tostring(PB.fx_view_add_label or ""))
+    r.ImGui_Separator(ctx)
+    if PB.fx_view_add_focus and r.ImGui_SetKeyboardFocusHere then
+        r.ImGui_SetKeyboardFocusHere(ctx)
+        PB.fx_view_add_focus = false
+    end
+    r.ImGui_PushItemWidth(ctx, 300)
+    local changed, txt = r.ImGui_InputText(ctx, "##fx_add_filter", PB.fx_view_add_filter or "")
+    r.ImGui_PopItemWidth(ctx)
+    if changed then PB.fx_view_add_filter = txt end
+
+    local filter = tostring(PB.fx_view_add_filter or ""):gsub("^%s*(.-)%s*$", "%1")
+    if PB.fx_view_add_error then
+        r.ImGui_TextDisabled(ctx, PB.fx_view_add_error)
+    elseif filter == "" then
+        -- Nothing typed: browse.
+        r.ImGui_Separator(ctx)
+        if PatchbayFxNodeMenuBrowse(ctx, track) then r.ImGui_CloseCurrentPopup(ctx) end
+    else
+        local matches = PatchbayFxNodeFilterAddItems(filter, 60)
+        if #matches == 0 then
+            r.ImGui_TextDisabled(ctx, "Nothing matches")
+        elseif r.ImGui_BeginChild then
+            if r.ImGui_BeginChild(ctx, "##fx_add_list", 320, 300) then
+                for i = 1, #matches do
+                    if r.ImGui_Selectable(ctx, matches[i].display .. "##add" .. i) then
+                        local ok, err = PatchbayFxNodeAddFx(track, PB.fx_view_add_slot, matches[i].addname)
+                        if not ok and err then
+                            r.ShowMessageBox(tostring(err), "Patchbay", 0)
+                        end
+                        r.ImGui_CloseCurrentPopup(ctx)
+                    end
+                end
+                r.ImGui_EndChild(ctx)
+            end
+        end
+    end
+    r.ImGui_EndPopup(ctx)
+end
+
+function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
+    if not PB.fx_view_guid then return false end
+    local follow_to = PatchbayFxNodeFollowPoll()
+    if follow_to then PatchbayFxNodeEnter(follow_to) end
+    local track = PatchbayFxNodeResolveTrack()
+    -- The track can be deleted while we are inside it. Fall back rather than
+    -- render a view of nothing.
+    if not track then PatchbayFxNodeExit() return false end
+
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local panel_bg, panel_border, panel_text = PatchbayFxSchemaPalette("panel")
+    local grid_bg = _G.patchbay_grid_bg_col or 0x1A1A1AFF
+    -- Bled past every edge: the canvas child is drawn with a border, so its
+    -- content region begins just inside the frame and a rect starting exactly
+    -- at origin_y leaves a hairline where the track graph below shows through.
+    local bleed = 8
+    r.ImGui_DrawList_AddRectFilled(dl, origin_x - bleed, origin_y - bleed,
+        origin_x + avail_w + bleed, origin_y + avail_h + bleed, grid_bg)
+
+    -- The same dotted grid the track canvas draws, stepped by the same GRID and
+    -- carried by this view's own pan. Left unscaled by zoom, exactly as the
+    -- track canvas leaves it, so the two read as one surface.
+    local grid_dot = _G.patchbay_grid_dot_col or 0x2A2A2AFF
+    local gx = origin_x + ((PB.fx_view_off_x % GRID) + GRID) % GRID
+    while gx < origin_x + avail_w do
+        local gy = origin_y + ((PB.fx_view_off_y % GRID) + GRID) % GRID
+        while gy < origin_y + avail_h do
+            r.ImGui_DrawList_AddRectFilled(dl, gx - 1, gy - 1, gx + 1, gy + 1, grid_dot)
+            gy = gy + GRID
+        end
+        gx = gx + GRID
+    end
+
+    PatchbayFxNodeShotBeginFrame()
+    local dims = PatchbayFxNodeDims(PB.fx_view_zoom)
+    local layout = PatchbayFxNodeCached(track, dims)
+
+    local content_w = layout.w + dims.edge_w * 2 + dims.col_gap * 2
+    local content_h = math.max(layout.h, dims.node_h)
+    if PB.fx_view_fit_pending then
+        PB.fx_view_off_x = (avail_w - content_w) * 0.5
+        PB.fx_view_off_y = (avail_h - content_h) * 0.5
+        PB.fx_view_fit_pending = false
+    end
+
+    local base_x = origin_x + PB.fx_view_off_x
+    local base_y = origin_y + PB.fx_view_off_y
+    local mid_y = base_y + content_h * 0.5
+
+    PatchbayFxNodePlace(layout.stages, base_x + dims.edge_w + dims.col_gap, base_y, content_h, dims)
+    PatchbayFxNodeApplyPositions(track, layout.stages, base_x, base_y, dims.zoom)
+    layout.band_top = base_y
+    layout.band_h = content_h
+
+    -- The edge boxes are worked out here, ahead of the overlap pass, because
+    -- they are obstacles like any node and it has to be able to see them.
+    local in_x = base_x
+    local out_x = base_x + content_w - dims.edge_w
+    local edge_h = math.max(dims.node_h, 34 * dims.zoom)
+    local in_y, out_y = mid_y - edge_h * 0.5, mid_y - edge_h * 0.5
+    local edge_pos = PatchbayFxNodeLoadPositions(track)
+    local pin_in = edge_pos[PATCHBAY_FX_EDGE_IN]
+    if pin_in then in_x, in_y = base_x + pin_in.x * dims.zoom, base_y + pin_in.y * dims.zoom end
+    local pin_out = edge_pos[PATCHBAY_FX_EDGE_OUT]
+    if pin_out then out_x, out_y = base_x + pin_out.x * dims.zoom, base_y + pin_out.y * dims.zoom end
+    layout.edge_w = dims.edge_w
+    layout.edge_h = edge_h
+    layout.edge_in_x, layout.edge_in_y = in_x, in_y
+    layout.edge_out_x, layout.edge_out_y = out_x, out_y
+
+    -- Nothing that is currently in your hand takes part: it belongs under the
+    -- cursor, and both drags are applied after this.
+    local edrag = PB.fx_view_edge_drag
+    in_x, in_y, out_x, out_y = PatchbayFxNodeResolveOverlaps(layout, dims,
+        (PB.fx_view_drag and PB.fx_view_drag.active) and PB.fx_view_drag.api_id or nil,
+        (edrag and edrag.active) and edrag.which or nil)
+
+    -- A drag in progress moves the node now, before the frame is drawn. Cables
+    -- read their ends off the node rectangles, so they stretch along with it
+    -- for free.
+    if PB.fx_view_drag and PB.fx_view_drag.active then
+        local dmx, dmy = r.ImGui_GetMousePos(ctx)
+        local dragged = PatchbayFxNodeFindByApi(layout.stages, PB.fx_view_drag.api_id)
+        if dragged then
+            PB.fx_view_drag.layout_x = dragged.x
+            PB.fx_view_drag.layout_y = dragged.y
+            PB.fx_view_drag.layout_w = dragged.w
+            PB.fx_view_drag.layout_h = dragged.h
+            PatchbayFxNodeShiftOne(dragged,
+                (dmx - (PB.fx_view_drag.grab_x or 0)) - dragged.x,
+                (dmy - (PB.fx_view_drag.grab_y or 0)) - dragged.y)
+        end
+    end
+
+    -- And the box being dragged, last of all, so it sits under the cursor
+    -- rather than where the resolver would rather have it.
+    if edrag and edrag.active then
+        local emx, emy = r.ImGui_GetMousePos(ctx)
+        local ex, ey = emx - (edrag.grab_x or 0), emy - (edrag.grab_y or 0)
+        if edrag.which == "in" then in_x, in_y = ex, ey else out_x, out_y = ex, ey end
+    end
+
+    PatchbayFxNodeDrawEdge(ctx, dl, in_x, in_y, dims.edge_w, edge_h, "IN", dims)
+    PatchbayFxNodeDrawEdge(ctx, dl, out_x, out_y, dims.edge_w, edge_h, "OUT", dims)
+    layout.edge_in_x = in_x
+    layout.edge_out_x = out_x
+    layout.edge_in_y = in_y
+    layout.edge_out_y = out_y
+    layout.edge_h = edge_h
+    layout.edge_w = dims.edge_w
+    PatchbayFxNodeDrawEdgePins(ctx, dl, layout, dims, track, PatchbayFxNodeCanvasInk(true))
+
+    -- Set before the branch: an empty chain still has one cable, from IN
+    -- straight to OUT, and it is a perfectly good place to drop the first FX.
+    layout.link_left = in_x + dims.edge_w
+    layout.link_right = out_x
+    layout.link_mid = mid_y
+    layout.link_left_y = in_y + edge_h * 0.5
+    layout.link_right_y = out_y + edge_h * 0.5
+
+    if #layout.stages == 0 then
+        local msg = "No FX on this track"
+        local tw = r.ImGui_CalcTextSize(ctx, msg)
+        PatchbayFxNodeCable(dl, in_x + dims.edge_w, in_y + edge_h * 0.5,
+            out_x, out_y + edge_h * 0.5, PatchbayFxNodeCanvasInk(false))
+        r.ImGui_DrawList_AddText(dl, base_x + (content_w - tw) * 0.5,
+            mid_y - 26 * dims.zoom, PatchbayFxNodeCanvasInk(true), msg)
+    else
+        PatchbayFxNodeDrawRouting(ctx, dl, layout, dims, track)
+        PatchbayFxNodeDrawStages(ctx, dl, layout.stages, dims,
+            in_x + dims.edge_w, mid_y, out_x,
+            PatchbayFxNodeCanvasInk(false), PatchbayFxNodeCanvasInk(true),
+            in_y + edge_h * 0.5, out_y + edge_h * 0.5)
+    end
+
+    -- Header strip: which track, and the way back out.
+    local _, track_name = r.GetTrackName(track)
+    local head = "FX  ·  " .. tostring(track_name or "Track")
+    local head_h = 26
+    r.ImGui_DrawList_AddRectFilled(dl, origin_x - bleed, origin_y - bleed,
+        origin_x + avail_w + bleed, origin_y + head_h, panel_bg)
+    r.ImGui_DrawList_AddLine(dl, origin_x - bleed, origin_y + head_h,
+        origin_x + avail_w + bleed, origin_y + head_h, panel_border, 1)
+    local head_x = (PB.fx_view_head_x or (origin_x + 78)) + 6
+    r.ImGui_DrawList_AddText(dl, head_x, origin_y + (head_h - r.ImGui_GetTextLineHeight(ctx)) * 0.5,
+        panel_text, head)
+
+    r.ImGui_PushID(ctx, "fx_node_view")
+    r.ImGui_SetCursorScreenPos(ctx, origin_x + 6, origin_y + 3)
+    if r.ImGui_Button(ctx, "< Tracks", 62, head_h - 6) then
+        PatchbayFxNodeExit()
+        r.ImGui_PopID(ctx)
+        return true
+    end
+    local btn_x = origin_x + 74
+    if PatchbayFxNodeHasPositions(track) then
+        r.ImGui_SetCursorScreenPos(ctx, btn_x, origin_y + 3)
+        if r.ImGui_Button(ctx, "Auto layout", 78, head_h - 6) then
+            PatchbayFxNodeClearAllPositions(track)
+            PatchbayFxNodeInvalidate()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Put every node back where the chain puts it")
+        end
+        btn_x = btn_x + 84
+    end
+    if r.ImGui_CreateImage then
+        r.ImGui_SetCursorScreenPos(ctx, btn_x, origin_y + 3)
+        local on = PatchbayFxNodeShotsOn()
+        if on then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A6EA5FF) end
+        if r.ImGui_Button(ctx, "Shots", 46, head_h - 6) then PatchbayFxNodeShotsToggle() end
+        if on then r.ImGui_PopStyleColor(ctx, 1) end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Show TK FX BROWSER screenshots in the nodes")
+        end
+        btn_x = btn_x + 52
+    end
+    r.ImGui_SetCursorScreenPos(ctx, btn_x, origin_y + 3)
+    local routing = PatchbayFxNodeRoutingOn()
+    if routing then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A6EA5FF) end
+    if r.ImGui_Button(ctx, "Routing", 56, head_h - 6) then PatchbayFxNodeRoutingToggle() end
+    if routing then r.ImGui_PopStyleColor(ctx, 1) end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show every channel cable, including the plain stereo pair")
+    end
+    btn_x = btn_x + 62
+
+    r.ImGui_SetCursorScreenPos(ctx, btn_x, origin_y + 3)
+    local tidy = PatchbayFxNodePreventOverlap()
+    if tidy then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A6EA5FF) end
+    if r.ImGui_Button(ctx, "No overlap", 74, head_h - 6) then
+        PatchbayFxNodePreventOverlapToggle()
+    end
+    if tidy then r.ImGui_PopStyleColor(ctx, 1) end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Keep nodes and the IN/OUT boxes clear of each other"
+            .. "\nseparate from the track graph's own setting")
+    end
+    btn_x = btn_x + 80
+
+    r.ImGui_SetCursorScreenPos(ctx, btn_x, origin_y + 3)
+    local following = PatchbayFxNodeFollowOn()
+    if following then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x3A6EA5FF) end
+    if r.ImGui_Button(ctx, "Follow", 50, head_h - 6) then PatchbayFxNodeFollowToggle() end
+    if following then r.ImGui_PopStyleColor(ctx, 1) end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show whichever track you select in REAPER")
+    end
+    btn_x = btn_x + 56
+    PB.fx_view_head_x = btn_x
+
+    -- The canvas itself: pan on left or middle drag, zoom on the wheel, both
+    -- kept in PB so leaving the view does not disturb the track graph's own
+    -- pan and zoom.
+    r.ImGui_SetCursorScreenPos(ctx, origin_x, origin_y + head_h)
+    if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
+    r.ImGui_InvisibleButton(ctx, "##fx_node_bg", avail_w, math.max(1, avail_h - head_h))
+    local bg_active = r.ImGui_IsItemActive(ctx)
+    local bg_hovered = r.ImGui_IsItemHovered(ctx)
+    local mx, my = r.ImGui_GetMousePos(ctx)
+
+    if bg_active and not PB.fx_view_drag and not PB.fx_view_pin_drag
+        and not PB.fx_view_edge_drag then
+        local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
+        if dx ~= 0 or dy ~= 0 then
+            PB.fx_view_off_x = PB.fx_view_off_x + dx
+            PB.fx_view_off_y = PB.fx_view_off_y + dy
+            r.ImGui_ResetMouseDragDelta(ctx, 0)
+        end
+    end
+    if r.ImGui_IsWindowHovered(ctx) and r.ImGui_IsMouseDragging(ctx, 2) then
+        local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 2, 0, 0)
+        if dx ~= 0 or dy ~= 0 then
+            PB.fx_view_off_x = PB.fx_view_off_x + dx
+            PB.fx_view_off_y = PB.fx_view_off_y + dy
+            r.ImGui_ResetMouseDragDelta(ctx, 2)
+        end
+    end
+    if r.ImGui_IsWindowHovered(ctx) then
+        local wheel = r.ImGui_GetMouseWheel(ctx)
+        if wheel ~= 0 then
+            local wx = (mx - origin_x - PB.fx_view_off_x) / PB.fx_view_zoom
+            local wy = (my - origin_y - PB.fx_view_off_y) / PB.fx_view_zoom
+            local factor = (wheel > 0) and 1.1 or (1 / 1.1)
+            local new_zoom = math.max(0.35, math.min(2.5, PB.fx_view_zoom * factor))
+            if new_zoom ~= PB.fx_view_zoom then
+                PB.fx_view_zoom = new_zoom
+                PB.fx_view_off_x = mx - origin_x - wx * new_zoom
+                PB.fx_view_off_y = my - origin_y - wy * new_zoom
+            end
+        end
+    end
+
+    -- Pins first: they sit ON the node's edge, so the body rectangle contains
+    -- them and a plain hit test would always win.
+    local pins = PatchbayFxNodeCollectPins(layout, dims, track)
+    local on_pin = PatchbayFxNodePinAt(pins, mx, my, dims)
+
+    if PB.fx_view_pin_drag then
+        local drag = PB.fx_view_pin_drag
+        local hot = PatchbayFxNodeDrawPinDrag(ctx, dl, pins, drag, mx, my, dims, track)
+        if r.ImGui_IsMouseReleased(ctx, 0) then
+            local drop_ok, why = PatchbayFxNodePinDropOk(drag, hot)
+            if hot and drop_ok then
+                local ok, err = PatchbayFxNodeConnectPins(track, drag, hot)
+                if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+            elseif hot and why then
+                r.ShowMessageBox(tostring(why), "Patchbay", 0)
+            end
+            PB.fx_view_pin_drag = nil
+        elseif not r.ImGui_IsMouseDown(ctx, 0) then
+            PB.fx_view_pin_drag = nil
+        end
+    elseif bg_hovered and on_pin and on_pin.side == "out" and r.ImGui_IsMouseClicked(ctx, 0)
+        and not IsAllLockedCfg(GetConfig()) then
+        PB.fx_view_pin_drag = on_pin
+    end
+
+    if on_pin and bg_hovered and not PB.fx_view_pin_drag then
+        local low, high = PatchbayFxNodePinMask(track, on_pin)
+        local label, _ = PatchbayFxNodeChannelLabel(low, high)
+        r.ImGui_SetTooltip(ctx, string.format("%s pin %d  ->  ch %s%s",
+            on_pin.side == "out" and "Output" or "Input", on_pin.index, label,
+            on_pin.side == "out" and "\ndrag to an input pin to wire it"
+                or "\nright-click to disconnect"))
+    end
+    if on_pin and bg_hovered and not on_pin.edge and r.ImGui_IsMouseClicked(ctx, 1) then
+        PatchbayFxNodeClearPin(track, on_pin)
+    end
+
+    -- Moving the IN and OUT boxes. Checked after the pins, which sit on their
+    -- edges: grabbing a pin starts a cable, and the box must not swallow that.
+    local on_edge = (not on_pin) and PatchbayFxNodeEdgeAt(layout, mx, my) or nil
+    if on_edge and bg_hovered and not PB.fx_view_pin_drag and not PB.fx_view_edge_drag
+        and r.ImGui_IsMouseClicked(ctx, 0) then
+        local ex, ey = PatchbayFxNodeEdgeRect(layout, on_edge)
+        PB.fx_view_edge_drag = { which = on_edge, x0 = mx, y0 = my, active = false,
+                                 grab_x = mx - ex, grab_y = my - ey }
+    end
+    if PB.fx_view_edge_drag then
+        local ed = PB.fx_view_edge_drag
+        if not ed.active then
+            local dx, dy = mx - ed.x0, my - ed.y0
+            -- Armed, not yet dragging: a plain click stays a plain click.
+            if (dx * dx + dy * dy) > 25 then ed.active = true end
+        end
+        if r.ImGui_IsMouseReleased(ctx, 0) or not r.ImGui_IsMouseDown(ctx, 0) then
+            if ed.active then
+                local key = (ed.which == "in") and PATCHBAY_FX_EDGE_IN or PATCHBAY_FX_EDGE_OUT
+                local ex = mx - (ed.grab_x or 0)
+                local ey = my - (ed.grab_y or 0)
+                if PatchbayFxNodePreventOverlap() then
+                    ex, ey = PatchbayFxNodeFreeSpot(
+                        PatchbayFxNodeObstacles(layout, nil, ed.which),
+                        ex, ey, layout.edge_w, layout.edge_h,
+                        PatchbayFxNodeFreeStep(dims.zoom))
+                end
+                PatchbayFxNodeSetPosition(track, key,
+                    (ex - base_x) / dims.zoom, (ey - base_y) / dims.zoom)
+            end
+            PB.fx_view_edge_drag = nil
+        end
+    end
+    if on_edge and bg_hovered and not PB.fx_view_edge_drag then
+        r.ImGui_SetTooltip(ctx, (on_edge == "in" and "Track input" or "Track output")
+            .. "\ndrag to move  ·  right-click to put it back")
+    end
+    if on_edge and bg_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
+        PatchbayFxNodeClearPosition(track,
+            (on_edge == "in") and PATCHBAY_FX_EDGE_IN or PATCHBAY_FX_EDGE_OUT)
+    end
+
+    local hit = (not on_pin) and (not on_edge)
+        and PatchbayFxNodeHit(layout.stages, mx, my) or nil
+    -- The bypass dot is hit-tested by hand rather than given its own ImGui
+    -- item: the whole view runs off one invisible background button, and a
+    -- widget per node would fight it for the mouse.
+    local on_bypass = false
+    local on_fold = false
+    if hit then
+        local bx, by, brad = PatchbayFxNodeBypassSpot(hit, dims)
+        local dx, dy = mx - bx, my - by
+        on_bypass = (dx * dx + dy * dy) <= (brad + 2) * (brad + 2)
+        if hit.fx_type == "Container" and #hit.children > 0 then
+            local fxx, fxy, fsize = PatchbayFxNodeFoldSpot(hit, dims)
+            on_fold = math.abs(mx - fxx) <= fsize and math.abs(my - fxy) <= fsize
+        end
+    end
+    if hit and bg_hovered then
+        r.ImGui_SetTooltip(ctx, on_fold and (hit.folded and "Unfold container" or "Fold container")
+            or on_bypass and (hit.enabled and "Bypass" or "Un-bypass")
+            or (hit.full_name ~= "" and hit.full_name or hit.name))
+    end
+    if bg_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
+        if on_fold then
+            PatchbayFxNodeToggleFold(track, hit.fxguid)
+        elseif on_bypass then
+            PatchbayFxNodeSetBypass(PatchbayFxNodeTarget(track, hit), hit.enabled)
+        else
+            PB.fx_view_sel_api = hit and hit.api_id or nil
+            -- Armed, not yet dragging: a plain click must stay a plain click,
+            -- so nothing happens until the mouse has actually travelled.
+            if hit and not IsAllLockedCfg(GetConfig()) then
+                PB.fx_view_drag = { api_id = hit.api_id, name = hit.name,
+                                    x0 = mx, y0 = my, active = false,
+                                    grab_x = mx - hit.x, grab_y = my - hit.y }
+            end
+        end
+    end
+
+    if PB.fx_view_drag then
+        local drag = PB.fx_view_drag
+        local source = PatchbayFxNodeFindByApi(layout.stages, drag.api_id)
+        if not source then
+            PB.fx_view_drag = nil
+        else
+            if not drag.active then
+                local dx, dy = mx - drag.x0, my - drag.y0
+                if (dx * dx + dy * dy) > 25 then drag.active = true end
+            end
+            if drag.active then
+                local targets = PatchbayFxNodeCollectDropTargets(layout, dims, source, track)
+                local over = PatchbayFxNodeFindDrop(targets, mx, my)
+                PatchbayFxNodeDrawDropTargets(dl, targets, over, dims)
+                if r.ImGui_IsMouseReleased(ctx, 0) then
+                    if over then
+                        -- Into the chain: the automatic layout is about to
+                        -- change under it, so a pinned spot would be nonsense.
+                        PatchbayFxNodeApplyDrop(track, source, over)
+                        PatchbayFxNodeClearPosition(track, source.fxguid)
+                    else
+                        local nx = mx - (drag.grab_x or 0)
+                        local ny = my - (drag.grab_y or 0)
+                        if PatchbayFxNodePreventOverlap() then
+                            nx, ny = PatchbayFxNodeFreeSpot(
+                                PatchbayFxNodeObstacles(layout, source.api_id, nil),
+                                nx, ny, source.w, source.h,
+                                PatchbayFxNodeFreeStep(dims.zoom))
+                        end
+                        PatchbayFxNodeSetPosition(track, source.fxguid,
+                            (nx - base_x) / dims.zoom, (ny - base_y) / dims.zoom)
+                        PatchbayFxNodeInvalidate()
+                    end
+                    PB.fx_view_drag = nil
+                end
+            elseif r.ImGui_IsMouseReleased(ctx, 0) then
+                PB.fx_view_drag = nil
+            end
+        end
+    end
+    if hit and bg_hovered and not on_bypass and not on_fold and r.ImGui_IsMouseDoubleClicked(ctx, 0) and r.TrackFX_Show then
+        r.TrackFX_Show(track, hit.api_id, 3)
+    end
+    if bg_hovered and not on_edge and r.ImGui_IsMouseClicked(ctx, 1) then
+        if hit then
+            PB.fx_view_ctx_api = hit.api_id
+            PB.fx_view_ctx_name = hit.name
+            PB.fx_view_ctx_is_container = (hit.fx_type == "Container")
+            PB.fx_view_ctx_open = true
+        elseif not IsAllLockedCfg(GetConfig()) then
+            PatchbayFxNodeOpenAdd("end", track, nil, "at the end of the chain")
+        end
+    end
+    if PB.fx_view_drag and not r.ImGui_IsMouseDown(ctx, 0) then PB.fx_view_drag = nil end
+    PatchbayFxNodePopups(ctx, track)
+    PatchbayFxNodeAddPopup(ctx, track)
+    if r.ImGui_IsKeyPressed and r.ImGui_Key_Escape and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+        PatchbayFxNodeExit()
+    end
+    r.ImGui_PopID(ctx)
+    return true
+end
+
 function ShowRoutingPatchbay()
     local ctx = GetCtx()
     local toolbar_popup_opened = false
@@ -6098,7 +10088,16 @@ function ShowRoutingPatchbay()
     end
 
     if not all_locked and open_toolbar_popup_id == nil and delete_selected_targets == nil then
-        if #selected_tracks > 0 and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_C) then
+        -- Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: while this window has focus the keys
+        -- reach the script, not REAPER, so they did nothing at all -- only the
+        -- arrow buttons could undo. They run the same native commands.
+        local shift_held = r.ImGui_GetKeyMods and r.ImGui_Mod_Shift
+            and (r.ImGui_GetKeyMods(ctx) & r.ImGui_Mod_Shift()) ~= 0
+        if r.ImGui_Key_Z and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_Z) then
+            r.Main_OnCommand(shift_held and 40030 or 40029, 0)
+        elseif r.ImGui_Key_Y and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_Y) then
+            r.Main_OnCommand(40030, 0)
+        elseif #selected_tracks > 0 and PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_C) then
             PatchbayCopySelectedTracks()
         elseif PatchbayCtrlShortcutPressed(ctx, r.ImGui_Key_V) then
             PatchbayPasteTracks(GetPatchbayMouseSpawn(ctx))
@@ -6672,8 +10671,17 @@ function ShowRoutingPatchbay()
         end
     end
     if PB.fx_schema_open_guid and not fx_schema_open_seen then PB.fx_schema_open_guid = nil end
-    local fx_schema_blocks_mouse = fx_schema_layout and mx >= fx_schema_layout.x and mx <= fx_schema_layout.x + fx_schema_layout.w and my >= fx_schema_layout.y and my <= fx_schema_layout.y + fx_schema_layout.h
-    PB.fx_schema_mouse_block = fx_schema_blocks_mouse == true
+    -- Two things can take the mouse away from the track graph: the FX schema
+    -- panel, which covers a corner of it, and the FX node view, which covers
+    -- the whole thing. They were kept apart, and only the panel reached the
+    -- handlers below -- so a right-click on an FX node opened the track graph's
+    -- own menus behind the view as well. One flag, so a guard cannot cover one
+    -- case and miss the other.
+    local fx_schema_blocks_mouse = (fx_schema_layout ~= nil
+        and mx >= fx_schema_layout.x and mx <= fx_schema_layout.x + fx_schema_layout.w
+        and my >= fx_schema_layout.y and my <= fx_schema_layout.y + fx_schema_layout.h)
+        or PB.fx_view_guid ~= nil
+    PB.fx_schema_mouse_block = fx_schema_blocks_mouse
 
     local function CablePassesFilter(is_main, mode, muted, send_type_info)
         if route_filter == "all" then return true end
@@ -6803,13 +10811,27 @@ function ShowRoutingPatchbay()
             local cy1 = sy
             local cx2 = dx - cp_dist
             local cy2 = dy
-            if not fx_schema_blocks_mouse and not hovered_cable and BezierHit(mx, my, sx, sy, cx1, cy1, cx2, cy2, dx, dy, 6) then
+            -- A track-graph cable under the cursor is only interesting when
+            -- the track graph has the mouse. It did not check, so with the FX
+            -- node view open a cable behind it still counted as hovered -- and
+            -- a right-click meant for an FX node opened that cable's send
+            -- popup, over a view that has nothing to do with it.
+            if not fx_schema_blocks_mouse and not hovered_cable
+                and BezierHit(mx, my, sx, sy, cx1, cy1, cx2, cy2, dx, dy, 6) then
                 hovered_cable = c
             end
         end
     end
 
-    for ci = 1, #cables do
+    -- Zero iterations while the FX node view owns the canvas. The view is drawn
+    -- over the top of all this, so every cable, node and pin below was being
+    -- built and then hidden -- about 88 lines of drawing per frame for nothing.
+    --
+    -- Written as a bound rather than an `if` around the body on purpose: the
+    -- node loop alone is 368 lines, and re-indenting it would turn a change
+    -- that can be read in one line into a diff nobody can check.
+
+    for ci = 1, (PB.fx_view_guid and 0 or #cables) do
         local c = cables[ci]
         local sx, sy = PinPos(c.sg, "out")
         local dx, dy = PinPos(c.dg, "in")
@@ -7044,7 +11066,15 @@ function ShowRoutingPatchbay()
         pb_rubber_start_x, pb_rubber_start_y = r.ImGui_GetMousePos(ctx)
     end
 
-    for i = 1, #tracks do
+    -- Zero iterations while the FX node view owns the canvas. The view is drawn
+    -- over the top of all this, so every cable, node and pin below was being
+    -- built and then hidden -- about 368 lines of drawing per frame for nothing.
+    --
+    -- Written as a bound rather than an `if` around the body on purpose: the
+    -- node loop alone is 368 lines, and re-indenting it would turn a change
+    -- that can be read in one line into a diff nobody can check.
+
+    for i = 1, (PB.fx_view_guid and 0 or #tracks) do
         local tr = tracks[i]
         local g = tr.guid
         local x1, y1, x2, y2 = NodeRect(g)
@@ -7155,7 +11185,10 @@ function ShowRoutingPatchbay()
             local control_size = math.max(10, math.min(14, math.floor(14 * canvas_zoom + 0.5)))
             local control_gap = math.max(2, math.floor(3 * canvas_zoom + 0.5))
             local control_pad_y = math.max(5, math.floor(6 * canvas_zoom + 0.5))
-            local control_left_group_w = (control_size * 2) + control_gap
+            -- Three now: pin, schema, FX node view. This width also decides
+            -- whether a node is wide enough to show its controls at all, and
+            -- bounds their hit region, so it has to grow with them.
+            local control_left_group_w = (control_size * 3) + (control_gap * 2)
             local control_right_group_w = (control_size * 4) + (control_gap * 3)
             local show_node_controls = (not is_master_node) and (not node_is_collapsed) and canvas_zoom >= 0.50 and node_screen_w >= (control_left_group_w + control_right_group_w + bar_w + 21) and node_screen_h >= (control_size + 22)
             local control_left_x = x1 + bar_w + 5
@@ -7236,6 +11269,11 @@ function ShowRoutingPatchbay()
                     node_popup_guid = g
                     request_open_node_popup = true
                 end
+            end
+            if not fx_schema_blocks_mouse and body_hovered and not node_control_hit
+                and not is_master_node and r.ValidatePtr(tr.track, "MediaTrack*")
+                and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+                PatchbayFxNodeEnter(g)
             end
             if not fx_schema_blocks_mouse and body_hovered and not node_control_hit and r.ImGui_IsMouseClicked(ctx, 0) then
                 local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
@@ -7341,6 +11379,7 @@ function ShowRoutingPatchbay()
                 local controls = {
                     { id = "##pin_btn", action = "pin", icon = "pin", width = control_size, x = control_left_x, active = node_is_pinned, on = 0xD7B95DFF, off = 0x4A4A4AFF, tip = node_is_pinned and "Unpin node" or "Pin node" },
                     { id = "##schema_btn", action = "schema", icon = "schema", width = control_size, x = control_left_x + control_size + control_gap, active = PB.fx_schema_open_guid == g, on = 0x6FB6D8FF, off = 0x4A4A4AFF, tip = PB.fx_schema_open_guid == g and "Hide FX chain schema" or "Show FX chain schema" },
+                    { id = "##fxnode_btn", action = "fxnode", icon = "fxnode", width = control_size, x = control_left_x + (control_size + control_gap) * 2, active = false, on = 0x6FD88AFF, off = 0x4A4A4AFF, tip = "Open the FX node view" },
                     { id = "##mute_btn", action = "mute", label = "M", width = control_size, x = control_right_x, active = mute_on, on = 0xC94FB0FF, off = 0x4A4A4AFF, tip = mute_tip, inherited_outline = tr.ancestor_muted and 0xFF5555FF or nil, inherited_outline2 = (tr.ancestor_muted and mute_on) and 0xFF9999FF or nil },
                     { id = "##solo_btn", action = "solo", label = "S", width = control_size, x = control_right_x + control_size + control_gap, active = solo_on, on = 0xCCBB33FF, off = 0x4A4A4AFF, tip = solo_tip, inherited_outline = tr.ancestor_soloed and 0xFFE066FF or nil, inherited_outline2 = (tr.ancestor_soloed and solo_on) and 0xFFF0AAFF or nil },
                     { id = "##arm_btn", action = "arm", label = "R", width = control_size, x = control_right_x + (control_size + control_gap) * 2, active = arm_on, on = 0xE05050FF, off = 0x4A4A4AFF, tip = arm_tip },
@@ -7367,6 +11406,8 @@ function ShowRoutingPatchbay()
                         PatchbayDrawPinSymbol(draw_list, bx1, by1, bx2, by2, ctrl.active and 0xFFE080FF or 0xFFFFFFFF)
                     elseif ctrl.icon == "schema" then
                         PatchbayDrawSchemaSymbol(draw_list, bx1, by1, bx2, by2, ctrl.active and 0xD7F4FFFF or 0xFFFFFFFF)
+                    elseif ctrl.icon == "fxnode" then
+                        PatchbayDrawFxNodeSymbol(draw_list, bx1, by1, bx2, by2, 0xFFFFFFFF)
                     else
                         local tw = r.ImGui_CalcTextSize(ctx, ctrl.label)
                         r.ImGui_DrawList_AddText(draw_list, bx1 + ((ctrl_w - tw) * 0.5), by1 + ((control_size - 12) * 0.5), 0xFFFFFFFF, ctrl.label)
@@ -7384,6 +11425,8 @@ function ShowRoutingPatchbay()
                             else
                                 PB.fx_schema_open_guid = g
                             end
+                        elseif ctrl.action == "fxnode" then
+                            PatchbayFxNodeEnter(g)
                         elseif ctrl.action == "mute" and not all_locked then
                             BatchSetMute(GetPatchbayControlTargetTracks(tr.track, g, tr.name), not mute_on)
                         elseif ctrl.action == "solo" and not all_locked then
@@ -7401,7 +11444,15 @@ function ShowRoutingPatchbay()
         end
     end
 
-    for i = 1, #tracks do
+    -- Zero iterations while the FX node view owns the canvas. The view is drawn
+    -- over the top of all this, so every cable, node and pin below was being
+    -- built and then hidden -- about 63 lines of drawing per frame for nothing.
+    --
+    -- Written as a bound rather than an `if` around the body on purpose: the
+    -- node loop alone is 368 lines, and re-indenting it would turn a change
+    -- that can be read in one line into a diff nobody can check.
+
+    for i = 1, (PB.fx_view_guid and 0 or #tracks) do
         local tr = tracks[i]
         local g = tr.guid
         local x1, y1, x2, y2 = NodeRect(g)
@@ -7467,6 +11518,7 @@ function ShowRoutingPatchbay()
     end
 
     if fx_schema_layout then PatchbayFxSchemaRender(ctx, draw_list, fx_schema_layout) end
+    PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
 
     if pending_folder_connection then
         local sx, sy = PinPos(pending_folder_connection.parent_guid, "bottom")

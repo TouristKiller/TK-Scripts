@@ -1,8 +1,23 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.18
+-- @version 3.2.19
 -- @changelog:
 --[[
+    v3.2.19:
+        + Patchbay: FX node view: double-click a track node (or use the FX icon on the node, or click the FX schema panel) to dive into that track and see its FX chain as nodes and cables instead of a strip, nested containers and parallel lanes included.
+        + Patchbay: FX node view: reorder by dragging - drop on a cable to place an FX in series, on a node to run it in parallel, or into a container. Parallel lanes can be reordered in both directions.
+        + Patchbay: FX node view: add FX after any node or inside a container, through a search box and browse menus for All plugins, Category, Developer, Folders and your own TK FX BROWSER custom folders.
+        + Patchbay: FX node view: bypass, offline, wet, rename, delete and open the FX window from the node or its right-click menu; wrap a plugin in a new container or unpack a container. Containers fold shut per container, and the choice is remembered.
+        + Patchbay: FX node view: nodes can be placed freely and keep their position per project. Prevent overlap keeps them from landing on top of each other, and TK FX BROWSER screenshots can optionally be shown in the node bodies.
+        + Patchbay: FX node view: Follow switches the view to whichever track you select in REAPER, so it can stay open while you work.
+        + Patchbay: FX node view: Routing shows the real pin wiring with one colour per channel, so a compressor's detector on channels 3/4, an output sent somewhere unusual or a crossed pair is visible without opening the pin connector. The plain stereo path is only drawn when Routing is on, so it does not bury the routing worth seeing.
+        + Patchbay: FX node view: pin-level patching. Drag from an output pin, or from a track channel on the IN box, to an input pin to wire it - feeding a sidechain is one drag. Right-click a pin to disconnect it; Reset pin routing puts a plugin back to its defaults. A connection that REAPER would wire differently from how it is drawn - across a container wall, backwards in the chain, between parallel lanes, from a bypassed plugin, or past a plugin that overwrites the channel on the way - is refused with an explanation instead of silently wiring something else.
+        + Patchbay: FX node view: the drawn routing follows REAPER's own signal flow, checked by measurement on REAPER 7.75: bypassed and offline plugins pass their input through, a container's output pins carry its internal channels, parallel lanes sum only what each lane writes, and plugins with more than 12 pins or tracks with more than 16 channels are followed in full (the extra pins collapse onto the last drawn pin, marked +N).
+        + Patchbay: FX node view: instruments get a dashed MIDI cable from the track, so a synth without audio inputs no longer looks as if it plays on its own.
+        + Patchbay: FX node view: every pin change - connect, disconnect, Reset pin routing - is its own undo step. REAPER does not register a pin change as an edit by itself, so without help Undo skipped it and took back the step before.
+        + Patchbay: Ctrl+Z undoes and Ctrl+Shift+Z / Ctrl+Y redo while the Patchbay window has focus; until now only the arrow buttons did, because the keys went to the script instead of REAPER.
+        + Patchbay: The track graph is no longer drawn underneath the FX node view, and a right-click inside the view no longer also opens the track graph's menus behind it.
+        + Patchbay: Notes panel: reads the shared TK Notes / Workbench note store first, so a note edited in either app shows up.
     v3.2.18:
         + Track templates: a template with a preview beside it can be auditioned without loading it. TK Idea Vault renders one when it saves a template, and any audio file sharing a template's name counts - so a preview put there by hand works the same way. Right-click a template in the list, or click the play badge on its thumbnail.
         + Track templates: the preview plays at the project's tempo rather than at whatever it was recorded at, without transposing it. The tempo it was played at comes from the .tkidea file Idea Vault leaves beside the template; without one the preview simply plays at its own speed.

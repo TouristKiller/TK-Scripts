@@ -1,7 +1,23 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.2.1
+-- @version 1.3.0
 -- @changelog:
+--   v1.3.0:
+--       + FX node view: double-click a track node (or use the FX icon on the node, or click the FX schema panel) to dive into that track and see its FX chain as nodes and cables instead of a strip, nested containers and parallel lanes included.
+--       + FX node view: reorder by dragging - drop on a cable to place an FX in series, on a node to run it in parallel, or into a container. Parallel lanes can be reordered in both directions.
+--       + FX node view: add FX after any node or inside a container, through a search box and browse menus for All plugins, Category, Developer, Folders and your own TK FX BROWSER custom folders.
+--       + FX node view: bypass, offline, wet, rename, delete and open the FX window from the node or its right-click menu; wrap a plugin in a new container or unpack a container. Containers fold shut per container, and the choice is remembered.
+--       + FX node view: nodes can be placed freely and keep their position per project. Prevent overlap keeps them from landing on top of each other, and TK FX BROWSER screenshots can optionally be shown in the node bodies.
+--       + FX node view: Follow switches the view to whichever track you select in REAPER, so it can stay open while you work.
+--       + FX node view: Routing shows the real pin wiring with one colour per channel, so a compressor's detector on channels 3/4, an output sent somewhere unusual or a crossed pair is visible without opening the pin connector. The plain stereo path is only drawn when Routing is on, so it does not bury the routing worth seeing.
+--       + FX node view: pin-level patching. Drag from an output pin, or from a track channel on the IN box, to an input pin to wire it - feeding a sidechain is one drag. Right-click a pin to disconnect it; Reset pin routing puts a plugin back to its defaults. A connection that REAPER would wire differently from how it is drawn - across a container wall, backwards in the chain, between parallel lanes, from a bypassed plugin, or past a plugin that overwrites the channel on the way - is refused with an explanation instead of silently wiring something else.
+--       + FX node view: the drawn routing follows REAPER's own signal flow, checked by measurement on REAPER 7.75: bypassed and offline plugins pass their input through, a container's output pins carry its internal channels, parallel lanes sum only what each lane writes, and plugins with more than 12 pins or tracks with more than 16 channels are followed in full (the extra pins collapse onto the last drawn pin, marked +N).
+--       + FX node view: instruments get a dashed MIDI cable from the track, so a synth without audio inputs no longer looks as if it plays on its own.
+--       + FX node view: every pin change - connect, disconnect, Reset pin routing - is its own undo step. REAPER does not register a pin change as an edit by itself, so without help Undo skipped it and took back the step before.
+--       + Ctrl+Z undoes and Ctrl+Shift+Z / Ctrl+Y redo while the Patchbay window has focus; until now only the arrow buttons did, because the keys went to the script instead of REAPER.
+--       + The track graph is no longer drawn underneath the FX node view, and a right-click inside the view no longer also opens the track graph's menus behind it.
+--       + Notes panel: reads the shared TK Notes / Workbench note store first, so a note edited in either app shows up.
+--       + Fixed: the notes panel's settings (shown/hidden, source, size and position) and several other Patchbay preferences were forgotten after restarting the standalone, because its settings table did not declare them.
 --   v1.2.1:
 --       + Added a Track notes panel (View > Show notes) that shows read-only track notes from TK Notes or Workbench directly inside the canvas.
 --       + The notes panel can be dragged anywhere in the canvas, resized via the bottom-right grip, and switched between TK Notes and Workbench sources.
@@ -165,7 +181,35 @@ _G.config = {
     routing_filter_text = "",
     routing_only_selected = false,
     window_alpha = 1.0,
-    patchbay_standalone_theme = "gray"
+    patchbay_standalone_theme = "gray",
+    -- NOTE: LoadConfig below only copies keys that already exist here
+    -- (`if _G.config[k] ~= nil`), so a setting missing from this table is
+    -- written to disk and then silently dropped on the next start. Any new
+    -- patchbay setting has to be declared here as well as used.
+    --
+    -- Everything below was being lost that way. The values match what the
+    -- module falls back to when the key is absent, so declaring them changes
+    -- nothing about a fresh start -- only about the second one.
+    patchbay_fx_node_screenshots = false,
+    patchbay_fx_node_follow = true,
+    patchbay_fx_node_routing = false,
+    patchbay_fx_node_overlap = true,
+    patchbay_show_notes = false,
+    patchbay_notes_source = "tk_notes",
+    patchbay_notes_w = 320,
+    patchbay_notes_h = 420,
+    -- false, not a number: the module reads these with tonumber() and places
+    -- the panel automatically while they are not numeric, so a declared 0 would
+    -- pin it to the corner instead.
+    patchbay_notes_off_x = false,
+    patchbay_notes_off_y = false,
+    patchbay_layout_preset = "hybrid",
+    patchbay_lock_mode = "none",
+    patchbay_route_filter = "all",
+    patchbay_show_unrouted = false,
+    patchbay_solo_path = false,
+    patchbay_explicit_show_mainsend = false,
+    patchbay_group_include_neighbors = true
 }
 
 -- Track selection tracking
