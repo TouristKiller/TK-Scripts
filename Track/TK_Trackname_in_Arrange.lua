@@ -1,8 +1,12 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 1.9.9
+-- @version 2.0.0
 -- @changelog 
 --[[
+v2.0.0:
++ Added Activity Glow (new Activity tab): each visible track lights up with its post-fader level, so in a large session you can see at a glance which tracks are sounding. Choose a level bar at the lane edge, a pulsing track color, or both, with adjustable floor, release and bar width
++ Activity Glow: optional clip flash turns the glow red for a moment when a track goes over 0 dBFS
+
 v1.9.9:
 + Added individual color controls for the record-arm, solo, and mute status dots
 
@@ -171,6 +175,7 @@ local overlay_hwnd = nil               -- Store overlay window handle
 local zorder_handled_at_startup = false -- Only fix z-order once at startup
 
 local color_cache        = {}
+local activity_glow_state = {}  -- [track] = {level, clip_until}; bewust buiten color_cache (alpha is continu)
 local cached_bg_color    = nil
 
 local excluded_tracks    = {}
@@ -689,6 +694,15 @@ local default_settings              = {
     freeze_icon_locked_x            = nil,
     freeze_icon_locked_y            = nil,
     hide_all_labels                 = false,
+    -- Activity Glow
+    activity_glow_enabled           = false,
+    activity_glow_mode              = 1,     -- 1=Bar, 2=Track color, 3=Bar + Track color
+    activity_glow_bar_side          = 1,     -- 1=left, 2=right
+    activity_glow_bar_width         = 4,
+    activity_glow_color_intensity   = 0.35,
+    activity_glow_floor_db          = -60,
+    activity_glow_release_ms        = 400,
+    activity_glow_clip_flash        = true,
 }
 
 local settings = {}
@@ -1276,6 +1290,7 @@ function SetTrackExcluded(track, excluded)
 end
 
 function RefreshProjectState()
+    activity_glow_state = {}
     UpdateBgColorCache()
     track_icon_manager.RefreshAllIcons()
     LoadExcludedTracks()
@@ -1642,6 +1657,10 @@ function ShowSettingsWindow()
             end
             if r.ImGui_BeginTabItem(ctx, "Time Selection", nil, settings_tab_restore == 6 and r.ImGui_TabItemFlags_SetSelected() or 0) then
                 settings_tab = 6
+                r.ImGui_EndTabItem(ctx)
+            end
+            if r.ImGui_BeginTabItem(ctx, "Activity", nil, settings_tab_restore == 8 and r.ImGui_TabItemFlags_SetSelected() or 0) then
+                settings_tab = 8
                 r.ImGui_EndTabItem(ctx)
             end
             r.ImGui_EndTabBar(ctx)
@@ -3270,9 +3289,83 @@ function ShowSettingsWindow()
             
             r.ImGui_PopItemWidth(ctx)
         end
-        
+
+        elseif settings_tab == 8 then
+        -- ═══════════════════════════════════════════════════════════════════
+        -- ACTIVITY TAB - activity glow (signaalniveau per track)
+        -- ═══════════════════════════════════════════════════════════════════
+        local changed
+        local label_col = 130
+        local glow_modes = {" Bar", " Track color", " Bar + Track color"}
+        local glow_sides = {" Left", " Right"}
+
+        if r.ImGui_RadioButton(ctx, "Activity Glow", settings.activity_glow_enabled) then
+            settings.activity_glow_enabled = not settings.activity_glow_enabled
+            activity_glow_state = {}
         end
-        
+        r.ImGui_SameLine(ctx, column_width * 2)
+        if r.ImGui_RadioButton(ctx, "Clip flash", settings.activity_glow_clip_flash) then
+            settings.activity_glow_clip_flash = not settings.activity_glow_clip_flash
+        end
+
+        r.ImGui_Dummy(ctx, 0, 4)
+        r.ImGui_Separator(ctx)
+        r.ImGui_Dummy(ctx, 0, 4)
+
+        r.ImGui_BeginDisabled(ctx, not settings.activity_glow_enabled)
+        r.ImGui_PushItemWidth(ctx, 180)
+
+        r.ImGui_Text(ctx, "Style")
+        r.ImGui_SameLine(ctx, label_col)
+        if r.ImGui_BeginCombo(ctx, "##GlowMode", glow_modes[settings.activity_glow_mode] or glow_modes[1]) then
+            for i, name in ipairs(glow_modes) do
+                if r.ImGui_Selectable(ctx, name, settings.activity_glow_mode == i) then
+                    settings.activity_glow_mode = i
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+
+        local uses_bar = settings.activity_glow_mode ~= 2
+        local uses_color = settings.activity_glow_mode ~= 1
+
+        r.ImGui_BeginDisabled(ctx, not uses_bar)
+        r.ImGui_Text(ctx, "Bar side")
+        r.ImGui_SameLine(ctx, label_col)
+        if r.ImGui_BeginCombo(ctx, "##GlowSide", glow_sides[settings.activity_glow_bar_side] or glow_sides[1]) then
+            for i, name in ipairs(glow_sides) do
+                if r.ImGui_Selectable(ctx, name, settings.activity_glow_bar_side == i) then
+                    settings.activity_glow_bar_side = i
+                end
+            end
+            r.ImGui_EndCombo(ctx)
+        end
+        r.ImGui_Text(ctx, "Bar width")
+        r.ImGui_SameLine(ctx, label_col)
+        changed, settings.activity_glow_bar_width = r.ImGui_SliderInt(ctx, "##GlowBarWidth", settings.activity_glow_bar_width, 2, 16, "%d px")
+        r.ImGui_EndDisabled(ctx)
+
+        r.ImGui_BeginDisabled(ctx, not uses_color)
+        r.ImGui_Text(ctx, "Color intensity")
+        r.ImGui_SameLine(ctx, label_col)
+        changed, settings.activity_glow_color_intensity = r.ImGui_SliderDouble(ctx, "##GlowColorIntensity", settings.activity_glow_color_intensity, 0.05, 1.0, "%.2f")
+        r.ImGui_EndDisabled(ctx)
+
+        r.ImGui_Text(ctx, "Floor")
+        r.ImGui_SameLine(ctx, label_col)
+        changed, settings.activity_glow_floor_db = r.ImGui_SliderInt(ctx, "##GlowFloor", settings.activity_glow_floor_db, -90, -20, "%d dB")
+        r.ImGui_Text(ctx, "Release")
+        r.ImGui_SameLine(ctx, label_col)
+        changed, settings.activity_glow_release_ms = r.ImGui_SliderInt(ctx, "##GlowRelease", settings.activity_glow_release_ms, 50, 2000, "%d ms")
+
+        r.ImGui_PopItemWidth(ctx)
+        r.ImGui_EndDisabled(ctx)
+
+        r.ImGui_Dummy(ctx, 0, 8)
+        r.ImGui_TextWrapped(ctx, "Lights up each visible track with its post-fader level. Floor is the level where the glow starts; Release is how fast it fades. Clip flash turns the glow red for a moment when a track goes over 0 dBFS.")
+
+        end
+
         -- ═══════════════════════════════════════════════════════════════════
         -- FOOTER - presets, autosave, save/reset (altijd zichtbaar)
         -- ═══════════════════════════════════════════════════════════════════
@@ -3900,6 +3993,89 @@ function ResetRenderContext()
     r.ImGui_Attach(ctx, settings_font)
     for _, font in ipairs(font_objects) do
         r.ImGui_Attach(ctx, font)
+    end
+end
+
+local function NativeToRGBA(native_color, alpha)
+    local red, green, blue = 204, 204, 204
+    if native_color and native_color ~= 0 then
+        red, green, blue = r.ColorFromNative(native_color)
+    end
+    local a = math.floor(math.max(0, math.min(1, alpha)) * 255 + 0.5)
+    return (red << 24) | (green << 16) | (blue << 8) | a
+end
+
+function DrawActivityGlow(draw_list, track, track_y, track_height, native_color, window_y, pinned_height, now)
+    local peak = math.max(r.Track_GetPeakInfo(track, 0), r.Track_GetPeakInfo(track, 1))
+
+    local state = activity_glow_state[track]
+    if not state then
+        state = {level = 0, clip_until = 0, t = now}
+        activity_glow_state[track] = state
+    end
+
+    -- Niveau naar 0..1 tussen floor en 0 dBFS; snel aan, lineair uit over release_ms
+    local target = 0
+    if peak > 0 then
+        local db = 20 * math.log(peak, 10)
+        local floor_db = settings.activity_glow_floor_db
+        target = math.max(0, math.min(1, (db - floor_db) / -floor_db))
+    end
+    local dt = now - state.t
+    state.t = now
+    if target >= state.level then
+        state.level = target
+    else
+        state.level = math.max(target, state.level - dt / (settings.activity_glow_release_ms / 1000))
+    end
+    if settings.activity_glow_clip_flash and peak >= 1.0 then
+        state.clip_until = now + 0.6
+    end
+
+    local clipping = now < state.clip_until
+    local level = state.level
+    if level <= 0.001 and not clipping then return end
+
+    -- Pinned tracks: niet tekenen onder het gepinde gebied
+    local top = track_y
+    pinned_height = pinned_height or 0
+    if pinned_height > 0 and top < pinned_height then
+        if track_y + track_height <= pinned_height then return end
+        top = pinned_height
+    end
+    local y1 = window_y + top
+    local y2 = window_y + track_y + track_height
+
+    local glow_color = clipping and r.ColorToNative(255, 40, 40) or native_color
+    local mode = settings.activity_glow_mode
+
+    if mode ~= 1 then
+        local alpha = settings.activity_glow_color_intensity * (clipping and math.max(level, 0.6) or level)
+        r.ImGui_DrawList_AddRectFilled(draw_list, LEFT, y1, RIGHT - scroll_size, y2, NativeToRGBA(glow_color, alpha))
+    end
+
+    if mode ~= 2 then
+        local w = settings.activity_glow_bar_width
+        local x1, x2, halo_x1, halo_x2
+        if settings.activity_glow_bar_side == 2 then
+            x2 = RIGHT - scroll_size
+            x1 = x2 - w
+            halo_x1, halo_x2 = x1 - w * 2, x1
+        else
+            x1 = LEFT
+            x2 = x1 + w
+            halo_x1, halo_x2 = x2, x2 + w * 2
+        end
+        -- Balk vult van onder naar boven met het niveau, plus een zachte halo ernaast
+        local fill = clipping and 1 or level
+        local fill_top = math.max(y1, y2 - (y2 - (window_y + track_y)) * fill)
+        r.ImGui_DrawList_AddRectFilled(draw_list, x1, y1, x2, y2, NativeToRGBA(glow_color, 0.12))
+        r.ImGui_DrawList_AddRectFilled(draw_list, x1, fill_top, x2, y2, NativeToRGBA(glow_color, 0.45 + 0.55 * fill))
+        local halo_in = NativeToRGBA(glow_color, 0.35 * fill)
+        local halo_out = NativeToRGBA(glow_color, 0)
+        local left_col = settings.activity_glow_bar_side == 2 and halo_out or halo_in
+        local right_col = settings.activity_glow_bar_side == 2 and halo_in or halo_out
+        r.ImGui_DrawList_AddRectFilledMultiColor(draw_list, halo_x1, fill_top, halo_x2, y2, left_col, right_col, right_col, left_col)
     end
 end
 
@@ -4996,6 +5172,11 @@ function loop()
                                 DrawTrackBorders(draw_list, track, track_y, track_height, border_color, WY, is_pinned, border_clip_height)
                             end
                         end
+                    end
+
+                    if settings.activity_glow_enabled then
+                        DrawActivityGlow(draw_list, track, track_y, track_height, track_color, WY,
+                            is_pinned and 0 or pinned_tracks_height, r.time_precise())
                     end
 
                     local should_show_track = false
