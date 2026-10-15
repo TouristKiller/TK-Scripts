@@ -167,6 +167,55 @@ local cb_section_states = {
     toggle_open = false,
 }
 
+-- One heading style for every settings section (also used by TK_TRANSPORT.lua)
+ButtonEditor.HEADER_COLOR = 0x8FB8F0FF
+
+function ButtonEditor.HeaderText(ctx, text)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), ButtonEditor.HEADER_COLOR)
+    r.ImGui_Text(ctx, text)
+    r.ImGui_PopStyleColor(ctx)
+end
+
+function ButtonEditor.SectionHeader(ctx, text, hint)
+    r.ImGui_Spacing(ctx)
+    ButtonEditor.HeaderText(ctx, text)
+    if hint then
+        r.ImGui_SameLine(ctx)
+        r.ImGui_TextDisabled(ctx, hint)
+    end
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+end
+local SectionHeader = ButtonEditor.SectionHeader
+
+-- Four editor columns that follow the available width instead of fixed pixels
+local function EditorColumns(ctx, indent)
+    indent = indent or 0
+    local avail = r.ImGui_GetContentRegionAvail(ctx)
+    local col_w = math.max(110, math.floor((avail - indent) / 4))
+    return indent, indent + col_w, indent + col_w * 2, indent + col_w * 3
+end
+
+-- "(Toggle active - ... in Toggle view)" where "Toggle view" switches to that view
+local function ToggleViewLink(ctx, what)
+    r.ImGui_TextDisabled(ctx, "(Toggle active - " .. what .. " in")
+    r.ImGui_SameLine(ctx, 0, 4)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFFFFFF18)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFFFFFF30)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), ButtonEditor.HEADER_COLOR)
+    if r.ImGui_SmallButton(ctx, "Toggle view##tvl_" .. what) then
+        cb_section_states.actions_open = false
+        cb_section_states.toggle_open = true
+    end
+    r.ImGui_PopStyleColor(ctx, 4)
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Open the Toggle settings of this button")
+    end
+    r.ImGui_SameLine(ctx, 0, 0)
+    r.ImGui_TextDisabled(ctx, ")")
+end
+
 local import_window = {
     open = false,
     ctx = nil,
@@ -186,23 +235,29 @@ local style_clipboard = {
     -- Which properties to copy (saved preferences)
     copy_settings = {
         width = true,
+        height = true,
         border = true,
-        tooltip = true,
         use_icon = true,
+        image_tinting = true,
         show_text = true,
         vertical_text = true,
+        text_position = true,
         color_base = true,
         color_hover = true,
         color_active = true,
         color_text = true,
         color_border = true,
+        invisible_bg = true,
+        toggle_colors = true,
         font = true,
         font_size = true,
         font_style = true,
         rounding = true,
         border_thickness = true,
         shape = true,
-    }
+    },
+    -- Keys captured by the last copy, so nil values (= defaults) are pasted too
+    keys = {}
 }
 
 local style_settings_window = {
@@ -601,95 +656,150 @@ local function GetDisplayOrder(items)
     return display_order
 end
 
+-- Copy-style settings, grouped the same way as the editor sections
+local STYLE_COPY_GROUPS = {
+    { label = "Size", items = {
+        { "width", "Width / Icon Size" },
+        { "height", "Height" },
+    }},
+    { label = "Button Image", items = {
+        { "use_icon", "Icon / Image" },
+        { "image_tinting", "Image Tinting (incl. ON/OFF)" },
+        { "shape", "Shape / Image Only" },
+    }},
+    { label = "Button Border", items = {
+        { "border", "Show Border" },
+        { "color_border", "Border Color" },
+        { "border_thickness", "Thickness" },
+        { "rounding", "Rounding" },
+    }},
+    { label = "Button Color", items = {
+        { "color_base", "Normal" },
+        { "color_hover", "Hover" },
+        { "color_active", "Active" },
+        { "invisible_bg", "Invisible BG" },
+        { "toggle_colors", "Toggle ON/OFF Colors" },
+    }},
+    { label = "Button Text", items = {
+        { "show_text", "Show Text" },
+        { "vertical_text", "Vertical" },
+        { "text_position", "Position" },
+        { "color_text", "Text Colors" },
+        { "font", "Font" },
+        { "font_size", "Font Size" },
+        { "font_style", "Font Style" },
+    }},
+}
+
+-- Which groups go in the left and right column
+local STYLE_COPY_COLUMNS = { { 1, 2, 3 }, { 4, 5 } }
+
+local STYLE_COPY_PRESETS = {
+    { label = "Colors only", keys = { "color_base", "color_hover", "color_active", "color_text",
+        "color_border", "toggle_colors", "image_tinting", "invisible_bg" } },
+    { label = "Layout only", keys = { "width", "height", "text_position", "vertical_text", "shape" } },
+}
+
+local function SetAllStyleCopySettings(value)
+    for k, _ in pairs(style_clipboard.copy_settings) do
+        style_clipboard.copy_settings[k] = value
+    end
+    SaveStyleCopySettings()
+end
+
+local function DrawStyleCopyGroup(ctx, group)
+    local settings = style_clipboard.copy_settings
+
+    -- Group header: a checkbox over all items, shown as mixed when partly selected
+    local mask, flags = 0, 0
+    for i, item in ipairs(group.items) do
+        local bit = 1 << (i - 1)
+        mask = mask | bit
+        if settings[item[1]] then flags = flags | bit end
+    end
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFD27AFF)
+    local rv, new_flags = r.ImGui_CheckboxFlags(ctx, group.label .. "##grp_" .. group.label, flags, mask)
+    r.ImGui_PopStyleColor(ctx)
+    if rv then
+        for i, item in ipairs(group.items) do
+            settings[item[1]] = (new_flags & (1 << (i - 1))) ~= 0
+        end
+        SaveStyleCopySettings()
+    end
+
+    r.ImGui_Indent(ctx, 18)
+    for _, item in ipairs(group.items) do
+        local changed
+        changed, settings[item[1]] = r.ImGui_Checkbox(ctx, item[2] .. "##sc_" .. item[1], settings[item[1]])
+        if changed then SaveStyleCopySettings() end
+    end
+    r.ImGui_Unindent(ctx, 18)
+    r.ImGui_Spacing(ctx)
+end
+
 -- Function to show style copy settings window
 local function ShowStyleSettingsWindow(ctx)
     if not style_settings_window.open then return end
-    
+
     local flags = r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize()
     local visible, open = r.ImGui_Begin(ctx, style_settings_window.title, true, flags)
-    
+
     if visible then
-        r.ImGui_Text(ctx, "Select which properties to copy:")
-        r.ImGui_Separator(ctx)
-        
-        r.ImGui_Text(ctx, "Size & Layout:")
-        local rv
-        rv, style_clipboard.copy_settings.width = r.ImGui_Checkbox(ctx, "Icon Size / Width", style_clipboard.copy_settings.width)
-        if rv then SaveStyleCopySettings() end
-        
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Display Options:")
-        rv, style_clipboard.copy_settings.border = r.ImGui_Checkbox(ctx, "Show Border", style_clipboard.copy_settings.border)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.use_icon = r.ImGui_Checkbox(ctx, "Use Icon", style_clipboard.copy_settings.use_icon)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.show_text = r.ImGui_Checkbox(ctx, "Show Text with Icon", style_clipboard.copy_settings.show_text)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.vertical_text = r.ImGui_Checkbox(ctx, "Vertical Text", style_clipboard.copy_settings.vertical_text)
-        if rv then SaveStyleCopySettings() end
-        
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Colors:")
-        rv, style_clipboard.copy_settings.color_base = r.ImGui_Checkbox(ctx, "Base Color", style_clipboard.copy_settings.color_base)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.color_hover = r.ImGui_Checkbox(ctx, "Hover Color", style_clipboard.copy_settings.color_hover)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.color_active = r.ImGui_Checkbox(ctx, "Active Color", style_clipboard.copy_settings.color_active)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.color_text = r.ImGui_Checkbox(ctx, "Text Color", style_clipboard.copy_settings.color_text)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.color_border = r.ImGui_Checkbox(ctx, "Border Color", style_clipboard.copy_settings.color_border)
-        if rv then SaveStyleCopySettings() end
-        
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Text & Font:")
-        rv, style_clipboard.copy_settings.font = r.ImGui_Checkbox(ctx, "Font", style_clipboard.copy_settings.font)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.font_size = r.ImGui_Checkbox(ctx, "Font Size", style_clipboard.copy_settings.font_size)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.font_style = r.ImGui_Checkbox(ctx, "Font Style", style_clipboard.copy_settings.font_style)
-        if rv then SaveStyleCopySettings() end
-        
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Border Style:")
-        rv, style_clipboard.copy_settings.rounding = r.ImGui_Checkbox(ctx, "Button Rounding", style_clipboard.copy_settings.rounding)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.border_thickness = r.ImGui_Checkbox(ctx, "Border Thickness", style_clipboard.copy_settings.border_thickness)
-        if rv then SaveStyleCopySettings() end
-        rv, style_clipboard.copy_settings.shape = r.ImGui_Checkbox(ctx, "Shape Settings", style_clipboard.copy_settings.shape)
-        if rv then SaveStyleCopySettings() end
-        
+        local total, enabled = 0, 0
+        for _, value in pairs(style_clipboard.copy_settings) do
+            total = total + 1
+            if value then enabled = enabled + 1 end
+        end
+        r.ImGui_Text(ctx, "Properties to copy:")
+        r.ImGui_SameLine(ctx)
+        r.ImGui_TextDisabled(ctx, string.format("%d of %d selected", enabled, total))
         r.ImGui_Separator(ctx)
         r.ImGui_Spacing(ctx)
-        
-        local button_width = 80
+
+        for col, group_ids in ipairs(STYLE_COPY_COLUMNS) do
+            if col > 1 then r.ImGui_SameLine(ctx, 0, 30) end
+            r.ImGui_BeginGroup(ctx)
+            for _, gi in ipairs(group_ids) do
+                DrawStyleCopyGroup(ctx, STYLE_COPY_GROUPS[gi])
+            end
+            r.ImGui_EndGroup(ctx)
+        end
+
+        r.ImGui_Separator(ctx)
+        r.ImGui_Spacing(ctx)
+
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_TextDisabled(ctx, "Quick:")
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "All") then SetAllStyleCopySettings(true) end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "None") then SetAllStyleCopySettings(false) end
+        for _, preset in ipairs(STYLE_COPY_PRESETS) do
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, preset.label) then
+                for k, _ in pairs(style_clipboard.copy_settings) do
+                    style_clipboard.copy_settings[k] = false
+                end
+                for _, k in ipairs(preset.keys) do
+                    style_clipboard.copy_settings[k] = true
+                end
+                SaveStyleCopySettings()
+            end
+        end
+
+        local close_w = 70
+        r.ImGui_SameLine(ctx)
         local avail = r.ImGui_GetContentRegionAvail(ctx)
-        local center_x = (avail - (button_width * 3 + 20)) * 0.5
-        if center_x > 0 then
-            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + center_x)
+        if avail > close_w then
+            r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + avail - close_w)
         end
-        
-        if r.ImGui_Button(ctx, "Select All", button_width) then
-            for k, _ in pairs(style_clipboard.copy_settings) do
-                style_clipboard.copy_settings[k] = true
-            end
-            SaveStyleCopySettings()
-        end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Deselect All", button_width) then
-            for k, _ in pairs(style_clipboard.copy_settings) do
-                style_clipboard.copy_settings[k] = false
-            end
-            SaveStyleCopySettings()
-        end
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "OK", button_width) then
+        if r.ImGui_Button(ctx, "Close", close_w) then
             style_settings_window.open = false
         end
-        
+
         r.ImGui_End(ctx)
     end
-    
+
     if not open then
         style_settings_window.open = false
     end
@@ -700,63 +810,47 @@ local function CopyButtonStyle(button)
     if not button then return end
     
     style_clipboard.data = {}
+    style_clipboard.keys = {}
     local settings = style_clipboard.copy_settings
-    
-    if settings.width then
-        style_clipboard.data.width = button.width
+
+    local function take(...)
+        for _, key in ipairs({...}) do
+            style_clipboard.data[key] = button[key]
+            style_clipboard.keys[#style_clipboard.keys + 1] = key
+        end
     end
-    if settings.border then
-        style_clipboard.data.show_border = button.show_border
-    end
+
+    if settings.width then take("width") end
+    if settings.height then take("height") end
+    if settings.border then take("show_border") end
     if settings.use_icon then
-        style_clipboard.data.use_icon = button.use_icon
-        style_clipboard.data.icon_name = button.icon_name
+        take("use_icon", "icon_name", "use_image", "image_path", "is_single_state_icon")
     end
-    if settings.show_text then
-        style_clipboard.data.show_text_with_icon = button.show_text_with_icon
+    if settings.image_tinting then
+        take("use_image_tinting", "image_tint_normal", "image_tint_hover", "image_tint_pressed",
+             "image_tint_on", "image_tint_off")
     end
-    if settings.vertical_text then
-        style_clipboard.data.vertical_text = button.vertical_text
-    end
-    if settings.color_base then
-        style_clipboard.data.color = button.color
-    end
-    if settings.color_hover then
-        style_clipboard.data.hover_color = button.hover_color
-    end
-    if settings.color_active then
-        style_clipboard.data.active_color = button.active_color
-    end
+    if settings.invisible_bg then take("invisible_bg") end
+    if settings.show_text then take("show_text_with_icon") end
+    if settings.vertical_text then take("vertical_text") end
+    if settings.text_position then take("text_position") end
+    if settings.color_base then take("color") end
+    if settings.color_hover then take("hover_color") end
+    if settings.color_active then take("active_color") end
     if settings.color_text then
-        style_clipboard.data.text_color = button.text_color
-        style_clipboard.data.text_color_hover = button.text_color_hover
-        style_clipboard.data.text_color_active = button.text_color_active
+        take("text_color", "text_color_hover", "text_color_active", "text_color_on", "text_color_off")
     end
-    if settings.color_border then
-        style_clipboard.data.border_color = button.border_color
-    end
-    if settings.font then
-        style_clipboard.data.font_name = button.font_name
-    end
-    if settings.font_size then
-        style_clipboard.data.font_size = button.font_size
-    end
-    if settings.font_style then
-        style_clipboard.data.font_style = button.font_style
-    end
-    if settings.rounding then
-        style_clipboard.data.rounding = button.rounding
-    end
-    if settings.border_thickness then
-        style_clipboard.data.border_thickness = button.border_thickness
-    end
+    if settings.color_border then take("border_color") end
+    if settings.toggle_colors then take("toggle_on_color", "toggle_off_color") end
+    if settings.font then take("font_name", "use_system_fonts") end
+    if settings.font_size then take("font_size") end
+    if settings.font_style then take("font_style") end
+    if settings.rounding then take("rounding") end
+    if settings.border_thickness then take("border_thickness") end
     if settings.shape then
-        style_clipboard.data.use_shape = button.use_shape
-        style_clipboard.data.shape_type = button.shape_type
-        style_clipboard.data.show_shape_border = button.show_shape_border
-        style_clipboard.data.image_only = button.image_only
+        take("use_shape", "shape_type", "show_shape_border", "image_only")
     end
-    
+
     style_clipboard.has_data = true
 end
 
@@ -766,8 +860,15 @@ local function PasteButtonStyle(button)
     
     local changed = false
     
-    for key, value in pairs(style_clipboard.data) do
-        if key == "icon_name" then
+    for _, key in ipairs(style_clipboard.keys) do
+        local value = style_clipboard.data[key]
+        if key == "image_path" then
+            if button.image_path ~= value then
+                button.image_path = value
+                button.image = nil
+                changed = true
+            end
+        elseif key == "icon_name" then
             -- Special handling for icons - also clear the cached icon
             if button.icon_name ~= value then
                 local ButtonRenderer = require('button_renderer')
@@ -878,12 +979,59 @@ end
 
 
 
+-- Shared look for the preset bars at the bottom of the settings window
+-- (transport presets and button presets use the same layout and colors)
+ButtonEditor.PRESET_BAR = {
+    label_color = 0x8FB8F0FF,
+    unsaved_colors = { 0xC07A20FF, 0xD88A2AFF, 0xE89A3AFF },
+    combo_fraction = 0.25,
+    placeholder = "Select preset...",
+    new_name_hint = "New preset name",
+}
+
+function ButtonEditor.PresetBarLabel(ctx, text)
+    r.ImGui_AlignTextToFramePadding(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), ButtonEditor.PRESET_BAR.label_color)
+    r.ImGui_Text(ctx, text)
+    r.ImGui_PopStyleColor(ctx)
+    r.ImGui_SameLine(ctx)
+end
+
+-- Resave button; highlighted while there are unsaved changes
+function ButtonEditor.PresetBarResave(ctx, unsaved)
+    local c = ButtonEditor.PRESET_BAR.unsaved_colors
+    if unsaved then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), c[1])
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), c[2])
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), c[3])
+    end
+    local clicked = r.ImGui_Button(ctx, "Resave")
+    if unsaved then r.ImGui_PopStyleColor(ctx, 3) end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, unsaved and "Unsaved changes - click to save them into this preset" or "Save into the current preset")
+    end
+    return clicked
+end
+
+-- Width left for the new-name input, after Save New and the right-hand buttons
+function ButtonEditor.PresetBarInputWidth(ctx, right_labels)
+    local spacing = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing())
+    local pad = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_FramePadding()) * 2
+    local used = r.ImGui_CalcTextSize(ctx, "Save New") + pad + spacing
+    for _, label in ipairs(right_labels) do
+        used = used + r.ImGui_CalcTextSize(ctx, label) + pad + spacing
+    end
+    local avail = r.ImGui_GetContentRegionAvail(ctx)
+    return math.max(80, math.floor(avail - used))
+end
+
 function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
     opts = opts or {}
+    local bar = ButtonEditor.PRESET_BAR
     local presets = custom_buttons.GetButtonPresets()
-    local current_preset = custom_buttons.current_preset or "Select Preset"
+    local current_preset = custom_buttons.current_preset or bar.placeholder
     local avail_w1, _ = r.ImGui_GetContentRegionAvail(ctx)
-    r.ImGui_SetNextItemWidth(ctx, math.max(100, math.floor(avail_w1 * 0.22)))
+    r.ImGui_SetNextItemWidth(ctx, math.max(120, math.floor(avail_w1 * bar.combo_fraction)))
     if r.ImGui_BeginCombo(ctx, "##ButtonPresetCombo", current_preset) then
         for _, preset in ipairs(presets) do
             if preset and type(preset) == "string" then
@@ -900,29 +1048,19 @@ function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
     end
 
     r.ImGui_SameLine(ctx)
-    local had_unsaved = has_unsaved_changes
-    if had_unsaved then
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xAA2222FF)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xDD3333FF)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF4444FF)
-    end
-    if r.ImGui_Button(ctx, "Resave") and custom_buttons.current_preset then
+    if ButtonEditor.PresetBarResave(ctx, has_unsaved_changes) and custom_buttons.current_preset then
         custom_buttons.SaveButtonPreset(custom_buttons.current_preset)
         has_unsaved_changes = false
-    end
-    if had_unsaved then
-        r.ImGui_PopStyleColor(ctx, 3)
     end
 
     r.ImGui_SameLine(ctx)
     if r.ImGui_Button(ctx, "Delete") and custom_buttons.current_preset then
-        custom_buttons.DeleteButtonPreset(custom_buttons.current_preset)
+        local answer = r.ShowMessageBox("Delete button preset '" .. custom_buttons.current_preset .. "'?\n\nThis action cannot be undone.", "Delete Button Preset", 4)
+        if answer == 6 then
+            custom_buttons.DeleteButtonPreset(custom_buttons.current_preset)
+        end
     end
 
-    r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Clear") then
-        r.ImGui_OpenPopup(ctx, "ConfirmClearAll")
-    end
     
     if r.ImGui_BeginPopupModal(ctx, "ConfirmClearAll", nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then
         r.ImGui_Text(ctx, "Are you sure you want to remove all buttons?")
@@ -944,14 +1082,9 @@ function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
 
     if not new_preset_name then new_preset_name = "" end
     r.ImGui_SameLine(ctx)
-    local avail_w2, _ = r.ImGui_GetContentRegionAvail(ctx)
-    local save_tw, _ = r.ImGui_CalcTextSize(ctx, "Save New")
-    local save_btn_w = save_tw + 18
-    local action_btn_w = 60
-    local input_w = math.max(60, math.floor(avail_w2 - save_btn_w - action_btn_w - 10))
-    r.ImGui_SetNextItemWidth(ctx, input_w)
+    r.ImGui_SetNextItemWidth(ctx, ButtonEditor.PresetBarInputWidth(ctx, { "Clear", "Action" }))
     local rv
-    rv, new_preset_name = r.ImGui_InputText(ctx, "##ButtonNewPreset", new_preset_name)
+    rv, new_preset_name = r.ImGui_InputTextWithHint(ctx, "##ButtonNewPreset", bar.new_name_hint, new_preset_name)
     r.ImGui_SameLine(ctx)
     if r.ImGui_Button(ctx, "Save New##SaveNew") and new_preset_name ~= "" then
         custom_buttons.SaveButtonPreset(new_preset_name)
@@ -963,10 +1096,15 @@ function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
         r.ImGui_SetTooltip(ctx, "Save as new preset")
     end
     r.ImGui_SameLine(ctx)
-    if r.ImGui_Button(ctx, "Action", action_btn_w, 0) and custom_buttons.current_preset then
-        r.ShowConsoleMsg("Attempting to create action for: " .. custom_buttons.current_preset .. "\n")
+    if r.ImGui_Button(ctx, "Clear") then
+        r.ImGui_OpenPopup(ctx, "ConfirmClearAll")
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Remove all buttons (asks first)")
+    end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Action") and custom_buttons.current_preset then
         local cmd_id = custom_buttons.RegisterCommandToLoadPreset(custom_buttons.current_preset)
-        r.ShowConsoleMsg("Command ID: " .. tostring(cmd_id) .. "\n")
         if cmd_id ~= 0 then
             r.ImGui_OpenPopup(ctx, "ActionCreatedPopup")
         end
@@ -984,6 +1122,188 @@ function ButtonEditor.ShowPresetsInline(ctx, custom_buttons, opts)
         r.ImGui_EndPopup(ctx)
     end
 end
+
+-- Rows the group bar always takes, so the pane above can reserve the space
+function ButtonEditor.GroupBarHeight(ctx)
+    return r.ImGui_GetFrameHeightWithSpacing(ctx) * 2 + 8
+end
+
+-- Fixed group bar under the button settings: everything here acts on the whole
+-- group of the selected button, not on the button itself. Always drawn with the
+-- same height (greyed out when the button has no group) so the layout stays put.
+function ButtonEditor.ShowGroupBar(ctx, custom_buttons, opts)
+    opts = opts or {}
+    local button = custom_buttons.current_edit and custom_buttons.buttons[custom_buttons.current_edit]
+    if not button then return end
+    local gname = button.group or ""
+    local in_group = gname ~= ""
+
+    local gcount = 0
+    local all_visible = true
+    if in_group then
+        for _, b in ipairs(custom_buttons.buttons) do
+            if b.group == gname then
+                gcount = gcount + 1
+                if not b.visible then all_visible = false end
+            end
+        end
+    end
+
+    local raw_w = opts.canvas_width or r.ImGui_GetWindowWidth(ctx)
+    local raw_h = opts.canvas_height or r.ImGui_GetWindowHeight(ctx)
+    local canvas_w = clamp(to_int(raw_w, 1), 1)
+    local canvas_h = clamp(to_int(raw_h, 1), 1)
+
+    local function adjust_group(dx, dy)
+        local any_changed = false
+        for _, b in ipairs(custom_buttons.buttons) do
+            if b.group == gname then
+                local _, _, sanitized = sanitize_button_xy(b, canvas_w, canvas_h)
+                if sanitized then any_changed = true end
+
+                if dx ~= 0 then
+                    local new_px = clamp(to_int((tonumber(b.position_px) or 0) + dx, 0), 0, canvas_w)
+                    if new_px ~= b.position_px then
+                        b.position_px = new_px
+                        b.position = new_px / math.max(1, canvas_w)
+                        any_changed = true
+                    end
+                end
+                if dy ~= 0 then
+                    local new_py = clamp(to_int((tonumber(b.position_y_px) or 0) + dy, 0), -100, canvas_h)
+                    if new_py ~= b.position_y_px then
+                        b.position_y_px = new_py
+                        b.position_y = new_py / math.max(1, canvas_h)
+                        any_changed = true
+                    end
+                end
+            end
+        end
+        if any_changed then
+            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+        end
+    end
+
+    -- Row 1: which group, visibility, nudge
+    r.ImGui_AlignTextToFramePadding(ctx)
+    ButtonEditor.HeaderText(ctx, "Group:")
+    r.ImGui_SameLine(ctx)
+    if in_group then
+        r.ImGui_TextColored(ctx, 0x00FF88FF, gname .. " (" .. gcount .. " buttons)")
+    else
+        r.ImGui_TextDisabled(ctx, "Not in a group - assign one at the top of Properties")
+    end
+
+    r.ImGui_BeginDisabled(ctx, not in_group)
+
+    if in_group then
+        r.ImGui_SameLine(ctx, 0, 20)
+        local rv_hide
+        rv_hide, all_visible = r.ImGui_Checkbox(ctx, "Visible##HideGroup", all_visible)
+        if rv_hide then
+            for _, b in ipairs(custom_buttons.buttons) do
+                if b.group == gname then b.visible = all_visible end
+            end
+            custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+        end
+
+        r.ImGui_SameLine(ctx, 0, 20)
+        if r.ImGui_Button(ctx, "←##grpMoveLeft") then adjust_group(-1, 0) end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel left") end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "→##grpMoveRight") then adjust_group(1, 0) end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel right") end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "↑##grpMoveUp") then adjust_group(0, -1) end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel up") end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "↓##grpMoveDown") then adjust_group(0, 1) end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel down") end
+    end
+
+    -- Row 2: alignment and style
+    if r.ImGui_Button(ctx, "Align Y") then
+        for _, b in ipairs(custom_buttons.buttons) do
+            if b.group == gname then
+                b.position_y = button.position_y
+                b.position_y_px = button.position_y_px
+                sanitize_button_xy(b, canvas_w, canvas_h)
+            end
+        end
+        custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+    end
+    if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled()) then
+        r.ImGui_SetTooltip(ctx, "Set all buttons in this group to the Y position of this button")
+    end
+
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Auto Align X") then
+        local group_buttons = {}
+        for _, b in ipairs(custom_buttons.buttons) do
+            if b.group == gname then
+                table.insert(group_buttons, b)
+            end
+        end
+
+        table.sort(group_buttons, function(a, b)
+            return (a.position_px or 0) < (b.position_px or 0)
+        end)
+
+        -- Keep the leftmost button where it is and line the rest up after it
+        local current_x = group_buttons[1] and group_buttons[1].position_px or 0
+        for _, b in ipairs(group_buttons) do
+            b.position_px = current_x
+            b.position = current_x / math.max(1, canvas_w)
+            sanitize_button_xy(b, canvas_w, canvas_h)
+            current_x = current_x + CalculateButtonWidth(ctx, b) + auto_align_spacing
+        end
+
+        custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+    end
+    if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled()) then
+        r.ImGui_SetTooltip(ctx, "Auto-align buttons horizontally with custom spacing\n(calculates actual width including text and icons)")
+    end
+
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetNextItemWidth(ctx, 40)
+    local rv, new_spacing = r.ImGui_InputDouble(ctx, "px spacing##alignSpacing", auto_align_spacing, 0, 0, "%.0f")
+    if rv then
+        auto_align_spacing = clamp(to_int(new_spacing, 3), 0, 50)
+        SaveAutoAlignSpacing()
+    end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Spacing between buttons for Auto Align X (0-50 pixels)") end
+
+    r.ImGui_SameLine(ctx, 0, 20)
+    local can_paste_group = in_group and style_clipboard.has_data
+    r.ImGui_BeginDisabled(ctx, not can_paste_group)
+    if can_paste_group then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00AA44FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x10BB55FF)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x20CC66FF)
+    end
+    if r.ImGui_Button(ctx, "Paste Style to Group") and can_paste_group then
+        if PasteStyleToGroup(button, custom_buttons) then
+            custom_buttons.SaveCurrentButtons()
+            has_unsaved_changes = true
+        end
+    end
+    if can_paste_group then
+        r.ImGui_PopStyleColor(ctx, 3)
+    end
+    if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled()) then
+        if not in_group then
+            r.ImGui_SetTooltip(ctx, "This button is not in a group")
+        elseif style_clipboard.has_data then
+            r.ImGui_SetTooltip(ctx, "Paste the copied style to all buttons in group '" .. gname .. "'\n(excluding position and alignment)")
+        else
+            r.ImGui_SetTooltip(ctx, "No style copied yet. Use 'Copy Style' in Properties first.")
+        end
+    end
+    r.ImGui_EndDisabled(ctx)
+
+    r.ImGui_EndDisabled(ctx)
+end
+
 
 function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
     opts = opts or {}
@@ -1343,15 +1663,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             button.border_color = button.border_color or 0xFFFFFFFF
             local colorFlags = r.ImGui_ColorEditFlags_NoInputs()
                 
-            local col1 = 0
-            local col2 = 130
-            local col3 = 270
-            local col4 = 410
+            local col1, col2, col3, col4 = EditorColumns(ctx, 0)
             
-            r.ImGui_Spacing(ctx)
-            r.ImGui_Separator(ctx)
-            r.ImGui_TextDisabled(ctx, "Button Image")
-            r.ImGui_Spacing(ctx)
+            SectionHeader(ctx, "Button Image")
                 
                 local rv
                 local use_icon_or_image = button.use_icon or button.use_image
@@ -1400,7 +1714,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         local toggle_tint_active = button.show_toggle_state
                         if toggle_tint_active then
                             r.ImGui_SameLine(ctx)
-                            r.ImGui_TextDisabled(ctx, "(Toggle active - set Tint ON/OFF in Toggle section)")
+                            ToggleViewLink(ctx, "set Tint ON/OFF")
                         else
                             local rv_tint
                             r.ImGui_SameLine(ctx)
@@ -1470,7 +1784,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         local toggle_text_active = button.show_toggle_state
                         if toggle_text_active then
                             r.ImGui_SameLine(ctx)
-                            r.ImGui_TextDisabled(ctx, "(Toggle active - set Text ON/OFF in Toggle section)")
+                            ToggleViewLink(ctx, "set Text ON/OFF")
                         elseif button.use_state_text then
                             local rv_txt
                             r.ImGui_SameLine(ctx)
@@ -1576,7 +1890,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         local toggle_active = is_regular_or_shape and button.show_toggle_state
                         if toggle_active then
                             r.ImGui_SameLine(ctx)
-                            r.ImGui_TextDisabled(ctx, "(Toggle active - set Text ON/OFF in Toggle section)")
+                            ToggleViewLink(ctx, "set Text ON/OFF")
                         elseif button.use_state_text then
                             local rv_txt
                             r.ImGui_SameLine(ctx)
@@ -1600,10 +1914,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     end
                 end
                 
-                r.ImGui_Spacing(ctx)
-                r.ImGui_Separator(ctx)
-                r.ImGui_TextDisabled(ctx, "Button Color")
-                r.ImGui_Spacing(ctx)
+                SectionHeader(ctx, "Button Color")
                 
                 local toggle_colors_active = button.show_toggle_state
                 
@@ -1621,7 +1932,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     
                     if toggle_colors_active then
                         r.ImGui_SameLine(ctx)
-                        r.ImGui_TextDisabled(ctx, "(Toggle active - set colors in Toggle section)")
+                        ToggleViewLink(ctx, "set colors")
                     else
                         r.ImGui_SameLine(ctx)
                         r.ImGui_SetCursorPosX(ctx, col2)
@@ -1652,10 +1963,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     r.ImGui_Text(ctx, "Active")
                 end
                 
-                r.ImGui_Spacing(ctx)
-                r.ImGui_Separator(ctx)
-                r.ImGui_TextDisabled(ctx, "Button Text")
-                r.ImGui_Spacing(ctx)
+                SectionHeader(ctx, "Button Text")
                 
                 local is_graphic_button = button.use_icon or button.use_image
                 if button.show_text_with_icon == nil then 
@@ -1858,15 +2166,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 end
                 
                 if not is_graphic_mode then
-                    r.ImGui_Spacing(ctx)
-                    r.ImGui_Separator(ctx)
-                    r.ImGui_TextDisabled(ctx, "Button Border")
-                    r.ImGui_Spacing(ctx)
+                    SectionHeader(ctx, "Button Border")
                     
-                    local col1 = 0
-                    local col2 = 130
-                    local col3 = 270
-                    local col4 = 410
+                    local col1, col2, col3, col4 = EditorColumns(ctx, 0)
                     local ctrl_width = 120
                     
                     r.ImGui_SetCursorPosX(ctx, col1)
@@ -1909,153 +2211,8 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                     end
                 end
         
-        local gname = (custom_buttons.current_edit and custom_buttons.buttons[custom_buttons.current_edit]) and 
-                      custom_buttons.buttons[custom_buttons.current_edit].group or ""
-        if gname == "" then
-            r.ImGui_TextDisabled(ctx, "(This Button is not in a group)")
-        else
-            r.ImGui_Separator(ctx)
-            r.ImGui_TextDisabled(ctx, "Group Settings")
-            local gcount = 0
-            for _, b in ipairs(custom_buttons.buttons) do
-                if b.group and b.group ~= "" and button.group == b.group then
-                    gcount = gcount + 1
-                end
-            end
-            r.ImGui_SameLine(ctx)
-            r.ImGui_TextColored(ctx, 0x00FF88FF, " " .. button.group .. " (" .. gcount .. ")")
-            
-            local all_visible = true
-            for _, b in ipairs(custom_buttons.buttons) do
-                if b.group == gname and not b.visible then all_visible = false break end
-            end
-            
-            local raw_w = (opts and opts.canvas_width) or r.ImGui_GetWindowWidth(ctx)
-            local raw_h = (opts and opts.canvas_height) or r.ImGui_GetWindowHeight(ctx)
-            local canvas_w = clamp(to_int(raw_w, 1), 1)
-            local canvas_h = clamp(to_int(raw_h, 1), 1)
-
-            local function adjust_group(dx, dy)
-                local any_changed = false
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        local _, _, sanitized = sanitize_button_xy(b, canvas_w, canvas_h)
-                        if sanitized then any_changed = true end
-
-                        if dx ~= 0 then
-                            local new_px = clamp(to_int((tonumber(b.position_px) or 0) + dx, 0), 0, canvas_w)
-                            if new_px ~= b.position_px then
-                                b.position_px = new_px
-                                b.position = new_px / math.max(1, canvas_w)
-                                any_changed = true
-                            end
-                        end
-                        if dy ~= 0 then
-                            local new_py = clamp(to_int((tonumber(b.position_y_px) or 0) + dy, 0), -100, canvas_h)
-                            if new_py ~= b.position_y_px then
-                                b.position_y_px = new_py
-                                b.position_y = new_py / math.max(1, canvas_h)
-                                any_changed = true
-                            end
-                        end
-                    end
-                end
-                if any_changed then
-                    custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-                end
-            end
-
-            local rv_hide
-            rv_hide, all_visible = r.ImGui_Checkbox(ctx, "##HideGroup", all_visible)
-            if rv_hide then
-                for _, b in ipairs(custom_buttons.buttons) do 
-                    if b.group == gname then b.visible = all_visible end 
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            r.ImGui_SameLine(ctx)
-            r.ImGui_Text(ctx, "Visible")
-            
-            r.ImGui_SameLine(ctx, 0, 20)
-            if r.ImGui_Button(ctx, "←##grpMoveLeft") then
-                adjust_group(-1, 0)
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel left") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "→##grpMoveRight") then
-                adjust_group(1, 0)
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel right") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "↑##grpMoveUp") then
-                adjust_group(0, -1)
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel up") end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "↓##grpMoveDown") then
-                adjust_group(0, 1)
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Move entire group 1 pixel down") end
-            
-            r.ImGui_SameLine(ctx, 0, 20)
-            if r.ImGui_Button(ctx, "Align Y") then
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        b.position_y = button.position_y
-                        b.position_y_px = button.position_y_px
-                        sanitize_button_xy(b, canvas_w, canvas_h)
-                    end
-                end
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Set all buttons in this group to the same Y position") end
-            
-            r.ImGui_SameLine(ctx, 0, 20)
-            if r.ImGui_Button(ctx, "Auto Align X") then
-                -- Collect all buttons in this group
-                local group_buttons = {}
-                for _, b in ipairs(custom_buttons.buttons) do
-                    if b.group == gname then
-                        table.insert(group_buttons, b)
-                    end
-                end
-                
-                -- Sort by current X position
-                table.sort(group_buttons, function(a, b)
-                    return (a.position_px or 0) < (b.position_px or 0)
-                end)
-                
-                -- Auto-align with user-defined spacing
-                local current_x = group_buttons[1] and group_buttons[1].position_px or 0
-                
-                for _, b in ipairs(group_buttons) do
-                    b.position_px = current_x
-                    b.position = current_x / math.max(1, canvas_w)
-                    sanitize_button_xy(b, canvas_w, canvas_h)
-                    
-                    -- Calculate actual button width (includes icon, text, padding)
-                    local button_width = CalculateButtonWidth(ctx, b)
-                    current_x = current_x + button_width + auto_align_spacing
-                end
-                
-                custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Auto-align buttons horizontally with custom spacing\n(calculates actual width including text and icons)") end
-            
-            r.ImGui_SameLine(ctx, 0, 20)
-            r.ImGui_SetNextItemWidth(ctx, 40)
-            local rv, new_spacing = r.ImGui_InputDouble(ctx, "px##alignSpacing", auto_align_spacing, 0, 0, "%.0f")
-            if rv then
-                auto_align_spacing = clamp(to_int(new_spacing, 3), 0, 50)
-                SaveAutoAlignSpacing()
-            end
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Spacing between buttons for Auto Align X (0-50 pixels)") end
-        end
         
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Separator(ctx)
-        r.ImGui_TextDisabled(ctx, "Copy Style")
-        r.ImGui_Spacing(ctx)
+        SectionHeader(ctx, "Copy Style")
         
         local has_sel = custom_buttons.current_edit ~= nil
         
@@ -2102,34 +2259,6 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         end
         if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
         
-        local button = custom_buttons.buttons[custom_buttons.current_edit]
-        if button and button.group and button.group ~= "" then
-            r.ImGui_SameLine(ctx)
-            local can_paste_group = style_clipboard.has_data
-            if r.ImGui_BeginDisabled then r.ImGui_BeginDisabled(ctx, not can_paste_group) end
-            if style_clipboard.has_data then
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00AA44FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x10BB55FF)
-                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x20CC66FF)
-            end
-            if r.ImGui_Button(ctx, "Paste Style to Group", 150, 0) and can_paste_group then
-                if PasteStyleToGroup(button, custom_buttons) then
-                    custom_buttons.SaveCurrentButtons()
-                    has_unsaved_changes = true
-                end
-            end
-            if style_clipboard.has_data then
-                r.ImGui_PopStyleColor(ctx, 3)
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                if style_clipboard.has_data then
-                    r.ImGui_SetTooltip(ctx, "Paste the copied style to all buttons in group '" .. button.group .. "'\n(excluding position and alignment)")
-                else
-                    r.ImGui_SetTooltip(ctx, "No style copied yet. Use 'Copy Style' button first.")
-                end
-            end
-            if r.ImGui_EndDisabled then r.ImGui_EndDisabled(ctx) end
-        end
         
         -- "Copy style from button" dropdown for quick style copying
         if has_sel and #custom_buttons.buttons > 1 then
@@ -2223,7 +2352,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
         end
         
         if cb_section_states.actions_open then
-            r.ImGui_Text(ctx, "Left Click:")
+            SectionHeader(ctx, "Left Click")
 
        
             r.ImGui_Text(ctx, "Name")
@@ -2560,11 +2689,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
 
             if changed then custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true end
 
-            r.ImGui_Separator(ctx)
-            
-            r.ImGui_Text(ctx, "Right Click Menu:")
-            r.ImGui_SameLine(ctx)
-            r.ImGui_TextDisabled(ctx, "Drag items into folders to create submenus")
+            SectionHeader(ctx, "Right Click Menu", "Drag items into folders to create submenus")
             button.right_menu = button.right_menu or {}
             button.right_menu.items = button.right_menu.items or {}
             
@@ -2871,8 +2996,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_SetTooltip(ctx, "Remember the state of toggle buttons in this preset\n(Per-preset setting - each button preset can have its own behavior)")
         end
         
-        r.ImGui_Separator(ctx)
-        r.ImGui_Text(ctx, "Group Visibility Control:")
+        SectionHeader(ctx, "Group Visibility Control")
         
         if not button.is_group_visibility_toggle then
             button.is_group_visibility_toggle = false
@@ -3150,9 +3274,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             end
         end
         
-        r.ImGui_Separator(ctx)
-        
-        r.ImGui_Text(ctx, "Toggle State Visualization:")
+        SectionHeader(ctx, "Toggle State Visualization")
         
         if not button.show_toggle_state then
             button.show_toggle_state = false
@@ -3176,10 +3298,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             local is_icon_or_image = button.use_icon or button.use_image
             local has_image_tinting = is_icon_or_image and button.use_image_tinting and not button.use_shape
             
-            local col1 = 20
-            local col2 = 150
-            local col3 = 260
-            local col4 = 390
+            local col1, col2, col3, col4 = EditorColumns(ctx, 20)
             
             r.ImGui_SetCursorPosX(ctx, col1)
             r.ImGui_Text(ctx, "Toggle ON Color:")

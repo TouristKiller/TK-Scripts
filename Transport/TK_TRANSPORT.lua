@@ -1,8 +1,23 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.5
+-- @version 2.0.6
 -- @changelog
 --[[
+    v2.0.6:
+    + Changed: Copy Style now also copies height, icon/image (incl. custom image path), image tinting (incl. Tint ON/OFF), Invisible BG, text position, toggle ON/OFF colors and the System Fonts setting
+    + Fixed: Paste Style did not reset values that were at their default on the source button - for example a custom tint on the target button stayed after pasting
+    + Changed: "New button - Copy style from last button" now copies the same appearance settings as Copy Style
+    + Changed: Copy Style Settings window redesigned - two columns grouped like the button editor, a checkbox per group, quick All / None / Colors only / Layout only buttons and a count of selected properties
+    + Added: Confirmation before deleting a transport preset or button preset and before Reset Defaults, so a misclick no longer throws work away
+    + Changed: Settings list split into General and Components; each component shows a dot for its visibility that you can click to show or hide it
+    + Changed: Transport and button preset bars now share one layout and color scheme; the new-name field shows a hint and Resave is highlighted while there are unsaved changes
+    + Changed: All settings sections use one heading style
+    + Changed: "(Toggle active ...)" notes in the button Properties now link straight to the Toggle view
+    + Changed: Button editor columns scale with the available width instead of fixed pixel positions
+    + Changed: Group settings moved to a fixed group bar below the button settings, visible in Properties, Actions and Toggle; Paste Style to Group moved there as well
+    + Fixed: With current ReaImGui versions, TK Transport's own window could be mistaken for REAPER's native transport when positioning relative to the REAPER transport or TCP
+    + Removed: Debug console output when creating a preset-load action, and outdated help text in the Buttons tab
+
     v2.0.5:
     + Fixed: Monitor Volume did not reflect or control the actual master hardware output volume - it now reads/writes the master output 1 send volume directly instead of nudging via SWS actions and tracking a cached value that drifted out of sync
     + Fixed: Right-click reset on Monitor Volume only reset the display, not the real output volume
@@ -232,7 +247,7 @@ local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
 
-local script_version = "2.0.3"
+local script_version = "2.0.6"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -1215,8 +1230,9 @@ local function GetReaperTransportPosition()
  for addr in list:gmatch("[^,]+") do
   local hwnd = reaper.JS_Window_HandleFromAddress(tonumber(addr))
   if hwnd then
-   local class = reaper.JS_Window_GetClassName(hwnd)
-   if class == "ImGuiWindow" then
+   -- Current ReaImGui uses "reaper_imgui_context"; older builds used "ImGuiWindow"
+   local class = reaper.JS_Window_GetClassName(hwnd) or ""
+   if class == "ImGuiWindow" or class:match("^reaper_imgui") then
     local title = reaper.JS_Window_GetTitle(hwnd)
     if title and title:match("^Transport") then
      script_windows[hwnd] = true
@@ -1270,8 +1286,9 @@ local function GetReaperTCPPosition()
  for addr in list:gmatch("[^,]+") do
   local hwnd = reaper.JS_Window_HandleFromAddress(tonumber(addr))
   if hwnd then
-   local class = reaper.JS_Window_GetClassName(hwnd)
-   if class == "ImGuiWindow" then
+   -- Current ReaImGui uses "reaper_imgui_context"; older builds used "ImGuiWindow"
+   local class = reaper.JS_Window_GetClassName(hwnd) or ""
+   if class == "ImGuiWindow" or class:match("^reaper_imgui") then
     local title = reaper.JS_Window_GetTitle(hwnd)
     if title and title:match("^Transport") then
      script_windows[hwnd] = true
@@ -1454,36 +1471,62 @@ local group_name_input = ""
 local show_button_import_inline = false 
 
 local transport_components = {
- { id = "transport_buttons", name = "Transport" },
- { id = "color_picker", name = "Color Picker" },
- { id = "master_volume", name = "Master Volume" },
- { id = "monitor_volume", name = "Monitor Volume" },
- { id = "envelope", name = "Envelope" },
- { id = "tempo_bpm", name = "Tempo (BPM)" },
- { id = "time_signature", name = "Time Signature" },
- { id = "time_selection", name = "Time Selection" },
- { id = "time_display", name = "Time Display" },
- { id = "battery_status", name = "Battery Status" },
- { id = "cursor_position", name = "Cursor Position" },
- { id = "wave_scrubber", name = "Wave Scrubber" },
- { id = "shuttle_wheel", name = "Shuttle Wheel" },
- { id = "visual_metronome", name = "Visual Metronome" },
- { id = "taptempo", name = "TapTempo" },
- { id = "playrate", name = "Playrate" },
- { id = "matrix_ticker", name = "Matrix Ticker" },
- { id = "quick_fx", name = "Quick FX" },
- { id = "window_set_picker", name = "Window Set Picker" },
+ { id = "transport_buttons", name = "Transport", visibility_key = "show_transport" },
+ { id = "color_picker", name = "Color Picker", visibility_key = "show_color_picker" },
+ { id = "master_volume", name = "Master Volume", visibility_key = "show_master_volume" },
+ { id = "monitor_volume", name = "Monitor Volume", visibility_key = "show_monitor_volume" },
+ { id = "envelope", name = "Envelope", visibility_key = "show_env_button" },
+ { id = "tempo_bpm", name = "Tempo (BPM)", visibility_key = "show_tempo" },
+ { id = "time_signature", name = "Time Signature", visibility_key = "show_timesig" },
+ { id = "time_selection", name = "Time Selection", visibility_key = "show_timesel" },
+ { id = "time_display", name = "Time Display", visibility_key = "show_local_time" },
+ { id = "battery_status", name = "Battery Status", visibility_key = "show_battery_status" },
+ { id = "cursor_position", name = "Cursor Position", visibility_key = "show_cursorpos" },
+ { id = "wave_scrubber", name = "Wave Scrubber", visibility_key = "show_waveform_scrubber" },
+ { id = "shuttle_wheel", name = "Shuttle Wheel", visibility_key = "show_shuttle_wheel" },
+ { id = "visual_metronome", name = "Visual Metronome", visibility_key = "show_visual_metronome" },
+ { id = "taptempo", name = "TapTempo", visibility_key = "show_taptempo" },
+ { id = "playrate", name = "Playrate", visibility_key = "show_playrate" },
+ { id = "matrix_ticker", name = "Matrix Ticker", visibility_key = "show_matrix_ticker" },
+ { id = "quick_fx", name = "Quick FX", visibility_key = "show_quick_fx" },
+ { id = "window_set_picker", name = "Window Set Picker", visibility_key = "show_window_set_picker" },
  { id = "h_line", name = "H-Line (Horizontal)" },
  { id = "v_line", name = "V-Line (Vertical)" }
 }
 
 function ShowComponentList(ctx)
+ local dot_w = 14
+ local line_h = r.ImGui_GetTextLineHeight(ctx)
+ local draw_list = r.ImGui_GetWindowDrawList(ctx)
  for _, component in ipairs(transport_components) do
  local is_selected = (selected_transport_component == component.id)
+
+ -- Visibility dot: green = shown, grey ring = hidden; click to toggle
+ local key = component.visibility_key
+ local x, y = r.ImGui_GetCursorScreenPos(ctx)
+ if key then
+ if r.ImGui_InvisibleButton(ctx, "##vis_" .. component.id, dot_w, line_h) then
+ settings[key] = not settings[key]
+ MarkTransportPresetChanged()
+ end
+ local cx, cy = x + dot_w * 0.5, y + line_h * 0.5
+ if settings[key] then
+ r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, 4, 0x4CC24CFF)
+ else
+ r.ImGui_DrawList_AddCircle(draw_list, cx, cy, 4, 0x777777FF, 0, 1.5)
+ end
+ if r.ImGui_IsItemHovered(ctx) then
+ r.ImGui_SetTooltip(ctx, settings[key] and "Visible - click to hide" or "Hidden - click to show")
+ end
+ else
+ r.ImGui_Dummy(ctx, dot_w, line_h)
+ end
+ r.ImGui_SameLine(ctx, 0, 4)
+
  if r.ImGui_Selectable(ctx, component.name, is_selected) then
  selected_transport_component = component.id
  end
- 
+
  if is_selected then
  r.ImGui_SetItemDefaultFocus(ctx)
  end
@@ -1506,8 +1549,7 @@ function ShowComponentSettings(ctx, main_window_width, main_window_height)
  return
  end
  
- r.ImGui_Text(ctx, "Settings for: " .. component.name)
- r.ImGui_Separator(ctx)
+ ButtonEditor.SectionHeader(ctx, component.name)
  
  local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)
  if r.ImGui_BeginChild(ctx, "ComponentSettingsScroll", avail_w, avail_h, r.ImGui_ChildFlags_None()) then
@@ -6750,7 +6792,7 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), 0x1E1E1EFF)
  
  local settings_window_height = 720 
- r.ImGui_SetNextWindowSize(ctx, settings.settings_window_width or 780, settings_window_height)
+ r.ImGui_SetNextWindowSize(ctx, 680, settings_window_height)
  local settings_visible, settings_open = r.ImGui_Begin(ctx, 'Transport Settings', true, settings_flags)
  if settings_visible then
  r.ImGui_PushFont(ctx, settings_ui_font, SETTINGS_UI_FONT_SIZE)
@@ -6786,29 +6828,6 @@ function ShowSettings(main_window_width , main_window_height)
  settings_open = false
  end
  r.ImGui_PopStyleColor(ctx, 3)
-
- do
- local labels = {
- "Global",
- "Transport",
- "Scaling",
- "Buttons",
- }
- local total = 0
- local per_tab_padding = 28 
- for i = 1, #labels do
- local tw = select(1, r.ImGui_CalcTextSize(ctx, labels[i]))
- total = total + tw + per_tab_padding
- end
- local side_margins = 24 
- local target_w = math.floor(total + side_margins)
- local min_w, max_w = 680, 1100
- target_w = math.max(min_w, math.min(max_w, target_w))
- if settings.settings_window_width ~= target_w then
- settings.settings_window_width = target_w
- r.ImGui_SetNextWindowSize(ctx, target_w, -1)
- end
- end
 
  local SETTINGS_TAB_HEIGHT = -30 
 
@@ -6857,31 +6876,23 @@ function ShowSettings(main_window_width , main_window_height)
  r.ImGui_TableNextRow(ctx)
  
  r.ImGui_TableSetColumnIndex(ctx, 0)
- r.ImGui_Text(ctx, "Components:")
- r.ImGui_Separator(ctx)
- 
- if r.ImGui_Selectable(ctx, "Base Style", selected_transport_component == "base_style") then
- selected_transport_component = "base_style"
+ ButtonEditor.SectionHeader(ctx, "General")
+
+ for _, item in ipairs({
+  { "base_style", "Base Style" },
+  { "scaling", "Scaling" },
+  { "alignment_guides", "Alignment Guides" },
+  { "quick_toggle", "Quick Toggle" },
+  { "z_order", "Z-Order (Layer)" },
+ }) do
+  if r.ImGui_Selectable(ctx, item[2], selected_transport_component == item[1]) then
+   selected_transport_component = item[1]
+  end
  end
- 
- if r.ImGui_Selectable(ctx, "Scaling", selected_transport_component == "scaling") then
- selected_transport_component = "scaling"
- end
- 
- if r.ImGui_Selectable(ctx, "Alignment Guides", selected_transport_component == "alignment_guides") then
- selected_transport_component = "alignment_guides"
- end
- 
- if r.ImGui_Selectable(ctx, "Quick Toggle", selected_transport_component == "quick_toggle") then
- selected_transport_component = "quick_toggle"
- end
- 
- if r.ImGui_Selectable(ctx, "Z-Order (Layer)", selected_transport_component == "z_order") then
- selected_transport_component = "z_order"
- end
- 
- r.ImGui_Separator(ctx)
- 
+
+ r.ImGui_Spacing(ctx)
+ ButtonEditor.SectionHeader(ctx, "Components")
+
  if r.ImGui_BeginChild(ctx, "ComponentList", 0, SETTINGS_TAB_HEIGHT) then
  ShowComponentList(ctx)
  r.ImGui_EndChild(ctx)
@@ -6893,8 +6904,7 @@ function ShowSettings(main_window_width , main_window_height)
  if selected_transport_component == "base_style" then
  local rv
  
- r.ImGui_Text(ctx, "Settings for: Base Style")
- r.ImGui_Separator(ctx)
+ ButtonEditor.SectionHeader(ctx, "Base Style")
  
  if r.ImGui_BeginTable(ctx, "TransportBaseStyle", 3, r.ImGui_TableFlags_SizingStretchSame()) then
  r.ImGui_TableNextRow(ctx)
@@ -7214,8 +7224,7 @@ function ShowSettings(main_window_width , main_window_height)
  elseif selected_transport_component == "scaling" then
  local rv
  
- r.ImGui_Text(ctx, "Settings for: Scaling")
- r.ImGui_Separator(ctx)
+ ButtonEditor.SectionHeader(ctx, "Scaling")
  
  local changed_scaling = false
  local rvb
@@ -7454,8 +7463,7 @@ function ShowSettings(main_window_width , main_window_height)
  elseif selected_transport_component == "alignment_guides" then
  local rv
  
- r.ImGui_Text(ctx, "Settings for: Alignment Guides")
- r.ImGui_Separator(ctx)
+ ButtonEditor.SectionHeader(ctx, "Alignment Guides")
  r.ImGui_Spacing(ctx)
  
  rv, settings.show_alignment_guides = r.ImGui_Checkbox(ctx, "Show Alignment Guides", settings.show_alignment_guides or false)
@@ -8010,7 +8018,7 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  r.ImGui_TableSetColumnIndex(ctx, 1)
  
  if show_button_import_inline then
- r.ImGui_Text(ctx, "Import Buttons from Other Presets")
+ ButtonEditor.HeaderText(ctx, "Import Buttons from Other Presets")
  elseif selected_button_component:match("^button_") then
  local button_index = tonumber(selected_button_component:sub(8))
  if CustomButtons and CustomButtons.buttons and CustomButtons.buttons[button_index] then
@@ -8023,7 +8031,7 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  local margin = 10
  local buttons_start_x = window_width - margin - total_btns_width
  
- r.ImGui_Text(ctx, button.name or ("Button " .. button_index))
+ ButtonEditor.HeaderText(ctx, button.name or ("Button " .. button_index))
  
  r.ImGui_SameLine(ctx)
  r.ImGui_SetCursorPosX(ctx, buttons_start_x)
@@ -8091,7 +8099,12 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  end
  r.ImGui_Separator(ctx)
  
- if r.ImGui_BeginChild(ctx, "ButtonSettings", 0, SETTINGS_TAB_HEIGHT) then
+ local show_group_bar = not show_button_import_inline
+  and selected_button_component:match("^button_")
+  and CustomButtons and CustomButtons.buttons
+  and CustomButtons.buttons[tonumber(selected_button_component:sub(8))] ~= nil
+ local group_bar_h = show_group_bar and ButtonEditor.GroupBarHeight(ctx) or 0
+ if r.ImGui_BeginChild(ctx, "ButtonSettings", 0, SETTINGS_TAB_HEIGHT - group_bar_h) then
  if show_button_import_inline then
  ButtonEditor.ShowImportInline(ctx, CustomButtons)
  elseif selected_button_component:match("^button_") then
@@ -8111,15 +8124,23 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  end
  
  else
- r.ImGui_Text(ctx, "Select a category or button from the left panel")
+ r.ImGui_Text(ctx, "Select a button in the list on the left to edit it")
  r.ImGui_Separator(ctx)
- r.ImGui_TextWrapped(ctx, "? Global Settings: Configure global button offset")
- r.ImGui_TextWrapped(ctx, "? Presets: Manage button presets") 
- r.ImGui_TextWrapped(ctx, "? Individual Buttons: Configure specific button properties")
+ r.ImGui_TextWrapped(ctx, "- Use the button icon next to 'Buttons' to add a new button (right-click for options)")
+ r.ImGui_TextWrapped(ctx, "- Use the folder icon to create a new group")
+ r.ImGui_TextWrapped(ctx, "- Button presets are managed in the bar at the bottom")
  end
  r.ImGui_EndChild(ctx)
  end
- 
+
+ if show_group_bar then
+  r.ImGui_Separator(ctx)
+  ButtonEditor.ShowGroupBar(ctx, CustomButtons, {
+   canvas_width = main_window_width,
+   canvas_height = main_window_height
+  })
+ end
+
  r.ImGui_EndTable(ctx)
  end
  
@@ -8128,10 +8149,7 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  
 
  if settings_active_top_tab == 3 then
- r.ImGui_Text(ctx, "Tab Configuration")
- r.ImGui_TextDisabled(ctx, "Tabs are global and not tied to any preset")
- r.ImGui_Separator(ctx)
- r.ImGui_Spacing(ctx)
+ ButtonEditor.SectionHeader(ctx, "Tab Configuration", "Tabs are global and not tied to any preset")
  
  local rv
  rv, settings.show_tabs = r.ImGui_Checkbox(ctx, "Show Tab Bar", settings.show_tabs or false)
@@ -8428,17 +8446,13 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  r.ImGui_Separator(ctx)
  
  if transport_tab_active then
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x32CD32FF) 
- r.ImGui_Text(ctx, "Presets:")
- r.ImGui_PopStyleColor(ctx)
- r.ImGui_SameLine(ctx)
+ ButtonEditor.PresetBarLabel(ctx, "Transport preset:")
  do
- local reset_btn_width = 100 
- local right_margin = reset_btn_width + 10 
- local avail_w1 = select(1, r.ImGui_GetContentRegionAvail(ctx)) - right_margin
- r.ImGui_SetNextItemWidth(ctx, math.max(140, math.floor(avail_w1 * 0.30))) 
+ local bar = ButtonEditor.PRESET_BAR
+ local avail_w1 = select(1, r.ImGui_GetContentRegionAvail(ctx))
+ r.ImGui_SetNextItemWidth(ctx, math.max(120, math.floor(avail_w1 * bar.combo_fraction)))
  local presets = GetPresetList()
- local display_name = preset_name and preset_name ~= "" and preset_name or "preset_name"
+ local display_name = preset_name and preset_name ~= "" and preset_name or bar.placeholder
  if not preset_input_name then preset_input_name = "" end
  if r.ImGui_BeginCombo(ctx, "##PresetCombo", display_name) then
  for _, preset in ipairs(presets) do
@@ -8456,35 +8470,25 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  end
 
  r.ImGui_SameLine(ctx)
- local had_unsaved = transport_preset_has_unsaved_changes
- if had_unsaved then
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x4040FFFF) 
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x4040CCFF) 
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x4040AAFF) 
- end
- if r.ImGui_Button(ctx, "Resave") and preset_name then
+ if ButtonEditor.PresetBarResave(ctx, transport_preset_has_unsaved_changes) and preset_name then
  SavePreset(preset_name)
  transport_preset_has_unsaved_changes = false
- end
- if had_unsaved then
- r.ImGui_PopStyleColor(ctx, 3)
  end
 
  r.ImGui_SameLine(ctx)
  if r.ImGui_Button(ctx, "Delete") and preset_name then
+ local answer = r.ShowMessageBox("Delete transport preset '" .. preset_name .. "'?\n\nThis action cannot be undone.", "Delete Preset", 4)
+ if answer == 6 then
  local preset_path = CreatePresetsFolder()
  os.remove(preset_path .. "/" .. preset_name .. ".json")
  preset_name = nil
  end
+ end
 
  r.ImGui_SameLine(ctx)
- local avail_w2 = select(1, r.ImGui_GetContentRegionAvail(ctx)) - right_margin
- local save_tw = select(1, r.ImGui_CalcTextSize(ctx, "Save New"))
- local save_btn_w = save_tw + 18
- local input_w = math.max(80, math.floor(avail_w2 - save_btn_w - 10))
- r.ImGui_SetNextItemWidth(ctx, input_w)
+ r.ImGui_SetNextItemWidth(ctx, ButtonEditor.PresetBarInputWidth(ctx, { "Reset Defaults" }))
  local rv
- rv, preset_input_name = r.ImGui_InputText(ctx, "##NewPreset", preset_input_name)
+ rv, preset_input_name = r.ImGui_InputTextWithHint(ctx, "##NewPreset", bar.new_name_hint, preset_input_name)
  r.ImGui_SameLine(ctx)
  if r.ImGui_Button(ctx, "Save New") and preset_input_name ~= "" then
  preset_name = preset_input_name
@@ -8496,15 +8500,15 @@ if r.ImGui_SmallButton(ctx, "🔘") then
  end
 
  r.ImGui_SameLine(ctx)
- if r.ImGui_Button(ctx, "Reset Defaults", reset_btn_width, 0) then
+ if r.ImGui_Button(ctx, "Reset Defaults") then
+ local answer = r.ShowMessageBox("Reset all transport settings to their defaults?\n\nYour current settings are overwritten. Saved presets are kept.", "Reset Defaults", 4)
+ if answer == 6 then
  ResetSettings()
  end
  end
+ end
  elseif buttons_tab_active then
- r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF7F50FF) 
- r.ImGui_Text(ctx, "Button Presets:")
- r.ImGui_PopStyleColor(ctx)
- r.ImGui_SameLine(ctx)
+ ButtonEditor.PresetBarLabel(ctx, "Button preset:")
  ButtonEditor.ShowPresetsInline(ctx, CustomButtons, { small_font = settings_ui_font_small, small_font_size = SETTINGS_UI_FONT_SMALL_SIZE })
  end
  

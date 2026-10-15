@@ -88,6 +88,15 @@ function CustomButtons.CreateNewButton(options)
         new_button.use_icon = source_button.use_icon
         new_button.icon_name = source_button.icon_name
         new_button.show_text_with_icon = source_button.show_text_with_icon
+        for _, key in ipairs({
+            "height", "use_image", "image_path", "is_single_state_icon",
+            "use_image_tinting", "image_tint_normal", "image_tint_hover", "image_tint_pressed",
+            "image_tint_on", "image_tint_off", "invisible_bg", "vertical_text", "text_position",
+            "text_color_on", "text_color_off", "toggle_on_color", "toggle_off_color",
+            "use_system_fonts", "use_shape", "shape_type", "show_shape_border", "image_only",
+        }) do
+            new_button[key] = source_button[key]
+        end
     end
     
     local position_source = nil
