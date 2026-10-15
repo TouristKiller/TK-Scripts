@@ -1,8 +1,14 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.6
+-- @version 2.0.7
 -- @changelog
 --[[
+    v2.0.7:
+    + Added: Decorative / Image Only buttons have a "Behind Transport" option that draws them behind the transport elements, so they can be used as backgrounds and frames
+    + Added: New "Background Buttons" layer in Z-Order (Layer), below Transport by default, to set how deep those buttons sit
+    + Changed: Decorative / Image Only buttons can now be as wide and tall as the transport window instead of being limited to 400 px; regular buttons keep the 400 px limit
+    + Changed: Copy Style and "Copy style from last button" also copy the "Behind Transport" option
+
     v2.0.6:
     + Changed: Copy Style now also copies height, icon/image (incl. custom image path), image tinting (incl. Tint ON/OFF), Invisible BG, text position, toggle ON/OFF colors and the System Fonts setting
     + Fixed: Paste Style did not reset values that were at their default on the source button - for example a custom tint on the target button stayed after pasting
@@ -247,7 +253,7 @@ local r = reaper
 local ctx = r.ImGui_CreateContext('Transport Control')
 
 
-local script_version = "2.0.6"
+local script_version = "2.0.7"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -1109,6 +1115,7 @@ local default_settings = {
  v_line_next_id = 1,
 
  -- Z-Order settings (higher = rendered on top)
+ z_order_background_buttons = 5,
  z_order_transport = 10,
  z_order_master_volume = 11,
  z_order_monitor_volume = 12,
@@ -4456,6 +4463,7 @@ function ShowZOrderSettings(ctx, main_window_width, main_window_height)
  r.ImGui_Spacing(ctx)
  
  local z_order_items = {
+  { key = "z_order_background_buttons", name = "Background Buttons", default = 5 },
   { key = "z_order_transport", name = "Transport", default = 10 },
   { key = "z_order_master_volume", name = "Master Volume", default = 11 },
   { key = "z_order_monitor_volume", name = "Monitor Volume", default = 12 },
@@ -13678,7 +13686,10 @@ function Main()
   { z_order = settings.z_order_matrix_ticker or 26, render = function() ShowMatrixTicker(main_window_width, main_window_height) end },
   { z_order = settings.z_order_quick_fx or 27, render = function() ShowQuickFX(main_window_width, main_window_height) end },
   { z_order = settings.z_order_color_picker or 28, render = function() ShowColorPicker(main_window_width, main_window_height) end },
-  { z_order = settings.z_order_custom_buttons or 50, render = function() 
+  { z_order = settings.z_order_background_buttons or 5, render = function()
+   ButtonRenderer.RenderButtons(ctx, CustomButtons, settings, "background")
+  end },
+  { z_order = settings.z_order_custom_buttons or 50, render = function()
    ButtonRenderer.RenderButtons(ctx, CustomButtons, settings)
    CustomButtons.CheckForCommandPick()
   end },

@@ -216,6 +216,21 @@ local function ToggleViewLink(ctx, what)
     r.ImGui_TextDisabled(ctx, ")")
 end
 
+-- Opt-in for decorative buttons: draw them in the Background Buttons layer
+local function DrawBehindCheckbox(ctx, button, custom_buttons, col)
+    if not button.image_only then return end
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetCursorPosX(ctx, col)
+    local rv_db
+    rv_db, button.draw_behind = r.ImGui_Checkbox(ctx, "Behind Transport", button.draw_behind or false)
+    if rv_db then
+        custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Draw this decorative button behind the transport elements.\nMove the 'Background Buttons' layer in Settings > General > Z-Order (Layer) to change its depth.")
+    end
+end
+
 local import_window = {
     open = false,
     ctx = nil,
@@ -848,7 +863,7 @@ local function CopyButtonStyle(button)
     if settings.rounding then take("rounding") end
     if settings.border_thickness then take("border_thickness") end
     if settings.shape then
-        take("use_shape", "shape_type", "show_shape_border", "image_only")
+        take("use_shape", "shape_type", "show_shape_border", "image_only", "draw_behind")
     end
 
     style_clipboard.has_data = true
@@ -1441,7 +1456,11 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             if canvas_width <= 0 then canvas_width = 1 end
             if canvas_height <= 0 then canvas_height = 1 end
 
-            local sanitized_width = clamp(to_int(button.width, 60), 12, 400)
+            -- Regular buttons stay at 400 px max; decorative ones may span the whole transport
+            local max_btn_w = button.image_only and math.max(400, canvas_width) or 400
+            local max_btn_h = button.image_only and math.max(400, canvas_height) or 400
+
+            local sanitized_width = clamp(to_int(button.width, 60), 12, max_btn_w)
             if sanitized_width ~= button.width then
                 button.width = sanitized_width
                 changed = true
@@ -1503,9 +1522,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             local old_width = button.width or 60
             local old_height = button.height or old_width
             r.ImGui_SetNextItemWidth(ctx, 140)
-            local rvw; rvw, button.width = r.ImGui_SliderInt(ctx, "##btnWidth_inline", button.width, 12, 400)
+            local rvw; rvw, button.width = r.ImGui_SliderInt(ctx, "##btnWidth_inline", button.width, 12, max_btn_w)
             if rvw then
-                local new_width = clamp(to_int(button.width, 60), 12, 400)
+                local new_width = clamp(to_int(button.width, 60), 12, max_btn_w)
                 local delta_w = new_width - old_width
                 local half_delta = math.floor(delta_w * 0.5)
                 
@@ -1537,7 +1556,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_SameLine(ctx)
             
             if r.ImGui_Button(ctx, "-##btnWidthMinus", 20, 0) then
-                local new_width = clamp(to_int(button.width, 60) - 1, 12, 400)
+                local new_width = clamp(to_int(button.width, 60) - 1, 12, max_btn_w)
                 local delta_w = new_width - (button.width or 60)
                 local half_delta = math.floor(delta_w * 0.5)
                 
@@ -1560,7 +1579,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
             r.ImGui_SameLine(ctx)
             
             if r.ImGui_Button(ctx, "+##btnWidthPlus", 20, 0) then
-                local new_width = clamp(to_int(button.width, 60) + 1, 12, 400)
+                local new_width = clamp(to_int(button.width, 60) + 1, 12, max_btn_w)
                 local delta_w = new_width - (button.width or 60)
                 local half_delta = math.floor(delta_w * 0.5)
                 
@@ -1587,9 +1606,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 local old_height = button.height or 0
                 if not button.height then button.height = 0 end
                 r.ImGui_SetNextItemWidth(ctx, 145)
-                local rvh; rvh, button.height = r.ImGui_SliderInt(ctx, "##btnHeight_inline", button.height, 0, 400, button.height == 0 and "Auto" or "%d")
+                local rvh; rvh, button.height = r.ImGui_SliderInt(ctx, "##btnHeight_inline", button.height, 0, max_btn_h, button.height == 0 and "Auto" or "%d")
                 if rvh then
-                    local new_height = clamp(to_int(button.height, 0), 0, 400)
+                    local new_height = clamp(to_int(button.height, 0), 0, max_btn_h)
                     if old_height > 0 and new_height > 0 then
                         local delta_h = new_height - old_height
                         button.position_y_px = clamp(to_int(button.position_y_px - delta_h * 0.5, 0), -100, canvas_height)
@@ -1601,7 +1620,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 
                 if r.ImGui_Button(ctx, "-##btnHeightMinus", 20, 0) then
                     local current_h = button.height or 0
-                    local new_height = clamp(current_h - 1, 0, 400)
+                    local new_height = clamp(current_h - 1, 0, max_btn_h)
                     if current_h > 0 and new_height > 0 then
                         local delta_h = new_height - current_h
                         button.position_y_px = clamp(to_int(button.position_y_px - delta_h * 0.5, 0), -100, canvas_height)
@@ -1613,7 +1632,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                 
                 if r.ImGui_Button(ctx, "+##btnHeightPlus", 20, 0) then
                     local current_h = button.height or 0
-                    local new_height = clamp(current_h + 1, 0, 400)
+                    local new_height = clamp(current_h + 1, 0, max_btn_h)
                     if current_h > 0 and new_height > 0 then
                         local delta_h = new_height - current_h
                         button.position_y_px = clamp(to_int(button.position_y_px - delta_h * 0.5, 0), -100, canvas_height)
@@ -1755,6 +1774,7 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         if rv_ct then
                             custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
                         end
+                        DrawBehindCheckbox(ctx, button, custom_buttons, col3)
                     else
                         r.ImGui_SameLine(ctx)
                         r.ImGui_SetCursorPosX(ctx, col2)
@@ -1771,8 +1791,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         if rv_ct then
                             custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
                         end
+                        DrawBehindCheckbox(ctx, button, custom_buttons, col4)
                     end
-                    
+
                     local show_state_text = not button.image_only or button.use_shape
                     if show_state_text then
                         r.ImGui_SetCursorPosX(ctx, col1)
@@ -1832,8 +1853,9 @@ function ButtonEditor.ShowEditorInline(ctx, custom_buttons, settings, opts)
                         if rv_ct then
                             custom_buttons.SaveCurrentButtons(); has_unsaved_changes = true
                         end
+                        DrawBehindCheckbox(ctx, button, custom_buttons, col4)
                     end
-                    
+
                     if button.image_only or button.use_shape then
                         r.ImGui_SetCursorPosX(ctx, col1)
                         r.ImGui_Text(ctx, "Shape Type:")

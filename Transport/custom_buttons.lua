@@ -93,7 +93,7 @@ function CustomButtons.CreateNewButton(options)
             "use_image_tinting", "image_tint_normal", "image_tint_hover", "image_tint_pressed",
             "image_tint_on", "image_tint_off", "invisible_bg", "vertical_text", "text_position",
             "text_color_on", "text_color_off", "toggle_on_color", "toggle_off_color",
-            "use_system_fonts", "use_shape", "shape_type", "show_shape_border", "image_only",
+            "use_system_fonts", "use_shape", "shape_type", "show_shape_border", "image_only", "draw_behind",
         }) do
             new_button[key] = source_button[key]
         end

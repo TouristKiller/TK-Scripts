@@ -425,15 +425,22 @@ end
 
 local ExecuteMenuItem, BuildMenuTree, SortedKeys, RenderMenuTree
 
-function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
+-- Decorative buttons that opted in to sit behind the transport elements
+function ButtonRenderer.IsBackgroundButton(button)
+    return button.image_only and button.draw_behind or false
+end
+
+-- layer "background" draws only background buttons; any other value draws the rest
+function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings, layer)
     r.ImGui_SetScrollY(ctx, 0)
-    
+    local background_pass = (layer == "background")
+
     local edit_mode = settings and settings.edit_mode
     local snap = settings and settings.edit_snap_to_grid
     local snap_mode = settings and settings.edit_snap_mode
     local grid_px = settings and (settings.edit_grid_size_px or 16) or 16
     local grid_color = settings and (settings.edit_grid_color or 0xFFFFFF22) or 0xFFFFFF22
-    if edit_mode and settings and settings.edit_grid_show then
+    if edit_mode and settings and settings.edit_grid_show and not background_pass then
         draw_grid(ctx, grid_color, grid_px, snap and snap_mode or nil)
     end
     local x_offset = custom_buttons.x_offset or 0  
@@ -548,7 +555,7 @@ function ButtonRenderer.RenderButtons(ctx, custom_buttons, settings)
 
     local sorted_buttons = {}
     for i, button in ipairs(custom_buttons.buttons) do
-        if should_show_button(button) then
+        if should_show_button(button) and ButtonRenderer.IsBackgroundButton(button) == background_pass then
             table.insert(sorted_buttons, {index = i, button = button, z_order = button.z_order or 0})
         end
     end
