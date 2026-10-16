@@ -30,11 +30,19 @@ Faster: put the edit cursor on a section of your song and press **+ Scene**. Wha
 | TK Media Browser / Workbench browser | Drag a file straight onto a slot. |
 | Media Explorer, Windows Explorer | Drag a file onto a slot. |
 | Any file | Right-click a slot, Add file... |
+| The media strip | Drag a row straight onto a slot, or double-click it to let the Launcher pick one. |
+| Items or Source Media view | Right-click a card and choose **Send to launcher**. Several selected items go over together. |
 | Nothing at all | Right-click a slot, New empty MIDI clip: one, two, four or eight bars, or as long as the scene it sits in. |
 | Another slot | Alt-drag a clip onto it to move it; hold Ctrl while dropping to copy. |
 | Arrange automation item | Select exactly one automation item, then click an empty slot in the matching automation lane. |
 
 Docked or floating both work. If an OS drag never arrives on your system, note that the TK browsers announce what they are dragging themselves rather than relying on one, so that route does not depend on it.
+
+**The media strip** is a narrow Items and Source Media list beside the grid, switched on under Settings with **Media strip beside the grid**. It is off until you ask for it, because the grid is a lane per track and wants the width; drag the bar between the two to set how much it gets, and that stays. Its two buttons choose which of the lists it shows and its search box is the same one those views use. Hover a row and a triangle appears at its right: that listens to the file, through the same preview engine the clip editor's Play uses, so it touches neither the transport nor the edit cursor and can be used while the grid is running. It needs SWS, and it plays audio, so a MIDI clip has no triangle. Dragging from it is not an OS drag - both halves live in one window - so it works docked as well as floating, and the slot you drop on is the slot it lands in, replacing whatever was there.
+
+**Send to launcher**, and a double-click in the strip, pick the lane for you instead: the track the clip came from where this project has one by that name, and the selected track otherwise, in the first free row of that lane. An item goes over whole, so it keeps the trim it was given in its own arrange and brings MIDI that exists only inside that project; a Source Media card is a file, and arrives the way a dropped one does, Sync BPM and all. To see other projects at all, Settings has **Include open project tabs** and **Include subprojects** under Project sources.
+
+Either way the Launcher stays a one-project thing: the lanes are this project's tracks, and whatever you put in a slot is copied onto a hidden track here, so nothing ever plays out of another tab. The arrange selection and the automation item route still only see the project you are in, because both of them start from something selected in it.
 
 A clip that was trimmed in the arrange loops the length you trimmed it to, not the whole file. Audio dropped in from a file is stretched to the project tempo when Sync BPM is on, reading the tempo from the file's metadata or its name.
 
@@ -91,7 +99,7 @@ TK Project Clips must be running with the Launcher view active. Commands are que
 
 A Launchpad does not lay its pads out as consecutive notes: its rows step by ten (Mini MK3, X, Pro MK3 and the RGB MK2, pads 11 to 88) or by sixteen (the older S and Mini, 0 to 119). Pick **Launchpad** as the layout and then the family, and the grid follows. **Top left pad** and **A row further down** are there for a board that numbers itself differently; leave them alone and the family decides.
 
-Choose a **MIDI output** and switch on **Light the pads**. On Windows the port a DAW is meant to use is the second one, usually called MIDIOUT2. From then on the grid shows what the launcher knows: an empty slot is dark, a filled one glows in its clip's colour, the clip that is playing is bright, one waiting for its bar line blinks, and an armed track blinks red. Press a blinking red pad to record into that slot, then press it again to stop. The strip on the right lights for scenes that have something in them. Learned command notes and CCs glow dimly, flash when pressed, and become bright while actions such as Record are active. Only pads that change colour are sent, so the board keeps up.
+Choose a **MIDI output** and switch on **Light the pads**. On Windows the port a DAW is meant to use is the second one, usually called MIDIOUT2. From then on the grid shows what the launcher knows: an empty slot is dark, a filled one glows in its clip's colour, the clip that is playing pulses on the beat, one waiting for its bar line blinks, and an armed track blinks red. Press a blinking red pad to record into that slot, then press it again to stop. The strip on the right lights for scenes that have something in them. Learned command notes and CCs glow dimly, flash when pressed, and become bright while actions such as Record are active. Only pads that change colour are sent, so the board keeps up.
 
 **Mode** decides how much of the board the Launcher takes over, and MK3 boards give you the choice:
 
@@ -100,7 +108,7 @@ Choose a **MIDI output** and switch on **Light the pads**. On Windows the port a
 
 Either way the mode is sent when the lights go on and undone when the Launcher closes; **Send mode again** asks a second time, for a board that was unplugged and put back.
 
-On the RGB boards the flashing and pulsing is done by the board itself - a clip waiting for its bar line flashes, the one that is playing pulses - so those pads are set once instead of being switched on and off from the script.
+Everything that moves on the board is driven from the project's own beat: a clip waiting for its bar line blinks, one that is playing pulses, an armed slot blinks red, and they all do it on the same line, in step with the same blinking in the grid on screen. The RGB boards can flash and pulse in hardware and earlier versions used that, but a board runs those on its own clock - 120 BPM unless it is fed MIDI clock - so at any other tempo its pads beat against the rest. With the transport stopped the blink keeps to the tempo under the edit cursor, so an armed slot waiting to record is already in time before you press play.
 
 An S or a Mini MK1 has only red and green lamps, so on those the colour is the state rather than the clip's own colour: dark, green, amber, red.
 
@@ -338,6 +346,8 @@ Trigger, Loop clip, When it has played, Play Nx, Rename, Colour, Write clip to a
 ## Known limits
 
 - No warping. Clips do not follow tempo changes the way Ableton's do; tempo matching happens once, when a file is brought in.
+- The media strip is fed by the same scan the Items view runs, so leaving it open keeps that scan going while you play. It skips the once-a-second check for missing media, which is the expensive half; a file that goes missing while the strip is open is noticed when you next leave the Launcher.
+- A clip taken from another project tab is copied into this one and belongs to it from then on. Send what you want while that tab is open: once it is closed its items leave the lists, and only audio can still be added afterwards, by its file. MIDI that existed only inside that project cannot.
 - At fast tempos, when a bar is shorter than the run-up, a launch lands a boundary later than you clicked.
 - Empty MIDI clips are a whole number of bars. There is no loop brace to drag a clip's length by hand.
 - An automation clip is a whole number of bars too. A file whose own length is not one is rounded to the nearest bar and its curve stretched to fit.

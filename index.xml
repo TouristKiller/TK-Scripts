@@ -748,7 +748,7 @@ v0.2.51
 
  <category name="Media">
     <reapack name="TK_PROJECT_CLIPS.lua" type="script" desc="TK Project Clips">
-        <version name="0.6.4" author="TouristKiller" time="2026-09-07T14:59:36Z">
+        <version name="0.6.5" author="TouristKiller" time="2026-10-16T14:58:12Z">
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS.lua</source>
         <source file="TK_PROJECT_CLIPS/launcher.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/launcher.lua</source>
         <source file="TK_PROJECT_CLIPS/chord_engine.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS/chord_engine.lua</source>
@@ -799,6 +799,20 @@ v0.2.51
         <source file="TK_PROJECT_CLIPS_ACTIONS/TK Project Clips - Launch scene 32.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_PROJECT_CLIPS_ACTIONS/TK%20Project%20Clips%20-%20Launch%20scene%2032.lua</source>
         <source file="TK_Project_Clips_Launcher.pdf">https://github.com/TouristKiller/TK-Scripts/raw/master/Media/TK_Project_Clips_Launcher.pdf</source>
         <changelog><![CDATA[
+            v0.6.5
+            + Launcher: Everything that blinks now runs off one clock on the project's beat - the record pads and the record rings included, which kept their own time - and it keeps that beat with the transport stopped. Reported by AndreiMir
+            + Launcher: The Launchpad's own flashing and pulsing is no longer used: a board runs those on its own clock, 120 BPM unless it is fed MIDI clock, so at any other tempo its pads beat against the rest. A playing pad now pulses on the project's beat like everything else
+            + Launcher: The blink follows what the meter counts, an eighth in 6/8 and a quarter in 4/4, the same rule the launch quantize follows
+            + Launcher: A take winding down to its bar line blinks the learned Record pad instead of sitting the same steady red as one that is still running
+            + Launcher: Send to launcher, in the right-click menu of an Items or Source Media card: the route to a clip in another open project tab or a loaded subproject, which nothing that starts from the arrange selection could reach. Asked by AndreiMir
+            + Launcher: An item sent over keeps the trim it was given in its own arrange and brings MIDI that exists only inside that project; a source card comes in as its file, Sync BPM and all
+            + Launcher: The lane is chosen for you - the track the clip came from where this project has one by that name, the selected track otherwise - in the first free row of that lane, and several selected items go over at once
+            + Launcher: A media strip beside the grid - the Items and Source Media lists, narrow - so a clip can be dragged straight into a slot, from this project or from any other open tab. Switch it on under Settings; it is off by default because the grid wants the width. Asked by AndreiMir
+            + Launcher: The strip drag is not an OS drag, both halves being one window, so it works docked as well as floating, and the slot you drop on is the slot it lands in
+            + Launcher: Drag the bar between strip and grid to set its width, and that is remembered; double-click a row instead and the lane is picked for you
+            + Launcher: Hover a strip row for a triangle that auditions it - the clip editor's own preview engine, so it leaves the transport, the edit cursor and every solo alone and can be used mid-jam. Needs SWS; audio only. Asked by AndreiMir
+            + Launcher: With the strip open the project scan keeps running, minus the once-a-second check for missing media, which is the half that costs anything
+            + Launcher: The manual says where the one-project boundary lies now that clips can cross it
             v0.6.4
             + Launcher: Recording-ready and queued Launchpad pads now blink in time with the project tempo
             v0.6.3

@@ -1,7 +1,20 @@
 -- @description TK Project Clips
 -- @author TouristKiller
--- @version 0.6.4
+-- @version 0.6.5
 -- @changelog:
+--   + Launcher: Everything that blinks now runs off one clock on the project's beat - the record pads and the record rings included, which kept their own time - and it keeps that beat with the transport stopped. Reported by AndreiMir
+--   + Launcher: The Launchpad's own flashing and pulsing is no longer used: a board runs those on its own clock, 120 BPM unless it is fed MIDI clock, so at any other tempo its pads beat against the rest. A playing pad now pulses on the project's beat like everything else
+--   + Launcher: The blink follows what the meter counts, an eighth in 6/8 and a quarter in 4/4, the same rule the launch quantize follows
+--   + Launcher: A take winding down to its bar line blinks the learned Record pad instead of sitting the same steady red as one that is still running
+--   + Launcher: Send to launcher, in the right-click menu of an Items or Source Media card: the route to a clip in another open project tab or a loaded subproject, which nothing that starts from the arrange selection could reach. Asked by AndreiMir
+--   + Launcher: An item sent over keeps the trim it was given in its own arrange and brings MIDI that exists only inside that project; a source card comes in as its file, Sync BPM and all
+--   + Launcher: The lane is chosen for you - the track the clip came from where this project has one by that name, the selected track otherwise - in the first free row of that lane, and several selected items go over at once
+--   + Launcher: A media strip beside the grid - the Items and Source Media lists, narrow - so a clip can be dragged straight into a slot, from this project or from any other open tab. Switch it on under Settings; it is off by default because the grid wants the width. Asked by AndreiMir
+--   + Launcher: The strip drag is not an OS drag, both halves being one window, so it works docked as well as floating, and the slot you drop on is the slot it lands in
+--   + Launcher: Drag the bar between strip and grid to set its width, and that is remembered; double-click a row instead and the lane is picked for you
+--   + Launcher: Hover a strip row for a triangle that auditions it - the clip editor's own preview engine, so it leaves the transport, the edit cursor and every solo alone and can be used mid-jam. Needs SWS; audio only. Asked by AndreiMir
+--   + Launcher: With the strip open the project scan keeps running, minus the once-a-second check for missing media, which is the half that costs anything
+--   + Launcher: The manual says where the one-project boundary lies now that clips can cross it
 --   + Launcher: Recording-ready and queued Launchpad pads now blink in time with the project tempo
 --   + Launcher: Armed empty MIDI pads now start and stop recording into their clip slots
 --   + Launcher: Learned MIDI commands light up, flash when pressed and show active Record and scene states
@@ -254,6 +267,9 @@ local saved_automation_sort = r.GetExtState(EXT_SECTION, "automation_sort")
 if not ({ name = true, uses = true, length = true })[saved_automation_sort] then saved_automation_sort = "name" end
 local saved_view_mode = r.GetExtState(EXT_SECTION, "view_mode")
 if not ({ items = true, sources = true, launcher = true })[saved_view_mode] then saved_view_mode = "items" end
+local saved_strip_mode = r.GetExtState(EXT_SECTION, "launcher_strip_mode")
+if not ({ items = true, sources = true })[saved_strip_mode] then saved_strip_mode = "items" end
+local saved_strip_width = tonumber(r.GetExtState(EXT_SECTION, "launcher_strip_width")) or 220
 
 local state = {
     open = true,
@@ -274,6 +290,12 @@ local state = {
     color_mode = saved_color_mode,
     position_mode = r.GetExtState(EXT_SECTION, "position_mode") == "time" and "time" or "bars",
     collapsed_tracks = {},
+    -- The media strip beside the launcher grid. Off by default: the grid is a
+    -- lane per track and already wants every pixel it can get.
+    launcher_strip = r.GetExtState(EXT_SECTION, "launcher_strip") == "1",
+    launcher_strip_mode = saved_strip_mode,
+    launcher_strip_width = math.max(150, math.min(420, saved_strip_width)),
+    strip_drag = nil,
     items = {},
     groups = {},
     sources = {},
@@ -1046,7 +1068,11 @@ local function refresh_if_needed()
     local now = r.time_precise()
     if now - state.last_scan < 0.2 then return end
     state.last_scan = now
-    if now - state.last_media_availability_check >= 1 then
+    -- Walking every item in every open project and asking the filesystem about
+    -- each one, once a second, is what marks missing media red. It is the one
+    -- genuinely expensive thing in here, and a grid being played must not pay
+    -- for it: to the strip that list is a pantry, not a monitor.
+    if state.view_mode ~= "launcher" and now - state.last_media_availability_check >= 1 then
         state.last_media_availability_check = now
         local availability_signature = media_availability_signature()
         if availability_signature ~= state.media_availability_signature then
@@ -1920,7 +1946,7 @@ local function update_drag()
     state.status = ""
 end
 
-Launcher.init({
+local launcher_context = {
     ctx = ctx,
     colors = COLORS,
     json = json,
@@ -1929,7 +1955,8 @@ Launcher.init({
     preview = launcher_preview,
     drop_target = calculate_drop_target,
     hide_scrollbar = function() return state.hide_content_scrollbar end,
-})
+}
+Launcher.init(launcher_context)
 
 local function filter_button(label, value, width)
     local active = state.filter == value
@@ -2125,6 +2152,16 @@ local function draw_theme_settings_body()
         option("Scenes as columns", sideways,
             function(value) Launcher.set_scenes_as_columns(value) end,
             "Turn the grid on its side, with a lane per row and a\nscene per column, the way Bitwig lays it out.\nClips keep their size.")
+        option("Media strip beside the grid", state.launcher_strip,
+            function(value)
+                state.launcher_strip = value
+                if not value then Launcher.preview_stop() end
+                r.SetExtState(EXT_SECTION, "launcher_strip", value and "1" or "0", true)
+            end,
+            "A narrow Items and Source Media list next to the grid, to\n"
+            .. "drag clips straight into a slot - including from another\n"
+            .. "open project tab or a loaded subproject. It costs the width\n"
+            .. "it takes, and the project scan the other views already run.")
 
         r.ImGui_TableNextRow(ctx)
         option("Lane height follows the track", Launcher.lane_track_height(),
@@ -2638,12 +2675,267 @@ local function draw_item_toggles(entry, cursor_x, cursor_y, card_width)
     return hovered
 end
 
+-- The Launcher fills its slots from this project's arrange, from a file, or
+-- from a browser drag. None of those reach what these two views can list: the
+-- items and sources of every other open tab and of a loaded subproject. This is
+-- where the two meet. An item goes over whole where it still resolves, which
+-- keeps the trim it was given in the arrange; a source card is a file, which is
+-- all a clip needs and the only thing that still works once that other tab is
+-- closed. The Launcher decides which lane it lands in.
+local function send_items_to_launcher(entries)
+    local specs = {}
+    for _, entry in ipairs(entries) do
+        specs[#specs + 1] = {
+            item = item_from_entry(entry, false),
+            project = entry.project,
+            path = entry.source_path ~= "" and entry.source_path or nil,
+            track_name = entry.track_name,
+            name = entry.name,
+        }
+    end
+    local _, message = Launcher.send_clips(specs)
+    state.status = message
+end
+
+-- The spec a strip row hands to the Launcher, in the same shape the menu route
+-- builds. Which of the two lists is showing decides what goes over: an item
+-- keeps the trim it was given in its own arrange, a source is a file.
+local function strip_spec(entry)
+    if not entry then return nil end
+    if state.launcher_strip_mode == "sources" then
+        return {
+            path = entry.path ~= "" and entry.path or nil,
+            track_name = entry.track_name,
+            name = entry.name,
+        }
+    end
+    return {
+        item = item_from_entry(entry, false),
+        project = entry.project,
+        path = entry.source_path ~= "" and entry.source_path or nil,
+        track_name = entry.track_name,
+        name = entry.name,
+    }
+end
+
+-- What the grid gets when a row from the media strip is dropped on a cell. The
+-- payload itself is only a token; this is the entry it stands for, rewritten by
+-- the row on every frame the drag is alive. Set here rather than in the table
+-- passed to Launcher.init, which is built further up the file than strip_spec
+-- is declared: a closure made there would be reaching for a global that never
+-- exists. Launcher.init keeps the table, so a field added now arrives all the
+-- same.
+launcher_context.send_payload = function()
+    local spec = strip_spec(state.strip_drag)
+    return spec and { spec } or nil
+end
+
+-- A row's own name, stable while a list reorders underneath it. Items already
+-- carry one that includes the project; a source card's key is its file.
+local function strip_key(entry)
+    return entry and (entry.key or entry.source_key) or nil
+end
+
+-- The file behind a row, or nothing. In-project MIDI has none, which is the
+-- same boundary the drag runs into: there is no file to hand over and none to
+-- listen to either.
+local function strip_preview_path(entry)
+    if not entry then return nil end
+    local path = state.launcher_strip_mode == "sources" and entry.path or entry.source_path
+    if not path or path == "" or entry.is_midi then return nil end
+    return path
+end
+
+local function strip_row_height()
+    return rounded(20)
+end
+
+local function strip_list()
+    return state.launcher_strip_mode == "sources" and state.sources or state.items
+end
+
+local function strip_mode_button(label, mode, width)
+    local active = state.launcher_strip_mode == mode
+    if active then
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.accent_soft)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), COLORS.accent)
+    end
+    local clicked = r.ImGui_Button(ctx, label, width, rounded(22))
+    if active then r.ImGui_PopStyleColor(ctx, 2) end
+    if clicked and not active then
+        state.launcher_strip_mode = mode
+        r.SetExtState(EXT_SECTION, "launcher_strip_mode", mode, true)
+    end
+end
+
+-- One row of the strip: a colour tab, the name, and the whole thing as a drag
+-- source. The payload is a token rather than the entry itself - ImGui carries
+-- strings - and state.strip_drag holds what it stands for, rewritten on every
+-- frame the drag is alive, so a list that reorders underneath cannot hand the
+-- grid the wrong clip.
+local function draw_strip_row(entry, index, preview_ok, sounding)
+    local row_h = strip_row_height()
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    local width = r.ImGui_GetContentRegionAvail(ctx)
+    r.ImGui_Selectable(ctx, "##strip_row_" .. tostring(index), false, 0, width, row_h)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    local draw_list = r.ImGui_GetWindowDrawList(ctx)
+    local tab_w = rounded(3)
+    r.ImGui_DrawList_AddRectFilled(draw_list, x, y + 1, x + tab_w, y + row_h - 1,
+        entry.track_color or COLORS.accent, rounded(2))
+    local text_x = x + tab_w + rounded(6)
+    local _, text_h = r.ImGui_CalcTextSize(ctx, "A")
+    r.ImGui_DrawList_AddText(draw_list, text_x, y + (row_h - text_h) * 0.5,
+        entry.missing and COLORS.danger or COLORS.text,
+        truncate_text(entry.name, width - tab_w - rounded(28)))
+    -- Auditioning. The row is one ImGui item and its click already means
+    -- something else, so the button is hit-tested by hand, the way the record
+    -- dot in a launcher cell is. It shows while the row is hovered and stays
+    -- while it sounds, so what is playing can always be stopped again.
+    -- Both answers are worked out once for the whole strip and handed down:
+    -- asking whether anything is sounding means asking SWS, and doing that per
+    -- row per frame is a lot of asking for one answer.
+    local path = preview_ok and strip_preview_path(entry) or nil
+    local key = strip_key(entry)
+    local playing = path and sounding == key or false
+    local button_w = rounded(16)
+    local button_x = x + width - button_w
+    local over_button = path and r.ImGui_IsMouseHoveringRect
+        and r.ImGui_IsMouseHoveringRect(ctx, button_x, y, x + width, y + row_h) or false
+    if path and (hovered or playing) then
+        local mid_y = y + row_h * 0.5
+        local ink = (playing or over_button) and COLORS.accent or COLORS.text_dim
+        if playing then
+            local half = rounded(4)
+            r.ImGui_DrawList_AddRectFilled(draw_list, button_x + rounded(3), mid_y - half,
+                button_x + rounded(3) + half * 2, mid_y + half, ink)
+        else
+            local size = rounded(5)
+            r.ImGui_DrawList_AddTriangleFilled(draw_list, button_x + rounded(4), mid_y - size,
+                button_x + rounded(4), mid_y + size, button_x + rounded(4) + size * 1.4, mid_y, ink)
+        end
+    elseif entry.is_midi then
+        r.ImGui_DrawList_AddRectFilled(draw_list, x + width - rounded(10), y + row_h * 0.5 - rounded(2),
+            x + width - rounded(6), y + row_h * 0.5 + rounded(2), COLORS.accent_soft)
+    end
+    if over_button and r.ImGui_IsItemClicked and r.ImGui_IsItemClicked(ctx, 0) then
+        Launcher.preview_toggle(path, key)
+    end
+    if hovered then
+        local lines = { entry.name }
+        if entry.track_name and entry.track_name ~= "" then lines[#lines + 1] = entry.track_name end
+        if entry.project_name and entry.project_name ~= "" then lines[#lines + 1] = entry.project_name end
+        lines[#lines + 1] = "Drag onto a slot, or double-click to let the Launcher pick one"
+        if path then
+            lines[#lines + 1] = "The triangle listens to it, without touching the transport"
+        end
+        r.ImGui_SetTooltip(ctx, table.concat(lines, "\n"))
+    end
+    if not over_button and r.ImGui_BeginDragDropSource and r.ImGui_BeginDragDropSource(ctx) then
+        state.strip_drag = entry
+        r.ImGui_SetDragDropPayload(ctx, "TK_LAUNCHER_SEND", "strip")
+        r.ImGui_Text(ctx, truncate_text(entry.name, 240))
+        r.ImGui_EndDragDropSource(ctx)
+    end
+    -- The same thing without aiming, for anyone who would rather not drag. Not
+    -- over the play button: two quick presses there are stop and start again,
+    -- and they must not also post the clip into the grid.
+    if hovered and not over_button and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+        local spec = strip_spec(entry)
+        if spec then
+            local _, message = Launcher.send_clips({ spec })
+            state.status = message
+        end
+    end
+end
+
+-- A pantry beside the grid: the Items and Source Media lists, narrow, so a clip
+-- from another open project tab can be dragged straight into a slot. Both live
+-- in one ImGui context, so this is an internal payload and not an OS drag -
+-- which is the whole reason it works while the window is docked.
+local function draw_launcher_strip()
+    if not state.launcher_strip then return end
+    local width = rounded(state.launcher_strip_width)
+    if r.ImGui_BeginChild(ctx, "launcher_strip", width, 0, 0) then
+        local half = (width - rounded(14)) * 0.5
+        strip_mode_button("Items", "items", half)
+        r.ImGui_SameLine(ctx, 0, rounded(4))
+        strip_mode_button("Sources", "sources", half)
+        r.ImGui_SetNextItemWidth(ctx, -1)
+        local changed, text = r.ImGui_InputTextWithHint(ctx, "##strip_search", "Search", state.search)
+        if changed then state.search = text end
+        r.ImGui_Separator(ctx)
+        local list = strip_list()
+        if #list == 0 then
+            r.ImGui_TextColored(ctx, COLORS.text_dim, "Nothing to show")
+            r.ImGui_TextWrapped(ctx, "Settings has Include open project tabs and Include subprojects, under Project sources.")
+        else
+            -- Only the rows on screen are drawn. A project with hundreds of
+            -- items would otherwise cost a Selectable and two draw calls each,
+            -- every frame, in the one view that has to stay smooth.
+            local row_h = strip_row_height()
+            local preview_ok = Launcher.preview_ready()
+            local sounding = preview_ok and Launcher.preview_key() or nil
+            for index, entry in ipairs(list) do
+                r.ImGui_PushID(ctx, index)
+                if r.ImGui_IsRectVisible(ctx, 1, row_h) then
+                    draw_strip_row(entry, index, preview_ok, sounding)
+                else
+                    r.ImGui_Dummy(ctx, 1, row_h)
+                end
+                r.ImGui_PopID(ctx)
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_SameLine(ctx, 0, rounded(2))
+    -- The grip. Its own width is dragged rather than the child's, because the
+    -- child is rebuilt from that number on the next frame anyway.
+    local _, grip_h = r.ImGui_GetContentRegionAvail(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), COLORS.border)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), COLORS.accent)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), COLORS.accent)
+    r.ImGui_Button(ctx, "##strip_grip", rounded(4), math.max(rounded(20), grip_h))
+    r.ImGui_PopStyleColor(ctx, 3)
+    if r.ImGui_IsItemHovered(ctx) and r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeEW then
+        r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeEW())
+    end
+    if r.ImGui_IsItemActive(ctx) then
+        local mouse_x = r.ImGui_GetMousePos(ctx)
+        if state.strip_grip_x then
+            local moved = mouse_x - state.strip_grip_x
+            if moved ~= 0 then
+                state.launcher_strip_width = math.max(150, math.min(420, state.launcher_strip_width + moved))
+            end
+        end
+        state.strip_grip_x = mouse_x
+    else
+        state.strip_grip_x = nil
+    end
+    -- Written once, when the grip is let go: an ExtState write per frame of a
+    -- drag is a lot of writing for a number nobody sees change.
+    if r.ImGui_IsItemDeactivated and r.ImGui_IsItemDeactivated(ctx) then
+        r.SetExtState(EXT_SECTION, "launcher_strip_width", tostring(math.floor(state.launcher_strip_width)), true)
+    end
+    r.ImGui_SameLine(ctx, 0, rounded(2))
+end
+
+local function send_source_to_launcher(entry)
+    local _, message = Launcher.send_clips({ {
+        path = entry.path ~= "" and entry.path or nil,
+        track_name = entry.track_name,
+        name = entry.name,
+    } })
+    state.status = message
+end
+
 local function draw_card_context(entry)
     if not r.ImGui_BeginPopupContextItem(ctx, "##project_clip_context_" .. entry.key) then return false end
     local entries = selected_entries()
     if #entries == 0 then entries = { entry } end
     r.ImGui_TextColored(ctx, COLORS.text_dim, tostring(#entries) .. " selected")
     if r.ImGui_MenuItem(ctx, "Insert at edit cursor") then insert_entry_at_cursor(entry) end
+    if r.ImGui_MenuItem(ctx, #entries > 1 and ("Send " .. tostring(#entries) .. " to launcher") or "Send to launcher") then send_items_to_launcher(entries) end
     if r.ImGui_MenuItem(ctx, entry.is_midi and "Open in MIDI editor" or "Open item properties") then open_item_editor(entry) end
     if r.ImGui_MenuItem(ctx, "Go to source item") then select_and_reveal(entry) end
     r.ImGui_Separator(ctx)
@@ -2797,6 +3089,7 @@ local function draw_source_card(entry)
     local context_open = r.ImGui_BeginPopupContextItem(ctx, "##source_context_" .. entry.source_key)
     if context_open then
         if r.ImGui_MenuItem(ctx, "Insert at edit cursor") then insert_entry_at_cursor(entry) end
+        if r.ImGui_MenuItem(ctx, "Send to launcher") then send_source_to_launcher(entry) end
         if r.ImGui_MenuItem(ctx, "Go to source project") then select_and_reveal(entry) end
         r.ImGui_Separator(ctx)
         if r.ImGui_MenuItem(ctx, "Select all uses") then select_all_source_uses(entry) end
@@ -3258,6 +3551,7 @@ local function draw_window()
             end
             if r.ImGui_BeginChild(ctx, "clip_scroll", 0, footer_visible and -rounded(28) or 0, 0, scroll_flags) then
                 if launcher_mode then
+                    draw_launcher_strip()
                     Launcher.draw()
                 elseif state.view_mode == "sources" then
                     draw_sources()
@@ -3292,7 +3586,11 @@ end
 
 local function loop()
     Launcher.set_active(state.view_mode == "launcher")
-    if state.view_mode ~= "launcher" then refresh_if_needed() end
+    -- The strip is fed by the same scan as the Items view, so that scan has to
+    -- keep running while the launcher is the view on screen. With the strip
+    -- shut nothing reads that list and the launcher pays nothing for it, which
+    -- is how it always was.
+    if state.view_mode ~= "launcher" or state.launcher_strip then refresh_if_needed() end
     update_item_preview()
     update_drag()
     Launcher.update()

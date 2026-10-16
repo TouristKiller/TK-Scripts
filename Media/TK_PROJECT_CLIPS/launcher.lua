@@ -269,8 +269,13 @@ local QUANTIZE_OPTIONS = {
 -- small utilities
 --------------------------------------------------------------------------------
 
-function H.valid_item(item)
-    return item ~= nil and r.ValidatePtr2(0, item, "MediaItem*")
+-- The project defaults to the active one, which is what almost every caller
+-- means. An item handed over from another open tab is the exception: asking
+-- project 0 about it answers no, and that single answer was the whole of why
+-- the Items view could list other projects while the Launcher could not touch
+-- them.
+function H.valid_item(item, project)
+    return item ~= nil and r.ValidatePtr2(project or 0, item, "MediaItem*")
 end
 
 function H.valid_track(track)
@@ -545,6 +550,47 @@ end
 function H.heard_pos()
     if (r.GetPlayState() & 1) ~= 1 then return nil end
     return r.GetPlayPosition()
+end
+
+-- One clock for everything that blinks - the record rings and the queued clips
+-- in the grid, and the pads on a Launchpad - so two things flashing side by
+-- side are never seen beating against each other. It counts beats off the play
+-- position while the transport rolls. Stopped, there is no position to read, so
+-- it keeps counting at the tempo under the edit cursor rather than dropping to
+-- a wall clock: an armed slot waiting to record is looked at with the transport
+-- stopped more often than not, and a blink at a rate the music never had is
+-- exactly what reads as out of time.
+function H.blink_cursor()
+    local at = r.GetCursorPosition and r.GetCursorPosition() or 0
+    return tonumber(at) or 0
+end
+
+-- Tempo in quarter notes a minute, read where the cursor sits.
+function H.blink_bpm()
+    local tempo = select(3, r.TimeMap_GetTimeSigAtTime(0, H.blink_cursor()))
+    if not tempo or tempo <= 0 then
+        tempo = r.Master_GetTempo and r.Master_GetTempo() or nil
+    end
+    if not tempo or tempo <= 0 then tempo = 120 end
+    return tempo
+end
+
+-- Phase inside the beat: 0 on the line, running up to 1 at the next one. The
+-- beat is one denominator unit - an eighth in 6/8, a quarter in 4/4 - which is
+-- what the meter counts and what the metronome clicks, the same rule the launch
+-- quantize follows.
+function H.blink_phase(now)
+    local position = H.heard_pos()
+    local _, denom = r.TimeMap_GetTimeSigAtTime(0, position or H.blink_cursor())
+    denom = (denom and denom > 0) and denom or 4
+    local beat_qn = 4 / denom
+    if position then return (r.TimeMap2_timeToQN(0, position) / beat_qn) % 1 end
+    return ((now or r.time_precise()) * H.blink_bpm() / 60 / beat_qn) % 1
+end
+
+-- Lit for the first half of every beat.
+function H.blink_on(now)
+    return H.blink_phase(now) < 0.5
 end
 
 function H.qn_per_bar(time)
@@ -1455,13 +1501,18 @@ function H.apply_section(item)
     return true
 end
 
-function H.assign_slot(lane, row, source_item)
+-- source_project names the project the item lives in, for an item sent over
+-- from another open tab; leaving it out means this one. Nothing below needs to
+-- know either way: H.copy_item works off the item's state chunk, which carries
+-- an absolute path for audio and the notes themselves for MIDI, and everything
+-- after the copy happens to a local item.
+function H.assign_slot(lane, row, source_item, source_project)
     if H.is_env_lane(lane) and not L.autom_building then
         L.status = "That is an automation lane; it takes curves, not media"
         return false
     end
     local lane_track = H.ensure_lane_track(lane)
-    if not lane_track or not H.valid_item(source_item) then return false end
+    if not lane_track or not H.valid_item(source_item, source_project) then return false end
     H.clear_slot(lane, row)
     local library = H.copy_item(source_item, lane_track, H.park_position())
     if not library then return false end
@@ -1952,8 +2003,31 @@ function H.accept_file_drop(lane, row)
             end
         end
     end
+    -- A row dragged out of the media strip. Taken before the file routes below,
+    -- because the last of those accepts whatever type is going and tries to
+    -- read paths out of it, which would swallow this one.
+    local strip_handled = false
+    if r.ImGui_AcceptDragDropPayload and UI.send_payload then
+        local ok = r.ImGui_AcceptDragDropPayload(UI.ctx, "TK_LAUNCHER_SEND")
+        if ok then
+            strip_handled = true
+            local specs = UI.send_payload()
+            if specs and #specs > 0 then
+                r.Undo_BeginBlock()
+                r.PreventUIRefresh(1)
+                H.place_specs(specs, lane, row)
+                r.PreventUIRefresh(-1)
+                r.Undo_EndBlock("Add clips to launcher", -1)
+                -- The lane track may have been made just now; moving the block
+                -- back to the end of the track list is the next tick's job,
+                -- never this one's, with the grid half drawn.
+                L.tidy_wanted = true
+                r.UpdateArrange()
+            end
+        end
+    end
     local paths = {}
-    if r.ImGui_AcceptDragDropPayloadFiles and r.ImGui_GetDragDropPayloadFile then
+    if not strip_handled and r.ImGui_AcceptDragDropPayloadFiles and r.ImGui_GetDragDropPayloadFile then
         -- Two returns: the flag first, then the count. Reading the flag as the
         -- count is why this route silently never fired.
         local accepted, count = r.ImGui_AcceptDragDropPayloadFiles(UI.ctx)
@@ -1966,7 +2040,7 @@ function H.accept_file_drop(lane, row)
             end
         end
     end
-    if #paths == 0 and r.ImGui_AcceptDragDropPayload then
+    if not strip_handled and #paths == 0 and r.ImGui_AcceptDragDropPayload then
         for _, payload_type in ipairs(C.drop_types) do
             local ok, payload = r.ImGui_AcceptDragDropPayload(UI.ctx, payload_type)
             if ok then
@@ -1975,7 +2049,7 @@ function H.accept_file_drop(lane, row)
             end
         end
     end
-    if #paths == 0 and r.ImGui_GetDragDropPayload and r.ImGui_AcceptDragDropPayload then
+    if not strip_handled and #paths == 0 and r.ImGui_GetDragDropPayload and r.ImGui_AcceptDragDropPayload then
         local ok, payload_type = r.ImGui_GetDragDropPayload(UI.ctx)
         if ok and payload_type and payload_type ~= "" then
             local got, payload = r.ImGui_AcceptDragDropPayload(UI.ctx, payload_type)
@@ -7799,6 +7873,44 @@ end
 function H.stop_preview()
     if L.preview and r.CF_Preview_Stop then pcall(r.CF_Preview_Stop, L.preview) end
     L.preview = nil
+    -- One handle serves both the clip editor and the media strip, so whoever
+    -- claimed it last lets go here. H.start_preview stops before it starts,
+    -- which means the editor clears a strip's claim on its way in.
+    L.preview_owner = nil
+end
+
+-- The media strip's preview: a plain file through the same SWS engine, with
+-- none of the section, rate and pitch work H.start_preview does for a clip -
+-- there is no clip here, only a path. Out of band by design: no transport, no
+-- edit cursor, no solo, because this is auditioned while the grid is playing.
+function H.start_file_preview(path, key)
+    H.stop_preview()
+    if not H.preview_ready() or not path or path == "" then return false end
+    local source = r.PCM_Source_CreateFromFile(path)
+    if not source then return false end
+    local kind = r.GetMediaSourceType(source, "") or ""
+    if kind == "" or kind == "EMPTY" or kind:find("MIDI") then
+        pcall(r.PCM_Source_Destroy, source)
+        L.status = kind:find("MIDI") and "A preview plays audio, and a MIDI clip has none"
+            or "Could not read that file"
+        return false
+    end
+    local preview = r.CF_CreatePreview(source)
+    if not preview then
+        pcall(r.PCM_Source_Destroy, source)
+        return false
+    end
+    -- Straight out, not through a track: a row in the strip belongs to no lane,
+    -- and borrowing one would put the audition through an FX chain that has
+    -- nothing to do with it.
+    if r.CF_Preview_SetValue then r.CF_Preview_SetValue(preview, "I_OUTCHAN", 0) end
+    L.preview = preview
+    L.preview_owner = key
+    r.CF_Preview_Play(preview)
+    -- The preview holds what it needs from here on, the same order the editor
+    -- uses and the one SWS's own example uses.
+    pcall(r.PCM_Source_Destroy, source)
+    return true
 end
 
 -- What a running preview should be doing at this moment. Set on the live
@@ -8785,7 +8897,7 @@ function H.draw_cell(lane, lane_index, row, box_height, box_width)
     local playing = lane.current ~= nil and lane.current.row == row
     local pending = (lane.pending ~= nil and lane.pending.row == row)
         or (lane.queued ~= nil and lane.queued.row == row)
-    local blink = (r.time_precise() % 0.6) < 0.3
+    local blink = H.blink_on()
 
     local orphaned = H.lane_orphaned(lane) or (slot and slot.missing)
     if orphaned then color = UI.colors.text_dim end
@@ -11103,6 +11215,10 @@ function Launcher.set_active(active)
     else
         H.refresh_external_action_states(true, true)
         H.finish_autom_edit(false)
+        -- Whatever was being auditioned belongs to this view. Leaving it playing
+        -- would leave a sound with no visible way back to the button that
+        -- started it.
+        H.stop_preview()
         H.lp_stop()
         H.reset_all()
         L.status = ""
@@ -12247,55 +12363,55 @@ function H.lp_off()
     return H.lp_family().palette and 0 or 12
 end
 
-function H.lp_blink(now)
-    local position = H.heard_pos()
-    if position then
-        local qn = r.TimeMap2_timeToQN(0, position)
-        return (qn % 1) < 0.5
-    end
-    return (now % 0.6) < 0.3
-end
-
 --------------------------------------------------------------------------------
 -- what the grid should look like
 --------------------------------------------------------------------------------
 
--- The colour a pad should be showing, and on which channel. The RGB boards
--- flash and pulse in hardware - channel 2 flashes, channel 3 pulses, for notes
--- and control changes alike - so a waiting clip is handed over to the board
--- instead of being switched on and off from here twenty times a second. The red
--- and green boards have no such thing, and blink the way they always did.
-function H.lp_cell_colour(row, col, blink)
-    local fancy = H.lp_family().palette
+-- A pad that is running is bright for three quarters of the beat and dips for
+-- the last of it. A blink would leave it as dim as an idle filled pad for half
+-- of every beat, and on a full grid that is what you are trying to pick it out
+-- of; this reads as a pulse instead, which is what the board itself used to do.
+function H.lp_lit(phase)
+    return (phase or 0) < 0.75
+end
+
+-- The colour a pad should be showing. The RGB boards can flash and pulse in
+-- hardware, and a playing clip used to be handed over to them for that, but the
+-- board runs those on its own clock - 120 BPM unless it is fed MIDI clock - so
+-- at any other tempo the pads it animated beat against the ones animated from
+-- here. Everything that moves is therefore driven off H.blink_on, one clock on
+-- the project's beat, and the boards are only ever told a steady colour.
+-- Waiting states go dark between beats; a playing clip only drops to its dim
+-- shade, so it is lit at every moment and still reads as running.
+function H.lp_cell_colour(row, col, blink, phase)
     local lane_offset, scene_offset = H.midi_bank_offsets()
     local scene_row = scene_offset + row + 1
-    if scene_row > L.rows then return H.lp_off(), 0 end
+    if scene_row > L.rows then return H.lp_off() end
     if col == 8 then
         -- The scene strip: white for a scene that has anything in it, pulsing
-        -- for the one that is running.
-        if not H.scene_filled(scene_row) then return H.lp_off(), 0 end
+        -- on the beat for the one that is running.
+        if not H.scene_filled(scene_row) then return H.lp_off() end
         local running = L.scene_run and L.scene_run.row == scene_row
-        if running and fancy then return H.lp_colour(nil, true), 2 end
-        return H.lp_colour(nil, running and true or false), 0
+        return H.lp_colour(nil, running and H.lp_lit(phase) or false)
     end
     local lane = L.lanes[lane_offset + col + 1]
-    if not lane then return H.lp_off(), 0 end
+    if not lane then return H.lp_off() end
     local slot = H.slot(lane, scene_row)
     if not slot then
         -- An armed track shows where a recording would land, the way the grid
         -- draws its record ring in an empty cell.
         if H.slot_mark(lane_offset + col + 1, scene_row) or H.track_armed(H.target_track(lane)) then
-            return blink and H.lp_colour(0xFF0000FF, true) or H.lp_off(), 0
+            return blink and H.lp_colour(0xFF0000FF, true) or H.lp_off()
         end
-        return H.lp_off(), 0
+        return H.lp_off()
     end
     local color = slot.color or H.lane_color(lane)
     local live = H.slot_is_live(lane, scene_row)
     if live == "pending" or (lane.queued and lane.queued.row == scene_row) then
-        return blink and H.lp_colour(color, true) or H.lp_off(), 0
+        return blink and H.lp_colour(color, true) or H.lp_off()
     end
-    if live == "playing" then return H.lp_colour(color, true), fancy and 2 or 0 end
-    return H.lp_colour(color, false), 0
+    if live == "playing" then return H.lp_colour(color, H.lp_lit(phase)) end
+    return H.lp_colour(color, false)
 end
 
 function H.lp_command_binding(kind, number)
@@ -12325,11 +12441,17 @@ function H.lp_command_active(key)
     return scene and L.scene_run and L.scene_run.row == scene or false
 end
 
-function H.lp_command_colour(command, binding)
+function H.lp_command_colour(command, binding, blink)
     local signature = binding.kind .. ":" .. tostring(binding.channel) .. ":" .. tostring(binding.number)
     local flash = (L.midi_command_flash[signature] or 0) > r.time_precise()
     local color = (command.key == "record" or command.key == "stop_all") and 0xFF0000FF or nil
-    return H.lp_colour(color, flash or H.lp_command_active(command.key))
+    local lit = flash or H.lp_command_active(command.key)
+    -- A take winding down to its bar line is not yet what the steady light
+    -- says: it is still running. That blinks on the beat, the same language the
+    -- grid uses for a clip waiting for its line. The press acknowledgement wins
+    -- over it, so a button always answers the finger first.
+    if command.key == "record" and L.record_stop_at and not flash then lit = blink end
+    return H.lp_colour(color, lit)
 end
 
 -- Only what changed is sent. A Launchpad given all sixty-four pads several
@@ -12343,7 +12465,10 @@ function H.lp_refresh(force)
     local now = r.time_precise()
     if not force and L.lp_sent and now - L.lp_sent < 0.05 then return end
     L.lp_sent = now
-    local blink = H.lp_blink(now)
+    -- One phase for the whole board: the waiting states take the half beat,
+    -- the running ones only dip at the end of it.
+    local phase = H.blink_phase(now)
+    local blink = phase < 0.5
     L.lp_shadow = L.lp_shadow or {}
     local represented = {}
     for row = 0, 7 do
@@ -12352,18 +12477,17 @@ function H.lp_refresh(force)
             if note then
                 local kind = col == 8 and H.lp_scene_is_cc() and "cc" or "note"
                 local command, binding = H.lp_command_binding(kind, note)
-                local wanted, lane_channel = H.lp_cell_colour(row, col, blink)
-                local status
+                local wanted = H.lp_cell_colour(row, col, blink, phase)
+                local status = (kind == "cc" and 0xB0 or 0x90)
                 if command then
-                    wanted = H.lp_command_colour(command, binding)
-                    status = (kind == "cc" and 0xB0 or 0x90) + binding.channel - 1
+                    wanted = H.lp_command_colour(command, binding, blink)
+                    status = status + binding.channel - 1
                     represented[command.key] = true
-                else
-                    status = (kind == "cc" and 0xB0 or 0x90) + lane_channel
                 end
                 -- The status byte is part of what the pad is showing: a strip
-                -- that went from note to control change, or a pad that went from
-                -- steady to pulsing, is a change like any other.
+                -- that went from note to control change is a change like any
+                -- other, and so is a pad left over on a hardware-animation
+                -- channel by an older version.
                 local state = status * 256 + wanted
                 if force or L.lp_shadow[note] ~= state then
                     L.lp_shadow[note] = state
@@ -12376,7 +12500,7 @@ function H.lp_refresh(force)
         local binding = L.midi_commands[command.key]
         if binding and H.midi_command_available(command) and not represented[command.key] then
             local status = (binding.kind == "cc" and 0xB0 or 0x90) + binding.channel - 1
-            local wanted = H.lp_command_colour(command, binding)
+            local wanted = H.lp_command_colour(command, binding, blink)
             local shadow_key = "command:" .. command.key
             local state = status * 65536 + binding.number * 256 + wanted
             if force or L.lp_shadow[shadow_key] ~= state then
@@ -12826,7 +12950,7 @@ function H.draw_launchpad_setup()
     local feedback_changed, feedback = r.ImGui_Checkbox(UI.ctx, "Light the pads", L.midi_feedback)
     if feedback_changed then H.set_midi_feedback(feedback) end
     if r.ImGui_IsItemHovered(UI.ctx) then
-        r.ImGui_SetTooltip(UI.ctx, "Empty is dark, a filled slot glows in its clip's colour, the one that\nis playing is bright, one waiting for its bar line blinks, and an armed\ntrack blinks red. Only pads that change are sent.")
+        r.ImGui_SetTooltip(UI.ctx, "Empty is dark, a filled slot glows in its clip's colour, the one that\nis playing pulses on the beat, one waiting for its bar line blinks,\nand an armed track blinks red. Everything moves on the project's own\nbeat, not the board's. Only pads that change are sent.")
     end
 
     if r.ImGui_Button(UI.ctx, "Test pattern", UI.rounded(110), UI.rounded(22)) then H.lp_test_pattern() end
@@ -14136,6 +14260,187 @@ function Launcher.set_scroll_sync(mode)
     L.scroll_sync = (mode == "follow" or mode == "both") and mode or "off"
     r.SetExtState(C.ext_section, "scroll_sync", L.scroll_sync, true)
     L.sync_mine, L.sync_theirs = nil, nil
+end
+
+--------------------------------------------------------------------------------
+-- clips sent over from the Items and Source Media views
+--------------------------------------------------------------------------------
+
+-- The first row in this lane with nothing in it, growing the grid by one where
+-- they are all taken. H.first_free_row looks for a row free across every lane,
+-- because that is what a scene needs; this cares only about the one column the
+-- clip is going into.
+function H.lane_free_row(lane)
+    for row = 1, L.rows do
+        if not H.slot(lane, row) then return row end
+    end
+    if L.rows >= C.max_rows then return nil end
+    L.rows = L.rows + 1
+    return L.rows
+end
+
+-- Where a clip from outside should land. Its own track first, matched by name
+-- the way a clip set matches one, because a "Drums" loop out of another song
+-- belongs on the Drums track here. Failing that the selected track, which is
+-- REAPER's ordinary way of saying where something goes.
+function H.lane_for_incoming(track_name)
+    local track = track_name and H.track_by_name(track_name) or nil
+    local lane = track and H.lane_for_track(track) or nil
+    if lane then return lane end
+    local selected = r.GetSelectedTrack(0, 0)
+    return selected and H.lane_for_track(selected) or nil
+end
+
+-- Clips handed over from the Items or Source Media view. Those views list every
+-- open project tab and every loaded subproject, and none of that is reachable
+-- from the routes that want something selected in this project's arrange.
+--
+-- A spec is { item, project, path, track_name, name }. The item is taken where
+-- it can still be resolved, because that keeps the trim it was given in the
+-- arrange and carries MIDI that exists only inside its own project; the path is
+-- the fallback and the only thing a Source Media card offers, and it arrives
+-- the way a dropped file does, Sync BPM and all. A spec that is neither is
+-- counted and named rather than dropped in silence.
+--
+-- This runs while the Launcher view is not the one on screen, so it puts the
+-- state in order itself rather than trusting the tick that only runs when it is.
+-- Placing a list of specs. A drop names the cell it was aimed at and replaces
+-- what sits there, the way a dropped file does - aiming at a slot is the whole
+-- meaning of the gesture. The menu route names no cell and lets the lane be
+-- worked out instead. Nothing in here rebuilds L.lanes: a drop is handled in
+-- the middle of the grid drawing itself, and the lanes it is walking are live.
+function H.place_specs(specs, target_lane, start_row)
+    local rows_before = L.rows
+    local added, skipped, reason, landed = 0, 0, nil, nil
+    for index, spec in ipairs(specs) do
+        local lane, row = target_lane, nil
+        if lane then
+            row = start_row + index - 1
+            if row > L.rows then
+                if L.rows < C.max_rows then L.rows = row else row = nil end
+            end
+        else
+            -- An item from this project knows its own track, which beats
+            -- matching on a name: an unnamed track answers to REAPER's
+            -- "Track 5" placeholder and nothing here would find it again.
+            if spec.item and H.valid_item(spec.item) then
+                lane = H.lane_for_track(r.GetMediaItemTrack(spec.item))
+            end
+            lane = lane or H.lane_for_incoming(spec.track_name)
+            row = lane and H.lane_free_row(lane) or nil
+        end
+        local done = false
+        if not lane then
+            reason = reason or "no track here to put it on - select one first"
+        elseif not row then
+            reason = reason or "the grid has no room left"
+        else
+            if spec.item and H.valid_item(spec.item, spec.project) then
+                done = H.assign_slot(lane, row, spec.item, spec.project)
+            end
+            if not done and spec.path and spec.path ~= "" then
+                done = H.assign_path(lane, row, spec.path)
+            end
+            if not done then
+                reason = reason or "nothing to copy: MIDI that lives only inside another project has no file"
+            end
+        end
+        if done then
+            added = added + 1
+            landed = landed or lane
+        else
+            skipped = skipped + 1
+        end
+    end
+    if added > 0 then
+        H.save()
+    else
+        -- H.lane_free_row grows the grid where a lane is full, and it has to
+        -- decide that before the copy is tried. Put back where nothing landed,
+        -- so a failed send leaves no empty rows behind to explain.
+        L.rows = rows_before
+    end
+    local message
+    if added == 1 and landed then
+        message = "Clip sent to " .. H.lane_label(landed)
+    elseif added > 1 then
+        message = tostring(added) .. " clips sent to the launcher"
+    else
+        message = "Nothing sent to the launcher"
+    end
+    if skipped > 0 then
+        message = message .. " - " .. tostring(skipped) .. " skipped: "
+            .. (reason or "could not be copied")
+    end
+    L.status = message
+    return added, message
+end
+
+-- Clips handed over from the Items or Source Media view, by its right-click
+-- menu. Those views list every open project tab and every loaded subproject,
+-- and none of that is reachable from the routes that want something selected in
+-- this project's arrange.
+--
+-- A spec is { item, project, path, track_name, name }. The item is taken where
+-- it can still be resolved, because that keeps the trim it was given in the
+-- arrange and carries MIDI that exists only inside its own project; the path is
+-- the fallback and the only thing a Source Media card offers, and it arrives
+-- the way a dropped file does, Sync BPM and all.
+--
+-- This runs while the Launcher view is not the one on screen, so it puts the
+-- state in order itself rather than trusting the tick that only runs when it is.
+function Launcher.send_clips(specs)
+    if type(specs) ~= "table" or #specs == 0 then return 0, "Nothing to send" end
+    H.project_changed()
+    if not L.loaded then H.load() end
+    H.follow_track_list()
+    if #L.lanes == 0 then
+        L.status = "No tracks to put a clip on"
+        return 0, L.status
+    end
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local added, message = H.place_specs(specs)
+    if added > 0 then H.tidy_lane_tracks() end
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Send clips to launcher", -1)
+    if added > 0 then
+        r.TrackList_AdjustWindows(false)
+        r.UpdateArrange()
+    end
+    return added, message
+end
+
+--------------------------------------------------------------------------------
+-- auditioning a row of the media strip
+--------------------------------------------------------------------------------
+
+function Launcher.preview_ready()
+    return H.preview_ready()
+end
+
+-- Which row is sounding, or nothing. The owner is asked as well as the handle:
+-- the clip editor plays through the same preview, and it must not light up a
+-- row that merely happens to have been the last one clicked.
+function Launcher.preview_key()
+    if not L.preview_owner then return nil end
+    if not H.preview_playing() then
+        L.preview_owner = nil
+        return nil
+    end
+    return L.preview_owner
+end
+
+function Launcher.preview_toggle(path, key)
+    if Launcher.preview_key() == key then
+        H.stop_preview()
+        return false
+    end
+    return H.start_file_preview(path, key)
+end
+
+function Launcher.preview_stop()
+    H.stop_preview()
 end
 
 function Launcher.status()
