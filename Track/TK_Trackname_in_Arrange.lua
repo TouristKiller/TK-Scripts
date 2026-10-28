@@ -1,8 +1,13 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 2.0.0
--- @changelog 
+-- @version 2.0.1
+-- @changelog
 --[[
+v2.0.1:
++ Changed: presets are now stored in REAPER/Data/TK_Trackname_Presets, the same folder the native Arrange overlay extension uses, so script and extension share one set of presets (works for regular and portable installs)
++ Existing presets are copied to the new folder automatically when the script starts; nothing is overwritten and the old folder is left in place
++ Note: if you use the native extension, run this script once after updating so your existing presets show up in the extension
+
 v2.0.0:
 + Added Activity Glow (new Activity tab): each visible track lights up with its post-fader level, so in a large session you can see at a glance which tracks are sounding. Choose a level bar at the lane edge, a pulsing track color, or both, with adjustable floor, release and bar width
 + Activity Glow: optional clip flash turns the glow red for a moment when a track goes over 0 dBFS
@@ -150,7 +155,38 @@ local r                  = reaper
 local OS                 = r.GetOS()
 local IS_LINUX           = OS:lower():find("linux") ~= nil
 local script_path        = debug.getinfo(1,'S').source:match[[^@?(.*[\/])[^\/]-$]]
-local preset_path        = script_path .. "TK_Trackname_Presets/"
+-- Presets staan in REAPER/Data (zelfde map als de native Arrange overlay extensie gebruikt)
+local preset_path        = r.GetResourcePath() .. "/Data/TK_Trackname_Presets/"
+
+-- Eenmalige migratie: presets uit de oude map naast het script kopieren (nooit overschrijven, oude map blijft staan)
+do
+    local old_path = script_path .. "TK_Trackname_Presets/"
+    local idx = 0
+    local filename = r.EnumerateFiles(old_path, idx)
+    if filename then r.RecursiveCreateDirectory(preset_path, 0) end
+    while filename do
+        if filename:match('%.json$') then
+            local existing = io.open(preset_path .. filename, 'rb')
+            if existing then
+                existing:close()
+            else
+                local src = io.open(old_path .. filename, 'rb')
+                if src then
+                    local content = src:read('*all')
+                    src:close()
+                    local dst = io.open(preset_path .. filename, 'wb')
+                    if dst then
+                        dst:write(content)
+                        dst:close()
+                    end
+                end
+            end
+        end
+        idx = idx + 1
+        filename = r.EnumerateFiles(old_path, idx)
+    end
+end
+
 local freeze_icon_path   = script_path .. "FREEZE.png"
 local freeze_icon_image  = nil
 local json               = dofile(script_path .. "json.lua")
