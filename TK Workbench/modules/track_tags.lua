@@ -49,7 +49,9 @@ local state = {
   filtered_tracks = {},
   available_sorted = {},
   last_filter_key = nil,
-  visibility_snapshot = nil
+  visibility_snapshot = nil,
+  store_content = nil,
+  revision = 0
 }
 
 -- Tracks without tags used to be collateral damage: they match no tag, so any
@@ -244,10 +246,17 @@ local function load_store(settings, force)
   local now = r.time_precise and r.time_precise() or os.time()
   if not force and path == state.store_path and settings.auto_reload ~= false and now - state.last_load_time < (settings.reload_interval or defaults.reload_interval) then return end
   if not force and path == state.store_path and settings.auto_reload == false and state.last_load_time > 0 then return end
+  -- The revision only moves when the tags really changed. The store is reread
+  -- every couple of seconds, and Color Studio repaints tracks whenever this
+  -- number moves, so bumping it on every reread would recolour on a timer.
+  local content = read_text(path) or ""
+  if path ~= state.store_path or content ~= state.store_content then state.revision = state.revision + 1 end
+  state.store_content = content
   state.store_path = path
   state.store_label = label
   settings.last_store_path = path
-  state.data = normalize_data(read_json(path))
+  local ok, decoded = pcall(json.decode, content ~= "" and content or "{}")
+  state.data = normalize_data(ok and type(decoded) == "table" and decoded or {})
   state.load_error = nil
   state.last_load_time = now
   refresh_available_sorted()
@@ -256,7 +265,10 @@ end
 local function save_store(app)
   state.data = normalize_data(state.data)
   refresh_available_sorted()
-  if write_json(state.store_path, state.data) then
+  local ok, encoded = pcall(json.encode, state.data)
+  if ok and encoded and write_text(state.store_path, encoded) then
+    state.store_content = encoded
+    state.revision = state.revision + 1
     state.load_error = nil
     state.last_load_time = r.time_precise and r.time_precise() or os.time()
     state.last_filter_key = nil
@@ -724,6 +736,39 @@ local function set_tagged_track_state(app, tag, field, value, label)
   app.status = "Tags " .. label:lower() .. ": " .. tostring(#tracks) .. " tracks"
 end
 
+-- One-off paint with the tag's colour. Color Studio's tag rules do the same
+-- automatically; this is for when that is not set up or a single track should
+-- change. The tag colour is ImGui RGBA, the track wants a native colour.
+local function color_tracks_from_tag(app, tag, tracks, label)
+  local color = tonumber(state.data.colors[tag])
+  if not color then app.status = "Tags: " .. tag .. " has no color"; return end
+  if #tracks == 0 then app.status = "Tags: no tracks to color"; return end
+  color = math.floor(color)
+  local native = r.ColorToNative((color >> 24) & 0xFF, (color >> 16) & 0xFF, (color >> 8) & 0xFF)
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  for _, track in ipairs(tracks) do r.SetTrackColor(track, native) end
+  r.PreventUIRefresh(-1)
+  r.TrackList_AdjustWindows(false)
+  r.UpdateArrange()
+  r.Undo_EndBlock(label, -1)
+  app.status = "Tags colored " .. tostring(#tracks) .. " tracks: " .. tag
+end
+
+local function selected_tracks()
+  local result = {}
+  for index = 0, r.CountSelectedTracks(0) - 1 do result[#result + 1] = r.GetSelectedTrack(0, index) end
+  return result
+end
+
+local function track_by_guid(guid)
+  for index = 0, r.CountTracks(0) - 1 do
+    local track = r.GetTrack(0, index)
+    if track_guid(track) == guid then return track end
+  end
+  return nil
+end
+
 local function solo_select_tracks_with_tag(app, tag)
   local tracks = tracks_with_tag(tag)
   local tagged = {}
@@ -1073,12 +1118,31 @@ local function draw_tag_chip(ctx, app, settings, tag, suffix, removable_guid)
       end
       r.ImGui_EndMenu(ctx)
     end
+    -- Greyed out rather than hidden while the tag has no colour, so the
+    -- option can be found before there is anything to paint with.
+    local has_color = state.data.colors[tag] ~= nil
+    if removable_guid and r.ImGui_MenuItem(ctx, "Color this track with tag color", nil, false, has_color) then
+      local track = track_by_guid(removable_guid)
+      color_tracks_from_tag(app, tag, track and { track } or {}, "Color track by tag")
+    end
+    if r.ImGui_MenuItem(ctx, "Color selected tracks with tag color", nil, false, has_color) then
+      color_tracks_from_tag(app, tag, selected_tracks(), "Color selected tracks by tag")
+    end
+    if r.ImGui_MenuItem(ctx, "Color all tracks with this tag", nil, false, has_color) then
+      color_tracks_from_tag(app, tag, tracks_with_tag(tag), "Color tracks by tag")
+    end
     if r.ImGui_BeginMenu(ctx, "Set color...") then
       local changed, value = r.ImGui_ColorEdit4(ctx, "##tag_context_color", state.edit_color_value, r.ImGui_ColorEditFlags_NoInputs())
       if changed then state.edit_color_value = value end
       if r.ImGui_Button(ctx, "Apply##tag_context_color_apply") then
         state.data.colors[tag] = state.edit_color_value
         if save_store(app) then app.status = "Tags color updated" end
+        r.ImGui_CloseCurrentPopup(ctx)
+      end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_Button(ctx, "Apply + color tracks##tag_context_color_apply_tracks") then
+        state.data.colors[tag] = state.edit_color_value
+        if save_store(app) then color_tracks_from_tag(app, tag, tracks_with_tag(tag), "Color tracks by tag") end
         r.ImGui_CloseCurrentPopup(ctx)
       end
       if state.data.colors[tag] then
@@ -1265,6 +1329,22 @@ local function draw_track_row(app, settings, item, width)
   end
   draw_divider(ctx, width)
   r.ImGui_PopID(ctx)
+end
+
+-- Read-only tag access for other modules. Color Studio's tag rules colour
+-- tracks from this, so a tag keeps one colour that both modules agree on
+-- instead of a second copy in Color Studio's own settings. The tables are the
+-- live store: callers read them and never write. revision moves whenever the
+-- tags or their colours change, from here or from TK FX Browser on disk.
+function M.tag_snapshot(app)
+  local settings = ensure_settings(app)
+  load_store(settings, false)
+  return {
+    tracks = state.data.tracks,
+    colors = state.data.colors,
+    revision = state.revision,
+    track_guid = track_guid
+  }
 end
 
 function M.init(app)

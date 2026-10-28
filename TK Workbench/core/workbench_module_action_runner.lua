@@ -40,6 +40,14 @@ function M.run(module_id, command)
   return send("run:" .. tostring(module_id) .. ":" .. tostring(command))
 end
 
+-- Puts back a saved split layout. Workbench is started if it is not running,
+-- like for the open actions, and picks the command up on its first frame.
+function M.workspace(index)
+  index = tonumber(index)
+  if not index then return false end
+  return send("workspace:" .. tostring(math.floor(index)))
+end
+
 function M.open(module_id)
   if not module_id or module_id == "" then return false end
   r.SetExtState(EXT_SECTION, COMMAND_KEY, "open:" .. tostring(module_id), false)

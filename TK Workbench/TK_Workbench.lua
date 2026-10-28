@@ -1,19 +1,21 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.9.8
+-- @version 0.9.9
 -- @changelog:
--- v0.9.8
---   + Time Machine (new module): Keeps a copy of every saved version of a project and says in plain words what changed between saves: tracks, plugins, items, envelopes, mixer settings, tempo, markers and the master. Versions are kept outside the project, in a "TK Time Machine" folder at a location of your choice, so the .rpp itself never grows. Saves are picked up in the background whenever Workbench runs, and copying and comparing are spread over frames so even very large projects do not stall the window
---   + Time Machine: Anything from an older version can be put back into the open project: one plugin, an envelope, a track's items or mixer settings, a whole track, a deleted track or a marker. Right-click a line in the list of changes or use a track's Restore menu; every restore is a single undo step, and tracks and plugins are found by their id, so a restore lands on the right track even after reordering or renaming
---   + Time Machine: "Versus now" compares a saved version with the project as it is, unsaved changes included. Select the newest version to see exactly what you changed since the last save, and undo any of it line by line
---   + Time Machine: History shows every saved change to one track or one plugin, newest first, so a question like "when did that reverb disappear?" no longer means clicking through every version. Open it from a track's History button, by right-clicking a plugin, or with Track for the track selected in REAPER
---   + Time Machine: Versions can be labelled ("Mix v1 sent to client") with a note, and labelled versions are never cleaned up. Other versions are thinned out automatically: every save is kept for a day, then one per hour for a week, then one per day, within a size limit per project
---   + Time Machine: VST, VST3 and CLAP plugins store their settings as an unreadable blob, so the list can only say "state changed". Explain plugin changes loads both versions on a hidden temporary track and names the parameters that actually moved, or tells you only the plugin's private data changed. JSFX sliders are named straight from the effect's source, and hidden sliders that meters write their readings into are ignored, so a meter on the master no longer shows up as an edit
---   + Time Machine: REAPER's own .rpp-bak backups (beside the project and in its Backups folder) can be imported, dated by when they were saved, to give a project a history from before Time Machine was installed
---   + Time Machine: A history follows its project when the project is moved or renamed, a Save As starts a new history that remembers where it came from, and Link reconnects a history by hand. When the storage location is changed, existing histories can be moved along and are merged with any already there
---   + Time Machine: An old version can be opened as a copy in a new tab and compared by ear with A/B, which switches between the two at the same play position (also available as an action for a shortcut). A track can be borrowed from any version of any project, with fresh ids and its media paths kept working. The list of changes can be copied as text, and a storage overview shows the space each history takes and cleans up histories whose project is gone
---   + Track Recall: Time Machine can save a track as it was in an older version as a recall, without changing the track now. The track chunk handling moved into a shared core file for this; restoring recalls works exactly as before
---   + Media Browser: Ratings in an ID3 chunk at the end of a WAV file are now found in WAVs larger than 50 MB. The scan stopped at the first chunk over 50 MB, which is normally the audio itself; now only the ID3 chunk is held to that limit
+-- v0.9.9
+--   + Workbench: Workspaces. A split layout - which module is in which pane, side by side or stacked, the divider position and the kept pane - can be saved in one of 10 workspace slots from the split view menu (Workspaces > Save current layout to), with a name such as "Monitoring". Loading one puts the whole layout back in one click, so switching between tasks no longer means setting up the panes again
+--   + Workbench: New actions "TK Workbench: Open workspace 1" to "10" load a saved workspace from a shortcut, toolbar or control surface, and start Workbench first if it is not running
+--   + Color Studio: Auto rules can now target Tag. Such a rule colours tracks by the tags they carry in the Tags module instead of by their name. Leave the text empty to match any tag, so one rule gives every tagged track the colour of its tag; with text it applies to the matching tags only
+--   + Color Studio: A tag rule follows the colour set for the tag in Tags (right-click a tag > Set color), so a tag keeps one colour that both modules share. With "Auto apply tracks" on, tracks are recoloured as soon as a tag gets a new colour or is added to a track, also when the tags are changed by TK FX Browser. Turn off "Use tag color" to paint the tracks with one fixed palette colour instead
+--   + Color Studio: Tag rules and track name rules are applied in one pass, so the rule order decides between them. A track with several matching tags takes the colour of the alphabetically first tag that has one; a rule higher in the list for one specific tag overrules that
+--   + Tags: Right-clicking a tag can now colour tracks with the tag's colour: this track, the selected tracks, or every track with the tag, each as a single undo step. "Set color..." has an "Apply + color tracks" button that stores the colour and applies it to every track with the tag in one go
+--   + Media Browser: The rating filter button opens a menu instead of cycling a minimum. Choose a rating only (3 stars shows exactly the 3-star files), a rating and up, or files without a rating. The label shows which: ★3 is exactly three, ★3+ three and up. Before, ★1 meant "one star and up", which shows every rated file and looked as if the filter did nothing
+--   + Media Browser: Ratings stored in the files themselves are read much faster while a rating filter or rating sort is on. They were read one file per frame, so in a large library the filtered list stayed incomplete for a long time; the button's tooltip now also says how many files are still being read
+--   + Plugin Browser: Fixed Workbench stopping with "ImGui_EndChild: Missing PopID()" followed by "expected a valid ImGui_Context*", for example while resizing the window. An error while drawing a single plugin card or row left the ImGui ID stack unbalanced, which destroys the whole window and hid the original error. Each card and row now always closes its ID, the error is written to workbench_errors.txt, and the rest of the list keeps drawing
+--   + Plugin Browser: Opening it with its action ("TK Workbench: Open Plugin Browser", for example from a key command) brings Workbench forward and takes the keyboard, with the cursor in the search box, so you can type a plugin name straight away, pick it with the arrow keys and insert it with Enter. A previous search is selected and replaced by what you type, and a window folded away by auto-collapse unfolds for it. Escape, or inserting with Enter, hands the keyboard back to REAPER so its shortcuts work again. Only this action takes the keyboard; it needs js_ReaScriptAPI and can be switched off in the Plugin Browser settings ("Type to search after open action")
+--   + Plugin Browser: Fixed plugins showing the screenshot of a similarly named plugin, or none. Screenshot files were matched first come, first served, so "JS_ Chorus _Improved Shaping_.png" claimed JS: Chorus before "JS_ Chorus.png" was reached; on one real library 372 plugins showed a sibling's screenshot. The exact file name that TK FX Browser saves under now always wins, shortened names only fill gaps, names like "JS: *" are found, and a plugin with several tags such as "Soundbox (Audiomodern) (16 out)" also finds a hand-made "Soundbox.png". The same applies to custom images
+--   + Plugin Browser: Make Screenshot no longer saves a blank image. Plugins that draw with OpenGL or DirectX, or that are still drawing their window, came back as one flat colour, and that blank file was then shown for good. A blank capture is now retried a moment later, then automatically as a screen capture (the OpenGL/DX method), and if it stays blank nothing is saved and the status line says so. A blank screenshot saved earlier can be replaced by making it again
+--   + FX Groups: Follow presets. Loading a preset on one member - in the plugin's own preset browser, such as UADx, or in REAPER's preset menu - now copies that whole FX to the other members of the group, including the plugin's own state, so their windows show the new preset name too. Before, only the parameter REAPER reported as last touched was linked, and a preset load touches none. A preset is recognised by its name changing or by several parameters changing at once (UADx does not report its preset names to REAPER, so for UADx it is the latter). Only FX with an open window are watched, and only parameters that differ are written, so even UADx PolyMAX with its 2149 parameters follows without load. Unlinked FX and parameters are left alone, automation on several parameters is not copied around endlessly, and the option can be switched off next to "Sync paused"
 
 local r = reaper
 
@@ -387,6 +389,246 @@ local function horizontal_rack_entry_visible()
   return app.modules_by_id and app.modules_by_id.instrument_rack ~= nil and not is_module_hidden("instrument_rack")
 end
 
+-- A workspace is the split view as it stands - which module sits in which pane,
+-- the direction, the divider and the pinned pane - kept in a numbered slot so
+-- one action (TK Workbench: Open workspace N) puts it all back at once. Slots
+-- are numbered rather than named because an action script has to name its
+-- target before anyone has saved anything. Grouped on one table because this
+-- file has a limited number of top-level locals.
+local workspaces = { SLOTS = 10 }
+
+function workspaces.list()
+  if type(app.settings.workspaces) ~= "table" then app.settings.workspaces = {} end
+  return app.settings.workspaces
+end
+
+-- String keys: a sparse array (slots 1 and 4 used) does not survive JSON.
+function workspaces.get(index)
+  local entry = workspaces.list()[tostring(index)]
+  if type(entry) == "table" and type(entry.active_module) == "string" and entry.active_module ~= "" then return entry end
+  return nil
+end
+
+function workspaces.module_title(id)
+  local module = app.modules_by_id[id or ""]
+  return module and tostring(module.title or module.id) or tostring(id or "?")
+end
+
+-- Says what is in it, so a slot saved without a name still reads as something.
+function workspaces.describe(entry)
+  local text = workspaces.module_title(entry.active_module)
+  if entry.split == true and entry.split_module and entry.split_module ~= "" then
+    text = text .. (entry.orientation == "horizontal" and " | " or " / ") .. workspaces.module_title(entry.split_module)
+  end
+  return text
+end
+
+function workspaces.label(index)
+  local entry = workspaces.get(index)
+  if not entry then return tostring(index) .. ". (empty)" end
+  local name = tostring(entry.name or "")
+  if name == "" then name = workspaces.describe(entry) end
+  return tostring(index) .. ". " .. name
+end
+
+-- The secondary module is passed in: the one on screen is worked out further
+-- down this file (it falls back to the first other module when none is set),
+-- and storing the raw setting would save a pane the user never saw.
+function workspaces.save(index, name, secondary_id, split_visible)
+  local active = app.settings.active_module
+  if not active or active == HOME_MODULE_ID or not app.modules_by_id[active] then
+    app.status = "Open a module before saving a workspace"
+    return false
+  end
+  local split = split_visible == true and secondary_id ~= nil and secondary_id ~= active
+  local pin = app.settings.split_pinned_pane
+  workspaces.list()[tostring(index)] = {
+    name = tostring(name or ""):match("^%s*(.-)%s*$") or "",
+    active_module = active,
+    split = split,
+    split_module = split and secondary_id or "",
+    orientation = app.settings.split_orientation == "horizontal" and "horizontal" or "vertical",
+    ratio = tonumber(app.settings.split_ratio) or 0.5,
+    pinned_pane = split and (pin == "primary" or pin == "secondary") and pin or ""
+  }
+  save_settings()
+  app.status = "Saved workspace " .. workspaces.label(index)
+  return true
+end
+
+-- Writes the settings directly instead of going through set_active_view: that
+-- routes around a pinned pane, and a workspace has to land exactly as saved
+-- whatever is pinned right now.
+function workspaces.load(index)
+  local entry = workspaces.get(index)
+  if not entry then
+    app.status = "Workspace " .. tostring(index) .. " is empty"
+    return false
+  end
+  if not app.modules_by_id[entry.active_module or ""] then
+    app.status = "Workspace " .. tostring(index) .. ": " .. tostring(entry.active_module) .. " is not available"
+    return false
+  end
+  local secondary = entry.split == true and entry.split_module ~= entry.active_module and app.modules_by_id[entry.split_module or ""] or nil
+  app.settings.active_module = entry.active_module
+  app.cache.plugin_browser_return_module = nil
+  if secondary then app.settings.split_module = entry.split_module end
+  app.settings.split_view_enabled = secondary ~= nil
+  app.settings.split_orientation = entry.orientation == "horizontal" and "horizontal" or "vertical"
+  app.settings.split_ratio = math.max(0.18, math.min(0.82, tonumber(entry.ratio) or 0.5))
+  app.settings.split_pinned_pane = secondary and (entry.pinned_pane == "primary" or entry.pinned_pane == "secondary") and entry.pinned_pane or ""
+  app.settings.split_pinned_return = ""
+  save_settings()
+  app.status = "Workspace " .. workspaces.label(index)
+  if entry.split == true and not secondary then app.status = app.status .. " - " .. workspaces.module_title(entry.split_module) .. " is not available" end
+  return true
+end
+
+function workspaces.clear(index)
+  workspaces.list()[tostring(index)] = nil
+  save_settings()
+  app.status = "Cleared workspace " .. tostring(index)
+end
+
+-- ImGui focus is only ImGui's idea of focus: a field can look active while
+-- Windows keeps sending the keys to another window. A module that wants the
+-- keyboard after an open action (Plugin Browser, to type a search) gets the
+-- Workbench window focused for real. Only on request: an open action bound to
+-- a control surface must not quietly take the keyboard away from REAPER.
+-- Needs js_ReaScriptAPI; without it the ImGui focus is all there is.
+local keyboard = {}
+
+function keyboard.handles(list)
+  local result = {}
+  for address in tostring(list or ""):gmatch("[^,]+") do
+    local number = tonumber(address)
+    local hwnd = number and r.JS_Window_HandleFromAddress(number) or nil
+    if hwnd then result[#result + 1] = hwnd end
+  end
+  return result
+end
+
+-- Current ReaImGui windows have class "reaper_imgui_context", older builds
+-- "ImGuiWindow" (the same test TK Transport uses).
+function keyboard.is_imgui(hwnd)
+  local class = r.JS_Window_GetClassName and r.JS_Window_GetClassName(hwnd) or ""
+  return class == "ImGuiWindow" or class:match("^reaper_imgui") ~= nil
+end
+
+-- Every ReaImGui window REAPER has: floating ones are top-level, docked ones
+-- live under the main window or under a floating docker it owns.
+function keyboard.imgui_windows()
+  local result, seen = {}, {}
+  local function consider(hwnd)
+    if hwnd and not seen[hwnd] and keyboard.is_imgui(hwnd) then
+      seen[hwnd] = true
+      result[#result + 1] = hwnd
+    end
+  end
+  local main = r.GetMainHwnd()
+  local parents = { main }
+  if r.JS_Window_ListAllTop then
+    local _, tops = r.JS_Window_ListAllTop()
+    for _, top in ipairs(keyboard.handles(tops)) do
+      consider(top)
+      local owner = r.JS_Window_GetRelated and r.JS_Window_GetRelated(top, "OWNER") or nil
+      if owner == main then parents[#parents + 1] = top end
+    end
+  end
+  for _, parent in ipairs(parents) do
+    local _, children = r.JS_Window_ListAllChild(parent)
+    for _, child in ipairs(keyboard.handles(children)) do consider(child) end
+  end
+  return result
+end
+
+-- Titles cannot be trusted (a docked window shows its tab text, several
+-- scripts can share a name), so the ReaImGui window is picked whose rectangle
+-- matches where this frame drew the Workbench window.
+function keyboard.workbench_hwnd()
+  if not (r.JS_Window_HandleFromAddress and r.JS_Window_ListAllChild and r.JS_Window_GetRect and r.GetMainHwnd) then return nil end
+  local x, y, w, h = app.cache.window_x, app.cache.window_y, app.cache.window_w, app.cache.window_h
+  if not (x and y and w and h) then return nil end
+  local left, top, right, bottom = x, y, x + w, y + h
+  if r.ImGui_PointConvertNative then
+    left, top = r.ImGui_PointConvertNative(ctx, x, y, true)
+    right, bottom = r.ImGui_PointConvertNative(ctx, x + w, y + h, true)
+  end
+  local best, best_error = nil, math.huge
+  for _, hwnd in ipairs(keyboard.imgui_windows()) do
+    if not r.JS_Window_IsVisible or r.JS_Window_IsVisible(hwnd) then
+      local ok, l, t, rr, b = r.JS_Window_GetRect(hwnd)
+      if ok then
+        -- Native y can run upwards (macOS), so compare the edges either way up.
+        local error = math.abs(l - left) + math.abs(rr - right) + math.min(math.abs(t - top) + math.abs(b - bottom), math.abs(t - bottom) + math.abs(b - top))
+        if error < best_error then best, best_error = hwnd, error end
+      end
+    end
+  end
+  if best and best_error <= 80 then return best end
+  return nil
+end
+
+function keyboard.holds(hwnd)
+  local focused = r.JS_Window_GetFocus and r.JS_Window_GetFocus() or nil
+  if not hwnd or not focused then return false end
+  return focused == hwnd or (r.JS_Window_IsChild and r.JS_Window_IsChild(hwnd, focused)) == true
+end
+
+-- The window that had focus (often the Action list the shortcut was pressed
+-- in) is a top-level window of its own, and focus does not move into another
+-- top-level window that is not in front. So the window holding Workbench is
+-- brought forward first, then focused.
+function keyboard.take(hwnd)
+  local root = hwnd
+  if r.JS_Window_GetParent then
+    for _ = 1, 16 do
+      local parent = r.JS_Window_GetParent(root)
+      if not parent then break end
+      root = parent
+    end
+  end
+  if r.JS_Window_SetForeground then r.JS_Window_SetForeground(root) end
+  r.JS_Window_SetFocus(hwnd)
+end
+
+-- Runs after the window is drawn. Right after a cold start the window does
+-- not exist yet, so finding it is retried for a few frames. Once found, focus
+-- is held for half a second: REAPER can hand it back to the window the
+-- shortcut came from after the action has run.
+function keyboard.apply_pending()
+  if not (r.JS_Window_SetFocus and r.time_precise) then app.cache.keyboard_focus_tries = nil; return end
+  local now = r.time_precise()
+  local hwnd = app.cache.keyboard_hwnd
+  if not hwnd then
+    hwnd = keyboard.workbench_hwnd()
+    if not hwnd then
+      local tries = (app.cache.keyboard_focus_tries or 0) - 1
+      app.cache.keyboard_focus_tries = tries > 0 and tries or nil
+      if tries <= 0 then app.status = "Could not give the Workbench window the keyboard" end
+      return
+    end
+    app.cache.keyboard_hwnd = hwnd
+    app.cache.keyboard_hold_until = now + 0.5
+  end
+  if not keyboard.holds(hwnd) then keyboard.take(hwnd) end
+  if now >= (app.cache.keyboard_hold_until or 0) then app.cache.keyboard_focus_tries = nil end
+end
+
+-- Hands the keyboard back to REAPER, so the space bar plays again once the
+-- typing is done. Only while Workbench still holds it: inserting a plugin can
+-- open its FX window, and that window keeps the focus it took.
+function keyboard.release()
+  app.cache.keyboard_focus_tries = nil
+  local hwnd = app.cache.keyboard_hwnd or keyboard.workbench_hwnd()
+  app.cache.keyboard_hwnd = nil
+  if not (r.JS_Window_SetFocus and r.GetMainHwnd) or not keyboard.holds(hwnd) then return end
+  if r.JS_Window_SetForeground then r.JS_Window_SetForeground(r.GetMainHwnd()) end
+  r.JS_Window_SetFocus(r.GetMainHwnd())
+end
+
+app.release_keyboard = keyboard.release
+
 local function process_module_action_commands()
   local command = r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY) or ""
   if command == "" then return end
@@ -408,11 +650,36 @@ local function process_module_action_commands()
     end
     return
   end
+  if action == "workspace" then
+    local index = tonumber(target)
+    if index and index >= 1 and index <= workspaces.SLOTS then workspaces.load(math.floor(index)) end
+    return
+  end
   if action ~= "open" or not target or target == "" then return end
   if target == HOME_MODULE_ID or app.modules_by_id[target] then
     set_active_view(target)
     local module = app.modules_by_id[target]
     app.status = "Opened " .. tostring(module and (module.title or module.id) or "Home")
+    -- Brought forward inside ImGui on every open action. The OS keyboard focus
+    -- is only taken when the module asks for it by returning true from
+    -- on_open_action (Plugin Browser: its search box).
+    app.cache.focus_window = true
+    -- Auto-collapse would otherwise keep the window folded to its strip until
+    -- the mouse comes over it, with the focused field out of sight.
+    if app.cache.auto_collapse_collapsed then
+      app.cache.auto_collapse_collapsed = false
+      app.cache.auto_collapse_force_restore = true
+      app.cache.auto_collapse_last_hover_time = r.time_precise and r.time_precise() or os.clock()
+    end
+    if module and type(module.on_open_action) == "function" then
+      local ok, wants_keyboard = pcall(module.on_open_action, app)
+      if not ok then
+        record_module_error(target .. ".open_action", wants_keyboard)
+      elseif wants_keyboard == true then
+        app.cache.keyboard_focus_tries = 10
+        app.cache.keyboard_hwnd = nil
+      end
+    end
   else
     app.status = "Workbench module not found: " .. tostring(target)
   end
@@ -1042,6 +1309,45 @@ local function draw_top_bar()
       app.settings.split_view_enabled = false
       app.status = "Split view disabled"
       save_settings()
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_BeginMenu(ctx, "Workspaces") then
+      local any_saved = false
+      for index = 1, workspaces.SLOTS do
+        local entry = workspaces.get(index)
+        if entry then
+          any_saved = true
+          if r.ImGui_MenuItem(ctx, workspaces.label(index) .. "##tk_workbench_workspace_load_" .. index, nil, false) then workspaces.load(index) end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, workspaces.describe(entry) .. "\nAction: TK Workbench: Open workspace " .. index) end
+        end
+      end
+      if not any_saved then r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No workspaces saved yet") end
+      r.ImGui_Separator(ctx)
+      local can_save = not is_home_active() and get_active_module() ~= nil
+      if r.ImGui_BeginMenu(ctx, "Save current layout to", can_save) then
+        r.ImGui_SetNextItemWidth(ctx, UIScale.round(200))
+        local name_changed, name_value = r.ImGui_InputTextWithHint(ctx, "##tk_workbench_workspace_name", "Name, e.g. Monitoring", app.cache.workspace_name or "")
+        if name_changed then app.cache.workspace_name = name_value end
+        local secondary = split_view_available() and get_split_module() or nil
+        for index = 1, workspaces.SLOTS do
+          if r.ImGui_MenuItem(ctx, workspaces.label(index) .. "##tk_workbench_workspace_save_" .. index) then
+            -- No name typed while overwriting keeps the slot's old name, so a
+            -- quick re-save does not wipe a label the user once gave it.
+            local name = app.cache.workspace_name or ""
+            local existing = workspaces.get(index)
+            if name:match("^%s*$") and existing then name = existing.name or "" end
+            if workspaces.save(index, name, secondary and secondary.id or nil, secondary ~= nil) then app.cache.workspace_name = "" end
+          end
+        end
+        r.ImGui_EndMenu(ctx)
+      end
+      if r.ImGui_BeginMenu(ctx, "Clear", any_saved) then
+        for index = 1, workspaces.SLOTS do
+          if workspaces.get(index) and r.ImGui_MenuItem(ctx, workspaces.label(index) .. "##tk_workbench_workspace_clear_" .. index) then workspaces.clear(index) end
+        end
+        r.ImGui_EndMenu(ctx)
+      end
+      r.ImGui_EndMenu(ctx)
     end
     r.ImGui_EndPopup(ctx)
   end
@@ -2446,6 +2752,10 @@ local function draw_frame()
   if r.ImGui_SetNextWindowBgAlpha then
     r.ImGui_SetNextWindowBgAlpha(ctx, app.settings.window_bg_alpha or 1.0)
   end
+  if app.cache.focus_window then
+    app.cache.focus_window = nil
+    if r.ImGui_SetNextWindowFocus then r.ImGui_SetNextWindowFocus(ctx) end
+  end
   local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
   if visible then
     app.cache.window_x, app.cache.window_y = r.ImGui_GetWindowPos(ctx)
@@ -2465,6 +2775,7 @@ local function draw_frame()
     update_auto_collapse_state(workbench_window_hovered(), docked)
   end
   r.ImGui_End(ctx)
+  if app.cache.keyboard_focus_tries then keyboard.apply_pending() end
   draw_preferences_settings()
   draw_missing_extensions_popup()
   UI.end_tooltip_frame(app)

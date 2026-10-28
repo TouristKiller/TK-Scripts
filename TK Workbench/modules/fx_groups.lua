@@ -21,7 +21,8 @@ local PALETTE = {
 }
 
 local defaults = {
-  sync_paused = false
+  sync_paused = false,
+  follow_presets = true
 }
 
 local state = {
@@ -477,11 +478,34 @@ local function entry_reference_fx(group, entry)
   return nil
 end
 
-local function sync_one_fx(group, entry)
-  local src_track, src_fx = resolve_fx_source(group, entry.name, entry.occ)
-  if not (src_track and src_fx) then return 0 end
+-- The unlinked parameters of one FX as a lookup. is_param_excluded walks the
+-- whole list for every parameter, which is fine for one knob but not for a
+-- copy of UADx PolyMAX, which has 2149 of them.
+local function excluded_param_set(group, name, occ)
+  local set = {}
+  local prefix = tostring(name) .. "##" .. tostring(occ) .. "##"
+  for _, key in ipairs(group.param_excluded or {}) do
+    if key:sub(1, #prefix) == prefix then
+      local param = tonumber(key:sub(#prefix + 1))
+      if param then set[param] = true end
+    end
+  end
+  return set
+end
+
+-- Copies one FX from the given instance to every other member that has it.
+-- Sync now passes the group's source, preset follow the one that changed.
+-- Only parameters that differ are written: a preset moves a few dozen of
+-- them, and setting all of a large VST3's parameters one by one is slow and
+-- floods the plugin with changes it does not need.
+local function sync_fx_from(group, entry, src_track, src_fx)
   local src_guid = track_guid(src_track)
   local src_params = r.TrackFX_GetNumParams(src_track, src_fx) or 0
+  local excluded = excluded_param_set(group, entry.name, entry.occ)
+  local source = {}
+  for param = 0, src_params - 1 do
+    if not excluded[param] then source[param] = r.TrackFX_GetParamNormalized(src_track, src_fx, param) end
+  end
   local synced = 0
   for _, guid in ipairs(group.members) do
     if guid ~= src_guid then
@@ -492,9 +516,10 @@ local function sync_one_fx(group, entry)
           local member_params = r.TrackFX_GetNumParams(member, midx) or 0
           local limit = math.min(src_params, member_params)
           for param = 0, limit - 1 do
-            if not is_param_excluded(group, entry.name, entry.occ, param) then
-              local value = r.TrackFX_GetParamNormalized(src_track, src_fx, param)
-              if value then r.TrackFX_SetParamNormalized(member, midx, param, value) end
+            local value = source[param]
+            if value then
+              local current = r.TrackFX_GetParamNormalized(member, midx, param)
+              if not current or math.abs(current - value) > 1e-9 then r.TrackFX_SetParamNormalized(member, midx, param, value) end
             end
           end
           synced = synced + 1
@@ -503,6 +528,12 @@ local function sync_one_fx(group, entry)
     end
   end
   return synced
+end
+
+local function sync_one_fx(group, entry)
+  local src_track, src_fx = resolve_fx_source(group, entry.name, entry.occ)
+  if not (src_track and src_fx) then return 0 end
+  return sync_fx_from(group, entry, src_track, src_fx)
 end
 
 local function sync_fx_now(group, entry)
@@ -537,17 +568,194 @@ local function add_fx_to_group(group, payload)
   return added
 end
 
+-- Preset follow. The sync in M.update only sees the parameter REAPER reports as
+-- last touched, and loading a preset touches none: a plugin's own preset
+-- browser (UADx, many VST3s) or REAPER's preset menu moves dozens of
+-- parameters at once, and none of that reached the other members. Every linked
+-- FX is now looked at in turn, a couple of milliseconds per frame, and when
+-- its preset name changes or several parameters jump between two looks, the
+-- whole FX is copied from that one to the rest of the group.
+local follow = {
+  instances = {},
+  index = 1,
+  snapshots = {},
+  triggers = {},
+  paused_until = {},
+  rebuild_at = 0,
+  -- One parameter moving is a knob being turned, which the touched-parameter
+  -- sync already handles; three or more at once is a preset or a reset.
+  JUMP_PARAMS = 3,
+  BUDGET = 0.002,
+  REBUILD_EVERY = 1.0,
+  -- Pause after every full round. Measured on UADx PolyMAX: 2149 parameters,
+  -- no preset name reported to REAPER (so the jump test is what catches it),
+  -- and a preset lands in a single frame with 28-35 parameters moving.
+  -- Reading that many parameters on every frame would be a constant load for
+  -- nothing; a round a few times a second still follows within a blink.
+  PASS_INTERVAL = 0.15,
+  next_pass_at = 0
+}
+
+function follow.rebuild()
+  local list, keep = {}, {}
+  for _, group in ipairs(state.groups) do
+    if group.link_active and #group.members > 1 then
+      for _, entry in ipairs(group_linked_fx(group)) do
+        if entry.count > 1 and not is_fx_excluded(group, entry.key) then
+          for _, inst in ipairs(members_with_fx(group, entry.name, entry.occ)) do
+            local id = group.id .. "\31" .. inst.guid .. "\31" .. entry.key
+            list[#list + 1] = { id = id, group = group, entry = entry, guid = inst.guid, track = inst.track, fxidx = inst.fxidx }
+            keep[id] = follow.snapshots[id]
+          end
+        end
+      end
+    end
+  end
+  follow.instances = list
+  follow.snapshots = keep
+  follow.index = 1
+end
+
+function follow.read(inst)
+  local _, preset = r.TrackFX_GetPreset(inst.track, inst.fxidx, "")
+  local count = r.TrackFX_GetNumParams(inst.track, inst.fxidx) or 0
+  local values = {}
+  for param = 0, count - 1 do values[param] = r.TrackFX_GetParamNormalized(inst.track, inst.fxidx, param) end
+  return { preset = tostring(preset or ""), count = count, values = values }
+end
+
+function follow.changed(inst, old, new)
+  -- A different parameter count is a different plugin state altogether
+  -- (another FX landed in this slot); look again before acting on it.
+  if old.count ~= new.count then return false end
+  if new.preset ~= "" and new.preset ~= old.preset then return true end
+  local moved = 0
+  for param = 0, new.count - 1 do
+    local before, after = old.values[param], new.values[param]
+    if before and after and math.abs(before - after) > 1e-6 and not is_param_excluded(inst.group, inst.entry.name, inst.entry.occ, param) then
+      moved = moved + 1
+      if moved >= follow.JUMP_PARAMS then return true end
+    end
+  end
+  return false
+end
+
+-- Automation or modulation on several parameters of one member looks exactly
+-- like a preset that keeps loading. A preset load may land over a few frames,
+-- so a handful of follows close together is allowed; past that the FX is left
+-- alone for a while instead of being copied around on every frame.
+function follow.allowed(inst, now)
+  if (follow.paused_until[inst.id] or 0) > now then return false end
+  local recent = {}
+  for _, at in ipairs(follow.triggers[inst.id] or {}) do
+    if now - at < 2.0 then recent[#recent + 1] = at end
+  end
+  recent[#recent + 1] = now
+  follow.triggers[inst.id] = recent
+  if #recent > 6 then
+    follow.paused_until[inst.id] = now + 5.0
+    return false
+  end
+  return true
+end
+
+-- Copies the plugin's whole state, not only its parameters. A plugin keeps the
+-- name of its loaded preset in that state: with parameters alone a member
+-- sounded like the new preset while its window still showed the old name.
+-- Unlinked parameters keep their own values: read before, written back after.
+-- Returns false when the plugin has no such state (JSFX) or REAPER cannot set
+-- it, and the parameter copy that follows is then all there is.
+function follow.copy_state(inst)
+  if not (r.TrackFX_GetNamedConfigParm and r.TrackFX_SetNamedConfigParm) then return false end
+  local ok, chunk = r.TrackFX_GetNamedConfigParm(inst.track, inst.fxidx, "vst_chunk")
+  if not ok or type(chunk) ~= "string" or chunk == "" then return false end
+  local excluded = excluded_param_set(inst.group, inst.entry.name, inst.entry.occ)
+  local copied = 0
+  for _, other in ipairs(follow.instances) do
+    if other.group == inst.group and other.entry.key == inst.entry.key and other.guid ~= inst.guid
+      and validate_track(other.track) and fx_name(other.track, other.fxidx) == inst.entry.name then
+      local keep = {}
+      for param in pairs(excluded) do keep[param] = r.TrackFX_GetParamNormalized(other.track, other.fxidx, param) end
+      if r.TrackFX_SetNamedConfigParm(other.track, other.fxidx, "vst_chunk", chunk) then
+        for param, value in pairs(keep) do
+          if value then r.TrackFX_SetParamNormalized(other.track, other.fxidx, param, value) end
+        end
+        copied = copied + 1
+      end
+    end
+  end
+  return copied > 0
+end
+
+function follow.propagate(inst)
+  r.Undo_BeginBlock()
+  r.PreventUIRefresh(1)
+  follow.copy_state(inst)
+  -- After a state copy this normally finds nothing left to write; for a
+  -- member whose state could not be set it is the whole copy.
+  local synced = sync_fx_from(inst.group, inst.entry, inst.track, inst.fxidx)
+  r.PreventUIRefresh(-1)
+  r.Undo_EndBlock("FX Groups: follow preset", -1)
+  -- The members were just written by us. Fresh snapshots keep that write from
+  -- reading as a preset change of their own and bouncing straight back.
+  for _, other in ipairs(follow.instances) do
+    if other.group == inst.group and other.entry.key == inst.entry.key and validate_track(other.track) then
+      follow.snapshots[other.id] = follow.read(other)
+    end
+  end
+  return synced
+end
+
+function follow.step(app, settings)
+  if settings.follow_presets == false then return end
+  local now = r.time_precise()
+  if now >= follow.rebuild_at then
+    follow.rebuild()
+    follow.rebuild_at = now + follow.REBUILD_EVERY
+  end
+  local count = #follow.instances
+  if now < follow.next_pass_at then return end
+  local deadline = now + follow.BUDGET
+  for _ = 1, count do
+    if follow.index > count then
+      follow.index = 1
+      follow.next_pass_at = now + follow.PASS_INTERVAL
+      return
+    end
+    local inst = follow.instances[follow.index]
+    follow.index = follow.index + 1
+    -- FX can be moved or deleted between rebuilds; a slot that no longer holds
+    -- the same plugin means the list is stale.
+    if not validate_track(inst.track) or fx_name(inst.track, inst.fxidx) ~= inst.entry.name then
+      follow.rebuild_at = 0
+      return
+    end
+    -- A preset is loaded from an open FX window - the plugin's own browser or
+    -- REAPER's preset menu - so only open FX are read. A closed one loses its
+    -- snapshot: whatever automation did to it in the meantime must not read
+    -- as a preset load the moment it is opened again.
+    local open = not r.TrackFX_GetOpen or r.TrackFX_GetOpen(inst.track, inst.fxidx)
+    local fresh = open and follow.read(inst) or nil
+    local old = follow.snapshots[inst.id]
+    follow.snapshots[inst.id] = fresh
+    if fresh and old and follow.changed(inst, old, fresh) and follow.allowed(inst, now) then
+      local synced = follow.propagate(inst)
+      if synced > 0 then app.status = "FX Groups: " .. inst.entry.name .. " followed to " .. tostring(synced) .. " member(s)" end
+      return
+    end
+    if r.time_precise() >= deadline then return end
+  end
+end
+
 function M.init(app)
   ensure_settings(app)
   state.project = current_project()
   state.groups = load_groups()
 end
 
-function M.update(app)
-  refresh_project()
-  local settings = app.settings and app.settings.fx_groups
-  if not settings or settings.sync_paused then return end
-  if #state.groups == 0 then return end
+-- Mirrors the one parameter REAPER reports as last touched: a knob being
+-- turned on one member moves on all of them.
+local function sync_touched_param()
   local track, fxnumber, paramnumber
   if r.GetTouchedOrFocusedFX then
     local ok, trackidx, itemidx, takeidx, fxidx, parm = r.GetTouchedOrFocusedFX(0)
@@ -610,6 +818,15 @@ function M.update(app)
       end
     end
   end
+end
+
+function M.update(app)
+  refresh_project()
+  local settings = app.settings and app.settings.fx_groups
+  if not settings or settings.sync_paused then return end
+  if #state.groups == 0 then return end
+  sync_touched_param()
+  follow.step(app, settings)
 end
 
 local function draw_member_rows(ctx, app, group)
@@ -912,6 +1129,13 @@ function M.draw(app)
     settings.sync_paused = paused_value
     if app.save_settings then app.save_settings() end
   end
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(10))
+  local follow_changed, follow_value = r.ImGui_Checkbox(ctx, "Follow presets##fxg_follow_presets", settings.follow_presets ~= false)
+  if follow_changed then
+    settings.follow_presets = follow_value
+    if app.save_settings then app.save_settings() end
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Loading a preset on one member - in the plugin's own preset browser\nor REAPER's preset menu - copies that whole FX to the other members") end
   r.ImGui_Separator(ctx)
 
   draw_group_list(ctx, app)

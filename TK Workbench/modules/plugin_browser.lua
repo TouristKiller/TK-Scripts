@@ -29,6 +29,7 @@ local defaults = {
   source = "All",
   view_mode = "tiles",
   show_screenshots = true,
+  focus_search_on_open = true,
   tile_size = 112,
   target_mode = "selected_track",
   recent_max = 30,
@@ -59,7 +60,7 @@ local max_screenshot_loads_per_frame = 12
 local min_screenshot_load_interval = 0
 local min_screenshot_lifetime = 2.0
 local screenshot_signature_check_interval = 5.0
-local screenshot_normalization_version = 4
+local screenshot_normalization_version = 5
 local base_row_height = 40
 local uniform_ratio = 0.625
 -- Grouped in tables on purpose: this chunk is close to Lua's 200 top-level
@@ -79,6 +80,21 @@ local views = {
 function views.normalize(mode)
   if views.labels[mode] then return mode end
   return "tiles"
+end
+
+-- Every row and card draws inside its own PushID. A Lua error in one of them
+-- used to skip the PopID: the pcall around the results caught the error, but
+-- EndChild then found the ID stack unbalanced, and that ImGui assertion
+-- destroys the whole context - Workbench stopped with "Missing PopID" and the
+-- real error was never seen. The PopID now always runs, the error goes to the
+-- error log, and the other cards keep drawing.
+function views.guarded(app, id, body, ...)
+  local ctx = app.ctx
+  r.ImGui_PushID(ctx, id)
+  local ok, err = pcall(body, ...)
+  r.ImGui_PopID(ctx)
+  if not ok and app.record_module_error then app.record_module_error("plugin_browser.card", err) end
+  return ok
 end
 
 function views.next(mode)
@@ -421,6 +437,16 @@ local function normalize_plugin_name(value)
   return name:gsub("[^%w]+", "")
 end
 
+-- The file name TK FX Browser (and this module) saves a screenshot under:
+-- every character other than letters, digits, spaces and "-" becomes "_".
+-- Prefixed with "=" so it can never collide with a normalized key, which is
+-- letters and digits only.
+local function screenshot_exact_key(value)
+  local name = tostring(value or "")
+  if name == "" then return "" end
+  return "=" .. name:gsub("[^%w%s-]", "_"):lower()
+end
+
 local function plugin_type(value)
   local name = tostring(value or "")
   if name:match("^VST3i?:") then return "VST3" end
@@ -688,23 +714,28 @@ local function build_screenshot_index(force)
   state.screenshot_count = 0
   state.screenshot_missing = {}
   state.screenshot_image_errors = 0
+  -- Three passes, most exact first. Keys used to be handed out first come,
+  -- first served in file order, so "JS_ Chorus _Improved Shaping_.png" took
+  -- the shortened key "chorus" before "JS_ Chorus.png" was reached, and JS:
+  -- Chorus showed its sibling's screenshot (372 plugins on one real library).
+  -- A shortened key now only fills a gap no exact or full name has taken.
+  local bases = {}
   for _, file_name in ipairs(signature_parts) do
-    local lower_file = file_name:lower()
-    local base = lower_file:match("%.png$") and file_name:gsub("%.[Pp][Nn][Gg]$", "") or lower_file:match("%.jpg$") and file_name:gsub("%.[Jj][Pp][Gg]$", "") or lower_file:match("%.jpeg$") and file_name:gsub("%.[Jj][Pp][Ee][Gg]$", "")
-    if base then
-      local function index_key(value)
-        local key = normalize_plugin_name(value)
-        if key ~= "" and not state.screenshot_index[key] then state.screenshot_index[key] = file_name end
-      end
-      local key = normalize_plugin_name(base)
-      if key ~= "" then
-        if not state.screenshot_index[key] then state.screenshot_index[key] = file_name end
-        state.screenshot_count = state.screenshot_count + 1
-      end
-      index_key(strip_trailing_plugin_tag(base))
-      index_key(strip_channel_tag(base))
-      index_key(strip_trailing_plugin_tag(strip_channel_tag(base)))
+    local base = file_name:gsub("%.[Pp][Nn][Gg]$", ""):gsub("%.[Jj][Pp][Ee]?[Gg]$", "")
+    if base ~= "" then
+      bases[#bases + 1] = { file = file_name, base = base }
+      state.screenshot_count = state.screenshot_count + 1
     end
+  end
+  local function index_key(key, file_name)
+    if key ~= "" and key ~= "=" and not state.screenshot_index[key] then state.screenshot_index[key] = file_name end
+  end
+  for _, entry in ipairs(bases) do index_key("=" .. entry.base:lower(), entry.file) end
+  for _, entry in ipairs(bases) do index_key(normalize_plugin_name(entry.base), entry.file) end
+  for _, entry in ipairs(bases) do
+    index_key(normalize_plugin_name(strip_trailing_plugin_tag(entry.base)), entry.file)
+    index_key(normalize_plugin_name(strip_channel_tag(entry.base)), entry.file)
+    index_key(normalize_plugin_name(strip_trailing_plugin_tag(strip_channel_tag(entry.base))), entry.file)
   end
 end
 
@@ -726,18 +757,21 @@ local function build_custom_image_index(force)
   state.custom_image_signature = signature
   state.custom_image_index = {}
   state.custom_image_map = read_json(custom_plugin_images_path) or {}
+  -- Same passes as the screenshot index, most exact first.
+  local bases = {}
   for _, file_name in ipairs(files) do
     local base = file_name:gsub("%.[Pp][Nn][Gg]$", ""):gsub("%.[Jj][Pp][Ee]?[Gg]$", "")
-    if base ~= "" then
-      local function index_key(value)
-        local key = normalize_plugin_name(value)
-        if key ~= "" and not state.custom_image_index[key] then state.custom_image_index[key] = file_name end
-      end
-      index_key(base)
-      index_key(strip_trailing_plugin_tag(base))
-      index_key(strip_channel_tag(base))
-      index_key(strip_trailing_plugin_tag(strip_channel_tag(base)))
-    end
+    if base ~= "" then bases[#bases + 1] = { file = file_name, base = base } end
+  end
+  local function index_key(key, file_name)
+    if key ~= "" and key ~= "=" and not state.custom_image_index[key] then state.custom_image_index[key] = file_name end
+  end
+  for _, entry in ipairs(bases) do index_key("=" .. entry.base:lower(), entry.file) end
+  for _, entry in ipairs(bases) do index_key(normalize_plugin_name(entry.base), entry.file) end
+  for _, entry in ipairs(bases) do
+    index_key(normalize_plugin_name(strip_trailing_plugin_tag(entry.base)), entry.file)
+    index_key(normalize_plugin_name(strip_channel_tag(entry.base)), entry.file)
+    index_key(normalize_plugin_name(strip_trailing_plugin_tag(strip_channel_tag(entry.base))), entry.file)
   end
 end
 
@@ -769,6 +803,34 @@ local function screenshot_keys(plugin)
     add_tagless(stripped)
     add_channelless(stripped)
   end
+  local function add_exact(value)
+    local key = screenshot_exact_key(value)
+    if key ~= "" and not seen[key] then
+      seen[key] = true
+      result[#result + 1] = key
+    end
+  end
+  -- Last resort: every trailing tag off, so "VSTi: Soundbox (Audiomodern)
+  -- (16 out)" still finds a hand-made "Soundbox.png". One strip only reached
+  -- "Soundbox (Audiomodern)".
+  local function add_bare(value)
+    local name = tostring(value or "")
+    for _ = 1, 4 do
+      local stripped = strip_trailing_plugin_tag(name)
+      if stripped == name or stripped == "" then break end
+      name = stripped
+    end
+    add(name)
+  end
+  -- The exact file name comes first: it is the one TK FX Browser and this
+  -- module save under, and no shortened name may win over it.
+  if type(plugin) == "table" then
+    add_exact(plugin.name)
+    add_exact(plugin.clean_name)
+    add_exact(plugin.display_name)
+  else
+    add_exact(plugin)
+  end
   if type(plugin) == "table" then
     add(plugin.name)
     add_tagless(plugin.name)
@@ -786,11 +848,14 @@ local function screenshot_keys(plugin)
     add_tagless(plugin.alias)
     add_channelless(plugin.alias)
     add_without_redundant_tag(plugin.alias)
+    add_bare(plugin.clean_name)
+    add_bare(plugin.alias)
   else
     add(plugin)
     add_tagless(plugin)
     add_channelless(plugin)
     add_without_redundant_tag(plugin)
+    add_bare(clean_plugin_name(plugin))
   end
   if type(plugin) == "table" then
     plugin.screenshot_keys_version = screenshot_normalization_version
@@ -1058,8 +1123,9 @@ local function capture_fx_window_screenshot(plugin_name, track, fx_index, screen
   local filename = state.screenshot_path .. safe_name .. ".png"
   local srcx, srcy = 0, 27
   local target_w = 500
+  local source_dc, source_bmp, dest_bmp
+  local blank = false
   local ok = pcall(function()
-    local source_dc, source_bmp, dest_bmp
     local w, h, source_x, source_y = 0, 0, srcx, srcy
     if screen_capture then
       local _, wl, wt, wr, wb = r.JS_Window_GetRect(hwnd)
@@ -1083,6 +1149,20 @@ local function capture_fx_window_screenshot(plugin_name, track, fx_index, screen
     source_bmp = r.JS_LICE_CreateBitmap(true, w, h)
     local source_bmp_dc = r.JS_LICE_GetDC(source_bmp)
     r.JS_GDI_Blit(source_bmp_dc, 0, 0, source_dc, source_x, source_y, w, h)
+    -- A plugin that draws with OpenGL or DirectX, or has not drawn its UI
+    -- yet, comes back as one flat colour from a window capture. Saved, that
+    -- blank file was then shown for the plugin for good, so a flat capture is
+    -- reported instead and the caller tries again.
+    if r.JS_LICE_GetPixel then
+      local first, differs = nil, false
+      for gy = 1, 7 do
+        for gx = 1, 7 do
+          local color = r.JS_LICE_GetPixel(source_bmp, math.floor(w * gx / 8), math.floor(h * gy / 8))
+          if first == nil then first = color elseif color ~= first then differs = true end
+        end
+      end
+      if not differs then blank = true; return end
+    end
     local scale = target_w / w
     local target_h = math.max(1, math.floor(h * scale))
     dest_bmp = r.JS_LICE_CreateBitmap(true, target_w, target_h)
@@ -1092,10 +1172,14 @@ local function capture_fx_window_screenshot(plugin_name, track, fx_index, screen
     else
       r.JS_LICE_WritePNG(filename, source_bmp, false)
     end
-    if dest_bmp then r.JS_LICE_DestroyBitmap(dest_bmp) end
-    if screen_capture then r.JS_GDI_ReleaseDC(nil, source_dc) else r.JS_GDI_ReleaseDC(hwnd, source_dc) end
-    r.JS_LICE_DestroyBitmap(source_bmp)
   end)
+  -- Released here rather than inside, so an error half-way leaks nothing.
+  if dest_bmp then r.JS_LICE_DestroyBitmap(dest_bmp) end
+  if source_bmp then r.JS_LICE_DestroyBitmap(source_bmp) end
+  if source_dc then
+    if screen_capture then r.JS_GDI_ReleaseDC(nil, source_dc) else r.JS_GDI_ReleaseDC(hwnd, source_dc) end
+  end
+  if blank then return false, filename, "blank" end
   if ok and screenshot_file_size(filename) > 0 then return true, filename end
   return false, filename
 end
@@ -1147,12 +1231,25 @@ local function start_screenshot_capture(app, plugin, screen_capture)
   end
   r.TrackFX_Show(track, fx_index, 3)
   local start_time = r.time_precise()
+  -- Tries at 0.6 s and, when that came out blank, again at 1.5 s for a plugin
+  -- still drawing its UI. A window capture that stays blank switches to a
+  -- screen capture (the "OpenGL/DX" one), which reads the pixels as they are
+  -- on screen and so also sees GPU-drawn interfaces.
+  local attempts = { 0.6, 1.5, 2.4 }
+  local attempt = 1
+  local mode_screen = screen_capture
   local function finish_capture()
-    if r.time_precise() - start_time < 0.5 then
+    if r.time_precise() - start_time < attempts[attempt] then
       r.defer(finish_capture)
       return
     end
-    local ok, path = capture_fx_window_screenshot(plugin_name, track, fx_index, screen_capture)
+    local ok, path, reason = capture_fx_window_screenshot(plugin_name, track, fx_index, mode_screen)
+    if not ok and reason == "blank" and attempt < #attempts then
+      attempt = attempt + 1
+      if attempt == #attempts and not mode_screen and screenshot_capture_available(true) then mode_screen = true end
+      r.defer(finish_capture)
+      return
+    end
     r.TrackFX_Show(track, fx_index, 2)
     r.TrackFX_Delete(track, fx_index)
     if temp_track then r.DeleteTrack(track) end
@@ -1162,6 +1259,8 @@ local function start_screenshot_capture(app, plugin, screen_capture)
     if ok then
       invalidate_screenshots(app.ctx)
       app.status = "Screenshot saved: " .. tostring(path)
+    elseif reason == "blank" then
+      app.status = "Screenshot came out blank: " .. plugin.display_name .. " - its window could not be read (on Linux this is common; a PNG named after the plugin in FX/Screenshots works too)"
     else
       app.status = "Screenshot failed: " .. plugin.display_name
     end
@@ -2770,6 +2869,12 @@ local function draw_filter_popup(ctx, settings, app)
     settings.return_to_chain_builder_after_add = return_to_chain_builder
     if app.save_settings then app.save_settings() end
   end
+  local focus_changed, focus_search = r.ImGui_Checkbox(ctx, "Type to search after open action", settings.focus_search_on_open ~= false)
+  if focus_changed then
+    settings.focus_search_on_open = focus_search
+    if app.save_settings then app.save_settings() end
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The Open Plugin Browser action takes the keyboard so you can type a name straight away.\nEscape, or inserting with Enter, gives it back to REAPER.") end
   local dropdown_changed, dropdown_rows = r.ImGui_SliderInt(ctx, "Dropdown rows", settings.dropdown_rows or defaults.dropdown_rows, 8, 36, "%d")
   if dropdown_changed then
     settings.dropdown_rows = dropdown_rows
@@ -2820,7 +2925,14 @@ local function draw_filter_popup(ctx, settings, app)
     settings.use_type_priority = use_type_priority
     save_filter_change(app)
   end
-  for index, plugin_type_name in ipairs(settings.type_priority or defaults.type_priority) do
+  -- The buttons below swap entries in settings.type_priority, so it has to be
+  -- a real list: reading defaults here and writing to a nil table would throw
+  -- inside the PushID and leave the ID stack unbalanced.
+  if type(settings.type_priority) ~= "table" then
+    settings.type_priority = {}
+    for index, name in ipairs(defaults.type_priority) do settings.type_priority[index] = name end
+  end
+  for index, plugin_type_name in ipairs(settings.type_priority) do
     r.ImGui_PushID(ctx, "prio_" .. tostring(index))
     if r.ImGui_Button(ctx, "U", UIScale.text_button_w(ctx, "U", 22, 4), 0) and index > 1 then
       settings.type_priority[index], settings.type_priority[index - 1] = settings.type_priority[index - 1], settings.type_priority[index]
@@ -2880,7 +2992,6 @@ end
 
 local function draw_plugin_row(app, settings, plugin, index, row_width)
   local ctx = app.ctx
-  r.ImGui_PushID(ctx, "pb_" .. tostring(index))
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   local width = math.max(UIScale.round(40), row_width or UIScale.round(180))
   local row_h = UIScale.round(base_row_height)
@@ -2936,7 +3047,6 @@ local function draw_plugin_row(app, settings, plugin, index, row_width)
   end
   if hovered then r.ImGui_SetTooltip(ctx, plugin.name .. (selected and selection_count() > 1 and ("\n" .. tostring(selection_count()) .. " FX selected") or "")) end
   draw_plugin_context_menu(app, settings, plugin, "##plugin_context")
-  r.ImGui_PopID(ctx)
 end
 
 local function draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, label_h)
@@ -2945,7 +3055,6 @@ local function draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, l
   local bg = Theme.colors.frame_bg
   local border = Theme.colors.border
   local hover = Theme.colors.accent
-  r.ImGui_PushID(ctx, "pb_uniform_" .. tostring(index))
   label_h = label_h or (r.ImGui_GetTextLineHeight(ctx) + UIScale.round(8))
   local total_h = cell_h + label_h
   local clicked = r.ImGui_InvisibleButton(ctx, "##uniform_card", cell_w, total_h)
@@ -3005,7 +3114,6 @@ local function draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, l
     r.ImGui_EndDragDropSource(ctx)
   end
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, plugin.name .. (selected and selection_count() > 1 and ("\n" .. tostring(selection_count()) .. " FX selected") or "")) end
-  r.ImGui_PopID(ctx)
 end
 
 local function visible_range(ctx, item_count, item_height, buffer)
@@ -3027,7 +3135,7 @@ local function draw_virtual_list(app, settings, row_width)
   if top_pad > 0 then r.ImGui_Dummy(ctx, 1, top_pad) end
   for index = first, last do
     local plugin = state.filtered[index]
-    if plugin then draw_plugin_row(app, settings, plugin, index, row_width) end
+    if plugin then views.guarded(app, "pb_" .. tostring(index), draw_plugin_row, app, settings, plugin, index, row_width) end
   end
   if bottom_pad > 0 then r.ImGui_Dummy(ctx, 1, bottom_pad) end
 end
@@ -3061,7 +3169,7 @@ local function draw_virtual_tiles(app, settings, avail_w)
       local index = (row - 1) * columns + col
       local plugin = state.filtered[index]
       if not plugin then break end
-      draw_uniform_card(app, settings, plugin, index, cell_w, cell_h, label_h)
+      views.guarded(app, "pb_uniform_" .. tostring(index), draw_uniform_card, app, settings, plugin, index, cell_w, cell_h, label_h)
       if col < columns and state.filtered[index + 1] then
         r.ImGui_SameLine(ctx, 0, gap)
       end
@@ -3160,7 +3268,7 @@ function masonry.draw(app, settings, avail_w)
       local plugin = state.filtered[item.index]
       if plugin then
         r.ImGui_SetCursorPos(ctx, origin_x + item.x, item_y)
-        draw_uniform_card(app, settings, plugin, item.index, item.w, item.h, layout.label_h)
+        views.guarded(app, "pb_uniform_" .. tostring(item.index), draw_uniform_card, app, settings, plugin, item.index, item.w, item.h, layout.label_h)
       end
     end
   end
@@ -3313,7 +3421,10 @@ function nav.keys(app, settings)
   -- No key repeat here: holding Enter must not insert the plugin over and over.
   if index and (nav.pressed(ctx, "Enter", false) or nav.pressed(ctx, "KeypadEnter", false)) then
     local plugin = state.filtered[index]
-    if plugin then add_fx_to_track(app, settings, plugin) end
+    if plugin then
+      add_fx_to_track(app, settings, plugin)
+      M.end_keyboard_session(app)
+    end
   end
 end
 
@@ -3473,6 +3584,12 @@ local function draw_toolbar(app, settings, avail_w)
   next_item()
   draw_settings_button(button_h)
   if row_started then r.ImGui_SetCursorPosY(ctx, math.max(0, r.ImGui_GetCursorPosY(ctx))) end
+  -- Set by the open action. Keyboard focus on an InputText selects what is in
+  -- it, so typing straight away replaces the previous search.
+  if state.focus_search then
+    state.focus_search = nil
+    if r.ImGui_SetKeyboardFocusHere then r.ImGui_SetKeyboardFocusHere(ctx) end
+  end
   local changed, search = UI.search_input(ctx, "##pb_search", "Search plugins", settings.search_term or "", width)
   if changed then
     settings.search_term = search
@@ -3503,6 +3620,25 @@ local function draw_bottom_shortcuts(app, width)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Go to FX Chain Builder") end
 end
 
+-- Opened from its action (a key command): put the cursor in the search box so
+-- the plugin name can be typed straight away. Returning true asks Workbench to
+-- take the OS keyboard focus as well; the ImGui focus alone leaves the keys
+-- going to REAPER. The session ends with Escape or an Enter insert, which hand
+-- the keyboard back.
+function M.on_open_action(app)
+  local settings = ensure_settings(app)
+  if settings.focus_search_on_open == false then return false end
+  state.focus_search = true
+  state.keyboard_session = true
+  return true
+end
+
+function M.end_keyboard_session(app)
+  if not state.keyboard_session then return end
+  state.keyboard_session = nil
+  if app.release_keyboard then app.release_keyboard() end
+end
+
 function M.init(app)
   ensure_settings(app)
   load_user_data()
@@ -3512,7 +3648,10 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
-  if r.ImGui_IsKeyPressed and r.ImGui_Key_Escape and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then clear_selection(app) end
+  if r.ImGui_IsKeyPressed and r.ImGui_Key_Escape and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+    clear_selection(app)
+    M.end_keyboard_session(app)
+  end
   update_external_drag(app, settings)
   state.screenshot_visible_keys = {}
   local avail_w, avail_h = r.ImGui_GetContentRegionAvail(ctx)

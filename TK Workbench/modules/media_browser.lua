@@ -39,6 +39,7 @@ local defaults = {
   compact_list = false,
   tile_size = 0,
   minimum_rating = 0,
+  rating_match = "at_least",
   sort_mode = "name",
   sort_descending = false,
   auto_selected_category = "All",
@@ -235,6 +236,7 @@ function ensure_settings(app)
   settings.tile_size = math.max(0, math.min(320, math.floor(tonumber(settings.tile_size) or 0)))
   if settings.tile_size > 0 and settings.tile_size < 64 then settings.tile_size = 64 end
   settings.minimum_rating = math.max(0, math.min(5, math.floor(tonumber(settings.minimum_rating) or 0)))
+  if settings.rating_match ~= "exact" and settings.rating_match ~= "unrated" then settings.rating_match = "at_least" end
   if settings.sort_mode ~= "rating" and settings.sort_mode ~= "type" then settings.sort_mode = "name" end
   settings.sort_descending = settings.sort_descending == true
   settings.folder_double_click_open = settings.folder_double_click_open == true
@@ -1113,8 +1115,16 @@ function embedded_file_rating(path, immediate)
   return nil
 end
 
-function process_embedded_rating_queue(limit)
-  for _ = 1, limit or 1 do
+-- With a budget (seconds) the queue is read for that long instead of one file
+-- per frame. One per frame took half a minute for a thousand files, and a
+-- rating filter looked broken all that time: every file not read yet counts
+-- as unrated and stays out of the list.
+function process_embedded_rating_queue(limit, budget)
+  local deadline = budget and r.time_precise and (r.time_precise() + budget) or nil
+  local count = 0
+  while deadline or count < (limit or 1) do
+    count = count + 1
+    if deadline and count > 1 and r.time_precise() >= deadline then break end
     local path = state.embedded_rating_queue[state.embedded_rating_queue_index]
     if not path then break end
     state.embedded_rating_queue_index = state.embedded_rating_queue_index + 1
@@ -1131,10 +1141,33 @@ function process_embedded_rating_queue(limit)
     state.embedded_rating_queue_index = 1
     if state.embedded_rating_changes > 0 then state.last_filter_key = nil end
     state.embedded_rating_changes = 0
-  elseif state.embedded_rating_changes >= 24 then
+  elseif state.embedded_rating_changes >= 24 or (deadline and state.embedded_rating_changes > 0 and r.time_precise() >= (state.embedded_rating_refresh_at or 0)) then
+    -- Fast reading finds ratings every frame, and refiltering a large library
+    -- every frame is not free, so the list catches up a few times a second.
     state.last_filter_key = nil
     state.embedded_rating_changes = 0
+    if deadline then state.embedded_rating_refresh_at = r.time_precise() + 0.3 end
   end
+end
+
+function mb_rating_queue_left()
+  return math.max(0, #state.embedded_rating_queue - state.embedded_rating_queue_index + 1)
+end
+
+function mb_rating_filter_active(settings)
+  return settings.rating_match == "unrated" or (tonumber(settings.minimum_rating) or 0) > 0
+end
+
+-- "at_least" is the old behaviour and stays the default. "exact" is what most
+-- people expect from a button that reads 1 star: only the 1-star files, not
+-- everything rated. "unrated" finds the files that still need a rating.
+function mb_rating_passes(settings, rating)
+  rating = tonumber(rating) or 0
+  if settings.rating_match == "unrated" then return rating == 0 end
+  local wanted = tonumber(settings.minimum_rating) or 0
+  if wanted <= 0 then return true end
+  if settings.rating_match == "exact" then return rating == wanted end
+  return rating >= wanted
 end
 
 function file_rating(path, immediate)
@@ -1581,7 +1614,7 @@ function build_folder_filter(files, settings)
 end
 
 function filter_key(settings)
-  return table.concat({ settings.search_term or "", tostring(settings.show_audio), tostring(settings.show_midi), tostring(settings.show_video), tostring(settings.show_image), tostring(settings.location_view_mode), tostring(settings.folder_browse), tostring(state.folder_path or ""), tostring(settings.auto_selected_category), tostring(settings.minimum_rating), tostring(settings.sort_mode), tostring(settings.sort_descending), tostring(#state.files), state.category_counts_key or "" }, "|")
+  return table.concat({ settings.search_term or "", tostring(settings.show_audio), tostring(settings.show_midi), tostring(settings.show_video), tostring(settings.show_image), tostring(settings.location_view_mode), tostring(settings.folder_browse), tostring(state.folder_path or ""), tostring(settings.auto_selected_category), tostring(settings.minimum_rating), tostring(settings.rating_match), tostring(settings.sort_mode), tostring(settings.sort_descending), tostring(#state.files), state.category_counts_key or "" }, "|")
 end
 
 function refresh_filter(settings)
@@ -1589,7 +1622,7 @@ function refresh_filter(settings)
   local key = filter_key(settings)
   if key == state.last_filter_key then return end
   local term = Text.lower(tostring(settings.search_term or ""))
-  local ratings_needed = settings.minimum_rating > 0 or settings.sort_mode == "rating"
+  local ratings_needed = mb_rating_filter_active(settings) or settings.sort_mode == "rating"
   local auto_scope = settings.location_view_mode == "auto" and auto_category_scope(settings) or ""
   local result = {}
   for _, file in ipairs(state.files) do
@@ -1603,7 +1636,7 @@ function refresh_filter(settings)
       include = category_for_file(file) == settings.auto_selected_category
     end
     if include and ratings_needed then embedded_file_rating(file.path, false) end
-    if include and file_rating(file.path) < settings.minimum_rating then include = false end
+    if include and not mb_rating_passes(settings, file_rating(file.path)) then include = false end
     -- Both sides through Text.lower, or a Cyrillic filename still only matches
     -- when the capitals are typed exactly as they appear.
     if include and term ~= "" and not (Text.lower(file.name):find(term, 1, true) or Text.lower(file.path):find(term, 1, true)) then include = false end
@@ -4996,7 +5029,7 @@ function draw_filter_buttons(ctx, settings, app, width)
     spacing_x = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing()) or spacing_x
   end
   local icon_w = UIScale.round(22)
-  local rating_w = UIScale.round(34)
+  local rating_w = UIScale.round(40)
   local search_w = math.max(1, row_w - icon_w * 4 - rating_w - spacing_x * 5)
   local search_changed, search = UI.search_input(ctx, "##media_search", "Search", settings.search_term or "", search_w)
   if search_changed then settings.search_term = search; state.last_filter_key = nil; if app.save_settings then app.save_settings() end end
@@ -5009,14 +5042,51 @@ function draw_filter_buttons(ctx, settings, app, width)
   r.ImGui_SameLine(ctx)
   if draw_filter_toggle(ctx, "image", settings.show_image == true, "Picture files") then settings.show_image = not (settings.show_image == true); changed = true end
   r.ImGui_SameLine(ctx)
+  -- The button used to cycle a minimum rating, and "★1" read as "only one
+  -- star" while it showed everything rated. It opens a menu now, and the label
+  -- says which kind of filter is on: ★3 is exactly three, ★3+ three and up.
   local minimum_rating = math.floor(tonumber(settings.minimum_rating) or 0)
-  local rating_label = minimum_rating > 0 and ("★" .. tostring(minimum_rating)) or "☆"
-  if r.ImGui_Button(ctx, rating_label .. "##media_rating_filter", rating_w, UIScale.round(22)) then
-    settings.minimum_rating = (minimum_rating + 1) % 6
-    changed = true
+  local match = settings.rating_match
+  local rating_label = "☆"
+  if match == "unrated" then
+    rating_label = "★0"
+  elseif minimum_rating > 0 then
+    rating_label = "★" .. tostring(minimum_rating) .. (match == "exact" and "" or "+")
   end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, minimum_rating > 0 and ("Show " .. tostring(minimum_rating) .. " stars and up\nRight-click to clear") or "Filter by minimum rating") end
-  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then settings.minimum_rating = 0; changed = true end
+  if r.ImGui_Button(ctx, rating_label .. "##media_rating_filter", rating_w, UIScale.round(22)) then
+    r.ImGui_OpenPopup(ctx, "##media_rating_filter_menu")
+  end
+  if r.ImGui_IsItemHovered(ctx) then
+    local tip = "Filter by rating"
+    if match == "unrated" then
+      tip = "Showing files without a rating"
+    elseif minimum_rating > 0 then
+      tip = match == "exact" and ("Showing " .. rating_text(minimum_rating, true) .. " only") or ("Showing " .. rating_text(minimum_rating, true) .. " and up")
+    end
+    if mb_rating_filter_active(settings) then tip = tip .. "\nRight-click to clear" end
+    local left = mb_rating_queue_left()
+    if left > 0 then tip = tip .. "\nReading ratings from files: " .. tostring(left) .. " to go" end
+    r.ImGui_SetTooltip(ctx, tip)
+  end
+  if r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseClicked(ctx, 1) then settings.minimum_rating = 0; settings.rating_match = "at_least"; changed = true end
+  if r.ImGui_BeginPopup(ctx, "##media_rating_filter_menu") then
+    if r.ImGui_MenuItem(ctx, "Any rating", nil, not mb_rating_filter_active(settings)) then settings.minimum_rating = 0; settings.rating_match = "at_least"; changed = true end
+    r.ImGui_Separator(ctx)
+    for rating = 5, 1, -1 do
+      if r.ImGui_MenuItem(ctx, rating_text(rating, true) .. " only##media_rating_exact_" .. tostring(rating), nil, match == "exact" and minimum_rating == rating) then
+        settings.minimum_rating = rating; settings.rating_match = "exact"; changed = true
+      end
+    end
+    r.ImGui_Separator(ctx)
+    for rating = 4, 1, -1 do
+      if r.ImGui_MenuItem(ctx, rating_text(rating, true) .. " and up##media_rating_min_" .. tostring(rating), nil, match == "at_least" and minimum_rating == rating) then
+        settings.minimum_rating = rating; settings.rating_match = "at_least"; changed = true
+      end
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "No rating", nil, match == "unrated") then settings.minimum_rating = 0; settings.rating_match = "unrated"; changed = true end
+    r.ImGui_EndPopup(ctx)
+  end
   if changed then state.last_filter_key = nil; if app.save_settings then app.save_settings() end end
 end
 
@@ -5720,7 +5790,15 @@ function M.update(app)
   local active = app.settings and app.settings.active_module == M.id
   cleanup_retired_preview_sources(false)
   update_pending_preview(settings)
-  if active then process_embedded_rating_queue(1) end
+  if active then
+    -- Only a rating filter or rating sort is waiting on the queue; otherwise
+    -- the ratings are just for the stars in the list and can trickle in.
+    if mb_rating_filter_active(settings) or settings.sort_mode == "rating" then
+      process_embedded_rating_queue(nil, 0.008)
+    else
+      process_embedded_rating_queue(1)
+    end
+  end
   if state.activated and (active or state.scanning) then
     if is_project_files_location(selected_location(settings)) and state.loaded_location == PROJECT_FILES_LOCATION and state.project_files_signature ~= project_files_signature() then load_or_scan_location(settings, true) end
     scan_step(settings)

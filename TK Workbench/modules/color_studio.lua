@@ -2,6 +2,8 @@ local r = reaper
 local Theme = require("core.theme")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
+local tags_ok, TrackTags = pcall(require, "modules.track_tags")
+if not tags_ok then TrackTags = nil end
 
 local M = {
   id = "color_studio",
@@ -39,6 +41,7 @@ local AUTO_MATCHERS = {
 
 local AUTO_TARGETS = {
   { id = "tracks", label = "Track", hint = "Track name" },
+  { id = "tags", label = "Tag", hint = "Tag name, empty = any tag" },
   { id = "markers", label = "Marker", hint = "Marker name" },
   { id = "regions", label = "Region", hint = "Region name" }
 }
@@ -84,6 +87,7 @@ local function default_auto_rule(index)
     target = "tracks",
     matcher = "contains",
     value = "",
+    use_tag_color = true,
     color_index = 1,
     color = 0x7AA2F7FF
   }
@@ -169,6 +173,7 @@ local function ensure_settings(app)
       rule.target = valid_auto_target(rule.target) and rule.target or "tracks"
       rule.matcher = valid_auto_matcher(rule.matcher) and rule.matcher or "contains"
       rule.value = tostring(rule.value or "")
+      rule.use_tag_color = rule.use_tag_color ~= false
       rule.color_index = math.max(1, tonumber(rule.color_index) or 1)
       if tonumber(rule.color) then
         rule.color = tonumber(rule.color)
@@ -1019,6 +1024,60 @@ local function auto_rule_target(rule)
   return valid_auto_target(rule and rule.target) and rule.target or "tracks"
 end
 
+-- Tag rules match the tags a track carries in the Tags module instead of its
+-- name. Empty text means any tag: one rule that gives every tagged track the
+-- colour of its tag.
+local function tag_rule_matches(rule, tag)
+  if trim_text(rule.value or "") == "" then return true end
+  return auto_rule_matches(rule, tag)
+end
+
+-- Tags are stored sorted, so on a track with several matching tags the
+-- alphabetically first one that has a colour wins. A rule higher up the list
+-- for one specific tag is the way to overrule that.
+local function auto_tag_color(settings, rule, entry)
+  local snapshot = state.tag_snapshot
+  if not snapshot or type(entry.tags) ~= "table" then return nil end
+  for _, tag in ipairs(entry.tags) do
+    if tag_rule_matches(rule, tag) then
+      if rule.use_tag_color == false then return auto_color_for_rule(settings, rule) end
+      local color = tonumber(snapshot.colors[tag])
+      -- A track colour has no alpha. Keeping a picked alpha would make the
+      -- comparison with the track colour fail forever and repaint every pass.
+      if color then return (math.floor(color) & 0xFFFFFF00) | 0xFF end
+    end
+  end
+  return nil
+end
+
+-- Tag rules colour tracks too, so they run in the track pass next to the name
+-- rules and the rule order decides between them, rather than whichever target
+-- loop happens to run last.
+local function auto_entry_color(settings, rule, target_id, entry)
+  if not rule.enabled then return nil end
+  local target = auto_rule_target(rule)
+  if target == "tags" then
+    if target_id ~= "tracks" then return nil end
+    return auto_tag_color(settings, rule, entry)
+  end
+  if target ~= target_id or not auto_rule_matches(rule, entry.name) then return nil end
+  return auto_color_for_rule(settings, rule)
+end
+
+-- Only read the Tags store while a tag rule is switched on; without one the
+-- track pass has no use for GUIDs or tags.
+local function refresh_tag_snapshot(app, settings)
+  state.tag_snapshot = nil
+  if not TrackTags or not TrackTags.tag_snapshot then return end
+  for _, rule in ipairs(settings.auto_rules or {}) do
+    if rule.enabled and rule.target == "tags" then
+      local ok, snapshot = pcall(TrackTags.tag_snapshot, app)
+      if ok and type(snapshot) == "table" then state.tag_snapshot = snapshot end
+      return
+    end
+  end
+end
+
 local function auto_target_entries(target)
   local entries = {}
   if target == "markers" then
@@ -1026,9 +1085,13 @@ local function auto_target_entries(target)
   elseif target == "regions" then
     for _, region in ipairs(all_marker_region_targets(false, true)) do entries[#entries + 1] = { target = region, name = region.name or "" } end
   else
+    local snapshot = state.tag_snapshot
     for track_index = 0, (r.CountTracks(0) or 0) - 1 do
       local track = r.GetTrack(0, track_index)
-      if valid_track(track) then entries[#entries + 1] = { target = track, name = track_name(track) } end
+      if valid_track(track) then
+        local tags = snapshot and snapshot.tracks[snapshot.track_guid(track) or ""] or nil
+        entries[#entries + 1] = { target = track, name = track_name(track), tags = tags }
+      end
     end
   end
   return entries
@@ -1087,11 +1150,15 @@ end
 local function count_auto_matches(settings)
   local count = 0
   for _, target_info in ipairs(AUTO_TARGETS) do
-    for _, entry in ipairs(auto_target_entries(target_info.id)) do
-      for _, rule in ipairs(settings.auto_rules or {}) do
-        if rule.enabled and auto_rule_target(rule) == target_info.id and auto_rule_matches(rule, entry.name) then
-          count = count + 1
-          break
+    -- Tag rules are counted in the track pass; a pass of their own would
+    -- count every tagged track twice.
+    if target_info.id ~= "tags" then
+      for _, entry in ipairs(auto_target_entries(target_info.id)) do
+        for _, rule in ipairs(settings.auto_rules or {}) do
+          if auto_entry_color(settings, rule, target_info.id, entry) then
+            count = count + 1
+            break
+          end
         end
       end
     end
@@ -1099,11 +1166,12 @@ local function count_auto_matches(settings)
   return count
 end
 
-local function count_auto_rule_matches(rule)
+local function count_auto_rule_matches(settings, rule)
   if not rule or not rule.enabled then return 0 end
   local count = 0
-  for _, entry in ipairs(auto_target_entries(auto_rule_target(rule))) do
-    if auto_rule_matches(rule, entry.name) then count = count + 1 end
+  local target = auto_rule_target(rule) == "tags" and "tracks" or auto_rule_target(rule)
+  for _, entry in ipairs(auto_target_entries(target)) do
+    if auto_entry_color(settings, rule, target, entry) then count = count + 1 end
   end
   return count
 end
@@ -1112,12 +1180,15 @@ local function apply_auto_color(app, settings)
   local changed = 0
   with_undo("Color Studio: Apply Auto", function()
     for _, target_info in ipairs(AUTO_TARGETS) do
-      for _, entry in ipairs(auto_target_entries(target_info.id)) do
-        for _, rule in ipairs(settings.auto_rules or {}) do
-          if rule.enabled and auto_rule_target(rule) == target_info.id and auto_rule_matches(rule, entry.name) then
-            set_auto_entry_color(target_info.id, entry, auto_color_for_rule(settings, rule))
-            changed = changed + 1
-            break
+      if target_info.id ~= "tags" then
+        for _, entry in ipairs(auto_target_entries(target_info.id)) do
+          for _, rule in ipairs(settings.auto_rules or {}) do
+            local color = auto_entry_color(settings, rule, target_info.id, entry)
+            if color then
+              set_auto_entry_color(target_info.id, entry, color)
+              changed = changed + 1
+              break
+            end
           end
         end
       end
@@ -1133,10 +1204,15 @@ end
 local function auto_track_rules_signature(settings)
   local parts = {}
   for index, rule in ipairs(settings.auto_rules or {}) do
-    if rule.enabled and auto_rule_target(rule) == "tracks" then
-      parts[#parts + 1] = table.concat({ index, tostring(rule.matcher or ""), tostring(rule.value or ""), tostring(rule.color or ""), tostring(rule.color_index or "") }, "\31")
+    local target = auto_rule_target(rule)
+    if rule.enabled and (target == "tracks" or target == "tags") then
+      parts[#parts + 1] = table.concat({ index, target, tostring(rule.matcher or ""), tostring(rule.value or ""), tostring(rule.color or ""), tostring(rule.color_index or ""), tostring(rule.use_tag_color) }, "\31")
     end
   end
+  -- A tag recoloured or moved in the Tags module changes no track and no
+  -- rule here, so its revision has to be part of the signature for auto
+  -- apply to notice.
+  if state.tag_snapshot then parts[#parts + 1] = "tags" .. tostring(state.tag_snapshot.revision) end
   return table.concat(parts, "\30"), #parts
 end
 
@@ -1158,8 +1234,8 @@ local function auto_track_changes(settings)
   local changes = {}
   for _, entry in ipairs(auto_target_entries("tracks")) do
     for _, rule in ipairs(settings.auto_rules or {}) do
-      if rule.enabled and auto_rule_target(rule) == "tracks" and auto_rule_matches(rule, entry.name) then
-        local color = auto_color_for_rule(settings, rule)
+      local color = auto_entry_color(settings, rule, "tracks", entry)
+      if color then
         if track_color(entry.target) ~= color then changes[#changes + 1] = { track = entry.target, color = color } end
         break
       end
@@ -1821,6 +1897,30 @@ local function draw_auto_target_combo(ctx, app, rule)
   end
 end
 
+-- A tag rule either follows each tag's own colour from the Tags module - the
+-- link, so recolouring a tag there recolours its tracks - or paints every
+-- matching track one fixed colour like a name rule does.
+local function draw_auto_rule_color(ctx, app, settings, rule)
+  if auto_rule_target(rule) ~= "tags" then
+    draw_auto_color_slot(ctx, app, settings, rule)
+    return
+  end
+  if not TrackTags then
+    r.ImGui_TextColored(ctx, Theme.colors.warning, "The Tags module is not available")
+    return
+  end
+  local changed, value = r.ImGui_Checkbox(ctx, "Use tag color##color_studio_auto_use_tag_color", rule.use_tag_color ~= false)
+  if changed then
+    rule.use_tag_color = value
+    if app.save_settings then app.save_settings() end
+  end
+  if rule.use_tag_color ~= false then
+    r.ImGui_TextWrapped(ctx, "Each track takes the color of its tag. Set it in Tags: right-click a tag > Set color. Tags without a color are skipped.")
+  else
+    draw_auto_color_slot(ctx, app, settings, rule)
+  end
+end
+
 local function draw_auto_rule_editor(ctx, app, settings)
   local rule = selected_auto_rule(settings)
   if not rule then return end
@@ -1852,7 +1952,7 @@ local function draw_auto_rule_editor(ctx, app, settings)
     changed, value = r.ImGui_InputTextWithHint(ctx, "Text##color_studio_auto_value", auto_target_hint(auto_rule_target(rule)), rule.value or "")
     if changed then rule.value = value; if app.save_settings then app.save_settings() end end
     r.ImGui_EndTable(ctx)
-    draw_auto_color_slot(ctx, app, settings, rule)
+    draw_auto_rule_color(ctx, app, settings, rule)
     return
   end
 
@@ -1877,11 +1977,21 @@ local function draw_auto_rule_editor(ctx, app, settings)
   r.ImGui_SameLine(ctx)
   changed, value = r.ImGui_InputTextWithHint(ctx, "Text##color_studio_auto_value", auto_target_hint(auto_rule_target(rule)), rule.value or "")
   if changed then rule.value = value; if app.save_settings then app.save_settings() end end
-  draw_auto_color_slot(ctx, app, settings, rule)
+  draw_auto_rule_color(ctx, app, settings, rule)
+end
+
+-- The swatch next to a rule that takes its colour from the tags is only the
+-- fallback colour, so the info text has to say where the colour really comes
+-- from.
+local function auto_rule_info_text(settings, rule)
+  local how = auto_matcher_label(rule.matcher)
+  if auto_rule_target(rule) == "tags" and rule.use_tag_color ~= false then how = how .. ", tag color" end
+  return auto_target_label(auto_rule_target(rule)) .. " | " .. how .. " | " .. tostring(count_auto_rule_matches(settings, rule))
 end
 
 local function auto_rule_summary_text(rule, index)
   local value = trim_text(rule.value or "")
+  if value == "" and auto_rule_target(rule) == "tags" then value = "Any tag" end
   local name = value ~= "" and value or trim_text(rule.name or "")
   if name == "" then name = "Rule " .. tostring(index) end
   return tostring(index) .. ". " .. name
@@ -1948,7 +2058,7 @@ local function draw_auto_rules_overview(ctx, app, settings)
       r.ImGui_TableNextColumn(ctx)
       draw_auto_rule_overview_label(ctx, app, settings, rule, index, auto_rule_summary_text(rule, index), text_color)
       r.ImGui_TableNextColumn(ctx)
-      r.ImGui_TextColored(ctx, Theme.colors.text_dim, auto_target_label(auto_rule_target(rule)) .. " | " .. auto_matcher_label(rule.matcher) .. " | " .. tostring(count_auto_rule_matches(rule)))
+      r.ImGui_TextColored(ctx, Theme.colors.text_dim, auto_rule_info_text(settings, rule))
       r.ImGui_TableNextColumn(ctx)
       if draw_swatch(ctx, "auto_rule_overview_color_" .. tostring(index), color, 18, settings.auto_rule_index == index) then
         settings.auto_rule_index = index
@@ -1962,7 +2072,7 @@ local function draw_auto_rules_overview(ctx, app, settings)
   end
   for index, rule in ipairs(settings.auto_rules or {}) do
     local color = tonumber(rule.color) or settings.active_color
-    draw_auto_rule_overview_label(ctx, app, settings, rule, index, auto_rule_summary_text(rule, index) .. " | " .. auto_target_label(auto_rule_target(rule)) .. " | " .. auto_matcher_label(rule.matcher) .. " | " .. tostring(count_auto_rule_matches(rule)), rule.enabled and Theme.colors.text or Theme.colors.text_dim)
+    draw_auto_rule_overview_label(ctx, app, settings, rule, index, auto_rule_summary_text(rule, index) .. " | " .. auto_rule_info_text(settings, rule), rule.enabled and Theme.colors.text or Theme.colors.text_dim)
     r.ImGui_SameLine(ctx)
     if draw_swatch(ctx, "auto_rule_overview_color_" .. tostring(index), color, 18, settings.auto_rule_index == index) then
       settings.auto_rule_index = index
@@ -2018,6 +2128,7 @@ function M.update(app)
     return
   end
   if state.auto_apply_running then return end
+  refresh_tag_snapshot(app, settings)
   local signature, rule_count = auto_tracks_signature(settings)
   if rule_count == 0 then
     state.auto_apply_signature = signature
@@ -2038,6 +2149,7 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  if settings.view_mode == "auto" then refresh_tag_snapshot(app, settings) end
   local selected_track_count = r.CountSelectedTracks(0) or 0
   local selected_item_count = r.CountSelectedMediaItems(0) or 0
   local target_tracks, target_items, target_takes, target_markers, target_regions = selected_targets(settings)

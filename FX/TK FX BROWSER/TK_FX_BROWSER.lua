@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.19
+-- @version 3.2.20
 -- @changelog:
 --[[
+    v3.2.20:
+        + Screenshots: A capture no longer saves a blank image. Plugins that draw their window with OpenGL or DirectX came back as one flat colour from a normal capture, and that blank file was then shown for the plugin for good. A flat capture is now taken again from the screen straight away (the same as the OpenGL/DX capture), which does see such plugins; if that is flat too, nothing is saved and an existing screenshot is kept. This also applies to bulk screenshots.
+        + Screenshots: The OpenGL/DX capture also leaves the existing file alone when it comes out blank, instead of overwriting it.
     v3.2.19:
         + Patchbay: FX node view: double-click a track node (or use the FX icon on the node, or click the FX schema panel) to dive into that track and see its FX chain as nodes and cables instead of a strip, nested containers and parallel lanes included.
         + Patchbay: FX node view: reorder by dragging - drop on a cable to place an FX in series, on a node to run it in parallel, or into a container. Parallel lanes can be reordered in both directions.
@@ -9234,6 +9237,22 @@ function EnsurePluginRemoved(fx_index, callback)
     r.defer(check)
 end
 
+-- A capture of a window whose plugin draws with OpenGL or DirectX, or has
+-- not drawn its UI yet, comes back as one flat colour. Saved, that blank file
+-- is then shown for the plugin for good, so the capture functions check a
+-- 7x7 grid of pixels first and keep the old file instead.
+function IsBlankCapture(bmp, w, h)
+    if not (r.JS_LICE_GetPixel and bmp and w and h and w > 0 and h > 0) then return false end
+    local first
+    for gy = 1, 7 do
+        for gx = 1, 7 do
+            local color = r.JS_LICE_GetPixel(bmp, math.floor(w * gx / 8), math.floor(h * gy / 8))
+            if first == nil then first = color elseif color ~= first then return false end
+        end
+    end
+    return true
+end
+
 function CaptureScreenshot(plugin_name, fx_index)
     local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
     local captured = false
@@ -9251,13 +9270,28 @@ function CaptureScreenshot(plugin_name, fx_index)
         local offset = plugin_name:match("^JS") and 0 or config.capture_height_offset
         h = h - offset - config.srcy
         log_to_file("Capturing screenshot for plugin: " .. plugin_name)
+        local blank_capture = false
         if not IsOSX() then
             local srcDC = r.JS_GDI_GetClientDC(hwnd)
             local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
             local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
             r.JS_GDI_Blit(srcDC_LICE, 0, 0, srcDC, config.srcx, config.srcy, w, h)
+            -- Flat from the window: read the same area from the screen, which
+            -- also sees GPU-drawn interfaces (what the OpenGL/DX capture does).
+            -- GetClientRect gives screen coordinates, so left/top place it.
+            blank_capture = IsBlankCapture(srcBmp, w, h)
+            if blank_capture and r.JS_GDI_GetScreenDC then
+                local screenDC = r.JS_GDI_GetScreenDC()
+                if screenDC then
+                    r.JS_GDI_Blit(srcDC_LICE, 0, 0, screenDC, left + config.srcx, top + config.srcy, w, h)
+                    r.JS_GDI_ReleaseDC(nil, screenDC)
+                    blank_capture = IsBlankCapture(srcBmp, w, h)
+                end
+            end
             local destBmp
-            if config.screenshot_size_option == 1 then
+            if blank_capture then
+                destBmp = srcBmp
+            elseif config.screenshot_size_option == 1 then
                 -- 128x128
                 destBmp = r.JS_LICE_CreateBitmap(true, 128, 128)
                 r.JS_LICE_ScaledBlit(destBmp, 0, 0, 128, 128, srcBmp, 0, 0, w, h, 1, "FAST")
@@ -9271,7 +9305,7 @@ function CaptureScreenshot(plugin_name, fx_index)
                 -- Origineel
                 destBmp = srcBmp
             end
-            r.JS_LICE_WritePNG(filename, destBmp, false)
+            if not blank_capture then r.JS_LICE_WritePNG(filename, destBmp, false) end
             if destBmp ~= srcBmp then
                 r.JS_LICE_DestroyBitmap(destBmp)
             end
@@ -9282,8 +9316,10 @@ function CaptureScreenshot(plugin_name, fx_index)
             h = top - bottom
             ScreenshotOSX(filename, left, top, w, h)
         end
-        local file = io.open(filename, "rb")
-        if file then
+        local file = not blank_capture and io.open(filename, "rb") or nil
+        if blank_capture then
+            print("Screenshot came out blank, nothing saved: " .. plugin_name)
+        elseif file then
             local size = file:seek("end")
             file:close()
             if size > 0 then
@@ -9337,8 +9373,12 @@ function CaptureScreenshotScreen(plugin_name, fx_index)
                 local srcBmp = r.JS_LICE_CreateBitmap(true, w, h)
                 local srcDC_LICE = r.JS_LICE_GetDC(srcBmp)
                 r.JS_GDI_Blit(srcDC_LICE, 0, 0, screenDC, x, y + config.srcy, w, h)
+                local blank_capture = IsBlankCapture(srcBmp, w, h)
                 local destBmp
-                if config.screenshot_size_option == 1 then
+                if blank_capture then
+                    destBmp = srcBmp
+                    log_to_file("Screenshot (Screen Capture) came out blank, nothing saved: " .. plugin_name)
+                elseif config.screenshot_size_option == 1 then
                     destBmp = r.JS_LICE_CreateBitmap(true, 128, 128)
                     r.JS_LICE_ScaledBlit(destBmp, 0, 0, 128, 128, srcBmp, 0, 0, w, h, 1, "FAST")
                 elseif config.screenshot_size_option == 2 then
@@ -9349,7 +9389,7 @@ function CaptureScreenshotScreen(plugin_name, fx_index)
                 else
                     destBmp = srcBmp
                 end
-                r.JS_LICE_WritePNG(filename, destBmp, false)
+                if not blank_capture then r.JS_LICE_WritePNG(filename, destBmp, false) end
                 if destBmp ~= srcBmp then r.JS_LICE_DestroyBitmap(destBmp) end
                 r.JS_GDI_ReleaseDC(nil, screenDC)
                 r.JS_LICE_DestroyBitmap(srcBmp)
