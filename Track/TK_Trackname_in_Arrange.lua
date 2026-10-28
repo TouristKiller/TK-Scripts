@@ -1,8 +1,13 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 2.0.1
+-- @version 2.0.2
 -- @changelog
 --[[
+v2.0.2:
++ Added: label font can now be any font installed on your system, e.g. to match your theme. Tick "System Fonts" at the top of the font list to browse and search all installed fonts; the choice is stored by name, so it is kept in presets
++ System font scan covers fonts installed for all users and fonts installed for your account only (Windows), plus macOS and Linux; use "Rescan" after installing a new font
++ The built-in font list and existing presets are unchanged
+
 v2.0.1:
 + Changed: presets are now stored in REAPER/Data/TK_Trackname_Presets, the same folder the native Arrange overlay extension uses, so script and extension share one set of presets (works for regular and portable installs)
 + Existing presets are copied to the new folder automatically when the script starts; nothing is overwritten and the old folder is left in place
@@ -596,6 +601,8 @@ local default_settings              = {
     horizontal_offset               = 100,
     vertical_offset                 = 0,
     selected_font                   = 1,
+    use_system_fonts                = false,
+    font_name                       = "",
     color_mode                      = 1,
     overlay_alpha                   = 0.1,
     show_track_colors               = true,
@@ -764,9 +771,101 @@ local font_objects = {}
 local env_point_font_cache = {}
 local settings_font
 
+-- Systeemfonts: lijst wordt gescand op verzoek en bewaard in ExtState; gekozen font wordt op naam opgeslagen
+local system_fonts = { list = nil, search = "", font = nil, key = nil }
+
+function LoadCachedSystemFonts()
+    local cached = r.GetExtState("TK_TRACKNAMES", "cached_system_fonts")
+    if cached ~= "" then
+        local list = {}
+        for name in cached:gmatch("[^|]+") do
+            list[#list + 1] = name
+        end
+        if #list > 0 then system_fonts.list = list end
+    end
+end
+
+function ScanSystemFonts()
+    local list, seen = {}, {}
+
+    local function add_font(name)
+        -- "Cambria & Cambria Math (TrueType)" bevat twee families
+        for part in name:gmatch("[^&]+") do
+            part = part:gsub("%s*%(.-%)%s*$", "")
+            for _, style in ipairs({"Bold Italic", "BoldItalic", "Bold","Italic", "Light", "Medium", "Semibold", "SemiBold", "Black", "Thin", "Regular"}) do
+                part = part:gsub("[%s%-]+" .. style .. "%s*$", "")
+            end
+            part = part:match("^%s*(.-)%s*$")
+            if #part > 1 and not seen[part:lower()] then
+                seen[part:lower()] = true
+                list[#list + 1] = part
+            end
+        end
+    end
+
+    local function read_lines(cmd, handler)
+        local p = io.popen(cmd)
+        if p then
+            for line in p:lines() do handler(line) end
+            p:close()
+        end
+    end
+
+    if OS:match("Win") then
+        -- HKLM = fonts voor alle gebruikers, HKCU = fonts die alleen voor deze gebruiker zijn geinstalleerd (standaard sinds Windows 10)
+        for _, hive in ipairs({"HKLM", "HKCU"}) do
+            read_lines('reg query "' .. hive .. '\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" 2>nul', function(line)
+                local name = line:match("^%s+(.-)%s+REG_SZ")
+                if name then add_font(name) end
+            end)
+        end
+    else
+        if OS:match("OSX") or OS:match("macOS") then
+            read_lines('system_profiler SPFontsDataType 2>/dev/null | grep "Family:" | cut -d: -f2', add_font)
+        end
+        if #list == 0 then
+            read_lines('fc-list : family 2>/dev/null | sort -u', function(line)
+                for part in line:gmatch("[^,]+") do add_font(part) end
+            end)
+        end
+    end
+
+    if #list > 0 then
+        table.sort(list, function(a, b) return a:lower() < b:lower() end)
+        system_fonts.list = list
+        r.SetExtState("TK_TRACKNAMES", "cached_system_fonts", table.concat(list, "|"), true)
+    end
+end
+
+function GetSystemFontList()
+    if not system_fonts.list then LoadCachedSystemFonts() end
+    return system_fonts.list
+end
+
+function GetActiveFontName()
+    if settings.use_system_fonts and settings.font_name and settings.font_name ~= "" then
+        return settings.font_name
+    end
+    return fonts[settings.selected_font] or fonts[1]
+end
+
+function GetActiveFont()
+    if settings.use_system_fonts and settings.font_name and settings.font_name ~= "" then
+        local key = settings.font_name .. "_" .. tostring(settings.text_size)
+        if system_fonts.key ~= key or not system_fonts.font or not r.ImGui_ValidatePtr(system_fonts.font, 'ImGui_Font*') then
+            system_fonts.font = r.ImGui_CreateFont(settings.font_name, settings.text_size)
+            system_fonts.key = key
+            r.ImGui_Attach(ctx, system_fonts.font)
+        end
+        return system_fonts.font
+    end
+    return font_objects[settings.selected_font] or font_objects[1]
+end
+
 function CreateFonts()
     font_objects = {}
     env_point_font_cache = {}
+    system_fonts.font, system_fonts.key = nil, nil
     for _, font_name in ipairs(fonts) do
         local font = r.ImGui_CreateFont(font_name, settings.text_size)
         table.insert(font_objects, font)
@@ -777,7 +876,7 @@ function CreateFonts()
 end
 
 function GetEnvelopePointFont()
-    local font_name = fonts[settings.selected_font] or fonts[1]
+    local font_name = GetActiveFontName()
     local font_size = settings.envelope_point_text_size or settings.text_size
     local cache_key = font_name .. "_" .. tostring(font_size)
     local font = env_point_font_cache[cache_key]
@@ -1847,10 +1946,42 @@ function ShowSettingsWindow()
         r.ImGui_Text(ctx, "Label Text:")
         
         r.ImGui_SetNextItemWidth(ctx, slider_width)
-        if r.ImGui_BeginCombo(ctx, "##Font", fonts[settings.selected_font]) then
-            for i, font_name in ipairs(fonts) do
-                if r.ImGui_Selectable(ctx, font_name, settings.selected_font == i) then
-                    settings.selected_font = i
+        if r.ImGui_BeginCombo(ctx, "##Font", GetActiveFontName(), r.ImGui_ComboFlags_HeightLargest()) then
+            local sys_changed
+            sys_changed, settings.use_system_fonts = r.ImGui_Checkbox(ctx, "System Fonts", settings.use_system_fonts)
+            if sys_changed and settings.use_system_fonts and not GetSystemFontList() then
+                ScanSystemFonts()
+            end
+            if settings.use_system_fonts then
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_SmallButton(ctx, "Rescan") then
+                    ScanSystemFonts()
+                end
+                r.ImGui_SetNextItemWidth(ctx, -1)
+                local _, search = r.ImGui_InputTextWithHint(ctx, "##FontSearch", "Search...", system_fonts.search)
+                system_fonts.search = search
+                local needle = search:lower()
+                local list = GetSystemFontList()
+                if r.ImGui_BeginChild(ctx, "##SystemFontList", 0, 250) then
+                    if not list then
+                        r.ImGui_TextDisabled(ctx, "No fonts found - try Rescan")
+                    else
+                        for _, font_name in ipairs(list) do
+                            if needle == "" or font_name:lower():find(needle, 1, true) then
+                                if r.ImGui_Selectable(ctx, font_name, settings.font_name == font_name) then
+                                    settings.font_name = font_name
+                                    r.ImGui_CloseCurrentPopup(ctx)
+                                end
+                            end
+                        end
+                    end
+                    r.ImGui_EndChild(ctx)
+                end
+            else
+                for i, font_name in ipairs(fonts) do
+                    if r.ImGui_Selectable(ctx, font_name, settings.selected_font == i) then
+                        settings.selected_font = i
+                    end
                 end
             end
             r.ImGui_EndCombo(ctx)
@@ -4026,6 +4157,7 @@ end
 
 function ResetRenderContext()
     ctx = r.ImGui_CreateContext('Track Names')
+    system_fonts.font, system_fonts.key = nil, nil
     r.ImGui_Attach(ctx, settings_font)
     for _, font in ipairs(font_objects) do
         r.ImGui_Attach(ctx, font)
@@ -4793,7 +4925,7 @@ function loop()
     end
 
     DrawOverArrange(false)
-    r.ImGui_PushFont(ctx, font_objects[settings.selected_font])
+    r.ImGui_PushFont(ctx, GetActiveFont())
     local ImGuiScale = reaper.ImGui_GetWindowDpiScale(ctx)
     if ImGuiScale ~= ImGuiScale_saved then
       SetWindowScale(ImGuiScale)

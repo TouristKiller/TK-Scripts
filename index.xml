@@ -1095,8 +1095,13 @@ v0.2.51
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="2.0.1" author="TouristKiller" time="2026-10-28T15:21:37Z">
+        <version name="2.0.2" author="TouristKiller" time="2026-10-28T16:14:39Z">
             <changelog><![CDATA[
+            v2.0.2:
+            + Added: label font can now be any font installed on your system, e.g. to match your theme. Tick "System Fonts" at the top of the font list to browse and search all installed fonts; the choice is stored by name, so it is kept in presets
+            + System font scan covers fonts installed for all users and fonts installed for your account only (Windows), plus macOS and Linux; use "Rescan" after installing a new font
+            + The built-in font list and existing presets are unchanged
+
             v2.0.1:
             + Changed: presets are now stored in REAPER/Data/TK_Trackname_Presets, the same folder the native Arrange overlay extension uses, so script and extension share one set of presets (works for regular and portable installs)
             + Existing presets are copied to the new folder automatically when the script starts; nothing is overwritten and the old folder is left in place
