@@ -214,24 +214,40 @@ local function OpenToolbarPopup(ctx, popup_id)
     open_toolbar_popup_id = popup_id
 end
 
+-- The toolbar's zoom buttons drive whichever canvas is on screen: inside a
+-- track's FX chain that is the FX view's own zoom, not the track graph's.
 function _G.PatchbayZoomStep(factor)
     if not factor then return end
+    if PB.fx_view_guid then
+        PB.fx_view_zoom_step = (PB.fx_view_zoom_step or 1) * factor
+        return
+    end
     canvas_zoom = math.max(MIN_ZOOM, math.min(MAX_ZOOM, canvas_zoom * factor))
     layout_dirty = true
 end
 
 function _G.PatchbayZoomReset()
+    if PB.fx_view_guid then
+        PB.fx_view_zoom = 1.0
+        PB.fx_view_fit_pending = true
+        return
+    end
     canvas_zoom = 1.0
     pending_center_view = true
     layout_dirty = true
 end
 
 function _G.PatchbayZoomFit()
+    if PB.fx_view_guid then
+        PB.fx_view_fit_zoom = true
+        return
+    end
     pending_fit_view = true
     layout_dirty = true
 end
 
 function _G.PatchbayZoomPercent()
+    if PB.fx_view_guid then return math.floor(PB.fx_view_zoom * 100 + 0.5) end
     return math.floor(canvas_zoom * 100 + 0.5)
 end
 
@@ -2869,7 +2885,11 @@ function HandlePatchbayExternalAction(cfg, layout_locked)
     PB.external_action_serial = serial
     r.DeleteExtState("TK_PATCHBAY_ACTIONS", "command", false)
     r.DeleteExtState("TK_PATCHBAY_ACTIONS", "serial", false)
-    if command == "fit_view" then
+    if command == "fit_view" and PB.fx_view_guid then
+        PB.fx_view_fit_zoom = true
+    elseif command == "center_view" and PB.fx_view_guid then
+        PB.fx_view_fit_pending = true
+    elseif command == "fit_view" then
         if not layout_locked then pending_fit_view = true end
     elseif command == "center_view" then
         if not layout_locked then pending_center_view = true end
@@ -4597,7 +4617,7 @@ local function RenderViewHelpWindow()
         RenderViewHelpItem(ctx, "Explicit", "Shows only tracks that have explicit sends or receives. Normal master output is not counted as explicit routing.")
         RenderViewHelpItem(ctx, "Master flow in explicit", "Allows normal track-to-master flow to appear while Explicit mode is enabled.")
         RenderViewHelpItem(ctx, "Only isolated", "Shows tracks that have no explicit sends, no explicit receives, and no master output.")
-        RenderViewHelpItem(ctx, "Flow", "Shows or hides the animated flow markers on visible cables.")
+        RenderViewHelpItem(ctx, "Flow", "Shows or hides the animated flow markers on visible cables. In the FX node view they only move while the track has signal.")
         RenderViewHelpItem(ctx, "Folder links", "Shows or hides the visual parent-to-child folder relationship lines.")
         RenderViewHelpItem(ctx, "Send type badges", "Shows audio, sidechain, and MIDI badges on send cables.")
         RenderViewHelpItem(ctx, "Focus selected", "Limits the view to selected tracks and their direct routing neighbors.")
@@ -5706,6 +5726,8 @@ PB.fx_view_off_y = 0
 PB.fx_view_zoom = 1.0
 PB.fx_view_sel_api = nil
 PB.fx_view_fit_pending = false
+PB.fx_view_fit_zoom = false     -- toolbar Fit: zoom and pan so everything shows
+PB.fx_view_zoom_step = nil      -- toolbar +/-: factor, applied around the middle
 PB.fx_view_ctx_api = nil
 PB.fx_view_ctx_name = nil
 PB.fx_view_ctx_open = false
@@ -5736,8 +5758,8 @@ function PatchbayFxNodeInvalidateBrowse()
 end
 
 function PatchbayFxNodeCached(track, dims)
-    local key = string.format("%s|%d|%.3f", tostring(PB.fx_view_guid),
-        r.TrackFX_GetCount(track) or 0, dims.zoom)
+    local key = string.format("%s|%d|%.3f|%d", tostring(PB.fx_view_guid),
+        r.TrackFX_GetCount(track) or 0, dims.zoom, dims.node_w)
     local now = r.time_precise()
     if PB.fx_view_cache and PB.fx_view_cache_key == key and (now - PB.fx_view_cache_time) < 0.25 then
         return PB.fx_view_cache
@@ -7346,11 +7368,15 @@ function PatchbayFxNodeDrawRoutingInside(dl, fx)
     return n
 end
 
+-- The toolbar's node-width slider sizes these nodes too: its default of 180
+-- maps to the FX node's own 150, so an untouched slider changes nothing.
 function PatchbayFxNodeDims(zoom)
     local z = math.max(0.35, math.min(2.5, zoom or 1))
+    local w_scale = NodeW() / NODE_W_DEFAULT
     return {
         zoom = z,
-        node_w = math.floor(150 * z + 0.5),
+        w_scale = w_scale,
+        node_w = math.floor(150 * w_scale * z + 0.5),
         node_h = math.floor(44 * z + 0.5),
         pin_r = math.max(2, 4 * z),
         pin_step = math.max(7, 13 * z),
@@ -7451,6 +7477,7 @@ function PatchbayFxNodeMake(track, api, fx_id, sibling_count, diff, depth)
         pins = PatchbayFxNodePinInfo(track, api),
         children = {}
     }
+    node.wet, node.has_wet = PatchbayFxNodeGetWet({ track = track, api_id = api })
     if fx_type == "Container" and depth < 4 then
         node.children = PatchbayFxNodeCollectContainer(track, fx_id, sibling_count, diff, depth)
     end
@@ -7519,7 +7546,10 @@ function PatchbayFxNodeMeasureOne(fx, dims)
     else
         fx.w = dims.node_w
         -- Rounded: a node on a half pixel renders its 1 px border blurred.
-        local body = PatchbayFxNodeShotsOn() and (dims.node_h * 1.45) or (dims.node_h * 0.55)
+        -- A screenshot body grows with the width, so a wider node shows a
+        -- bigger picture instead of the same one with empty sides.
+        local body = PatchbayFxNodeShotsOn() and (dims.node_h * 1.45 * math.max(1, dims.w_scale))
+            or (dims.node_h * 0.55)
         fx.h = math.floor(math.max(dims.node_h, dims.head_h + body) + 0.5)
     end
     -- A node has to be tall enough for its own pins, or a ReaComp's four inputs
@@ -7583,6 +7613,39 @@ end
 function PatchbayFxNodeCable(dl, x1, y1, x2, y2, col, thick)
     local cp = math.max(18, math.abs(x2 - x1) * 0.45)
     r.ImGui_DrawList_AddBezierCubic(dl, x1, y1, x1 + cp, y1, x2 - cp, y2, x2, y2, col, thick or 1.6)
+    if PB.fx_view_flow then
+        -- Same pace and stagger as the track graph's flow markers; the count
+        -- gives each cable its own phase so they do not march in lockstep.
+        PB.fx_view_flow_n = PB.fx_view_flow_n + 1
+        local t = (r.time_precise() * 0.55 + PB.fx_view_flow_n * 0.137) % 1.0
+        local u = 1 - t
+        local px = u * u * u * x1 + 3 * u * u * t * (x1 + cp) + 3 * u * t * t * (x2 - cp) + t * t * t * x2
+        local py = u * u * u * y1 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y2
+        r.ImGui_DrawList_AddCircleFilled(dl, px, py, PB.fx_view_flow_r or 2.5,
+            (math.tointeger(col) or 0xE6E6E6FF) | 0xFF)
+    end
+end
+
+-- Flow in here means "audio is going through this chain right now", not just
+-- "cables point this way": left to right is already obvious in a chain, so a
+-- marker that always moves would say nothing. REAPER only meters the track as
+-- a whole, so this cannot show where in the chain the signal stops. The meter
+-- is the track's own (post-fader by default), held briefly so a quiet passage
+-- does not make the dots stutter.
+function PatchbayFxNodeFlowLive(track)
+    local cfg = GetConfig()
+    if cfg and cfg.patchbay_show_flow == false then return false end
+    if not r.Track_GetPeakInfo then return false end
+    local now = r.time_precise()
+    local nch = math.floor(r.GetMediaTrackInfo_Value(track, "I_NCHAN") or 2)
+    nch = math.min(16, math.max(2, nch))
+    for ch = 0, nch - 1 do
+        if (r.Track_GetPeakInfo(track, ch) or 0) > 0.0001 then
+            PB.fx_view_flow_until = now + 0.35
+            break
+        end
+    end
+    return now < (PB.fx_view_flow_until or 0)
 end
 
 -- Pins sit at a fixed spacing around the middle of the node, NOT spread across
@@ -7743,6 +7806,8 @@ function PatchbayFxNodeDrawOne(ctx, dl, fx, dims, ink_pin, ink_label)
 
     local text_h = r.ImGui_GetTextLineHeight(ctx)
     local dot_room = math.max(3, 5 * dims.zoom) * 2 + 6
+    local knob_x, _, knob_r = PatchbayFxNodeWetSpot(fx, dims)
+    if knob_x then dot_room = fx.x + fx.w - dims.text_pad - (knob_x - knob_r) + 6 end
     local fold_room = 0
     if fx.fx_type == "Container" and #fx.children > 0 then
         fold_room = math.max(4, dims.head_h * 0.34) + dims.text_pad * 0.6
@@ -7778,6 +7843,7 @@ function PatchbayFxNodeDrawOne(ctx, dl, fx, dims, ink_pin, ink_label)
         end
     end
     PatchbayFxNodeDrawBypass(dl, fx, dims, text_col)
+    PatchbayFxNodeDrawWet(dl, fx, dims, text_col)
     PatchbayFxNodeDrawPins(ctx, dl, fx, dims, ink_pin, ink_label)
     if is_container then
         PatchbayFxNodeDrawStages(ctx, dl, fx.child_stages, dims,
@@ -7990,11 +8056,11 @@ function PatchbayFxNodeGetWet(target)
     return 1.0, false
 end
 
-function PatchbayFxNodeSetWet(target, wet)
-    if IsAllLockedCfg(GetConfig()) then return false end
+-- The write on its own, without an undo step: the knob calls it every frame
+-- while it is being turned, and only the release makes the undo point.
+function PatchbayFxNodeWriteWet(target, wet)
     if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return false end
     wet = math.max(0, math.min(1, tonumber(wet) or 0))
-    r.Undo_BeginBlock()
     local ok = false
     if r.TrackFX_GetParamFromIdent and r.TrackFX_SetParam then
         local wet_param = r.TrackFX_GetParamFromIdent(target.track, target.api_id, ":wet")
@@ -8011,6 +8077,14 @@ function PatchbayFxNodeSetWet(target, wet)
         local called = pcall(function() r.TrackFX_SetWetDryMix(target.track, target.api_id, wet, 1 - wet) end)
         if called then ok = true end
     end
+    return ok
+end
+
+function PatchbayFxNodeSetWet(target, wet)
+    if IsAllLockedCfg(GetConfig()) then return false end
+    if not target or not target.track or target.api_id == nil or not r.ValidatePtr(target.track, "MediaTrack*") then return false end
+    r.Undo_BeginBlock()
+    local ok = PatchbayFxNodeWriteWet(target, wet)
     r.Undo_EndBlock("Patchbay: set FX wet/dry", -1)
     return ok
 end
@@ -8072,6 +8146,60 @@ function PatchbayFxNodeDrawBypass(dl, fx, dims, border)
     else
         r.ImGui_DrawList_AddCircle(dl, cx, cy, rad, border, 0, 1.4)
     end
+end
+
+-- The wet/dry knob, just left of the bypass dot. Not drawn below 60% zoom,
+-- where it would be a smudge that eats the last of the name, nor on a plugin
+-- that answers none of the three ways of reading a wet value.
+function PatchbayFxNodeWetSpot(fx, dims)
+    if not fx.has_wet or dims.zoom < 0.6 then return nil end
+    local bx, by, brad = PatchbayFxNodeBypassSpot(fx, dims)
+    local rad = math.max(4, 6.5 * dims.zoom)
+    return bx - brad - 5 * dims.zoom - rad, by, rad
+end
+
+-- The node table is cached between frames, so while the knob is in your hand
+-- the value it shows comes from the drag, not from the model.
+function PatchbayFxNodeWetShown(fx)
+    local d = PB.fx_view_wet_drag
+    if d and d.api_id == fx.api_id then return d.value end
+    return fx.wet or 1
+end
+
+function PatchbayFxNodeWetAt(stages, mx, my, dims)
+    local hit = PatchbayFxNodeHit(stages, mx, my)
+    if not hit then return nil end
+    local cx, cy, rad = PatchbayFxNodeWetSpot(hit, dims)
+    if not cx then return nil end
+    local dx, dy = mx - cx, my - cy
+    if (dx * dx + dy * dy) <= (rad + 2) * (rad + 2) then return hit end
+    return nil
+end
+
+function PatchbayFxNodeWetLabel(wet)
+    local pct = math.floor(wet * 100 + 0.5)
+    return string.format("%d DRY / WET %d", 100 - pct, pct)
+end
+
+-- A 270 degree arc open at the bottom, filled from the left as it goes wet.
+function PatchbayFxNodeDrawWet(dl, fx, dims, ink)
+    local cx, cy, rad = PatchbayFxNodeWetSpot(fx, dims)
+    if not cx then return end
+    local wet = PatchbayFxNodeWetShown(fx)
+    local a0, a1 = math.pi * 0.75, math.pi * 2.25
+    local av = a0 + (a1 - a0) * wet
+    local thick = math.max(1.5, 2.2 * dims.zoom)
+    local arc_r = rad - thick * 0.5
+    local accent = fx.enabled and 0x3D8BFFFF or 0x8A8F98FF
+    r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, rad, 0x00000066)
+    r.ImGui_DrawList_PathArcTo(dl, cx, cy, arc_r, a0, a1, 24)
+    r.ImGui_DrawList_PathStroke(dl, 0xFFFFFF30, nil, thick)
+    if wet > 0.001 then
+        r.ImGui_DrawList_PathArcTo(dl, cx, cy, arc_r, a0, av, 24)
+        r.ImGui_DrawList_PathStroke(dl, accent, nil, thick)
+    end
+    r.ImGui_DrawList_AddLine(dl, cx, cy,
+        cx + math.cos(av) * (rad - thick), cy + math.sin(av) * (rad - thick), ink, math.max(1, 1.4 * dims.zoom))
 end
 
 function PatchbayFxNodePopups(ctx, track)
@@ -9189,6 +9317,18 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
         gx = gx + GRID
     end
 
+    -- The toolbar's + and - zoom around the middle of the canvas, the way the
+    -- wheel zooms around the cursor.
+    if PB.fx_view_zoom_step then
+        local cx, cy = avail_w * 0.5, avail_h * 0.5
+        local wx = (cx - PB.fx_view_off_x) / PB.fx_view_zoom
+        local wy = (cy - PB.fx_view_off_y) / PB.fx_view_zoom
+        PB.fx_view_zoom = math.max(0.35, math.min(2.5, PB.fx_view_zoom * PB.fx_view_zoom_step))
+        PB.fx_view_off_x = cx - wx * PB.fx_view_zoom
+        PB.fx_view_off_y = cy - wy * PB.fx_view_zoom
+        PB.fx_view_zoom_step = nil
+    end
+
     PatchbayFxNodeShotBeginFrame()
     local dims = PatchbayFxNodeDims(PB.fx_view_zoom)
     local layout = PatchbayFxNodeCached(track, dims)
@@ -9233,6 +9373,30 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
         (PB.fx_view_drag and PB.fx_view_drag.active) and PB.fx_view_drag.api_id or nil,
         (edrag and edrag.active) and edrag.which or nil)
 
+    -- Fit measures what is really on screen, moved nodes and IN/OUT boxes
+    -- included, rather than the automatic layout's own width. The new zoom and
+    -- pan show from the next frame on.
+    if PB.fx_view_fit_zoom then
+        PB.fx_view_fit_zoom = false
+        local x1, y1 = math.min(in_x, out_x), math.min(in_y, out_y)
+        local x2 = math.max(in_x, out_x) + dims.edge_w
+        local y2 = math.max(in_y, out_y) + edge_h
+        for _, st in ipairs(layout.stages) do
+            for _, fx in ipairs(st) do
+                x1, y1 = math.min(x1, fx.x), math.min(y1, fx.y)
+                x2, y2 = math.max(x2, fx.x + fx.w), math.max(y2, fx.y + fx.h)
+            end
+        end
+        local z = dims.zoom
+        local cw, ch = math.max(1, (x2 - x1) / z), math.max(1, (y2 - y1) / z)
+        local top, pad = 26, 24
+        local nz = math.min((avail_w - pad * 2) / cw, (avail_h - top - pad * 2) / ch)
+        nz = math.max(0.35, math.min(2.5, nz))
+        PB.fx_view_zoom = nz
+        PB.fx_view_off_x = (avail_w - cw * nz) * 0.5 - ((x1 - origin_x - PB.fx_view_off_x) / z) * nz
+        PB.fx_view_off_y = top + (avail_h - top - ch * nz) * 0.5 - ((y1 - origin_y - PB.fx_view_off_y) / z) * nz
+    end
+
     -- A drag in progress moves the node now, before the frame is drawn. Cables
     -- read their ends off the node rectangles, so they stretch along with it
     -- for free.
@@ -9276,6 +9440,11 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     layout.link_left_y = in_y + edge_h * 0.5
     layout.link_right_y = out_y + edge_h * 0.5
 
+    -- Only the chain's own cables carry markers: the switch is off again
+    -- before the pin-drag cable and anything else drawn later in the frame.
+    PB.fx_view_flow = PatchbayFxNodeFlowLive(track)
+    PB.fx_view_flow_n = 0
+    PB.fx_view_flow_r = math.max(2, 2.6 * dims.zoom)
     if #layout.stages == 0 then
         local msg = "No FX on this track"
         local tw = r.ImGui_CalcTextSize(ctx, msg)
@@ -9290,6 +9459,7 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
             PatchbayFxNodeCanvasInk(false), PatchbayFxNodeCanvasInk(true),
             in_y + edge_h * 0.5, out_y + edge_h * 0.5)
     end
+    PB.fx_view_flow = false
 
     -- Header strip: which track, and the way back out.
     local _, track_name = r.GetTrackName(track)
@@ -9311,7 +9481,7 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
         return true
     end
     local btn_x = origin_x + 74
-    if PatchbayFxNodeHasPositions(track) then
+    if PatchbayFxNodeHasPositions(track) and not IsLayoutLockedCfg(GetConfig()) then
         r.ImGui_SetCursorScreenPos(ctx, btn_x, origin_y + 3)
         if r.ImGui_Button(ctx, "Auto layout", 78, head_h - 6) then
             PatchbayFxNodeClearAllPositions(track)
@@ -9377,8 +9547,9 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     local bg_hovered = r.ImGui_IsItemHovered(ctx)
     local mx, my = r.ImGui_GetMousePos(ctx)
 
+    local wet_hover = bg_hovered and PatchbayFxNodeWetAt(layout.stages, mx, my, dims) or nil
     if bg_active and not PB.fx_view_drag and not PB.fx_view_pin_drag
-        and not PB.fx_view_edge_drag then
+        and not PB.fx_view_edge_drag and not PB.fx_view_wet_drag then
         local dx, dy = r.ImGui_GetMouseDragDelta(ctx, 0, 0, 0)
         if dx ~= 0 or dy ~= 0 then
             PB.fx_view_off_x = PB.fx_view_off_x + dx
@@ -9396,7 +9567,15 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     end
     if r.ImGui_IsWindowHovered(ctx) then
         local wheel = r.ImGui_GetMouseWheel(ctx)
-        if wheel ~= 0 then
+        if wheel ~= 0 and wet_hover then
+            -- Over a knob the wheel turns the knob instead of zooming.
+            local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
+            local fine = r.ImGui_Mod_Shift and (mods & r.ImGui_Mod_Shift()) ~= 0
+            local step = (fine and 0.01 or 0.05) * (wheel > 0 and 1 or -1)
+            if PatchbayFxNodeSetWet(PatchbayFxNodeTarget(track, wet_hover), (wet_hover.wet or 1) + step) then
+                PatchbayFxNodeInvalidate()
+            end
+        elseif wheel ~= 0 then
             local wx = (mx - origin_x - PB.fx_view_off_x) / PB.fx_view_zoom
             local wy = (my - origin_y - PB.fx_view_off_y) / PB.fx_view_zoom
             local factor = (wheel > 0) and 1.1 or (1 / 1.1)
@@ -9449,8 +9628,12 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     -- Moving the IN and OUT boxes. Checked after the pins, which sit on their
     -- edges: grabbing a pin starts a cable, and the box must not swallow that.
     local on_edge = (not on_pin) and PatchbayFxNodeEdgeAt(layout, mx, my) or nil
+    -- Lock: Layout freezes where things stand here just as it does on the
+    -- track graph; reordering the chain is an FX action and only Lock: All
+    -- stops that.
+    local layout_locked = IsLayoutLockedCfg(GetConfig())
     if on_edge and bg_hovered and not PB.fx_view_pin_drag and not PB.fx_view_edge_drag
-        and r.ImGui_IsMouseClicked(ctx, 0) then
+        and not layout_locked and r.ImGui_IsMouseClicked(ctx, 0) then
         local ex, ey = PatchbayFxNodeEdgeRect(layout, on_edge)
         PB.fx_view_edge_drag = { which = on_edge, x0 = mx, y0 = my, active = false,
                                  grab_x = mx - ex, grab_y = my - ey }
@@ -9481,9 +9664,9 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     end
     if on_edge and bg_hovered and not PB.fx_view_edge_drag then
         r.ImGui_SetTooltip(ctx, (on_edge == "in" and "Track input" or "Track output")
-            .. "\ndrag to move  ·  right-click to put it back")
+            .. (layout_locked and "\nlayout locked" or "\ndrag to move  ·  right-click to put it back"))
     end
-    if on_edge and bg_hovered and r.ImGui_IsMouseClicked(ctx, 1) then
+    if on_edge and bg_hovered and not layout_locked and r.ImGui_IsMouseClicked(ctx, 1) then
         PatchbayFxNodeClearPosition(track,
             (on_edge == "in") and PATCHBAY_FX_EDGE_IN or PATCHBAY_FX_EDGE_OUT)
     end
@@ -9495,6 +9678,7 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     -- widget per node would fight it for the mouse.
     local on_bypass = false
     local on_fold = false
+    local on_wet = hit ~= nil and wet_hover == hit
     if hit then
         local bx, by, brad = PatchbayFxNodeBypassSpot(hit, dims)
         local dx, dy = mx - bx, my - by
@@ -9504,7 +9688,12 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
             on_fold = math.abs(mx - fxx) <= fsize and math.abs(my - fxy) <= fsize
         end
     end
-    if hit and bg_hovered then
+    if PB.fx_view_wet_drag then
+        r.ImGui_SetTooltip(ctx, PatchbayFxNodeWetLabel(PB.fx_view_wet_drag.value))
+    elseif on_wet and bg_hovered then
+        r.ImGui_SetTooltip(ctx, PatchbayFxNodeWetLabel(PatchbayFxNodeWetShown(hit))
+            .. "\ndrag or scroll  ·  Shift = fine  ·  double-click = 100% wet")
+    elseif hit and bg_hovered then
         r.ImGui_SetTooltip(ctx, on_fold and (hit.folded and "Unfold container" or "Fold container")
             or on_bypass and (hit.enabled and "Bypass" or "Un-bypass")
             or (hit.full_name ~= "" and hit.full_name or hit.name))
@@ -9514,6 +9703,10 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
             PatchbayFxNodeToggleFold(track, hit.fxguid)
         elseif on_bypass then
             PatchbayFxNodeSetBypass(PatchbayFxNodeTarget(track, hit), hit.enabled)
+        elseif on_wet then
+            if not IsAllLockedCfg(GetConfig()) then
+                PB.fx_view_wet_drag = { api_id = hit.api_id, start = hit.wet or 1, value = hit.wet or 1 }
+            end
         else
             PB.fx_view_sel_api = hit and hit.api_id or nil
             -- Armed, not yet dragging: a plain click must stay a plain click,
@@ -9546,7 +9739,7 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
                         -- change under it, so a pinned spot would be nonsense.
                         PatchbayFxNodeApplyDrop(track, source, over)
                         PatchbayFxNodeClearPosition(track, source.fxguid)
-                    else
+                    elseif not layout_locked then
                         local nx = mx - (drag.grab_x or 0)
                         local ny = my - (drag.grab_y or 0)
                         if PatchbayFxNodePreventOverlap() then
@@ -9566,7 +9759,35 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
             end
         end
     end
-    if hit and bg_hovered and not on_bypass and not on_fold and r.ImGui_IsMouseDoubleClicked(ctx, 0) and r.TrackFX_Show then
+    -- Turning the knob. Written straight to the plugin so you hear it move;
+    -- on release the start value goes back silently and the end value is set
+    -- once more inside an undo block, so the whole turn is one undo step.
+    if PB.fx_view_wet_drag then
+        local wd = PB.fx_view_wet_drag
+        local wtarget = { track = track, track_guid = PB.fx_view_guid, api_id = wd.api_id }
+        if r.ImGui_IsMouseDown(ctx, 0) then
+            local _, ddy = r.ImGui_GetMouseDelta(ctx)
+            local mods = r.ImGui_GetKeyMods and r.ImGui_GetKeyMods(ctx) or 0
+            local fine = r.ImGui_Mod_Shift and (mods & r.ImGui_Mod_Shift()) ~= 0
+            local v = math.max(0, math.min(1, wd.value - (ddy or 0) / (fine and 600 or 150)))
+            if v ~= wd.value then
+                wd.value = v
+                PatchbayFxNodeWriteWet(wtarget, v)
+            end
+        else
+            if math.abs(wd.value - wd.start) > 1e-6 then
+                PatchbayFxNodeWriteWet(wtarget, wd.start)
+                PatchbayFxNodeSetWet(wtarget, wd.value)
+            end
+            PB.fx_view_wet_drag = nil
+            PatchbayFxNodeInvalidate()
+        end
+    end
+    if on_wet and bg_hovered and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+        PB.fx_view_wet_drag = nil
+        if PatchbayFxNodeSetWet(PatchbayFxNodeTarget(track, hit), 1) then PatchbayFxNodeInvalidate() end
+    end
+    if hit and bg_hovered and not on_bypass and not on_fold and not on_wet and r.ImGui_IsMouseDoubleClicked(ctx, 0) and r.TrackFX_Show then
         r.TrackFX_Show(track, hit.api_id, 3)
     end
     if bg_hovered and not on_edge and r.ImGui_IsMouseClicked(ctx, 1) then

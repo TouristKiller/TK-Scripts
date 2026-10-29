@@ -1,7 +1,14 @@
 -- @description TK Patchbay Viewer (Standalone)
 -- @author TouristKiller
--- @version 1.3.0
+-- @version 1.3.1
 -- @changelog:
+--   v1.3.1:
+--       + FX node view: the toolbar's zoom buttons (-, +, 1:1 and Fit) and the zoom percentage now work inside the FX node view; until now they only moved the track graph hidden behind it. Fit measures what is really there, nodes you moved and the IN/OUT boxes included.
+--       + FX node view: the node width slider now sizes the FX nodes too, so long plugin names fit; with Shots on, a wider node also gets a bigger screenshot. At the default width nothing changes.
+--       + FX node view: Lock: Layout now holds the FX view in place as well: nodes and the IN/OUT boxes cannot be moved and Auto layout is hidden. Reordering the chain still works, as that is an FX action and only Lock: All stops it.
+--       + FX node view: the assignable Fit view and Center view actions act on the FX node view while it is open.
+--       + FX node view: a wet/dry knob sits next to the bypass dot. Drag it up or down or scroll over it (hold Shift for fine steps) and double-click it for 100% wet; the tooltip shows the dry/wet balance, and one whole turn is one undo step. It is hidden below 60% zoom and on plugins without a wet control.
+--       + FX node view: with Flow on, markers run along the chain's cables while the track has signal and stand still when it is silent, so you can see at a glance whether audio is going through. REAPER only meters the track as a whole, so they show that signal is there, not where in the chain it stops.
 --   v1.3.0:
 --       + FX node view: double-click a track node (or use the FX icon on the node, or click the FX schema panel) to dive into that track and see its FX chain as nodes and cables instead of a strip, nested containers and parallel lanes included.
 --       + FX node view: reorder by dragging - drop on a cable to place an FX in series, on a node to run it in parallel, or into a container. Parallel lanes can be reordered in both directions.

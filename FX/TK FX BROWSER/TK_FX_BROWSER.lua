@@ -1,8 +1,15 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.20
+-- @version 3.2.21
 -- @changelog:
 --[[
+    v3.2.21:
+        + Patchbay: FX node view: the toolbar's zoom buttons (-, +, 1:1 and Fit) and the zoom percentage now work inside the FX node view; until now they only moved the track graph hidden behind it. Fit measures what is really there, nodes you moved and the IN/OUT boxes included.
+        + Patchbay: FX node view: the node width slider now sizes the FX nodes too, so long plugin names fit; with Shots on, a wider node also gets a bigger screenshot. At the default width nothing changes.
+        + Patchbay: FX node view: Lock: Layout now holds the FX view in place as well: nodes and the IN/OUT boxes cannot be moved and Auto layout is hidden. Reordering the chain still works, as that is an FX action and only Lock: All stops it.
+        + Patchbay: FX node view: the assignable Fit view and Center view actions act on the FX node view while it is open.
+        + Patchbay: FX node view: a wet/dry knob sits next to the bypass dot. Drag it up or down or scroll over it (hold Shift for fine steps) and double-click it for 100% wet; the tooltip shows the dry/wet balance, and one whole turn is one undo step. It is hidden below 60% zoom and on plugins without a wet control.
+        + Patchbay: FX node view: with Flow on, markers run along the chain's cables while the track has signal and stand still when it is silent, so you can see at a glance whether audio is going through. REAPER only meters the track as a whole, so they show that signal is there, not where in the chain it stops.
     v3.2.20:
         + Screenshots: A capture no longer saves a blank image. Plugins that draw their window with OpenGL or DirectX came back as one flat colour from a normal capture, and that blank file was then shown for the plugin for good. A flat capture is now taken again from the screen straight away (the same as the OpenGL/DX capture), which does see such plugins; if that is flat too, nothing is saved and an existing screenshot is kept. This also applies to bulk screenshots.
         + Screenshots: The OpenGL/DX capture also leaves the existing file alone when it comes out blank, instead of overwriting it.
