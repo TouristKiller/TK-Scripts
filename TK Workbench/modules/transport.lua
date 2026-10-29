@@ -107,6 +107,84 @@ end
 
 local function save(app) if app.save_settings then app.save_settings() end end
 
+-- Block heights the user can drag. Only blocks that draw a picture get one:
+-- the Navigator map, the Master scope and the Markers strip (in rows of
+-- chips). The others are rows of controls with a natural height, where taller
+-- would only add empty space and shorter would cut controls off. Heights are
+-- stored unscaled, so they follow the UI scale like everything else.
+local block_size = {
+  SPEC = {
+    navigator = { default = 120, min = 60, max = 480 },
+    master_peak = { default = 70, min = 30, max = 320 },
+    markers = { default = 3, min = 1, max = 12, rows = true }
+  },
+  drag = nil,
+  row_px = {}
+}
+
+function block_size.get(settings, id)
+  local spec = block_size.SPEC[id]
+  if not spec then return nil end
+  local saved = type(settings.block_heights) == "table" and tonumber(settings.block_heights[id]) or nil
+  local value = math.max(spec.min, math.min(spec.max, saved or spec.default))
+  if spec.rows then return math.floor(value + 0.5) end
+  return math.floor(value + 0.5)
+end
+
+function block_size.set(settings, id, value)
+  if type(settings.block_heights) ~= "table" then settings.block_heights = {} end
+  settings.block_heights[id] = value
+end
+
+-- A strip along the card edge that drags the height. With the stack anchored
+-- to the bottom a card grows upwards - the cards sit against the pinned
+-- transport card - so the strip is on the top edge there and the edge stays
+-- under the mouse instead of running away from it.
+function block_size.draw_grip(ctx, app, settings, id, x0, y0, w, h, at_top)
+  local spec = block_size.SPEC[id]
+  if not spec then return end
+  local grip_h = UIScale.round(6)
+  local gy = at_top and y0 or (y0 + h - grip_h)
+  r.ImGui_SetCursorScreenPos(ctx, x0, gy)
+  r.ImGui_InvisibleButton(ctx, "##block_resize_" .. id, w, grip_h)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  local active = r.ImGui_IsItemActive(ctx)
+  local _, mouse_y = r.ImGui_GetMousePos(ctx)
+  if r.ImGui_IsItemActivated(ctx) then
+    block_size.drag = { id = id, start_y = mouse_y, start = block_size.get(settings, id) }
+  end
+  if hovered and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+    if type(settings.block_heights) == "table" then settings.block_heights[id] = nil end
+    block_size.drag = nil
+    save(app)
+    app.status = "Transport: " .. block_title(id) .. " back to its default height"
+  elseif active and block_size.drag and block_size.drag.id == id then
+    local dy = mouse_y - block_size.drag.start_y
+    if at_top then dy = -dy end
+    local value
+    if spec.rows then
+      value = block_size.drag.start + math.floor(dy / math.max(1, block_size.row_px[id] or UIScale.round(24)) + 0.5)
+    else
+      value = block_size.drag.start + dy / math.max(0.1, UIScale.value())
+    end
+    block_size.set(settings, id, math.max(spec.min, math.min(spec.max, math.floor(value + 0.5))))
+  end
+  if r.ImGui_IsItemDeactivated(ctx) and block_size.drag and block_size.drag.id == id then
+    block_size.drag = nil
+    save(app)
+  end
+  if hovered or active then
+    if r.ImGui_SetMouseCursor and r.ImGui_MouseCursor_ResizeNS then r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS()) end
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local line_y = at_top and y0 or (y0 + h)
+    r.ImGui_DrawList_AddLine(dl, x0 + UIScale.round(6), line_y, x0 + w - UIScale.round(6), line_y, Theme.colors.accent, UIScale.px(2))
+    if hovered and not active then
+      local now = block_size.get(settings, id)
+      r.ImGui_SetTooltip(ctx, "Drag to resize (" .. tostring(now) .. (spec.rows and " rows" or " px") .. ")\nDouble-click: default height")
+    end
+  end
+end
+
 -- Move source block next to target, on the side matching the drag direction:
 -- dragging down drops it after the target, dragging up drops it before.
 local function reorder_block(app, settings, source, target)
@@ -1817,7 +1895,9 @@ end
 BLOCKS.navigator = function(ctx, app, settings, width)
   -- The map itself lives in core/navigator so the card here and the module of
   -- the same name are literally the same code.
-  Navigator.draw(ctx, app, width, UIScale.round(120), "Transport")
+  if Navigator.draw(ctx, app, width, UIScale.round(block_size.get(settings, "navigator")), "Transport") then
+    state.wheel_owner = true
+  end
 end
 BLOCKS.markers = function(ctx, app, settings, width)
   if not r.CountProjectMarkers or not r.EnumProjectMarkers3 then
@@ -1966,8 +2046,12 @@ BLOCKS.markers = function(ctx, app, settings, width)
     return lines
   end
 
+  -- Rows shown before the strip scrolls: MK_MAX_ROWS unless dragged. The row
+  -- height is handed to the resize grip so a drag moves in whole rows.
+  local max_rows = block_size.get(settings, "markers") or MK_MAX_ROWS
+  block_size.row_px.markers = chip_h + gap
   local lines = layout(width)
-  if #lines > MK_MAX_ROWS then
+  if #lines > max_rows then
     -- Re-flow inside the narrower space left by the scrollbar.
     local sb = UIScale.round(12)
     if r.ImGui_GetStyleVar and r.ImGui_StyleVar_ScrollbarSize then
@@ -1976,7 +2060,12 @@ BLOCKS.markers = function(ctx, app, settings, width)
     end
     lines = layout(math.max(UIScale.round(40), width - sb - UIScale.round(2)))
   end
-  local list_h = math.min(#lines, MK_MAX_ROWS) * (chip_h + gap) - gap
+  -- A height the user dragged reserves that many rows, also with fewer chips:
+  -- otherwise the strip shrinks to its content and a drag seems to do nothing
+  -- until the project has enough markers to fill it. Without one it still
+  -- shrinks to fit, as before.
+  local reserved = type(settings.block_heights) == "table" and settings.block_heights.markers ~= nil
+  local list_h = (reserved and max_rows or math.min(#lines, max_rows)) * (chip_h + gap) - gap
 
   r.ImGui_SetCursorScreenPos(ctx, ox, y)
   local padded = false
@@ -2432,7 +2521,7 @@ BLOCKS.master_peak = function(ctx, app, settings, width)
   local ox, oy = r.ImGui_GetCursorScreenPos(ctx)
   ox, oy = math.floor(ox), math.floor(oy)
   local w = math.max(UIScale.round(40), width)
-  local h = UIScale.round(70)
+  local h = UIScale.round(block_size.get(settings, "master_peak"))
   local scope = state.scope
 
   -- Push one sample per frame: the master peak while rolling, silence otherwise
@@ -2640,6 +2729,9 @@ local function draw_block_card(ctx, app, settings, id, pinned)
   local h = math.ceil((gy2 - y0) + pad)
   state.card_heights[id] = h
   r.ImGui_DrawList_AddRect(dl, x0, y0, x0 + w, y0 + h, Theme.colors.border, UIScale.px(6), 0, UIScale.px(1))
+  -- Drawn after the height is measured, in the card's padding, so the grip
+  -- itself never changes the height it controls.
+  if not pinned then block_size.draw_grip(ctx, app, settings, id, x0, y0, w, h, settings.anchor == "bottom") end
   -- Advance the cursor below the card with a plain move (no Dummy, so ImGui does
   -- not add ItemSpacing that would inflate the real stack height per card and
   -- throw off the bottom-anchor estimate).
@@ -2658,7 +2750,13 @@ local function draw_block_stack(ctx, app, settings, ids, height, bottom_align)
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 0, 0)
     padded = true
   end
-  local visible = r.ImGui_BeginChild(ctx, "##transport_block_stack", 0, height, 0)
+  -- The Navigator zooms with the wheel. While the mouse is over it the stack
+  -- must not scroll too, or the map runs away from under the pointer. ImGui
+  -- decides about wheel scrolling from the flags a window had last frame, so
+  -- the hover from last frame is what counts here.
+  local stack_flags = 0
+  if state.wheel_owner_prev and r.ImGui_WindowFlags_NoScrollWithMouse then stack_flags = r.ImGui_WindowFlags_NoScrollWithMouse() end
+  local visible = r.ImGui_BeginChild(ctx, "##transport_block_stack", 0, height, 0, stack_flags)
   if padded then r.ImGui_PopStyleVar(ctx) end
   if not visible then return end
   local ok, err = pcall(function()
@@ -2688,6 +2786,8 @@ end
 function M.draw(app)
   local ctx = app.ctx
   local settings = ensure_settings(app)
+  state.wheel_owner_prev = state.wheel_owner
+  state.wheel_owner = false
   local avail_w = r.ImGui_GetContentRegionAvail(ctx)
   local width = math.max(UIScale.round(140), avail_w or UIScale.round(280))
 

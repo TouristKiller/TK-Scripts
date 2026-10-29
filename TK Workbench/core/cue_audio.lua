@@ -17,7 +17,7 @@ local Wav = require("core.cue_wav")
 local Audio = {}
 
 Audio.GMEM = "tk_cue"
-Audio.JSFX_VERSION = 4
+Audio.JSFX_VERSION = 5
 Audio.FX_NAME = "TK Cue Click"
 
 -- gmem slots. Kept small and flat on purpose: this is written every frame from
@@ -38,6 +38,12 @@ local SLOT_SOUND_COUNT = 9
 local SLOT_SOUND_GO = 10
 local SLOT_SOUND_BEAT = 11
 local SLOT_SOUND_ACCENT = 12
+-- A section's own sound - a voice saying "Chorus" - and when it is due. It is
+-- a one-shot on a voice of its own: the warning and count-in cues fire on
+-- every beat of their window, and a spoken word on one of those would be
+-- repeated, or cut off by the next tick.
+local SLOT_ANNOUNCE_TIME = 13
+local SLOT_ANNOUNCE_SOUND = 14
 
 -- The effect reports back up here: what it is, how many sounds it managed to
 -- load, and how long each of them turned out to be. Without this the audio
@@ -56,7 +62,13 @@ local SLOT_COUNT = 31
 local SLOT_DIRECTORY = 32      -- 4 words per sound: frames, rate, offset, spare
 local AUDIO_BASE = 4096
 
-Audio.MAX_SOUNDS = 16
+-- Sounds loaded into shared memory at once: the cue roles plus one per
+-- section that has its own. 32 sounds of at most two seconds stays inside
+-- gmem's room even at 96 kHz.
+Audio.MAX_SOUNDS = 32
+-- Files offered in the pickers. Only names, so this can be generous; a folder
+-- of voice cues alone runs past the old limit of sixteen.
+Audio.MAX_LISTED = 256
 -- Only the first few seconds of a sound are loaded. A cue is a tick, and
 -- somebody will eventually drop a four-minute bounce in that folder.
 Audio.MAX_SECONDS = 2
@@ -102,7 +114,7 @@ function Audio.list_sounds()
       out[#out + 1] = { name = filename, path = root .. filename }
     end
     index = index + 1
-    if #out >= Audio.MAX_SOUNDS then break end
+    if #out >= Audio.MAX_LISTED then break end
   end
   table.sort(out, function(a, b) return a.name:lower() < b.name:lower() end)
   return out
@@ -117,20 +129,55 @@ function Audio.used_sounds(preset, files)
   files = files or Audio.sounds()
   local sounds = preset and preset.sounds or {}
   local used, seen = {}, {}
-  for _, role in ipairs(Audio.SOUND_ROLES) do
-    local name = tostring(sounds[role] or "")
+  local function add(name)
+    name = tostring(name or "")
     local key = name:lower()
-    if name ~= "" and not seen[key] then
-      for _, entry in ipairs(files) do
-        if entry.name:lower() == key then
-          seen[key] = true
-          used[#used + 1] = entry
-          break
-        end
+    if name == "" or seen[key] or #used >= Audio.MAX_SOUNDS then return end
+    for _, entry in ipairs(files) do
+      if entry.name:lower() == key then
+        seen[key] = true
+        used[#used + 1] = entry
+        return
       end
     end
   end
+  for _, role in ipairs(Audio.SOUND_ROLES) do add(sounds[role]) end
+  -- Section sounds after the roles, so a song with a voice for every part can
+  -- never push the warning tick out. Three choruses share one entry by name,
+  -- so they share one slot too.
+  for _, entry in ipairs(preset and preset.sections or {}) do add(entry.sound) end
   return used
+end
+
+-- The section entry a region name matches, the same way the presets match
+-- it: by name, ignoring case. Kept here so the audio side does not need the
+-- presets module to find out what to play.
+function Audio.section_entry(preset, name)
+  name = tostring(name or ""):lower()
+  if name == "" then return nil end
+  for _, entry in ipairs(preset and preset.sections or {}) do
+    if tostring(entry.match or ""):lower() == name then return entry end
+  end
+  return nil
+end
+
+-- When the coming section announces itself, and with which sound: the time in
+-- seconds and an index into the used set, or nil when there is nothing to say.
+function Audio.announcement(preset, state, plan, used)
+  local coming = state and state.next_section
+  if not coming or not plan then return nil end
+  local entry = Audio.section_entry(preset, coming.key or coming.name)
+  if not entry or tostring(entry.sound or "") == "" then return nil end
+  local index = Audio.sound_index(used, entry.sound)
+  if index < 0 then return nil end
+  local at = entry.sound_at == "change" and plan.change or plan.warn
+  if not at then return nil end
+  -- A section shorter than its warning window puts the warning before the
+  -- section even began: already past, it would never be heard. It moves up to
+  -- where this section starts instead.
+  local here = state.section and state.section.start
+  if here and at < here then at = here end
+  return { time = at, sound = index }
 end
 
 function Audio.sound_index(files, name)
@@ -171,6 +218,7 @@ options:gmem=tk_cue
   env = 0; env_d = 0; ph = 0; ph_d = 0; amp = 0;
   next_beat = -1; fired = -1;
   s_slot = -1; sp = 0; s_amp = 0;
+  a_slot = -1; ap = 0; a_amp = 0; a_fired = -1;
   gmem[20] = %d;
   gmem[22] = srate;
 
@@ -188,6 +236,11 @@ options:gmem=tk_cue
   warn_t = gmem[6];
   last_bar_t = gmem[7];
   sounds = gmem[31] | 0;
+  // A section that announces itself: when, and which sample. a_ok says the
+  // sample is really loaded, and only then does it take over that beat.
+  announce_t = gmem[13];
+  announce_s = gmem[14] | 0;
+  a_ok = (announce_t >= 0 && announce_s >= 0 && announce_s < sounds && gmem[32 + announce_s * 4] > 0) ? 1 : 0;
   gmem[20] = %d;
   gmem[21] = sounds;
   gmem[22] = srate;
@@ -202,6 +255,17 @@ options:gmem=tk_cue
 
 @sample
   live ? (
+    t_now = play_position + spl_i * inv;
+    // The announcement fires once, on its own voice. A start more than a
+    // quarter second after it is too late to be of use and stays quiet; going
+    // back before it (a loop, a jump) arms it again.
+    a_ok ? (
+      t_now < announce_t - 0.5 ? a_fired = -1;
+      (a_fired != announce_t && t_now >= announce_t && t_now < announce_t + 0.25) ? (
+        a_fired = announce_t;
+        a_slot = announce_s; ap = 0; a_amp = vol;
+      );
+    );
     b = bstart + spl_i * bps * inv;
     b >= next_beat ? (
       t = play_position + spl_i * inv;
@@ -215,6 +279,9 @@ options:gmem=tk_cue
 
       allow = kind == 0 ? (flags & 1) : (kind == 1 ? (flags & 2) :
               (kind == 2 ? (flags & 4) : (kind == 3 ? (flags & 8) : (flags & 16))));
+      // The voice replaces the tick on its own beat rather than talking
+      // over it.
+      (a_ok && abs(t - announce_t) < 0.03) ? allow = 0;
 
       allow ? (
         amp = (kind == 4 ? 1.0 : (kind == 1 ? 0.8 : 0.6)) * vol;
@@ -262,6 +329,23 @@ options:gmem=tk_cue
         spl1 += sm;
         sp += step;
       ) : s_slot = -1;
+    );
+
+    a_slot >= 0 ? (
+      a_len = gmem[32 + a_slot * 4];
+      a_rate = gmem[33 + a_slot * 4];
+      a_at = gmem[34 + a_slot * 4];
+      a_step = a_rate > 0 ? a_rate / srate : 1;
+      a_i0 = floor(ap);
+      a_frac = ap - a_i0;
+      (a_i0 + 1) < a_len ? (
+        a_v0 = gmem[a_at + a_i0];
+        a_v1 = gmem[a_at + a_i0 + 1];
+        am = (a_v0 + (a_v1 - a_v0) * a_frac) * a_amp;
+        spl0 += am;
+        spl1 += am;
+        ap += a_step;
+      ) : a_slot = -1;
     );
 
     spl_i += 1;
@@ -625,11 +709,17 @@ function Audio.push(engine, state, preset)
   write(SLOT_SOUND_GO, Audio.sound_index(used, sounds.go))
   write(SLOT_SOUND_BEAT, Audio.sound_index(used, sounds.beat))
   write(SLOT_SOUND_ACCENT, Audio.sound_index(used, sounds.accent))
-  if not audio.enabled then return true end
+  if not audio.enabled then
+    write(SLOT_ANNOUNCE_TIME, -1)
+    return true
+  end
   local plan = Audio.schedule(engine, state, state.warn_bars)
   write(SLOT_CHANGE, plan and plan.change or -1)
   write(SLOT_WARN, plan and plan.warn or -1)
   write(SLOT_LAST_BAR, plan and plan.last_bar or -1)
+  local announce = Audio.announcement(preset, state, plan, used)
+  write(SLOT_ANNOUNCE_SOUND, announce and announce.sound or -1)
+  write(SLOT_ANNOUNCE_TIME, announce and announce.time or -1)
   return true
 end
 

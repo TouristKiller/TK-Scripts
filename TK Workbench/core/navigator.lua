@@ -324,6 +324,12 @@ function M.draw(ctx, app, width, height, label)
   r.ImGui_SetCursorScreenPos(ctx, ox, oy)
   r.ImGui_InvisibleButton(ctx, "##nav_canvas", w, h)
   local hovered = r.ImGui_IsItemHovered(ctx)
+  -- The wheel zooms the map, so the window around it must not scroll as well.
+  -- Owning the wheel is ImGui's own way to say so; where ReaImGui does not
+  -- have it, the caller gets `hovered` back and can switch its scrolling off.
+  if hovered and r.ImGui_SetItemKeyOwner and r.ImGui_Key_MouseWheelY then
+    pcall(r.ImGui_SetItemKeyOwner, ctx, r.ImGui_Key_MouseWheelY())
+  end
   local mx = r.ImGui_GetMousePos(ctx)
   local edge = UIScale.round(4)
   local min_dur = math.max(0.05, len * 0.002)
@@ -422,6 +428,7 @@ function M.draw(ctx, app, width, height, label)
         or ("Zoom slot " .. slot .. " (empty) — right-click: save current zoom"))
     end
   end
+  return hovered
 end
 
 function M.available()

@@ -1,21 +1,22 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 0.9.9
+-- @version 1.0.0
 -- @changelog:
--- v0.9.9
---   + Workbench: Workspaces. A split layout - which module is in which pane, side by side or stacked, the divider position and the kept pane - can be saved in one of 10 workspace slots from the split view menu (Workspaces > Save current layout to), with a name such as "Monitoring". Loading one puts the whole layout back in one click, so switching between tasks no longer means setting up the panes again
---   + Workbench: New actions "TK Workbench: Open workspace 1" to "10" load a saved workspace from a shortcut, toolbar or control surface, and start Workbench first if it is not running
---   + Color Studio: Auto rules can now target Tag. Such a rule colours tracks by the tags they carry in the Tags module instead of by their name. Leave the text empty to match any tag, so one rule gives every tagged track the colour of its tag; with text it applies to the matching tags only
---   + Color Studio: A tag rule follows the colour set for the tag in Tags (right-click a tag > Set color), so a tag keeps one colour that both modules share. With "Auto apply tracks" on, tracks are recoloured as soon as a tag gets a new colour or is added to a track, also when the tags are changed by TK FX Browser. Turn off "Use tag color" to paint the tracks with one fixed palette colour instead
---   + Color Studio: Tag rules and track name rules are applied in one pass, so the rule order decides between them. A track with several matching tags takes the colour of the alphabetically first tag that has one; a rule higher in the list for one specific tag overrules that
---   + Tags: Right-clicking a tag can now colour tracks with the tag's colour: this track, the selected tracks, or every track with the tag, each as a single undo step. "Set color..." has an "Apply + color tracks" button that stores the colour and applies it to every track with the tag in one go
---   + Media Browser: The rating filter button opens a menu instead of cycling a minimum. Choose a rating only (3 stars shows exactly the 3-star files), a rating and up, or files without a rating. The label shows which: ★3 is exactly three, ★3+ three and up. Before, ★1 meant "one star and up", which shows every rated file and looked as if the filter did nothing
---   + Media Browser: Ratings stored in the files themselves are read much faster while a rating filter or rating sort is on. They were read one file per frame, so in a large library the filtered list stayed incomplete for a long time; the button's tooltip now also says how many files are still being read
---   + Plugin Browser: Fixed Workbench stopping with "ImGui_EndChild: Missing PopID()" followed by "expected a valid ImGui_Context*", for example while resizing the window. An error while drawing a single plugin card or row left the ImGui ID stack unbalanced, which destroys the whole window and hid the original error. Each card and row now always closes its ID, the error is written to workbench_errors.txt, and the rest of the list keeps drawing
---   + Plugin Browser: Opening it with its action ("TK Workbench: Open Plugin Browser", for example from a key command) brings Workbench forward and takes the keyboard, with the cursor in the search box, so you can type a plugin name straight away, pick it with the arrow keys and insert it with Enter. A previous search is selected and replaced by what you type, and a window folded away by auto-collapse unfolds for it. Escape, or inserting with Enter, hands the keyboard back to REAPER so its shortcuts work again. Only this action takes the keyboard; it needs js_ReaScriptAPI and can be switched off in the Plugin Browser settings ("Type to search after open action")
---   + Plugin Browser: Fixed plugins showing the screenshot of a similarly named plugin, or none. Screenshot files were matched first come, first served, so "JS_ Chorus _Improved Shaping_.png" claimed JS: Chorus before "JS_ Chorus.png" was reached; on one real library 372 plugins showed a sibling's screenshot. The exact file name that TK FX Browser saves under now always wins, shortened names only fill gaps, names like "JS: *" are found, and a plugin with several tags such as "Soundbox (Audiomodern) (16 out)" also finds a hand-made "Soundbox.png". The same applies to custom images
---   + Plugin Browser: Make Screenshot no longer saves a blank image. Plugins that draw with OpenGL or DirectX, or that are still drawing their window, came back as one flat colour, and that blank file was then shown for good. A blank capture is now retried a moment later, then automatically as a screen capture (the OpenGL/DX method), and if it stays blank nothing is saved and the status line says so. A blank screenshot saved earlier can be replaced by making it again
---   + FX Groups: Follow presets. Loading a preset on one member - in the plugin's own preset browser, such as UADx, or in REAPER's preset menu - now copies that whole FX to the other members of the group, including the plugin's own state, so their windows show the new preset name too. Before, only the parameter REAPER reported as last touched was linked, and a preset load touches none. A preset is recognised by its name changing or by several parameters changing at once (UADx does not report its preset names to REAPER, so for UADx it is the latter). Only FX with an open window are watched, and only parameters that differ are written, so even UADx PolyMAX with its 2149 parameters follows without load. Unlinked FX and parameters are left alone, automation on several parameters is not copied around endlessly, and the option can be switched off next to "Sync paused"
+-- v1.0.0
+--   + Workbench: Profiles, in a new Profile tab in Preferences. Save current setup as my default keeps your setup - visible modules, theme, scale and how every module is set up - and Reset to my default brings it back. Where you are is not part of it: window positions, the open module, searches, filters and current folders stay as they are, so a reset does not send you back to the folder you were in when you saved
+--   + Workbench: Export and Import save a setup to a file and load it again, as a backup, for another computer or to share. Workbench 2 can use the same default, so a second window starts from your setup
+--   + Workbench: Reset to factory settings puts everything back as installed. Before any reset or import the settings as they were are kept, and Restore previous settings undoes it in one click
+--   + Workbench: Every module in Preferences > Modules has a Reset button, to put just that module back to your default or to factory settings without touching the rest
+--   + Workbench: The first start asks which modules to show, with sets to start from (Mixing, Production, Project, Writing, Tools). The others stay installed and can be switched on in Preferences > Modules, where Choose by set... opens the same picker again
+--   + Transport: The Navigator, Master scope and Markers & regions blocks can be made taller or shorter by dragging the edge of their card; Markers grows in whole rows of chips and keeps that many rows free, also while the project has fewer markers. Double-click the edge for the default height. With the stack anchored to the bottom the handle is on the top edge, so the edge stays under the mouse. The other blocks are rows of controls with a fixed height and keep it
+--   + Transport: Fixed the mouse wheel over the Navigator block also scrolling the whole stack of blocks, which moved the map away from under the pointer while zooming. The wheel now only zooms the Navigator
+--   + Cue: Every section can have a sound of its own, such as a voice saying "Intro" or "Chorus", chosen in the Sections window from the .wav files in the TK Cue Sounds folder. It plays where the warning starts, so you hear what is coming in time, or on the change itself. Sections with the same name share it, it replaces the click on that beat, and it plays on a voice of its own so the next tick does not cut it off. No extra track or routing: it goes through the cue click like the other cues
+--   + Cue: Up to 32 sounds are loaded at once (was 16), and the sound pickers list every .wav in the folder instead of the first sixteen
+--   + Cue: Chosen cue sounds are loaded again when Cue starts with Play cues on. After restarting REAPER they played the built-in tone until a sound menu was opened, and an older cue effect is now brought up to date without pressing Reload
+--   + Cue: Regions and markers without a name can now be set up one by one. Their setup was filed under the empty name, so two unnamed regions were one row in the Sections window and neither could get a label, warning or sound; each now has its own row, by the number REAPER gives it
+--   + Cue: The Sections window renames regions and sets their colour in REAPER, for every region in the row at once, each as one undo step. A section's setup moves along to its new name
+--   + Cue: Two sections with the same name in a row, or two unnamed ones, now count as a change: the flash and the go cue went missing between them
+--   + Cue: The settings are also on a "..." button in the top-right corner of the panel, next to the right-click menu. The menu is tidier: what the panel shows moved into a Display submenu, the Sections item says what it holds (names, colours, warnings, sounds), and Cue click has a Sound per section item that leads there
 
 local r = reaper
 
@@ -35,10 +36,14 @@ local Selection = require("core.selection")
 local ModuleLoader = require("core.module_loader")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
+local Profile = require("core.profile")
 
 local ctx = r.ImGui_CreateContext(SCRIPT_NAME)
 local config_name = rawget(_G, "TK_WORKBENCH_CONFIG_NAME") or "config.json"
 local config_path = script_path .. config_name
+-- No config yet means Workbench has never run here: that start gets the module
+-- picker. Checked before loading, because loading writes the file.
+local first_start = not r.file_exists(config_path)
 local settings = Settings.load(config_path)
 UIScale.set(settings.ui_scale)
 
@@ -1513,6 +1518,264 @@ local function draw_theme_settings_body()
     end
 end
 
+-- Profiles: "my default", factory reset, export/import, a per-module reset,
+-- and the module picker of a first start. The rules for what goes into a
+-- profile live in core/profile.lua. Everything here is one table because this
+-- file has a limited number of top-level locals.
+local profile_ui = {
+  -- Sets for the picker. A set adds its modules; ticking stays free.
+  SETS = {
+    { label = "Mixing", ids = { "control_room", "send_studio", "sidechain", "fx_groups", "transport", "timepiece", "xy_pad" } },
+    { label = "Production", ids = { "plugin_browser", "instrument_rack", "fx_chain_builder", "media_browser", "track_recall", "idea_vault", "xy_pad" } },
+    { label = "Project", ids = { "project_overview", "project_browser", "transport", "navigator", "time_machine", "track_tags", "color_studio", "notes", "render_hub" } },
+    { label = "Writing", ids = { "lyrics", "notes", "idea_vault", "cue", "transport", "timepiece" } },
+    { label = "Tools", ids = { "action_browser", "action_clipboard", "script_launcher", "arrange_bg_presets", "automation_item_manager", "calculator" } }
+  }
+}
+
+-- One "my default" for every Workbench window, so Workbench 2 can start from
+-- the same setup; the backup belongs to the window it was taken from.
+function profile_ui.default_path() return script_path .. "profile_default.json" end
+function profile_ui.backup_path() return script_path .. config_name:gsub("%.json$", "") .. "_backup.json" end
+
+-- Asked every frame while the Profile tab or the picker is open, so the file
+-- is read at most once every two seconds rather than parsed on each frame.
+-- Saving clears the cache, so a new default shows straight away.
+function profile_ui.saved_default()
+  local now = r.time_precise and r.time_precise() or os.clock()
+  local cached = app.cache.profile_default_info
+  if cached and now < cached.until_time then return cached.header end
+  local _, header = Profile.read(profile_ui.default_path())
+  if type(header) ~= "table" then header = nil end
+  app.cache.profile_default_info = { header = header, until_time = now + 2.0 }
+  return header
+end
+
+-- Applying replaces every module's settings, so it waits for the start of the
+-- next frame instead of happening half-way through the one that was clicked.
+function profile_ui.request(new_settings, status)
+  app.cache.pending_profile = { settings = new_settings, status = status }
+end
+
+function profile_ui.apply_pending()
+  local pending = app.cache.pending_profile
+  if not pending then return end
+  app.cache.pending_profile = nil
+  -- One step back is always kept: Restore previous settings undoes a reset
+  -- or an import that turned out not to be what was wanted.
+  Settings.save(profile_ui.backup_path(), app.settings)
+  -- Same table, new contents: app.settings is what everything else holds.
+  for key in pairs(app.settings) do app.settings[key] = nil end
+  for key, value in pairs(pending.settings) do app.settings[key] = value end
+  set_ui_scale(app.settings.ui_scale or 1.0)
+  app.cache.ui_fonts = {}
+  Theme.current_preset = nil
+  apply_module_order()
+  -- Modules build caches from their settings when they start; they start over.
+  for _, module in ipairs(app.modules) do
+    if module.init then
+      local ok, err = pcall(module.init, app)
+      if not ok then record_module_error(module.id .. ".init", err) end
+    end
+  end
+  save_settings()
+  app.status = pending.status
+end
+
+function profile_ui.save_default()
+  local ok, err = Profile.write(profile_ui.default_path(), Profile.snapshot(app.settings, app.modules_by_id), "My default")
+  app.cache.profile_default_info = nil
+  app.status = ok and "Saved as my default" or ("Could not save my default: " .. tostring(err))
+end
+
+function profile_ui.reset_to_default()
+  local choices, err = Profile.read(profile_ui.default_path())
+  if not choices then app.status = "No default saved yet (" .. tostring(err) .. ")"; return end
+  profile_ui.request(Profile.compose(app.settings, choices, app.modules_by_id), "Reset to my default")
+end
+
+function profile_ui.reset_to_factory()
+  profile_ui.request(Profile.compose(app.settings, nil, app.modules_by_id), "Reset to factory settings")
+end
+
+function profile_ui.restore_backup()
+  local file = io.open(profile_ui.backup_path(), "r")
+  if not file then app.status = "No previous settings to restore"; return end
+  local content = file:read("*a")
+  file:close()
+  local ok, decoded = pcall(require("core.json").decode, content)
+  if not ok or type(decoded) ~= "table" then app.status = "The previous settings could not be read"; return end
+  profile_ui.request(decoded, "Restored the previous settings")
+end
+
+function profile_ui.reset_module(module, to_default)
+  local choices = nil
+  if to_default then
+    choices = Profile.read(profile_ui.default_path())
+    if not choices then app.status = "No default saved yet"; return end
+  end
+  local new_settings = Settings.copy(app.settings)
+  new_settings[module.id] = Profile.compose_module(app.settings, module.id, choices, app.modules_by_id)
+  profile_ui.request(new_settings, tostring(module.title or module.id) .. (to_default and " reset to my default" or " reset to factory settings"))
+end
+
+function profile_ui.export()
+  local path
+  if r.JS_Dialog_BrowseForSaveFile then
+    local ok, chosen = r.JS_Dialog_BrowseForSaveFile("Export Workbench profile", script_path, "TK Workbench profile.json", "Workbench profile (*.json)\0*.json\0")
+    if ok == 1 and chosen and chosen ~= "" then path = chosen end
+  else
+    local ok, chosen = r.GetUserInputs("Export Workbench profile", 1, "Save as (full path):,extrawidth=320", script_path .. "TK Workbench profile.json")
+    if ok and chosen ~= "" then path = chosen end
+  end
+  if not path then return end
+  if not path:lower():match("%.json$") then path = path .. ".json" end
+  local ok, err = Profile.write(path, Profile.snapshot(app.settings, app.modules_by_id), "Export")
+  app.status = ok and ("Profile exported: " .. path) or ("Export failed: " .. tostring(err))
+end
+
+function profile_ui.import()
+  local ok, path
+  if r.JS_Dialog_BrowseForOpenFiles then
+    ok, path = r.JS_Dialog_BrowseForOpenFiles("Import Workbench profile", script_path, "", "Workbench profile (*.json)\0*.json\0", false)
+    ok = ok == 1
+  elseif r.GetUserFileNameForRead then
+    ok, path = r.GetUserFileNameForRead("", "Import Workbench profile", ".json")
+  end
+  if not ok or not path or path == "" then return end
+  local choices, err = Profile.read(path)
+  if not choices then app.status = "Import failed: " .. tostring(err); return end
+  profile_ui.request(Profile.compose(app.settings, choices, app.modules_by_id), "Profile imported")
+end
+
+-- Two-step buttons for what throws settings away: the first click arms it,
+-- the second within a few seconds does it. A modal for every reset is more
+-- clicks than the risk deserves now that the previous settings are kept.
+function profile_ui.confirm_button(id, label, armed_label, width)
+  local now = r.time_precise and r.time_precise() or os.clock()
+  local armed = app.cache.profile_armed == id and now < (app.cache.profile_armed_until or 0)
+  local pushed = 0
+  if armed then
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), Theme.colors.danger)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), Theme.colors.danger)
+    pushed = 2
+  end
+  local clicked = r.ImGui_Button(ctx, (armed and armed_label or label) .. "##" .. id, width or 0, 0)
+  if pushed > 0 then r.ImGui_PopStyleColor(ctx, pushed) end
+  if not clicked then return false end
+  if armed then
+    app.cache.profile_armed = nil
+    return true
+  end
+  app.cache.profile_armed = id
+  app.cache.profile_armed_until = now + 3.0
+  return false
+end
+
+function profile_ui.draw_tab()
+  local width = UIScale.round(250)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "My default")
+  local header = profile_ui.saved_default()
+  r.ImGui_TextWrapped(ctx, header and ("Saved " .. tostring(header.saved or "")) or "Not saved yet.")
+  if r.ImGui_Button(ctx, "Save current setup as my default##profile_save", width, 0) then profile_ui.save_default() end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Visible modules, theme, scale and every module's settings.\nNot where you are: window positions, the open module,\nsearches, filters and current folders stay as they are.") end
+  if header then
+    if profile_ui.confirm_button("profile_reset_default", "Reset to my default", "Click again to reset", width) then profile_ui.reset_to_default() end
+  end
+  r.ImGui_Separator(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Share")
+  local half = math.floor((width - UIScale.gap(6)) / 2)
+  if r.ImGui_Button(ctx, "Export...##profile_export", half, 0) then profile_ui.export() end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Save this setup to a file: as a backup, for another computer,\nor to share. Paths and audio outputs in it are this computer's.") end
+  r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
+  if r.ImGui_Button(ctx, "Import...##profile_import", half, 0) then profile_ui.import() end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Load a setup from a file exported here or by someone else.") end
+  r.ImGui_Separator(ctx)
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Start over")
+  if profile_ui.confirm_button("profile_reset_factory", "Reset to factory settings", "Click again to reset everything", width) then profile_ui.reset_to_factory() end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Every module back to how it was installed, including custom themes,\npalettes, presets, rules and workspaces. Export first to keep them.") end
+  local backup = io.open(profile_ui.backup_path(), "r")
+  if backup then
+    backup:close()
+    if r.ImGui_Button(ctx, "Restore previous settings##profile_restore", width, 0) then profile_ui.restore_backup() end
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Undo the last reset or import: the settings from just before it.") end
+  end
+end
+
+-- Per module in the Modules tab. Opens a menu rather than acting at once:
+-- there are two places to reset to, and one of them may not exist.
+function profile_ui.draw_module_reset(module)
+  local popup_id = "##profile_module_reset_" .. module.id
+  if r.ImGui_SmallButton(ctx, "Reset##profile_reset_btn_" .. module.id) then r.ImGui_OpenPopup(ctx, popup_id) end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Reset " .. tostring(module.title or module.id) .. "'s settings") end
+  if r.ImGui_BeginPopup(ctx, popup_id) then
+    if r.ImGui_MenuItem(ctx, "To my default", nil, false, profile_ui.saved_default() ~= nil) then profile_ui.reset_module(module, true) end
+    if r.ImGui_MenuItem(ctx, "To factory settings") then profile_ui.reset_module(module, false) end
+    r.ImGui_EndPopup(ctx)
+  end
+end
+
+-- The first start shows every module there is, which is a lot to take in.
+-- The picker asks once which ones to show; the rest stay installed and come
+-- back with a tick in Preferences > Modules.
+function profile_ui.open_picker()
+  local chosen = {}
+  for _, module in ipairs(app.modules) do chosen[module.id] = not is_module_hidden(module.id) end
+  app.cache.module_picker = { chosen = chosen }
+end
+
+function profile_ui.draw_picker()
+  local picker = app.cache.module_picker
+  if not picker then return end
+  if r.ImGui_SetNextWindowSize then r.ImGui_SetNextWindowSize(ctx, UIScale.round(520), 0, r.ImGui_Cond_Appearing()) end
+  local visible, open = r.ImGui_Begin(ctx, "Choose your modules##tk_workbench_module_picker", true, r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize())
+  if not open then app.cache.module_picker = nil end
+  if visible then
+    r.ImGui_TextWrapped(ctx, "Workbench has a lot of modules. Pick the ones you want to see; the others stay installed and can be switched on any time in Preferences > Modules.")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Add a set")
+    for index, set in ipairs(profile_ui.SETS) do
+      if index > 1 then r.ImGui_SameLine(ctx, 0, UIScale.gap(6)) end
+      if r.ImGui_Button(ctx, set.label .. "##picker_set_" .. index) then
+        for _, id in ipairs(set.ids) do if app.modules_by_id[id] then picker.chosen[id] = true end end
+      end
+    end
+    if r.ImGui_Button(ctx, "Everything##picker_all") then for _, module in ipairs(app.modules) do picker.chosen[module.id] = true end end
+    r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
+    if r.ImGui_Button(ctx, "Nothing##picker_none") then for _, module in ipairs(app.modules) do picker.chosen[module.id] = false end end
+    r.ImGui_Separator(ctx)
+    local sorted = {}
+    for _, module in ipairs(app.modules) do sorted[#sorted + 1] = module end
+    table.sort(sorted, function(a, b) return tostring(a.title or a.id):lower() < tostring(b.title or b.id):lower() end)
+    if r.ImGui_BeginTable(ctx, "##picker_modules", 3) then
+      for _, module in ipairs(sorted) do
+        r.ImGui_TableNextColumn(ctx)
+        local changed, value = r.ImGui_Checkbox(ctx, tostring(module.title or module.id) .. "##picker_" .. module.id, picker.chosen[module.id] == true)
+        if changed then picker.chosen[module.id] = value end
+      end
+      r.ImGui_EndTable(ctx)
+    end
+    r.ImGui_Separator(ctx)
+    local count = 0
+    for _, on in pairs(picker.chosen) do if on then count = count + 1 end end
+    if r.ImGui_Button(ctx, "Show " .. tostring(count) .. " module" .. (count == 1 and "" or "s") .. "##picker_apply", UIScale.round(160), 0) then
+      for _, module in ipairs(app.modules) do set_module_hidden(module.id, picker.chosen[module.id] ~= true) end
+      app.cache.module_picker = nil
+      app.status = tostring(count) .. " modules shown - change it any time in Preferences > Modules"
+    end
+    -- Someone who already has a setup, opening a second Workbench or starting
+    -- on a new computer, can take that instead of ticking everything again.
+    if profile_ui.saved_default() then
+      r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
+      if r.ImGui_Button(ctx, "Use my default instead##picker_default") then
+        app.cache.module_picker = nil
+        profile_ui.reset_to_default()
+      end
+    end
+  end
+  r.ImGui_End(ctx)
+end
+
 local function draw_preferences_tab(label, tab_id)
   local current = app.cache.preferences_tab or "general"
   local active = current == tab_id
@@ -1556,7 +1819,7 @@ local function draw_preferences_settings()
     if r.ImGui_InvisibleButton(ctx, "##preferences_close", close_size, close_size) then app.cache.preferences_open = false end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Close") end
     r.ImGui_Separator(ctx)
-    local pref_tabs = { { id = "general", label = "General" }, { id = "modules", label = "Modules" }, { id = "theme", label = "Theme" } }
+    local pref_tabs = { { id = "general", label = "General" }, { id = "modules", label = "Modules" }, { id = "theme", label = "Theme" }, { id = "profile", label = "Profile" } }
     for index, tab in ipairs(pref_tabs) do
       draw_preferences_tab(tab.label, tab.id)
       if index < #pref_tabs then r.ImGui_SameLine(ctx, 0, UIScale.gap(6)) end
@@ -1574,6 +1837,11 @@ local function draw_preferences_settings()
       r.ImGui_End(ctx)
       return
     end
+    if active_tab == "profile" then
+      profile_ui.draw_tab()
+      r.ImGui_End(ctx)
+      return
+    end
     if active_tab == "modules" then
       r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Show or hide modules in the tiles and dropdown.")
       if r.ImGui_SmallButton(ctx, "Show all") then
@@ -1585,14 +1853,27 @@ local function draw_preferences_settings()
         set_all_modules_hidden(true)
         app.status = "All modules hidden"
       end
+      r.ImGui_SameLine(ctx, 0, UIScale.gap(6))
+      if r.ImGui_SmallButton(ctx, "Choose by set...") then profile_ui.open_picker() end
       r.ImGui_Separator(ctx)
-      for _, module in ipairs(app.modules) do
-        local module_visible = not is_module_hidden(module.id)
-        local changed, value = r.ImGui_Checkbox(ctx, (module.title or module.id) .. "##pref_module_" .. module.id, module_visible)
-        if changed then
-          set_module_hidden(module.id, not value)
-          app.status = value and ((module.title or module.id) .. " shown") or ((module.title or module.id) .. " hidden")
+      -- A two-column table so the Reset buttons line up, whatever the length
+      -- of the module names.
+      -- Fixed-fit columns: this window sizes itself to its contents, and a
+      -- stretching column in it has no width of its own to stretch to.
+      local table_flags = r.ImGui_TableFlags_SizingFixedFit and r.ImGui_TableFlags_SizingFixedFit() or 0
+      if r.ImGui_BeginTable(ctx, "##pref_modules_table", 2, table_flags) then
+        for _, module in ipairs(app.modules) do
+          r.ImGui_TableNextColumn(ctx)
+          local module_visible = not is_module_hidden(module.id)
+          local changed, value = r.ImGui_Checkbox(ctx, (module.title or module.id) .. "##pref_module_" .. module.id, module_visible)
+          if changed then
+            set_module_hidden(module.id, not value)
+            app.status = value and ((module.title or module.id) .. " shown") or ((module.title or module.id) .. " hidden")
+          end
+          r.ImGui_TableNextColumn(ctx)
+          profile_ui.draw_module_reset(module)
         end
+        r.ImGui_EndTable(ctx)
       end
       r.ImGui_End(ctx)
       return
@@ -2732,6 +3013,7 @@ local function draw_frame()
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY, "true", false)
   r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_HEARTBEAT_KEY, tostring(r.time_precise and r.time_precise() or os.clock()), false)
   process_module_action_commands()
+  profile_ui.apply_pending()
   UI.begin_tooltip_frame(app)
   r.ImGui_SetNextWindowSize(ctx, app.settings.window_width or 430, app.settings.window_height or 760, r.ImGui_Cond_FirstUseEver())
   apply_auto_collapse_window()
@@ -2777,6 +3059,7 @@ local function draw_frame()
   r.ImGui_End(ctx)
   if app.cache.keyboard_focus_tries then keyboard.apply_pending() end
   draw_preferences_settings()
+  profile_ui.draw_picker()
   draw_missing_extensions_popup()
   UI.end_tooltip_frame(app)
   pop_auto_collapse_style(auto_collapse_style_vars, auto_collapse_style_colors)
@@ -2808,6 +3091,7 @@ end
 
 ModuleLoader.load(app, module_names)
 apply_module_order()
+if first_start then profile_ui.open_picker() end
 if app.settings.active_module ~= HOME_MODULE_ID and not app.modules_by_id[app.settings.active_module] and app.modules[1] then
   app.settings.active_module = app.modules[1].id
   save_settings()

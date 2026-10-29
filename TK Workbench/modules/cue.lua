@@ -486,7 +486,9 @@ end
 -- song plays and then walk away from.
 local function draw_settings_popup(app, preset)
   local ctx = app.ctx
-  if not r.ImGui_BeginPopupContextItem(ctx, "##cue_settings") then return end
+  -- Opened by a right-click on the panel or by its "..." button; both call
+  -- OpenPopup, so this no longer hangs off whichever item came last.
+  if not r.ImGui_BeginPopup(ctx, "##cue_settings") then return end
   r.ImGui_TextColored(ctx, Theme.colors.text_dim,
     state.from_project and "Cue - this project" or "Cue - your defaults, not saved to this project yet")
 
@@ -497,36 +499,42 @@ local function draw_settings_popup(app, preset)
     r.ImGui_SetTooltip(ctx, "How many bars before a section change the display turns amber.\n"
       .. "A section can be given its own distance under Sections")
   end
-  changed, value = r.ImGui_Checkbox(ctx, "Beat dots", preset.display.beats == true)
-  if changed then preset.display.beats = value; save_preset(app) end
-  changed, value = r.ImGui_Checkbox(ctx, "Tempo and signature", preset.display.details == true)
-  if changed then preset.display.details = value; save_preset(app) end
-  if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, "Shown when the panel is wide enough for it")
-  end
-  if preset.display.details then
-    changed, value = r.ImGui_Checkbox(ctx, "Details in two columns", preset.display.details_columns == 2)
-    if changed then preset.display.details_columns = value and 2 or 1; save_preset(app) end
-  end
-  changed, value = r.ImGui_Checkbox(ctx, "Section progress bar", preset.display.progress == true)
-  if changed then preset.display.progress = value; save_preset(app) end
-  if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, "How far through the current section you are, in bars")
-  end
-  changed, value = r.ImGui_Checkbox(ctx, "Show end of song", preset.display.end_of_song == true)
-  if changed then preset.display.end_of_song = value; save_preset(app) end
-  changed, value = r.ImGui_Checkbox(ctx, "Show recording status", preset.display.record_status == true)
-  if changed then preset.display.record_status = value; save_preset(app) end
-  changed, value = r.ImGui_Checkbox(ctx, "Use the region colour", preset.display.section_color == true)
-  if changed then preset.display.section_color = value; save_preset(app) end
-  if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, "Paints the section name and the progress bar in the colour of the region itself.\n"
-      .. "The name is lightened where it would not be readable on the panel")
-  end
   changed, value = r.ImGui_Checkbox(ctx, "Flash on a section change", preset.cues.flash_on_change == true)
   if changed then preset.cues.flash_on_change = value; save_preset(app) end
 
   r.ImGui_Separator(ctx)
+  -- What the panel shows, in a menu of its own like Chords and Cue click: on
+  -- the top level these eight sat between the two settings that decide when
+  -- a cue comes.
+  if r.ImGui_BeginMenu(ctx, "Display") then
+    changed, value = r.ImGui_Checkbox(ctx, "Beat dots", preset.display.beats == true)
+    if changed then preset.display.beats = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Tempo and signature", preset.display.details == true)
+    if changed then preset.display.details = value; save_preset(app) end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Shown when the panel is wide enough for it")
+    end
+    if preset.display.details then
+      changed, value = r.ImGui_Checkbox(ctx, "Details in two columns", preset.display.details_columns == 2)
+      if changed then preset.display.details_columns = value and 2 or 1; save_preset(app) end
+    end
+    changed, value = r.ImGui_Checkbox(ctx, "Section progress bar", preset.display.progress == true)
+    if changed then preset.display.progress = value; save_preset(app) end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "How far through the current section you are, in bars")
+    end
+    changed, value = r.ImGui_Checkbox(ctx, "Show end of song", preset.display.end_of_song == true)
+    if changed then preset.display.end_of_song = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Show recording status", preset.display.record_status == true)
+    if changed then preset.display.record_status = value; save_preset(app) end
+    changed, value = r.ImGui_Checkbox(ctx, "Use the region colour", preset.display.section_color == true)
+    if changed then preset.display.section_color = value; save_preset(app) end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Paints the section name and the progress bar in the colour of the region itself.\n"
+        .. "The name is lightened where it would not be readable on the panel")
+    end
+    r.ImGui_EndMenu(ctx)
+  end
   if r.ImGui_BeginMenu(ctx, "Chords") then
     changed, value = r.ImGui_Checkbox(ctx, "Show chords", preset.chords.enabled == true)
     if changed then
@@ -693,6 +701,12 @@ local function draw_settings_popup(app, preset)
     if r.ImGui_IsItemHovered(ctx) then
       r.ImGui_SetTooltip(ctx, "Play your own samples instead of the built-in tones")
     end
+    -- The per-section sounds live in the Sections window; this is where
+    -- someone looking for sounds will look, so it points there.
+    if r.ImGui_MenuItem(ctx, "Sound per section...") then state.sections_open = true end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "A sound of its own for each section, such as a voice saying \"Chorus\"")
+    end
 
     r.ImGui_Separator(ctx)
     if r.ImGui_MenuItem(ctx, "Put it in the monitoring FX") then
@@ -714,10 +728,9 @@ local function draw_settings_popup(app, preset)
   end
 
   r.ImGui_Separator(ctx)
-  if r.ImGui_MenuItem(ctx, "Sections...") then state.sections_open = true end
-  if r.ImGui_IsItemHovered(ctx) then
-    r.ImGui_SetTooltip(ctx, "Give a section its own name on screen, or its own warning distance")
-  end
+  -- Named for what is in it: plain "Sections..." gave no hint that this is
+  -- where names, colours, warnings and sounds are set.
+  if r.ImGui_MenuItem(ctx, "Sections: names, colours, warnings, sounds...") then state.sections_open = true end
 
   r.ImGui_Separator(ctx)
   if r.ImGui_MenuItem(ctx, "Save as my default for new projects") then
@@ -760,6 +773,53 @@ local function draw_settings_popup(app, preset)
   r.ImGui_EndPopup(ctx)
 end
 
+-- A row in the Sections window stands for every section with that name, the
+-- same way its setup already applies to all of them, so a rename or a colour
+-- changes every one of them. One undo step either way.
+local function update_sections(group, new_name, new_color, undo_label)
+  if not r.SetProjectMarker4 then return false end
+  r.Undo_BeginBlock()
+  for _, section in ipairs(group) do
+    local name = new_name ~= nil and new_name or section.name
+    local color = new_color ~= nil and new_color or (section.color or 0)
+    -- Flag 1 is the only way to give a region an empty name: an empty string
+    -- on its own means "leave the name as it is".
+    local flags = name == "" and 1 or 0
+    r.SetProjectMarker4(0, section.id, section.is_region, section.start,
+      section.is_region and section.stop or 0, name, color, flags)
+  end
+  r.Undo_EndBlock(undo_label, -1)
+  Engine.invalidate()
+  return true
+end
+
+local function rename_section_group(app, preset, group, key, new_name)
+  new_name = tostring(new_name or ""):match("^%s*(.-)%s*$")
+  if new_name == group[1].name then return end
+  if not update_sections(group, new_name, nil, "Cue: rename section") then
+    app.status = "This REAPER cannot rename regions from a script"
+    return
+  end
+  -- The setup moves with the name, or renaming would lose the sound,
+  -- warning and label chosen for it.
+  Presets.rename_section(preset, key, new_name ~= "" and new_name or Engine.unnamed_key(group[1]))
+  save_preset(app)
+  app.status = string.format("Renamed %d section%s to %s", #group, #group == 1 and "" or "s",
+    new_name ~= "" and ("\"" .. new_name .. "\"") or "no name")
+end
+
+local function native_to_rgba(native)
+  native = tonumber(native) or 0
+  if native == 0 or not r.ColorFromNative then return 0x808080FF end
+  local red, green, blue = r.ColorFromNative(native & 0xFFFFFF)
+  return (red << 24) | (green << 16) | (blue << 8) | 0xFF
+end
+
+local function rgba_to_native(rgba)
+  if not r.ColorToNative then return 0 end
+  return r.ColorToNative((rgba >> 24) & 0xFF, (rgba >> 16) & 0xFF, (rgba >> 8) & 0xFF) | 0x1000000
+end
+
 -- Editing is not done on the playing screen: this is a dialog, it may be as
 -- wide as it likes, and nothing in it is needed while the song runs.
 local function draw_sections_popup(app, preset)
@@ -770,23 +830,86 @@ local function draw_sections_popup(app, preset)
   end
   if not r.ImGui_BeginPopup(ctx, "Cue sections") then return end
   local sections = Engine.sections()
+  local files = Audio.sounds()
   r.ImGui_Text(ctx, "Sections in this project")
   r.ImGui_TextColored(ctx, Theme.colors.text_dim,
-    "A label replaces the region name on screen. Warn bars overrides the general setting.")
+    "The name and colour are the region's own and change it in REAPER, for every region with that name.")
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim,
+    "A label replaces the name on screen only. Warn bars overrides the general setting.")
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim,
+    "A sound announces the section - a voice saying \"Chorus\" - on the warning before it, or on the change.")
   r.ImGui_Dummy(ctx, 0, UIScale.round(4))
 
   if #sections == 0 then
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "No regions or markers to work with yet.")
-  elseif r.ImGui_BeginChild(ctx, "##cue_sections", UIScale.round(420),
+  elseif r.ImGui_BeginChild(ctx, "##cue_sections", UIScale.round(800),
                             math.min(UIScale.round(320), UIScale.round(34) * #sections + UIScale.round(10)), 0) then
-    for index, section in ipairs(sections) do
-      local name = tostring(section.name or "")
-      local entry = Presets.section(preset, name)
+    -- Sections with the same name share one setup, so a sound chosen for one
+    -- chorus is every chorus's sound. The rows say so by only appearing once.
+    -- An unnamed section's key is its region number, so each gets a row.
+    local groups, order = {}, {}
+    for _, section in ipairs(sections) do
+      local group_key = tostring(section.key or section.name or ""):lower()
+      if not groups[group_key] then
+        groups[group_key] = {}
+        order[#order + 1] = group_key
+      end
+      local group = groups[group_key]
+      group[#group + 1] = section
+    end
+    state.rename_text = state.rename_text or {}
+    state.color_edit = state.color_edit or {}
+    for index, group_key in ipairs(order) do
+      local group = groups[group_key]
+      local section = group[1]
+      local name = tostring(section.key or section.name or "")
+      local shown = Engine.display_name(section)
+      local entry = Presets.section(preset, name, section.name)
       r.ImGui_PushID(ctx, index)
-      r.ImGui_Text(ctx, name ~= "" and name or "(unnamed)")
-      r.ImGui_SameLine(ctx, UIScale.round(150))
-      r.ImGui_SetNextItemWidth(ctx, UIScale.round(130))
-      local changed, value = r.ImGui_InputTextWithHint(ctx, "##label", name, entry.label ~= name and entry.label or "")
+      -- The region's own name. Committed when the field is left, not on every
+      -- key, or each letter typed would be its own rename and undo step.
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(140))
+      local typed, text = r.ImGui_InputTextWithHint(ctx, "##rename", shown, state.rename_text[group_key] or section.name)
+      if typed then state.rename_text[group_key] = text end
+      if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+        rename_section_group(app, preset, group, name, state.rename_text[group_key] or section.name)
+        state.rename_text[group_key] = nil
+      elseif not r.ImGui_IsItemActive(ctx) then
+        state.rename_text[group_key] = nil
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, #group > 1 and string.format("Renames all %d regions called \"%s\"", #group, shown)
+          or "Renames this region in REAPER")
+      end
+      r.ImGui_SameLine(ctx)
+      local color_flags = r.ImGui_ColorEditFlags_NoTooltip and r.ImGui_ColorEditFlags_NoTooltip() or 0
+      if r.ImGui_ColorButton(ctx, "##color", native_to_rgba(section.color), color_flags, UIScale.round(20), UIScale.round(20)) then
+        state.color_edit[group_key] = native_to_rgba(section.color)
+        r.ImGui_OpenPopup(ctx, "##section_color")
+      end
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Region colour") end
+      if r.ImGui_BeginPopup(ctx, "##section_color") then
+        -- With NoAlpha ReaImGui hands colours over as 0xRRGGBB, not
+        -- 0xRRGGBBAA: read as RGBA every channel lands one byte off, and blue
+        -- came back purple. The picker therefore works in RGB, and only the
+        -- swatch and the conversion to REAPER's colour use RGBA.
+        local picker_flags = r.ImGui_ColorEditFlags_NoAlpha and r.ImGui_ColorEditFlags_NoAlpha() or 0
+        local rgb = (state.color_edit[group_key] or native_to_rgba(section.color)) >> 8
+        local moved, picked = r.ImGui_ColorPicker4(ctx, "##picker", rgb, picker_flags)
+        if moved then state.color_edit[group_key] = ((picked & 0xFFFFFF) << 8) | 0xFF end
+        -- Applied on the button rather than while dragging: every movement
+        -- of the picker would otherwise be an undo step of its own.
+        if r.ImGui_Button(ctx, "Apply", UIScale.round(80), 0) then
+          update_sections(group, nil, rgba_to_native(state.color_edit[group_key] or native_to_rgba(section.color)), "Cue: section colour")
+          state.color_edit[group_key] = nil
+          r.ImGui_CloseCurrentPopup(ctx)
+        end
+        r.ImGui_EndPopup(ctx)
+      end
+      r.ImGui_SameLine(ctx)
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(120))
+      local label_hint = section.name ~= "" and section.name or "label"
+      local changed, value = r.ImGui_InputTextWithHint(ctx, "##label", label_hint, entry.label ~= section.name and entry.label or "")
       if changed then
         Presets.set_section(preset, name, { label = value })
         save_preset(app)
@@ -799,9 +922,58 @@ local function draw_sections_popup(app, preset)
         Presets.set_section(preset, name, { warn_bars = value > 0 and value or false })
         save_preset(app)
       end
+      r.ImGui_SameLine(ctx)
+      r.ImGui_SetNextItemWidth(ctx, UIScale.round(170))
+      local sound = tostring(entry.sound or "")
+      if r.ImGui_BeginCombo(ctx, "##sound", sound ~= "" and sound or "No sound") then
+        if r.ImGui_Selectable(ctx, "No sound", sound == "") then
+          Presets.set_section(preset, name, { sound = false })
+          save_preset(app)
+          Audio.sync(preset)
+        end
+        for _, file in ipairs(files) do
+          if r.ImGui_Selectable(ctx, file.name, sound == file.name) then
+            Presets.set_section(preset, name, { sound = file.name })
+            save_preset(app)
+            -- Choosing a sound is what gets it into the effect's memory.
+            Audio.sync(preset)
+          end
+        end
+        if #files == 0 then
+          r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Put .wav files in the sounds folder")
+        end
+        r.ImGui_EndCombo(ctx)
+      end
+      if sound ~= "" then
+        r.ImGui_SameLine(ctx)
+        r.ImGui_SetNextItemWidth(ctx, UIScale.round(110))
+        local at_change = entry.sound_at == "change"
+        if r.ImGui_BeginCombo(ctx, "##sound_at", at_change and "at change" or "on warning") then
+          if r.ImGui_Selectable(ctx, "on warning", not at_change) then
+            Presets.set_section(preset, name, { sound_at = "warn" })
+            save_preset(app)
+          end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Where the warning starts, the warn bars before the change: in time to get ready") end
+          if r.ImGui_Selectable(ctx, "at change", at_change) then
+            Presets.set_section(preset, name, { sound_at = "change" })
+            save_preset(app)
+          end
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "On the first beat of the section itself") end
+          r.ImGui_EndCombo(ctx)
+        end
+        -- The effect is the only one that knows whether the file was usable.
+        local info = Audio.upload_info(sound)
+        if info and info.error then
+          r.ImGui_SameLine(ctx)
+          r.ImGui_TextColored(ctx, Theme.colors.danger, tostring(info.error))
+        end
+      end
       r.ImGui_PopID(ctx)
     end
     r.ImGui_EndChild(ctx)
+  end
+  if not preset.audio.enabled then
+    r.ImGui_TextColored(ctx, Theme.colors.warning, "Section sounds play when Play cues is on.")
   end
 
   r.ImGui_Dummy(ctx, 0, UIScale.round(4))
@@ -969,7 +1141,7 @@ function M.update(app)
     state.record_start = nil
   end
   state.previous = now
-  local here = Presets.section(preset, now.section and now.section.name or "")
+  local here = Presets.section(preset, now.section and now.section.key or "", now.section and now.section.name or "")
   if here.warn_bars ~= preset.cues.warn_bars then
     now.stage = Engine.stage(now, here.warn_bars)
   end
@@ -990,7 +1162,18 @@ function M.update(app)
   if now.entered and preset.cues.flash_on_change then
     state.flash_at = r.time_precise and r.time_precise() or os.clock()
   end
-  if preset.audio.enabled then Audio.push(Engine, now, preset) end
+  if preset.audio.enabled then
+    -- Once per run: brings an older effect up to date (reloading it where it
+    -- sits) and puts the chosen sounds back into shared memory, which REAPER
+    -- empties on a restart. Until something called this, cues that had a
+    -- sample chosen played the built-in tone instead, and a section sound
+    -- needs the current effect to be heard at all.
+    if not state.audio_synced then
+      state.audio_synced = true
+      Audio.sync(preset)
+    end
+    Audio.push(Engine, now, preset)
+  end
 end
 
 function M.draw(app)
@@ -1075,7 +1258,11 @@ function M.draw(app)
   local draw_list = r.ImGui_GetWindowDrawList(ctx)
   -- One invisible item over the whole surface: it is what the right-click menu
   -- hangs off, and it keeps the module claiming the space it just measured.
+  -- Overlap allowed so the "..." button drawn on top of it at the end gets
+  -- its own clicks.
+  if r.ImGui_SetNextItemAllowOverlap then r.ImGui_SetNextItemAllowOverlap(ctx) end
   r.ImGui_InvisibleButton(ctx, "##cue_surface", avail_w, math.min(avail_h, total + pad * 2))
+  if r.ImGui_IsItemClicked(ctx, 1) then r.ImGui_OpenPopup(ctx, "##cue_settings") end
   local hovered = r.ImGui_IsItemHovered(ctx)
 
   if flashing then
@@ -1153,7 +1340,7 @@ function M.draw(app)
       r.ImGui_DrawList_AddLine(draw_list, cx, cy, cx + width, cy, Theme.colors.border, UIScale.px(1))
       cy = cy + UIScale.px(1) + gap
       local next_name = now.next_section
-        and Presets.section(preset, tostring(now.next_section.name or "")).label or ""
+        and Presets.section(preset, tostring(now.next_section.key or ""), tostring(now.next_section.name or "")).label or ""
       if next_name == "" then next_name = now.next_section and "(unnamed)" or "END OF SONG" end
       local phrase = bars_phrase(now.bars_to_change)
       if now.stage == "go" then phrase = "GO" end
@@ -1240,6 +1427,15 @@ function M.draw(app)
     r.ImGui_SetTooltip(ctx, string.format("%s in %d bars\nRight-click for the cue settings",
       what, math.ceil(now.bars_to_next_change - 0.0001)))
   end
+
+  -- The settings on a button as well: a right-click menu stays invisible until
+  -- someone happens to try it. Drawn last so it sits on top of the panel.
+  local dots_w, dots_h = UIScale.round(24), UIScale.round(18)
+  r.ImGui_SetCursorScreenPos(ctx, x + avail_w - dots_w - UIScale.round(4), y + UIScale.round(4))
+  if r.ImGui_Button(ctx, "...##cue_settings_button", dots_w, dots_h) then
+    r.ImGui_OpenPopup(ctx, "##cue_settings")
+  end
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Cue settings") end
 
   draw_settings_popup(app, preset)
   draw_sections_popup(app, preset)

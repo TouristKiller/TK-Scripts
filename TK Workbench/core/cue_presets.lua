@@ -156,7 +156,9 @@ function Presets.normalize(preset)
           match = tostring(entry.match),
           label = tostring(entry.label or ""),
           warn_bars = entry.warn_bars and clamp_int(entry.warn_bars, 1, 8, out.cues.warn_bars) or nil,
-          chords = type(entry.chords) == "table" and entry.chords or {}
+          chords = type(entry.chords) == "table" and entry.chords or {},
+          sound = tostring(entry.sound or ""),
+          sound_at = entry.sound_at == "change" and "change" or "warn"
         }
       end
     end
@@ -184,13 +186,21 @@ Presets.find_section = find_entry
 
 -- What actually applies to a section: its own overrides where it has them, the
 -- preset's values where it does not.
-function Presets.section(preset, name)
+-- name is the key a section is filed under (Engine section.key); display is
+-- what to show when no label was set, for an unnamed section whose key is
+-- only a number.
+function Presets.section(preset, name, display)
   local entry = find_entry(preset, name)
   return {
     match = tostring(name or ""),
-    label = (entry and entry.label ~= "" and entry.label) or tostring(name or ""),
+    label = (entry and entry.label ~= "" and entry.label) or tostring(display or name or ""),
     warn_bars = (entry and entry.warn_bars) or preset.cues.warn_bars,
     chords = (entry and entry.chords) or {},
+    -- A sound of its own announces the section: a voice saying "Chorus".
+    -- "warn" plays it where the warning starts, ahead of the change, which is
+    -- when a player needs to hear it; "change" plays it on the change itself.
+    sound = (entry and entry.sound) or "",
+    sound_at = (entry and entry.sound_at == "change") and "change" or "warn",
     overridden = entry ~= nil
   }
 end
@@ -212,12 +222,34 @@ function Presets.set_section(preset, name, fields)
     entry.warn_bars = fields.warn_bars and clamp_int(fields.warn_bars, 1, 8, preset.cues.warn_bars) or nil
   end
   if fields.chords ~= nil then entry.chords = fields.chords end
+  if fields.sound ~= nil then entry.sound = fields.sound and tostring(fields.sound) or "" end
+  if fields.sound_at ~= nil then entry.sound_at = fields.sound_at == "change" and "change" or "warn" end
   local empty = (entry.label == "" or entry.label == entry.match)
     and entry.warn_bars == nil and #(entry.chords or {}) == 0
+    and (entry.sound or "") == ""
   if empty then
     for index, candidate in ipairs(preset.sections) do
       if candidate == entry then table.remove(preset.sections, index); break end
     end
+  end
+  return preset
+end
+
+-- Renaming a section in REAPER would orphan its setup, which is filed by
+-- name. This moves it along. When the new name already has a setup of its
+-- own, that one is kept and the old one goes: the name it is joining is the
+-- one the user chose.
+function Presets.rename_section(preset, old_key, new_key)
+  old_key, new_key = tostring(old_key or ""), tostring(new_key or "")
+  if old_key == "" or new_key == "" or old_key:lower() == new_key:lower() then return preset end
+  local entry = find_entry(preset, old_key)
+  if not entry then return preset end
+  if find_entry(preset, new_key) then
+    for index, candidate in ipairs(preset.sections) do
+      if candidate == entry then table.remove(preset.sections, index); break end
+    end
+  else
+    entry.match = new_key
   end
   return preset
 end

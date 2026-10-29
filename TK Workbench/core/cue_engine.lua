@@ -23,11 +23,12 @@ local function collect_regions()
   local sections = {}
   local index = 0
   while true do
-    local ok, is_region, pos, stop, name, _, color = r.EnumProjectMarkers3(0, index)
+    local ok, is_region, pos, stop, name, id, color = r.EnumProjectMarkers3(0, index)
     if not ok or ok == 0 then break end
     if is_region then
       sections[#sections + 1] = {
         name = tostring(name or ""),
+        id = id,
         start = pos,
         stop = stop,
         color = color,
@@ -43,10 +44,10 @@ local function collect_markers()
   local points = {}
   local index = 0
   while true do
-    local ok, is_region, pos, _, name, _, color = r.EnumProjectMarkers3(0, index)
+    local ok, is_region, pos, _, name, id, color = r.EnumProjectMarkers3(0, index)
     if not ok or ok == 0 then break end
     if not is_region then
-      points[#points + 1] = { name = tostring(name or ""), start = pos, color = color }
+      points[#points + 1] = { name = tostring(name or ""), id = id, start = pos, color = color }
     end
     index = index + 1
   end
@@ -57,6 +58,7 @@ local function collect_markers()
     local stop = points[i + 1] and points[i + 1].start or math.max(length, point.start)
     sections[#sections + 1] = {
       name = point.name,
+      id = point.id,
       start = point.start,
       stop = stop,
       color = point.color,
@@ -88,9 +90,28 @@ function Engine.sections(force)
     if a.start ~= b.start then return a.start < b.start end
     return a.stop < b.stop
   end)
-  for i, section in ipairs(sections) do section.index = i end
+  -- What a section's setup is filed under. Its name, so every "Chorus" shares
+  -- one; a section without a name has nothing to share and gets the number
+  -- REAPER shows for it instead. Matched on an empty name, two unnamed regions
+  -- used to be one row in the Sections window, and neither could be set up.
+  for i, section in ipairs(sections) do
+    section.index = i
+    section.key = section.name ~= "" and section.name or Engine.unnamed_key(section)
+  end
   cache.stamp, cache.project, cache.sections = stamp, project, sections
   return sections
+end
+
+function Engine.unnamed_key(section)
+  return (section.is_region and "#R" or "#M") .. tostring(section.id or section.index or "?")
+end
+
+-- "Region 3" for a section with no name of its own, for wherever a name has
+-- to be shown.
+function Engine.display_name(section)
+  if not section then return "" end
+  if section.name ~= "" then return section.name end
+  return (section.is_region and "Region " or "Marker ") .. tostring(section.id or section.index or "?")
 end
 
 function Engine.invalidate()
@@ -267,9 +288,10 @@ function Engine.read(opts, previous)
   -- run -> warn -> last_bar, the three things the screen has to say without
   -- being read. A change that has just happened reports as "go" for one call,
   -- which is what a flash on the wall hangs off.
-  local previous_name = previous and previous.section and previous.section.name
-  local name = section and section.name
-  state.entered = previous ~= nil and previous_name ~= name
+  -- Compared by where the section is, not by its name: two choruses in a row,
+  -- or two regions without a name, are still a change.
+  local before = previous and previous.section
+  state.entered = previous ~= nil and (before and before.start) ~= (section and section.start)
   state.stage = Engine.stage(state, warn_bars)
 
   return state

@@ -198,6 +198,15 @@ function M.load(path)
   return config
 end
 
+-- A fresh copy of the factory settings, for a profile reset. Module settings
+-- that are not in here are filled in by each module's own defaults.
+function M.defaults()
+  return copy_table(defaults)
+end
+
+M.copy = copy_table
+M.merge = merge_table
+
 function M.save(path, config)
   local ok, encoded = pcall(json.encode, config)
   if not ok or not encoded then return false end
