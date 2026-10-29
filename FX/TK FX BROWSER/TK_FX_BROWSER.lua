@@ -1,8 +1,12 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.21
+-- @version 3.2.22
 -- @changelog:
 --[[
+    v3.2.22:
+        + Patchbay: FX node view: buttons to add FX. Hover a node: the + beside it adds an FX in series (after the whole group when it sits among parallel lanes) and the = below it adds a parallel lane. The first node of a chain, also inside a container, gets a + in front of it, so an FX or instrument can go before the first one; an empty chain shows a + on its cable. The buttons stay while the mouse travels out to them, also over a container's body.
+        + Patchbay: FX node view: to make a dragged FX run in parallel you now drop it on the = mark below a node, instead of onto the node itself, which was hard to guess. Dropping on a node's body now simply places the FX there.
+        + Patchbay: FX node view: the add buttons and the marks shown while dragging share one look: amber + for series and = for parallel, highlighted under the cursor, in a deeper amber on a light theme.
     v3.2.21:
         + Patchbay: FX node view: the toolbar's zoom buttons (-, +, 1:1 and Fit) and the zoom percentage now work inside the FX node view; until now they only moved the track graph hidden behind it. Fit measures what is really there, nodes you moved and the IN/OUT boxes included.
         + Patchbay: FX node view: the node width slider now sizes the FX nodes too, so long plugin names fit; with Shots on, a wider node also gets a bigger screenshot. At the default width nothing changes.

@@ -218,7 +218,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.21" author="TouristKiller" time="2026-10-29T19:06:55Z">
+    <version name="3.2.22" author="TouristKiller" time="2026-10-29T22:41:04Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -234,6 +234,10 @@
     <source main="main" file="TK_NOTES_OpenGlobalMode.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_NOTES_OpenGlobalMode.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
+                v3.2.22:
+                + Patchbay: FX node view: buttons to add FX. Hover a node: the + beside it adds an FX in series (after the whole group when it sits among parallel lanes) and the = below it adds a parallel lane. The first node of a chain, also inside a container, gets a + in front of it, so an FX or instrument can go before the first one; an empty chain shows a + on its cable. The buttons stay while the mouse travels out to them, also over a container's body.
+                + Patchbay: FX node view: to make a dragged FX run in parallel you now drop it on the = mark below a node, instead of onto the node itself, which was hard to guess. Dropping on a node's body now simply places the FX there.
+                + Patchbay: FX node view: the add buttons and the marks shown while dragging share one look: amber + for series and = for parallel, highlighted under the cursor, in a deeper amber on a light theme.
                 v3.2.21:
                 + Patchbay: FX node view: the toolbar's zoom buttons (-, +, 1:1 and Fit) and the zoom percentage now work inside the FX node view; until now they only moved the track graph hidden behind it. Fit measures what is really there, nodes you moved and the IN/OUT boxes included.
                 + Patchbay: FX node view: the node width slider now sizes the FX nodes too, so long plugin names fit; with Shots on, a wider node also gets a bigger screenshot. At the default width nothing changes.
@@ -241,25 +245,19 @@
                 + Patchbay: FX node view: the assignable Fit view and Center view actions act on the FX node view while it is open.
                 + Patchbay: FX node view: a wet/dry knob sits next to the bypass dot. Drag it up or down or scroll over it (hold Shift for fine steps) and double-click it for 100% wet; the tooltip shows the dry/wet balance, and one whole turn is one undo step. It is hidden below 60% zoom and on plugins without a wet control.
                 + Patchbay: FX node view: with Flow on, markers run along the chain's cables while the track has signal and stand still when it is silent, so you can see at a glance whether audio is going through. REAPER only meters the track as a whole, so they show that signal is there, not where in the chain it stops.
-                v3.2.20:
-                + Screenshots: A capture no longer saves a blank image. Plugins that draw their window with OpenGL or DirectX came back as one flat colour from a normal capture, and that blank file was then shown for the plugin for good. A flat capture is now taken again from the screen straight away (the same as the OpenGL/DX capture), which does see such plugins; if that is flat too, nothing is saved and an existing screenshot is kept. This also applies to bulk screenshots.
-                + Screenshots: The OpenGL/DX capture also leaves the existing file alone when it comes out blank, instead of overwriting it.
 ]]></changelog>
     </version>
     </reapack>
 
     <reapack name="TK_Patchbay_Standalone.lua" type="script" desc="TK Patchbay Viewer (Standalone)">
-    <version name="1.3.1" author="TouristKiller" time="2026-10-29T19:06:55Z">
+    <version name="1.3.2" author="TouristKiller" time="2026-10-29T22:41:04Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Patchbay_Standalone.lua</source>
     <source file="TKFXBPatchbay_Standalone.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBPatchbay_Standalone.lua</source>
                 <changelog><![CDATA[
-            v1.3.1
-            + FX node view: the toolbar's zoom buttons (-, +, 1:1 and Fit) and the zoom percentage now work inside the FX node view; until now they only moved the track graph hidden behind it. Fit measures what is really there, nodes you moved and the IN/OUT boxes included.
-            + FX node view: the node width slider now sizes the FX nodes too, so long plugin names fit; with Shots on, a wider node also gets a bigger screenshot. At the default width nothing changes.
-            + FX node view: Lock: Layout now holds the FX view in place as well: nodes and the IN/OUT boxes cannot be moved and Auto layout is hidden. Reordering the chain still works, as that is an FX action and only Lock: All stops it.
-            + FX node view: the assignable Fit view and Center view actions act on the FX node view while it is open.
-            + FX node view: a wet/dry knob sits next to the bypass dot. Drag it up or down or scroll over it (hold Shift for fine steps) and double-click it for 100% wet; the tooltip shows the dry/wet balance, and one whole turn is one undo step. It is hidden below 60% zoom and on plugins without a wet control.
-            + FX node view: with Flow on, markers run along the chain's cables while the track has signal and stand still when it is silent, so you can see at a glance whether audio is going through. REAPER only meters the track as a whole, so they show that signal is there, not where in the chain it stops.
+            v1.3.2
+            + FX node view: buttons to add FX. Hover a node: the + beside it adds an FX in series (after the whole group when it sits among parallel lanes) and the = below it adds a parallel lane. The first node of a chain, also inside a container, gets a + in front of it, so an FX or instrument can go before the first one; an empty chain shows a + on its cable. The buttons stay while the mouse travels out to them, also over a container's body.
+            + FX node view: to make a dragged FX run in parallel you now drop it on the = mark below a node, instead of onto the node itself, which was hard to guess. Dropping on a node's body now simply places the FX there.
+            + FX node view: the add buttons and the marks shown while dragging share one look: amber + for series and = for parallel, highlighted under the cursor, in a deeper amber on a light theme.
 ]]></changelog>
     </version>
     </reapack>

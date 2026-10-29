@@ -8722,27 +8722,23 @@ function PatchbayFxNodeCollectDropTargets(layout, dims, source, track)
     end
     inner_serial(stages)
 
-    -- Onto a node: join its stage in parallel. Onto a container's header: move
-    -- inside it. Both walk the tree, so a nested container is a target too.
-    -- Order matters: PatchbayFxNodeFindDrop scans backwards, so whatever is
-    -- added LAST wins where regions overlap. A container therefore offers
-    --
-    --   its whole box   -> parallel with the container   (added first)
-    --   its header      -> inside the container          (added second)
-    --   its children    -> whatever each child offers    (added last)
-    --
-    -- which leaves the ring of padding around the children as the place to drop
-    -- something alongside a container. Without the box entry there was no way
-    -- to put anything parallel to a container at all: the header claimed the
-    -- only region a container had.
+    -- Parallel: a mark below each node, on the spot of its = add button, rather
+    -- than the whole node body. Dropping one node onto another to run them side
+    -- by side was not something anyone guessed; a mark that looks like the add
+    -- button for exactly that says it. Onto a container's header: move inside
+    -- it. Both walk the tree, so a nested container is a target too, and since
+    -- PatchbayFxNodeFindDrop scans backwards a child's marks win over the
+    -- container drawn around them.
     local function walk(list)
         for _, st in ipairs(list) do
             for _, fx in ipairs(st) do
                 local self_or_child = (source ~= nil) and
                     (fx.api_id == source.api_id or PatchbayFxNodeContains(source, fx.api_id))
                 if not self_or_child then
+                    local spot = PatchbayFxNodePlusSpots(fx, dims).parallel
                     out[#out + 1] = { kind = "parallel", node = fx, stage = st,
-                        x = fx.x, y = fx.y, w = fx.w, h = fx.h }
+                        cx = spot.x, cy = spot.y,
+                        x = spot.x - grab, y = spot.y - grab, w = grab * 2, h = grab * 2 }
                     if fx.fx_type == "Container" and #fx.children > 0 then
                         out[#out + 1] = { kind = "container", node = fx,
                             x = fx.x, y = fx.y, w = fx.w, h = dims.head_h }
@@ -8798,51 +8794,20 @@ function PatchbayFxNodeApplyDrop(track, source, target)
     return false
 end
 
--- A drop mark you have to hunt for is no better than none. These only appear
--- while something is being dragged, so there is nothing to be shy about: solid
--- amber, dark ring for contrast against both a light and a dark canvas, and a
--- plus sign saying what dropping there does -- insert here.
--- Amber reads beautifully on a dark canvas and vanishes on a light one, where
--- it sits only 28 luminance steps from the background. So the mark follows the
--- theme: bright amber on dark, deep amber on light, and the hovered state moves
--- further from the background either way rather than simply getting brighter.
-function PatchbayFxNodeDropMarkColors(hot)
-    if PatchbayFxSchemaThemeIsLight() then
-        if hot then return 0x8F5200FF, 0xFFF2D8FF end
-        return 0xC77A00E8, 0xFFF2D8FF
-    end
-    if hot then return 0xFFE9A8FF, 0x1A1200FF end
-    return 0xFFD36BE8, 0x241A00DD
-end
-
-function PatchbayFxNodeDrawDropMark(dl, cx, cy, rad, hot)
-    local fill, ink = PatchbayFxNodeDropMarkColors(hot)
-    if hot then
-        -- A halo, so the one under the cursor is unmistakable among the rest.
-        r.ImGui_DrawList_AddCircle(dl, cx, cy, rad * 1.9, 0xFFD36B70, 0, math.max(2, rad * 0.35))
-    end
-    r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, rad + 1.5, 0x00000090)
-    r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, rad, fill)
-    local arm = rad * 0.52
-    local thick = math.max(1.6, rad * 0.26)
-    r.ImGui_DrawList_AddLine(dl, cx - arm, cy, cx + arm, cy, ink, thick)
-    r.ImGui_DrawList_AddLine(dl, cx, cy - arm, cx, cy + arm, ink, thick)
-end
-
--- One source for the size, so the grab area can be checked against what is
--- actually drawn: a mark you can see but cannot hit is a lie.
-function PatchbayFxNodeDropMarkRadius(dims, hot)
-    local rad = math.max(6, 9 * dims.zoom)
-    return hot and rad * 1.35 or rad
+-- The drop marks are the add buttons: one look for "something goes here",
+-- whether it comes from the add menu or from your hand. The grab area stays
+-- larger than the disc, so a drop does not have to be aimed to the pixel.
+function PatchbayFxNodeDropMarkRadius(dims)
+    return math.max(6, 9 * dims.zoom)
 end
 
 function PatchbayFxNodeDrawDropTargets(dl, targets, hovered, dims)
     for _, t in ipairs(targets) do
         local on = rawequal(t, hovered)
-        if t.kind == "serial" then
+        if t.kind == "serial" or t.kind == "parallel" then
             local cx, cy = t.cx or (t.x + t.w * 0.5), t.cy or (t.y + t.h * 0.5)
-            PatchbayFxNodeDrawDropMark(dl, cx, cy,
-                PatchbayFxNodeDropMarkRadius(dims, on), on)
+            PatchbayFxNodeDrawPlusButton(dl, cx, cy, PatchbayFxNodeDropMarkRadius(dims),
+                on, dims, t.kind == "parallel")
         elseif on then
             local col = (t.kind == "container") and 0x6FD88AFF or 0xFFD36BFF
             r.ImGui_DrawList_AddRect(dl, t.x, t.y, t.x + t.w, t.y + t.h, col,
@@ -9031,8 +8996,10 @@ end
 function PatchbayFxNodeAddSlot(kind, track, node)
     if kind == "end" then
         return -1000 - (r.TrackFX_GetCount(track) or 0)
-    elseif kind == "after" and node then
+    elseif (kind == "after" or kind == "parallel") and node then
         return -1000 - (node.api_id + (node.stride or 1))
+    elseif kind == "before" and node then
+        return -1000 - node.api_id
     elseif kind == "inside" and node then
         local slot = PatchbayFxNodeContainerEndSlot(track, node)
         if not slot then return nil end
@@ -9050,6 +9017,12 @@ function PatchbayFxNodeAddFx(track, slot, addname)
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     local new_index = r.TrackFX_AddByName(track, addname, false, slot)
+    -- A parallel add goes in straight after the node and is then flagged to
+    -- run alongside it. The slot is the new FX's address, container or not;
+    -- "2" is the same flag the drag-to-parallel move writes.
+    if new_index and new_index >= 0 and PB.fx_view_add_parallel and r.TrackFX_SetNamedConfigParm then
+        r.TrackFX_SetNamedConfigParm(track, -1000 - slot, "parallel", "2")
+    end
     r.PreventUIRefresh(-1)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
@@ -9230,9 +9203,166 @@ function PatchbayFxNodeMenuBrowse(ctx, track)
     return picked
 end
 
+-- ---------------------------------------------------------------------------
+-- The + buttons
+--
+-- Beside a node: add in series. Below it: add a parallel lane. Only on the
+-- node under the mouse, so a long chain is not covered in crosses; the one
+-- beside sits on the cable in the middle of the gap, the one below in the
+-- middle of the row gap, where neither covers a pin or its label.
+-- ---------------------------------------------------------------------------
+
+-- Which edge of its own chain a node sits on. The first stage gets a third
+-- button, before it, since nothing to its left could otherwise add there. Inside
+-- a container the outer buttons move in to the middle of the container's
+-- padding: half a column out would put them past the wall, where a button that
+-- adds inside would look like one that adds after the container.
+-- Cheap enough to run every frame, so it never goes stale against the cache.
+function PatchbayFxNodeMarkPlusEdges(stages, inner)
+    for si, st in ipairs(stages) do
+        for _, fx in ipairs(st) do
+            fx.plus_first = (si == 1)
+            fx.plus_first_inner = inner and si == 1
+            fx.plus_last_inner = inner and si == #stages
+            if fx.child_stages then PatchbayFxNodeMarkPlusEdges(fx.child_stages, true) end
+        end
+    end
+end
+
+PATCHBAY_FX_PLUS_KINDS = { "before", "serial", "parallel" }
+
+function PatchbayFxNodePlusSpots(fx, dims)
+    local rad = PatchbayFxNodeDropMarkRadius(dims)
+    local inner_gap = dims.pad * 0.5
+    if fx.plus_first_inner or fx.plus_last_inner then rad = math.min(rad, math.max(5, inner_gap)) end
+    local right_gap = fx.plus_last_inner and inner_gap or dims.col_gap * 0.5
+    local left_gap = fx.plus_first_inner and inner_gap or dims.col_gap * 0.5
+    local mid = fx.y + fx.h * 0.5
+    return {
+        rad = rad,
+        before = fx.plus_first and { x = fx.x - left_gap, y = mid } or nil,
+        serial = { x = fx.x + fx.w + right_gap, y = mid },
+        parallel = { x = fx.x + fx.w * 0.5, y = fx.y + fx.h + dims.row_gap * 0.5 }
+    }
+end
+
+function PatchbayFxNodePlusAt(fx, dims, mx, my)
+    local s = PatchbayFxNodePlusSpots(fx, dims)
+    for _, kind in ipairs(PATCHBAY_FX_PLUS_KINDS) do
+        local p = s[kind]
+        if p then
+            local dx, dy = mx - p.x, my - p.y
+            if (dx * dx + dy * dy) <= (s.rad + 2) * (s.rad + 2) then return kind end
+        end
+    end
+    return nil
+end
+
+-- The node plus the way out to its buttons. The gap between a node and the
+-- button beside it is half a column wide, so testing only node-or-button
+-- dropped the buttons the moment the mouse left the node to go and click one.
+function PatchbayFxNodePlusReach(fx, dims, mx, my)
+    local s = PatchbayFxNodePlusSpots(fx, dims)
+    local pad = s.rad + 4
+    local left = s.before and (s.before.x - pad) or (fx.x - 4)
+    return mx >= left and mx <= s.serial.x + pad
+        and my >= fx.y - 4 and my <= s.parallel.y + pad
+end
+
+-- Whether outer is a container drawn around inner. Its body fills the whole
+-- box, so on the way from a child to the child's own buttons the mouse is over
+-- the container, and that must not count as moving on to another node.
+function PatchbayFxNodeEncloses(outer, inner)
+    return outer ~= inner and outer.child_stages ~= nil
+        and inner.x >= outer.x and inner.x + inner.w <= outer.x + outer.w
+        and inner.y >= outer.y and inner.y + inner.h <= outer.y + outer.h
+end
+
+-- Amber reads beautifully on a dark canvas and vanishes on a light one, where
+-- it sits only 28 luminance steps from the background. So the button follows
+-- the theme: bright amber on dark, deep amber on light, and the hovered state
+-- moves further from the background either way rather than simply brighter.
+function PatchbayFxNodeDropMarkColors(hot)
+    if PatchbayFxSchemaThemeIsLight() then
+        if hot then return 0x8F5200FF, 0xFFF2D8FF end
+        return 0xC77A00E8, 0xFFF2D8FF
+    end
+    if hot then return 0xFFE9A8FF, 0x1A1200FF end
+    return 0xFFD36BE8, 0x241A00DD
+end
+
+-- Solid amber with a dark ring for contrast against both a light and a dark
+-- canvas, a halo on the one under the cursor so it is unmistakable among the
+-- rest. A parallel button shows two stacked lines, two lanes side by side,
+-- instead of a cross, so it reads differently from the series ones.
+function PatchbayFxNodeDrawPlusButton(dl, x, y, rad, on, dims, parallel)
+    local fill, ink = PatchbayFxNodeDropMarkColors(on)
+    if on then
+        rad = rad * 1.35
+        r.ImGui_DrawList_AddCircle(dl, x, y, rad * 1.9, 0xFFD36B70, 0, math.max(2, rad * 0.35))
+    end
+    r.ImGui_DrawList_AddCircleFilled(dl, x, y, rad + 1.5, 0x00000090)
+    r.ImGui_DrawList_AddCircleFilled(dl, x, y, rad, fill)
+    local arm = rad * 0.52
+    local thick = math.max(1.6, rad * 0.26)
+    if parallel then
+        local gap = math.max(1.8, rad * 0.3)
+        r.ImGui_DrawList_AddLine(dl, x - arm, y - gap, x + arm, y - gap, ink, thick)
+        r.ImGui_DrawList_AddLine(dl, x - arm, y + gap, x + arm, y + gap, ink, thick)
+        return
+    end
+    r.ImGui_DrawList_AddLine(dl, x - arm, y, x + arm, y, ink, thick)
+    r.ImGui_DrawList_AddLine(dl, x, y - arm, x, y + arm, ink, thick)
+end
+
+function PatchbayFxNodeDrawPlus(dl, fx, dims, hot)
+    local s = PatchbayFxNodePlusSpots(fx, dims)
+    for _, kind in ipairs(PATCHBAY_FX_PLUS_KINDS) do
+        local p = s[kind]
+        if p then PatchbayFxNodeDrawPlusButton(dl, p.x, p.y, s.rad, hot == kind, dims, kind == "parallel") end
+    end
+end
+
+-- The stage a node sits in, searched into containers as well.
+function PatchbayFxNodeStageOf(stages, api)
+    for _, st in ipairs(stages) do
+        for _, fx in ipairs(st) do
+            if fx.api_id == api then return st end
+            if fx.child_stages then
+                local deeper = PatchbayFxNodeStageOf(fx.child_stages, api)
+                if deeper then return deeper end
+            end
+        end
+    end
+    return nil
+end
+
+-- In series means after the whole stage. Straight after one lane of a parallel
+-- stage the next lane, still flagged parallel, would take the new FX in as a
+-- lane of its own. Before goes in front of the stage's first lane, which keeps
+-- the lanes together behind the new FX.
+function PatchbayFxNodeOpenPlus(kind, track, stages, node)
+    if kind == "parallel" then
+        PatchbayFxNodeOpenAdd("parallel", track, node, "parallel to " .. tostring(node.name))
+        return
+    end
+    local st = PatchbayFxNodeStageOf(stages, node.api_id)
+    local lanes = st and #st > 1
+    if kind == "before" then
+        local first = (st and st[1]) or node
+        PatchbayFxNodeOpenAdd("before", track, first, "before "
+            .. (lanes and "the parallel lanes" or tostring(node.name)))
+        return
+    end
+    local last = (st and st[#st]) or node
+    PatchbayFxNodeOpenAdd("after", track, last, "after "
+        .. (lanes and "the parallel lanes" or tostring(node.name)))
+end
+
 function PatchbayFxNodeOpenAdd(kind, track, node, label)
     local slot = PatchbayFxNodeAddSlot(kind, track, node)
     PB.fx_view_add_slot = slot
+    PB.fx_view_add_parallel = (kind == "parallel")
     PB.fx_view_add_label = label or "chain"
     PB.fx_view_add_filter = ""
     PB.fx_view_add_open = true
@@ -9334,6 +9464,7 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     PatchbayFxNodeShotBeginFrame()
     local dims = PatchbayFxNodeDims(PB.fx_view_zoom)
     local layout = PatchbayFxNodeCached(track, dims)
+    PatchbayFxNodeMarkPlusEdges(layout.stages, false)
 
     local content_w = layout.w + dims.edge_w * 2 + dims.col_gap * 2
     local content_h = math.max(layout.h, dims.node_h)
@@ -9454,7 +9585,21 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
             out_x, out_y + edge_h * 0.5, PatchbayFxNodeCanvasInk(false))
         r.ImGui_DrawList_AddText(dl, base_x + (content_w - tw) * 0.5,
             mid_y - 26 * dims.zoom, PatchbayFxNodeCanvasInk(true), msg)
+        -- Nothing to hover yet, so the first FX gets a button that is always
+        -- there, in the middle of the cable (a symmetric bezier's midpoint is
+        -- the midpoint of its ends).
+        PB.fx_view_empty_plus = nil
+        if not IsAllLockedCfg(GetConfig()) then
+            local ex = (in_x + dims.edge_w + out_x) * 0.5
+            local ey = (in_y + out_y) * 0.5 + edge_h * 0.5
+            local erad = math.max(7, 9 * dims.zoom)
+            local emx, emy = r.ImGui_GetMousePos(ctx)
+            local on = (emx - ex) * (emx - ex) + (emy - ey) * (emy - ey) <= (erad + 2) * (erad + 2)
+            PatchbayFxNodeDrawPlusButton(dl, ex, ey, erad, on, dims)
+            PB.fx_view_empty_plus = on
+        end
     else
+        PB.fx_view_empty_plus = nil
         PatchbayFxNodeDrawRouting(ctx, dl, layout, dims, track)
         PatchbayFxNodeDrawStages(ctx, dl, layout.stages, dims,
             in_x + dims.edge_w, mid_y, out_x,
@@ -9681,6 +9826,29 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     local on_bypass = false
     local on_fold = false
     local on_wet = hit ~= nil and wet_hover == hit
+    -- The node keeps its buttons while the mouse travels out to one of them.
+    local plus_node, on_plus = nil, nil
+    if not IsAllLockedCfg(GetConfig()) and dims.zoom >= 0.6 and not PB.fx_view_drag
+        and not PB.fx_view_pin_drag and not PB.fx_view_edge_drag and not PB.fx_view_wet_drag then
+        -- On one of its buttons it stays, even where that button lies over a
+        -- container's body; another node under the mouse takes over; and in
+        -- the stretch between the node and its buttons it stays as well.
+        local kept = PB.fx_view_plus_api and PatchbayFxNodeFindByApi(layout.stages, PB.fx_view_plus_api) or nil
+        if kept and bg_hovered then on_plus = PatchbayFxNodePlusAt(kept, dims, mx, my) end
+        local in_reach = kept and bg_hovered and PatchbayFxNodePlusReach(kept, dims, mx, my)
+        if on_plus then
+            plus_node = kept
+        elseif in_reach and (not hit or hit == kept or PatchbayFxNodeEncloses(hit, kept)) then
+            plus_node = kept
+        else
+            plus_node = hit
+        end
+        if plus_node and bg_hovered and not on_plus then
+            on_plus = PatchbayFxNodePlusAt(plus_node, dims, mx, my)
+        end
+    end
+    PB.fx_view_plus_api = plus_node and plus_node.api_id or nil
+    if plus_node then PatchbayFxNodeDrawPlus(dl, plus_node, dims, on_plus) end
     if hit then
         local bx, by, brad = PatchbayFxNodeBypassSpot(hit, dims)
         local dx, dy = mx - bx, my - by
@@ -9692,6 +9860,11 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
     end
     if PB.fx_view_wet_drag then
         r.ImGui_SetTooltip(ctx, PatchbayFxNodeWetLabel(PB.fx_view_wet_drag.value))
+    elseif PB.fx_view_empty_plus and bg_hovered then
+        r.ImGui_SetTooltip(ctx, "Add FX")
+    elseif on_plus then
+        r.ImGui_SetTooltip(ctx, on_plus == "parallel" and "Add FX in parallel"
+            or on_plus == "before" and "Add FX before" or "Add FX in series")
     elseif on_wet and bg_hovered then
         r.ImGui_SetTooltip(ctx, PatchbayFxNodeWetLabel(PatchbayFxNodeWetShown(hit))
             .. "\ndrag or scroll  ·  Shift = fine  ·  double-click = 100% wet")
@@ -9701,7 +9874,11 @@ function PatchbayFxNodeFrame(ctx, origin_x, origin_y, avail_w, avail_h)
             or (hit.full_name ~= "" and hit.full_name or hit.name))
     end
     if bg_hovered and r.ImGui_IsMouseClicked(ctx, 0) then
-        if on_fold then
+        if PB.fx_view_empty_plus then
+            PatchbayFxNodeOpenAdd("end", track, nil, "the chain")
+        elseif on_plus then
+            PatchbayFxNodeOpenPlus(on_plus, track, layout.stages, plus_node)
+        elseif on_fold then
             PatchbayFxNodeToggleFold(track, hit.fxguid)
         elseif on_bypass then
             PatchbayFxNodeSetBypass(PatchbayFxNodeTarget(track, hit), hit.enabled)
