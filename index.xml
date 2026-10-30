@@ -582,7 +582,7 @@ v0.2.51
 
 <category name="Transport">
     <reapack name="TK_TRANSPORT.lua" type="script" desc="TK_TRANSPORT">
-        <version name="2.0.7" author="TouristKiller" time="2026-10-15T21:28:00Z">
+        <version name="2.0.8" author="TouristKiller" time="2026-10-30T14:36:00Z">
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/TK_TRANSPORT.lua</source>
             <source file="json.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/json.lua</source>
             <source file="button_editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/button_editor.lua</source>
@@ -591,26 +591,14 @@ v0.2.51
             <source file="icon_browser.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/icon_browser.lua</source>
             <source file="toolbar_images.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/Transport/toolbar_images.zip</source>
             <changelog><![CDATA[
+    v2.0.8:
+    + Added: TK Transport checks the installed ReaImGui version at startup and asks to update when it is older than 0.10.0.5, instead of failing with a misleading "ImGui_End: Missing PopStyleColor()" error - Reported by Loukas
+
     v2.0.7:
     + Added: Decorative / Image Only buttons have a "Behind Transport" option that draws them behind the transport elements, so they can be used as backgrounds and frames
     + Added: New "Background Buttons" layer in Z-Order (Layer), below Transport by default, to set how deep those buttons sit
     + Changed: Decorative / Image Only buttons can now be as wide and tall as the transport window instead of being limited to 400 px; regular buttons keep the 400 px limit
     + Changed: Copy Style and "Copy style from last button" also copy the "Behind Transport" option
-
-    v2.0.6:
-    + Changed: Copy Style now also copies height, icon/image (incl. custom image path), image tinting (incl. Tint ON/OFF), Invisible BG, text position, toggle ON/OFF colors and the System Fonts setting
-    + Fixed: Paste Style did not reset values that were at their default on the source button - for example a custom tint on the target button stayed after pasting
-    + Changed: "New button - Copy style from last button" now copies the same appearance settings as Copy Style
-    + Changed: Copy Style Settings window redesigned - two columns grouped like the button editor, a checkbox per group, quick All / None / Colors only / Layout only buttons and a count of selected properties
-    + Added: Confirmation before deleting a transport preset or button preset and before Reset Defaults, so a misclick no longer throws work away
-    + Changed: Settings list split into General and Components; each component shows a dot for its visibility that you can click to show or hide it
-    + Changed: Transport and button preset bars now share one layout and color scheme; the new-name field shows a hint and Resave is highlighted while there are unsaved changes
-    + Changed: All settings sections use one heading style
-    + Changed: "(Toggle active ...)" notes in the button Properties now link straight to the Toggle view
-    + Changed: Button editor columns scale with the available width instead of fixed pixel positions
-    + Changed: Group settings moved to a fixed group bar below the button settings, visible in Properties, Actions and Toggle; Paste Style to Group moved there as well
-    + Fixed: With current ReaImGui versions, TK Transport's own window could be mistaken for REAPER's native transport when positioning relative to the REAPER transport or TCP
-    + Removed: Debug console output when creating a preset-load action, and outdated help text in the Buttons tab
 
 ]]></changelog>
         </version>

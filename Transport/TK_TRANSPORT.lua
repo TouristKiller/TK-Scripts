@@ -1,8 +1,11 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.7
+-- @version 2.0.8
 -- @changelog
 --[[
+    v2.0.8:
+    + Added: TK Transport checks the installed ReaImGui version at startup and asks to update when it is older than 0.10.0.5, instead of failing with a misleading "ImGui_End: Missing PopStyleColor()" error - Reported by Loukas
+
     v2.0.7:
     + Added: Decorative / Image Only buttons have a "Behind Transport" option that draws them behind the transport elements, so they can be used as backgrounds and frames
     + Added: New "Background Buttons" layer in Z-Order (Layer), below Transport by default, to set how deep those buttons sit
@@ -250,10 +253,40 @@
   ]]--
 ---------------------------------------------------------------------------------------------
 local r = reaper
+
+-- TK Transport uses the ReaImGui 0.10 font API (size passed to PushFont, not CreateFont).
+-- Older versions fail with misleading errors such as "Missing PopStyleColor()", so stop early.
+do
+ local REQUIRED_REAIMGUI = { 0, 10, 0, 5 }
+ local required_str = table.concat(REQUIRED_REAIMGUI, ".")
+ local installed_str
+ if r.ImGui_GetVersion then
+  for _, v in ipairs({ r.ImGui_GetVersion() }) do
+   if type(v) == "string" and v:match("^0%.%d") then installed_str = v end
+  end
+ end
+ local too_old = not installed_str
+ if installed_str then
+  local parts = {}
+  for n in installed_str:gmatch("%d+") do parts[#parts + 1] = tonumber(n) end
+  for i = 1, #REQUIRED_REAIMGUI do
+   local have, need = parts[i] or 0, REQUIRED_REAIMGUI[i]
+   if have ~= need then too_old = have < need break end
+  end
+ end
+ if too_old then
+  r.MB("TK Transport requires ReaImGui " .. required_str .. " or newer.\n\n"
+   .. "Installed: " .. (installed_str or (r.ImGui_CreateContext and "unknown (too old)" or "not installed")) .. "\n\n"
+   .. "Update it via Extensions > ReaPack > Browse packages > \"ReaImGui\", then restart REAPER.",
+   "TK Transport", 0)
+  return
+ end
+end
+
 local ctx = r.ImGui_CreateContext('Transport Control')
 
 
-local script_version = "2.0.7"
+local script_version = "2.0.8"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
