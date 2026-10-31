@@ -1,22 +1,14 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.0
+-- @version 1.0.1
 -- @changelog:
--- v1.0.0
---   + Workbench: Profiles, in a new Profile tab in Preferences. Save current setup as my default keeps your setup - visible modules, theme, scale and how every module is set up - and Reset to my default brings it back. Where you are is not part of it: window positions, the open module, searches, filters and current folders stay as they are, so a reset does not send you back to the folder you were in when you saved
---   + Workbench: Export and Import save a setup to a file and load it again, as a backup, for another computer or to share. Workbench 2 can use the same default, so a second window starts from your setup
---   + Workbench: Reset to factory settings puts everything back as installed. Before any reset or import the settings as they were are kept, and Restore previous settings undoes it in one click
---   + Workbench: Every module in Preferences > Modules has a Reset button, to put just that module back to your default or to factory settings without touching the rest
---   + Workbench: The first start asks which modules to show, with sets to start from (Mixing, Production, Project, Writing, Tools). The others stay installed and can be switched on in Preferences > Modules, where Choose by set... opens the same picker again
---   + Transport: The Navigator, Master scope and Markers & regions blocks can be made taller or shorter by dragging the edge of their card; Markers grows in whole rows of chips and keeps that many rows free, also while the project has fewer markers. Double-click the edge for the default height. With the stack anchored to the bottom the handle is on the top edge, so the edge stays under the mouse. The other blocks are rows of controls with a fixed height and keep it
---   + Transport: Fixed the mouse wheel over the Navigator block also scrolling the whole stack of blocks, which moved the map away from under the pointer while zooming. The wheel now only zooms the Navigator
---   + Cue: Every section can have a sound of its own, such as a voice saying "Intro" or "Chorus", chosen in the Sections window from the .wav files in the TK Cue Sounds folder. It plays where the warning starts, so you hear what is coming in time, or on the change itself. Sections with the same name share it, it replaces the click on that beat, and it plays on a voice of its own so the next tick does not cut it off. No extra track or routing: it goes through the cue click like the other cues
---   + Cue: Up to 32 sounds are loaded at once (was 16), and the sound pickers list every .wav in the folder instead of the first sixteen
---   + Cue: Chosen cue sounds are loaded again when Cue starts with Play cues on. After restarting REAPER they played the built-in tone until a sound menu was opened, and an older cue effect is now brought up to date without pressing Reload
---   + Cue: Regions and markers without a name can now be set up one by one. Their setup was filed under the empty name, so two unnamed regions were one row in the Sections window and neither could get a label, warning or sound; each now has its own row, by the number REAPER gives it
---   + Cue: The Sections window renames regions and sets their colour in REAPER, for every region in the row at once, each as one undo step. A section's setup moves along to its new name
---   + Cue: Two sections with the same name in a row, or two unnamed ones, now count as a change: the flash and the go cue went missing between them
---   + Cue: The settings are also on a "..." button in the top-right corner of the panel, next to the right-click menu. The menu is tidier: what the panel shows moved into a Display submenu, the Sections item says what it holds (names, colours, warnings, sounds), and Cue click has a Sound per section item that leads there
+-- v1.0.1
+--   + Workbench: Opening any module with a search field from its action (a shortcut, toolbar button or control surface) puts the cursor in that search field and gives Workbench the keyboard, so you can type straight away: Media Browser, Project Browser, Action Browser, Script Launcher, Tags, Idea Vault, Sidechain and Plugin Browser. Until now only Plugin Browser did this. Modules without a search field still leave the keyboard with REAPER
+--   + Workbench: Esc in a search field clears the search and gives the keyboard back to REAPER, so its shortcuts work again without clicking out of Workbench first. The search fields say so in their tooltip
+--   + Workbench: The option moved from Plugin Browser to Preferences > General as "Type to search after an open action", since it now covers every module; it stays off for anyone who had switched it off
+--   + Workbench: Fixed a floating Workbench window not getting the keyboard when the shortcut was pressed in REAPER's main window, for example right after Esc had handed the keyboard back: the field looked ready, but the typing went to REAPER. When the keyboard cannot be taken, the status line now says so
+--   + Workbench: Fixed two Workbenches running at once. An open action that found Workbench closed started it inside the action script itself, so running TK_Workbench.lua afterwards opened a second Workbench on the same settings, pressing the same action again ran into REAPER's "script is already running" question (which could close Workbench), and the toolbar showed the wrong state. Actions now start TK_Workbench.lua itself, and a second start brings the open Workbench forward instead of opening another. The same applied to opening the Plugin Browser from the Instrument Rack
+--   + Workbench: Workbench 2 no longer picks up commands meant for Workbench 1: the module and workspace actions always go to TK Workbench
 
 local r = reaper
 
@@ -46,6 +38,13 @@ local config_path = script_path .. config_name
 local first_start = not r.file_exists(config_path)
 local settings = Settings.load(config_path)
 UIScale.set(settings.ui_scale)
+-- Typing into the search after an open action used to be a Plugin Browser
+-- setting; it now covers every module, and someone who had switched it off
+-- there keeps it off.
+if settings.search_focus_on_open == nil and type(settings.plugin_browser) == "table"
+  and settings.plugin_browser.focus_search_on_open == false then
+  settings.search_focus_on_open = false
+end
 
 local app = {
   ctx = ctx,
@@ -69,10 +68,31 @@ app.cache.saved_theme_preset = settings.theme_preset or "Graphite"
 
 local HOME_MODULE_ID = "__home"
 local MODULE_REORDER_PAYLOAD = "TK_WORKBENCH_MODULE_REORDER"
-local MODULE_ACTION_EXT_SECTION = "TK_WORKBENCH_MODULE_ACTIONS"
+-- One section per settings file. Workbench 2 shared this one with Workbench
+-- 1, so an open action could land in whichever of the two read it first, and
+-- each looked like the other to the check below. The actions keep talking to
+-- the main Workbench (config.json), as they always meant to.
+local MODULE_ACTION_EXT_SECTION = config_name == "config.json" and "TK_WORKBENCH_MODULE_ACTIONS"
+  or ("TK_WORKBENCH_MODULE_ACTIONS_" .. (config_name:gsub("%.json$", "")):upper())
 local MODULE_ACTION_COMMAND_KEY = "command"
 local MODULE_ACTION_RUNNING_KEY = "running"
 local MODULE_ACTION_HEARTBEAT_KEY = "heartbeat"
+
+-- One Workbench per settings file. A second one on the same config.json writes
+-- over the first one's settings, and that is what happened when Workbench had
+-- been started by an action and TK_Workbench.lua was then run as well. A
+-- Workbench already beating its heart in this section is brought forward
+-- instead, and this one stops before it opens a window. The heartbeat makes a
+-- crashed instance's leftover "running" harmless after a few seconds.
+if r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY) == "true" then
+  local beat = tonumber(r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_HEARTBEAT_KEY)) or 0
+  if (r.time_precise and r.time_precise() or os.clock()) - beat < 2.5 then
+    if r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY) == "" then
+      r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY, "show:window", false)
+    end
+    return
+  end
+end
 
 local module_names = {
   "project_overview",
@@ -584,16 +604,26 @@ end
 -- in) is a top-level window of its own, and focus does not move into another
 -- top-level window that is not in front. So the window holding Workbench is
 -- brought forward first, then focused.
-function keyboard.take(hwnd)
+-- The top-level window hwnd sits in. JS_Window_GetParent also answers with
+-- the OWNER of a top-level window, and a floating Workbench window is owned by
+-- REAPER's main window: climbing on that alone made the main window "the top",
+-- so a floating Workbench was never brought forward. That went unnoticed when
+-- the shortcut came from the Action list, and failed every time after Esc had
+-- put the focus on the main window itself. Only a real parent is followed.
+function keyboard.root(hwnd)
   local root = hwnd
-  if r.JS_Window_GetParent then
+  if r.JS_Window_GetParent and r.JS_Window_IsChild then
     for _ = 1, 16 do
       local parent = r.JS_Window_GetParent(root)
-      if not parent then break end
+      if not parent or not r.JS_Window_IsChild(parent, root) then break end
       root = parent
     end
   end
-  if r.JS_Window_SetForeground then r.JS_Window_SetForeground(root) end
+  return root
+end
+
+function keyboard.take(hwnd)
+  if r.JS_Window_SetForeground then r.JS_Window_SetForeground(keyboard.root(hwnd)) end
   r.JS_Window_SetFocus(hwnd)
 end
 
@@ -617,7 +647,12 @@ function keyboard.apply_pending()
     app.cache.keyboard_hold_until = now + 0.5
   end
   if not keyboard.holds(hwnd) then keyboard.take(hwnd) end
-  if now >= (app.cache.keyboard_hold_until or 0) then app.cache.keyboard_focus_tries = nil end
+  if now >= (app.cache.keyboard_hold_until or 0) then
+    app.cache.keyboard_focus_tries = nil
+    -- Said out loud when it did not work: the field looks ready either way,
+    -- and otherwise the only sign is typing that lands somewhere else.
+    if not keyboard.holds(hwnd) then app.status = "Workbench could not take the keyboard - click into it once" end
+  end
 end
 
 -- Hands the keyboard back to REAPER, so the space bar plays again once the
@@ -633,6 +668,14 @@ function keyboard.release()
 end
 
 app.release_keyboard = keyboard.release
+
+-- Asked for by a search field that just took the ImGui focus after an open
+-- action (core/ui.lua); the window gets the real keyboard focus after the
+-- frame is drawn.
+function app.request_keyboard()
+  app.cache.keyboard_focus_tries = 10
+  app.cache.keyboard_hwnd = nil
+end
 
 local function process_module_action_commands()
   local command = r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY) or ""
@@ -660,6 +703,18 @@ local function process_module_action_commands()
     if index and index >= 1 and index <= workspaces.SLOTS then workspaces.load(math.floor(index)) end
     return
   end
+  -- Sent by a second start of Workbench, which stops itself: this one comes
+  -- forward instead, unfolded if auto-collapse had it folded away.
+  if action == "show" then
+    app.cache.focus_window = true
+    if app.cache.auto_collapse_collapsed then
+      app.cache.auto_collapse_collapsed = false
+      app.cache.auto_collapse_force_restore = true
+      app.cache.auto_collapse_last_hover_time = r.time_precise and r.time_precise() or os.clock()
+    end
+    app.status = "Workbench is already open"
+    return
+  end
   if action ~= "open" or not target or target == "" then return end
   if target == HOME_MODULE_ID or app.modules_by_id[target] then
     set_active_view(target)
@@ -676,14 +731,14 @@ local function process_module_action_commands()
       app.cache.auto_collapse_force_restore = true
       app.cache.auto_collapse_last_hover_time = r.time_precise and r.time_precise() or os.clock()
     end
+    -- Every module with a search field: the field takes the keyboard when the
+    -- module draws it. A module without one lets the request run out, and the
+    -- keyboard stays with REAPER - an open action on a control surface must
+    -- not quietly take it away.
+    if module and app.settings.search_focus_on_open ~= false then UI.request_search_focus(app, module.id) end
     if module and type(module.on_open_action) == "function" then
-      local ok, wants_keyboard = pcall(module.on_open_action, app)
-      if not ok then
-        record_module_error(target .. ".open_action", wants_keyboard)
-      elseif wants_keyboard == true then
-        app.cache.keyboard_focus_tries = 10
-        app.cache.keyboard_hwnd = nil
-      end
+      local ok, err = pcall(module.on_open_action, app)
+      if not ok then record_module_error(target .. ".open_action", err) end
     end
   else
     app.status = "Workbench module not found: " .. tostring(target)
@@ -1931,6 +1986,18 @@ local function draw_preferences_settings()
       app.status = value and "Info box visible" or "Info box hidden"
       save_settings()
     end
+    changed, value = r.ImGui_Checkbox(ctx, "Type to search after an open action", app.settings.search_focus_on_open ~= false)
+    if changed then
+      app.settings.search_focus_on_open = value
+      app.status = value and "Open actions put the cursor in the search field" or "Open actions leave the keyboard with REAPER"
+      save_settings()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, "Opening a module with its action (a shortcut, toolbar button or control surface)\n"
+        .. "puts the cursor in its search field, so you can type straight away.\n"
+        .. "Esc clears the search and gives the keyboard back to REAPER.\n"
+        .. "Modules without a search field never take the keyboard.")
+    end
     r.ImGui_Separator(ctx)
     changed, value = r.ImGui_Checkbox(ctx, "Module rail", app.settings.sidebar_enabled == true)
     if changed then
@@ -2500,7 +2567,11 @@ local function draw_module_instance(module, pane_id)
     -- Cleared first, so a note left by whatever drew before this cannot be read
     -- as belonging to this module's failure.
     app.breadcrumb = nil
+    -- Which module is drawing, for shared widgets that act for one module
+    -- only: the search field that an open action asked to focus.
+    app.drawing_module = module.id
     local ok, err = pcall(module.draw, app)
+    app.drawing_module = nil
     app.cache.structural_fails = app.cache.structural_fails or {}
     if ok then
       clear_module_error(module.id .. ".draw")

@@ -29,7 +29,6 @@ local defaults = {
   source = "All",
   view_mode = "tiles",
   show_screenshots = true,
-  focus_search_on_open = true,
   tile_size = 112,
   target_mode = "selected_track",
   recent_max = 30,
@@ -2869,12 +2868,6 @@ local function draw_filter_popup(ctx, settings, app)
     settings.return_to_chain_builder_after_add = return_to_chain_builder
     if app.save_settings then app.save_settings() end
   end
-  local focus_changed, focus_search = r.ImGui_Checkbox(ctx, "Type to search after open action", settings.focus_search_on_open ~= false)
-  if focus_changed then
-    settings.focus_search_on_open = focus_search
-    if app.save_settings then app.save_settings() end
-  end
-  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The Open Plugin Browser action takes the keyboard so you can type a name straight away.\nEscape, or inserting with Enter, gives it back to REAPER.") end
   local dropdown_changed, dropdown_rows = r.ImGui_SliderInt(ctx, "Dropdown rows", settings.dropdown_rows or defaults.dropdown_rows, 8, 36, "%d")
   if dropdown_changed then
     settings.dropdown_rows = dropdown_rows
@@ -3423,7 +3416,7 @@ function nav.keys(app, settings)
     local plugin = state.filtered[index]
     if plugin then
       add_fx_to_track(app, settings, plugin)
-      M.end_keyboard_session(app)
+      UI.end_search_session(app)
     end
   end
 end
@@ -3584,12 +3577,6 @@ local function draw_toolbar(app, settings, avail_w)
   next_item()
   draw_settings_button(button_h)
   if row_started then r.ImGui_SetCursorPosY(ctx, math.max(0, r.ImGui_GetCursorPosY(ctx))) end
-  -- Set by the open action. Keyboard focus on an InputText selects what is in
-  -- it, so typing straight away replaces the previous search.
-  if state.focus_search then
-    state.focus_search = nil
-    if r.ImGui_SetKeyboardFocusHere then r.ImGui_SetKeyboardFocusHere(ctx) end
-  end
   local changed, search = UI.search_input(ctx, "##pb_search", "Search plugins", settings.search_term or "", width)
   if changed then
     settings.search_term = search
@@ -3620,25 +3607,6 @@ local function draw_bottom_shortcuts(app, width)
   if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Go to FX Chain Builder") end
 end
 
--- Opened from its action (a key command): put the cursor in the search box so
--- the plugin name can be typed straight away. Returning true asks Workbench to
--- take the OS keyboard focus as well; the ImGui focus alone leaves the keys
--- going to REAPER. The session ends with Escape or an Enter insert, which hand
--- the keyboard back.
-function M.on_open_action(app)
-  local settings = ensure_settings(app)
-  if settings.focus_search_on_open == false then return false end
-  state.focus_search = true
-  state.keyboard_session = true
-  return true
-end
-
-function M.end_keyboard_session(app)
-  if not state.keyboard_session then return end
-  state.keyboard_session = nil
-  if app.release_keyboard then app.release_keyboard() end
-end
-
 function M.init(app)
   ensure_settings(app)
   load_user_data()
@@ -3650,7 +3618,7 @@ function M.draw(app)
   local settings = ensure_settings(app)
   if r.ImGui_IsKeyPressed and r.ImGui_Key_Escape and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
     clear_selection(app)
-    M.end_keyboard_session(app)
+    UI.end_search_session(app)
   end
   update_external_drag(app, settings)
   state.screenshot_visible_keys = {}

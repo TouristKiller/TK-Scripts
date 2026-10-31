@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="1.0.0" author="TouristKiller" time="2026-10-29T16:08:45Z">
+    <version name="1.0.1" author="TouristKiller" time="2026-10-31T18:15:30Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -172,21 +172,13 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
-            v1.0.0
-            + Workbench: Profiles, in a new Profile tab in Preferences. Save current setup as my default keeps your setup - visible modules, theme, scale and how every module is set up - and Reset to my default brings it back. Where you are is not part of it: window positions, the open module, searches, filters and current folders stay as they are, so a reset does not send you back to the folder you were in when you saved
-            + Workbench: Export and Import save a setup to a file and load it again, as a backup, for another computer or to share. Workbench 2 can use the same default, so a second window starts from your setup
-            + Workbench: Reset to factory settings puts everything back as installed. Before any reset or import the settings as they were are kept, and Restore previous settings undoes it in one click
-            + Workbench: Every module in Preferences > Modules has a Reset button, to put just that module back to your default or to factory settings without touching the rest
-            + Workbench: The first start asks which modules to show, with sets to start from (Mixing, Production, Project, Writing, Tools). The others stay installed and can be switched on in Preferences > Modules, where Choose by set... opens the same picker again
-            + Transport: The Navigator, Master scope and Markers & regions blocks can be made taller or shorter by dragging the edge of their card; Markers grows in whole rows of chips and keeps that many rows free, also while the project has fewer markers. Double-click the edge for the default height. With the stack anchored to the bottom the handle is on the top edge, so the edge stays under the mouse. The other blocks are rows of controls with a fixed height and keep it
-            + Transport: Fixed the mouse wheel over the Navigator block also scrolling the whole stack of blocks, which moved the map away from under the pointer while zooming. The wheel now only zooms the Navigator
-            + Cue: Every section can have a sound of its own, such as a voice saying "Intro" or "Chorus", chosen in the Sections window from the .wav files in the TK Cue Sounds folder. It plays where the warning starts, so you hear what is coming in time, or on the change itself. Sections with the same name share it, it replaces the click on that beat, and it plays on a voice of its own so the next tick does not cut it off. No extra track or routing: it goes through the cue click like the other cues
-            + Cue: Up to 32 sounds are loaded at once (was 16), and the sound pickers list every .wav in the folder instead of the first sixteen
-            + Cue: Chosen cue sounds are loaded again when Cue starts with Play cues on. After restarting REAPER they played the built-in tone until a sound menu was opened, and an older cue effect is now brought up to date without pressing Reload
-            + Cue: Regions and markers without a name can now be set up one by one. Their setup was filed under the empty name, so two unnamed regions were one row in the Sections window and neither could get a label, warning or sound; each now has its own row, by the number REAPER gives it
-            + Cue: The Sections window renames regions and sets their colour in REAPER, for every region in the row at once, each as one undo step. A section's setup moves along to its new name
-            + Cue: Two sections with the same name in a row, or two unnamed ones, now count as a change: the flash and the go cue went missing between them
-            + Cue: The settings are also on a "..." button in the top-right corner of the panel, next to the right-click menu. The menu is tidier: what the panel shows moved into a Display submenu, the Sections item says what it holds (names, colours, warnings, sounds), and Cue click has a Sound per section item that leads there
+            v1.0.1
+            + Workbench: Opening any module with a search field from its action (a shortcut, toolbar button or control surface) puts the cursor in that search field and gives Workbench the keyboard, so you can type straight away: Media Browser, Project Browser, Action Browser, Script Launcher, Tags, Idea Vault, Sidechain and Plugin Browser. Until now only Plugin Browser did this. Modules without a search field still leave the keyboard with REAPER
+            + Workbench: Esc in a search field clears the search and gives the keyboard back to REAPER, so its shortcuts work again without clicking out of Workbench first. The search fields say so in their tooltip
+            + Workbench: The option moved from Plugin Browser to Preferences > General as "Type to search after an open action", since it now covers every module; it stays off for anyone who had switched it off
+            + Workbench: Fixed a floating Workbench window not getting the keyboard when the shortcut was pressed in REAPER's main window, for example right after Esc had handed the keyboard back: the field looked ready, but the typing went to REAPER. When the keyboard cannot be taken, the status line now says so
+            + Workbench: Fixed two Workbenches running at once. An open action that found Workbench closed started it inside the action script itself, so running TK_Workbench.lua afterwards opened a second Workbench on the same settings, pressing the same action again ran into REAPER's "script is already running" question (which could close Workbench), and the toolbar showed the wrong state. Actions now start TK_Workbench.lua itself, and a second start brings the open Workbench forward instead of opening another. The same applied to opening the Plugin Browser from the Instrument Rack
+            + Workbench: Workbench 2 no longer picks up commands meant for Workbench 1: the module and workspace actions always go to TK Workbench
 ]]></changelog>
      </version>
      </reapack>

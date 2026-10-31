@@ -175,6 +175,57 @@ function M.draw_info_line(ctx, text, options)
 	end
 end
 
+-- Typing straight into a module opened from the keyboard. An open action asks
+-- for it for one module; the first search field that module draws within half
+-- a second takes it, and Workbench gives its window the real keyboard focus.
+-- Bound to a module rather than "the next search field": with split view two
+-- modules draw, and the other pane's field must not take it. A module without
+-- a search field simply lets the request run out.
+function M.request_search_focus(app, module_id)
+	local now = r.time_precise and r.time_precise() or os.clock()
+	app.cache.search_focus = { module = module_id, until_time = now + 1.0 }
+end
+
+-- Hands the keyboard back to REAPER after typing that started from an open
+-- action, for a module that ends it some other way than Esc (Plugin Browser
+-- inserting a plugin with Enter).
+function M.end_search_session(app)
+	if not (app and app.cache and app.cache.search_session) then return end
+	app.cache.search_session = nil
+	if app.release_keyboard then app.release_keyboard() end
+end
+
+-- Asked again every frame until the field really is active, not once. The
+-- first request can be dropped: switching to this module from one without a
+-- search field changes the window's focus in ImGui and in Windows in the same
+-- frame, and the field then stayed inactive - the keyboard was Workbench's,
+-- the typing went nowhere. Returns the request this field is serving, so the
+-- caller can close it once the field is active.
+local function take_search_focus(ctx, id)
+	local app = tooltip_app
+	local pending = app and app.cache and app.cache.search_focus
+	if not pending then return nil end
+	local now = r.time_precise and r.time_precise() or os.clock()
+	if now > pending.until_time then
+		app.cache.search_focus = nil
+		return nil
+	end
+	if pending.module ~= nil and pending.module ~= app.drawing_module then return nil end
+	-- The first field the module draws is the one: a second search field in
+	-- the same module must not pull the focus over every other frame.
+	if pending.field and pending.field ~= id then return nil end
+	-- Keyboard focus on an InputText selects what is in it, so typing replaces
+	-- the previous search.
+	if r.ImGui_SetKeyboardFocusHere then r.ImGui_SetKeyboardFocusHere(ctx) end
+	if not pending.field then
+		pending.field = id
+		app.cache.search_session = true
+		if app.request_keyboard then app.request_keyboard() end
+		app.status = "Type to search - Esc clears it and gives the keyboard back to REAPER"
+	end
+	return pending
+end
+
 function M.search_input(ctx, id, hint, value, width)
 	value = tostring(value or "")
 	local has_value = value ~= ""
@@ -183,9 +234,29 @@ function M.search_input(ctx, id, hint, value, width)
 	local total_w = tonumber(width)
 	if not total_w or total_w <= 0 then total_w = r.ImGui_GetContentRegionAvail(ctx) or UIScale.round(200) end
 	local input_w = math.max(UIScale.round(40), total_w - clear_w - spacing)
+	local serving = take_search_focus(ctx, id)
 	r.ImGui_SetNextItemWidth(ctx, input_w)
 	local changed, new_value = r.ImGui_InputTextWithHint(ctx, id, hint, value)
 	if changed then value = new_value end
+	local active = r.ImGui_IsItemActive(ctx)
+	-- Done once the field has the focus; until then it keeps asking.
+	if serving and active and tooltip_app and tooltip_app.cache.search_focus == serving then
+		tooltip_app.cache.search_focus = nil
+	end
+	if r.ImGui_IsItemHovered(ctx) and not active and r.ImGui_SetTooltip then
+		r.ImGui_SetTooltip(ctx, "Type to search.\nEsc: clear the search and give the keyboard back to REAPER,\nso its shortcuts work again without clicking out of Workbench.")
+	end
+	-- Esc ends the search: it empties the field and gives the keyboard back to
+	-- REAPER. ImGui's own Esc only leaves the field (and reverts what was typed),
+	-- which kept the keys in Workbench. Checked for the frame the field lets go
+	-- too, since that is the frame Esc arrives in.
+	if (active or (r.ImGui_IsItemDeactivated and r.ImGui_IsItemDeactivated(ctx)))
+		and r.ImGui_Key_Escape and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape(), false) then
+		local app = tooltip_app
+		if app and app.cache then app.cache.search_session = nil end
+		if app and app.release_keyboard then app.release_keyboard() end
+		return true, ""
+	end
 	if has_value then
 		r.ImGui_SameLine(ctx, 0, spacing)
 		local btn_h = r.ImGui_GetFrameHeight(ctx)
