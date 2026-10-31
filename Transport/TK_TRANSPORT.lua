@@ -1,8 +1,11 @@
 ﻿-- @description TK_TRANSPORT
 -- @author TouristKiller
--- @version 2.0.8
+-- @version 2.0.9
 -- @changelog
 --[[
+    v2.0.9:
+    + Fixed: TK Transport crashed right after starting with "ImGui_End: Missing PopStyleColor()" on new installs - the Envelope (ENV) button, visible by default, treated REAPER's "No override" state as an active override and pushed one color too many - Reported by Loukas and Bone (SP)
+
     v2.0.8:
     + Added: TK Transport checks the installed ReaImGui version at startup and asks to update when it is older than 0.10.0.5, instead of failing with a misleading "ImGui_End: Missing PopStyleColor()" error - Reported by Loukas
 
@@ -286,7 +289,7 @@ end
 local ctx = r.ImGui_CreateContext('Transport Control')
 
 
-local script_version = "2.0.8"
+local script_version = "2.0.9"
 do
     local info = debug.getinfo(1, 'S')
     if info and info.source then
@@ -8782,7 +8785,9 @@ function EnvelopeOverride(main_window_width, main_window_height)
  r.ImGui_SetCursorPosY(ctx, settings.env_y_px and ScalePosY(settings.env_y_px, main_window_height, settings) or (settings.env_y * main_window_height))
  local current_mode = "No override"
  for _, mode in ipairs(AUTOMATION_MODES) do
- if r.GetToggleCommandState(mode.command) == 1 then
+ -- "No override" is in the list too; its toggle is on by default, and treating it as an
+ -- active override pushed a fourth color that was never popped (fresh installs crashed)
+ if mode.name ~= "No override" and r.GetToggleCommandState(mode.command) == 1 then
  current_mode = mode.name
  local override_col = settings.env_override_active_color or mode_loop_active
  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), GetButtonColorWithTransparency(override_col))
@@ -8845,11 +8850,7 @@ function EnvelopeOverride(main_window_width, main_window_height)
  
  StoreElementRect("env")
 
- if current_mode == "No override" then
  r.ImGui_PopStyleColor(ctx, 3)
- else
- r.ImGui_PopStyleColor(ctx, 3)
- end
 
  if r.ImGui_BeginPopup(ctx, "AutomationMenu") then
  local color_count, font_pushed, popup_font = PushTransportPopupStyling(ctx, settings)
