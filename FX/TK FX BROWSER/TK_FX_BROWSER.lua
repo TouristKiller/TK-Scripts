@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.22
+-- @version 3.2.23
 -- @changelog:
 --[[
+    v3.2.23:
+        + Patchbay: FX node view: Replace FX... in a plugin's right-click menu swaps it for another plugin, picked through the same search and browse menus as Add FX. The new plugin takes over the old one's place: in series or in parallel, the pin routing for the pins both plugins have (so a sidechain stays wired), and a node position you set by hand. It is one undo step, and it is not offered on a container, where it would throw away everything inside. Requested by AndreiMir.
+        + Patchbay: FX node view: Copy FX in the right-click menu, then Paste after this or Replace with copied on another plugin. The copy keeps all its settings and can be pasted on another track too. While something is copied, every Add FX popup (the + and = buttons, and a right-click on the empty canvas) offers it at the top, so it can also go in series, in parallel or at the end of the chain. Requested by AndreiMir.
     v3.2.22:
         + Patchbay: FX node view: buttons to add FX. Hover a node: the + beside it adds an FX in series (after the whole group when it sits among parallel lanes) and the = below it adds a parallel lane. The first node of a chain, also inside a container, gets a + in front of it, so an FX or instrument can go before the first one; an empty chain shows a + on its cable. The buttons stay while the mouse travels out to them, also over a container's body.
         + Patchbay: FX node view: to make a dragged FX run in parallel you now drop it on the = mark below a node, instead of onto the node itself, which was hard to guess. Dropping on a node's body now simply places the FX there.

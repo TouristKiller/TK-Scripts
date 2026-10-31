@@ -8291,6 +8291,46 @@ function PatchbayFxNodePopups(ctx, track)
                 end
                 r.ImGui_CloseCurrentPopup(ctx)
             end
+            -- Not on a container: replacing it would throw away everything in it.
+            if not PB.fx_view_ctx_is_container and r.ImGui_Selectable(ctx, "Replace FX...") then
+                local node = PB.fx_view_cache
+                    and PatchbayFxNodeFindByApi(PB.fx_view_cache.stages, target.api_id)
+                if node then
+                    PatchbayFxNodeOpenAdd("replace", track, node, "replacing " .. tostring(node.name))
+                end
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            r.ImGui_Separator(ctx)
+            if r.ImGui_Selectable(ctx, "Copy FX") then
+                local node = PB.fx_view_cache
+                    and PatchbayFxNodeFindByApi(PB.fx_view_cache.stages, target.api_id)
+                PatchbayFxNodeCopy(track, node)
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if PB.fx_view_clip and r.ImGui_Selectable(ctx, "Paste after this: " .. tostring(PB.fx_view_clip.name)) then
+                local node = PB.fx_view_cache
+                    and PatchbayFxNodeFindByApi(PB.fx_view_cache.stages, target.api_id)
+                if node then
+                    local ok, err = PatchbayFxNodePaste(track,
+                        PatchbayFxNodeAddSlot("after", track, node), false, nil)
+                    if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+                end
+                PB.fx_view_ctx_api = nil
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
+            if PB.fx_view_clip and not PB.fx_view_ctx_is_container
+                and r.ImGui_Selectable(ctx, "Replace with copied: " .. tostring(PB.fx_view_clip.name)) then
+                local node = PB.fx_view_cache
+                    and PatchbayFxNodeFindByApi(PB.fx_view_cache.stages, target.api_id)
+                if node and node.fxguid then
+                    local ok, err = PatchbayFxNodePaste(track,
+                        PatchbayFxNodeAddSlot("replace", track, node), false,
+                        { guid = node.fxguid, name = node.name })
+                    if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+                end
+                PB.fx_view_ctx_api = nil
+                r.ImGui_CloseCurrentPopup(ctx)
+            end
             r.ImGui_Separator(ctx)
             if r.ImGui_Selectable(ctx, "Delete FX") then
                 PatchbayFxNodeDelete(target)
@@ -8996,7 +9036,7 @@ function PatchbayFxNodeAddSlot(kind, track, node)
         return -1000 - (r.TrackFX_GetCount(track) or 0)
     elseif (kind == "after" or kind == "parallel") and node then
         return -1000 - (node.api_id + (node.stride or 1))
-    elseif kind == "before" and node then
+    elseif (kind == "before" or kind == "replace") and node then
         return -1000 - node.api_id
     elseif kind == "inside" and node then
         local slot = PatchbayFxNodeContainerEndSlot(track, node)
@@ -9012,21 +9052,144 @@ function PatchbayFxNodeAddFx(track, slot, addname)
     addname = tostring(addname or "")
     if addname == "" then return false, "No FX chosen." end
     if slot == nil then return false, "Could not work out where to insert." end
+    local replace = PB.fx_view_add_replace
     r.Undo_BeginBlock()
     r.PreventUIRefresh(1)
     local new_index = r.TrackFX_AddByName(track, addname, false, slot)
     -- A parallel add goes in straight after the node and is then flagged to
     -- run alongside it. The slot is the new FX's address, container or not;
     -- "2" is the same flag the drag-to-parallel move writes.
-    if new_index and new_index >= 0 and PB.fx_view_add_parallel and r.TrackFX_SetNamedConfigParm then
-        r.TrackFX_SetNamedConfigParm(track, -1000 - slot, "parallel", "2")
+    if new_index and new_index >= 0 then
+        if replace then
+            PatchbayFxNodeFinishReplace(track, -1000 - slot, replace.guid)
+        elseif PB.fx_view_add_parallel and r.TrackFX_SetNamedConfigParm then
+            r.TrackFX_SetNamedConfigParm(track, -1000 - slot, "parallel", "2")
+        end
     end
     r.PreventUIRefresh(-1)
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
-    r.Undo_EndBlock("Patchbay: add FX", -1)
+    r.Undo_EndBlock(replace and "Patchbay: replace FX" or "Patchbay: add FX", -1)
     PatchbayFxNodeInvalidate()
     if not new_index or new_index < 0 then return false, "REAPER would not add that FX." end
+    return true, nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Replace, copy and paste
+--
+-- Replace is an add at the old plugin's own address followed by deleting the
+-- old one, so it reuses the whole Add FX popup -- search, browse menus and the
+-- paste entry -- rather than growing a second picker. The new plugin takes
+-- over what belongs to the place rather than to the plugin: the parallel flag,
+-- the pins both have (a sidechain stays wired), and a node position you set by
+-- hand. Its own parameters are its own.
+--
+-- The clipboard holds GUIDs, not addresses, so a copy survives the chain being
+-- rearranged and can be pasted onto another track. TrackFX_CopyToTrack copies
+-- the plugin with its full state, the same call the drag moves are built on.
+-- ---------------------------------------------------------------------------
+
+PB.fx_view_clip = nil
+
+-- An address for an FX GUID, containers included. Read fresh: addresses shift
+-- with every change, which is the reason the clipboard does not keep one.
+function PatchbayFxNodeApiByGuid(track, fxguid)
+    if not track or not fxguid or not r.ValidatePtr(track, "MediaTrack*") then return nil end
+    local function walk(list)
+        for _, fx in ipairs(list) do
+            if fx.fxguid == fxguid then return fx.api_id end
+            local deeper = walk(fx.children or {})
+            if deeper then return deeper end
+        end
+        return nil
+    end
+    return walk(PatchbayFxNodeChain(track))
+end
+
+function PatchbayFxNodeTrackByGuid(guid)
+    if not guid then return nil end
+    for i = 0, r.CountTracks(0) - 1 do
+        local tr = r.GetTrack(0, i)
+        if r.GetTrackGUID(tr) == guid then return tr end
+    end
+    return nil
+end
+
+-- Called inside the caller's undo block, with the new plugin already sitting
+-- at the old one's address and the old one straight after it -- so deleting
+-- the old one leaves the new one's address alone.
+function PatchbayFxNodeFinishReplace(track, new_api, old_guid)
+    local old_api = PatchbayFxNodeApiByGuid(track, old_guid)
+    if not old_api or old_api == new_api then return false end
+    if r.TrackFX_GetNamedConfigParm and r.TrackFX_SetNamedConfigParm then
+        local ok, par = r.TrackFX_GetNamedConfigParm(track, old_api, "parallel")
+        r.TrackFX_SetNamedConfigParm(track, new_api, "parallel", ok and tostring(par or "0") or "0")
+    end
+    if r.TrackFX_GetIOSize and r.TrackFX_GetPinMappings and r.TrackFX_SetPinMappings then
+        local _, old_in, old_out = r.TrackFX_GetIOSize(track, old_api)
+        local _, new_in, new_out = r.TrackFX_GetIOSize(track, new_api)
+        local sides = {
+            { 0, math.min(tonumber(old_in) or 0, tonumber(new_in) or 0) },
+            { 1, math.min(tonumber(old_out) or 0, tonumber(new_out) or 0) },
+        }
+        for _, side in ipairs(sides) do
+            for p = 0, math.floor(side[2]) - 1 do
+                local low, high = r.TrackFX_GetPinMappings(track, old_api, side[1], p)
+                r.TrackFX_SetPinMappings(track, new_api, side[1], p, low or 0, high or 0)
+            end
+        end
+    end
+    local positions = PatchbayFxNodeLoadPositions(track)
+    local new_guid = r.TrackFX_GetFXGUID and r.TrackFX_GetFXGUID(track, new_api) or nil
+    if positions[old_guid] and new_guid then
+        positions[new_guid] = positions[old_guid]
+        positions[old_guid] = nil
+        PatchbayFxNodeSavePositions(track)
+    end
+    r.TrackFX_Delete(track, old_api)
+    PB.fx_view_sel_api = nil
+    return true
+end
+
+function PatchbayFxNodeCopy(track, node)
+    if not track or not node or not node.fxguid then return end
+    PB.fx_view_clip = { track_guid = r.GetTrackGUID(track), fx_guid = node.fxguid,
+                        name = tostring(node.name or "FX") }
+end
+
+-- Pastes the copied FX at an Add FX slot, as a parallel lane or in place of
+-- the plugin `replace` names. The copy brings its own parallel flag along, so
+-- a plain paste clears it rather than inheriting a lane it never asked for.
+function PatchbayFxNodePaste(track, slot, parallel, replace)
+    if IsAllLockedCfg(GetConfig()) then return false, "FX actions locked." end
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return false, "Track is gone." end
+    if not r.TrackFX_CopyToTrack then return false, "This REAPER cannot copy FX." end
+    if slot == nil then return false, "Could not work out where to paste." end
+    local clip = PB.fx_view_clip
+    local src_track = clip and PatchbayFxNodeTrackByGuid(clip.track_guid)
+    local src_api = src_track and PatchbayFxNodeApiByGuid(src_track, clip.fx_guid)
+    if not src_api then
+        PB.fx_view_clip = nil
+        return false, "The copied FX is no longer there."
+    end
+    local dest = -1000 - slot
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    local ok = r.TrackFX_CopyToTrack(src_track, src_api, track, dest, false) ~= false
+    if ok then
+        if replace then
+            PatchbayFxNodeFinishReplace(track, dest, replace.guid)
+        elseif r.TrackFX_SetNamedConfigParm then
+            r.TrackFX_SetNamedConfigParm(track, dest, "parallel", parallel and "2" or "0")
+        end
+    end
+    r.PreventUIRefresh(-1)
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock(replace and "Patchbay: replace FX with copy" or "Patchbay: paste FX", -1)
+    PatchbayFxNodeInvalidate()
+    if not ok then return false, "REAPER would not paste that FX." end
     return true, nil
 end
 
@@ -9361,6 +9524,8 @@ function PatchbayFxNodeOpenAdd(kind, track, node, label)
     local slot = PatchbayFxNodeAddSlot(kind, track, node)
     PB.fx_view_add_slot = slot
     PB.fx_view_add_parallel = (kind == "parallel")
+    PB.fx_view_add_replace = (kind == "replace" and node and node.fxguid)
+        and { guid = node.fxguid, name = node.name } or nil
     PB.fx_view_add_label = label or "chain"
     PB.fx_view_add_filter = ""
     PB.fx_view_add_open = true
@@ -9374,8 +9539,22 @@ function PatchbayFxNodeAddPopup(ctx, track)
         PB.fx_view_add_open = false
     end
     if not r.ImGui_BeginPopup(ctx, "PatchbayFxNodeAdd") then return end
-    r.ImGui_Text(ctx, "Add FX -- " .. tostring(PB.fx_view_add_label or ""))
+    local replace = PB.fx_view_add_replace
+    r.ImGui_Text(ctx, (replace and "Replace FX -- " or "Add FX -- ") .. tostring(PB.fx_view_add_label or ""))
     r.ImGui_Separator(ctx)
+    if PB.fx_view_clip then
+        local paste_label = (replace and "Replace with copied: " or "Paste: ")
+            .. tostring(PB.fx_view_clip.name) .. "##fx_add_paste"
+        if r.ImGui_Selectable(ctx, paste_label) then
+            local ok, err = PatchbayFxNodePaste(track, PB.fx_view_add_slot,
+                PB.fx_view_add_parallel, replace)
+            if not ok and err then r.ShowMessageBox(tostring(err), "Patchbay", 0) end
+            r.ImGui_CloseCurrentPopup(ctx)
+            r.ImGui_EndPopup(ctx)
+            return
+        end
+        r.ImGui_Separator(ctx)
+    end
     if PB.fx_view_add_focus and r.ImGui_SetKeyboardFocusHere then
         r.ImGui_SetKeyboardFocusHere(ctx)
         PB.fx_view_add_focus = false
