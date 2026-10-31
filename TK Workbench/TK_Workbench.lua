@@ -1,14 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.1
+-- @version 1.0.2
 -- @changelog:
--- v1.0.1
---   + Workbench: Opening any module with a search field from its action (a shortcut, toolbar button or control surface) puts the cursor in that search field and gives Workbench the keyboard, so you can type straight away: Media Browser, Project Browser, Action Browser, Script Launcher, Tags, Idea Vault, Sidechain and Plugin Browser. Until now only Plugin Browser did this. Modules without a search field still leave the keyboard with REAPER
---   + Workbench: Esc in a search field clears the search and gives the keyboard back to REAPER, so its shortcuts work again without clicking out of Workbench first. The search fields say so in their tooltip
---   + Workbench: The option moved from Plugin Browser to Preferences > General as "Type to search after an open action", since it now covers every module; it stays off for anyone who had switched it off
---   + Workbench: Fixed a floating Workbench window not getting the keyboard when the shortcut was pressed in REAPER's main window, for example right after Esc had handed the keyboard back: the field looked ready, but the typing went to REAPER. When the keyboard cannot be taken, the status line now says so
---   + Workbench: Fixed two Workbenches running at once. An open action that found Workbench closed started it inside the action script itself, so running TK_Workbench.lua afterwards opened a second Workbench on the same settings, pressing the same action again ran into REAPER's "script is already running" question (which could close Workbench), and the toolbar showed the wrong state. Actions now start TK_Workbench.lua itself, and a second start brings the open Workbench forward instead of opening another. The same applied to opening the Plugin Browser from the Instrument Rack
---   + Workbench: Workbench 2 no longer picks up commands meant for Workbench 1: the module and workspace actions always go to TK Workbench
+-- v1.0.2
+--   + Workbench: TK_Workbench.lua is now an on/off toggle. Running it while Workbench is open closes Workbench, so one shortcut or toolbar button opens and closes it, and REAPER no longer asks whether to terminate the script or start another instance. The action shows as on in toolbars and menus while Workbench is open. The same goes for TK_Workbench_2.lua and Workbench 2
 
 local r = reaper
 
@@ -91,6 +86,22 @@ if r.GetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_RUNNING_KEY) == "true"
       r.SetExtState(MODULE_ACTION_EXT_SECTION, MODULE_ACTION_COMMAND_KEY, "show:window", false)
     end
     return
+  end
+end
+
+-- One key opens and closes Workbench: running TK_Workbench.lua again ends it
+-- instead of REAPER asking whether to terminate or start another instance,
+-- and the action shows as on in toolbars and menus while Workbench runs.
+-- Only when Workbench runs as its own script (or as Workbench 2). Hosted by a
+-- module action - the fallback when TK_Workbench.lua is not in the action list
+-- - pressing that action again would otherwise close Workbench instead of
+-- opening the module.
+do
+  local _, launched_from = r.get_action_context()
+  local file = tostring(launched_from or ""):match("([^\\/]+)$") or ""
+  if r.set_action_options and (file == "TK_Workbench.lua" or file:match("^TK_Workbench_%d+%.lua$")) then
+    r.set_action_options(1 | 8)
+    app.cache.toggle_action = true
   end
 end
 
@@ -2932,6 +2943,8 @@ local function shutdown()
     app.settings.theme_preset = app.cache.saved_theme_preset or "Graphite"
   end
   save_settings()
+  -- The toolbar button goes back to off with the window.
+  if app.cache.toggle_action and r.set_action_options then r.set_action_options(4) end
 end
 
 if r.atexit then r.atexit(shutdown) end
