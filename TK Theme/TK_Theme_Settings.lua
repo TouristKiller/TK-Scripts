@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.3
+-- @version 0.9.4
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -1037,7 +1037,7 @@ local GUIDE = {
         "Colours you save go into the file TK Theme Dark.ReaperTheme in ColorThemes. Updating the theme with ReaPack replaces that file, so changed colours have to be set again.",
     } },
     { "Dark mode and the menu bar", windows = true, {
-        "The Dark mode page sets the colours of REAPER's lists, menus and borders. REAPER reads them when it starts, so changes show after a restart. It keeps your own colours, and can go back to REAPER's original ones. Popup menus keep Windows' own grey: REAPER has no colour setting for them.",
+        "The Dark mode page sets the colours of REAPER's lists, menus and borders. REAPER reads them when it starts, so changes show after a restart. It keeps your own colours, and can go back to REAPER's original ones. Popup menus, buttons and dropdowns in REAPER's windows keep their own grey: none of REAPER's colour settings changes them.",
         "Hiding the menu bar needs TK Native Helper 1.1.0 or newer, from ReaPack. Give the action TK_Theme_Toggle_Menu_Bar a shortcut to do it from the keyboard. The menu bar comes back when REAPER restarts.",
     } },
     { "Toolbar icons", {

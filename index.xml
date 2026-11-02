@@ -181,7 +181,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme Dark">
-    <version name="0.9.3" author="TouristKiller" time="2026-11-02T16:58:17Z">
+    <version name="0.9.4" author="TouristKiller" time="2026-11-02T19:27:48Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -417,7 +417,9 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: a Guide page in the settings window, explaining what the theme's buttons do, where things are, and how to use the TK_ toolbar icons.
++ Fixed: the text in the routing window was hard to read.
++ Changed: the wiring diagram follows the theme's colours.
++ Changed: the text of bypassed FX and FX parameters is lighter, so it stays readable.
 ]]></changelog>
     </version>
     </reapack>

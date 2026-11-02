@@ -44,7 +44,8 @@ lists, menus and borders. That takes effect after a restart.
 - **Hiding the menu bar** needs TK Native Helper 1.1.0 or newer (also in this
   repository). Its action is `TK_Theme_Toggle_Menu_Bar`, for a shortcut.
 
-Popup menus keep Windows' own grey: REAPER has no colour setting for them.
+Popup menus, buttons and dropdowns in REAPER's windows keep their own grey: none of
+REAPER's colour settings changes them.
 
 ## Toolbar icons
 

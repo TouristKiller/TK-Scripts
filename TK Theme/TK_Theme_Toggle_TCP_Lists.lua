@@ -1,6 +1,6 @@
 -- @description TK Theme Dark: show/hide the TCP FX and IO columns
 -- @author TouristKiller
--- @version 0.9.3
+-- @version 0.9.4
 -- Run from the button in the TCP (TK_Theme_Rebuild.lua registers this script
 -- and the generator wires the button to it). Flips the theme parameters for
 -- the FX list and send list sections between off and their last position,
