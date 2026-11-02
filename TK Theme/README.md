@@ -14,8 +14,9 @@ You need [ReaPack](https://reapack.com) and, for the settings window, ReaImGui
 2. Install **TK Theme Dark** (category TK Theme).
 3. Options > Themes > **TK Theme Dark**.
 4. Click the gear at the end of the transport to open the settings.
-5. Click the columns button in a track panel to show the FX and IO columns. That also
-   turns on REAPER's options to show FX and sends in the track panel.
+5. Click the columns button in a track panel to show the FX and IO columns on that
+   track's layout. That also turns on REAPER's options to show FX and sends in the track
+   panel.
 
 On Windows, the settings window offers to apply matching colours to REAPER's
 lists, menus and borders. That takes effect after a restart.
@@ -29,13 +30,16 @@ lists, menus and borders. That takes effect after a restart.
   arrow for the metronome settings. "Metronome light at startup" also keeps it
   right before your first click; it adds one line to `Scripts/__startup.lua`,
   and switching it off removes that line again.
-- **Track panel:** FX and send columns, FX parameters under the controls, buttons for
-  fixed lanes and freeze. The master has the same windows, with its hardware outputs
-  in the IO column.
-- **Mixer:** a fader cap or a dot, and three layouts.
+- **Track panel:** FX and IO columns, FX parameters under the controls, buttons for
+  fixed lanes and freeze, and a blue strip on tracks with fixed lanes. The master has the
+  same windows, with its hardware outputs in the IO column, or can be one big meter.
+- **Layouts:** A, B and C can each leave out or move parts of the track panel and mixer
+  strip. Name only turns a track into a divider, and a track's height can be set and locked.
+- **Mixer:** a fader cap or a dot, a sidebar with 1 to 4 columns, and settings for the
+  normal, intermediate and narrow strip.
 - **Envelope lanes, media items, MIDI editor, inline MIDI editor:** all redrawn.
-- **Settings:** every option on one page per area, a colour editor, a factory reset
-  that you can undo, and a Guide page that explains the theme.
+- **Settings:** every option on one page per area, a colour editor with a reset per colour,
+  a factory reset that you can undo, and a Guide page that explains the theme.
 
 ## Windows only
 

@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.4
+-- @version 0.9.5
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -184,10 +184,18 @@ local function load_params()
     end
 end
 
-local function expand(param, layouts)
+-- the track panel page sets one layout at a time, chosen at the top of that page
+local THIS_LAYOUT = "*"
+local tcp_layout = "A"
+
+local function expand(param, layouts, also)
     if not layouts then return { param } end
+    if layouts == THIS_LAYOUT then layouts = tcp_layout end
     local out = {}
-    for lay in layouts:gmatch(".") do out[#out + 1] = "Layout" .. lay .. "-" .. param end
+    for lay in layouts:gmatch(".") do
+        out[#out + 1] = "Layout" .. lay .. "-" .. param
+        for _, more in ipairs(also or {}) do out[#out + 1] = "Layout" .. lay .. "-" .. more end
+    end
     return out
 end
 
@@ -203,12 +211,74 @@ end
 -- ---------------------------------------------------------------- pages
 
 local function S(label, param, layouts, hint) return { kind = "slider", label = label, param = param, layouts = layouts, hint = hint } end
+-- one slider for a setting that exists once more for selected and armed strips
+local function Grow(label, param, also) return { kind = "slider", label = label, param = param, layouts = THIS_LAYOUT, also = also } end
 local function T(label, param, layouts, hint, invert) return { kind = "toggle", label = label, param = param, layouts = layouts, hint = hint, invert = invert } end
 -- a transport button that can run an action of the user's choice instead
 local function B(label, key, free) return { kind = "button", label = label, param = "tkBtn_" .. key, key = key, free = free } end
 -- a transport button with a fixed action: off, or in the left or right window
 local function N(label, key, hint) return { kind = "place", label = label, param = "tkBtn_" .. key, hint = hint } end
-local ALL, WIDE = "ABC", "AC"
+local ALL = "ABC"
+
+-- a setting that doesn't count at the moment shows grey and can't be changed
+local function Off(when, item)
+    item.off = when
+    return item
+end
+local function lay_value(name)
+    local p = P["Layout" .. tcp_layout .. "-" .. name]
+    return p and p.value ~= 0
+end
+local function global_value(name)
+    local p = P[name]
+    return p and p.value ~= 0
+end
+local function lay_on(...)
+    local names = { ... }
+    return function()
+        for _, n in ipairs(names) do
+            if lay_value(n) then return true end
+        end
+        return false
+    end
+end
+-- off while `need` is off, or while `other` is on
+local function lay_off_or(need, other)
+    return function() return not lay_value(need) or lay_value(other) end
+end
+local function lay_all_or(all, other)
+    return function()
+        if lay_value(other) then return true end
+        for _, n in ipairs(all) do
+            if not lay_value(n) then return false end
+        end
+        return true
+    end
+end
+local function no_sidebar()
+    return not (lay_value("mcpSidebar") or lay_value("mcpSidebarSel") or lay_value("mcpSidebarRecarm"))
+end
+-- 1 narrow, 2 intermediate, 3 normal: the width decides, as in the theme
+local function not_form(form)
+    return function()
+        local p = P["Layout" .. tcp_layout .. "-mcpWidth"]
+        local width = p and p.value or 0
+        local current = width < 52 and 1 or width < 88 and 2 or 3
+        return current ~= form
+    end
+end
+local function global_on(...)
+    local names = { ... }
+    return function()
+        for _, n in ipairs(names) do
+            if global_value(n) then return true end
+        end
+        return false
+    end
+end
+local function global_off_or(need, other)
+    return function() return not global_value(need) or global_value(other) end
+end
 
 local PAGES = {
     { title = "General", cards = {
@@ -220,7 +290,6 @@ local PAGES = {
         } },
         { "Text and spacing", {
             S("Text brightness", "textBrightness"),
-            S("Section margins", "sectionMargin", nil, "Space around the windows in track panels and envelope lanes."),
         } },
         { "Main window", {
             { kind = "menubar", label = "Menu bar",
@@ -232,37 +301,91 @@ local PAGES = {
         } },
     } },
     { title = "Track panel", cards = {
-        { "Columns and meter", {
-            { kind = "lists", label = "FX and IO columns", hint = "Same as the button in the track panel." },
-            T("Meter", "tkTcpMeterHide", nil, "Same as the button in the track panel.", true),
-            S("Column width", "sectionRightW", ALL, "The FX and send columns share this width."),
-            S("Meter width", "tcpMeterWidth", ALL),
-        } },
-        { "Text and structure", {
-            S("Name size", "tcpLabelSize", ALL), S("Input text size", "tcpInputFontSize", ALL),
+        { "All tracks", {
+            S("Section margins", "sectionMargin", nil, "Space around the windows, in track panels and envelope lanes. Clicking between or in the windows selects the track."),
             S("Folder indent", "tcpfolderIndentSize"),
+        } },
+        { "Per layout", {
+            { kind = "layout", label = "Layout", hint = "These settings are for the tracks on this layout. Set a track's layout in its right-click menu. The columns and meter buttons in a track panel change them too, for that track's layout." },
+            T("Name only", "tkNameOnly", THIS_LAYOUT, "Just the track's name, large and centred, for a divider or a folder."),
+            Off(lay_on("tkNameOnly"), T("Volume", "tkHideVol", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly"), T("Pan", "tkHidePan", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly"), T("Input row", "tkHideInput", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly"), T("Button row", "tkHideButtons", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly"), T("Mute and solo", "tkHideMs", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly", "tkHideMs"), T("Mute and solo on the left", "tkMsLeft", THIS_LAYOUT)),
+            Off(lay_on("tkNameOnly"), T("Record arm and monitor", "tkHideArm", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly"), T("FX column", "tkNoFxCol", THIS_LAYOUT, "Without its column, the FX button moves to the first row.", true)),
+            Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without its column, the IO button moves to the first row.", true)),
+            Off(lay_off_or("tkNoFxCol", "tkNameOnly"), T("FX button", "tkHideFxBtn", THIS_LAYOUT, nil, true)),
+            Off(lay_off_or("tkNoIoCol", "tkNameOnly"), T("IO button", "tkHideIoBtn", THIS_LAYOUT, nil, true)),
+            Off(lay_all_or({ "tkNoFxCol", "tkNoIoCol" }, "tkNameOnly"), S("Column width", "sectionRightW", THIS_LAYOUT, "The FX and IO columns share this width.")),
+            Off(lay_on("tkNameOnly"), T("Meter", "tkHideMeter", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly", "tkHideMeter"), T("Meter on the left", "tkMeterLeft", THIS_LAYOUT)),
+            Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT)),
+            Off(lay_on("tkNameOnly"), S("Name size", "tcpLabelSize", THIS_LAYOUT)),
+            Off(lay_on("tkNameOnly", "tkHideInput"), S("Input text size", "tcpInputFontSize", THIS_LAYOUT)),
+        } },
+        { "Selected tracks", {
+            { kind = "tracks", hint = "Saved per track, in the project. Moving the slider changes nothing until you click a button, so a new track on a layout gets its height the next time you click. Make divider needs Name only on that layout. Layout A includes tracks on the default layout. REAPER's zoom actions leave a locked track's height alone." },
+        } },
+        { "Master", {
+            T("Only a meter", "tkMasterMeterOnly", nil, "The whole master becomes one big meter."),
+            Off(global_on("tkMasterMeterOnly"), T("Meter", "tkMasterHideMeter", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly"), T("Volume", "tkMasterHideVol", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly"), T("Pan", "tkMasterHidePan", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly"), T("Mute and solo", "tkMasterHideMs", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly"), T("FX column", "tkMasterNoFx", nil, "Without its column, the FX button moves to the first row.", true)),
+            Off(global_on("tkMasterMeterOnly"), T("IO column", "tkMasterNoIo", nil, "Without its column, the IO button moves to the first row.", true)),
+            Off(global_off_or("tkMasterNoFx", "tkMasterMeterOnly"), T("FX button", "tkMasterHideFxBtn", nil, nil, true)),
+            Off(global_off_or("tkMasterNoIo", "tkMasterMeterOnly"), T("IO button", "tkMasterHideIoBtn", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), T("Meter on the left", "tkMasterMeterLeft")),
+            Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), S("Meter width", "tkMasterMeterW", nil, "0 follows the tracks on layout A. Any other width no longer lines up with them.")),
         } },
     } },
     { title = "Mixer", cards = {
         { "Fader", {
             { kind = "handle", label = "Handle", hint = "Strips set to their own layout keep that layout." },
         } },
-        { "Strip width", {
-            S("Width", "mcpWidth", WIDE, "Layouts A and C. Layout B stays the narrow strip."),
-            S("Width when selected", "mcpWidthSel", WIDE), S("Width when armed", "mcpWidthRecarm", WIDE),
-            S("Name size", "mcpLabelSize", ALL),
+        { "Per layout", {
+            { kind = "layout", label = "Layout", hint = "These settings are for the strips on this layout. Layout A is the standard strip, B the narrow one, and C has a sidebar and more values. Set a track's layout in its right-click menu." },
+            S("Width", "mcpWidth", THIS_LAYOUT, "Under 52 this is a narrow strip, under 88 an intermediate one, from 88 a normal one."),
+            S("Width when selected", "mcpWidthSel", THIS_LAYOUT), S("Width when armed", "mcpWidthRecarm", THIS_LAYOUT),
+            Grow("Wider per channel", "mcpNchanGrow", { "mcpNchanGrowSel", "mcpNchanGrowRecarm" }),
+            S("Name size", "mcpLabelSize", THIS_LAYOUT),
+            T("More values", "verboseMcp", THIS_LAYOUT, "Such as the volume in dB above the fader."),
+        } },
+        { "Sidebar", {
+            T("Sidebar", "mcpSidebar", THIS_LAYOUT, "The FX and send lists beside the strip instead of above it."),
+            T("Sidebar when selected", "mcpSidebarSel", THIS_LAYOUT), T("Sidebar when armed", "mcpSidebarRecarm", THIS_LAYOUT),
+            Off(no_sidebar, S("Sidebar width", "sidebarWidth", THIS_LAYOUT)),
+            Off(no_sidebar, S("Sidebar columns", "tkSidebarCols", THIS_LAYOUT, "For the FX and send lists. More columns need a wider sidebar.")),
         } },
         { "Buttons", {
-            T("I/O button", "mcpNormalShowRoute", ALL), T("FX buttons", "mcpNormalShowSecFx", ALL),
-            T("Envelope button", "mcpNormalShowEnv", ALL), T("Phase button", "mcpNormalShowPhase", ALL),
+            T("I/O button", "mcpNormalShowRoute", THIS_LAYOUT), T("FX buttons", "mcpNormalShowSecFx", THIS_LAYOUT),
+            T("Envelope button", "mcpNormalShowEnv", THIS_LAYOUT), T("Phase button", "mcpNormalShowPhase", THIS_LAYOUT),
         } },
         { "Meter", {
-            T("Peak readout", "mcpMeterReadout", ALL), T("Scale", "mcpMeterVals", ALL),
-            T("Scale when selected", "mcpMeterValsSel", ALL), T("Scale when armed", "mcpMeterValsRecarm", ALL),
+            T("Peak readout", "mcpMeterReadout", THIS_LAYOUT), T("Scale", "mcpMeterVals", THIS_LAYOUT),
+            T("Scale when selected", "mcpMeterValsSel", THIS_LAYOUT), T("Scale when armed", "mcpMeterValsRecarm", THIS_LAYOUT),
         } },
-        { "Sections", {
-            S("Show input from height", "mcpNormalShowSecIn", ALL, "A lower mixer drops the input window."),
-            S("Show pan from height", "mcpNormalShowSecPan", ALL, "A lower mixer drops the pan window."),
+        { "Normal strip", {
+            Off(not_form(3), S("Show input from height", "mcpNormalShowSecIn", THIS_LAYOUT, "A lower mixer drops the input window.")),
+            Off(not_form(3), S("Show pan from height", "mcpNormalShowSecPan", THIS_LAYOUT, "A lower mixer drops the pan window.")),
+        } },
+        { "Intermediate strip", {
+            Off(not_form(2), S("Show input from height", "mcpInterShowSecIn", THIS_LAYOUT)),
+            Off(not_form(2), S("Show buttons from height", "mcpInterShowSecButtons", THIS_LAYOUT)),
+            Off(not_form(2), S("Show pan from height", "mcpInterShowSecPan", THIS_LAYOUT)),
+        } },
+        { "Narrow strip", {
+            Off(not_form(1), S("Name height", "mcpStripLabelHeight", THIS_LAYOUT)),
+            Off(not_form(1), S("Input height", "mcpStripInputHeight", THIS_LAYOUT)),
+            Off(not_form(1), S("Meter height", "mcpStripMeterHeight", THIS_LAYOUT)),
+            Off(not_form(1), S("Volume height", "mcpStripVolumeHeight", THIS_LAYOUT)),
+            Off(not_form(1), T("FX and send lists", "mcpStripHideExtmixer", THIS_LAYOUT, nil, true)),
+        } },
+        { "All strips", {
             S("Folder indent", "mcpfolderIndentSize"),
         } },
         { "Master", {
@@ -345,44 +468,6 @@ local function row_label(label)
     r.ImGui_AlignTextToFramePadding(ctx)
     r.ImGui_Text(ctx, label)
     r.ImGui_SameLine(ctx, LABEL_W)
-end
-
--- REAPER's own options, off on a new install: with them off the columns stay
--- empty whatever the theme's parameters say
-local LIST_OPTIONS = { 40302, 40677 }   -- show FX inserts, show sends in TCP
-
-local function lists_shown()
-    if r.GetToggleCommandState(LIST_OPTIONS[1]) ~= 1 then return false end
-    for lay in ALL:gmatch(".") do
-        local p = P["Layout" .. lay .. "-tcpFxLocation"]
-        if p and p.value > 0 then return true end
-    end
-    return false
-end
-
-local function set_lists(show)
-    local defaults = { Fx = 7, Send = 8 }
-    for lay in ALL:gmatch(".") do
-        for kind, def in pairs(defaults) do
-            local name = "Layout" .. lay .. "-tcp" .. kind .. "Location"
-            local p = P[name]
-            if p then
-                if show then
-                    local back = p.value > 0 and p.value or tonumber(r.GetExtState(LISTS_SECTION, name)) or def
-                    set_param(name, back, true)
-                else
-                    if p.value > 0 then r.SetExtState(LISTS_SECTION, name, tostring(p.value), true) end
-                    set_param(name, 0, true)
-                end
-            end
-        end
-    end
-    if show then
-        for _, cmd in ipairs(LIST_OPTIONS) do
-            if r.GetToggleCommandState(cmd) ~= 1 then r.Main_OnCommand(cmd, 0) end
-        end
-    end
-    r.ThemeLayout_RefreshAll()
 end
 
 -- the metronome button's watcher in Scripts/__startup.lua, so the button is right
@@ -561,8 +646,103 @@ local function draw_menubar(item, id)
     end
 end
 
+local function draw_layout_choice(item, id)
+    row_label(item.label)
+    r.ImGui_PushID(ctx, id)
+    for i, lay in ipairs({ "A", "B", "C" }) do
+        if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
+        local active = tcp_layout == lay
+        if active then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
+        end
+        local clicked = r.ImGui_Button(ctx, lay, 46, 0)
+        if active then r.ImGui_PopStyleColor(ctx, 2) end
+        if clicked then tcp_layout = lay end
+    end
+    r.ImGui_PopID(ctx)
+end
+
+-- a height for the selected tracks; a theme can't set one itself. A divider also
+-- gets the layout chosen above. TK_Theme_Make_Divider.lua does the same from an action.
+local track_height = tonumber(r.GetExtState(SCRIPT, "track_height")) or 40
+local track_lock = r.GetExtState(SCRIPT, "track_lock") ~= "0"
+
+local function apply_to_tracks(tracks, layout, undo_name)
+    local count = #tracks
+    if count == 0 then
+        state.msg = undo_name and "No tracks on this layout." or "Select one or more tracks first."
+        return
+    end
+    r.Undo_BeginBlock()
+    for _, track in ipairs(tracks) do
+        if layout then r.GetSetMediaTrackInfo_String(track, "P_TCP_LAYOUT", layout, true) end
+        -- a locked height has to be released first; REAPER wants the height set before locking
+        r.SetMediaTrackInfo_Value(track, "B_HEIGHTLOCK", 0)
+        r.SetMediaTrackInfo_Value(track, "I_HEIGHTOVERRIDE", track_height)
+        r.SetMediaTrackInfo_Value(track, "B_HEIGHTLOCK", track_lock and 1 or 0)
+    end
+    r.TrackList_AdjustWindows(false)
+    r.UpdateArrange()
+    r.Undo_EndBlock(undo_name or (layout and "TK Theme: make dividers") or "TK Theme: set track height", -1)
+    state.msg = count .. (count == 1 and " track" or " tracks") .. " changed."
+end
+
+local function selected_tracks()
+    local tracks = {}
+    for i = 0, r.CountSelectedTracks(0) - 1 do tracks[#tracks + 1] = r.GetSelectedTrack(0, i) end
+    return tracks
+end
+
+-- a track on the default layout has no name stored, and that's layout A
+local function tracks_on_layout(lay)
+    local tracks = {}
+    for i = 0, r.CountTracks(0) - 1 do
+        local track = r.GetTrack(0, i)
+        local _, name = r.GetSetMediaTrackInfo_String(track, "P_TCP_LAYOUT", "", false)
+        if name == lay or name:match("_" .. lay .. "$") or (name == "" and lay == "A") then
+            tracks[#tracks + 1] = track
+        end
+    end
+    return tracks
+end
+
+local function draw_selected_tracks(id)
+    row_label("Height")
+    r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
+    r.ImGui_PushID(ctx, id)
+    local changed, v = r.ImGui_SliderInt(ctx, "##height", track_height, 20, 400)
+    r.ImGui_PopID(ctx)
+    if changed then
+        track_height = v
+        r.SetExtState(SCRIPT, "track_height", tostring(v), true)
+    end
+    row_label("Lock height")
+    if toggle(id .. "_lock", track_lock) then
+        track_lock = not track_lock
+        r.SetExtState(SCRIPT, "track_lock", track_lock and "1" or "0", true)
+    end
+    r.ImGui_SetCursorPosX(ctx, LABEL_W)
+    if r.ImGui_Button(ctx, "Apply##" .. id) then apply_to_tracks(selected_tracks()) end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Apply to all on layout " .. tcp_layout .. "##" .. id) then
+        apply_to_tracks(tracks_on_layout(tcp_layout), nil, "TK Theme: set height on layout " .. tcp_layout)
+    end
+    r.ImGui_SameLine(ctx)
+    local no_name_only = not lay_value("tkNameOnly")
+    if no_name_only then r.ImGui_BeginDisabled(ctx, true) end
+    if r.ImGui_Button(ctx, "Make divider on layout " .. tcp_layout .. "##" .. id) then
+        apply_to_tracks(selected_tracks(), tcp_layout)
+    end
+    if no_name_only then r.ImGui_EndDisabled(ctx) end
+end
+
 local function draw_setting(item, id)
-    if item.kind == "menubar" then
+    if item.kind == "layout" then
+        draw_layout_choice(item, id)
+    elseif item.kind == "tracks" then
+        draw_selected_tracks(id)
+    elseif item.kind == "menubar" then
         draw_menubar(item, id)
         if not r.TK_SetMainMenuVisible then return end
     elseif item.kind == "handle" then
@@ -571,15 +751,11 @@ local function draw_setting(item, id)
         draw_button_row(item, id)
     elseif item.kind == "place" then
         if P[item.param] then draw_place(item, id) end
-    elseif item.kind == "lists" then
-        row_label(item.label)
-        local on = lists_shown()
-        if toggle(id, on) then set_lists(not on) end
     elseif item.kind == "startup" then
         row_label(item.label)
         if toggle(id, startup.on) then set_startup(not startup.on) end
     else
-        local names = expand(item.param, item.layouts)
+        local names = expand(item.param, item.layouts, item.also)
         local p = P[names[1]]
         if not p then return end
         row_label(item.label)
@@ -630,7 +806,7 @@ local function page_params(page)
     for _, card in ipairs(page.cards or {}) do
         for _, item in ipairs(card[2]) do
             if item.param then
-                for _, n in ipairs(expand(item.param, item.layouts)) do out[#out + 1] = n end
+                for _, n in ipairs(expand(item.param, item.layouts, item.also)) do out[#out + 1] = n end
             end
         end
     end
@@ -653,7 +829,12 @@ end
 local function draw_param_page(page)
     for ci, card in ipairs(page.cards) do
         if begin_card(card[1], ci) then
-            for ii, item in ipairs(card[2]) do draw_setting(item, ci .. "_" .. ii) end
+            for ii, item in ipairs(card[2]) do
+                local off = item.off and item.off()
+                if off then r.ImGui_BeginDisabled(ctx, true) end
+                draw_setting(item, ci .. "_" .. ii)
+                if off then r.ImGui_EndDisabled(ctx) end
+            end
             r.ImGui_EndChild(ctx)
         end
         r.ImGui_Dummy(ctx, 0, 2)
@@ -705,8 +886,50 @@ local function save_colours()
     return true
 end
 
+-- REAPER only repaints some windows (the mixer's background, for one) when told to
+local function repaint_after_colour()
+    r.UpdateArrange()
+    r.UpdateTimeline()
+    r.TrackList_AdjustWindows(false)
+    r.ThemeLayout_RefreshAll()
+    r.DockWindowRefresh()
+end
+
+-- the colours as the theme comes, from the file a factory reset uses
+local factory_colours
+local function factory_colour(key)
+    if not factory_colours then
+        factory_colours = {}
+        local path = theme_file()
+        local base = path and path:match("([^\\/]+)%.ReaperTheme$")
+        local text = base and read_all(here .. "dist/" .. base .. ".factory.ReaperTheme") or ""
+        for name, value in text:gmatch("([%w_]+)=(-?%d+)") do
+            factory_colours[name] = tonumber(value) & 0xFFFFFF
+        end
+    end
+    return factory_colours[key]
+end
+
+local function set_colour(entry, native)
+    for _, key in ipairs(entry[2]) do
+        r.SetThemeColor(key, native, 1)
+        changed_colours[key] = native
+    end
+end
+
 local function draw_colours()
     hint_text("Colours REAPER draws itself. Panels, the glass windows and icons are images in the theme, so they keep their colours.")
+    r.ImGui_Dummy(ctx, 0, 2)
+    if confirm_button("colours_all", "Reset all colours", "Click again to reset all colours") then
+        for _, group in ipairs(COLOUR_GROUPS) do
+            for _, entry in ipairs(group[2]) do
+                local native = factory_colour(entry[2][1])
+                if native then set_colour(entry, native) end
+            end
+        end
+        repaint_after_colour()
+        state.msg = "Colours reset. Click Save colours to keep them."
+    end
     r.ImGui_Dummy(ctx, 0, 2)
     for gi, group in ipairs(COLOUR_GROUPS) do
         if begin_card(group[1], "c" .. gi) then
@@ -717,12 +940,16 @@ local function draw_colours()
                 local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
                 local changed, value = r.ImGui_ColorEdit3(ctx, "##colour", rgb, flags)
                 if changed then
-                    local native = rgb_to_native(value)
-                    for _, key in ipairs(entry[2]) do
-                        r.SetThemeColor(key, native, 1)
-                        changed_colours[key] = native
+                    set_colour(entry, rgb_to_native(value))
+                    repaint_after_colour()
+                end
+                local factory = factory_colour(entry[2][1])
+                if factory and factory ~= rgb_to_native(rgb) then
+                    r.ImGui_SameLine(ctx)
+                    if r.ImGui_SmallButton(ctx, "Reset") then
+                        set_colour(entry, factory)
+                        repaint_after_colour()
                     end
-                    r.UpdateArrange()
                 end
                 r.ImGui_PopID(ctx)
             end
@@ -743,6 +970,7 @@ local function draw_colours()
             changed_colours = {}
             r.OpenColorThemeFile(path)
             refresh_palette()
+            repaint_after_colour()
         end
     else
         hint_text("No unsaved changes.")
@@ -1022,18 +1250,25 @@ local GUIDE = {
     } },
     { "Track panel", {
         "The buttons on the lowest row are, from the left: automation mode, phase, fixed item lanes, FX and IO columns, meter, freeze and unfreeze. Buttons that don't fit are left out, so make the panel wider or the track taller to see them.",
-        "The columns button shows the FX and IO columns on every track and on the master. It also turns on REAPER's options to show FX and sends in the track panel. The FX and IO buttons are the headers of those columns. Set their width on the Track panel page.",
+        "The columns and meter buttons work on all tracks with the same layout as the one you click; the master's buttons only on the master. The columns button also turns on REAPER's options to show FX and sends in the track panel. The FX and IO buttons are the headers of those columns; without a column, they move to the first row. Set the columns' width on the Track panel page.",
+        "A track with fixed item lanes has a blue strip at the left of its window, whether the lanes are open or closed.",
         "To add a knob for an FX parameter: in the FX window, choose Param > FX parameter list > Show in track controls. It appears under the controls, so the track has to be tall enough.",
         "An FX with an embedded UI shows under the controls too, once it's turned on: right-click the FX in the FX chain. Make the track taller to see it.",
     } },
     { "Master", {
-        "The master has the same windows as a track. Show it with View > Master track. Its hardware outputs are in the IO column; click the IO button to add one.",
+        "The master has the same windows as a track. Show it with View > Master track. Its hardware outputs are in the IO column; click the IO button to add one. It can do without volume, pan or columns, have a wider meter, or be nothing but one big meter: see the Master settings on the Track panel page.",
+    } },
+    { "Layouts", {
+        "Each track can use layout A, B or C. In the track panel they look the same until you change one on the Track panel page, for example to give your busses only a name, FX, mute and solo, with a wide meter on the left. Settings that don't count at the moment show grey. Name only turns a track into a divider: its name, large and centred, growing with the track's height.",
+        "Under Selected tracks you set a height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
     } },
     { "Mixer", {
         "Choose a fader cap or a dot on the Mixer page. Strips set to a layout of their own keep that layout.",
+        "Layouts A, B and C each have their own settings. The width decides the form: a narrow strip under 52, an intermediate one under 88, a normal one from 88. What doesn't count for the current form shows grey. A sidebar puts the FX and send lists beside the strip.",
         "Turn on the FX and send lists by right-clicking the mixer. An FX's embedded UI shows in that list when the strip is tall enough.",
     } },
     { "Colours", {
+        "A colour that differs from the theme's own gets a Reset button, and Reset all colours does them all. A change is temporary until you click Save colours; Undo changes goes back to the last saved colours.",
         "Colours you save go into the file TK Theme Dark.ReaperTheme in ColorThemes. Updating the theme with ReaPack replaces that file, so changed colours have to be set again.",
     } },
     { "Dark mode and the menu bar", windows = true, {
@@ -1044,7 +1279,7 @@ local GUIDE = {
         "ReaPack also installs a set of TK_ icons for toolbars and menus you make yourself, in Data/toolbar_icons in REAPER's resource folder. Right-click a toolbar, choose Customize toolbar, select a button and click Icon. A button that toggles has an _off and an _on file: choose _off.",
     } },
     { "Going back", {
-        "Each page has a Reset button for its own settings. The Reset page puts the whole theme back as it comes, and can undo the last reset.",
+        "Each page has a Reset button for its own settings; on the Track panel and Mixer pages it also takes only the chosen layout. The Reset page puts the whole theme back as it comes, and can undo the last reset.",
     } },
 }
 
@@ -1177,9 +1412,9 @@ end
 -- the theme's buttons call these scripts by action ID, which only exists once
 -- they are in the action list; once per install location is enough
 local function register_helpers()
-    if r.GetExtState(SCRIPT, "registered3") == here then return end
+    if r.GetExtState(SCRIPT, "registered4") == here then return end
     local files = { "TK_Theme_Settings.lua", "TK_Theme_Toggle_TCP_Lists.lua", "TK_Theme_Toggle_TCP_Meter.lua",
-        "TK_Theme_Metronome.lua", "TK_Theme_Metronome_Watch.lua", "TK_Theme_Toggle_Menu_Bar.lua" }
+        "TK_Theme_Metronome.lua", "TK_Theme_Metronome_Watch.lua", "TK_Theme_Toggle_Menu_Bar.lua", "TK_Theme_Make_Divider.lua" }
     for _, key in ipairs(SLOT_KEYS) do files[#files + 1] = "slots/TK_Theme_Slot_" .. key .. ".lua" end
     local ok = true
     for i, file in ipairs(files) do
@@ -1190,7 +1425,7 @@ local function register_helpers()
             ok = false
         end
     end
-    if ok then r.SetExtState(SCRIPT, "registered3", here, true) end
+    if ok then r.SetExtState(SCRIPT, "registered4", here, true) end
 end
 
 -- REAPER's Theme Adjuster action (the gear in the transport) only looks directly
