@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.1
+-- @version 0.9.2
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -346,7 +346,12 @@ local function row_label(label)
     r.ImGui_SameLine(ctx, LABEL_W)
 end
 
+-- REAPER's own options, off on a new install: with them off the columns stay
+-- empty whatever the theme's parameters say
+local LIST_OPTIONS = { 40302, 40677 }   -- show FX inserts, show sends in TCP
+
 local function lists_shown()
+    if r.GetToggleCommandState(LIST_OPTIONS[1]) ~= 1 then return false end
     for lay in ALL:gmatch(".") do
         local p = P["Layout" .. lay .. "-tcpFxLocation"]
         if p and p.value > 0 then return true end
@@ -362,12 +367,18 @@ local function set_lists(show)
             local p = P[name]
             if p then
                 if show then
-                    set_param(name, tonumber(r.GetExtState(LISTS_SECTION, name)) or def, true)
+                    local back = p.value > 0 and p.value or tonumber(r.GetExtState(LISTS_SECTION, name)) or def
+                    set_param(name, back, true)
                 else
                     if p.value > 0 then r.SetExtState(LISTS_SECTION, name, tostring(p.value), true) end
                     set_param(name, 0, true)
                 end
             end
+        end
+    end
+    if show then
+        for _, cmd in ipairs(LIST_OPTIONS) do
+            if r.GetToggleCommandState(cmd) ~= 1 then r.Main_OnCommand(cmd, 0) end
         end
     end
     r.ThemeLayout_RefreshAll()

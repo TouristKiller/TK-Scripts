@@ -181,7 +181,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme Dark">
-    <version name="0.9.1" author="TouristKiller" time="2026-11-02T14:47:58Z">
+    <version name="0.9.2" author="TouristKiller" time="2026-11-02T16:41:12Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -206,12 +206,223 @@
      <source file="dist/darkmode_colors.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/darkmode_colors.txt</source>
      <source type="theme" file="TK Theme Dark.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Dark.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Dark.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Dark.ReaperTheme</source>
+     <source type="data" file="toolbar_icons/150/TK_Add_Track.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Add_Track.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Arm_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Arm_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Arm_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Arm_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Auto_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Auto_Play_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Auto_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Auto_Play_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Car_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Car_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Car_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Car_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Color.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Color.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Copy.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Copy.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Cut.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Cut.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Delete.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Delete.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Envelope_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Envelope_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Envelope_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Envelope_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_FX_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_FX_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_FX_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_FX_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Fade.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Fade.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Fixed_Lanes_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Fixed_Lanes_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Fixed_Lanes_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Fixed_Lanes_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Folder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Folder.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Free_Position_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Free_Position_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Free_Position_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Free_Position_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Freeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Freeze.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Glue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Glue.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Grid_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Grid_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Grid_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Grid_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Group_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Group_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Group_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Group_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Loop_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Loop_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Loop_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Loop_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Marker.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Marker.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Marquee_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Marquee_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Marquee_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Marquee_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Metronome_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Metronome_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Metronome_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Metronome_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Mixer_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Mixer_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Mixer_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Mixer_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Mute_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Mute_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Mute_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Mute_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Normalize.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Normalize.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Notes.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Paste.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Paste.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Play_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Play_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Razor_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Razor_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Razor_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Razor_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Record_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Record_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Record_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Record_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Redo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Redo.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Region.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Region.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Remove_Track.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Remove_Track.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Render.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Render.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Reverse.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Reverse.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Ripple_All.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Ripple_All.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Ripple_Off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Ripple_Off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Ripple_One.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Ripple_One.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Routing_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Routing_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Routing_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Routing_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Save.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Save.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Settings.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Settings.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Snap_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Snap_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Snap_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Snap_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Solo_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Solo_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Solo_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Solo_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Split.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Split.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Stop.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Stop.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Trim.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Trim.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Undo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Undo.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Unfreeze.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Zoom.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Add_Track.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Add_Track.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Arm_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Arm_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Arm_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Arm_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Auto_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Auto_Play_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Auto_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Auto_Play_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Car_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Car_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Car_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Car_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Color.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Color.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Copy.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Copy.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Cut.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Cut.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Delete.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Delete.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Envelope_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Envelope_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Envelope_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Envelope_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_FX_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_FX_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_FX_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_FX_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Fade.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Fade.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Fixed_Lanes_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Fixed_Lanes_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Fixed_Lanes_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Fixed_Lanes_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Folder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Folder.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Free_Position_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Free_Position_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Free_Position_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Free_Position_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Freeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Freeze.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Glue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Glue.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Grid_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Grid_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Grid_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Grid_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Group_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Group_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Group_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Group_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Loop_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Loop_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Loop_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Loop_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Marker.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Marker.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Marquee_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Marquee_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Marquee_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Marquee_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Metronome_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Metronome_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Metronome_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Metronome_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Mixer_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Mixer_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Mixer_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Mixer_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Mute_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Mute_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Mute_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Mute_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Normalize.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Normalize.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Notes.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Paste.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Paste.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Play_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Play_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Razor_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Razor_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Razor_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Razor_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Record_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Record_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Record_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Record_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Redo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Redo.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Region.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Region.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Remove_Track.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Remove_Track.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Render.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Render.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Reverse.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Reverse.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Ripple_All.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Ripple_All.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Ripple_Off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Ripple_Off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Ripple_One.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Ripple_One.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Routing_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Routing_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Routing_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Routing_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Save.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Save.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Settings.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Settings.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Snap_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Snap_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Snap_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Snap_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Solo_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Solo_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Solo_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Solo_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Split.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Split.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Stop.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Stop.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Trim.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Trim.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Undo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Undo.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Unfreeze.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Zoom.png</source>
+     <source type="data" file="toolbar_icons/TK_Add_Track.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Add_Track.png</source>
+     <source type="data" file="toolbar_icons/TK_Arm_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Arm_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Arm_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Arm_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Auto_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Auto_Play_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Auto_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Auto_Play_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Car_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Car_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Car_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Car_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Color.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Color.png</source>
+     <source type="data" file="toolbar_icons/TK_Copy.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Copy.png</source>
+     <source type="data" file="toolbar_icons/TK_Cut.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Cut.png</source>
+     <source type="data" file="toolbar_icons/TK_Delete.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Delete.png</source>
+     <source type="data" file="toolbar_icons/TK_Envelope_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Envelope_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Envelope_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Envelope_on.png</source>
+     <source type="data" file="toolbar_icons/TK_FX_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_FX_off.png</source>
+     <source type="data" file="toolbar_icons/TK_FX_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_FX_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Fade.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Fade.png</source>
+     <source type="data" file="toolbar_icons/TK_Fixed_Lanes_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Fixed_Lanes_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Fixed_Lanes_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Fixed_Lanes_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Folder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Folder.png</source>
+     <source type="data" file="toolbar_icons/TK_Free_Position_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Free_Position_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Free_Position_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Free_Position_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Freeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Freeze.png</source>
+     <source type="data" file="toolbar_icons/TK_Glue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Glue.png</source>
+     <source type="data" file="toolbar_icons/TK_Grid_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Grid_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Grid_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Grid_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Group_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Group_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Group_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Group_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Loop_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Loop_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Loop_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Loop_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI.png</source>
+     <source type="data" file="toolbar_icons/TK_Marker.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Marker.png</source>
+     <source type="data" file="toolbar_icons/TK_Marquee_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Marquee_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Marquee_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Marquee_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Metronome_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Metronome_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Metronome_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Metronome_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Mixer_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Mixer_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Mixer_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Mixer_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Mute_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Mute_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Mute_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Mute_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Normalize.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Normalize.png</source>
+     <source type="data" file="toolbar_icons/TK_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Notes.png</source>
+     <source type="data" file="toolbar_icons/TK_Paste.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Paste.png</source>
+     <source type="data" file="toolbar_icons/TK_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Play_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Play_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Razor_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Razor_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Razor_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Razor_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Record_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Record_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Record_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Record_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Redo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Redo.png</source>
+     <source type="data" file="toolbar_icons/TK_Region.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Region.png</source>
+     <source type="data" file="toolbar_icons/TK_Remove_Track.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Remove_Track.png</source>
+     <source type="data" file="toolbar_icons/TK_Render.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Render.png</source>
+     <source type="data" file="toolbar_icons/TK_Reverse.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Reverse.png</source>
+     <source type="data" file="toolbar_icons/TK_Ripple_All.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Ripple_All.png</source>
+     <source type="data" file="toolbar_icons/TK_Ripple_Off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Ripple_Off.png</source>
+     <source type="data" file="toolbar_icons/TK_Ripple_One.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Ripple_One.png</source>
+     <source type="data" file="toolbar_icons/TK_Routing_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Routing_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Routing_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Routing_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Save.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Save.png</source>
+     <source type="data" file="toolbar_icons/TK_Settings.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Settings.png</source>
+     <source type="data" file="toolbar_icons/TK_Snap_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Snap_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Snap_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Snap_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Solo_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Solo_off.png</source>
+     <source type="data" file="toolbar_icons/TK_Solo_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Solo_on.png</source>
+     <source type="data" file="toolbar_icons/TK_Split.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Split.png</source>
+     <source type="data" file="toolbar_icons/TK_Stop.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Stop.png</source>
+     <source type="data" file="toolbar_icons/TK_Trim.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Trim.png</source>
+     <source type="data" file="toolbar_icons/TK_Undo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Undo.png</source>
+     <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
+     <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Fixed: the gear in the transport opened the theme colour window on a new install. It now runs the settings script's own action.
-+ Fixed: embedded FX didn't show in the track panel. They now take the full width below the controls; make the track taller to see them.
-+ Changed: the master in the track panel has the same windows as a track, with new volume, pan and mono buttons.
-+ Changed: the FX and send columns have one working width slider, and the divider sliders that showed nothing are gone.
-+ Changed: button windows on the transport's second row line up with the row above.
++ Fixed: the FX and IO columns stayed empty on a new install. The button and the switch in the settings now also turn on REAPER's own options for them.
++ Added: the toolbar icons now install with ReaPack, in Data/toolbar_icons. The separate zip is gone.
++ Added: the master in the track panel has FX and IO columns, with its hardware outputs in the IO column, and the same meter, margins and buttons as a track.
++ Added: FX parameters show in the track panel again, for tracks and the master: one column under the controls, with only the parameters you chose.
++ Changed: the master in the track panel has a slightly darker background, to set it apart from the tracks.
++ Changed: FX parameter rows and the master's mono button are drawn in the theme's style.
 ]]></changelog>
     </version>
     </reapack>

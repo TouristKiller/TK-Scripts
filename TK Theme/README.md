@@ -14,6 +14,8 @@ You need [ReaPack](https://reapack.com) and, for the settings window, ReaImGui
 2. Install **TK Theme Dark** (category TK Theme).
 3. Options > Themes > **TK Theme Dark**.
 4. Click the gear at the end of the transport to open the settings.
+5. Click the columns button in a track panel to show the FX and IO columns. That also
+   turns on REAPER's options to show FX and sends in the track panel.
 
 On Windows, the settings window offers to apply matching colours to REAPER's
 lists, menus and borders. That takes effect after a restart.
@@ -27,7 +29,9 @@ lists, menus and borders. That takes effect after a restart.
   arrow for the metronome settings. "Metronome light at startup" also keeps it
   right before your first click; it adds one line to `Scripts/__startup.lua`,
   and switching it off removes that line again.
-- **Track panel:** FX and send columns, buttons for fixed lanes and freeze.
+- **Track panel:** FX and send columns, FX parameters under the controls, buttons for
+  fixed lanes and freeze. The master has the same windows, with its hardware outputs
+  in the IO column.
 - **Mixer:** a fader cap or a dot, and three layouts.
 - **Envelope lanes, media items, MIDI editor, inline MIDI editor:** all redrawn.
 - **Settings:** every option on one page per area, a colour editor, and a factory
@@ -44,9 +48,9 @@ Popup menus keep Windows' own grey: REAPER has no colour setting for them.
 
 ## Toolbar icons
 
-Icons for your own toolbars are a separate download, as they aren't needed for
-the theme itself: [TK_Theme_Toolbar_Icons.zip](https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK_Theme_Toolbar_Icons.zip).
-The zip contains installation steps.
+ReaPack also installs a set of `TK_` icons for your own toolbars. Right-click a
+toolbar > Customize toolbar, select a button, click Icon, and choose a `TK_` icon.
+A button that toggles has an `_off` and an `_on` file: choose `_off`.
 
 ## Good to know
 

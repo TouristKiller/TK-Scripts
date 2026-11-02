@@ -1,6 +1,6 @@
 -- @description TK Theme Dark: show/hide the TCP meters
 -- @author TouristKiller
--- @version 0.9.1
+-- @version 0.9.2
 -- Run from the button in the TCP (TK_Theme_Rebuild.lua registers this script
 -- and the generator wires the button to it). Flips the theme's own
 -- tkTcpMeterHide parameter; hidden, the meter section is zero wide and the
