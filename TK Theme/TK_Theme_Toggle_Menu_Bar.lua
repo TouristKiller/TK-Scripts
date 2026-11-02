@@ -1,6 +1,6 @@
 -- @description TK Theme: show/hide REAPER's menu bar
 -- @author TouristKiller
--- @version 0.9.5
+-- @version 0.9.6
 -- Windows only, and needs TK Native Helper (ReaPack). Give it a shortcut in the
 -- action list; the same switch is on the General page of the theme's settings.
 local r = reaper

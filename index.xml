@@ -181,7 +181,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme Dark">
-    <version name="0.9.5" author="TouristKiller" time="2026-11-02T22:42:14Z">
+    <version name="0.9.6" author="TouristKiller" time="2026-11-03T00:24:39Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -418,19 +418,11 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: layouts A, B and C can now differ in the track panel and in the mixer. Choose the layout at the top of the settings page; each setting is for that layout only.
-+ Added: per layout in the track panel, hide the meter, volume, pan, input row, button row, mute and solo, record arm and monitor, and the FX and IO columns and buttons separately. Mute and solo, and the meter, can move to the left. Requested on the forum.
-+ Added: Name only, a track panel with just the track's name, large and centred, for dividers and folders.
-+ Added: under Selected tracks, set and lock the height of the selected tracks or of all tracks on a layout, or make dividers. The action TK_Theme_Make_Divider does this from a shortcut.
-+ Added: the master in the track panel can hide its meter, volume, pan, mute and solo, and its FX and IO columns and buttons, have a meter on the left and a width of its own, or be nothing but one big meter. Requested on the forum.
-+ Added: a blue strip on a track with fixed item lanes, also when they're closed or the track is low. Requested on the forum.
-+ Added: for the mixer, a sidebar with its own width and 1 to 4 columns, more values, width per channel, and heights for the narrow strip. Its buttons can now be turned off too.
-+ Added: a Reset button per colour, and Reset all colours.
-+ Changed: settings that don't count at the moment show grey and can't be changed.
-+ Changed: the columns and meter buttons work on the layout of the track you click, or only on the master.
-+ Changed: Section margins moved to the Track panel page and go up to 20, for more room to click between the windows. Requested on the forum.
-+ Changed: FX and IO have the same letter size as M and S, and the narrow strip's buttons and the sidebar have a glass window.
-+ Fixed: a colour change now tells REAPER to repaint its windows straight away.
++ Added: presets. Save all your settings and colours under a name, load them again with undo, or share the file.
++ Added: a Colour processing page with gamma, highlights, midtones, shadows, saturation and tint for the whole theme. They go along in presets.
++ Added: transport buttons for Quit REAPER and for showing the master track in the track panel.
++ Changed: Cap or Dot for the fader now goes for all mixer layouts at once.
++ Changed: colours you save are kept apart and come back by themselves when you open the settings after an update. This starts with this version: colours saved in an earlier version are replaced once more by this update.
 ]]></changelog>
     </version>
     </reapack>

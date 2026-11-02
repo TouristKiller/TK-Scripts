@@ -39,7 +39,8 @@ lists, menus and borders. That takes effect after a restart.
   normal, intermediate and narrow strip.
 - **Envelope lanes, media items, MIDI editor, inline MIDI editor:** all redrawn.
 - **Settings:** every option on one page per area, a colour editor with a reset per colour,
-  a factory reset that you can undo, and a Guide page that explains the theme.
+  colour processing for the whole theme, presets, a factory reset that you can undo, and a
+  Guide page that explains the theme.
 
 ## Windows only
 
@@ -59,9 +60,9 @@ A button that toggles has an `_off` and an `_on` file: choose `_off`.
 
 ## Good to know
 
-- This is a beta. It has been tested on Windows at 100%, 150% and 200%. Mac and
-  Linux have not been confirmed yet; reports are welcome.
-- Colours you save go into `ColorThemes/TK Theme Dark.ReaperTheme`. Updating the
-  theme with ReaPack replaces that file, so changed colours have to be set again.
+- This is a beta. It has been tested on Windows at 100%, 150% and 200%, and a user
+  reports it works on Mac so far. Linux hasn't been confirmed yet; reports are welcome.
+- An update replaces `ColorThemes/TK Theme Dark.ReaperTheme`. Colours you saved come back
+  by themselves the next time you open the settings; until then you see the theme's own.
 - Transport buttons call scripts through action IDs that depend on the install
   path. Leave the files where ReaPack puts them.

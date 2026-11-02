@@ -1,5 +1,5 @@
 -- @description TK Theme Dark: transport button 'free2', runs the action chosen in the settings
 -- @author TouristKiller
--- @version 0.9.5
+-- @version 0.9.6
 local here = debug.getinfo(1, "S").source:match("^@(.*[\\/])")
 dofile(here .. "../TK_Theme_Slot.lua")("free2")

@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.5
+-- @version 0.9.6
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -345,7 +345,7 @@ local PAGES = {
     } },
     { title = "Mixer", cards = {
         { "Fader", {
-            { kind = "handle", label = "Handle", hint = "Strips set to their own layout keep that layout." },
+            { kind = "handle", label = "Handle", hint = "For all layouts. A project opened later follows the next time this window opens." },
         } },
         { "Per layout", {
             { kind = "layout", label = "Layout", hint = "These settings are for the strips on this layout. Layout A is the standard strip, B the narrow one, and C has a sidebar and more values. Set a track's layout in its right-click menu." },
@@ -410,12 +410,13 @@ local PAGES = {
         { "Project", {
             N("New project", "new"), N("Open project", "open"), N("Save project", "save"),
             N("Render", "render"), N("Project settings", "projset"), N("Preferences", "prefs"),
+            N("Quit REAPER", "quit"),
         } },
         { "Windows", {
             B("Mixer", "mixer"), B("Media Explorer", "explorer"), B("FX Browser", "fxbrowser"),
             B("Track Manager", "trackmgr"), B("Project Bay", "bay"), B("Big clock", "clock"),
             B("Actions", "actions"), B("Routing matrix", "routing"), B("Region/marker manager", "regions"),
-            B("Virtual MIDI keyboard", "vkb"),
+            B("Virtual MIDI keyboard", "vkb"), N("Master track in the track panel", "master"),
         } },
         { "Your own actions", {
             B("Button 1", "free1", true), B("Button 2", "free2", true), B("Button 3", "free3", true),
@@ -425,7 +426,9 @@ local PAGES = {
         } },
     } },
     { title = "Colours", draw = "colours" },
+    { title = "Colour processing", draw = "processing" },
     { title = "Dark mode", draw = "darkmode" },
+    { title = "Presets", draw = "presets" },
     { title = "Reset", draw = "reset" },
     { title = "Guide", draw = "guide" },
 }
@@ -600,15 +603,36 @@ local function draw_button_row(item, id)
 end
 
 -- the mixer's fader handle is chosen by layout: images can't follow a parameter
+-- so each of A, B and C has a twin with the dot, and tracks set to a layout of their
+-- own move to the matching one
 local DOT_LAYOUT = "A Dot"
 local function handle_is_dot()
     local ok, name = r.ThemeLayout_GetLayout("mcp", -1)
     return ok and name == DOT_LAYOUT
 end
 
+local function sync_track_handles(dot)
+    local project_index = 0
+    while true do
+        local project = r.EnumProjects(project_index)
+        if not project then break end
+        for i = 0, r.CountTracks(project) - 1 do
+            local track = r.GetTrack(project, i)
+            local _, name = r.GetSetMediaTrackInfo_String(track, "P_MCP_LAYOUT", "", false)
+            local lay = name:match("^([ABC])$") or name:match("^([ABC]) Dot$")
+            local wanted = lay and (dot and lay .. " Dot" or lay)
+            if wanted and wanted ~= name then
+                r.GetSetMediaTrackInfo_String(track, "P_MCP_LAYOUT", wanted, true)
+            end
+        end
+        project_index = project_index + 1
+    end
+end
+
 local function set_handle(dot)
     r.ThemeLayout_SetLayout("mcp", dot and DOT_LAYOUT or "A")
     r.ThemeLayout_SetLayout("master_mcp", dot and DOT_LAYOUT or "A")
+    sync_track_handles(dot)
     r.ThemeLayout_RefreshAll()
 end
 
@@ -870,6 +894,8 @@ local COLOUR_GROUPS = {
 
 local changed_colours = {}
 
+local remember_colours     -- further down, once the factory colours are known
+
 local function save_colours()
     local path = theme_file()
     local s = path and read_all(path)
@@ -883,6 +909,7 @@ local function save_colours()
     end
     if not write_all(path, s) then return false end
     changed_colours = {}
+    remember_colours()
     return true
 end
 
@@ -908,6 +935,49 @@ local function factory_colour(key)
         end
     end
     return factory_colours[key]
+end
+
+-- a ReaPack update replaces the theme's colour file. The colours that differ from the
+-- theme's own are kept here too, and come back when this window opens after an update
+local my_colours_file = r.GetResourcePath() .. "/Data/TK Theme/my_colours.txt"
+
+remember_colours = function()
+    local lines = {}
+    for _, group in ipairs(COLOUR_GROUPS) do
+        for _, entry in ipairs(group[2]) do
+            for _, key in ipairs(entry[2]) do
+                local factory = factory_colour(key)
+                local current = r.GetThemeColor(key, 0) & 0xFFFFFF
+                if factory and factory ~= current then lines[#lines + 1] = key .. "=" .. current end
+            end
+        end
+    end
+    if #lines == 0 then
+        os.remove(my_colours_file)
+    else
+        r.RecursiveCreateDirectory(r.GetResourcePath() .. "/Data/TK Theme", 0)
+        write_all(my_colours_file, table.concat(lines, "\n") .. "\n")
+    end
+end
+
+-- only a colour that's back at the theme's own: anything else was changed on purpose
+local function restore_my_colours()
+    local text = read_all(my_colours_file)
+    if not text then return end
+    local restored = false
+    for key, value in text:gmatch("([%w_]+)=(%d+)") do
+        local mine, factory = tonumber(value), factory_colour(key)
+        local current = r.GetThemeColor(key, 0) & 0xFFFFFF
+        if factory and current == factory and mine ~= current then
+            r.SetThemeColor(key, mine, 1)
+            changed_colours[key] = mine
+            restored = true
+        end
+    end
+    if restored and save_colours() then
+        repaint_after_colour()
+        state.msg = "Your saved colours were restored after the update."
+    end
 end
 
 local function set_colour(entry, native)
@@ -974,6 +1044,70 @@ local function draw_colours()
         end
     else
         hint_text("No unsaved changes.")
+    end
+end
+
+-- ---------------------------------------------------------------- colour processing
+
+-- REAPER's own colour controls for the whole theme, images included, as in Default 7's
+-- adjuster: parameter numbers below zero, shown on the same scales as there
+local PROCESSING = {
+    { -1000, "Gamma", 25, 200, "%d" }, { -1003, "Highlights", -100, 100, "%d" }, { -1002, "Midtones", -100, 100, "%d" },
+    { -1001, "Shadows", -100, 100, "%d" }, { -1004, "Saturation", 0, 200, "%d%%" }, { -1005, "Tint", -180, 180, "%d\u{B0}" },
+}
+local PROCESS_CUSTOM = -1006    -- also affect project custom colours
+
+local function processing_ids()
+    local ids = { PROCESS_CUSTOM }
+    for _, c in ipairs(PROCESSING) do ids[#ids + 1] = c[1] end
+    return ids
+end
+
+local function reset_processing()
+    for _, id in ipairs(processing_ids()) do
+        local name, _, _, def = r.ThemeLayout_GetParameter(id)
+        if name then r.ThemeLayout_SetParameter(id, def, true) end
+    end
+    r.ThemeLayout_RefreshAll()
+end
+
+local function draw_processing()
+    hint_text("REAPER's own colour controls. They work on the whole theme, images included. Right-click a slider for its default.")
+    r.ImGui_Dummy(ctx, 0, 2)
+    if begin_card("Colour processing", "cp") then
+        for i, c in ipairs(PROCESSING) do
+            local id, label, lo, hi, format = c[1], c[2], c[3], c[4], c[5]
+            local name, _, value, def, min, max = r.ThemeLayout_GetParameter(id)
+            if name and max ~= min then
+                row_label(label)
+                local shown = math.floor(lo + (value - min) / (max - min) * (hi - lo) + 0.5)
+                r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
+                r.ImGui_PushID(ctx, "cp" .. i)
+                local changed, v = r.ImGui_SliderInt(ctx, "##value", shown, lo, hi, format)
+                local done = r.ImGui_IsItemDeactivatedAfterEdit(ctx)
+                local reset = r.ImGui_IsItemClicked(ctx, 1)
+                r.ImGui_PopID(ctx)
+                if reset then
+                    r.ThemeLayout_SetParameter(id, def, true)
+                    r.ThemeLayout_RefreshAll()
+                elseif changed or done then
+                    local raw = math.floor(min + (v - lo) / (hi - lo) * (max - min) + 0.5)
+                    r.ThemeLayout_SetParameter(id, raw, done)
+                    r.ThemeLayout_RefreshAll()
+                end
+            end
+        end
+        local name, _, value = r.ThemeLayout_GetParameter(PROCESS_CUSTOM)
+        if name then
+            row_label("Also affect track colours")
+            if toggle("cp_custom", value ~= 0) then
+                r.ThemeLayout_SetParameter(PROCESS_CUSTOM, value ~= 0 and 0 or 1, true)
+                r.ThemeLayout_RefreshAll()
+            end
+        end
+        r.ImGui_Dummy(ctx, 0, 2)
+        if r.ImGui_Button(ctx, "Reset all##cp") then reset_processing() end
+        r.ImGui_EndChild(ctx)
     end
 end
 
@@ -1098,6 +1232,10 @@ local function save_undo()
             if v ~= "" then lines[#lines + 1] = "lists:" .. k .. "=" .. v end
         end
     end
+    for _, id in ipairs(processing_ids()) do
+        local name, _, value = r.ThemeLayout_GetParameter(id)
+        if name then lines[#lines + 1] = "processing:" .. id .. "=" .. tostring(math.floor(value)) end
+    end
     lines[#lines + 1] = "handle=" .. (handle_is_dot() and "dot" or "cap")
     lines[#lines + 1] = "startup=" .. (startup.on and "1" or "0")
     local path = theme_file()
@@ -1141,6 +1279,8 @@ local function undo_reset()
         local param, v = line:match("^param:(.-)=(-?%d+)$")
         local button, text = line:match("^button:(.-)=(.*)$")
         local lists, pos = line:match("^lists:(.-)=(.*)$")
+        local process, amount = line:match("^processing:(-%d+)=(-?%d+)$")
+        if process then r.ThemeLayout_SetParameter(tonumber(process), tonumber(amount), true) end
         if button then
             r.SetExtState(BUTTONS_SECTION, button, text, true)
         elseif lists then
@@ -1169,6 +1309,7 @@ local function undo_reset()
     if theme and path and write_all(path, theme) then
         changed_colours = {}
         r.OpenColorThemeFile(path)
+        remember_colours()
     end
     clear_undo()
     load_params()
@@ -1188,6 +1329,7 @@ local function factory_reset()
             r.ThemeLayout_SetParameter(P[n].idx, math.floor(P[n].def), true)
         end
     end
+    reset_processing()
     r.ThemeLayout_RefreshAll()
     clear_buttons_and_lists()
     if startup.on then set_startup(false) end
@@ -1198,6 +1340,7 @@ local function factory_reset()
     local factory = base and read_all(here .. "dist/" .. base .. ".factory.ReaperTheme")
     if factory and write_all(path, factory) then
         changed_colours = {}
+        os.remove(my_colours_file)
         r.OpenColorThemeFile(path)
     else
         notes[#notes + 1] = "The theme's colour file couldn't be reset."
@@ -1211,6 +1354,207 @@ local function factory_reset()
     load_dark()
     refresh_palette()
     state.msg = "Factory settings restored. " .. table.concat(notes, " ")
+end
+
+-- ---------------------------------------------------------------- presets
+
+-- a preset is one text file: every setting, colour, chosen action, the colour
+-- processing and the fader handle. Not what belongs to a project or to REAPER as a whole; dark mode colours
+-- only if asked for, as they apply to all of REAPER and need a restart.
+local preset_dir = r.GetResourcePath() .. "/Data/TK Theme/presets"
+
+local function preset_path(name) return preset_dir .. "/" .. name .. ".txt" end
+
+local function preset_names()
+    if state.presets then return state.presets end
+    local names, i = {}, 0
+    while true do
+        local file = r.EnumerateFiles(preset_dir, i)
+        if not file then break end
+        local name = file:match("^(.*)%.txt$")
+        if name then names[#names + 1] = name end
+        i = i + 1
+    end
+    table.sort(names, function(a, b) return a:lower() < b:lower() end)
+    state.presets = names
+    return names
+end
+
+local function colour_keys(fn)
+    for _, group in ipairs(COLOUR_GROUPS) do
+        for _, entry in ipairs(group[2]) do
+            for _, key in ipairs(entry[2]) do fn(key) end
+        end
+    end
+end
+
+local function save_preset(name, with_dark)
+    r.RecursiveCreateDirectory(preset_dir, 0)
+    local lines = { "tk_theme_preset=1", "date=" .. os.date("%Y-%m-%d %H:%M") }
+    for _, n in ipairs(order) do
+        if n ~= "tkTransMetroOn" then
+            lines[#lines + 1] = "param:" .. n .. "=" .. tostring(math.floor(P[n].value))
+        end
+    end
+    for _, key in ipairs(SLOT_KEYS) do
+        for _, k in ipairs({ key, key .. "_name" }) do
+            local v = r.GetExtState(BUTTONS_SECTION, k)
+            if v ~= "" then lines[#lines + 1] = "button:" .. k .. "=" .. v end
+        end
+    end
+    colour_keys(function(key)
+        lines[#lines + 1] = "colour:" .. key .. "=" .. tostring(r.GetThemeColor(key, 0) & 0xFFFFFF)
+    end)
+    for _, id in ipairs(processing_ids()) do
+        local name, _, value = r.ThemeLayout_GetParameter(id)
+        if name then lines[#lines + 1] = "processing:" .. id .. "=" .. tostring(math.floor(value)) end
+    end
+    lines[#lines + 1] = "handle=" .. (handle_is_dot() and "dot" or "cap")
+    if with_dark and ini_get("win32_darkmode_colors") then
+        lines[#lines + 1] = "win32_darkmode_colors=" .. ini_get("win32_darkmode_colors")
+    end
+    state.presets = nil
+    return write_all(preset_path(name), table.concat(lines, "\n") .. "\n")
+end
+
+local function load_preset(name, with_dark)
+    local s = read_all(preset_path(name))
+    if not s or not s:find("^tk_theme_preset=") then
+        state.msg = "This isn't a TK Theme preset."
+        return
+    end
+    if not save_undo() then
+        state.msg = "Nothing was loaded: couldn't save the current settings for undo."
+        return
+    end
+    local params, colours, values = {}, {}, {}
+    clear_buttons_and_lists()
+    reset_processing()      -- what the preset holds comes right back
+    local missing = 0
+    for line in s:gmatch("[^\r\n]+") do
+        local process, amount = line:match("^processing:(-%d+)=(-?%d+)$")
+        if process then r.ThemeLayout_SetParameter(tonumber(process), tonumber(amount), true) end
+        local param, v = line:match("^param:(.-)=(-?%d+)$")
+        local button, text = line:match("^button:(.-)=(.*)$")
+        local colour, native = line:match("^colour:(.-)=(%d+)$")
+        if param then
+            params[param] = tonumber(v)
+        elseif button then
+            r.SetExtState(BUTTONS_SECTION, button, text, true)
+            if not button:find("_name$") and not tonumber(text) and r.NamedCommandLookup(text) == 0 then
+                missing = missing + 1
+            end
+        elseif colour then
+            colours[colour] = tonumber(native)
+        else
+            local key, val = line:match("^([%w_]+)=(.*)$")
+            if key then values[key] = val end
+        end
+    end
+    -- a setting the preset doesn't know, from a newer version, goes to its default
+    for _, n in ipairs(order) do
+        if n ~= "tkTransMetroOn" then
+            local v = params[n] or math.floor(P[n].def)
+            P[n].value = v
+            r.ThemeLayout_SetParameter(P[n].idx, v, true)
+        end
+    end
+    r.ThemeLayout_RefreshAll()
+    if values.handle then set_handle(values.handle == "dot") end
+    local notes = {}
+    changed_colours = {}
+    for key, native in pairs(colours) do
+        r.SetThemeColor(key, native, 1)
+        changed_colours[key] = native
+    end
+    if not save_colours() then notes[#notes + 1] = "Its colours are shown, but couldn't be saved to the theme file." end
+    if with_dark and values.win32_darkmode_colors then
+        ini_set("win32_darkmode_colors", values.win32_darkmode_colors)
+        needs_restart()
+    end
+    if missing > 0 then
+        notes[#notes + 1] = missing .. (missing == 1 and " chosen action isn't" or " chosen actions aren't") .. " on this computer, so those buttons do nothing."
+    end
+    load_params()
+    load_dark()
+    refresh_palette()
+    repaint_after_colour()
+    state.msg = 'Loaded "' .. name .. '". ' .. table.concat(notes, " ")
+end
+
+local function draw_undo_card()
+    local date = undo_date()
+    if not date then return end
+    r.ImGui_Dummy(ctx, 0, 2)
+    if begin_card("Undo", "u") then
+        hint_text("Brings back everything as it was before the reset or preset of " .. date .. ".")
+        if confirm_button("undo", "Undo", "Click again to undo") then
+            state.msg = undo_reset() and "Undone." or "Could not read the saved settings."
+        end
+        r.ImGui_EndChild(ctx)
+    end
+end
+
+local function draw_presets()
+    hint_text("A preset holds every setting, colour, the colour processing, chosen actions and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
+    r.ImGui_Dummy(ctx, 0, 2)
+    if begin_card("Save as a new preset", "ps") then
+        row_label("Name")
+        r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
+        local changed, name = r.ImGui_InputText(ctx, "##preset_name", state.preset_name or "")
+        if changed then state.preset_name = name end
+        if IS_WINDOWS then
+            row_label("With dark mode colours")
+            if toggle("preset_dark_save", state.preset_dark_save) then state.preset_dark_save = not state.preset_dark_save end
+        end
+        r.ImGui_SetCursorPosX(ctx, LABEL_W)
+        if r.ImGui_Button(ctx, "Save preset") then
+            local clean = (state.preset_name or ""):gsub('[\\/:*?"<>|]', ""):match("^%s*(.-)%s*$")
+            if clean == "" then
+                state.msg = "Give the preset a name first."
+            elseif read_all(preset_path(clean)) then
+                state.msg = 'There already is a preset "' .. clean .. '". Use its Overwrite button, or choose another name.'
+            elseif save_preset(clean, state.preset_dark_save) then
+                state.preset_name = ""
+                state.msg = 'Saved "' .. clean .. '".'
+            else
+                state.msg = "Could not write the preset."
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_Dummy(ctx, 0, 2)
+    if begin_card("Presets", "pl") then
+        local names = preset_names()
+        if #names == 0 then hint_text("No presets yet.") end
+        if IS_WINDOWS and #names > 0 then
+            row_label("Load dark mode colours too")
+            if toggle("preset_dark_load", state.preset_dark_load) then state.preset_dark_load = not state.preset_dark_load end
+            r.ImGui_SetCursorPosX(ctx, LABEL_W)
+            hint_text("Only for a preset saved with them. They apply to all of REAPER, after a restart.")
+            r.ImGui_Dummy(ctx, 0, 2)
+        end
+        for i, name in ipairs(names) do
+            r.ImGui_PushID(ctx, "preset" .. i)
+            row_label(name)
+            if r.ImGui_Button(ctx, "Load") then load_preset(name, state.preset_dark_load) end
+            r.ImGui_SameLine(ctx)
+            if confirm_button("over" .. i, "Overwrite", "Click again to overwrite") then
+                state.msg = save_preset(name, state.preset_dark_save) and ('Saved "' .. name .. '".') or "Could not write the preset."
+            end
+            r.ImGui_SameLine(ctx)
+            if confirm_button("del" .. i, "Delete", "Click again to delete") then
+                os.remove(preset_path(name))
+                state.presets = nil
+                state.msg = 'Deleted "' .. name .. '".'
+            end
+            r.ImGui_PopID(ctx)
+        end
+        r.ImGui_Dummy(ctx, 0, 2)
+        hint_text("To share a preset, copy its file from " .. preset_dir .. ". A copied file shows up the next time this window opens.")
+        r.ImGui_EndChild(ctx)
+    end
+    draw_undo_card()
 end
 
 local function draw_reset()
@@ -1227,17 +1571,7 @@ local function draw_reset()
         end
         r.ImGui_EndChild(ctx)
     end
-    local date = undo_date()
-    if date then
-        r.ImGui_Dummy(ctx, 0, 2)
-        if begin_card("Undo", "u") then
-            hint_text("Brings back everything as it was before the reset of " .. date .. ".")
-            if confirm_button("undo", "Undo last reset", "Click again to undo the reset") then
-                state.msg = undo_reset() and "Reset undone." or "Could not read the saved settings."
-            end
-            r.ImGui_EndChild(ctx)
-        end
-    end
+    draw_undo_card()
 end
 
 -- ---------------------------------------------------------------- guide
@@ -1263,13 +1597,14 @@ local GUIDE = {
         "Under Selected tracks you set a height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
     } },
     { "Mixer", {
-        "Choose a fader cap or a dot on the Mixer page. Strips set to a layout of their own keep that layout.",
+        "Choose a fader cap or a dot on the Mixer page, for all layouts. In the track's layout menu, each layout has a twin with the word Dot; this switch moves tracks between them. A project opened later follows the next time this window opens.",
         "Layouts A, B and C each have their own settings. The width decides the form: a narrow strip under 52, an intermediate one under 88, a normal one from 88. What doesn't count for the current form shows grey. A sidebar puts the FX and send lists beside the strip.",
         "Turn on the FX and send lists by right-clicking the mixer. An FX's embedded UI shows in that list when the strip is tall enough.",
     } },
     { "Colours", {
         "A colour that differs from the theme's own gets a Reset button, and Reset all colours does them all. A change is temporary until you click Save colours; Undo changes goes back to the last saved colours.",
-        "Colours you save go into the file TK Theme Dark.ReaperTheme in ColorThemes. Updating the theme with ReaPack replaces that file, so changed colours have to be set again.",
+        "An update of the theme replaces its colour file. Colours you saved come back by themselves the next time you open this window.",
+        "Colour processing changes the whole theme at once, images included: gamma, highlights, midtones, shadows, saturation and tint.",
     } },
     { "Dark mode and the menu bar", windows = true, {
         "The Dark mode page sets the colours of REAPER's lists, menus and borders. REAPER reads them when it starts, so changes show after a restart. It keeps your own colours, and can go back to REAPER's original ones. Popup menus, buttons and dropdowns in REAPER's windows keep their own grey: none of REAPER's colour settings changes them.",
@@ -1277,6 +1612,9 @@ local GUIDE = {
     } },
     { "Toolbar icons", {
         "ReaPack also installs a set of TK_ icons for toolbars and menus you make yourself, in Data/toolbar_icons in REAPER's resource folder. Right-click a toolbar, choose Customize toolbar, select a button and click Icon. A button that toggles has an _off and an _on file: choose _off.",
+    } },
+    { "Presets", {
+        "The Presets page saves all your settings and colours under a name, to go back to or to share as a file. Loading one can be undone on that same page.",
     } },
     { "Going back", {
         "Each page has a Reset button for its own settings; on the Track panel and Mixer pages it also takes only the chosen layout. The Reset page puts the whole theme back as it comes, and can undo the last reset.",
@@ -1298,7 +1636,7 @@ end
 
 -- ---------------------------------------------------------------- window
 
-local DRAWERS = { colours = draw_colours, darkmode = draw_darkmode, reset = draw_reset, guide = draw_guide }
+local DRAWERS = { colours = draw_colours, darkmode = draw_darkmode, reset = draw_reset, presets = draw_presets, processing = draw_processing, guide = draw_guide }
 
 local function draw_nav()
     if r.ImGui_BeginChild(ctx, "##nav", 170, 0, r.ImGui_ChildFlags_AlwaysUseWindowPadding and r.ImGui_ChildFlags_AlwaysUseWindowPadding() or 0) then
@@ -1445,6 +1783,9 @@ load_startup()
 refresh_palette()
 load_params()
 load_dark()
+restore_my_colours()
+if handle_is_dot() then sync_track_handles(true) end
+refresh_palette()
 state.restart = r.GetExtState(SCRIPT, "restart") == "1"
 state.welcome = IS_WINDOWS and not dark.saved and r.GetExtState(SCRIPT, "welcomed") == ""
 r.defer(loop)
