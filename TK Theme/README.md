@@ -34,8 +34,8 @@ lists, menus and borders. That takes effect after a restart.
   in the IO column.
 - **Mixer:** a fader cap or a dot, and three layouts.
 - **Envelope lanes, media items, MIDI editor, inline MIDI editor:** all redrawn.
-- **Settings:** every option on one page per area, a colour editor, and a factory
-  reset that you can undo.
+- **Settings:** every option on one page per area, a colour editor, a factory reset
+  that you can undo, and a Guide page that explains the theme.
 
 ## Windows only
 

@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.2
+-- @version 0.9.3
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -304,6 +304,7 @@ local PAGES = {
     { title = "Colours", draw = "colours" },
     { title = "Dark mode", draw = "darkmode" },
     { title = "Reset", draw = "reset" },
+    { title = "Guide", draw = "guide" },
 }
 if not IS_WINDOWS then
     for i, page in ipairs(PAGES) do
@@ -1011,9 +1012,58 @@ local function draw_reset()
     end
 end
 
+-- ---------------------------------------------------------------- guide
+
+local GUIDE = {
+    { "Transport", {
+        "The gear at the end of the transport opens this window.",
+        "The metronome button lights up while the metronome is on. Its small arrow opens the metronome settings. To have the light right before your first click, turn on \"Metronome light at startup\" on the General page.",
+        "Extra buttons sit in a window to the left or right of the transport. Choose them on the Transport buttons page, where a button can also run an action of your own. When the transport gets too narrow, these windows move to a second row.",
+    } },
+    { "Track panel", {
+        "The buttons on the lowest row are, from the left: automation mode, phase, fixed item lanes, FX and IO columns, meter, freeze and unfreeze. Buttons that don't fit are left out, so make the panel wider or the track taller to see them.",
+        "The columns button shows the FX and IO columns on every track and on the master. It also turns on REAPER's options to show FX and sends in the track panel. The FX and IO buttons are the headers of those columns. Set their width on the Track panel page.",
+        "To add a knob for an FX parameter: in the FX window, choose Param > FX parameter list > Show in track controls. It appears under the controls, so the track has to be tall enough.",
+        "An FX with an embedded UI shows under the controls too, once it's turned on: right-click the FX in the FX chain. Make the track taller to see it.",
+    } },
+    { "Master", {
+        "The master has the same windows as a track. Show it with View > Master track. Its hardware outputs are in the IO column; click the IO button to add one.",
+    } },
+    { "Mixer", {
+        "Choose a fader cap or a dot on the Mixer page. Strips set to a layout of their own keep that layout.",
+        "Turn on the FX and send lists by right-clicking the mixer. An FX's embedded UI shows in that list when the strip is tall enough.",
+    } },
+    { "Colours", {
+        "Colours you save go into the file TK Theme Dark.ReaperTheme in ColorThemes. Updating the theme with ReaPack replaces that file, so changed colours have to be set again.",
+    } },
+    { "Dark mode and the menu bar", windows = true, {
+        "The Dark mode page sets the colours of REAPER's lists, menus and borders. REAPER reads them when it starts, so changes show after a restart. It keeps your own colours, and can go back to REAPER's original ones. Popup menus keep Windows' own grey: REAPER has no colour setting for them.",
+        "Hiding the menu bar needs TK Native Helper 1.1.0 or newer, from ReaPack. Give the action TK_Theme_Toggle_Menu_Bar a shortcut to do it from the keyboard. The menu bar comes back when REAPER restarts.",
+    } },
+    { "Toolbar icons", {
+        "ReaPack also installs a set of TK_ icons for toolbars and menus you make yourself, in Data/toolbar_icons in REAPER's resource folder. Right-click a toolbar, choose Customize toolbar, select a button and click Icon. A button that toggles has an _off and an _on file: choose _off.",
+    } },
+    { "Going back", {
+        "Each page has a Reset button for its own settings. The Reset page puts the whole theme back as it comes, and can undo the last reset.",
+    } },
+}
+
+local function draw_guide()
+    for i, section in ipairs(GUIDE) do
+        if (IS_WINDOWS or not section.windows) and begin_card(section[1], "guide" .. i) then
+            for j, text in ipairs(section[2]) do
+                if j > 1 then r.ImGui_Dummy(ctx, 0, 2) end
+                r.ImGui_TextWrapped(ctx, text)
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        if IS_WINDOWS or not section.windows then r.ImGui_Dummy(ctx, 0, 2) end
+    end
+end
+
 -- ---------------------------------------------------------------- window
 
-local DRAWERS = { colours = draw_colours, darkmode = draw_darkmode, reset = draw_reset }
+local DRAWERS = { colours = draw_colours, darkmode = draw_darkmode, reset = draw_reset, guide = draw_guide }
 
 local function draw_nav()
     if r.ImGui_BeginChild(ctx, "##nav", 170, 0, r.ImGui_ChildFlags_AlwaysUseWindowPadding and r.ImGui_ChildFlags_AlwaysUseWindowPadding() or 0) then
