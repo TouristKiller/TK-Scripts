@@ -182,6 +182,56 @@ const char __def_TK_StartFileDrag[] =
     "Starts a native OS file drag-and-drop for the given file path so it can be dropped onto external plugin windows "
     "(Windows OLE, macOS NSDraggingSession, Linux XDND). Returns true when the file was dropped on a target.";
 
+#ifdef _WIN32
+// The main window's menu bar: detached with SetMenu and kept here to put back.
+// Windows only, as the menu bar is part of the window just there; scripts guard
+// with `if reaper.TK_SetMainMenuVisible then ... end`.
+HMENU g_hiddenMenu = nullptr;
+
+bool TK_IsMainMenuVisible()
+{
+    HWND main = static_cast<HWND>(g_getMainHwnd ? g_getMainHwnd() : nullptr);
+    return main && GetMenu(main) != nullptr;
+}
+
+bool TK_SetMainMenuVisible(bool visible)
+{
+    HWND main = static_cast<HWND>(g_getMainHwnd ? g_getMainHwnd() : nullptr);
+    if (!main) return false;
+    if (visible)
+    {
+        if (!g_hiddenMenu) return GetMenu(main) != nullptr;
+        if (!SetMenu(main, g_hiddenMenu)) return false;
+        g_hiddenMenu = nullptr;
+        return true;
+    }
+    HMENU menu = GetMenu(main);
+    if (!menu) return true;
+    if (!SetMenu(main, nullptr)) return false;
+    g_hiddenMenu = menu;
+    return true;
+}
+
+void* __vararg_TK_IsMainMenuVisible(void**, int)
+{
+    return reinterpret_cast<void*>(static_cast<intptr_t>(TK_IsMainMenuVisible() ? 1 : 0));
+}
+
+void* __vararg_TK_SetMainMenuVisible(void** arglist, int numparms)
+{
+    const bool visible = numparms >= 1 && arglist && arglist[0] != nullptr;
+    return reinterpret_cast<void*>(static_cast<intptr_t>(TK_SetMainMenuVisible(visible) ? 1 : 0));
+}
+
+const char __def_TK_IsMainMenuVisible[] =
+    "bool\0\0\0"
+    "Returns whether REAPER's main window has its menu bar (Windows only).";
+
+const char __def_TK_SetMainMenuVisible[] =
+    "bool\0bool\0visible\0"
+    "Hides or shows the menu bar of REAPER's main window (Windows only). Returns true on success.";
+#endif
+
 bool registerApi(reaper_plugin_info_t* rec)
 {
     if (!rec->Register("API_TK_StartFileDrag", reinterpret_cast<void*>(TK_StartFileDrag))) return false;
@@ -191,6 +241,14 @@ bool registerApi(reaper_plugin_info_t* rec)
         return false;
     }
     rec->Register("APIdef_TK_StartFileDrag", const_cast<char*>(__def_TK_StartFileDrag));
+#ifdef _WIN32
+    rec->Register("API_TK_IsMainMenuVisible", reinterpret_cast<void*>(TK_IsMainMenuVisible));
+    rec->Register("APIvararg_TK_IsMainMenuVisible", reinterpret_cast<void*>(__vararg_TK_IsMainMenuVisible));
+    rec->Register("APIdef_TK_IsMainMenuVisible", const_cast<char*>(__def_TK_IsMainMenuVisible));
+    rec->Register("API_TK_SetMainMenuVisible", reinterpret_cast<void*>(TK_SetMainMenuVisible));
+    rec->Register("APIvararg_TK_SetMainMenuVisible", reinterpret_cast<void*>(__vararg_TK_SetMainMenuVisible));
+    rec->Register("APIdef_TK_SetMainMenuVisible", const_cast<char*>(__def_TK_SetMainMenuVisible));
+#endif
     return true;
 }
 
@@ -199,6 +257,12 @@ void unregisterApi()
     if (!g_rec) return;
     g_rec->Register("-API_TK_StartFileDrag", reinterpret_cast<void*>(TK_StartFileDrag));
     g_rec->Register("-APIvararg_TK_StartFileDrag", reinterpret_cast<void*>(__vararg_TK_StartFileDrag));
+#ifdef _WIN32
+    g_rec->Register("-API_TK_IsMainMenuVisible", reinterpret_cast<void*>(TK_IsMainMenuVisible));
+    g_rec->Register("-APIvararg_TK_IsMainMenuVisible", reinterpret_cast<void*>(__vararg_TK_IsMainMenuVisible));
+    g_rec->Register("-API_TK_SetMainMenuVisible", reinterpret_cast<void*>(TK_SetMainMenuVisible));
+    g_rec->Register("-APIvararg_TK_SetMainMenuVisible", reinterpret_cast<void*>(__vararg_TK_SetMainMenuVisible));
+#endif
 }
 }
 

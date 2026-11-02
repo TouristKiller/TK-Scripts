@@ -15,7 +15,12 @@ only expose the drag-to-plugin feature when the extension is present.
   - Returns `true` when the file was dropped on a target.
   - Windows (OLE), macOS (NSDraggingSession) and Linux (XDND) are implemented.
 
-Scripts guard the feature with `if reaper.TK_StartFileDrag then ... end`.
+- `reaper.TK_SetMainMenuVisible(visible)` -> `boolean` (Windows only)
+  - Hides or shows the menu bar of REAPER's main window. Used by TK Theme.
+- `reaper.TK_IsMainMenuVisible()` -> `boolean` (Windows only)
+
+Scripts guard the feature with `if reaper.TK_StartFileDrag then ... end`, and the menu
+bar with `if reaper.TK_SetMainMenuVisible then ... end`.
 
 ## Build outputs
 
