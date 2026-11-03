@@ -180,8 +180,8 @@
  </category>
 
  <category name="TK Theme">
-    <reapack name="TK_Theme_Dark" type="script" desc="TK Theme Dark">
-    <version name="0.9.6" author="TouristKiller" time="2026-11-03T00:24:39Z">
+    <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
+    <version name="0.9.7" author="TouristKiller" time="2026-11-03T15:07:03Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -203,10 +203,44 @@
      <source main="main" file="slots/TK_Theme_Slot_trackmgr.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_trackmgr.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_vkb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_vkb.lua</source>
      <source file="TK_Theme_Slot.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Slot.lua</source>
-     <source file="dist/TK Theme Dark.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Dark.factory.ReaperTheme</source>
+     <source file="TK_Theme_Zip.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Zip.lua</source>
      <source file="dist/darkmode_colors.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/darkmode_colors.txt</source>
+     <source file="dist/TK Theme Dark.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Dark.factory.ReaperTheme</source>
+     <source file="dist/TK Theme Light.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Light.factory.ReaperTheme</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/cap/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/cap/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/cap/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/cap/preview.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/cap/150/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/cap/150/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/cap/200/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/cap/200/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/classic/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/classic/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/classic/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/classic/preview.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/classic/150/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/classic/150/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/classic/200/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/classic/200/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/dot/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/dot/preview.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/slim/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/slim/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/slim/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/slim/preview.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/slim/150/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/slim/150/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Dark/mcp_volthumb/slim/200/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Dark/mcp_volthumb/slim/200/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/cap/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/cap/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/cap/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/cap/preview.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/cap/150/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/cap/150/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/cap/200/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/cap/200/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/classic/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/classic/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/classic/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/classic/preview.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/classic/150/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/classic/150/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/classic/200/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/classic/200/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/dot/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/dot/preview.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/slim/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/slim/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/slim/preview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/slim/preview.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/slim/150/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/slim/150/mcp_volthumb.png</source>
+     <source file="dist/parts/TK Theme Light/mcp_volthumb/slim/200/mcp_volthumb.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/parts/TK%20Theme%20Light/mcp_volthumb/slim/200/mcp_volthumb.png</source>
+     <source file="dist/looks/TK Theme Dark.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/looks/TK%20Theme%20Dark.png</source>
+     <source file="dist/looks/TK Theme Light.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/looks/TK%20Theme%20Light.png</source>
+     <source file="dist/look_icons/TK Theme Dark.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/look_icons/TK%20Theme%20Dark.zip</source>
+     <source file="dist/look_icons/TK Theme Light.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/look_icons/TK%20Theme%20Light.zip</source>
      <source type="theme" file="TK Theme Dark.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Dark.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Dark.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Dark.ReaperTheme</source>
+     <source type="theme" file="TK Theme Light.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Light.ReaperThemeZip</source>
+     <source type="theme" file="TK Theme Light.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Light.ReaperTheme</source>
      <source type="data" file="toolbar_icons/150/TK_Add_Track.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Add_Track.png</source>
      <source type="data" file="toolbar_icons/150/TK_Arm_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Arm_off.png</source>
      <source type="data" file="toolbar_icons/150/TK_Arm_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Arm_on.png</source>
@@ -237,6 +271,30 @@
      <source type="data" file="toolbar_icons/150/TK_Loop_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Loop_off.png</source>
      <source type="data" file="toolbar_icons/150/TK_Loop_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Loop_on.png</source>
      <source type="data" file="toolbar_icons/150/TK_MIDI.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_CC_Follows_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_CC_Follows_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_CC_Follows_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_CC_Follows_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Center_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Center_Notes.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Filter_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Filter_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Filter_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Filter_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Hide_Unused_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Hide_Unused_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Hide_Unused_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Hide_Unused_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Legato.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Legato.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Multitool.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Multitool.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Named_Notes_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Named_Notes_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Named_Notes_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Named_Notes_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Notation_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Notation_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Notation_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Notation_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Notes_To_Time.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Notes_To_Time.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Only_Used_CC_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Only_Used_CC_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Only_Used_CC_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Only_Used_CC_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Piano_Roll_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Piano_Roll_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Piano_Roll_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Piano_Roll_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Quantize_Ends.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Quantize_Ends.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Split.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Split.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Step_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Step_off.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Step_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Step_on.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Strum.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Strum.png</source>
+     <source type="data" file="toolbar_icons/150/TK_MIDI_Zoom_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_MIDI_Zoom_Notes.png</source>
      <source type="data" file="toolbar_icons/150/TK_Marker.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Marker.png</source>
      <source type="data" file="toolbar_icons/150/TK_Marquee_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Marquee_off.png</source>
      <source type="data" file="toolbar_icons/150/TK_Marquee_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Marquee_on.png</source>
@@ -249,6 +307,7 @@
      <source type="data" file="toolbar_icons/150/TK_Normalize.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Normalize.png</source>
      <source type="data" file="toolbar_icons/150/TK_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Notes.png</source>
      <source type="data" file="toolbar_icons/150/TK_Paste.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Paste.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Plate_TK-S73.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Plate_TK-S73.png</source>
      <source type="data" file="toolbar_icons/150/TK_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Play_off.png</source>
      <source type="data" file="toolbar_icons/150/TK_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Play_on.png</source>
      <source type="data" file="toolbar_icons/150/TK_Razor_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Razor_off.png</source>
@@ -307,6 +366,30 @@
      <source type="data" file="toolbar_icons/200/TK_Loop_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Loop_off.png</source>
      <source type="data" file="toolbar_icons/200/TK_Loop_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Loop_on.png</source>
      <source type="data" file="toolbar_icons/200/TK_MIDI.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_CC_Follows_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_CC_Follows_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_CC_Follows_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_CC_Follows_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Center_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Center_Notes.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Filter_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Filter_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Filter_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Filter_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Hide_Unused_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Hide_Unused_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Hide_Unused_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Hide_Unused_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Legato.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Legato.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Multitool.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Multitool.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Named_Notes_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Named_Notes_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Named_Notes_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Named_Notes_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Notation_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Notation_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Notation_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Notation_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Notes_To_Time.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Notes_To_Time.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Only_Used_CC_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Only_Used_CC_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Only_Used_CC_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Only_Used_CC_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Piano_Roll_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Piano_Roll_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Piano_Roll_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Piano_Roll_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Quantize_Ends.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Quantize_Ends.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Split.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Split.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Step_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Step_off.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Step_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Step_on.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Strum.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Strum.png</source>
+     <source type="data" file="toolbar_icons/200/TK_MIDI_Zoom_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_MIDI_Zoom_Notes.png</source>
      <source type="data" file="toolbar_icons/200/TK_Marker.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Marker.png</source>
      <source type="data" file="toolbar_icons/200/TK_Marquee_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Marquee_off.png</source>
      <source type="data" file="toolbar_icons/200/TK_Marquee_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Marquee_on.png</source>
@@ -319,6 +402,7 @@
      <source type="data" file="toolbar_icons/200/TK_Normalize.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Normalize.png</source>
      <source type="data" file="toolbar_icons/200/TK_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Notes.png</source>
      <source type="data" file="toolbar_icons/200/TK_Paste.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Paste.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Plate_TK-S73.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Plate_TK-S73.png</source>
      <source type="data" file="toolbar_icons/200/TK_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Play_off.png</source>
      <source type="data" file="toolbar_icons/200/TK_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Play_on.png</source>
      <source type="data" file="toolbar_icons/200/TK_Razor_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Razor_off.png</source>
@@ -377,6 +461,30 @@
      <source type="data" file="toolbar_icons/TK_Loop_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Loop_off.png</source>
      <source type="data" file="toolbar_icons/TK_Loop_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Loop_on.png</source>
      <source type="data" file="toolbar_icons/TK_MIDI.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_CC_Follows_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_CC_Follows_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_CC_Follows_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_CC_Follows_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Center_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Center_Notes.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Filter_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Filter_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Filter_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Filter_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Hide_Unused_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Hide_Unused_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Hide_Unused_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Hide_Unused_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Legato.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Legato.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Multitool.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Multitool.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Named_Notes_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Named_Notes_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Named_Notes_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Named_Notes_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Notation_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Notation_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Notation_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Notation_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Notes_To_Time.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Notes_To_Time.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Only_Used_CC_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Only_Used_CC_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Only_Used_CC_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Only_Used_CC_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Piano_Roll_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Piano_Roll_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Piano_Roll_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Piano_Roll_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Quantize_Ends.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Quantize_Ends.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Split.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Split.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Step_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Step_off.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Step_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Step_on.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Strum.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Strum.png</source>
+     <source type="data" file="toolbar_icons/TK_MIDI_Zoom_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_MIDI_Zoom_Notes.png</source>
      <source type="data" file="toolbar_icons/TK_Marker.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Marker.png</source>
      <source type="data" file="toolbar_icons/TK_Marquee_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Marquee_off.png</source>
      <source type="data" file="toolbar_icons/TK_Marquee_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Marquee_on.png</source>
@@ -389,6 +497,7 @@
      <source type="data" file="toolbar_icons/TK_Normalize.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Normalize.png</source>
      <source type="data" file="toolbar_icons/TK_Notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Notes.png</source>
      <source type="data" file="toolbar_icons/TK_Paste.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Paste.png</source>
+     <source type="data" file="toolbar_icons/TK_Plate_TK-S73.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Plate_TK-S73.png</source>
      <source type="data" file="toolbar_icons/TK_Play_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Play_off.png</source>
      <source type="data" file="toolbar_icons/TK_Play_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Play_on.png</source>
      <source type="data" file="toolbar_icons/TK_Razor_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Razor_off.png</source>
@@ -418,11 +527,14 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: presets. Save all your settings and colours under a name, load them again with undo, or share the file.
-+ Added: a Colour processing page with gamma, highlights, midtones, shadows, saturation and tint for the whole theme. They go along in presets.
-+ Added: transport buttons for Quit REAPER and for showing the master track in the track panel.
-+ Changed: Cap or Dot for the fader now goes for all mixer layouts at once.
-+ Changed: colours you save are kept apart and come back by themselves when you open the settings after an update. This starts with this version: colours saved in an earlier version are replaced once more by this update.
++ Added: a Look page at the top of the settings, with a new Light look next to Dark. A look changes colours and images; your layout settings go along. Options > Themes lists both, but your settings only go along when you change the look on this page.
++ Added: Classic and Slim fader handles on the Mixer page, next to Cap and Dot, chosen by their picture. Choosing Cap, Classic or Slim reloads the theme, so the screen may blink.
++ Added: rack screws, as an option on the transport and on the master in the track panel.
++ Added: TK_MIDI_ icons for the MIDI editor's toolbar, and more of REAPER's own icons in the theme's style: arrows, note shapes and the MIDI track list. TK_ icons now follow the look.
++ Changed: this package is now called TK Theme. It updates as before.
++ Changed: a preset also remembers its look and fader handle. Presets from earlier versions were made on Dark, so they load Dark.
++ Changed: the Look page says when a look uses your own colours, and can take it back to the look's own.
++ Fixed: the master's menu button in the mixer had kept Default 7's dark image.
 ]]></changelog>
     </version>
     </reapack>

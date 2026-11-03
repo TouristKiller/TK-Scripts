@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.6
+-- @version 0.9.7
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -281,6 +281,7 @@ local function global_off_or(need, other)
 end
 
 local PAGES = {
+    { title = "Look", draw = "look" },
     { title = "General", cards = {
         { "Tracks and strips", {
             S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims."),
@@ -331,6 +332,7 @@ local PAGES = {
         } },
         { "Master", {
             T("Only a meter", "tkMasterMeterOnly", nil, "The whole master becomes one big meter."),
+            T("Rack screws", "tkMasterScrews", nil, "On the left of the master, like the ones on the transport."),
             Off(global_on("tkMasterMeterOnly"), T("Meter", "tkMasterHideMeter", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Volume", "tkMasterHideVol", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Pan", "tkMasterHidePan", nil, nil, true)),
@@ -345,7 +347,7 @@ local PAGES = {
     } },
     { title = "Mixer", cards = {
         { "Fader", {
-            { kind = "handle", label = "Handle", hint = "For all layouts. A project opened later follows the next time this window opens." },
+            { kind = "handle", label = "Handle", hint = "For all layouts. A project opened later follows the next time this window opens. Cap, Classic and Slim reload the theme, so the screen may blink." },
         } },
         { "Per layout", {
             { kind = "layout", label = "Layout", hint = "These settings are for the strips on this layout. Layout A is the standard strip, B the narrow one, and C has a sidebar and more values. Set a track's layout in its right-click menu." },
@@ -401,6 +403,7 @@ local PAGES = {
     } },
     { title = "Transport buttons", cards = {
         { "Button windows", {
+            T("Rack screws", "tkTransScrews", nil, "Screws at both ends of the transport, as if it's mounted in a rack."),
             T("Left window at the far left", "tkBtnLeftEdge", nil, "Otherwise it sits right beside the transport buttons. Only when the transport is centred."),
             T("Right window at the far right", "tkBtnRightEdge", nil, "Otherwise it sits right beside the readouts."),
         } },
@@ -636,21 +639,206 @@ local function set_handle(dot)
     r.ThemeLayout_RefreshAll()
 end
 
+-- Parts: images no parameter or layout can reach. The chosen variant is written into
+-- the theme's zip and the theme reloaded. parts.txt keeps the choice, so it can come
+-- back when an update has replaced the zip.
+local Zip = dofile(here .. "TK_Theme_Zip.lua")
+local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {} }
+-- a look is a theme file of its own, with its own images, colours and parts
+local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
+
+function look.current()
+    local base = (r.GetLastColorThemeFile() or ""):match("([^\\/]+)%.ReaperTheme")
+    for _, entry in ipairs(look.list) do
+        if entry.theme == base then return entry end
+    end
+    return nil
+end
+
+function parts.load()
+    for part, variant in (read_all(parts.file) or ""):gmatch("([%w_]+)=([%w_]+)") do
+        parts.chosen[part] = variant
+    end
+end
+
+function parts.save()
+    r.RecursiveCreateDirectory(r.GetResourcePath() .. "/Data/TK Theme", 0)
+    local lines = {}
+    for part, variant in pairs(parts.chosen) do lines[#lines + 1] = part .. "=" .. variant end
+    write_all(parts.file, table.concat(lines, "\n") .. "\n")
+end
+
+-- REAPER takes the TK_ toolbar icons from Data/toolbar_icons, whatever the theme holds,
+-- so each look puts its own there. An update puts Dark's back, which the check spots.
+function look.apply_icons(entry)
+    local pack = here .. "dist/look_icons/" .. entry.theme .. ".zip"
+    local data = r.GetResourcePath() .. "/Data/toolbar_icons/"
+    if Zip.same_files(pack, data) then return false end
+    for _, sub in ipairs({ "150", "200" }) do r.RecursiveCreateDirectory(data .. sub, 0) end
+    return Zip.extract(pack, data) == true
+end
+
+function parts.zip_path()
+    return ((r.GetLastColorThemeFile() or ""):gsub("Zip$", "")) .. "Zip"
+end
+
+function parts.folder(zip, part, variant)
+    return here .. "dist/parts/" .. (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. "/" .. part .. "/" .. variant .. "/"
+end
+
+function parts.write(part, variant, zip)
+    zip = zip or parts.zip_path()
+    local root = Zip.root(zip)
+    if not root then return nil, "the loaded theme has no zip" end
+    local files = {}
+    for _, sub in ipairs({ "", "150/", "200/" }) do
+        local data = read_all(parts.folder(zip, part, variant) .. sub .. part .. ".png")
+        if not data then return nil, "the images of this choice are missing" end
+        files[root .. "/" .. sub .. part .. ".png"] = data
+    end
+    return Zip.replace(zip, files)
+end
+
+function parts.in_zip(part, variant, zip)
+    zip = zip or parts.zip_path()
+    local root = Zip.root(zip)
+    local data = read_all(parts.folder(zip, part, variant) .. part .. ".png")
+    return not root or not data or Zip.crc_of(zip, root .. "/" .. part .. ".png") == Zip.crc32(data)
+end
+
+-- REAPER keeps the images of the theme that is already loaded, so step off it first:
+-- onto a copy of this theme, or Default 7 if that can't be made
+function parts.reload()
+    local current = r.GetLastColorThemeFile()
+    local config = r.GetResourcePath() .. "/reaper-themeconfig.ini"
+    local step = Zip.make_stand_in(current, config)
+        or r.GetResourcePath() .. "/ColorThemes/Default_7.0.ReaperThemeZip"
+    r.PreventUIRefresh(1)
+    if read_all(step) then r.OpenColorThemeFile(step) end
+    r.OpenColorThemeFile(current)
+    r.PreventUIRefresh(-1)
+    Zip.remove_stand_in(current, config)
+    load_params()
+    refresh_palette()
+    r.ThemeLayout_RefreshAll()
+    r.UpdateArrange()
+    r.TrackList_AdjustWindows(false)
+    r.DockWindowRefresh()
+end
+
+function parts.choose(part, variant, forced)
+    if not look.current() then
+        state.msg = "Load one of TK Theme's looks first."
+        return false
+    end
+    if not forced and parts.colours_unsaved() then
+        state.msg = "Save or undo your colour changes first: this reloads the theme."
+        return false
+    end
+    local ok, err = parts.write(part, variant)
+    if not ok then
+        state.msg = "Could not change the theme file: " .. tostring(err) .. "."
+        return false
+    end
+    parts.chosen[part] = variant
+    parts.save()
+    parts.reload()
+    return true
+end
+
+-- after an update the zip holds the standard images again
+function parts.restore()
+    parts.load()
+    if not look.current() then return end
+    local changed = false
+    for part, variant in pairs(parts.chosen) do
+        if not parts.in_zip(part, variant) and parts.write(part, variant) then changed = true end
+    end
+    if look.apply_icons(look.current()) then changed = true end
+    if changed then parts.reload() end
+end
+
+function parts.picture(path)
+    if parts.images[path] == nil then
+        local ok, image = pcall(r.ImGui_CreateImage, path)
+        if ok and image then r.ImGui_Attach(ctx, image) end
+        parts.images[path] = ok and image or false
+    end
+    return parts.images[path]
+end
+
+function parts.image(part, variant)
+    return parts.picture(parts.folder(parts.zip_path(), part, variant) .. "preview.png")
+end
+
+-- Some parameters hold the look's own panel colours, as their defaults: the backgrounds
+-- of the transport, track panels and mixer. They are no settings, and must never follow
+-- from another look or a preset, so they always stay at this look's default.
+function look.own_colours()
+    local changed = false
+    for _, n in ipairs(order) do
+        if (n:find("BgCol[RGB]$") or n:find("StatusCol[RGB]$")) and P[n].value ~= P[n].def then
+            set_param(n, math.floor(P[n].def), true)
+            changed = true
+        end
+    end
+    return changed
+end
+
+-- for presets and undo: what's chosen now, and bringing it back
+function look.save_lines(lines)
+    local entry = look.current()
+    if entry then lines[#lines + 1] = "look=" .. entry.theme end
+    for part, variant in pairs(parts.chosen) do lines[#lines + 1] = "part:" .. part .. "=" .. variant end
+end
+
+function look.apply_saved(text)
+    local theme = text:match("[\r\n]look=([^\r\n]*)") or look.list[1].theme     -- older ones were all Dark
+    for _, entry in ipairs(look.list) do
+        if entry.theme == theme then look.switch(entry, true) end
+    end
+    for part, variant in text:gmatch("[\r\n]part:([%w_]+)=([%w_]+)") do
+        if (parts.chosen[part] or "cap") ~= variant then parts.choose(part, variant, true) end
+    end
+end
+
+local HANDLE_PART = "mcp_volthumb"
+local HANDLES = { { "cap", "Cap" }, { "classic", "Classic" }, { "slim", "Slim" }, { "dot", "Dot" } }
+
 local function draw_handle(item, id)
     row_label(item.label)
     local dot = handle_is_dot()
+    local current = parts.chosen[HANDLE_PART] or "cap"
     r.ImGui_PushID(ctx, id)
-    for i, choice in ipairs({ { "Cap", false }, { "Dot", true } }) do
-        if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
-        local active = dot == choice[2]
+    for i, choice in ipairs(HANDLES) do
+        local key, name = choice[1], choice[2]
+        if i > 1 then r.ImGui_SameLine(ctx, 0, 6) end
+        r.ImGui_BeginGroup(ctx)
+        local active = dot and key == "dot" or not dot and key == current
         if active then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
         end
-        local clicked = r.ImGui_Button(ctx, choice[1], 46, 0)
-        if active then r.ImGui_PopStyleColor(ctx, 2) end
+        local x = r.ImGui_GetCursorPosX(ctx)
+        local image = parts.image(HANDLE_PART, key)
+        local clicked
+        if image then
+            clicked = r.ImGui_ImageButton(ctx, "##" .. key, image, 47, 44)
+        else
+            clicked = r.ImGui_Button(ctx, "?##" .. key, 55, 52)
+        end
+        if active then r.ImGui_PopStyleColor(ctx) end
+        local width = r.ImGui_GetItemRectSize(ctx)
+        r.ImGui_SetCursorPosX(ctx, x + (width - r.ImGui_CalcTextSize(ctx, name)) / 2)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(active and UI.ink or UI.text))
+        r.ImGui_Text(ctx, name)
+        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_EndGroup(ctx)
         if clicked and not active then
-            set_handle(choice[2])
+            if key == "dot" then
+                set_handle(true)
+            elseif key == current or parts.choose(HANDLE_PART, key) then
+                set_handle(false)
+            end
         end
     end
     r.ImGui_PopID(ctx)
@@ -893,6 +1081,7 @@ local COLOUR_GROUPS = {
 }
 
 local changed_colours = {}
+function parts.colours_unsaved() return next(changed_colours) ~= nil end
 
 local remember_colours     -- further down, once the factory colours are known
 
@@ -939,7 +1128,10 @@ end
 
 -- a ReaPack update replaces the theme's colour file. The colours that differ from the
 -- theme's own are kept here too, and come back when this window opens after an update
-local my_colours_file = r.GetResourcePath() .. "/Data/TK Theme/my_colours.txt"
+local function my_colours_file()
+    local entry = look.current()
+    return r.GetResourcePath() .. "/Data/TK Theme/my_colours" .. (entry and entry.name ~= "Dark" and "_" .. entry.name or "") .. ".txt"
+end
 
 remember_colours = function()
     local lines = {}
@@ -953,17 +1145,17 @@ remember_colours = function()
         end
     end
     if #lines == 0 then
-        os.remove(my_colours_file)
+        os.remove(my_colours_file())
     else
         r.RecursiveCreateDirectory(r.GetResourcePath() .. "/Data/TK Theme", 0)
-        write_all(my_colours_file, table.concat(lines, "\n") .. "\n")
+        write_all(my_colours_file(), table.concat(lines, "\n") .. "\n")
     end
 end
 
 -- only a colour that's back at the theme's own: anything else was changed on purpose
 local function restore_my_colours()
-    local text = read_all(my_colours_file)
-    if not text then return end
+    local text = read_all(my_colours_file())
+    if not text or not look.current() then return end
     local restored = false
     for key, value in text:gmatch("([%w_]+)=(%d+)") do
         local mine, factory = tonumber(value), factory_colour(key)
@@ -987,17 +1179,21 @@ local function set_colour(entry, native)
     end
 end
 
+local function reset_colours()
+    for _, group in ipairs(COLOUR_GROUPS) do
+        for _, entry in ipairs(group[2]) do
+            local native = factory_colour(entry[2][1])
+            if native then set_colour(entry, native) end
+        end
+    end
+    repaint_after_colour()
+end
+
 local function draw_colours()
     hint_text("Colours REAPER draws itself. Panels, the glass windows and icons are images in the theme, so they keep their colours.")
     r.ImGui_Dummy(ctx, 0, 2)
     if confirm_button("colours_all", "Reset all colours", "Click again to reset all colours") then
-        for _, group in ipairs(COLOUR_GROUPS) do
-            for _, entry in ipairs(group[2]) do
-                local native = factory_colour(entry[2][1])
-                if native then set_colour(entry, native) end
-            end
-        end
-        repaint_after_colour()
+        reset_colours()
         state.msg = "Colours reset. Click Save colours to keep them."
     end
     r.ImGui_Dummy(ctx, 0, 2)
@@ -1237,6 +1433,7 @@ local function save_undo()
         if name then lines[#lines + 1] = "processing:" .. id .. "=" .. tostring(math.floor(value)) end
     end
     lines[#lines + 1] = "handle=" .. (handle_is_dot() and "dot" or "cap")
+    look.save_lines(lines)
     lines[#lines + 1] = "startup=" .. (startup.on and "1" or "0")
     local path = theme_file()
     local theme = path and read_all(path)
@@ -1274,6 +1471,7 @@ local function undo_reset()
     local s = read_all(undo_dir .. "/settings.txt")
     if not s then return false end
     local values = {}
+    look.apply_saved(s)
     clear_buttons_and_lists()
     for line in s:gmatch("[^\r\n]+") do
         local param, v = line:match("^param:(.-)=(-?%d+)$")
@@ -1295,6 +1493,7 @@ local function undo_reset()
             if key then values[key] = val end
         end
     end
+    look.own_colours()
     r.ThemeLayout_RefreshAll()
     if values.handle then set_handle(values.handle == "dot") end
     if (values.startup == "1") ~= startup.on then set_startup(values.startup == "1") end
@@ -1334,13 +1533,14 @@ local function factory_reset()
     clear_buttons_and_lists()
     if startup.on then set_startup(false) end
     set_handle(false)
+    if (parts.chosen[HANDLE_PART] or "cap") ~= "cap" then parts.choose(HANDLE_PART, "cap", true) end
     local notes = {}
     local path = theme_file()
     local base = path and path:match("([^\\/]+)%.ReaperTheme$")
     local factory = base and read_all(here .. "dist/" .. base .. ".factory.ReaperTheme")
     if factory and write_all(path, factory) then
         changed_colours = {}
-        os.remove(my_colours_file)
+        os.remove(my_colours_file())
         r.OpenColorThemeFile(path)
     else
         notes[#notes + 1] = "The theme's colour file couldn't be reset."
@@ -1359,7 +1559,7 @@ end
 -- ---------------------------------------------------------------- presets
 
 -- a preset is one text file: every setting, colour, chosen action, the colour
--- processing and the fader handle. Not what belongs to a project or to REAPER as a whole; dark mode colours
+-- processing, the look and the fader handle. Not what belongs to a project or to REAPER as a whole; dark mode colours
 -- only if asked for, as they apply to all of REAPER and need a restart.
 local preset_dir = r.GetResourcePath() .. "/Data/TK Theme/presets"
 
@@ -1410,6 +1610,7 @@ local function save_preset(name, with_dark)
         if name then lines[#lines + 1] = "processing:" .. id .. "=" .. tostring(math.floor(value)) end
     end
     lines[#lines + 1] = "handle=" .. (handle_is_dot() and "dot" or "cap")
+    look.save_lines(lines)
     if with_dark and ini_get("win32_darkmode_colors") then
         lines[#lines + 1] = "win32_darkmode_colors=" .. ini_get("win32_darkmode_colors")
     end
@@ -1428,6 +1629,7 @@ local function load_preset(name, with_dark)
         return
     end
     local params, colours, values = {}, {}, {}
+    look.apply_saved(s)
     clear_buttons_and_lists()
     reset_processing()      -- what the preset holds comes right back
     local missing = 0
@@ -1459,6 +1661,7 @@ local function load_preset(name, with_dark)
             r.ThemeLayout_SetParameter(P[n].idx, v, true)
         end
     end
+    look.own_colours()
     r.ThemeLayout_RefreshAll()
     if values.handle then set_handle(values.handle == "dot") end
     local notes = {}
@@ -1496,7 +1699,7 @@ local function draw_undo_card()
 end
 
 local function draw_presets()
-    hint_text("A preset holds every setting, colour, the colour processing, chosen actions and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
+    hint_text("A preset holds every setting, colour, the colour processing, chosen actions, the look and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
     r.ImGui_Dummy(ctx, 0, 2)
     if begin_card("Save as a new preset", "ps") then
         row_label("Name")
@@ -1574,9 +1777,137 @@ local function draw_reset()
     draw_undo_card()
 end
 
+-- ---------------------------------------------------------------- look
+
+-- REAPER keeps layout settings per theme name, so they go along to the new look.
+-- Colours stay with each look.
+function look.switch(entry, forced)
+    if look.current() == entry then return true end
+    if not forced and parts.colours_unsaved() then
+        state.msg = "Save or undo your colour changes first: they belong to this look."
+        return false
+    end
+    local folder = r.GetResourcePath() .. "/ColorThemes/"
+    local zip, loose = folder .. entry.theme .. ".ReaperThemeZip", folder .. entry.theme .. ".ReaperTheme"
+    if not Zip.root(zip) then
+        state.msg = "This look isn't installed: " .. entry.theme .. "."
+        return false
+    end
+    if not read_all(loose) then
+        local factory = read_all(here .. "dist/" .. entry.theme .. ".factory.ReaperTheme")
+        if factory then write_all(loose, factory) end
+    end
+    for part, variant in pairs(parts.chosen) do
+        if not parts.in_zip(part, variant, zip) then parts.write(part, variant, zip) end
+    end
+    look.apply_icons(entry)
+
+    local on_look, values, processing, layouts = look.current(), {}, {}, {}
+    if on_look then
+        for _, n in ipairs(order) do
+            if n ~= "tkTransMetroOn" then values[n] = math.floor(P[n].value) end
+        end
+        for _, id in ipairs(processing_ids()) do
+            local name, _, value = r.ThemeLayout_GetParameter(id)
+            if name then processing[id] = math.floor(value) end
+        end
+        for _, section in ipairs({ "tcp", "master_tcp", "envcp", "trans" }) do
+            local ok, name = r.ThemeLayout_GetLayout(section, -1)
+            if ok and name ~= "" then layouts[section] = name end
+        end
+    end
+    local dot = handle_is_dot()
+
+    r.PreventUIRefresh(1)
+    r.OpenColorThemeFile(read_all(loose) and loose or zip)
+    changed_colours, factory_colours = {}, nil
+    load_params()
+    for n, v in pairs(values) do set_param(n, v, true) end
+    for id, v in pairs(processing) do r.ThemeLayout_SetParameter(id, v, true) end
+    for section, name in pairs(layouts) do r.ThemeLayout_SetLayout(section, name) end
+    look.own_colours()
+    if on_look then set_handle(dot) end
+    r.PreventUIRefresh(-1)
+    load_params()
+    refresh_palette()
+    repaint_after_colour()
+    if not dark.dirty then load_dark() end
+    return true
+end
+
+-- colours from the Colours page or a preset stay with a look, which can look like a
+-- look that didn't change all the way, so this page says so
+function look.has_own_colours()
+    local own = false
+    colour_keys(function(key)
+        local factory = factory_colour(key)
+        if factory and factory ~= r.GetThemeColor(key, 0) & 0xFFFFFF then own = true end
+    end)
+    return own
+end
+
+local function draw_look()
+    hint_text("A look sets the colours and images of the whole theme. Your layout settings stay as they are. Colours you change on the Colours page are kept per look.")
+    r.ImGui_Dummy(ctx, 0, 2)
+    local current = look.current()
+    if begin_card("Look", "lk") then
+        for _, entry in ipairs(look.list) do
+            r.ImGui_PushID(ctx, entry.name)
+            local active = current == entry
+            if active then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55))) end
+            local image = parts.picture(here .. "dist/looks/" .. entry.theme .. ".png")
+            local clicked
+            if image then
+                local w, h = r.ImGui_Image_GetSize(image)
+                clicked = r.ImGui_ImageButton(ctx, "##look", image, w, h)
+            else
+                clicked = r.ImGui_Button(ctx, "?##look", 120, 52)
+            end
+            if active then r.ImGui_PopStyleColor(ctx) end
+            r.ImGui_SameLine(ctx, 0, 10)
+            r.ImGui_AlignTextToFramePadding(ctx)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(active and UI.ink or UI.text))
+            r.ImGui_Text(ctx, entry.name)
+            r.ImGui_PopStyleColor(ctx)
+            if clicked and not active and look.switch(entry) then
+                state.msg = entry.name .. " is on."
+            end
+            r.ImGui_PopID(ctx)
+        end
+        if not current then
+            hint_text("Another theme is loaded now. Choosing a look loads TK Theme, with its settings as you last left them.")
+        elseif look.has_own_colours() then
+            r.ImGui_Dummy(ctx, 0, 2)
+            hint_text("This look uses your own colours, from the Colours page or a preset. They are why it can differ from the picture above.")
+            if confirm_button("look_colours", "Back to the colours of " .. current.name, "Click again to replace your colours") then
+                reset_colours()
+                state.msg = save_colours() and ("Back to the colours of " .. current.name .. ".") or "Could not write the theme file."
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    local wants_dark = current and current.name == "Dark"
+    if IS_WINDOWS and current and dark.on ~= wants_dark then
+        r.ImGui_Dummy(ctx, 0, 2)
+        if begin_card("Dark mode", "lkd") then
+            hint_text(wants_dark and "Dark mode is off, so lists and scrollbars are light beside this dark look."
+                or "Dark mode is on, so menus, lists and scrollbars stay dark beside this light look. Whether you like that is up to you.")
+            if r.ImGui_Button(ctx, (wants_dark and "Turn dark mode on" or "Turn dark mode off") .. " (restart needed)") then
+                dark.on = wants_dark
+                apply_dark()
+            end
+            r.ImGui_EndChild(ctx)
+        end
+    end
+end
+
 -- ---------------------------------------------------------------- guide
 
 local GUIDE = {
+    { "Look", {
+        "The Look page chooses Dark or Light. A look changes colours and images only: your layout settings go along. Colours you changed are kept per look, and a preset remembers which look it was saved with. When a look uses your own colours, this page says so and can take it back to the look's own.",
+        "In Options > Themes the looks are listed as TK Theme Dark and TK Theme Light. Choosing one there works too, but your settings only go along when you change the look on this page.",
+    } },
     { "Transport", {
         "The gear at the end of the transport opens this window.",
         "The metronome button lights up while the metronome is on. Its small arrow opens the metronome settings. To have the light right before your first click, turn on \"Metronome light at startup\" on the General page.",
@@ -1597,7 +1928,7 @@ local GUIDE = {
         "Under Selected tracks you set a height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
     } },
     { "Mixer", {
-        "Choose a fader cap or a dot on the Mixer page, for all layouts. In the track's layout menu, each layout has a twin with the word Dot; this switch moves tracks between them. A project opened later follows the next time this window opens.",
+        "Choose the fader handle on the Mixer page, for all layouts. In the track's layout menu, each layout has a twin with the word Dot; this switch moves tracks between them. A project opened later follows the next time this window opens.",
         "Layouts A, B and C each have their own settings. The width decides the form: a narrow strip under 52, an intermediate one under 88, a normal one from 88. What doesn't count for the current form shows grey. A sidebar puts the FX and send lists beside the strip.",
         "Turn on the FX and send lists by right-clicking the mixer. An FX's embedded UI shows in that list when the strip is tall enough.",
     } },
@@ -1636,7 +1967,7 @@ end
 
 -- ---------------------------------------------------------------- window
 
-local DRAWERS = { colours = draw_colours, darkmode = draw_darkmode, reset = draw_reset, presets = draw_presets, processing = draw_processing, guide = draw_guide }
+local DRAWERS = { look = draw_look, colours = draw_colours, darkmode = draw_darkmode, reset = draw_reset, presets = draw_presets, processing = draw_processing, guide = draw_guide }
 
 local function draw_nav()
     if r.ImGui_BeginChild(ctx, "##nav", 170, 0, r.ImGui_ChildFlags_AlwaysUseWindowPadding and r.ImGui_ChildFlags_AlwaysUseWindowPadding() or 0) then
@@ -1783,6 +2114,8 @@ load_startup()
 refresh_palette()
 load_params()
 load_dark()
+parts.restore()
+if look.current() and look.own_colours() then r.ThemeLayout_RefreshAll() end
 restore_my_colours()
 if handle_is_dot() then sync_track_handles(true) end
 refresh_palette()
