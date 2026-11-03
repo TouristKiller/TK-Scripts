@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.7
+-- @version 0.9.8
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -280,9 +280,14 @@ local function global_off_or(need, other)
     return function() return not global_value(need) or global_value(other) end
 end
 
+local SLIDER_HANDLES = { { "dot", "Dot" }, { "ring", "Ring" }, { "bar", "Bar" }, { "cap", "Cap" }, { "classic", "Classic" } }
+
 local PAGES = {
     { title = "Look", draw = "look" },
     { title = "General", cards = {
+        { "Meters", {
+            { kind = "meter", label = "Type", hint = "For the track panel and the mixer, in every look. Medium and Large segments grow with the height of the meter. Choosing one reloads the theme, so the screen may blink." },
+        } },
         { "Tracks and strips", {
             S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims."),
             S("Selection strength", "selectStrength", nil, "How much a selected track lightens."),
@@ -303,6 +308,8 @@ local PAGES = {
     } },
     { title = "Track panel", cards = {
         { "All tracks", {
+            { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES,
+              hint = "For volume, pan and width, in all layouts and on the master. Choosing one reloads the theme, so the screen may blink." },
             S("Section margins", "sectionMargin", nil, "Space around the windows, in track panels and envelope lanes. Clicking between or in the windows selects the track."),
             S("Folder indent", "tcpfolderIndentSize"),
         } },
@@ -346,8 +353,10 @@ local PAGES = {
         } },
     } },
     { title = "Mixer", cards = {
-        { "Fader", {
-            { kind = "handle", label = "Handle", hint = "For all layouts. A project opened later follows the next time this window opens. Cap, Classic and Slim reload the theme, so the screen may blink." },
+        { "Handles", {
+            { kind = "handle", label = "Fader", hint = "For all layouts. A project opened later follows the next time this window opens. All but Dot reload the theme, so the screen may blink." },
+            { kind = "part", part = "mcp_pan", label = "Pan and width", choices = SLIDER_HANDLES,
+              hint = "For all layouts and the master. Choosing one reloads the theme, so the screen may blink." },
         } },
         { "Per layout", {
             { kind = "layout", label = "Layout", hint = "These settings are for the strips on this layout. Layout A is the standard strip, B the narrow one, and C has a sidebar and more values. Set a track's layout in its right-click menu." },
@@ -643,7 +652,9 @@ end
 -- the theme's zip and the theme reloaded. parts.txt keeps the choice, so it can come
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
-local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {} }
+local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
+    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue" },
+    images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
 
@@ -682,28 +693,117 @@ function parts.zip_path()
     return ((r.GetLastColorThemeFile() or ""):gsub("Zip$", "")) .. "Zip"
 end
 
-function parts.folder(zip, part, variant)
-    return here .. "dist/parts/" .. (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. "/" .. part .. "/" .. variant .. "/"
+-- One pack per look and accent colour holds everything to choose from: what the accent
+-- changes, keys.txt with its colour lines, and under parts/ every part in that colour.
+parts.packs = {}
+function parts.pack(zip, accent)
+    accent = accent or parts.chosen.accent or parts.default.accent
+    local path = here .. "dist/accents/" .. (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. "/" .. accent .. ".zip"
+    if parts.packs[path] == nil then parts.packs[path] = Zip.read_stored(path) or false end
+    return parts.packs[path]
 end
 
-function parts.write(part, variant, zip)
+function parts.read(zip, accent, part, variant, file)
+    local pack = parts.pack(zip, accent)
+    return pack and pack["parts/" .. part .. "/" .. variant .. "/" .. file]
+end
+
+-- the images of a part, as they are named in the theme. Meters have no scaled versions
+function parts.files(part)
+    if part ~= "meter" then
+        local files = {}
+        for _, name in ipairs(parts.images_of[part] or { part }) do
+            for _, sub in ipairs({ "", "150/", "200/" }) do files[#files + 1] = sub .. name .. ".png" end
+        end
+        return files
+    end
+    -- the first is what parts.in_zip compares: the strip, which differs per type
+    local files = {}
+    for _, o in ipairs({ "v", "h" }) do
+        for _, name in ipairs({ "meter_strip_" .. o, "meter_strip_" .. o .. "_rms", "meter_strip_" .. o .. "_gr", "meter_clip_" .. o }) do
+            files[#files + 1] = name .. ".png"
+        end
+    end
+    files[#files + 1] = "meter_clip_v_rms2.png"
+    return files
+end
+
+-- A part can also need lines in the theme's colour file: keys.txt beside its images.
+-- Returns whether that file already has them, and the text it should hold.
+function parts.keys(keys, zip)
+    local loose = zip:gsub("Zip$", "")
+    local text = read_all(loose)
+    if not keys or not text then return true end
+    local same = true
+    for key, value in keys:gmatch("([%w_]+)=(%-?%d+)") do
+        text = text:gsub("([\r\n]" .. key .. "=)(%-?%d+)", function(head, old)
+            if old ~= value then same = false end
+            return head .. value
+        end, 1)
+    end
+    return same, text, loose
+end
+
+-- the meter comes from the pack too, so an accent writes the chosen type in its own colour,
+-- and the other parts go back over what it holds
+function parts.write_accent(variant, zip, root)
+    local pack = parts.pack(zip, variant)
+    if not pack then return nil, "this colour is missing" end
+    local files = {}
+    for name, data in pairs(pack) do
+        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" then files[root .. "/" .. name] = data end
+    end
+    local ok, err = Zip.replace(zip, files)
+    if not ok then return nil, err end
+    local same, text, loose = parts.keys(pack["keys.txt"], zip)
+    if not same then
+        ok, err = Zip.save(loose, text)
+        if not ok then return nil, err end
+    end
+    ok, err = parts.write("meter", parts.chosen.meter or parts.default.meter, zip, variant)
+    if not ok then return nil, err end
+    for part, chosen in pairs(parts.chosen) do
+        if part ~= "accent" and part ~= "meter" then parts.write(part, chosen, zip, variant) end
+    end
+    return true
+end
+
+function parts.write(part, variant, zip, accent)
     zip = zip or parts.zip_path()
     local root = Zip.root(zip)
     if not root then return nil, "the loaded theme has no zip" end
+    if part == "accent" then return parts.write_accent(variant, zip, root) end
     local files = {}
-    for _, sub in ipairs({ "", "150/", "200/" }) do
-        local data = read_all(parts.folder(zip, part, variant) .. sub .. part .. ".png")
+    for _, name in ipairs(parts.files(part)) do
+        local data = parts.read(zip, accent, part, variant, name)
         if not data then return nil, "the images of this choice are missing" end
-        files[root .. "/" .. sub .. part .. ".png"] = data
+        files[root .. "/" .. name] = data
     end
-    return Zip.replace(zip, files)
+    local ok, err = Zip.replace(zip, files)
+    if not ok then return nil, err end
+    local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip)
+    if same then return true end
+    return Zip.save(loose, text)
+end
+
+function parts.accent_in_zip(variant, zip, root)
+    local pack = parts.pack(zip, variant)
+    if not pack then return true end
+    local crcs = Zip.crc_map(zip)
+    for name, data in pairs(pack) do
+        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" and crcs[root .. "/" .. name] ~= Zip.crc32(data) then return false end
+    end
+    return (parts.keys(pack["keys.txt"], zip))
 end
 
 function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
     local root = Zip.root(zip)
-    local data = read_all(parts.folder(zip, part, variant) .. part .. ".png")
-    return not root or not data or Zip.crc_of(zip, root .. "/" .. part .. ".png") == Zip.crc32(data)
+    if part == "accent" then return not root or parts.accent_in_zip(variant, zip, root) end
+    local name = parts.files(part)[1]
+    local data = parts.read(zip, nil, part, variant, name)
+    if not root or not data then return true end
+    return Zip.crc_of(zip, root .. "/" .. name) == Zip.crc32(data) and (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip))
 end
 
 -- REAPER keeps the images of the theme that is already loaded, so step off it first:
@@ -743,6 +843,7 @@ function parts.choose(part, variant, forced)
     parts.chosen[part] = variant
     parts.save()
     parts.reload()
+    parts.forget_factory()
     return true
 end
 
@@ -768,7 +869,16 @@ function parts.picture(path)
 end
 
 function parts.image(part, variant)
-    return parts.picture(parts.folder(parts.zip_path(), part, variant) .. "preview.png")
+    local zip = parts.zip_path()
+    local accent = parts.chosen.accent or parts.default.accent
+    local key = zip .. "|" .. accent .. "|" .. part .. "|" .. variant
+    if parts.images[key] == nil then
+        local data = parts.read(zip, accent, part, variant, "preview.png")
+        local ok, image = pcall(r.ImGui_CreateImageFromMem, data or "")
+        if ok and image then r.ImGui_Attach(ctx, image) end
+        parts.images[key] = ok and image or false
+    end
+    return parts.images[key]
 end
 
 -- Some parameters hold the look's own panel colours, as their defaults: the backgrounds
@@ -798,31 +908,41 @@ function look.apply_saved(text)
         if entry.theme == theme then look.switch(entry, true) end
     end
     for part, variant in text:gmatch("[\r\n]part:([%w_]+)=([%w_]+)") do
-        if (parts.chosen[part] or "cap") ~= variant then parts.choose(part, variant, true) end
+        if (parts.chosen[part] or parts.default[part]) ~= variant then parts.choose(part, variant, true) end
     end
 end
 
 local HANDLE_PART = "mcp_volthumb"
-local HANDLES = { { "cap", "Cap" }, { "classic", "Classic" }, { "slim", "Slim" }, { "dot", "Dot" } }
+local HANDLES = { { "cap", "Cap" }, { "classic", "Classic" }, { "slim", "Slim" }, { "ring", "Ring" }, { "dot", "Dot" } }
 
-local function draw_handle(item, id)
-    row_label(item.label)
-    local dot = handle_is_dot()
-    local current = parts.chosen[HANDLE_PART] or "cap"
+-- a row of picture buttons; returns the key of the one clicked, if it wasn't on already
+function parts.buttons(id, part, choices, current)
+    local picked
+    local left = r.ImGui_GetCursorPosX(ctx)
+    local last_w = 0
     r.ImGui_PushID(ctx, id)
-    for i, choice in ipairs(HANDLES) do
+    for i, choice in ipairs(choices) do
         local key, name = choice[1], choice[2]
-        if i > 1 then r.ImGui_SameLine(ctx, 0, 6) end
+        if i > 1 then
+            r.ImGui_SameLine(ctx, 0, 6)
+            -- what doesn't fit goes on a next row, under the first button
+            if r.ImGui_GetContentRegionAvail(ctx) < last_w then
+                r.ImGui_NewLine(ctx)
+                r.ImGui_Dummy(ctx, 0, 2)
+                r.ImGui_SetCursorPosX(ctx, left)
+            end
+        end
         r.ImGui_BeginGroup(ctx)
-        local active = dot and key == "dot" or not dot and key == current
+        local active = key == current
         if active then
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
         end
         local x = r.ImGui_GetCursorPosX(ctx)
-        local image = parts.image(HANDLE_PART, key)
+        local image = parts.image(part, key)
         local clicked
         if image then
-            clicked = r.ImGui_ImageButton(ctx, "##" .. key, image, 47, 44)
+            local w, h = r.ImGui_Image_GetSize(image)
+            clicked = r.ImGui_ImageButton(ctx, "##" .. key, image, w, h)
         else
             clicked = r.ImGui_Button(ctx, "?##" .. key, 55, 52)
         end
@@ -833,15 +953,40 @@ local function draw_handle(item, id)
         r.ImGui_Text(ctx, name)
         r.ImGui_PopStyleColor(ctx)
         r.ImGui_EndGroup(ctx)
-        if clicked and not active then
-            if key == "dot" then
-                set_handle(true)
-            elseif key == current or parts.choose(HANDLE_PART, key) then
-                set_handle(false)
-            end
-        end
+        last_w = r.ImGui_GetItemRectSize(ctx)
+        if clicked and not active then picked = key end
     end
     r.ImGui_PopID(ctx)
+    return picked
+end
+
+local function draw_handle(item, id)
+    row_label(item.label)
+    local current = parts.chosen[HANDLE_PART] or parts.default[HANDLE_PART]
+    local picked = parts.buttons(id, HANDLE_PART, HANDLES, handle_is_dot() and "dot" or current)
+    if picked == "dot" then
+        set_handle(true)
+    elseif picked and (picked == current or parts.choose(HANDLE_PART, picked)) then
+        set_handle(false)
+    end
+end
+
+local METERS = { { "segment", "Segment" }, { "colour", "Colour" }, { "led", "LED" }, { "solid", "Solid" }, { "mono", "Mono" }, { "heat", "Heat" } }
+local WITH_SEGMENTS = { segment = true, colour = true, led = true }
+
+-- a type with segments and its size are one folder: led, led_m, led_l
+local function draw_meter(item, id)
+    row_label(item.label)
+    local current = parts.chosen.meter or parts.default.meter
+    local kind, size = current:match("^(%a+)(.*)$")
+    local picked = parts.buttons(id, "meter", METERS, kind)
+    if picked then parts.choose("meter", picked .. (WITH_SEGMENTS[picked] and size or "")) end
+    if not WITH_SEGMENTS[kind] then return end
+    r.ImGui_Dummy(ctx, 0, 2)
+    row_label("Segments")
+    local sizes = { { kind, "Fine" }, { kind .. "_m", "Medium" }, { kind .. "_l", "Large" } }
+    picked = parts.buttons(id .. "_size", "meter", sizes, current)
+    if picked then parts.choose("meter", picked) end
 end
 
 -- TK Native Helper does this on Windows; without it, say what's missing
@@ -959,6 +1104,12 @@ local function draw_setting(item, id)
         if not r.TK_SetMainMenuVisible then return end
     elseif item.kind == "handle" then
         draw_handle(item, id)
+    elseif item.kind == "meter" then
+        draw_meter(item, id)
+    elseif item.kind == "part" then
+        row_label(item.label)
+        local picked = parts.buttons(id, item.part, item.choices, parts.chosen[item.part] or parts.default[item.part])
+        if picked then parts.choose(item.part, picked) end
     elseif item.kind == "button" then
         draw_button_row(item, id)
     elseif item.kind == "place" then
@@ -1080,6 +1231,10 @@ local COLOUR_GROUPS = {
     } },
 }
 
+-- The Inverted colour setting takes the arrange from the other look, with what has to
+-- contrast with it. These aren't on the page above, so they are reset along with it.
+local ARRANGE_EXTRA = { "selcol_tr1_bg", "selcol_tr2_bg", "arrange_vgrid", "col_mi_label_float", "col_mi_label_float_sel" }
+
 local changed_colours = {}
 function parts.colours_unsaved() return next(changed_colours) ~= nil end
 
@@ -1122,9 +1277,15 @@ local function factory_colour(key)
         for name, value in text:gmatch("([%w_]+)=(-?%d+)") do
             factory_colours[name] = tonumber(value) & 0xFFFFFF
         end
+        -- an accent colour changes some of what the look comes with
+        local pack = parts.pack(parts.zip_path())
+        for name, value in ((pack and pack["keys.txt"]) or ""):gmatch("([%w_]+)=(-?%d+)") do
+            factory_colours[name] = tonumber(value) & 0xFFFFFF
+        end
     end
     return factory_colours[key]
 end
+function parts.forget_factory() factory_colours = nil end
 
 -- a ReaPack update replaces the theme's colour file. The colours that differ from the
 -- theme's own are kept here too, and come back when this window opens after an update
@@ -1185,6 +1346,10 @@ local function reset_colours()
             local native = factory_colour(entry[2][1])
             if native then set_colour(entry, native) end
         end
+    end
+    for _, key in ipairs(ARRANGE_EXTRA) do
+        local native = factory_colour(key)
+        if native then set_colour({ key, { key } }, native) end
     end
     repaint_after_colour()
 end
@@ -1533,7 +1698,9 @@ local function factory_reset()
     clear_buttons_and_lists()
     if startup.on then set_startup(false) end
     set_handle(false)
-    if (parts.chosen[HANDLE_PART] or "cap") ~= "cap" then parts.choose(HANDLE_PART, "cap", true) end
+    for part, default in pairs(parts.default) do
+        if (parts.chosen[part] or default) ~= default then parts.choose(part, default, true) end
+    end
     local notes = {}
     local path = theme_file()
     local base = path and path:match("([^\\/]+)%.ReaperTheme$")
@@ -1559,7 +1726,7 @@ end
 -- ---------------------------------------------------------------- presets
 
 -- a preset is one text file: every setting, colour, chosen action, the colour
--- processing, the look and the fader handle. Not what belongs to a project or to REAPER as a whole; dark mode colours
+-- processing, the look, the meter type and the fader handle. Not what belongs to a project or to REAPER as a whole; dark mode colours
 -- only if asked for, as they apply to all of REAPER and need a restart.
 local preset_dir = r.GetResourcePath() .. "/Data/TK Theme/presets"
 
@@ -1586,6 +1753,7 @@ local function colour_keys(fn)
             for _, key in ipairs(entry[2]) do fn(key) end
         end
     end
+    for _, key in ipairs(ARRANGE_EXTRA) do fn(key) end
 end
 
 local function save_preset(name, with_dark)
@@ -1666,6 +1834,9 @@ local function load_preset(name, with_dark)
     if values.handle then set_handle(values.handle == "dot") end
     local notes = {}
     changed_colours = {}
+    for _, key in ipairs(ARRANGE_EXTRA) do      -- a preset from before these were kept
+        colours[key] = colours[key] or factory_colour(key)
+    end
     for key, native in pairs(colours) do
         r.SetThemeColor(key, native, 1)
         changed_colours[key] = native
@@ -1699,7 +1870,7 @@ local function draw_undo_card()
 end
 
 local function draw_presets()
-    hint_text("A preset holds every setting, colour, the colour processing, chosen actions, the look and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
+    hint_text("A preset holds every setting, colour, the colour processing, chosen actions, the look, the meter type and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
     r.ImGui_Dummy(ctx, 0, 2)
     if begin_card("Save as a new preset", "ps") then
         row_label("Name")
@@ -1835,8 +2006,24 @@ function look.switch(entry, forced)
     return true
 end
 
+look.invert_keys = { col_arrangebg = true, col_tr1_bg = true, col_gridlines2 = true, col_gridlines3 = true,
+    col_gridlines = true, col_cursor = true }
+look.mood_keys = { col_arrangebg = true, col_tr1_bg = true, col_gridlines2 = true, col_gridlines3 = true,
+    col_gridlines = true, col_mixerbg = true, genlist_bg = true, genlist_selbg = true }
+
 -- colours from the Colours page or a preset stay with a look, which can look like a
 -- look that didn't change all the way, so this page says so
+-- whether all that differs from the look's own is what a colour setting changes
+function look.only_mood_colours()
+    for _, group in ipairs(COLOUR_GROUPS) do
+        for _, item in ipairs(group[2]) do
+            local factory = factory_colour(item[2][1])
+            if factory and not look.mood_keys[item[2][1]] and not look.invert_keys[item[2][1]] and factory ~= r.GetThemeColor(item[2][1], 0) & 0xFFFFFF then return false end
+        end
+    end
+    return true
+end
+
 function look.has_own_colours()
     local own = false
     colour_keys(function(key)
@@ -1844,6 +2031,133 @@ function look.has_own_colours()
         if factory and factory ~= r.GetThemeColor(key, 0) & 0xFFFFFF then own = true end
     end)
     return own
+end
+
+-- Colour settings: the look's own background colours, warmer, cooler or without colour,
+-- keeping how light they are. A light look shows a tint far more, so it gets less of it.
+-- They live in the colour file like any other colour, and presets keep them.
+local MOODS = { { "Standard" }, { "Warm", 1.16, 1.0, 0.78 }, { "Cool", 0.82, 1.0, 1.2 }, { "Neutral", 1, 1, 1 }, { "Inverted", invert = true } }
+local MOOD_KEYS = look.mood_keys
+
+function look.mood_colour(native, mood, amount)
+    if not mood[2] then return native end
+    local rgb = native_to_rgb(native)
+    local c = { rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255 }
+    local lum = 0.3 * c[1] + 0.59 * c[2] + 0.11 * c[3]
+    local out = 0
+    for i = 1, 3 do
+        local v = c[i] + (lum * mood[i + 1] - c[i]) * amount
+        out = out << 8 | math.max(0, math.min(255, math.floor(v + 0.5)))
+    end
+    return rgb_to_native(out)
+end
+
+function look.mood_amount(entry, mood)
+    if mood[1] == "Neutral" then return 1 end
+    return entry.name == "Dark" and 0.85 or 0.4
+end
+
+-- the other look's colours as it comes, from the file a factory reset uses
+look.other_colours = {}
+function look.other_colour(entry, key)
+    local other = entry.name == "Dark" and look.list[2] or look.list[1]
+    local colours = look.other_colours[other.theme]
+    if not colours then
+        colours = {}
+        local text = read_all(here .. "dist/" .. other.theme .. ".factory.ReaperTheme") or ""
+        for name, value in text:gmatch("([%w_]+)=(-?%d+)") do colours[name] = tonumber(value) & 0xFFFFFF end
+        look.other_colours[other.theme] = colours
+    end
+    return colours[key]
+end
+
+-- calls fn for each colour setting a mood changes, with its colour in that mood. All of
+-- them, in every mood: Inverted's have to go back when another is chosen
+function look.each_mood_colour(entry, mood, fn)
+    for _, group in ipairs(COLOUR_GROUPS) do
+        for _, item in ipairs(group[2]) do
+            local key = item[2][1]
+            local factory = (MOOD_KEYS[key] or look.invert_keys[key]) and factory_colour(key)
+            if factory then
+                local value = look.mood_colour(factory, MOOD_KEYS[key] and mood or MOODS[1], look.mood_amount(entry, mood))
+                if mood.invert and look.invert_keys[key] then value = look.other_colour(entry, key) or factory end
+                if mood.invert and key == "col_arrangebg" then
+                    -- the same entry holds the empty area under the track panels, which stays
+                    fn({ key, { key } }, value)
+                    fn({ "col_tracklistbg", { "col_tracklistbg" } }, factory_colour("col_tracklistbg"))
+                else
+                    fn(item, value)
+                end
+            end
+        end
+    end
+    for _, key in ipairs(ARRANGE_EXTRA) do
+        local factory = factory_colour(key)
+        if factory then fn({ key, { key } }, mood.invert and look.other_colour(entry, key) or factory) end
+    end
+end
+
+function look.current_mood(entry)
+    for _, mood in ipairs(MOODS) do
+        local same = true
+        look.each_mood_colour(entry, mood, function(item, value)
+            if r.GetThemeColor(item[2][1], 0) & 0xFFFFFF ~= value & 0xFFFFFF then same = false end
+        end)
+        if same then return mood end
+    end
+    return nil
+end
+
+local function draw_moods(current)
+    local active = look.current_mood(current)
+    r.ImGui_Dummy(ctx, 0, 2)
+    if not begin_card("Colour setting", "lkm") then return end
+    for i, mood in ipairs(MOODS) do
+        if i > 1 then r.ImGui_SameLine(ctx, 0, 6) end
+        local on = mood == active
+        local sample = mood.invert and look.other_colour(current, "col_tr1_bg") or factory_colour("col_tr1_bg")
+        sample = sample and look.mood_colour(sample, mood, look.mood_amount(current, mood))
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(on and mix(UI.raised, UI.accent, 0.55) or sample and native_to_rgb(sample) or UI.raised))
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
+        local clicked = r.ImGui_Button(ctx, mood[1] .. "##mood", 90, 30)
+        r.ImGui_PopStyleColor(ctx, 2)
+        if clicked and not on then
+            look.each_mood_colour(current, mood, set_colour)
+            repaint_after_colour()
+            state.msg = save_colours() and (mood[1] .. " is on.") or "Could not write the theme file."
+        end
+    end
+    r.ImGui_Dummy(ctx, 0, 2)
+    hint_text("For the arrange, grid, mixer background and lists: what REAPER draws itself. Panels and the glass windows are images, so they keep their colours. Inverted gives this look the other look's arrange: light on Dark, dark on Light. This replaces your own colours for these parts, and a preset can keep them.")
+    r.ImGui_EndChild(ctx)
+end
+
+-- the accent's own colour per look, for its button
+local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 } }
+
+local function draw_accents(current)
+    r.ImGui_Dummy(ctx, 0, 2)
+    if not begin_card("Accent colour", "lka") then return end
+    local chosen = parts.chosen.accent or parts.default.accent
+    for i, accent in ipairs(ACCENTS) do
+        if i > 1 then r.ImGui_SameLine(ctx, 0, 6) end
+        local colour = current.name == "Dark" and accent[3] or accent[4]
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(colour))
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), rgba(mix(colour, 0xFFFFFF, 0.15)))
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(current.name == "Dark" and 0x0A1115 or 0xFFFFFF))
+        local clicked = r.ImGui_Button(ctx, accent[2] .. "##accent", 90, 30)
+        r.ImGui_PopStyleColor(ctx, 3)
+        if accent[1] == chosen then
+            local x, y = r.ImGui_GetItemRectMin(ctx)
+            local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+            r.ImGui_DrawList_AddRect(r.ImGui_GetWindowDrawList(ctx), x - 2, y - 2, x2 + 2, y2 + 2, rgba(UI.ink), 3, 0, 2)
+        elseif clicked and parts.choose("accent", accent[1]) then
+            state.msg = accent[2] .. " is on."
+        end
+    end
+    r.ImGui_Dummy(ctx, 0, 2)
+    hint_text("The colour of what's on: selections, FX buttons, highlights, meters, and icons when you point at them. Mute, solo, record and play keep their own colours. Choosing one reloads the theme, so the screen may blink.")
+    r.ImGui_EndChild(ctx)
 end
 
 local function draw_look()
@@ -1876,7 +2190,7 @@ local function draw_look()
         end
         if not current then
             hint_text("Another theme is loaded now. Choosing a look loads TK Theme, with its settings as you last left them.")
-        elseif look.has_own_colours() then
+        elseif look.has_own_colours() and not (look.current_mood(current) and look.only_mood_colours()) then
             r.ImGui_Dummy(ctx, 0, 2)
             hint_text("This look uses your own colours, from the Colours page or a preset. They are why it can differ from the picture above.")
             if confirm_button("look_colours", "Back to the colours of " .. current.name, "Click again to replace your colours") then
@@ -1885,6 +2199,10 @@ local function draw_look()
             end
         end
         r.ImGui_EndChild(ctx)
+    end
+    if current then
+        draw_moods(current)
+        draw_accents(current)
     end
     local wants_dark = current and current.name == "Dark"
     if IS_WINDOWS and current and dark.on ~= wants_dark then
@@ -1929,13 +2247,15 @@ local GUIDE = {
     } },
     { "Mixer", {
         "Choose the fader handle on the Mixer page, for all layouts. In the track's layout menu, each layout has a twin with the word Dot; this switch moves tracks between them. A project opened later follows the next time this window opens.",
-        "Layouts A, B and C each have their own settings. The width decides the form: a narrow strip under 52, an intermediate one under 88, a normal one from 88. What doesn't count for the current form shows grey. A sidebar puts the FX and send lists beside the strip.",
+        "The handles of the pan and width sliders have their own choice there, and the Track panel page has one for its volume, pan and width sliders. Layouts A, B and C each have their own settings. The width decides the form: a narrow strip under 52, an intermediate one under 88, a normal one from 88. What doesn't count for the current form shows grey. A sidebar puts the FX and send lists beside the strip.",
         "Turn on the FX and send lists by right-clicking the mixer. An FX's embedded UI shows in that list when the strip is tall enough.",
     } },
     { "Colours", {
+        "The Look page also has colour settings: Standard, Warm, Cool, Neutral and Inverted. They change the arrange, grid, mixer background and lists; Inverted gives a look the other look's arrange. Panels and glass windows are images, so they stay as they are.",
         "A colour that differs from the theme's own gets a Reset button, and Reset all colours does them all. A change is temporary until you click Save colours; Undo changes goes back to the last saved colours.",
         "An update of the theme replaces its colour file. Colours you saved come back by themselves the next time you open this window.",
         "Colour processing changes the whole theme at once, images included: gamma, highlights, midtones, shadows, saturation and tint.",
+        "The General page chooses the meter type and the size of its segments, for the track panel and the mixer. The colour steps assume REAPER's standard meter range of -60 to +6 dB: with another range they fall elsewhere.",
     } },
     { "Dark mode and the menu bar", windows = true, {
         "The Dark mode page sets the colours of REAPER's lists, menus and borders. REAPER reads them when it starts, so changes show after a restart. It keeps your own colours, and can go back to REAPER's original ones. Popup menus, buttons and dropdowns in REAPER's windows keep their own grey: none of REAPER's colour settings changes them.",

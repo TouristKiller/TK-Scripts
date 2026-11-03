@@ -87,6 +87,28 @@ function Zip.crc_of(path, name)
     return nil
 end
 
+-- every file of a zip made without compression: { [name] = contents }
+function Zip.read_stored(path)
+    local s = read_file(path)
+    local entries = s and read_entries(s)
+    if not entries then return nil end
+    local files = {}
+    for _, e in ipairs(entries) do
+        if e.method ~= 0 then return nil end
+        files[e.name] = read_data(s, e)
+    end
+    return files
+end
+
+-- the checksums of all files in a zip: { [name] = crc }
+function Zip.crc_map(path)
+    local s = read_file(path)
+    local entries = s and read_entries(s)
+    local crcs = {}
+    for _, e in ipairs(entries or {}) do crcs[e.name] = e.crc end
+    return crcs
+end
+
 -- whether every file in the zip is in the folder, unchanged
 function Zip.same_files(path, folder)
     local s = read_file(path)
