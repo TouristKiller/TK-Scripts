@@ -181,7 +181,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.8" author="TouristKiller" time="2026-11-03T19:52:45Z">
+    <version name="0.9.9" author="TouristKiller" time="2026-11-04T22:47:00Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -507,14 +507,16 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: accent colours on the Look page: Blue, Orange and Violet, for selections, FX buttons, highlights, meters and the theme's icons. Mute, solo, record and play keep their own colours.
-+ Added: colour settings on the Look page: Standard, Warm, Cool, Neutral and Inverted, for the arrange, grid, mixer background and lists. Inverted gives Dark a light arrange and Light a dark one. They replace your own colours for those parts.
-+ Added: meter types on the General page: Segment, Colour, LED, Solid, Mono and Heat. The ones with segments come in Fine, Medium and Large. Colour steps assume REAPER's standard meter range of -60 to +6 dB.
-+ Added: slider handles for volume, pan and width on the Track panel page, and for pan and width on the Mixer page: Dot, Ring, Bar, Cap and Classic.
-+ Added: a Ring fader handle in the mixer.
-+ Changed: presets, undo and the factory reset also take the meter type, slider handles and accent colour along.
-+ Changed: the pictures on the choice buttons and everything to choose from now come in a few packs, so this update has fewer files.
-+ Fixed: the master's RMS column in the mixer turned a lighter colour above 0 dB, and meter values over 0 dB were hard to read on the red.
++ Added: volume and pan on the first row of the track panel, beside the name, so they also show on the lowest track height. Name width sets the room for the name. Per layout, on the Track panel page.
++ Added: Volume and pan as Auto, Sliders or Knobs, per layout and for the master. Auto shows knobs when a slider wouldn't have the room. Knobs sit side by side.
++ Changed: new knobs, with the travelled part in the accent colour.
++ Changed: the slider handle you choose for the track panel now also goes for envelope lanes.
++ Changed: dual pan has a line under its sliders and more room in the mixer, and the track panel has the line too.
++ Changed: better readable text in the Light look, on toolbars, rulers, tabs and above items.
++ Fixed: on Mac and Linux the colour settings, Reset and saved colours had red and blue swapped. Colours you saved there earlier may need one reset: use "Back to the colours of..." on the Look page.
++ Fixed: REAPER drew a knob over a short slider.
++ Fixed: overlapping circles around knobs in the mixer's intermediate strip, and the pan knob wasn't centred there.
++ Fixed: slider handles sat a pixel off their line on low tracks.
 ]]></changelog>
     </version>
     </reapack>

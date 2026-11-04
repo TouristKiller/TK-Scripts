@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.8
+-- @version 0.9.9
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -106,6 +106,17 @@ end
 
 local function rgb_to_native(rgb)
     return r.ColorToNative((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255)
+end
+
+-- A .ReaperTheme holds red in its low byte on every system. Native colours only do on
+-- Windows: on Mac and Linux red and blue are the other way around.
+local function file_to_native(value)
+    return r.ColorToNative(value & 255, (value >> 8) & 255, (value >> 16) & 255) & 0xFFFFFF
+end
+
+local function native_to_file(c)
+    local R, G, B = r.ColorFromNative(c & 0xFFFFFF)
+    return R | (G << 8) | (B << 16)
 end
 
 local function mix(a, b, t)
@@ -280,6 +291,7 @@ local function global_off_or(need, other)
     return function() return not global_value(need) or global_value(other) end
 end
 
+local KNOB_CHOICE = { "Auto", "Sliders", "Knobs" }
 local SLIDER_HANDLES = { { "dot", "Dot" }, { "ring", "Ring" }, { "bar", "Bar" }, { "cap", "Cap" }, { "classic", "Classic" } }
 
 local PAGES = {
@@ -309,7 +321,7 @@ local PAGES = {
     { title = "Track panel", cards = {
         { "All tracks", {
             { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES,
-              hint = "For volume, pan and width, in all layouts and on the master. Choosing one reloads the theme, so the screen may blink." },
+              hint = "For volume, pan and width, in all layouts, on the master and in envelope lanes. Choosing one reloads the theme, so the screen may blink." },
             S("Section margins", "sectionMargin", nil, "Space around the windows, in track panels and envelope lanes. Clicking between or in the windows selects the track."),
             S("Folder indent", "tcpfolderIndentSize"),
         } },
@@ -318,6 +330,10 @@ local PAGES = {
             T("Name only", "tkNameOnly", THIS_LAYOUT, "Just the track's name, large and centred, for a divider or a folder."),
             Off(lay_on("tkNameOnly"), T("Volume", "tkHideVol", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Pan", "tkHidePan", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly"), T("Volume and pan on the first row", "tkTopSliders", THIS_LAYOUT, "Beside the name, so they also show on the lowest track height. A narrow track panel leaves them out.")),
+            Off(lay_off_or("tkTopSliders", "tkNameOnly"), S("Name width", "tkNameW", THIS_LAYOUT, "The sliders take what's left of the row.")),
+            Off(lay_on("tkNameOnly"), { kind = "choice", label = "Volume and pan as", param = "tkKnobs", layouts = THIS_LAYOUT, choices = KNOB_CHOICE,
+                hint = "Auto shows a knob when a slider wouldn't have the room." }),
             Off(lay_on("tkNameOnly"), T("Input row", "tkHideInput", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Button row", "tkHideButtons", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Mute and solo", "tkHideMs", THIS_LAYOUT, nil, true)),
@@ -343,6 +359,8 @@ local PAGES = {
             Off(global_on("tkMasterMeterOnly"), T("Meter", "tkMasterHideMeter", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Volume", "tkMasterHideVol", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Pan", "tkMasterHidePan", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly"), { kind = "choice", label = "Volume and pan as", param = "tkMasterKnobs", choices = KNOB_CHOICE,
+                hint = "Auto shows a knob when a slider wouldn't have the room." }),
             Off(global_on("tkMasterMeterOnly"), T("Mute and solo", "tkMasterHideMs", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("FX column", "tkMasterNoFx", nil, "Without its column, the FX button moves to the first row.", true)),
             Off(global_on("tkMasterMeterOnly"), T("IO column", "tkMasterNoIo", nil, "Without its column, the IO button moves to the first row.", true)),
@@ -654,7 +672,7 @@ end
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
     default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue" },
-    images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
+    images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
 
@@ -1106,6 +1124,27 @@ local function draw_setting(item, id)
         draw_handle(item, id)
     elseif item.kind == "meter" then
         draw_meter(item, id)
+    elseif item.kind == "choice" then
+        local names = expand(item.param, item.layouts)
+        local p = P[names[1]]
+        if not p then return end
+        row_label(item.label)
+        r.ImGui_PushID(ctx, id)
+        for i, name in ipairs(item.choices) do
+            if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
+            local active = math.floor(p.value) == i - 1
+            if active then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
+            end
+            local clicked = r.ImGui_Button(ctx, name, 66, 0)
+            if active then r.ImGui_PopStyleColor(ctx, 2) end
+            if clicked and not active then
+                for _, n in ipairs(names) do set_param(n, i - 1, true) end
+                r.ThemeLayout_RefreshAll()
+            end
+        end
+        r.ImGui_PopID(ctx)
     elseif item.kind == "part" then
         row_label(item.label)
         local picked = parts.buttons(id, item.part, item.choices, parts.chosen[item.part] or parts.default[item.part])
@@ -1246,7 +1285,7 @@ local function save_colours()
     if not s then return false end
     for key, native in pairs(changed_colours) do
         s = s:gsub("([\r\n]" .. key .. "=)(-?%d+)", function(head, old)
-            local v = (tonumber(old) & 0xFF000000) | (native & 0xFFFFFF)
+            local v = (tonumber(old) & 0xFF000000) | native_to_file(native)
             if v >= 0x80000000 then v = v - 0x100000000 end
             return head .. v
         end, 1)
@@ -1275,12 +1314,12 @@ local function factory_colour(key)
         local base = path and path:match("([^\\/]+)%.ReaperTheme$")
         local text = base and read_all(here .. "dist/" .. base .. ".factory.ReaperTheme") or ""
         for name, value in text:gmatch("([%w_]+)=(-?%d+)") do
-            factory_colours[name] = tonumber(value) & 0xFFFFFF
+            factory_colours[name] = file_to_native(tonumber(value) & 0xFFFFFF)
         end
         -- an accent colour changes some of what the look comes with
         local pack = parts.pack(parts.zip_path())
         for name, value in ((pack and pack["keys.txt"]) or ""):gmatch("([%w_]+)=(-?%d+)") do
-            factory_colours[name] = tonumber(value) & 0xFFFFFF
+            factory_colours[name] = file_to_native(tonumber(value) & 0xFFFFFF)
         end
     end
     return factory_colours[key]
@@ -1771,7 +1810,7 @@ local function save_preset(name, with_dark)
         end
     end
     colour_keys(function(key)
-        lines[#lines + 1] = "colour:" .. key .. "=" .. tostring(r.GetThemeColor(key, 0) & 0xFFFFFF)
+        lines[#lines + 1] = "colour:" .. key .. "=" .. tostring(native_to_file(r.GetThemeColor(key, 0)))
     end)
     for _, id in ipairs(processing_ids()) do
         local name, _, value = r.ThemeLayout_GetParameter(id)
@@ -1815,7 +1854,7 @@ local function load_preset(name, with_dark)
                 missing = missing + 1
             end
         elseif colour then
-            colours[colour] = tonumber(native)
+            colours[colour] = file_to_native(tonumber(native))
         else
             local key, val = line:match("^([%w_]+)=(.*)$")
             if key then values[key] = val end
@@ -2065,7 +2104,7 @@ function look.other_colour(entry, key)
     if not colours then
         colours = {}
         local text = read_all(here .. "dist/" .. other.theme .. ".factory.ReaperTheme") or ""
-        for name, value in text:gmatch("([%w_]+)=(-?%d+)") do colours[name] = tonumber(value) & 0xFFFFFF end
+        for name, value in text:gmatch("([%w_]+)=(-?%d+)") do colours[name] = file_to_native(tonumber(value) & 0xFFFFFF) end
         look.other_colours[other.theme] = colours
     end
     return colours[key]
@@ -2224,6 +2263,7 @@ end
 local GUIDE = {
     { "Look", {
         "The Look page chooses Dark or Light. A look changes colours and images only: your layout settings go along. Colours you changed are kept per look, and a preset remembers which look it was saved with. When a look uses your own colours, this page says so and can take it back to the look's own.",
+        "The same page chooses an accent colour: Blue, Orange or Violet, for selections, FX buttons, highlights, meters and the theme's icons. Mute, solo, record and play keep their own colours, and so do the TK_ icons on your own toolbars.",
         "In Options > Themes the looks are listed as TK Theme Dark and TK Theme Light. Choosing one there works too, but your settings only go along when you change the look on this page.",
     } },
     { "Transport", {
@@ -2244,6 +2284,7 @@ local GUIDE = {
     { "Layouts", {
         "Each track can use layout A, B or C. In the track panel they look the same until you change one on the Track panel page, for example to give your busses only a name, FX, mute and solo, with a wide meter on the left. Settings that don't count at the moment show grey. Name only turns a track into a divider: its name, large and centred, growing with the track's height.",
         "Under Selected tracks you set a height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
+        "Volume and pan on the first row puts them beside the name, so they also show on the lowest track height. Name width then sets the room for the name. Volume and pan as chooses Sliders, Knobs or Auto, which shows knobs when a slider wouldn't have the room. Knobs sit side by side, and on the first row the name takes the room they leave.",
     } },
     { "Mixer", {
         "Choose the fader handle on the Mixer page, for all layouts. In the track's layout menu, each layout has a twin with the word Dot; this switch moves tracks between them. A project opened later follows the next time this window opens.",

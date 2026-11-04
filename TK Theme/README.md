@@ -39,7 +39,8 @@ lists, menus and borders. That takes effect after a restart.
   arrow for the metronome settings. "Metronome light at startup" also keeps it
   right before your first click; it adds one line to `Scripts/__startup.lua`,
   and switching it off removes that line again.
-- **Track panel:** a choice of slider handles, FX and IO columns, FX parameters under the controls, buttons for
+- **Track panel:** a choice of slider handles, sliders or knobs for volume and pan, which can
+  also sit on the first row so they show on the lowest track height, FX and IO columns, FX parameters under the controls, buttons for
   fixed lanes and freeze, and a blue strip on tracks with fixed lanes. The master has the
   same windows, with its hardware outputs in the IO column, or can be one big meter.
 - **Layouts:** A, B and C can each leave out or move parts of the track panel and mixer

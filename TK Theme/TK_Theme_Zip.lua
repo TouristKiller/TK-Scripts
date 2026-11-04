@@ -152,6 +152,11 @@ function Zip.save(path, data)
         os.remove(tmp)
         return nil, "can't write next to the theme file (is the disk full?)"
     end
+    -- never swap in anything but what was meant: something else may write there too
+    if read_file(tmp) ~= data then
+        os.remove(tmp)
+        return nil, "the theme file couldn't be written correctly, please try again"
+    end
     os.remove(old)
     local existed = read_file(path) ~= nil
     if existed and not os.rename(path, old) then
