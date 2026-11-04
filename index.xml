@@ -565,10 +565,6 @@
                 v3.2.23:
                 + Patchbay: FX node view: Replace FX... in a plugin's right-click menu swaps it for another plugin, picked through the same search and browse menus as Add FX. The new plugin takes over the old one's place: in series or in parallel, the pin routing for the pins both plugins have (so a sidechain stays wired), and a node position you set by hand. It is one undo step, and it is not offered on a container, where it would throw away everything inside. Requested by AndreiMir.
                 + Patchbay: FX node view: Copy FX in the right-click menu, then Paste after this or Replace with copied on another plugin. The copy keeps all its settings and can be pasted on another track too. While something is copied, every Add FX popup (the + and = buttons, and a right-click on the empty canvas) offers it at the top, so it can also go in series, in parallel or at the end of the chain. Requested by AndreiMir.
-                v3.2.22:
-                + Patchbay: FX node view: buttons to add FX. Hover a node: the + beside it adds an FX in series (after the whole group when it sits among parallel lanes) and the = below it adds a parallel lane. The first node of a chain, also inside a container, gets a + in front of it, so an FX or instrument can go before the first one; an empty chain shows a + on its cable. The buttons stay while the mouse travels out to them, also over a container's body.
-                + Patchbay: FX node view: to make a dragged FX run in parallel you now drop it on the = mark below a node, instead of onto the node itself, which was hard to guess. Dropping on a node's body now simply places the FX there.
-                + Patchbay: FX node view: the add buttons and the marks shown while dragging share one look: amber + for series and = for parallel, highlighted under the cursor, in a deeper amber on a light theme.
 ]]></changelog>
     </version>
     </reapack>
@@ -701,7 +697,6 @@
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Add_ReVue_to_Tracks.lua</source>
                 <changelog><![CDATA[           
 + v1.1: Improved timing with extra defer cycles and verification for reliable MCP embedding
-+ Initial release
 ]]></changelog>
     </version>
     </reapack>
@@ -720,7 +715,6 @@
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK_Create_Tracks_with_ReVue.lua</source>
                 <changelog><![CDATA[           
 + v1.1: Improved timing with extra defer cycles and verification for reliable MCP embedding
-+ Initial release
 ]]></changelog>
     </version>
     </reapack>
@@ -868,36 +862,6 @@ v0.2.52
 # A cover image deleted from disk no longer stops Kit Maker on startup. Its stale browser reference is removed before ReaImGui tries to load it.
 + Browser sorting by transient and frequency, in both directions. Existing sample analysis is reused; unanalysed samples stay at the end of the list.
 + All, Loop and One-shot filters in the Browser, Folder Explosion and each Builder pool, using cached waveform shape and filename evidence.
-
-v0.2.51
-# Export to MIDI now plays what the sequencer plays. It did not, in three different ways, and all three came down to one thing: two notes of the same pitch that touch cannot both be struck. The engine sends a note-off and then a note-on for every hit, so a repeat always re-articulates; a note rectangle that ends exactly where the next begins does not.
-# A gate of 100% over a length of one fills its step precisely and meets the next one, so a run of steps came out as a single sustained note.
-# A groove that pulls a note early made it start inside the one before it, so a swung double hit exported as one hit - the second was there in the item and could not sound.
-# A one-shot lane threw away every hit after the first. Four kicks became one note running to the end of the bar: not a note that failed to sound, three that were never written. The engine plays all four.
-# Every exported note now ends a hair before the next of its pitch begins. The gap is a sixty-fourth of a step - about two milliseconds at 120 - which is far under hearing and far over the rounding.
-# Per-step pitch in an exported pattern no longer runs away. A step at -18 wrote its envelope point and a step at 0 wrote nothing, so an envelope holds its last value and every step after that one played at -18, right to the end where the single reset point sat. Steps with no offset now write their point too, which is what playback has always done.
-# Per-step pitch, pan, volume, attack and release are only written when the step they belong to is actually going to be struck. These are plugin parameters shared by every note a pad plays, so each write bends whatever is still ringing - and preparing a step with no hit on it spent the tail of the note you had just heard on a value nothing was going to use. A hit now keeps its own pitch for as long as it rings, which is most of what made an exported pattern sound cleaner than the one you were listening to.
-# A lane running backwards or as a pendulum now prepares the right step. The look-ahead worked out the next step by counting forwards, so those two were handed the values of a step they were not about to play: wrong, rather than late.
-+ Per-step pan and volume, and the Euclid page's attack and release, now survive the export. They live on the sampler rather than in the notes, so an exported pattern said nothing about them at all - you could program them, hear them, and get none of it back. All four are written as FX parameter envelopes, the way per-step pitch already was.
-# Attack and release were the worst of it: set on the Euclid page, applied on every step while it played, and then wiped from the sampler the moment you stopped. They did not survive the session, let alone the export.
-# A step back at centre writes its point too, so a pan that swung left returns rather than staying there for the rest of the bar. All of them go back to neutral after the pattern, so a rack is not left panned or turned down by a kit exported an hour ago.
-# The values come from the same code that sets them during playback, asked not to write. Working the numbers out a second time in the exporter is how the sound you heard and the file you got would drift apart.
-# An envelope and the sequencer cannot both own a parameter, and the envelope wins - so the sequencer would have looked broken on any pad you had ever exported. Pitch already handed the parameter back and forth at play and stop; all five do now.
-# The export reads whether a pad's sampler obeys note-offs, which it never actually did: "a and b or true" cannot return false, so a pad that ignores note-offs answered "yes" and got gate-length notes anyway. Those lengths mean nothing while the sampler ignores them - and start cutting samples the moment Note-off is switched on afterwards. A pad that ignores note-offs now exports notes that run to the next hit, which is what you were hearing when you exported.
-# Save kit takes off a slot number it put on last time, so saving a kit twice no longer gives you 010_010_Cymbal, and a sample brought in from another kit does not land as 010_013_Cymbal. Only a number that could have been one of ours: slots run 1 to 16, so 808_kick keeps its 808 and 909_snare its 909. That is the same test the Browser already uses in the other direction.
-- Retrig is gone from the Step and Euclid pages. The engine never read it: it sends a note-off before every note-on whatever the setting said, so the switch changed nothing you could hear - while the export took it seriously, which is where the one-long-note came from.
-# Both of its meanings were already Note-off's. With Note-off on a hit cuts the one before it and restarts; with it off the sampler ignores the note-off and the sample rings on and layers. That is the switch that was doing the work all along.
-# Audition and playback agreed with each other even less than they agreed with the export: the click-preview honoured Retrig, the engine did not. All three now do the same thing.
-+ Container racks, experimental: a kit as ONE track with sixteen samplers inside a single FX container, instead of sixteen tracks. Right-click a kit collection in the Kits browser for "Create Drum Rack (Container)". For AndreiMir, who asked for a way to stop a project filling up with dozens of tracks per kit.
-# The Step and Euclid pages drive it, it exports, and per-pad pitch, pan, volume, attack and release all work. The engine goes on the rack track itself, above the container, so there is no bus and there are no sends - everything it has to reach is already on that track.
-# The Kit Manager sees one too: the pads, their samples and their names, dropping a sample on a pad, and Save kit. Two things a single track cannot do are per-pad record arm and a colour per pad.
-# A pad blinks on the hit rather than staying lit for as long as the note lasts. That was fine while exported notes were a step long and wrong the moment they were not - a one-shot lane writes a note that runs to the next hit, so a kick on step 1 with the next on step 9 held its pad lit for eight steps. The sequencer's own indicator has always worked off the moment of the trigger; this now matches it.
-# Playing an exported pattern lights the pad the note belongs to, not all sixteen. The Kit Manager asked whether anything was sounding on the pad's TRACK, which on a folder rack is the same question - one pad per track, with a note filter in front of it. Sixteen pads on one track have no such luck. It reads the note now, and scans a track once rather than once per pad.
-# Still experimental. Relinking a rack whose samples moved, and undo around building one, have not been gone through yet. Needs REAPER 7.
-# A pad is found by which plugin it is, not by where it sits. The rack writes down its pads' FX GUIDs while it is built, and the position is only a hint - right almost always, and one read to check. Drop an FX into the container and every pad would otherwise have addressed the one next door, which reads exactly like a rack that works until it does not.
-# Nothing about existing racks changes. A folder rack is still a folder rack, and this is a second shape beside it rather than a replacement.
-
-
 ]]></changelog>
         </version>
     </reapack>
@@ -916,10 +880,6 @@ v0.2.51
             <changelog><![CDATA[
     v2.0.9:
     + Fixed: TK Transport crashed right after starting with "ImGui_End: Missing PopStyleColor()" on new installs - the Envelope (ENV) button, visible by default, treated REAPER's "No override" state as an active override and pushed one color too many - Reported by Loukas and Bone (SP)
-
-    v2.0.8:
-    + Added: TK Transport checks the installed ReaImGui version at startup and asks to update when it is older than 0.10.0.5, instead of failing with a misleading "ImGui_End: Missing PopStyleColor()" error - Reported by Loukas
-
 ]]></changelog>
         </version>
     </reapack>
@@ -944,15 +904,6 @@ v0.2.51
             + Instance state: each mixer keeps its own tracks, hidden state, snapshots, pinned parameters, layout, docking and window position
             + Window: press Escape to close the focused TK Mixer
             + Action: running the same mixer action again reliably closes that instance
-
-            v1.3.7
-            + Fixed: Icon Browser could crash after being accidentally docked - the window can no longer be docked and is automatically undocked
-
-            v1.3.6
-            + Instrument Rack: the mixer's rack panel is now powered by the shared TK Workbench Instrument Rack module (shim) instead of the mixer's own implementation - same features and theming as the standalone rack; requires TK Workbench (shows a message when it is not installed)
-            + Drag & drop: plugins from a TK FX Browser can be dropped onto Mixer FX slots and the Instrument Rack, regardless of window open order, and multiple browsers can be open at once
-            + Sidebar: added an auto-hide option (hover to open, right-click for options) with a pin-open toggle
-            + Channels: added a separate Master channel width slider, independent from the normal channel width
 ]]></changelog>
         </version>
     </reapack>
@@ -1114,58 +1065,7 @@ v0.2.51
             + Launcher: Hover a strip row for a triangle that auditions it - the clip editor's own preview engine, so it leaves the transport, the edit cursor and every solo alone and can be used mid-jam. Needs SWS; audio only. Asked by AndreiMir
             + Launcher: With the strip open the project scan keeps running, minus the once-a-second check for missing media, which is the half that costs anything
             + Launcher: The manual says where the one-project boundary lies now that clips can cross it
-            v0.6.4
-            + Launcher: Recording-ready and queued Launchpad pads now blink in time with the project tempo
-            v0.6.3
-            + Launcher: Armed empty MIDI pads now start and stop recording into their clip slots
-            + Launcher: Learned MIDI commands light up, flash when pressed and show active Record and scene states
-            + Launcher: DAW mode now clearly identifies the Launchpad's dedicated input and output ports
-            + Launcher: Optional ReaLearn actions install as a Core set of 8 or a Full set of 40, and can be removed again
-            + Launcher: ReaLearn actions use the same quantized commands as MIDI control, with Record and scene feedback
-            + Launcher: Auto run-up no longer changes REAPER's global media buffer preference
-            + Launcher: Hidden lane tracks are configured more reliably when created or reused
-            v0.6.2
-            + Launcher: Edit clip - a window on the file behind an audio clip, with its waveform, a grid over it and the part that plays marked out
-            + Launcher: Start and end are set by dragging the lines in the waveform or the faders under it, snapped to bars, beats, half or quarter beats
-            + Launcher: Fade in and fade out per clip, honoured by the voices as well, with the launcher's own short guard against clicks kept underneath
-            + Launcher: Stopping a lane now fades into the bar line it stops on rather than losing the clip's own fade, and never takes any longer for it
-            + Launcher: Fade every pass lays a loop down one pass at a time so every round fades, instead of once at each end
-            + Launcher: Reverse, pitch in semitones and normalise, none of which write a thing into the audio
-            + Launcher: Play and stop in the editor use the preview engine, through the lane's own track, without touching the transport or the edit cursor
-            + Launcher: Fades, level, speed and pitch reach a running preview as you change them
-            + Launcher: Fade in, fade out, gain and pitch are knobs - drag up and down, ctrl for fine, double click to clear
-            + Launcher: The editor is a window of its own rather than a popup, so it stays where you put it and comes back there
-            + Launcher: A clip's picture in the grid is redrawn when it is trimmed, sped up or reversed, instead of at the next restart
-            v0.6.1
-            + Launcher: A Launchpad is taken over in DAW mode now, the way Ableton and PlayTime do it: the board keeps its own Session and Custom buttons and its second port stays free for playing. Reported by AndreiMir
-            + Launcher: Programmer mode is still on offer for a board that will not talk in DAW mode
-            + Launcher: In DAW mode the scene strip on the right works as control changes, lit and read
-            + Launcher: On the RGB boards a clip waiting for its bar line flashes and the playing clip pulses in hardware, instead of being blinked from the script
-            v0.6.0
-            + Launcher: Configurable MIDI control with Keyboard, Pads and Custom Grid layouts, banking and scene launching
-            + Launcher: MIDI Learn for notes and commands, with reusable MIDI setup presets
-            + Launcher: Launchpad layout - the 8 x 8 note grid of a Mini MK3, X, Pro MK3, MK2, S or Mini MK1, with the right hand strip launching scenes
-            + Launcher: The pads light up with the grid - filled, playing, waiting and armed - in the clip's own colour where the board has one
-            + Launcher: Faster scene switching with fewer project-state writes and a shorter retrigger horizon
-            + Launcher: Automation lanes follow their Arrange envelope heights and can follow, pause or resume independently
-            + Launcher: Import a selected Arrange automation item into the matching automation clip lane
-            + Launcher: Automation clips - a clip that is a curve instead of a sound, played as an automation item on the track's own envelope, on the same bar line as everything else
-            + Launcher: Automation clips sit in a lane of their own under the track lane, one per parameter, so a curve runs while the track's clip keeps playing
-            + Launcher: A clip takes the curves in its row with it, a curve can be fired on its own, and stopping a track stops its curves
-            + Launcher: Draw a curve in the arrange from the clip's own menu and take it back into the clip, its length with it
-            + Launcher: Load and save REAPER's own automation items, the AutomationItems folder and everything under it
-            + Launcher: Hold to play works for a curve as well, with no gate effect involved
-            + Launcher: When it has played reads Next scene literally, with Next scene with a clip for skipping the empty rows
-            + Launcher: The FX button lists the FX already on the track - click opens one floating, right-click bypasses it
-            + Launcher: A stop-all square beside the bar count and the time signature
-            + Launcher: The play triangle leads the scene number
-            + Items and Source Media can include open project tabs and loaded subprojects
-            + Filter Items and Source Media by project, tab or subproject
-            + Insert or drag clips from another project into the active project
-            + Added separate tile scaling for Items, Source Media and Automation
-            + Fixed project-aware GUID handling and track collapse controls
-
-        ]]></changelog>
+]]></changelog>
         </version>
     </reapack>
     <reapack name="TK_MEDIA_BROWSER(SA).lua" type="script" desc="TK MEDIA BROWSER">
@@ -1179,14 +1079,6 @@ v0.2.51
             + Tree View: macOS AppleDouble metadata files whose names start with ._ are no longer shown or added by new scans, and are filtered from existing caches immediately
             + Sync: right-click the sync button to choose half-speed (/2), normal (1x) or double-speed (2x) tempo matching for previews and inserted media
             + Waveform: right-click the peak waveform and choose Reveal in Tree to return to the displayed file; the browser switches to Tree View, opens its parent folders and scrolls the file into view
-
-            v1.2.0:
-            + New: a fourth view mode, Grouped, on the Tree / Flat / Compact button (T -> F -> G -> C). It is the flat list with a collapsible header per folder, so a location reads as an overview of what is in it and opens where you want it, instead of being scrolled through as one long list. Folders start collapsed, and which ones you opened is remembered per location. Requested by Heavy
-            + Grouped: the header names the folder relative to the location and counts the files in it, so two folders that happen to share a name stay apart. That path is worked out from the file itself rather than read from what the scan stored, which means no library has to be scanned again for this
-            + Grouped: the grouping is worked out once per change and then cached, and which folder a file belongs to is remembered for as long as the location does not change. Typing in the search box rebuilds the list on every keystroke, and that is what keeps it from costing anything
-            + New: Show Progress Bar, under Settings. Switched off, the transport hands its space back to the oscilloscope, or to the folder pane and the file list in the single pane layout - the transport measures its own height, so nothing else needs adjusting for it
-            + Fixed: an image that cannot be decoded no longer takes the whole browser down with it. ReaImGui reads what stb_image reads, and webp is not on that list - nor is anything that is not really an image at all, such as an audio file picked as a folder image by mistake. Such a file reached ImGui_CreateImage, and the failure came back as an error dialog for every frame the thumbnail was on screen, which made the browser unusable and, once docked, impossible to start. Wrapping the call in a pcall does not help: the decode happens inside ImGui after the call has already returned, so the failure never arrives as something the script could check. A file that cannot be decoded is therefore never handed to ImGui at all - not as a cover found in a pack, not as a folder image chosen by hand, and not in the image viewer. That folder simply shows no thumbnail. Reported by Heavy
-
 ]]></changelog>
         </version>
     </reapack>
@@ -1259,34 +1151,7 @@ v0.2.51
 
         [Menus]
         + The Dice right-click menu holds randomize settings only (Progression Length, Always Start on Tonic, Use Selected Chord Types). Playback settings live on PLAY, chord length on the [+] panel. Tooltips now name what a menu contains instead of saying "Settings".
-
-        v2.5.6
-
-        [Time Selection / Insert]
-        + Bug fix — when Note Length is set to "Time Selection" but no time selection is active, the length now correctly falls back to the MIDI Editor grid. Previously the -1 sentinel leaked into the grid calculation, producing tiny notes and a cursor that jumped back one beat.
-
-        [Note Length / Grid]
-        + Bug fix — "Grid" note length now uses the project/arrange grid when no MIDI editor is open (was: defaulted to 1/32, or even a zero-length/invisible note on the very first insert, until an item had been opened in the MIDI editor at least once). The grid length now always falls back to a valid value, so notes are never zero-length.
-        + "Grid" note length now follows the MIDI Editor grid only when the editor is actually visible. A docked MIDI Editor in a closed/hidden docker no longer counts as "open" (it kept a valid pointer), so the length correctly falls back to the arrange grid instead of a leftover editor grid (e.g. 1/32). Requires js_ReaScriptAPI for visibility detection.
-
-        [Inversion]
-        + Simplified the inversion system to a single source of truth: Ctrl+Click on a chord button now cycles the global inversion for that scale degree (root → 1st → 2nd → ... → root, based on the actual number of chord notes) and previews it. The "Inv:" value box in the top frame always reflects the current value.
-        + Click (preview), Shift+Click (insert) and Alt+Click (add to slot) now all respect the selected inversion automatically — re-previewing is just another Click, no special modifier needed.
-        + Drag & drop onto a progression slot now also carries the selected inversion (was: always inserted the root-position chord).
-        + Removed the separate temporary cycle system: no more 2-second reset timer, no more "I1/I2/I3" badge, and Ctrl+Shift+Click / Ctrl+Alt+Click are no longer needed (they now behave like Shift+Click / Alt+Click). This fixes the preview/badge mismatch and the inability to re-preview an inversion.
-
-        [MIDI Trigger]
-        + Bug fix — "Clear All Mappings" in the MIDI Trigger menu did nothing when no ChordMap presets were saved. The greyed-out "(no presets)" placeholder still consumed a menu index, so the Clear action ended up on the wrong index. The index is now calculated from the actual number of delete-menu items, so Clear All Mappings works with or without saved presets.
-
-        [MIDI Playback / Recording]
-        + Bug fix — note-off messages from button clicks now always use the same MIDI channel as the matching note-on. Previously the channel was re-read at note-off time, so if it changed in between (MIDI editor opening/closing, or toggling Scale Filter / MIDI Trigger) the note-off landed on a different channel and the note was never released. This caused stuck notes that, with retroactive MIDI recording, were stretched all the way to the end of the item. stopAllNotesFromPlaying now also clears every channel that was actually used.
-
-        [MIDI Trigger / Learn]
-        + The "Assign MIDI Trigger" / "Assign Column Trigger" flow now uses a non-blocking on-screen overlay instead of a modal pop-up. While listening you see a centered prompt; the moment a MIDI note arrives it is mapped, a short "Assigned: <note>" confirmation is shown, and the overlay closes automatically — no more clicking OK and no more wondering whether it worked.
-        + Assigning a trigger now also works while MIDI Trigger is globally OFF. The overlay shows a reminder that you still have to enable the connector icon (top bar) for triggers to actually fire, since it is off by default and the icon is not obvious.
-        + The MIDI Trigger icon now pulses with an extra ring while you are assigning a trigger, making it clear the script is waiting for a note.
-        + Press Esc or click anywhere to cancel an assignment in progress.
- ]]></changelog>
+]]></changelog>
 
         <source main="main midi_editor" file="TK_ChordGun/TK_ChordGun.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun.lua</source>
         <source file="TK_ChordGun/TK_ChordGun_Help.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_ChordGun/TK_ChordGun_Help.lua</source>
@@ -1354,40 +1219,8 @@ v0.2.51
     <reapack name="TK_Find Similar MIDI Items.lua" type="script" desc="TK Find Similar MIDI Items - Find matching MIDI patterns">
       <version name="1.8" author="TouristKiller" time="2025-12-11T15:00:00Z">
         <changelog><![CDATA[
-        + Initial release
-        + Find MIDI items similar to reference item
-        + Percentage-based similarity threshold
-        + Overlay comparison with detailed statistics
-        + Color coding by similarity percentage
-        + Select, color, and delete similar items
-        + Added pattern matching with offset detection
-        + Can now find similar patterns even if notes are shifted in time
-        + Added segment matching - find partial matches within larger items
-        + Search modes: Full Item / Segment (find reference pattern in larger items)
-        + Added Time Selection mode - use time selection within item as search pattern
-        + Fixed segment matching - extra notes in matched section now reduce similarity score
-        + Added Note Range Filter (ignore keyswitches)
-        + Added "Pin to Top" option for created tracks
-        + Added "Max Similarity" threshold
-        + Added global settings persistence (Save/Load options)
-        + Added "Show Reference" button
-        + Improved UI with tooltips and collapsible options
-        + Matches are now grouped by source track when copying
-        + Added Track Batch Mode: Select a track (without selecting items) to scan all items on that track
-        + Results are now grouped by Reference Item in Batch Mode
-        + UI Overhaul: Compact layout, collapsible settings, improved button organization
-        + Improved Sorting: Fixed sorting for items with identical similarity scores (Track # priority)
-        + Workflow: Single-click details for single matches, auto-reselect reference after replace
-        + Fix: "Replace Phrase" now correctly handles time selections with leading silence
-        + Fix: Multi-match items now sort based on their best match
-        + Added Track Selector popup - easily select which tracks to search
-        + Track selector shows track number, name and color
-        + Search/filter tracks by name in the popup
-        + Select All / Deselect All / Invert buttons for quick selection
-        + Only tracks containing MIDI items are shown
-        + Added progress indicator during analysis - UI no longer freezes
-        + Added "Lock" checkbox in Track Batch mode to lock the reference track
-        ]]></changelog>
+        + Added "NEW" button to clear all results and start a fresh search
+]]></changelog>
         <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_Find%20Similar%20MIDI%20Items.lua</source>
         <source file="TK_Find Similar MIDI Items (CORE).lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Midi/TK_Find%20Similar%20MIDI%20Items%20(CORE).lua</source>
       </version>
@@ -1402,16 +1235,6 @@ v0.2.51
             + Added: label font can now be any font installed on your system, e.g. to match your theme. Tick "System Fonts" at the top of the font list to browse and search all installed fonts; the choice is stored by name, so it is kept in presets
             + System font scan covers fonts installed for all users and fonts installed for your account only (Windows), plus macOS and Linux; use "Rescan" after installing a new font
             + The built-in font list and existing presets are unchanged
-
-            v2.0.1:
-            + Changed: presets are now stored in REAPER/Data/TK_Trackname_Presets, the same folder the native Arrange overlay extension uses, so script and extension share one set of presets (works for regular and portable installs)
-            + Existing presets are copied to the new folder automatically when the script starts; nothing is overwritten and the old folder is left in place
-            + Note: if you use the native extension, run this script once after updating so your existing presets show up in the extension
-
-            v2.0.0:
-            + Added Activity Glow (new Activity tab): each visible track lights up with its post-fader level, so in a large session you can see at a glance which tracks are sounding. Choose a level bar at the lane edge, a pulsing track color, or both, with adjustable floor, release and bar width
-            + Activity Glow: optional clip flash turns the glow red for a moment when a track goes over 0 dBFS
-
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Overlay_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Overlay_Toggle.lua</source>
@@ -1461,7 +1284,7 @@ v0.2.51
     </reapack>
 
     <reapack name="TK_Arrange_Background_Presets.lua" type="script" desc="TK Arrange Background Presets">
-        <version name="1.5.0" author="TouristKiller" time="2026-04-28T02:4500Z">
+        <version name="1.5.0" author="TouristKiller" time="2026-04-28T02:45:00Z">
             <changelog><![CDATA[
             + Initial release
             + English UI labels
