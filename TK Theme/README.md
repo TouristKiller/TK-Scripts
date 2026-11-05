@@ -28,6 +28,11 @@ lists, menus and borders. That takes effect after a restart.
   choosing one there works too, but your settings only go along from the Look page.
 - **Accent colours:** Blue, Orange and Violet, for selections, FX buttons, highlights, meters
   and the theme's icons.
+- **Display:** Ice, Amber, Green, Red or Blue: dark glass on the transport with everything on it
+  in one colour, in both looks. Standard follows the look and its accent colour.
+- **FX and send lists:** plain, or a subtle grid above the mixer's strips.
+- **Transport plate:** Black or Silver: brushed metal behind the whole transport, with screws and
+  a maker's plate, on the General page.
 - **Colour settings:** Standard, Warm, Cool, Neutral and Inverted, for the arrange, grid, mixer
   background and lists. Inverted gives Dark a light arrange and Light a dark one.
 - **Meters:** six types with colour steps, and segments in three sizes. The steps assume

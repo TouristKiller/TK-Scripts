@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.9
+-- @version 0.9.10
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -314,6 +314,7 @@ local PAGES = {
               hint = "Give the action TK_Theme_Toggle_Menu_Bar a shortcut to do this from the keyboard. The menu bar comes back when REAPER restarts." },
         } },
         { "Transport", {
+            { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
             { kind = "startup", label = "Metronome light at startup",
               hint = "Without it the metronome button shows its state after the first click. Adds one line to Scripts/__startup.lua; switching it off removes that line again." },
         } },
@@ -375,6 +376,10 @@ local PAGES = {
             { kind = "handle", label = "Fader", hint = "For all layouts. A project opened later follows the next time this window opens. All but Dot reload the theme, so the screen may blink." },
             { kind = "part", part = "mcp_pan", label = "Pan and width", choices = SLIDER_HANDLES,
               hint = "For all layouts and the master. Choosing one reloads the theme, so the screen may blink." },
+        } },
+        { "FX and send lists", {
+            { kind = "part", part = "mcp_extmixbg", label = "Above the strips", choices = { { "plain", "Plain" }, { "grid", "Grid" } },
+              hint = "A grid shows the slots, also the empty ones. Choosing one reloads the theme, so the screen may blink." },
         } },
         { "Per layout", {
             { kind = "layout", label = "Layout", hint = "These settings are for the strips on this layout. Layout A is the standard strip, B the narrow one, and C has a sidebar and more values. Set a track's layout in its right-click menu." },
@@ -671,7 +676,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue" },
+    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
@@ -722,12 +727,27 @@ function parts.pack(zip, accent)
 end
 
 function parts.read(zip, accent, part, variant, file)
+    if part == "display" then
+        local display = parts.display_pack(zip, variant)
+        return display and display[file]
+    end
     local pack = parts.pack(zip, accent)
     return pack and pack["parts/" .. part .. "/" .. variant .. "/" .. file]
 end
 
+-- A display skin is one set for every look, in a pack of its own: the images, keys.txt, and
+-- lines.txt with the layout's lines that hold its colours. Standard is per look.
+function parts.display_pack(zip, variant)
+    local name = variant == "standard" and (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. " standard" or variant
+    local path = here .. "dist/display/" .. name .. ".zip"
+    if parts.packs[path] == nil then parts.packs[path] = Zip.read_stored(path) or false end
+    return parts.packs[path]
+end
+
 -- the images of a part, as they are named in the theme. Meters have no scaled versions
 function parts.files(part)
+    if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
+    if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
     if part ~= "meter" then
         local files = {}
         for _, name in ipairs(parts.images_of[part] or { part }) do
@@ -786,11 +806,36 @@ function parts.write_accent(variant, zip, root)
     return true
 end
 
+-- Standard is the look in the chosen accent colour, so the accent's own images go over it.
+-- The layout comes from the accent's pack, as it's the only copy Lua can read.
+function parts.write_display(variant, zip, root, accent)
+    local display = parts.display_pack(zip, variant)
+    local pack = parts.pack(zip, accent)
+    if not display or not pack then return nil, "this display is missing" end
+    local files = {}
+    for name, data in pairs(display) do
+        if name:find("%.png$") and name ~= "preview.png" then
+            files[root .. "/" .. name] = variant == "standard" and pack[name] or data
+        end
+    end
+    local layout = "\n" .. (pack["rtconfig.txt"] or "")
+    for name, line in (display["lines.txt"] or ""):gmatch("([^\t\n]+)\t([^\n]*)") do
+        layout = layout:gsub("\n[ \t]*set " .. name:gsub("%p", "%%%0") .. "[ \t][^\r\n]*", function() return "\n" .. line end, 1)
+    end
+    if pack["rtconfig.txt"] then files[root .. "/rtconfig.txt"] = layout:sub(2) end
+    local ok, err = Zip.replace(zip, files)
+    if not ok then return nil, err end
+    local same, text, loose = parts.keys(display["keys.txt"], zip)
+    if same then return true end
+    return Zip.save(loose, text)
+end
+
 function parts.write(part, variant, zip, accent)
     zip = zip or parts.zip_path()
     local root = Zip.root(zip)
     if not root then return nil, "the loaded theme has no zip" end
     if part == "accent" then return parts.write_accent(variant, zip, root) end
+    if part == "display" then return parts.write_display(variant, zip, root, accent) end
     local files = {}
     for _, name in ipairs(parts.files(part)) do
         local data = parts.read(zip, accent, part, variant, name)
@@ -808,8 +853,12 @@ function parts.accent_in_zip(variant, zip, root)
     local pack = parts.pack(zip, variant)
     if not pack then return true end
     local crcs = Zip.crc_map(zip)
+    -- a display skin has its own images, and its colours in the layout
+    local chosen = parts.chosen.display or parts.default.display
+    local display = chosen ~= parts.default.display and parts.display_pack(zip, chosen)
     for name, data in pairs(pack) do
-        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" and crcs[root .. "/" .. name] ~= Zip.crc32(data) then return false end
+        local skinned = display and (display[name] or name == "rtconfig.txt")
+        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" and not skinned and crcs[root .. "/" .. name] ~= Zip.crc32(data) then return false end
     end
     return (parts.keys(pack["keys.txt"], zip))
 end
@@ -892,7 +941,9 @@ function parts.image(part, variant)
     local key = zip .. "|" .. accent .. "|" .. part .. "|" .. variant
     if parts.images[key] == nil then
         local data = parts.read(zip, accent, part, variant, "preview.png")
-        local ok, image = pcall(r.ImGui_CreateImageFromMem, data or "")
+        -- ReaImGui reports unusable data in REAPER's error window, pcall or not
+        local ok, image = false, nil
+        if data and data ~= "" then ok, image = pcall(r.ImGui_CreateImageFromMem, data) end
         if ok and image then r.ImGui_Attach(ctx, image) end
         parts.images[key] = ok and image or false
     end
@@ -979,6 +1030,7 @@ function parts.buttons(id, part, choices, current)
 end
 
 local function draw_handle(item, id)
+    if not look.current() then return end
     row_label(item.label)
     local current = parts.chosen[HANDLE_PART] or parts.default[HANDLE_PART]
     local picked = parts.buttons(id, HANDLE_PART, HANDLES, handle_is_dot() and "dot" or current)
@@ -994,6 +1046,7 @@ local WITH_SEGMENTS = { segment = true, colour = true, led = true }
 
 -- a type with segments and its size are one folder: led, led_m, led_l
 local function draw_meter(item, id)
+    if not look.current() then return end       -- only a look has parts to choose from
     row_label(item.label)
     local current = parts.chosen.meter or parts.default.meter
     local kind, size = current:match("^(%a+)(.*)$")
@@ -1146,6 +1199,7 @@ local function draw_setting(item, id)
         end
         r.ImGui_PopID(ctx)
     elseif item.kind == "part" then
+        if not look.current() then return end
         row_label(item.label)
         local picked = parts.buttons(id, item.part, item.choices, parts.chosen[item.part] or parts.default[item.part])
         if picked then parts.choose(item.part, picked) end
@@ -2174,6 +2228,18 @@ end
 -- the accent's own colour per look, for its button
 local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 } }
 
+local DISPLAYS = { { "standard", "Standard" }, { "ice", "Ice" }, { "amber", "Amber" }, { "green", "Green" }, { "red", "Red" }, { "blue", "Blue" } }
+
+local function draw_display()
+    r.ImGui_Dummy(ctx, 0, 2)
+    if not begin_card("Display", "lkv") then return end
+    local picked = parts.buttons("display", "display", DISPLAYS, parts.chosen.display or parts.default.display)
+    if picked and parts.choose("display", picked) then state.msg = "Display changed." end
+    r.ImGui_Dummy(ctx, 0, 2)
+    hint_text("The transport's glass and everything on it, in one colour, as on a piece of hardware. Record, play and repeat keep their own colours. Standard follows the look and its accent colour. Choosing one reloads the theme, so the screen may blink.")
+    r.ImGui_EndChild(ctx)
+end
+
 local function draw_accents(current)
     r.ImGui_Dummy(ctx, 0, 2)
     if not begin_card("Accent colour", "lka") then return end
@@ -2242,6 +2308,7 @@ local function draw_look()
     if current then
         draw_moods(current)
         draw_accents(current)
+        draw_display()
     end
     local wants_dark = current and current.name == "Dark"
     if IS_WINDOWS and current and dark.on ~= wants_dark then
@@ -2263,6 +2330,8 @@ end
 local GUIDE = {
     { "Look", {
         "The Look page chooses Dark or Light. A look changes colours and images only: your layout settings go along. Colours you changed are kept per look, and a preset remembers which look it was saved with. When a look uses your own colours, this page says so and can take it back to the look's own.",
+        "A transport plate on General puts brushed metal, with screws and a maker's plate, behind the whole transport, which gets a little taller. It goes with any look and display skin.",
+        "A display skin gives the transport's glass and what's on it one colour of its own, in every look. The accent colour doesn't reach it.",
         "The same page chooses an accent colour: Blue, Orange or Violet, for selections, FX buttons, highlights, meters and the theme's icons. Mute, solo, record and play keep their own colours, and so do the TK_ icons on your own toolbars.",
         "In Options > Themes the looks are listed as TK Theme Dark and TK Theme Light. Choosing one there works too, but your settings only go along when you change the look on this page.",
     } },

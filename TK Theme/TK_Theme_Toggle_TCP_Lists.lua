@@ -1,6 +1,6 @@
 -- @description TK Theme Dark: show/hide the TCP FX and IO columns
 -- @author TouristKiller
--- @version 0.9.9
+-- @version 0.9.10
 -- Run from the button in the TCP. Shows or hides both columns for the layout of the
 -- track under the mouse, or for the master if that's the one clicked. From a shortcut,
 -- without a track under the mouse, the first selected track decides. These are the

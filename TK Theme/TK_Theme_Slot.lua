@@ -1,6 +1,6 @@
 -- @description TK Theme Dark: runs the action chosen for a transport button
 -- @author TouristKiller
--- @version 0.9.9
+-- @version 0.9.10
 -- Library for the scripts in slots/: a theme button holds one fixed action, so
 -- buttons that can run the user's choice call those, and they call this.
 return function(key)
