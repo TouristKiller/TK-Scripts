@@ -181,7 +181,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.10" author="TouristKiller" time="2026-11-05T03:32:15Z">
+    <version name="0.9.11" author="TouristKiller" time="2026-11-05T14:36:37Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -514,12 +514,13 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: display skins for the transport, on the Look page: Ice, Amber, Green, Red or Blue, with dark glass and everything on it in one colour, in both looks. Record, play and repeat keep their own colours.
-+ Added: transport plates on the General page: Black or Silver brushed metal behind the whole transport, with screws and a maker's plate. The transport gets a little taller, and a plate goes with any look and display skin.
-+ Added: a subtle grid for the FX and send lists above the mixer's strips, on the Mixer page.
-+ Changed: the rate slider is a thin line in the display's colour, with its handle centred on it.
-+ Changed: the letters on buttons, such as M, S and FX, are centred in their button. They sat about a pixel high.
-+ Fixed: an error window in the settings when another theme was loaded and the General, Track panel or Mixer page was opened.
++ Added: a choice for text buttons on toolbars, on the General page: Plain, or with a quiet cell behind them.
++ Changed: text on toolbar buttons is much easier to read, with a clearer colour and a smoother font, in both looks. REAPER draws that text itself, so the Text brightness slider has no effect on it.
++ Changed: mute is red and solo is yellow, so they stand apart from each other and from the FX button.
++ Changed: the M over a muted track's meter is calmer in Dark, and the marks over the meter have a solid background in Light, so they're readable there.
++ Changed: Default 7's green is gone from the bar under pinned tracks, the scrollbar in the FX and send lists, and a few small icons. They follow the accent colour now.
++ Changed: in Light, the bar and gap under pinned tracks are no longer near-black.
++ Fixed: an extra ring beside the knobs of FX parameters in the mixer, with a band behind their text.
 ]]></changelog>
     </version>
     </reapack>

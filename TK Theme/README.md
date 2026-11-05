@@ -30,6 +30,7 @@ lists, menus and borders. That takes effect after a restart.
   and the theme's icons.
 - **Display:** Ice, Amber, Green, Red or Blue: dark glass on the transport with everything on it
   in one colour, in both looks. Standard follows the look and its accent colour.
+- **Text buttons on toolbars:** plain, or with a quiet cell behind them.
 - **FX and send lists:** plain, or a subtle grid above the mixer's strips.
 - **Transport plate:** Black or Silver: brushed metal behind the whole transport, with screws and
   a maker's plate, on the General page.

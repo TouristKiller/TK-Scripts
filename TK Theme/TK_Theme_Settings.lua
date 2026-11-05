@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.10
+-- @version 0.9.11
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -312,6 +312,10 @@ local PAGES = {
         { "Main window", {
             { kind = "menubar", label = "Menu bar",
               hint = "Give the action TK_Theme_Toggle_Menu_Bar a shortcut to do this from the keyboard. The menu bar comes back when REAPER restarts." },
+        } },
+        { "Toolbars", {
+            { kind = "part", part = "toolbar_blank", label = "Text buttons", choices = { { "plain", "Plain" }, { "cell", "Cell" } },
+              hint = "A quiet cell behind toolbar buttons that show text. Choosing one reloads the theme, so the screen may blink." },
         } },
         { "Transport", {
             { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
@@ -676,7 +680,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain" },
+    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
