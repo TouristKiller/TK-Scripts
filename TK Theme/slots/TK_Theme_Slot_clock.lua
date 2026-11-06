@@ -1,5 +1,5 @@
 -- @description TK Theme Dark: transport button 'clock', runs the action chosen in the settings
 -- @author TouristKiller
--- @version 0.9.11
+-- @version 0.9.12
 local here = debug.getinfo(1, "S").source:match("^@(.*[\\/])")
 dofile(here .. "../TK_Theme_Slot.lua")("clock")

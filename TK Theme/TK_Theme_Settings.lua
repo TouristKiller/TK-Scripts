@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.11
+-- @version 0.9.12
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -316,6 +316,8 @@ local PAGES = {
         { "Toolbars", {
             { kind = "part", part = "toolbar_blank", label = "Text buttons", choices = { { "plain", "Plain" }, { "cell", "Cell" } },
               hint = "A quiet cell behind toolbar buttons that show text. Choosing one reloads the theme, so the screen may blink." },
+            { kind = "part", part = "toolbar_text", label = "Text size", choices = { { "small", "Small" }, { "normal", "Normal" }, { "large", "Large" } },
+              hint = "The text on toolbar buttons, which REAPER draws itself. Choosing one reloads the theme, so the screen may blink." },
         } },
         { "Transport", {
             { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
@@ -348,7 +350,8 @@ local PAGES = {
             Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without its column, the IO button moves to the first row.", true)),
             Off(lay_off_or("tkNoFxCol", "tkNameOnly"), T("FX button", "tkHideFxBtn", THIS_LAYOUT, nil, true)),
             Off(lay_off_or("tkNoIoCol", "tkNameOnly"), T("IO button", "tkHideIoBtn", THIS_LAYOUT, nil, true)),
-            Off(lay_all_or({ "tkNoFxCol", "tkNoIoCol" }, "tkNameOnly"), S("Column width", "sectionRightW", THIS_LAYOUT, "The FX and IO columns share this width.")),
+            Off(lay_on("tkNoFxCol", "tkNameOnly"), S("FX column width", "sectionRightW", THIS_LAYOUT)),
+            Off(lay_on("tkNoIoCol", "tkNameOnly"), S("IO column width", "tkIoW", THIS_LAYOUT, "0 gives it the width of the FX column. Like that one, it's at least 46.")),
             Off(lay_on("tkNameOnly"), T("Meter", "tkHideMeter", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly", "tkHideMeter"), T("Meter on the left", "tkMeterLeft", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT)),
@@ -680,7 +683,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain" },
+    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
@@ -752,6 +755,7 @@ end
 function parts.files(part)
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
     if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
+    if part == "toolbar_text" then return {} end                       -- a line in the colour file only
     if part ~= "meter" then
         local files = {}
         for _, name in ipairs(parts.images_of[part] or { part }) do
@@ -777,8 +781,8 @@ function parts.keys(keys, zip)
     local text = read_all(loose)
     if not keys or not text then return true end
     local same = true
-    for key, value in keys:gmatch("([%w_]+)=(%-?%d+)") do
-        text = text:gsub("([\r\n]" .. key .. "=)(%-?%d+)", function(head, old)
+    for key, value in keys:gmatch("([%w_]+)=(%-?%w+)") do
+        text = text:gsub("([\r\n]" .. key .. "=)(%-?%w+)", function(head, old)
             if old ~= value then same = false end
             return head .. value
         end, 1)
@@ -846,8 +850,10 @@ function parts.write(part, variant, zip, accent)
         if not data then return nil, "the images of this choice are missing" end
         files[root .. "/" .. name] = data
     end
-    local ok, err = Zip.replace(zip, files)
-    if not ok then return nil, err end
+    if next(files) then
+        local ok, err = Zip.replace(zip, files)
+        if not ok then return nil, err end
+    end
     local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip)
     if same then return true end
     return Zip.save(loose, text)
@@ -872,6 +878,7 @@ function parts.in_zip(part, variant, zip)
     local root = Zip.root(zip)
     if part == "accent" then return not root or parts.accent_in_zip(variant, zip, root) end
     local name = parts.files(part)[1]
+    if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip)) end
     local data = parts.read(zip, nil, part, variant, name)
     if not root or not data then return true end
     return Zip.crc_of(zip, root .. "/" .. name) == Zip.crc32(data) and (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip))
