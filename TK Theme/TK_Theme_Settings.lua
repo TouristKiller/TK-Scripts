@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.13
+-- @version 0.9.14
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -292,7 +292,7 @@ local function global_off_or(need, other)
 end
 
 local KNOB_CHOICE = { "Auto", "Sliders", "Knobs" }
-local SLIDER_HANDLES = { { "dot", "Dot" }, { "ring", "Ring" }, { "bar", "Bar" }, { "cap", "Cap" }, { "classic", "Classic" } }
+local SLIDER_HANDLES = { { "dot", "Dot" }, { "ring", "Ring" }, { "bar", "Bar" }, { "cap", "Cap" }, { "classic", "Classic" }, { "classic_accent", "Accent" } }
 
 local PAGES = {
     { title = "Look", draw = "look" },
@@ -304,6 +304,7 @@ local PAGES = {
             S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims."),
             S("Selection strength", "selectStrength", nil, "How much a selected track lightens."),
             T("Track names in track colour", "colorTrackLabels"),
+            T("Track names in accent colour", "tkNameAccent", nil, "Goes before the track colour: with both on, names show in the accent colour."),
             T("Selection dot", "selDot", nil, "The small dot on the track number."),
         } },
         { "Text and spacing", {
@@ -321,6 +322,8 @@ local PAGES = {
         } },
         { "Transport", {
             { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
+            T("Rate as a knob", "tkRateKnob", nil, "With a plate: the rate as a knob on the right of the plate, mirroring the maker's plate. Off keeps the slider in the display."),
+            { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil" } },
             { kind = "startup", label = "Metronome light at startup",
               hint = "Without it the metronome button shows its state after the first click. Adds one line to Scripts/__startup.lua; switching it off removes that line again." },
         } },
@@ -358,8 +361,8 @@ local PAGES = {
             Off(lay_on("tkNameOnly"), S("Name size", "tcpLabelSize", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly", "tkHideInput"), S("Input text size", "tcpInputFontSize", THIS_LAYOUT)),
         } },
-        { "Selected tracks", {
-            { kind = "tracks", hint = "Saved per track, in the project. Moving the slider changes nothing until you click a button, so a new track on a layout gets its height the next time you click. Make divider needs Name only on that layout. Layout A includes tracks on the default layout. REAPER's zoom actions leave a locked track's height alone." },
+        { "Set track height", {
+            { kind = "tracks", hint = "A fixed height for the tracks selected now: it stays when you select other tracks, and it does not follow the selection (a theme can't resize tracks by itself). Saved per track, in the project. Moving the slider changes nothing until you click a button, so a new track on a layout gets its height the next time you click. Make divider needs Name only on that layout. Layout A includes tracks on the default layout. REAPER's zoom actions leave a locked track's height alone." },
         } },
         { "Master", {
             T("Only a meter", "tkMasterMeterOnly", nil, "The whole master becomes one big meter."),
@@ -685,7 +688,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off" },
+    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
@@ -757,7 +760,7 @@ end
 function parts.files(part)
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
     if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
-    if part == "toolbar_text" or part == "send_tint" then return {} end  -- a line in the colour file only
+    if part == "toolbar_text" or part == "send_tint" or part == "shade" then return {} end  -- lines in the colour file only
     if part ~= "meter" then
         local files = {}
         for _, name in ipairs(parts.images_of[part] or { part }) do
@@ -995,7 +998,7 @@ function look.apply_saved(text)
 end
 
 local HANDLE_PART = "mcp_volthumb"
-local HANDLES = { { "cap", "Cap" }, { "classic", "Classic" }, { "slim", "Slim" }, { "ring", "Ring" }, { "dot", "Dot" } }
+local HANDLES = { { "cap", "Cap" }, { "classic", "Classic" }, { "classic_accent", "Accent" }, { "slim", "Slim" }, { "ring", "Ring" }, { "dot", "Dot" } }
 
 -- a row of picture buttons; returns the key of the one clicked, if it wasn't on already
 function parts.buttons(id, part, choices, current)
@@ -1975,9 +1978,38 @@ local function draw_undo_card()
     end
 end
 
+local RED_DEVIL = "\nlook=TK Theme Dark\npart:accent=red\npart:display=red\npart:shade=black"
+    .. "\npart:mcp_volthumb=classic_accent\npart:tcp_thumb=classic_accent\npart:mcp_pan=classic_accent\n"
+
+local function apply_red_devil()
+    if not save_undo() then
+        state.msg = "Nothing changed: couldn't save the current settings for undo."
+        return
+    end
+    if handle_is_dot() then set_handle(false) end      -- the mixer's handle by layout, else the cap won't show
+    look.apply_saved(RED_DEVIL)
+    set_param("tkTransPlate", 1, true)
+    set_param("tkPlateLogo", 1, true)
+    set_param("customColorDepthParam", 0, true)     -- plain rims
+    set_param("tkNameAccent", 1, true)
+    r.ThemeLayout_RefreshAll()
+    state.msg = "Red Devil is on. Undo brings back what you had."
+end
+
+local function draw_red_devil()
+    if begin_card("Red Devil", "prd") then
+        hint_text("The Dark look in red and near black: red accent colour, red display, Black darkness, the black transport plate with the Red Devil on it, plain rims without track colour, track names in red and classic handles with a red line. Everything else stays as it is, each can be changed back on its own, and Undo brings back what you had.")
+        r.ImGui_SetCursorPosX(ctx, LABEL_W)
+        if r.ImGui_Button(ctx, "Apply Red Devil") then apply_red_devil() end
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_Dummy(ctx, 0, 2)
+end
+
 local function draw_presets()
     hint_text("A preset holds every setting, colour, the colour processing, chosen actions, the look, the meter type and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
     r.ImGui_Dummy(ctx, 0, 2)
+    draw_red_devil()
     if begin_card("Save as a new preset", "ps") then
         row_label("Name")
         r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
@@ -2239,7 +2271,7 @@ local function draw_moods(current)
 end
 
 -- the accent's own colour per look, for its button
-local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 } }
+local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 }, { "red", "Red", 0xE8303A, 0xC41A24 } }
 
 local DISPLAYS = { { "standard", "Standard" }, { "ice", "Ice" }, { "amber", "Amber" }, { "green", "Green" }, { "red", "Red" }, { "blue", "Blue" } }
 
@@ -2250,6 +2282,18 @@ local function draw_display()
     if picked and parts.choose("display", picked) then state.msg = "Display changed." end
     r.ImGui_Dummy(ctx, 0, 2)
     hint_text("The transport's glass and everything on it, in one colour, as on a piece of hardware. Record, play and repeat keep their own colours. Standard follows the look and its accent colour. Choosing one reloads the theme, so the screen may blink.")
+    r.ImGui_EndChild(ctx)
+end
+
+local SHADES = { { "standard", "Standard" }, { "black", "Black" } }
+
+local function draw_shade()
+    r.ImGui_Dummy(ctx, 0, 2)
+    if not begin_card("Darkness", "lks") then return end
+    local picked = parts.buttons("shade", "shade", SHADES, parts.chosen.shade or parts.default.shade)
+    if picked and parts.choose("shade", picked) then state.msg = "Darkness changed." end
+    r.ImGui_Dummy(ctx, 0, 2)
+    hint_text("Black takes the arrange view, track lanes, lists, mixer, MIDI editor and dockers close to black. The panels and buttons stay as they are. Choosing one reloads the theme, so the screen may blink.")
     r.ImGui_EndChild(ctx)
 end
 
@@ -2321,6 +2365,7 @@ local function draw_look()
     if current then
         draw_moods(current)
         draw_accents(current)
+        if current.name == "Dark" then draw_shade() end
         draw_display()
     end
     local wants_dark = current and current.name == "Dark"
@@ -2365,7 +2410,7 @@ local GUIDE = {
     } },
     { "Layouts", {
         "Each track can use layout A, B or C. In the track panel they look the same until you change one on the Track panel page, for example to give your busses only a name, FX, mute and solo, with a wide meter on the left. Settings that don't count at the moment show grey. Name only turns a track into a divider: its name, large and centred, growing with the track's height.",
-        "Under Selected tracks you set a height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
+        "Under Set track height you set a fixed height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
         "Volume and pan on the first row puts them beside the name, so they also show on the lowest track height. Name width then sets the room for the name. Volume and pan as chooses Sliders, Knobs or Auto, which shows knobs when a slider wouldn't have the room. Knobs sit side by side, and on the first row the name takes the room they leave.",
     } },
     { "Mixer", {

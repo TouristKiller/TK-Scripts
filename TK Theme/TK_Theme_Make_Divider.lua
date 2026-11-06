@@ -1,8 +1,8 @@
 -- @description TK Theme: make the selected tracks dividers
 -- @author TouristKiller
--- @version 0.9.13
+-- @version 0.9.14
 -- Puts the selected tracks on the first layout with "Name only" turned on, at the
--- height and lock chosen under Selected tracks on the Track panel page of the
+-- height and lock chosen under Set track height on the Track panel page of the
 -- theme's settings. Give it a shortcut in the action list.
 local r = reaper
 local SCRIPT = "TK Theme Settings"

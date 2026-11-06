@@ -1,6 +1,6 @@
 -- @description TK Theme Dark: keep the transport's metronome button in step
 -- @author TouristKiller
--- @version 0.9.13
+-- @version 0.9.14
 -- A theme can't read whether the metronome is on, so this background script
 -- passes it on as the theme parameter tkTransMetroOn. Started by the metronome
 -- button; run it from __startup.lua to have the button right from the start.

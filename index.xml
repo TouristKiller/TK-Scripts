@@ -181,7 +181,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.13" author="TouristKiller" time="2026-11-06T02:38:21Z">
+    <version name="0.9.14" author="TouristKiller" time="2026-11-06T14:16:19Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -213,9 +213,11 @@
      <source file="dist/look_icons/TK Theme Light.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/look_icons/TK%20Theme%20Light.zip</source>
      <source file="dist/accents/TK Theme Dark/blue.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/blue.zip</source>
      <source file="dist/accents/TK Theme Dark/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/orange.zip</source>
+     <source file="dist/accents/TK Theme Dark/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/red.zip</source>
      <source file="dist/accents/TK Theme Dark/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/violet.zip</source>
      <source file="dist/accents/TK Theme Light/blue.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/blue.zip</source>
      <source file="dist/accents/TK Theme Light/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/orange.zip</source>
+     <source file="dist/accents/TK Theme Light/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/red.zip</source>
      <source file="dist/accents/TK Theme Light/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/violet.zip</source>
      <source file="dist/display/TK Theme Dark standard.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/display/TK%20Theme%20Dark%20standard.zip</source>
      <source file="dist/display/TK Theme Light standard.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/display/TK%20Theme%20Light%20standard.zip</source>
@@ -535,7 +537,14 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: send colours, on the Mixer page: sends in the colour of the track they go to, Subtle or Medium, in the mixer and the track panel. Off is as before.
++ Added: Red Devil, on the Presets page. One click turns Dark red and near black: red accent colour, red display, Black darkness, the black transport plate with the Red Devil on it, plain rims without track colour, track names in red and classic handles with a red line. Everything else stays as it is, each part can be changed back on its own, and Undo brings back what you had.
++ Added: Red as an accent colour, in both looks.
++ Added: Darkness on the Look page, for Dark. Black takes the arrange view, track lanes, lists, mixer, MIDI editor and dockers close to black; the panels and buttons stay as they are.
++ Added: Plate logo on the General page: TK-S73 or the Red Devil, on the Black and the Silver plate.
++ Added: Rate as a knob. With a transport plate the rate sits as a knob on the right of the plate, mirroring the maker's plate. Switch it off to keep the slider in the display.
++ Added: Track names in accent colour, on the General page. It goes before the track colour.
++ Added: Accent slider handles: the classic cap with its line in the accent colour, for the mixer's fader, the track panel's sliders and the mixer's pan and width.
++ Changed: the track panel's "Selected tracks" card is now "Set track height". It sets a fixed height on the tracks selected now and does not follow the selection, which its hint now says, as a theme can't resize tracks by itself.
 ]]></changelog>
     </version>
     </reapack>
