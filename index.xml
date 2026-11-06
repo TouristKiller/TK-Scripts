@@ -181,7 +181,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.12" author="TouristKiller" time="2026-11-06T01:49:50Z">
+    <version name="0.9.13" author="TouristKiller" time="2026-11-06T02:38:21Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -535,13 +535,7 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: TK Theme now draws about 55 more of REAPER's own toolbar icons, among them the automation modes, windows such as the FX browser, navigator and undo history, explode and implode takes, crop, zoom, and REAPER's classic main toolbar set (v3). Choose them in REAPER's icon list as usual: they follow the look and the accent colour, and change along when you switch to another theme.
-+ Added: TK icons for Preferences, Actions, Media Explorer and Track Manager, for which REAPER has no icon of its own.
-+ Added: a width of its own for the IO column, on the Track panel page. 0 keeps it the width of the FX column.
-+ Added: a text size for toolbar buttons that show text, on the General page: Small, Normal or Large.
-+ Changed: the buttons of fixed item lanes are small dots in the accent colour.
-+ Changed: track names in their track colour are easier to read in Light.
-+ Changed: the monitor FX and timebase icons follow the accent colour too.
++ Added: send colours, on the Mixer page: sends in the colour of the track they go to, Subtle or Medium, in the mixer and the track panel. Off is as before.
 ]]></changelog>
     </version>
     </reapack>

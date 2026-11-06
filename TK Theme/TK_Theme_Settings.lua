@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.12
+-- @version 0.9.13
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -387,6 +387,8 @@ local PAGES = {
         { "FX and send lists", {
             { kind = "part", part = "mcp_extmixbg", label = "Above the strips", choices = { { "plain", "Plain" }, { "grid", "Grid" } },
               hint = "A grid shows the slots, also the empty ones. Choosing one reloads the theme, so the screen may blink." },
+            { kind = "part", part = "send_tint", label = "Send colours", choices = { { "off", "Off" }, { "subtle", "Subtle" }, { "medium", "Medium" } },
+              hint = "Sends in the colour of the track they go to, in the mixer and the track panel. Choosing one reloads the theme, so the screen may blink." },
         } },
         { "Per layout", {
             { kind = "layout", label = "Layout", hint = "These settings are for the strips on this layout. Layout A is the standard strip, B the narrow one, and C has a sidebar and more values. Set a track's layout in its right-click menu." },
@@ -683,7 +685,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal" },
+    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
@@ -755,7 +757,7 @@ end
 function parts.files(part)
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
     if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
-    if part == "toolbar_text" then return {} end                       -- a line in the colour file only
+    if part == "toolbar_text" or part == "send_tint" then return {} end  -- a line in the colour file only
     if part ~= "meter" then
         local files = {}
         for _, name in ipairs(parts.images_of[part] or { part }) do
