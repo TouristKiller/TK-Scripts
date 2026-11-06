@@ -8,7 +8,7 @@ local M = {
   id = "idea_vault",
   title = "Idea Vault",
   icon = "IDV",
-  version = "0.1.4"
+  version = "0.1.6"
 }
 
 local state = {
@@ -21,6 +21,14 @@ local state = {
   preview_name = nil,
   tempo_lock = true,
   match_tempo = false,
+  insert_on_selected = false,
+  -- Dragging an idea onto the arrange: armed on press, live past a few
+  -- pixels, dropped on release (the Media Browser's way, not an OS drag).
+  drag_armed = nil,
+  drag_x = 0,
+  drag_y = 0,
+  dragging = nil,
+  drag_saved_cursor = nil,
   loop = false,
   fixed_h = nil,
   capture_open = false,
@@ -297,6 +305,43 @@ local function load_idea(app, idea)
   app.status = changing
     and string.format("Loaded %s and set the project to %g BPM", tostring(idea.name), tonumber(idea.bpm) or 0)
     or ("Loaded " .. tostring(idea.name))
+end
+
+-- The preview as an audio item rather than the tracks behind it. The rate is
+-- the one the preview plays at, so "Lock to tempo" means the same thing in the
+-- arrange as it does in the headphones: what you heard is what lands.
+-- target: "new", "selected", or a MediaTrack (a drop). opts: position, at_end.
+local function insert_audio(app, idea, target, opts)
+  opts = opts or {}
+  if not idea or not idea.has_preview then
+    app.status = "This idea has no preview file to insert"
+    return
+  end
+  local track, fallback = nil, false
+  if target == "selected" then
+    track = r.GetSelectedTrack(0, 0)
+    fallback = track == nil
+  elseif target ~= "new" then
+    track = target
+  end
+  local item, err, created = Store.insert_preview(idea, {
+    track = track,
+    position = opts.position,
+    at_end = opts.at_end,
+    rate = playback_rate(idea)
+  })
+  if not item then
+    app.status = tostring(err or "Could not insert the preview")
+    return
+  end
+  local _, name = r.GetTrackName(r.GetMediaItem_Track(item))
+  if fallback then
+    app.status = "No track was selected, so " .. tostring(idea.name) .. " went on a new track"
+  elseif created then
+    app.status = "Inserted " .. tostring(idea.name) .. " as audio on a new track"
+  else
+    app.status = "Inserted " .. tostring(idea.name) .. " as audio on " .. tostring(name)
+  end
 end
 
 local function do_capture(app)
@@ -1044,6 +1089,96 @@ local function draw_tag_bar(app, settings)
   r.ImGui_EndChild(ctx)
 end
 
+--------------------------------------------------------------------------------
+-- dragging an idea onto the arrange
+--------------------------------------------------------------------------------
+
+local DRAG_THRESHOLD = 6
+
+-- Where in the arrange the mouse is: the project time under it (snapped) and
+-- whether it is inside the arrange area at all. Needs js_ReaScriptAPI; without
+-- it a drop still works on a track, at the edit cursor.
+local function arrange_point(mx, my)
+  if not (r.JS_Window_FindChildByID and r.JS_Window_GetRect and r.GetSet_ArrangeView2) then
+    return nil, false
+  end
+  local arrange = r.JS_Window_FindChildByID(r.GetMainHwnd(), 0x3E8)
+  if not arrange then return nil, false end
+  local _, left, top, right, bottom = r.JS_Window_GetRect(arrange)
+  if not (left and right and top and bottom) or right <= left then return nil, false end
+  if top > bottom then top, bottom = bottom, top end
+  if mx < left or mx > right or my < top or my > bottom then return nil, false end
+  local view_start, view_end = r.GetSet_ArrangeView2(0, false, 0, 0)
+  local time = view_start + ((mx - left) / (right - left)) * (view_end - view_start)
+  if r.SnapToGrid then time = r.SnapToGrid(0, time) end
+  return math.max(0, time), true
+end
+
+-- What a release at the mouse would do: a track (drop on it), "new" (empty
+-- arrange below the tracks), or nil (nowhere useful), plus the time.
+local function drop_target(app)
+  local mx, my = r.GetMousePosition()
+  -- Over Workbench itself is never a drop, even with REAPER's arrange behind it.
+  if r.ImGui_IsWindowHovered(app.ctx, r.ImGui_HoveredFlags_AnyWindow()) then return nil end
+  local time, in_arrange = arrange_point(mx, my)
+  local track = r.GetTrackFromPoint and r.GetTrackFromPoint(mx, my) or nil
+  if track and r.ValidatePtr2(0, track, "MediaTrack*") and track ~= r.GetMasterTrack(0) then
+    return track, time
+  end
+  if in_arrange then return "new", time end
+  return nil
+end
+
+local function update_drag(app)
+  local ctx = app.ctx
+  local down = r.ImGui_IsMouseDown(ctx, 0)
+  if state.drag_armed and not state.dragging then
+    if not down then
+      state.drag_armed = nil
+    else
+      local mx, my = r.GetMousePosition()
+      local dx, dy = mx - state.drag_x, my - state.drag_y
+      if dx * dx + dy * dy >= DRAG_THRESHOLD * DRAG_THRESHOLD then
+        state.dragging = state.drag_armed
+        state.drag_armed = nil
+        state.drag_saved_cursor = r.GetCursorPosition()
+      end
+    end
+  end
+  local idea = state.dragging
+  if not idea then return end
+  local target, time = drop_target(app)
+  -- The edit cursor rides along so you can see where the item will start, as
+  -- in the Media Browser. Off target it goes back to where it was, so it never
+  -- points at a spot a release would not use.
+  local cursor = (target and time) or state.drag_saved_cursor
+  if cursor and math.abs(r.GetCursorPosition() - cursor) > 1e-9 then
+    r.SetEditCurPos(cursor, false, false)
+  end
+  if down then
+    local where
+    if target == "new" then
+      where = "a new track"
+    elseif target then
+      local _, name = r.GetTrackName(target)
+      where = tostring(name)
+    end
+    app.status = where and ("Drop " .. tostring(idea.name) .. " as audio on " .. where)
+      or ("Drag " .. tostring(idea.name) .. " onto a track, or below the last one for a new track")
+    r.ImGui_SetTooltip(ctx, tostring(idea.name) .. "\n" .. (where and ("-> " .. where) or "Not over a track"))
+    return
+  end
+  state.dragging = nil
+  state.drag_saved_cursor = nil
+  if target then
+    insert_audio(app, idea, target, { position = time, at_end = true })
+  elseif r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_AnyWindow()) then
+    app.status = ""  -- let go over Workbench: a cancelled drag, not a failure
+  else
+    app.status = "Not over a track - nothing inserted"
+  end
+end
+
 -- One card for all three densities. The layout differs per mode, everything
 -- else - selecting, the play badge, double-click to load, the context menu - is
 -- the same thing three times over, and three copies of it is three places for
@@ -1149,12 +1284,18 @@ local function draw_card(app, idea, width, height, mode)
     end
   end
   if double and not badge_hot then load_idea(app, idea) end
-  if hovered and not badge_hot then
+  if hovered and not badge_hot and idea.has_preview and not state.dragging
+     and r.ImGui_IsMouseClicked(ctx, 0) then
+    state.drag_armed = idea
+    state.drag_x, state.drag_y = r.GetMousePosition()
+  end
+  if hovered and not badge_hot and not state.dragging then
     local tags = Store.tags_text(idea)
     r.ImGui_SetTooltip(ctx, tostring(idea.name) .. "\n" .. summary_line(idea)
       .. (tags ~= "" and ("\n" .. tags) or "")
       .. (tostring(idea.description or "") ~= "" and ("\n\n" .. idea.description) or "")
       .. "\n\nDouble-click to load into the project"
+      .. (idea.has_preview and "\nDrag onto a track to insert the preview as audio" or "")
       .. "\nCtrl-click to pick out several, shift-click for a run of them")
   end
 
@@ -1169,6 +1310,14 @@ local function draw_card(app, idea, width, height, mode)
       if playing then stop_preview() else play(app, idea) end
     end
     if r.ImGui_MenuItem(ctx, "Load into project") then load_idea(app, idea) end
+    if r.ImGui_MenuItem(ctx, "Insert preview as audio on a new track", nil, false, idea.has_preview == true) then
+      insert_audio(app, idea, "new")
+    end
+    if r.ImGui_MenuItem(ctx, "Insert preview as audio on the selected track", nil, false,
+        idea.has_preview == true and r.CountSelectedTracks(0) > 0) then
+      insert_audio(app, idea, "selected")
+    end
+    r.ImGui_Separator(ctx)
     if r.ImGui_MenuItem(ctx, "Edit description, tags and rating") then begin_edit(idea) end
     if r.ImGui_MenuItem(ctx, "Rename") then
       state.rename_target = idea
@@ -1319,6 +1468,28 @@ local function draw_footer(app)
       .. "what you want when a new piece starts from one. It changes the whole\n"
       .. "project, and it is one undo step together with the load.")
   end
+  -- Its own row for the same reason as the load row: two more controls on
+  -- either of the rows above would push one off a narrow panel.
+  local insert_w = UIScale.text_button_w(ctx, "Insert audio", 100)
+  if not idea.has_preview then r.ImGui_BeginDisabled(ctx) end
+  if r.ImGui_Button(ctx, "Insert audio", insert_w, 0) then
+    insert_audio(app, idea, state.insert_on_selected and "selected" or "new")
+  end
+  if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled()) then
+    r.ImGui_SetTooltip(ctx, idea.has_preview
+      and ("Puts the preview at the edit cursor as one audio item - the part as it\n"
+        .. "was played, without the instruments and FX behind it.\n"
+        .. "Follows \"Lock to tempo\". You can also drag an idea onto a track.")
+      or "This idea was saved without a preview")
+  end
+  r.ImGui_SameLine(ctx)
+  changed, value = r.ImGui_Checkbox(ctx, "On the selected track", state.insert_on_selected)
+  if changed then state.insert_on_selected = value end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Off: a new track named after the idea.\n"
+      .. "On: the first selected track (a new track when none is selected).")
+  end
+  if not idea.has_preview then r.ImGui_EndDisabled(ctx) end
 end
 
 -- Only on screen while something is marked: a permanent row would cost the
@@ -1348,6 +1519,46 @@ end
 --------------------------------------------------------------------------------
 -- module contract
 --------------------------------------------------------------------------------
+
+-- Selected arrange items that are previews put in by Insert audio. Read every
+-- frame, so it stops looking past a large selection - nobody swaps hundreds of
+-- previews by hand, and reading every item each frame would be the cost.
+local SWAP_SCAN_LIMIT = 256
+
+local function swap_selected(app)
+  local entries = Store.preview_items()
+  if #entries == 0 then
+    app.status = "Select a preview that Insert audio put in the project first"
+    return
+  end
+  local swapped, failed = Store.swap_for_tracks(entries)
+  local message = swapped == 1 and "Swapped the preview for its tracks"
+    or string.format("Swapped %d previews for their tracks", swapped)
+  if #failed > 0 then
+    message = (swapped > 0 and (message .. ". ") or "") .. Store.swap_failure_text(failed)
+  end
+  app.status = message
+end
+
+-- Only on screen while it has something to act on, like the selection bar:
+-- the canvas has no scrollbar to pay for a permanent row.
+local function draw_swap_bar(app)
+  local count = r.CountSelectedMediaItems(0)
+  if count == 0 or count > SWAP_SCAN_LIMIT then return end
+  local previews = #Store.preview_items()
+  if previews == 0 then return end
+  local ctx = app.ctx
+  r.ImGui_TextColored(ctx, Theme.colors.text_dim, previews == 1 and "1 idea preview selected in the arrange"
+    or string.format("%d idea previews selected in the arrange", previews))
+  r.ImGui_SameLine(ctx)
+  if r.ImGui_SmallButton(ctx, "Swap for tracks") then swap_selected(app) end
+  if r.ImGui_IsItemHovered(ctx) then
+    r.ImGui_SetTooltip(ctx, "Replaces the audio with the idea's real tracks - instruments, FX\n"
+      .. "and all - lined up so the part plays exactly where the audio did.\n"
+      .. "A track Insert audio made for the preview is removed once empty.\n"
+      .. "One undo step. Also available as an action for the item context menu.")
+  end
+end
 
 function M.init(app)
   state.dirty = true
@@ -1420,6 +1631,7 @@ function M.draw(app)
   draw_header(app, settings)
   draw_tag_bar(app, settings)
   draw_selection_bar(app)
+  draw_swap_bar(app)
   r.ImGui_Dummy(ctx, 0, UIScale.round(4))
   draw_list(app, settings, list_h)
   draw_footer(app)
@@ -1429,6 +1641,7 @@ function M.draw(app)
   draw_tag_rename_popup(app)
   draw_rename_popup(app)
   draw_view_popup(app, settings)
+  update_drag(app)
 
   local used = r.ImGui_GetCursorPosY(ctx) - start_y
   state.fixed_h = math.max(UIScale.round(40), used - list_h)
@@ -1450,6 +1663,8 @@ function M.handle_action(app, verb)
     stop_preview()
   elseif verb == "refresh" then
     state.dirty = true
+  elseif verb == "swap" then
+    swap_selected(app)
   else
     app.status = "Idea Vault does not know the action: " .. tostring(verb)
   end

@@ -1,9 +1,12 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.2
+-- @version 1.0.3
 -- @changelog:
--- v1.0.2
---   + Workbench: TK_Workbench.lua is now an on/off toggle. Running it while Workbench is open closes Workbench, so one shortcut or toolbar button opens and closes it, and REAPER no longer asks whether to terminate the script or start another instance. The action shows as on in toolbars and menus while Workbench is open. The same goes for TK_Workbench_2.lua and Workbench 2
+-- v1.0.3
+--   + Idea Vault: A preview can now go into the project as audio on its own, without loading the track template behind it. Right-click an idea for "Insert preview as audio" on a new track or on the selected track, or use the new Insert audio button. You get the part exactly as it was played, as one item, without the instruments and FX that cost CPU, which is handy for trying parts out in the timeline. The item follows Lock to tempo, so an idea recorded at another tempo fits the grid without being transposed. Requested on the REAPER forum
+--   + Idea Vault: Ideas can be dragged straight onto a track in the arrange to insert their preview as audio. The edit cursor follows the mouse while dragging, so you can see where the item will start, and dropping below the last track puts it on a new track
+--   + Idea Vault: An inserted preview can be swapped for the idea's real tracks later. Select the item and press Swap for tracks in Idea Vault, or run the new action TK_Idea_Swap_To_Tracks.lua, which works without Workbench running and can go in the media item context menu. The tracks are loaded below the preview's track and lined up so the part plays exactly where the audio did, tempo fitting included, and a track Insert audio made for the preview is removed. One undo step, also for several previews at once. Ideas captured from now on also record where their preview starts, so the alignment is exact even when a time selection was used for the render
+--   + Idea Vault: Load into project now fits exactly the tracks the template added, wherever REAPER puts them in the project, instead of assuming they land at the bottom
 
 local r = reaper
 

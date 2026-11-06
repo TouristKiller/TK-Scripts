@@ -760,7 +760,7 @@ end
 local PERSISTED = {
   "schema", "name", "description", "tags", "bpm", "timesig_num", "timesig_den",
   "created", "tracks", "track_count", "template", "preview", "duration",
-  "source_project", "rating"
+  "source_project", "rating", "preview_lead"
 }
 
 local function serialize(idea)
@@ -833,6 +833,12 @@ function Store.capture(opts)
 
   local warning = nil
   if opts.render ~= false then
+    -- Read before the render, from the same state it will use: how far after
+    -- the preview's first sample the idea's first item starts. Swapping an
+    -- inserted preview for its tracks lines them up by this.
+    local bounds = resolve_bounds(cfg, tracks)
+    local first = items_extent(tracks)
+    if first then idea.preview_lead = first - (bounds.start_pos or 0) end
     local preview_path, render_note = Store.render_preview(tracks, base, root, cfg)
     warning = render_note
     if preview_path then
@@ -1073,10 +1079,9 @@ local SCALED_ITEM_KEYS = { "D_POSITION", "D_LENGTH", "D_FADEINLEN", "D_FADEOUTLE
 -- alone: length times rate is unchanged, so the same piece of audio is used.
 -- MIDI takes keep their rate, because their notes are ticks and already play at
 -- the project tempo; only their item boundaries need moving.
-local function fit_items_to_tempo(first_track, ratio)
+local function fit_items_to_tempo(tracks, ratio)
   local count = 0
-  for i = first_track, r.CountTracks(0) - 1 do
-    local track = r.GetTrack(0, i)
+  for _, track in ipairs(tracks) do
     for j = 0, r.CountTrackMediaItems(track) - 1 do
       local item = r.GetTrackMediaItem(track, j)
       for _, key in ipairs(SCALED_ITEM_KEYS) do
@@ -1106,10 +1111,9 @@ end
 -- Take envelopes are deliberately not touched: their points live in take time,
 -- and length times rate came out unchanged, so they still line up with the
 -- audio they were drawn against.
-local function fit_envelopes_to_tempo(first_track, ratio)
+local function fit_envelopes_to_tempo(tracks, ratio)
   local count = 0
-  for i = first_track, r.CountTracks(0) - 1 do
-    local track = r.GetTrack(0, i)
+  for _, track in ipairs(tracks) do
     for e = 0, r.CountTrackEnvelopes(track) - 1 do
       local env = r.GetTrackEnvelope(track, e)
       local points = r.CountEnvelopePoints(env)
@@ -1133,36 +1137,337 @@ end
 -- opts.match_tempo sets the project tempo to the idea's before the tracks land,
 -- inside the same undo block so one press of Ctrl+Z takes both back. Otherwise
 -- the items are fitted to the project instead, unless opts.fit_tempo is false.
+local function track_set()
+  local set = {}
+  for i = 0, r.CountTracks(0) - 1 do set[r.GetTrack(0, i)] = true end
+  return set
+end
+
+-- The tracks a template just added, in project order. Found by difference
+-- rather than by index: a template lands below the selected track, not
+-- necessarily at the bottom of the project.
+local function tracks_added_since(before)
+  local added = {}
+  for i = 0, r.CountTracks(0) - 1 do
+    local track = r.GetTrack(0, i)
+    if not before[track] then added[#added + 1] = track end
+  end
+  return added
+end
+
+-- The ratio that fits an idea recorded at one tempo into the project's, or
+-- nil when they already agree (or either is unknown).
+local function tempo_ratio(idea)
+  local recorded = tonumber(idea and idea.bpm)
+  local project_bpm = r.Master_GetTempo()
+  if not recorded or recorded <= 0 or not project_bpm or project_bpm <= 0 then return nil end
+  local ratio = recorded / project_bpm
+  if math.abs(ratio - 1) < 0.0001 then return nil end
+  return ratio
+end
+
 function Store.load(idea, opts)
   if not idea or not idea.template_path or not r.file_exists(idea.template_path) then
     return false, "The template file is missing"
   end
-  local before = r.CountTracks(0)
+  local before = track_set()
   local matching = opts and opts.match_tempo
-  local recorded = tonumber(idea.bpm)
-  local project_bpm = r.Master_GetTempo()
   local ratio = nil
-  if not matching and (not opts or opts.fit_tempo ~= false)
-     and recorded and recorded > 0 and project_bpm and project_bpm > 0 then
-    ratio = recorded / project_bpm
-    if math.abs(ratio - 1) < 0.0001 then ratio = nil end
-  end
+  if not matching and (not opts or opts.fit_tempo ~= false) then ratio = tempo_ratio(idea) end
 
   r.PreventUIRefresh(1)
   r.Undo_BeginBlock()
   if matching then Store.apply_tempo(idea) end
   r.Main_openProject(idea.template_path)
+  local added = tracks_added_since(before)
   if ratio then
-    fit_items_to_tempo(before, ratio)
-    fit_envelopes_to_tempo(before, ratio)
+    fit_items_to_tempo(added, ratio)
+    fit_envelopes_to_tempo(added, ratio)
   end
-  local first_new = r.GetTrack(0, before)
+  local first_new = added[1]
   if first_new then r.SetOnlyTrackSelected(first_new) end
   r.Undo_EndBlock("Load idea: " .. tostring(idea.name or ""), -1)
   r.PreventUIRefresh(-1)
   r.TrackList_AdjustWindows(false)
   r.UpdateArrange()
   return true
+end
+
+-- Marks on an inserted preview, so it can later be swapped for the tracks it
+-- was rendered from. They live in the project file with the item, which means
+-- a preview copied, pasted or saved with the song still knows its idea.
+local EXT_IDEA_ID = "P_EXT:TK_IDEA_VAULT_ID"
+local EXT_IDEA_NAME = "P_EXT:TK_IDEA_VAULT_NAME"
+local EXT_OWN_TRACK = "P_EXT:TK_IDEA_VAULT_TRACK"
+
+-- The preview on its own, as one audio item: the part as it was played,
+-- without the instruments and FX that made it, so it costs no CPU. A new
+-- track goes below the last selected one (REAPER's own habit for inserting
+-- media), or at the bottom when nothing is selected or opts.at_end is set.
+--
+-- opts.track     put it on this track instead of a new one
+-- opts.position  project time; the edit cursor when absent
+-- opts.rate      play rate, from preview_rate() when the caller locks to the
+--                project tempo; pitch is preserved, so a 96 BPM idea in a
+--                120 BPM song lands in the grid without being transposed
+-- opts.at_end    a new track goes to the bottom of the project
+function Store.insert_preview(idea, opts)
+  opts = opts or {}
+  if not idea or not idea.preview_path or not r.file_exists(idea.preview_path) then
+    return nil, "This idea has no preview file"
+  end
+  local rate = tonumber(opts.rate) or 1.0
+  if rate <= 0 then rate = 1.0 end
+  local position = tonumber(opts.position) or r.GetCursorPosition()
+  if position < 0 then position = 0 end
+
+  -- Peaks first, on a throwaway source: an item whose source has no peak file
+  -- yet draws as an empty box until something makes REAPER look again.
+  if r.PCM_Source_BuildPeaks then
+    local probe = r.PCM_Source_CreateFromFile(idea.preview_path)
+    if probe then
+      r.PCM_Source_BuildPeaks(probe, 0)
+      if r.PCM_Source_Destroy then r.PCM_Source_Destroy(probe) end
+    end
+  end
+
+  r.PreventUIRefresh(1)
+  r.Undo_BeginBlock()
+  local track = opts.track
+  local created = false
+  if not track then
+    local index = r.CountTracks(0)
+    if not opts.at_end then
+      for i = r.CountSelectedTracks(0) - 1, 0, -1 do
+        local selected = r.GetSelectedTrack(0, i)
+        if selected then
+          index = math.floor(r.GetMediaTrackInfo_Value(selected, "IP_TRACKNUMBER"))
+          break
+        end
+      end
+    end
+    r.InsertTrackAtIndex(index, true)
+    track = r.GetTrack(0, index)
+    if track then
+      r.GetSetMediaTrackInfo_String(track, "P_NAME", tostring(idea.name or "Idea"), true)
+      created = true
+    end
+  end
+
+  local item = track and r.AddMediaItemToTrack(track) or nil
+  local take = item and r.AddTakeToMediaItem(item) or nil
+  local source = take and r.PCM_Source_CreateFromFile(idea.preview_path) or nil
+  if not source then
+    if item then r.DeleteTrackMediaItem(track, item) end
+    if created then r.DeleteTrack(track) end
+    r.Undo_EndBlock("Insert idea preview", -1)
+    r.PreventUIRefresh(-1)
+    return nil, "Could not open " .. tostring(idea.preview or idea.preview_path)
+  end
+  r.SetMediaItemTake_Source(take, source)
+  r.GetSetMediaItemTakeInfo_String(take, "P_NAME", tostring(idea.name or ""), true)
+  -- The tag swap_for_tracks reads back. "created" is the idea's stable id, as
+  -- a rename changes the name; the name stays as the fallback for ideas that
+  -- somehow have no timestamp.
+  r.GetSetMediaItemTakeInfo_String(take, EXT_IDEA_ID, tostring(idea.created or ""), true)
+  r.GetSetMediaItemTakeInfo_String(take, EXT_IDEA_NAME, tostring(idea.name or ""), true)
+  if created then r.GetSetMediaTrackInfo_String(track, EXT_OWN_TRACK, "1", true) end
+  if math.abs(rate - 1) > 0.0001 then
+    r.SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", rate)
+    r.SetMediaItemTakeInfo_Value(take, "B_PPITCH", 1)
+  end
+  local length = (r.GetMediaSourceLength(source)) or tonumber(idea.duration) or 1
+  r.SetMediaItemInfo_Value(item, "D_POSITION", position)
+  r.SetMediaItemInfo_Value(item, "D_LENGTH", math.max(0.01, length / rate))
+  r.SelectAllMediaItems(0, false)
+  r.SetMediaItemSelected(item, true)
+  r.SetOnlyTrackSelected(track)
+  -- A nudge and back: the cheapest way found (in the Media Browser) to make
+  -- the arrange draw the new item's waveform straight away.
+  r.UpdateItemInProject(item)
+  r.SetMediaItemInfo_Value(item, "D_POSITION", position + 0.0001)
+  r.UpdateItemInProject(item)
+  r.SetMediaItemInfo_Value(item, "D_POSITION", position)
+  r.UpdateItemInProject(item)
+  r.PreventUIRefresh(-1)
+  -- The nudge alone is not enough: the item often stayed an empty box until it
+  -- was inserted a few times over. The Media Browser ends every insert with
+  -- these two actions and its waveforms appear at once, so this does the same,
+  -- after the UI refresh is back on. The new item is the only one selected, so
+  -- the rebuild touches nothing else.
+  r.Main_OnCommand(40047, 0)  -- Peaks: Build any missing peaks
+  r.Main_OnCommand(40441, 0)  -- Peaks: Rebuild peaks for selected items
+  r.Undo_EndBlock("Insert idea preview: " .. tostring(idea.name or ""), -1)
+  if r.UpdateTimeline then r.UpdateTimeline() end
+  r.TrackList_AdjustWindows(false)
+  r.UpdateArrange()
+  return item, nil, created
+end
+
+--------------------------------------------------------------------------------
+-- swapping an inserted preview for the real tracks
+--------------------------------------------------------------------------------
+
+local function take_ext(take, key)
+  local ok, value = r.GetSetMediaItemTakeInfo_String(take, key, "", false)
+  if ok and value and value ~= "" then return value end
+  return nil
+end
+
+-- The selected items that are Idea Vault previews: { item, id, name } each.
+-- Only the active take counts - a preview comped under another take is not
+-- what the item is playing.
+function Store.preview_items()
+  local out = {}
+  for i = 0, r.CountSelectedMediaItems(0) - 1 do
+    local item = r.GetSelectedMediaItem(0, i)
+    local take = item and r.GetActiveTake(item)
+    if take then
+      local id, name = take_ext(take, EXT_IDEA_ID), take_ext(take, EXT_IDEA_NAME)
+      if id or name then out[#out + 1] = { item = item, id = id, name = name } end
+    end
+  end
+  return out
+end
+
+local function find_idea(ideas, id, name)
+  if id then
+    for _, idea in ipairs(ideas) do
+      if tostring(idea.created or "") == id then return idea end
+    end
+  end
+  if name then
+    for _, idea in ipairs(ideas) do
+      if idea.name == name then return idea end
+    end
+  end
+  return nil
+end
+
+local function earliest_item(tracks)
+  local first = nil
+  for _, track in ipairs(tracks) do
+    for j = 0, r.CountTrackMediaItems(track) - 1 do
+      local pos = r.GetMediaItemInfo_Value(r.GetTrackMediaItem(track, j), "D_POSITION")
+      if not first or pos < first then first = pos end
+    end
+  end
+  return first
+end
+
+-- Moves everything on these tracks along the timeline: items, track envelope
+-- points (FX parameter lanes included) and automation items.
+local function shift_tracks(tracks, offset)
+  if math.abs(offset) < 1e-9 then return end
+  for _, track in ipairs(tracks) do
+    for j = 0, r.CountTrackMediaItems(track) - 1 do
+      local item = r.GetTrackMediaItem(track, j)
+      r.SetMediaItemInfo_Value(item, "D_POSITION", r.GetMediaItemInfo_Value(item, "D_POSITION") + offset)
+    end
+    for e = 0, r.CountTrackEnvelopes(track) - 1 do
+      local env = r.GetTrackEnvelope(track, e)
+      local points = r.CountEnvelopePoints(env)
+      for p = 0, points - 1 do
+        local ok, time, value, shape, tension, selected = r.GetEnvelopePoint(env, p)
+        if ok then r.SetEnvelopePoint(env, p, time + offset, value, shape, tension, selected, true) end
+      end
+      if points > 0 then r.Envelope_SortPoints(env) end
+      if r.CountAutomationItems then
+        for a = 0, r.CountAutomationItems(env) - 1 do
+          local pos = r.GetSetAutomationItemInfo(env, a, "D_POSITION", 0, false)
+          r.GetSetAutomationItemInfo(env, a, "D_POSITION", pos + offset, true)
+        end
+      end
+    end
+  end
+end
+
+-- One preview item out, the tracks it was rendered from in, lined up so the
+-- part plays where the audio did. Called inside the caller's undo block.
+local function swap_one(entry, ideas)
+  local item = entry.item
+  if not r.ValidatePtr2(0, item, "MediaItem*") then return false, "gone" end
+  local idea = find_idea(ideas, entry.id, entry.name)
+  if not idea then return false, "missing", entry.name end
+  if not idea.has_template then return false, "no_template", idea.name end
+
+  -- Where the preview's first sample sits in the project. A trimmed start
+  -- (D_STARTOFFS, in source seconds) moves that point left of the item edge.
+  local take = r.GetActiveTake(item)
+  local rate = take and r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") or 1
+  if not rate or rate <= 0 then rate = 1 end
+  local startoffs = take and r.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") or 0
+  local anchor = r.GetMediaItemInfo_Value(item, "D_POSITION") - startoffs / rate
+
+  local host = r.GetMediaItem_Track(item)
+  local _, own = r.GetSetMediaTrackInfo_String(host, EXT_OWN_TRACK, "", false)
+  -- The template goes in below the preview's track, so the parts end up next
+  -- to where the audio was rather than at the bottom of the song.
+  r.SetOnlyTrackSelected(host)
+  local before = track_set()
+  r.Main_openProject(idea.template_path)
+  local added = tracks_added_since(before)
+  if #added == 0 then return false, "no_tracks", idea.name end
+
+  local ratio = tempo_ratio(idea)
+  if ratio then
+    fit_items_to_tempo(added, ratio)
+    fit_envelopes_to_tempo(added, ratio)
+  end
+  -- Measured from the first item wherever the template put it, not from an
+  -- absolute time: depending on a preference, REAPER may offset a template's
+  -- items to the edit cursor. preview_lead is how far after the preview's
+  -- first sample that item started at capture; ideas from before it was
+  -- recorded read 0, which is right unless the render used a time selection.
+  local first = earliest_item(added)
+  if first then
+    local lead = (tonumber(idea.preview_lead) or 0) * (ratio or 1)
+    shift_tracks(added, anchor + lead - first)
+  end
+
+  r.DeleteTrackMediaItem(host, item)
+  -- The track Insert audio made for this preview goes too, once it is empty:
+  -- it was only ever a holder for the audio. A track the user chose keeps
+  -- everything else that is on it.
+  if own == "1" and r.CountTrackMediaItems(host) == 0 then r.DeleteTrack(host) end
+  r.SetOnlyTrackSelected(added[1])
+  return true, nil, idea.name
+end
+
+-- Every selected preview item swapped for its idea's tracks, in one undo
+-- step. Returns swapped count and a list of { name, why } for the ones that
+-- could not be swapped.
+function Store.swap_for_tracks(entries)
+  entries = entries or Store.preview_items()
+  if #entries == 0 then return 0, {} end
+  local ideas = Store.list()
+  local swapped, failed = 0, {}
+  r.PreventUIRefresh(1)
+  r.Undo_BeginBlock()
+  for _, entry in ipairs(entries) do
+    local ok, why, name = swap_one(entry, ideas)
+    if ok then swapped = swapped + 1
+    elseif why ~= "gone" then failed[#failed + 1] = { name = name or "?", why = why } end
+  end
+  r.Undo_EndBlock(swapped == 1 and "Swap idea preview for its tracks"
+    or ("Swap " .. swapped .. " idea previews for their tracks"), -1)
+  r.PreventUIRefresh(-1)
+  r.TrackList_AdjustWindows(false)
+  r.UpdateArrange()
+  return swapped, failed
+end
+
+function Store.swap_failure_text(failed)
+  local reasons = {
+    missing = "is no longer in the vault",
+    no_template = "has lost its track template",
+    no_tracks = "has a template with no tracks in it"
+  }
+  local lines = {}
+  for _, f in ipairs(failed or {}) do
+    lines[#lines + 1] = tostring(f.name) .. " " .. (reasons[f.why] or "could not be swapped")
+  end
+  return table.concat(lines, "; ")
 end
 
 local function move_file(from, to)
