@@ -581,7 +581,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.24" author="TouristKiller" time="2026-11-07T13:50:00Z">
+    <version name="3.2.25" author="TouristKiller" time="2026-11-07T15:05:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -598,11 +598,8 @@
     <source main="main" file="TK_Notes_Toggle_focus.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Notes_Toggle_focus.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
-                v3.2.24:
-                + TK Notes 2.8.0: Word-wise editing like any Windows text box. Ctrl+Left/Right jumps a word, Ctrl+Shift+Left/Right selects word by word (without the space behind it), Ctrl+Backspace/Delete removes the word before/after the caret. Bold and text-size formatting inside the word stays intact. Requested via the contact form
-                + TK Notes 2.8.0: File > Auto-save TXT in project folder keeps a plain-text copy of Project, Track and Item notes next to the .rpp, updated as you type (tabs become sections). Off by default and shared with TK Workbench Notes, which writes the same file. File > Show TXT in project folder opens it in Explorer or Finder. Requested via the contact form
-                + TK Notes 2.8.0: New action "TK Notes - Toggle focus between note and arrange view" (TK_Notes_Toggle_focus.lua). Give it any shortcut, type lyrics, press it to hand the keyboard to the arrange view for play/stop, and press it again to carry on typing where the cursor was. It works from inside the note as well, and starts TK Notes if needed. Needs js_ReaScriptAPI. Requested via the contact form
-                + TK Notes 2.8.0: Save as TXT no longer writes the hidden bold and size markers into the file
+                v3.2.25:
+                + Screenshots: Visibility > Mark Folders With Missing Screenshots puts a small amber count on every folder that holds plugins without a screenshot - Developer, Category, REAPER folders, your own folders (subfolders included) and the main headers - so you can see at a glance where shots are missing. Right-click such a folder for Capture Missing Screenshots, which captures only the plugins that still need one, and the counts go down as each screenshot is taken. Counted like the Missing list: excluded plugins are skipped and a plugin installed as VST and VST3 counts once. The check runs in the background a little per frame, so the browser does not stall on large plugin libraries. Off by default. Also in TK FX BROWSER Mini 1.2.22. Requested via the contact form
 ]]></changelog>
     </version>
     </reapack>

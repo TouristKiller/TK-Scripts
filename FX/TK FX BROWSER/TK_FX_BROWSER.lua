@@ -1,8 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.24
+-- @version 3.2.25
 -- @changelog:
 --[[
+    v3.2.25:
+        + Screenshots: Visibility > Mark Folders With Missing Screenshots puts a small amber count on every folder that holds plugins without a screenshot - Developer, Category, REAPER folders, your own folders (subfolders included) and the main headers - so you can see at a glance where shots are missing. Right-click such a folder for Capture Missing Screenshots, which captures only the plugins that still need one. Counted like the Missing list: excluded plugins are skipped and a plugin installed as VST and VST3 counts once. The check runs in the background a little per frame, so the browser does not stall on large plugin libraries. Off by default. Requested via the contact form
     v3.2.24:
         + TK Notes 2.8.0: Word-wise editing like any Windows text box. Ctrl+Left/Right jumps a word, Ctrl+Shift+Left/Right selects word by word (without the space behind it), Ctrl+Backspace/Delete removes the word before/after the caret. Bold and text-size formatting inside the word stays intact. Requested via the contact form
         + TK Notes 2.8.0: File > Auto-save TXT in project folder keeps a plain-text copy of Project, Track and Item notes next to the .rpp, updated as you type (tabs become sections). Off by default and shared with TK Workbench Notes, which writes the same file. File > Show TXT in project folder opens it in Explorer or Finder. Requested via the contact form
@@ -3154,6 +3156,7 @@ function DrawCustomFolderContextMenu(folder_name, path_prefix, full_path)
     if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
         StartFolderScreenshots(full_path)
     end
+    MissingShots.menu_item("CF|" .. full_path, full_path)
     if r.ImGui_MenuItem(ctx, "Set Folder Color...") then
         OpenCustomFolderColorPopup(full_path, folder_name)
     end
@@ -4082,6 +4085,7 @@ function BuildScreenshotIndex(force)
         end
         i = i + 1
     end
+    if MissingShots then MissingShots.on_index(i) end
 end
 
 -- Pinned plugins helpers
@@ -4227,6 +4231,183 @@ function SplitPluginsByScreenshot(plugin_list)
         ::continue_plugin::
     end
     return with_shot, missing
+end
+
+-- Folder markers for plugins without a screenshot (Visibility > Mark Folders With
+-- Missing Screenshots). Every folder row and main header gets a small amber
+-- count on its right; right-click offers to capture just the missing ones.
+-- Cost control:
+--  * screenshot_exists_cache is wiped on nearly every folder click, so this
+--    keeps its own answer per plugin in MissingShots.has, cleared only when a
+--    screenshot is made or removed, or the screenshot folder's file count
+--    changes on a rescan;
+--  * HasScreenshot can try ~40 file names for a plugin without one, so new
+--    checks run within a 3 ms budget per frame and counts appear over a few
+--    frames instead of freezing the browser.
+-- Counted the way the Missing list counts: exclusions respected (when that
+-- option is on) and one entry per plugin across VST/VST3/CLAP duplicates.
+-- Global on purpose: this file has few top-level local slots left.
+-- Same code as in TK_FX_BROWSER Mini.lua; keep the two copies the same.
+MissingShots = { has = {}, states = {}, frame = -1, spent = 0, BUDGET = 0.003, file_count = nil }
+
+function MissingShots.enabled()
+    return config ~= nil and config.mark_missing_screenshot_folders == true
+end
+
+function MissingShots.reset()
+    MissingShots.has = {}
+    MissingShots.states = {}
+end
+
+-- One plugin's screenshot changed: forget its answer and let every folder
+-- recount. Folders keep their plugin list and keep showing the old number
+-- until the recount is done, so markers do not vanish while a batch of
+-- screenshots is being taken; the recount itself is only table lookups.
+function MissingShots.forget(plugin_name)
+    if plugin_name then MissingShots.has[plugin_name] = nil end
+    for _, st in pairs(MissingShots.states) do st.stale = true end
+end
+
+-- After a rescan of the screenshot folder: a different number of files means
+-- screenshots were added or removed outside the paths that call forget().
+function MissingShots.on_index(file_count)
+    if MissingShots.file_count ~= nil and MissingShots.file_count ~= file_count then MissingShots.reset() end
+    MissingShots.file_count = file_count
+end
+
+function MissingShots.relevant(list)
+    local out, seen = {}, {}
+    for _, name in ipairs(list or {}) do
+        if type(name) == "string" and not seen[name]
+            and name ~= "--Favorites End--" and name ~= "--Pinned End--" and not name:match("^%-%-Chain:.+%-%-$")
+            and not (config.respect_search_exclusions_in_screenshots and config.excluded_plugins and config.excluded_plugins[name]) then
+            seen[name] = true
+            out[#out + 1] = name
+        end
+    end
+    if DedupeByTypePriority then out = DedupeByTypePriority(out) end
+    return out
+end
+
+-- Every plugin in a custom folder, its subfolders included.
+function MissingShots.collect_custom(content, out)
+    out = out or {}
+    if type(content) ~= "table" then return out end
+    for k, v in pairs(content) do
+        if type(k) == "number" and type(v) == "string" then
+            out[#out + 1] = v
+        elseif type(k) == "string" and k ~= "__folder_marker__" and type(v) == "table" then
+            MissingShots.collect_custom(v, out)
+        end
+    end
+    return out
+end
+
+-- Every plugin in all subgroups of a main category (for its header).
+function MissingShots.collect_groups(groups)
+    local out = {}
+    for _, grp in ipairs(groups or {}) do
+        for _, fx in ipairs(grp.fx or {}) do out[#out + 1] = fx end
+    end
+    return out
+end
+
+-- Number of plugins without a screenshot in src. While (re)counting it is the
+-- last finished number, or nil when there is none yet.
+-- builder turns src into a plugin list (nil: src already is one). A finished
+-- count is redone every 10 s so edits to a folder's content show up.
+-- The budget is the time spent in here, summed over the frame - not the clock
+-- since the first call. Measured on the clock, the drawing between the first
+-- folder and a later one used it up, and a folder further down (JS under ALL
+-- PLUGINS) never got its turn.
+function MissingShots.count(key, src, builder)
+    if not MissingShots.enabled() or not src then return nil end
+    local t0 = r.time_precise()
+    local frame = r.ImGui_GetFrameCount(ctx)
+    if frame ~= MissingShots.frame then
+        MissingShots.frame = frame
+        MissingShots.spent = 0
+    end
+    local st = MissingShots.states[key]
+    -- Compared by size, not by table identity: a list that is rebuilt with
+    -- the same content must not restart its count. A new or refreshed state
+    -- keeps the last finished number (shown) to display meanwhile.
+    if not st or st.n ~= #src then
+        st = { n = #src, t = t0, idx = 1, missing = 0, shown = st and st.shown }
+        MissingShots.states[key] = st
+    elseif st.done and t0 - st.t > 10 then
+        st.items, st.stale = nil, true
+    end
+    if st.stale then
+        st.stale, st.done, st.idx, st.missing = false, false, 1, 0
+    end
+    if st.done then return st.missing end
+    local function over_budget()
+        return MissingShots.spent + (r.time_precise() - t0) > MissingShots.BUDGET
+    end
+    if not st.items then
+        if MissingShots.spent > MissingShots.BUDGET then return st.shown end
+        st.items = MissingShots.relevant(builder and builder(src) or src)
+    end
+    local has, items = MissingShots.has, st.items
+    while st.idx <= #items do
+        local name = items[st.idx]
+        local v = has[name]
+        if v == nil then
+            if over_budget() then
+                MissingShots.spent = MissingShots.spent + (r.time_precise() - t0)
+                return st.shown
+            end
+            v = HasScreenshot(name) and true or false
+            has[name] = v
+        end
+        if not v then st.missing = st.missing + 1 end
+        st.idx = st.idx + 1
+    end
+    MissingShots.spent = MissingShots.spent + (r.time_precise() - t0)
+    st.done = true
+    st.t = t0
+    st.shown = st.missing
+    return st.missing
+end
+
+-- Amber dot and count on the right of the item just drawn.
+function MissingShots.badge(count)
+    if not count or count <= 0 then return end
+    local min_x, min_y = r.ImGui_GetItemRectMin(ctx)
+    local max_x, max_y = r.ImGui_GetItemRectMax(ctx)
+    local text = tostring(count)
+    local tw, th = r.ImGui_CalcTextSize(ctx, text)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local col = 0xE0A040FF
+    local x = max_x - tw - 6
+    local cy = min_y + (max_y - min_y) * 0.5
+    r.ImGui_DrawList_AddCircleFilled(dl, x - 6, cy, 2.5, col)
+    r.ImGui_DrawList_AddText(dl, x, cy - th * 0.5, col, text)
+    if r.ImGui_IsMouseHoveringRect(ctx, x - 10, min_y, max_x, max_y) then
+        r.ImGui_SetTooltip(ctx, (count == 1 and "1 plugin without a screenshot" or (count .. " plugins without a screenshot"))
+            .. "\nRight-click: Capture Missing Screenshots")
+    end
+end
+
+-- Count and draw in one go, for the common case.
+function MissingShots.mark(key, src, builder)
+    if not MissingShots.enabled() then return end
+    MissingShots.badge(MissingShots.count(key, src, builder))
+end
+
+-- Context-menu entry that captures only the plugins still missing a shot.
+function MissingShots.menu_item(key, folder_name, kind)
+    if not MissingShots.enabled() then return end
+    local st = MissingShots.states[key]
+    if not st or not st.done or st.missing == 0 then return end
+    if r.ImGui_MenuItem(ctx, "Capture Missing Screenshots (" .. st.missing .. ")") then
+        local list = {}
+        for _, name in ipairs(st.items or {}) do
+            if MissingShots.has[name] == false then list[#list + 1] = name end
+        end
+        if #list > 0 then StartFolderScreenshots(folder_name, list, kind) end
+    end
 end
 
 -- FW
@@ -5300,6 +5481,8 @@ function InvalidateCustomImageCaches()
     custom_image_index_norm = nil
     custom_image_resolve_cache = {}
     screenshot_exists_cache = {}
+    -- A custom image counts as a screenshot for the folder markers.
+    if MissingShots then MissingShots.reset() end
 end
 
 function GetCustomImagePath(plugin_name)
@@ -9415,6 +9598,7 @@ function CaptureScreenshotScreen(plugin_name, fx_index)
             end
         end
         log_to_file("Screenshot (Screen Capture) saved: " .. plugin_name)
+        if MissingShots then MissingShots.forget(plugin_name) end
     else
         log_to_file("No Plugin Window for screen capture: " .. plugin_name)
     end
@@ -9964,10 +10148,12 @@ function MakeScreenshot(plugin_name, callback, is_individual)
                 if IsARAPlugin(TRACK, fx_index) then
                     CaptureARAScreenshot(TRACK, fx_index, plugin_name)
                     log_to_file("Screenshot Success: " .. plugin_name .. " (ARA)")
+                    if MissingShots then MissingShots.forget(plugin_name) end
                 else
                     local captured = CaptureScreenshot(plugin_name, fx_index)
                     if captured then
                         log_to_file("Screenshot Success: " .. plugin_name)
+                        if MissingShots then MissingShots.forget(plugin_name) end
                     else
                         log_to_file("Screenshot Failed: " .. plugin_name)
                     end
@@ -13788,6 +13974,7 @@ function ShowPluginContextMenuInline(plugin_name)
                     end
                 end
                 screenshot_exists_cache[plugin_name] = nil
+                if MissingShots then MissingShots.forget(plugin_name) end
                 ClearScreenshotCache()
                 BuildScreenshotIndex(true)
                 folder_changed = true
@@ -15654,6 +15841,14 @@ function ShowScreenshotControls()
             if r.ImGui_MenuItem(ctx, (config.show_missing_list ~= false) and "Hide Missing List" or "Show Missing List") then
                 config.show_missing_list = not (config.show_missing_list ~= false); SaveConfig()
             end
+            if r.ImGui_MenuItem(ctx, "Mark Folders With Missing Screenshots", "", config.mark_missing_screenshot_folders == true) then
+                config.mark_missing_screenshot_folders = not config.mark_missing_screenshot_folders
+                MissingShots.reset()
+                SaveConfig()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Shows an amber count on every folder that holds plugins without a screenshot.\nRight-click such a folder for Capture Missing Screenshots.")
+            end
             r.ImGui_EndMenu(ctx)
         end
 
@@ -16668,6 +16863,7 @@ function DrawBrowserItems(tbl, main_cat_name)
                 ClearScreenshotCache()
             end
             if type(item_color) == "number" then r.ImGui_PopStyleColor(ctx) end
+            MissingShots.mark("ITEM|" .. tostring(main_cat_name or "") .. "|" .. subgroup_name, tbl[i].fx)
             r.ImGui_Unindent(ctx, 10)
 
             if main_cat_name == "FOLDERS" then
@@ -16715,6 +16911,7 @@ function DrawBrowserItems(tbl, main_cat_name)
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
                     StartFolderScreenshots(subgroup_name)
                 end
+                MissingShots.menu_item("ITEM|" .. tostring(main_cat_name or "") .. "|" .. subgroup_name, subgroup_name)
                 if r.ImGui_MenuItem(ctx, "Set Color...") then
                     OpenBrowserItemColorPopup(main_cat_name, subgroup_name)
                 end
@@ -16944,6 +17141,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 r.ImGui_EndDragDropTarget(ctx)
             end
             local item_min_x, item_min_y = r.ImGui_GetItemRectMin(ctx)
+            MissingShots.mark("CF|" .. full_path, folder_content, MissingShots.collect_custom)
             local line_h = r.ImGui_GetTextLineHeight(ctx)
             local text_w, text_h = r.ImGui_CalcTextSize(ctx, display_label)
             local spacing = r.ImGui_GetTreeNodeToLabelSpacing(ctx)
@@ -17016,6 +17214,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 if r.ImGui_MenuItem(ctx, "Capture Folder Screenshots") then
                     StartFolderScreenshots(full_path)
                 end
+                MissingShots.menu_item("CF|" .. full_path, full_path)
                 if r.ImGui_MenuItem(ctx, "Set Folder Color...") then
                     OpenCustomFolderColorPopup(full_path, folder_name)
                 end
@@ -17176,6 +17375,7 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
                 ClearScreenshotCache()
             end
             DrawCustomFolderIconOnLastItem(full_path)
+            MissingShots.mark("CF|" .. full_path, folder_content, MissingShots.collect_custom)
             r.ImGui_PopStyleColor(ctx)
             
             r.ImGui_PopFont(ctx)
@@ -17342,6 +17542,14 @@ function DrawBrowserMainHeader(category_name, label)
     if type(color) == "number" then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), color) end
     local is_open = r.ImGui_CollapsingHeader(ctx, label)
     if type(color) == "number" then r.ImGui_PopStyleColor(ctx) end
+    if MissingShots.enabled() and type(CAT_TEST) == "table" then
+        for _, cat in ipairs(CAT_TEST) do
+            if cat.name == category_name then
+                MissingShots.mark("HDR|" .. category_name, cat.list, MissingShots.collect_groups)
+                break
+            end
+        end
+    end
     if r.ImGui_BeginPopupContextItem(ctx, "browser_main_header_ctx_" .. category_name) then
         if r.ImGui_MenuItem(ctx, "Set Color...") then
             OpenBrowserItemColorPopup("MAIN", category_name)
@@ -18277,6 +18485,7 @@ function ShowBrowserPanel()
                             if type(folder_color) == "number" then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), folder_color) end
                             r.ImGui_Selectable(ctx, header_text, folder_is_selected)
                             if type(folder_color) == "number" then r.ImGui_PopStyleColor(ctx) end
+                            MissingShots.mark("MAP|" .. folder_name, CAT_TEST[i].list[j].fx)
                             r.ImGui_Unindent(ctx, 10)
 
                             if r.ImGui_IsMouseDragging(ctx, 0, 5.0) then
@@ -18355,6 +18564,7 @@ function ShowBrowserPanel()
                                 if r.ImGui_MenuItem(ctx, 'Capture Folder Screenshots') then
                                     StartFolderScreenshots(folder_name)
                                 end
+                                MissingShots.menu_item("MAP|" .. folder_name, folder_name)
                                 if r.ImGui_MenuItem(ctx, "Set Color...") then
                                     OpenBrowserItemColorPopup("FOLDERS", folder_name)
                                 end
