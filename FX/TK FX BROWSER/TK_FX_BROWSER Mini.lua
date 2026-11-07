@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.22
+-- @version 1.2.23
 -- @changelog:
 --[[ 
+    v1.2.23:
+        + Fix: The plugin menus in the main window (All Plugins, Category, Developer, Favorites, Custom, FX Chains and the rest) closed when the mouse rested on the --Pinned End-- or --Favorites End-- line, or between two entries, because nothing counted as hovered there. They now stay open while the mouse is anywhere over the menu, and close once it leaves.
+        + Fix: The meter's R, L and L-S/LRA modes showed nothing. They read REAPER's Loudness Meter on the master's monitoring FX, but looked for it by file name while REAPER reports its display name, and read fixed parameter numbers that had shifted in newer versions of that meter. It is now found by its display name and its values by their parameter names. Those modes measure the master mix, and now say so ("Master RMS-M" and so on); P still measures the selected track. With the transport stopped, the integrated values and LRA show -- instead of the last run, until the next play starts a new measurement.
     v1.2.22:
         + Screenshots: Visibility > Mark Folders With Missing Screenshots puts a small amber count on every folder that holds plugins without a screenshot - Developer, Category, REAPER folders, your own folders (subfolders included) and the main headers - so you can see at a glance where shots are missing. Right-click such a folder for Capture Missing Screenshots, which captures only the plugins that still need one. Counted like the Missing list: excluded plugins are skipped and a plugin installed as VST and VST3 counts once. The check runs in the background a little per frame, so the browser does not stall on large plugin libraries. Off by default. Requested via the contact form
     v1.2.21:
@@ -10182,16 +10185,20 @@ function ShowPluginScreenshot()
                 local is_left_docked = (window_x - viewport_pos_x) < 20
                 
                 local window_pos_x
+                -- Distance from the mouse, set under Settings > Screenshots
+                -- (Preview X/Y Offset); 20/20 is the original placement.
+                local offset_x = tonumber(config.preview_offset_x) or 20
+                local offset_y = tonumber(config.preview_offset_y) or 20
                 if is_left_docked then
-                    window_pos_x = mouse_x + 20  -- Toon rechts
+                    window_pos_x = mouse_x + offset_x  -- Toon rechts
                 else
-                    window_pos_x = mouse_x - display_width - 20  -- Toon links
+                    window_pos_x = mouse_x - display_width - offset_x  -- Toon links
                 end
                 
-                local window_pos_y = mouse_y + 20
+                local window_pos_y = mouse_y + offset_y
                 
                 if window_pos_y + display_height > window_y + vp_height + 250 then
-                    window_pos_y = mouse_y - display_height - 20
+                    window_pos_y = mouse_y - display_height - offset_y
                 end
 
                 local show_name = config.show_name_in_main_window and not config.hidden_names[current_hovered_plugin]
@@ -10216,7 +10223,12 @@ function ShowPluginScreenshot()
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), border_color)
                    
-                if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+                -- NoInputs: outside the browser window the preview becomes a
+                -- window of its own, and one that takes mouse input steals the
+                -- hover from the list row, so the preview blinked on and off.
+                local preview_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()
+                if r.ImGui_WindowFlags_NoInputs then preview_flags = preview_flags | r.ImGui_WindowFlags_NoInputs() end
+                if r.ImGui_Begin(ctx, "Plugin Screenshot", true, preview_flags) then
                     SafeImage(ctx, screenshot_texture, display_width, display_height)
                        
                     if show_name then
@@ -27505,7 +27517,7 @@ function DrawItems(tbl, main_cat_name)
                 end
             end
            
-            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                 r.ImGui_CloseCurrentPopup(ctx)
             end
            
@@ -28208,7 +28220,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                     end
                 end
                 
-                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
                 r.ImGui_EndMenu(ctx)
@@ -28242,7 +28254,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                     r.ImGui_EndPopup(ctx)
                 end
                 DrawCustomFoldersMenu(folder_content, full_path)
-                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
                 r.ImGui_EndMenu(ctx)
@@ -28279,7 +28291,7 @@ function Frame()
       
         if r.ImGui_BeginMenu(ctx, "FAVORITES") then
             DrawFavorites()
-            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                 r.ImGui_CloseCurrentPopup(ctx)
             end
             r.ImGui_EndMenu(ctx)
@@ -28300,7 +28312,7 @@ if config.show_custom_folders and next(config.custom_folders) then  -- VOEG show
 
     if r.ImGui_BeginMenu(ctx, "CUSTOM") then
         DrawCustomFoldersMenu(config.custom_folders, "")
-        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
             r.ImGui_CloseCurrentPopup(ctx)
         end
         
@@ -28339,7 +28351,7 @@ end
                         end
                         local tree = GetFxChainsTree()
                         DrawFxChains(tree, nil, true)  -- true = toon hover preview in main window
-                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end -- auto-expand FOLDERS header on startup when last opened was inside
                             r.ImGui_CloseCurrentPopup(ctx)
                         end
@@ -28358,7 +28370,7 @@ end
                         r.ImGui_Separator(ctx)
                         local tree = GetTrackTemplatesTree()
                         DrawTrackTemplates(tree)
-                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                             r.ImGui_CloseCurrentPopup(ctx)
                         end
                     else

@@ -60,60 +60,46 @@ function loadJSLoudnessMeter(r)
     end
 end
 
-function getRMSValues()
-    local meter_idx = findJSLoudnessMeter(r)
-    if meter_idx < 0 then return -100, -100 end
-    
-    local master = r.GetMasterTrack(0)
-    local fx_idx = 0x1000000 + meter_idx
-    
-    -- Vind de juiste parameter indices
-    local param_count = r.TrackFX_GetNumParams(master, fx_idx)
-    local param_indices = {}
-    
-    for i = 0, param_count - 1 do
-        local _, param_name = r.TrackFX_GetParamName(master, fx_idx, i)
-        if param_name:match("RMS%-M") then param_indices[1] = i
-        elseif param_name:match("RMS%-I") then param_indices[2] = i
-        end
-    end
-    
-    local values = {}
-    for i, param_idx in ipairs(param_indices) do
-        local retval, value = r.TrackFX_GetParamNormalized(master, fx_idx, param_idx)
-        values[i] = retval and (-100 + (value * 100)) or -100
-    end
-    
-    return table.unpack(values)
-end
+-- Values from REAPER's "Loudness Meter Peak/RMS/LUFS (Cockos)" on the
+-- master's monitoring FX (R, L and L-S/LRA modes; Peak reads the track).
+-- The meter is found by its display name (findJSLoudnessMeter), and its
+-- output parameters by their own names: the meter's parameter numbers moved
+-- when Cockos added sliders, and fixed numbers then read the wrong value
+-- (RMS-M showed the peak, and so on) - while matching the file name against
+-- the display name never found the meter at all, so every value was -100.
+local LOUDNESS_PARAMS = {
+    rms_m = "RMS-M (output)", rms_i = "RMS-I (output)",
+    lufs_m = "LUFS-M (output)", lufs_s = "LUFS-S (output)", lufs_i = "LUFS-I (output)",
+    lra = "LRA (output)",
+}
+local loudness_cache = { fx = nil, params = nil }
 
-function getLUFSValues()
-    local meter_idx = findJSLoudnessMeter(r)
-    if meter_idx < 0 then return -100, -100, -100, -100 end
-    
+local function readLoudness(r)
     local master = r.GetMasterTrack(0)
-    local fx_idx = 0x1000000 + meter_idx
-    
-    -- Vind de juiste parameter indices
-    local param_count = r.TrackFX_GetNumParams(master, fx_idx)
-    local param_indices = {}
-    
-    for i = 0, param_count - 1 do
-        local _, param_name = r.TrackFX_GetParamName(master, fx_idx, i)
-        if param_name:match("LUFS%-M") then param_indices[1] = i
-        elseif param_name:match("LUFS%-I") then param_indices[2] = i
-        elseif param_name:match("LUFS%-S") then param_indices[3] = i
-        elseif param_name:match("LRA") then param_indices[4] = i
+    local idx = findJSLoudnessMeter(r)
+    if idx < 0 then return nil end
+    local fx = 0x1000000 + idx
+    if loudness_cache.fx ~= fx or not loudness_cache.params then
+        local params = {}
+        for p = 0, r.TrackFX_GetNumParams(master, fx) - 1 do
+            local _, name = r.TrackFX_GetParamName(master, fx, p)
+            -- A hidden JSFX slider is declared with a leading "-"; compare
+            -- without it in case REAPER passes it on.
+            name = (name or ""):gsub("^%-", ""):match("^%s*(.-)%s*$")
+            for key, wanted in pairs(LOUDNESS_PARAMS) do
+                if name == wanted then params[key] = p end
+            end
         end
+        -- Nothing found: do not keep that, look again next frame.
+        loudness_cache.fx, loudness_cache.params = fx, next(params) and params or nil
+        if not loudness_cache.params then return nil end
     end
-    
-    local values = {}
-    for i, param_idx in ipairs(param_indices) do
-        local retval, value = r.TrackFX_GetParamNormalized(master, fx_idx, param_idx)
-        values[i] = retval and (-100 + (value * 100)) or -100
+    local out = {}
+    for key, p in pairs(loudness_cache.params) do
+        local v = r.TrackFX_GetParam(master, fx, p)
+        out[key] = v
     end
-    
-    return table.unpack(values)
+    return out
 end
 
 function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
@@ -137,6 +123,11 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
     lufs_s_hold_time = lufs_s_hold_time or 0
     lra_hold_time = lra_hold_time or 0
     PEAK_HOLD_DURATION = 2.0
+    -- Integrated values and LRA describe the run since play started. With the
+    -- transport stopped they are shown empty ("--") instead of the last run's
+    -- result, until the next play starts a new measurement. Paused counts as
+    -- running: playing on continues the same measurement.
+    local transport_stopped = r.GetPlayState() == 0
 
     local function scaleTodB(peak)
         if peak < 0.001 then return -60.0 end
@@ -144,43 +135,16 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
     end
 
     local function getRMSValues()
-        local monitor_fx_count = r.TrackFX_GetRecCount(r.GetMasterTrack(0))
-        for i = 0, monitor_fx_count - 1 do
-            local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
-            if fx_name:find("JS: analysis\\loudness_meter") or fx_name:find("JS: analysis/loudness_meter") then
-                local rms_M = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 16)
-                local rms_I = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 17)
-                
-                local db_M = -100 + (rms_M * 100)
-                local db_I = -100 + (rms_I * 100)
-                
-                return db_M, db_I
-            end
-        end
-        return -100, -100
+        local v = readLoudness(r)
+        if not v then return -100, -100 end
+        return v.rms_m or -100, v.rms_i or -100
     end
     local function getLUFSValues()
-        local monitor_fx_count = r.TrackFX_GetRecCount(r.GetMasterTrack(0))
-        for i = 0, monitor_fx_count - 1 do
-            local _, fx_name = r.TrackFX_GetFXName(r.GetMasterTrack(0), 0x1000000 + i, "")
-            if fx_name:find("JS: analysis\\loudness_meter") or fx_name:find("JS: analysis/loudness_meter") then
-                local lufs_M = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 18)
-                local lufs_I = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 20)
-                local lufs_S = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 19)
-                local lufs_LRA = r.TrackFX_GetParamNormalized(r.GetMasterTrack(0), 0x1000000 + i, 21)
-                local db_LRA = lufs_LRA * 100  -- Direct vermenigvuldigen met 100 zonder offset
-                
-                local db_M = -100 + (lufs_M * 100)
-                local db_I = -100 + (lufs_I * 100)
-                local db_S = -100 + (lufs_S * 100)
-                --local db_LRA = -100 + (lufs_LRA * 100)
-                
-                return db_M, db_I, db_S, db_LRA
-            end
-        end
-        return -100, -100, -100, -100
+        local v = readLoudness(r)
+        if not v then return -100, -100, -100, -100 end
+        return v.lufs_m or -100, v.lufs_i or -100, v.lufs_s or -100, v.lra or 0
     end
-    
+
     local meter_height = 90
     local margin = 5
     local meter_offset = 8
@@ -263,6 +227,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
         if config.show_rms_meter then
             -- RMS meters
             local rms_M, rms_I = getRMSValues()
+            if transport_stopped then rms_I = -100; rms_i_hold = -60 end
 
             if rms_M > rms_m_hold then
                 rms_m_hold = rms_M
@@ -272,7 +237,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             end
             -- RMS-M (Momentary)
             r.ImGui_SetNextItemWidth(ctx, 80)
-            r.ImGui_Text(ctx, string.format("RMS-M: %.1f dB", rms_M))
+            r.ImGui_Text(ctx, string.format("Master RMS-M: %.1f dB", rms_M))
             if rms_m_hold > -60 then
                 r.ImGui_SameLine(ctx, meter_width - peak_text_width)
                 r.ImGui_Text(ctx, string.format("%.1f", rms_m_hold))
@@ -299,7 +264,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                 rms_i_hold = rms_I
             end
             r.ImGui_SetNextItemWidth(ctx, 80)
-            r.ImGui_Text(ctx, string.format("RMS-I: %.1f dB", rms_I))
+            r.ImGui_Text(ctx, transport_stopped and "Master RMS-I: --" or string.format("Master RMS-I: %.1f dB", rms_I))
             if rms_i_hold > -60 then
                 r.ImGui_SameLine(ctx, meter_width - peak_text_width)
                 r.ImGui_Text(ctx, string.format("%.1f", rms_i_hold))
@@ -320,6 +285,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
 
             elseif config.show_lufs_meter then
                 local lufs_M, lufs_I = getLUFSValues()
+                if transport_stopped then lufs_I = -100; lufs_i_hold = -60 end
                 if lufs_M and lufs_I then
                     if lufs_M > lufs_m_hold then
                         lufs_m_hold = lufs_M
@@ -329,7 +295,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                     end
                     -- LUFS-M (Momentary)
                     r.ImGui_SetNextItemWidth(ctx, 80)
-                    r.ImGui_Text(ctx, string.format("LUFS-M: %.1f dB", lufs_M))
+                    r.ImGui_Text(ctx, string.format("Master LUFS-M: %.1f", lufs_M))
                     if lufs_m_hold > -60 then
                         r.ImGui_SameLine(ctx, meter_width - peak_text_width)
                         r.ImGui_Text(ctx, string.format("%.1f", lufs_m_hold))
@@ -356,7 +322,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                     lufs_i_hold = lufs_I
                 end
                 r.ImGui_SetNextItemWidth(ctx, 80)
-                r.ImGui_Text(ctx, string.format("LUFS-I: %.1f dB", lufs_I))
+                r.ImGui_Text(ctx, transport_stopped and "Master LUFS-I: --" or string.format("Master LUFS-I: %.1f", lufs_I))
                 if lufs_i_hold > -60 then
                     r.ImGui_SameLine(ctx, meter_width - peak_text_width)
                     r.ImGui_Text(ctx, string.format("%.1f", lufs_i_hold))
@@ -374,6 +340,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
             r.ImGui_Dummy(ctx, meter_width, meter_bar_height)
             elseif config.show_lufs_slra_meter then
             local _, _, lufs_S, lufs_LRA = getLUFSValues()
+            if transport_stopped and lufs_LRA then lufs_LRA = 0; lra_hold = -60 end
             if lufs_S and lufs_LRA then
                 -- LUFS-S
                 if lufs_S > lufs_s_hold then
@@ -383,7 +350,7 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                     lufs_s_hold = lufs_S
                 end
                 r.ImGui_SetNextItemWidth(ctx, 80)
-                r.ImGui_Text(ctx, string.format("LUFS-S: %.1f dB", lufs_S))
+                r.ImGui_Text(ctx, string.format("Master LUFS-S: %.1f", lufs_S))
                 if lufs_s_hold > -60 then
                     r.ImGui_SameLine(ctx, meter_width - peak_text_width)
                     r.ImGui_Text(ctx, string.format("%.1f", lufs_s_hold))
@@ -411,8 +378,8 @@ function M.DrawMeter(r, ctx, config, TRACK, TinyFont)
                 end
                 -- LRA
                 r.ImGui_SetNextItemWidth(ctx, 80)
-                r.ImGui_Text(ctx, string.format("LRA: %.1f dB", lufs_LRA))
-                if lra_hold > -60 then
+                r.ImGui_Text(ctx, transport_stopped and "Master LRA: --" or string.format("Master LRA: %.1f LU", lufs_LRA))
+                if lra_hold > -60 and not transport_stopped then
                     r.ImGui_SameLine(ctx, meter_width - peak_text_width)
                     r.ImGui_Text(ctx, string.format("%.1f", lra_hold))
                 end

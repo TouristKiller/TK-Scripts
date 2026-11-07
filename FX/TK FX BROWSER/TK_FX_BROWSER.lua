@@ -1,8 +1,15 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.25
+-- @version 3.2.26
 -- @changelog:
 --[[
+    v3.2.26:
+        + Screenshots: The hover previews of plugins and FX chains are now placed beside the menu the plugin is in, instead of following the mouse pointer: they stay in one place while you move along a name, sit the same distance from every menu whether it is narrow or wide, and are always kept on screen. Settings > Screenshots has Preview X Offset (the gap beside the menu) and Preview Y Offset (from the top of the row), typed in with -/+ buttons, and Reset Preview Offset for the standard 10/0. The previews also no longer take the mouse, so they cannot blink on and off. Requested on the REAPER forum
+        + Main window: The track's icon can be shown just below the track header, so you can tell at a glance which track you are on; the new picture button next to the eye in the header shows or hides it. A track without an icon shows a + there to pick one, and right-clicking an icon changes or removes it, as in the INFO panel. Requested on the REAPER forum
+        + Main window: Pan, volume and width can be rotary knobs instead of sliders (Settings > View > Main Window Sections > Knobs): pan left (L and R in dual-pan mode), a larger volume knob in the middle, width right, each with its value underneath. Drag up/down or use the mouse wheel, Shift for fine steps, double-click to reset. Right-click works as on the sliders: pan mode menu, 0 dB (double right-click -12 dB), 100% width. The lit arc shows the side of centre, and turns amber for volume above 0 dB. Requested on the REAPER forum
+        + Fix: The plugin menus in the main window (All Plugins, Category, Developer, Favorites, Custom, FX Chains and the rest) closed when the mouse rested on the --Pinned End-- or --Favorites End-- line, or between two entries, because nothing counted as hovered there. They now stay open while the mouse is anywhere over the menu, and close once it leaves.
+        + Fix: A screenshot preview stayed on screen after moving back from a plugin to a folder in a parent menu (for example from a plugin in a subfolder back to the folder above it). The preview now shows only while a plugin is under the mouse.
+        + Fix: The meter's R, L and L-S/LRA modes showed nothing. They read REAPER's Loudness Meter on the master's monitoring FX, but looked for it by file name while REAPER reports its display name, and read fixed parameter numbers that had shifted in newer versions of that meter. It is now found by its display name and its values by their parameter names. Those modes measure the master mix, and now say so ("Master RMS-M" and so on); P still measures the selected track. With the transport stopped, the integrated values and LRA show -- instead of the last run, until the next play starts a new measurement.
     v3.2.25:
         + Screenshots: Visibility > Mark Folders With Missing Screenshots puts a small amber count on every folder that holds plugins without a screenshot - Developer, Category, REAPER folders, your own folders (subfolders included) and the main headers - so you can see at a glance where shots are missing. Right-click such a folder for Capture Missing Screenshots, which captures only the plugins that still need one. Counted like the Missing list: excluded plugins are skipped and a plugin installed as VST and VST3 counts once. The check runs in the background a little per frame, so the browser does not stall on large plugin libraries. Off by default. Requested via the contact form
     v3.2.24:
@@ -1388,6 +1395,8 @@ function SetDefaultConfig()
         srcy = 27,
         capture_height_offset = 0,
         screenshot_display_size = 250,
+        preview_offset_x = 10,
+        preview_offset_y = 0,
         screenshot_window_width = 200,
         screenshot_window_size = 200,
         use_global_screenshot_size = false,
@@ -1470,6 +1479,8 @@ function SetDefaultConfig()
         main_section_inputfx_enabled = true,
         main_section_meter_enabled = true,
         main_section_buttons_enabled = true,
+        show_header_track_icon = true,
+        mix_knobs = false,
         show_chain_builder = false,
         show_chain_builder_button = true,
         chain_builder_plugins = {},
@@ -5784,6 +5795,21 @@ function DrawCloseIcon(x, y, size, color)
     r.ImGui_DrawList_AddCircleFilled(draw_list, cx, cy, radius, color)
 end
 
+-- A small picture (frame, hill, sun) for the track icon toggle in the header;
+-- crossed out when the track icon area is hidden.
+function DrawTrackIconIcon(x, y, size, color, crossed)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local l, t = x + size * 0.2, y + size * 0.25
+    local rgt, b = x + size * 0.8, y + size * 0.75
+    r.ImGui_DrawList_AddRect(dl, l, t, rgt, b, color, 1.5, 0, 1.5)
+    r.ImGui_DrawList_AddTriangleFilled(dl, l + 2, b - 2, l + (rgt - l) * 0.45, t + (b - t) * 0.45, rgt - (rgt - l) * 0.2, b - 2, color)
+    r.ImGui_DrawList_AddCircleFilled(dl, rgt - (rgt - l) * 0.25, t + (b - t) * 0.3, size * 0.06, color)
+    if crossed then
+        local cx, cy, d = x + size / 2, y + size / 2, size * 0.35
+        r.ImGui_DrawList_AddLine(dl, cx - d, cy + d, cx + d, cy - d, color, 1.5)
+    end
+end
+
 function DrawIconButton(icon_type, size, custom_color)
     local cursor_x, cursor_y = r.ImGui_GetCursorScreenPos(ctx)
     
@@ -5826,6 +5852,10 @@ function DrawIconButton(icon_type, size, custom_color)
         DrawEyeOffIcon(cursor_x, cursor_y, size, icon_color)
     elseif icon_type == "close" then
         DrawCloseIcon(cursor_x, cursor_y, size, icon_color)
+    elseif icon_type == "trackicon" then
+        DrawTrackIconIcon(cursor_x, cursor_y, size, icon_color, false)
+    elseif icon_type == "trackicon_off" then
+        DrawTrackIconIcon(cursor_x, cursor_y, size, icon_color, true)
     end
     
     return clicked
@@ -8359,6 +8389,10 @@ function ShowConfigWindow()
             _, config.main_section_meter_enabled = r.ImGui_Checkbox(ctx, "Meter##mw", config.main_section_meter_enabled)
             r.ImGui_SetCursorPosX(ctx, column1_width)
             _, config.main_section_buttons_enabled = r.ImGui_Checkbox(ctx, "Buttons##mw", config.main_section_buttons_enabled)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            _, config.mix_knobs = r.ImGui_Checkbox(ctx, "Knobs##mw", config.mix_knobs == true)
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show pan, volume and width in the Buttons section as rotary knobs instead of sliders.") end
 
             r.ImGui_Dummy(ctx, 0, 8)
 
@@ -8419,6 +8453,35 @@ function ShowConfigWindow()
             r.ImGui_PushItemWidth(ctx, slider_width)
             _, config.screenshot_display_size = r.ImGui_SliderInt(ctx, "##Display Size", config.screenshot_display_size, 100, 500)
             r.ImGui_PopItemWidth(ctx)
+            -- Where the hover preview appears: X is the gap beside the menu the
+            -- plugin is in, Y the distance from the top of its row.
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            r.ImGui_Text(ctx, "Preview X Offset")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column2_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            -- Typed rather than dragged: a slider over this range is too coarse
+            -- to set a pixel distance precisely. -/+ step 1, Ctrl 10.
+            local px_changed, px = r.ImGui_InputInt(ctx, "##Preview X Offset", tonumber(config.preview_offset_x) or 10, 1, 10)
+            if px_changed then config.preview_offset_x = math.max(-300, math.min(1000, px)) end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            r.ImGui_Text(ctx, "Preview Y Offset")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column4_width)
+            r.ImGui_PushItemWidth(ctx, slider_width)
+            local py_changed, py = r.ImGui_InputInt(ctx, "##Preview Y Offset", tonumber(config.preview_offset_y) or 0, 1, 10)
+            if py_changed then config.preview_offset_y = math.max(-500, math.min(500, py)) end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            if r.ImGui_Button(ctx, "Reset Preview Offset") then
+                config.preview_offset_x = 10
+                config.preview_offset_y = 0
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Back to the standard place: 10 px beside the menu, level with the top of the row.")
+            end
             NewSection("CUSTOM IMAGES:")
             r.ImGui_SetCursorPosX(ctx, column1_width)
             local ci_changed
@@ -10714,6 +10777,53 @@ function LoadPluginScreenshot(plugin_name)
     end
 end
 
+-- The plugin under the mouse, for placing the hover preview: the left and
+-- right edge of the menu (or list window) it is in, and the top and bottom
+-- of its row. Called right after a plugin row's IsItemHovered, so the current
+-- window is that menu. The menu's own edges rather than the row's: rows in a
+-- menu of fixed width (Favorites, FX Chains) run on as far as the longest,
+-- cut-off name, which put the preview further out there than elsewhere.
+function RememberPreviewAnchor()
+    local _, y1 = r.ImGui_GetItemRectMin(ctx)
+    local _, y2 = r.ImGui_GetItemRectMax(ctx)
+    local wx = r.ImGui_GetWindowPos(ctx)
+    local ww = r.ImGui_GetWindowSize(ctx)
+    PreviewAnchor = { wx, y1, wx + ww, y2 }
+end
+
+-- Where a hover preview of w x h goes, for plugin screenshots and FX chain
+-- previews alike, measured from the menu the plugin is in (PreviewAnchor),
+-- so it stays put while the mouse moves and sits the same way beside every
+-- menu, narrow or wide:
+--  X: Preview X Offset is the gap between the menu's edge and the preview,
+--     on the side the preview shows on;
+--  Y: Preview Y Offset from the row's top; flipped above the row when it
+--     would run off the bottom, and always kept on screen.
+-- The side (right or left of the menu) follows where the main window sits,
+-- as it always has.
+function PlaceHoverPreview(w, h)
+    local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
+    local viewport = r.ImGui_GetMainViewport(ctx)
+    local vp_x, vp_y = r.ImGui_Viewport_GetWorkPos(viewport)
+    local vp_w, vp_h = r.ImGui_Viewport_GetWorkSize(viewport)
+    local win_x = MainWindowRect and MainWindowRect[1] or mouse_x
+    local show_right = (win_x - r.ImGui_Viewport_GetPos(viewport)) < 20
+    local offset_x = tonumber(config.preview_offset_x) or 10
+    local offset_y = tonumber(config.preview_offset_y) or 0
+    local a = PreviewAnchor or { mouse_x, mouse_y, mouse_x, mouse_y }
+    local x
+    if show_right then
+        x = a[3] + offset_x
+    else
+        x = a[1] - w - offset_x
+    end
+    local y = a[2] + offset_y
+    if y + h > vp_y + vp_h then y = a[4] - h - offset_y end
+    if y + h > vp_y + vp_h then y = vp_y + vp_h - h end
+    if y < vp_y then y = vp_y end
+    return x, y
+end
+
 function ShowPluginScreenshot()
     if screenshot_texture and current_hovered_plugin and is_screenshot_visible then
         if r.ImGui_ValidatePtr(screenshot_texture, 'ImGui_Image*') then
@@ -10728,30 +10838,10 @@ function ShowPluginScreenshot()
                     display_width = display_height * (width / height)
                 end
                    
-                local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-                local window_x, window_y = r.ImGui_GetWindowPos(ctx)
-                local vp_width, vp_height = r.ImGui_GetWindowSize(ctx)
-                
-                local viewport = r.ImGui_GetMainViewport(ctx)
-                local viewport_pos_x = r.ImGui_Viewport_GetPos(viewport)
-                local is_left_docked = (window_x - viewport_pos_x) < 20
-                
-                local window_pos_x
-                if is_left_docked then
-                    window_pos_x = mouse_x + 20  -- Toon rechts
-                else
-                    window_pos_x = mouse_x - display_width - 20  -- Toon links
-                end
-                
-                local window_pos_y = mouse_y + 20
-                
-                if window_pos_y + display_height > window_y + vp_height + 250 then
-                    window_pos_y = mouse_y - display_height - 20
-                end
-
                 local show_name = config.show_name_in_main_window and not config.hidden_names[current_hovered_plugin]
                 local window_height = display_height + (show_name and 40 or 0)
-                
+                local window_pos_x, window_pos_y = PlaceHoverPreview(display_width, window_height)
+
                 r.ImGui_SetNextWindowSize(ctx, display_width, window_height)
                 r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
                 r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
@@ -10770,7 +10860,12 @@ function ShowPluginScreenshot()
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBgActive(), 0x000000FF)
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_Border(), 0x000000FF)
                    
-                if r.ImGui_Begin(ctx, "Plugin Screenshot", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+                -- NoInputs: outside the browser window the preview becomes a
+                -- window of its own, and one that takes mouse input steals the
+                -- hover from the list row, so the preview blinked on and off.
+                local preview_flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()
+                if r.ImGui_WindowFlags_NoInputs then preview_flags = preview_flags | r.ImGui_WindowFlags_NoInputs() end
+                if r.ImGui_Begin(ctx, "Plugin Screenshot", true, preview_flags) then
                     SafeImage(ctx, screenshot_texture, display_width, display_height)
                        
                     if show_name then
@@ -11215,16 +11310,9 @@ function ShowFxChainPreview(chain_path, chain_name)
         local total_width = math.max(display_width, cols * small_width + (cols - 1) * spacing) + 2 * padding
         local total_height = chain_name_height + first_height + text_height + (remaining_count > 0 and (grid_height + spacing * 2) or 0) + 2 * padding + 30
         
-        -- Position window
-        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-        local window_x, window_y = r.ImGui_GetWindowPos(ctx)
-        local viewport = r.ImGui_GetMainViewport(ctx)
-        local viewport_pos_x = r.ImGui_Viewport_GetPos(viewport)
-        local is_left_docked = (window_x - viewport_pos_x) < 20
-        
-        local window_pos_x = is_left_docked and (mouse_x + 20) or (mouse_x - total_width - 20)
-        local window_pos_y = mouse_y + 20
-        
+        -- Same placement and offsets as the plugin screenshot preview.
+        local window_pos_x, window_pos_y = PlaceHoverPreview(total_width, total_height)
+
         r.ImGui_SetNextWindowSize(ctx, total_width, total_height)
         r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
         r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
@@ -11238,7 +11326,7 @@ function ShowFxChainPreview(chain_path, chain_name)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x000000FF)
         
-        if r.ImGui_Begin(ctx, "FX Chain Preview", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+        if r.ImGui_Begin(ctx, "FX Chain Preview", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize() | (r.ImGui_WindowFlags_NoInputs and r.ImGui_WindowFlags_NoInputs() or 0)) then
             
             -- Draw chain name at top
             if chain_name then
@@ -11332,15 +11420,8 @@ function ShowFxChainPreview(chain_path, chain_name)
         local total_width = cols * small_width + (cols - 1) * spacing + 2 * padding
         local total_height = chain_name_height + rows * (small_height + text_height + spacing) + 2 * padding
         
-        local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
-        local window_x, window_y = r.ImGui_GetWindowPos(ctx)
-        local viewport = r.ImGui_GetMainViewport(ctx)
-        local viewport_pos_x = r.ImGui_Viewport_GetPos(viewport)
-        local is_left_docked = (window_x - viewport_pos_x) < 20
-        
-        local window_pos_x = is_left_docked and (mouse_x + 20) or (mouse_x - total_width - 20)
-        local window_pos_y = mouse_y + 20
-        
+        local window_pos_x, window_pos_y = PlaceHoverPreview(total_width, total_height)
+
         r.ImGui_SetNextWindowSize(ctx, total_width, total_height)
         r.ImGui_SetNextWindowPos(ctx, window_pos_x, window_pos_y)
         r.ImGui_SetNextWindowBgAlpha(ctx, 0.9)
@@ -11354,7 +11435,7 @@ function ShowFxChainPreview(chain_path, chain_name)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), 0x000000FF)
         
-        if r.ImGui_Begin(ctx, "FX Chain Preview", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize()) then
+        if r.ImGui_Begin(ctx, "FX Chain Preview", true, r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoFocusOnAppearing() | r.ImGui_WindowFlags_NoDocking() | r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_TopMost() | r.ImGui_WindowFlags_NoResize() | (r.ImGui_WindowFlags_NoInputs and r.ImGui_WindowFlags_NoInputs() or 0)) then
             
             -- Draw chain name at top
             if chain_name then
@@ -16200,6 +16281,7 @@ function DrawFxChains(tbl, path, show_hover_preview)
             if show_hover_preview and r.ImGui_IsItemHovered(ctx) then
                 local fx_chains_path = ResolveFxChainsRoot()
                 local chain_file_path = fx_chains_path .. path .. os_separator .. item .. extension
+                RememberPreviewAnchor()
                 ShowFxChainPreview(chain_file_path, item)
             end
             
@@ -16301,6 +16383,7 @@ function DrawFxChains(tbl, path, show_hover_preview)
                     if show_hover_preview and r.ImGui_IsItemHovered(ctx) then
                         local fx_chains_path = ResolveFxChainsRoot()
                         local chain_file_path = fx_chains_path .. path .. os_separator .. item[j] .. extension
+                        RememberPreviewAnchor()
                         ShowFxChainPreview(chain_file_path, item[j])
                     end
                     
@@ -27044,7 +27127,7 @@ end
                                         LoadPluginScreenshot(current_hovered_plugin)
                                     end
                                 end
-                                is_screenshot_visible = true
+                                is_screenshot_visible = true; RememberPreviewAnchor()
                                 if not config.show_screenshot_in_search or not ScreenshotExists(plugin.name) then
                                     r.ImGui_BeginTooltip(ctx)
                                     local disp = GetDisplayPluginName(plugin.name)
@@ -27085,7 +27168,7 @@ end
                                 LoadPluginScreenshot(current_hovered_plugin)
                             end
                         end
-                        is_screenshot_visible = true
+                        is_screenshot_visible = true; RememberPreviewAnchor()
                         if not config.show_screenshot_in_search or not ScreenshotExists(filtered_fx[i].name) then
                             r.ImGui_BeginTooltip(ctx)
                             r.ImGui_Text(ctx, filtered_fx[i].name)
@@ -27230,7 +27313,7 @@ function DrawItems(tbl, main_cat_name)
                                 current_hovered_plugin = plugin.name
                                 LoadPluginScreenshot(current_hovered_plugin)
                             end
-                            is_screenshot_visible = true
+                            is_screenshot_visible = true; RememberPreviewAnchor()
                         end
                        
                         ShowPluginContextMenu(plugin.name, "folders_" .. i .. "_" .. plugin.index)
@@ -27305,7 +27388,7 @@ function DrawItems(tbl, main_cat_name)
                                 current_hovered_plugin = e.original
                                 LoadPluginScreenshot(current_hovered_plugin)
                             end
-                            is_screenshot_visible = true
+                            is_screenshot_visible = true; RememberPreviewAnchor()
                         end
                         ShowPluginContextMenu(e.original, "category_" .. i .. "_" .. e.index)
                     end
@@ -27331,14 +27414,14 @@ function DrawItems(tbl, main_cat_name)
                                 current_hovered_plugin = e.original
                                 LoadPluginScreenshot(current_hovered_plugin)
                             end
-                            is_screenshot_visible = true
+                            is_screenshot_visible = true; RememberPreviewAnchor()
                         end
                         ShowPluginContextMenu(e.original, "category_" .. i .. "_" .. e.index)
                     end
                 end
             end
            
-            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                 r.ImGui_CloseCurrentPopup(ctx)
             end
            
@@ -27403,7 +27486,7 @@ function DrawFavorites()
                     current_hovered_plugin = fav
                     LoadPluginScreenshot(current_hovered_plugin)
                 end
-                is_screenshot_visible = true
+                is_screenshot_visible = true; RememberPreviewAnchor()
             end
             ShowPluginContextMenu(fav, "favorites_" .. i)
         end
@@ -27790,12 +27873,223 @@ function DrawIOSection()
     r.ImGui_PopStyleVar(ctx)
 end
 
+-- Track icon for the header at the top of the main window. A cache of its
+-- own: the INFO panel's GetInfoTrackIcon keeps one texture, and two callers
+-- asking for different tracks would reload it every frame.
+HeaderIcon = { path = nil, tex = nil }
+
+function GetHeaderTrackIcon(track)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return nil end
+    local _, icon_path = r.GetSetMediaTrackInfo_String(track, "P_ICON", "", false)
+    if not icon_path or icon_path == "" then return nil end
+    if HeaderIcon.path == icon_path and HeaderIcon.tex and r.ImGui_ValidatePtr(HeaderIcon.tex, "ImGui_Image*") then
+        return HeaderIcon.tex
+    end
+    if HeaderIcon.tex and r.ImGui_ValidatePtr(HeaderIcon.tex, "ImGui_Image*") then r.ImGui_Detach(ctx, HeaderIcon.tex) end
+    HeaderIcon.path, HeaderIcon.tex = icon_path, nil
+    local full_path = icon_path
+    if not icon_path:match("^[A-Za-z]:") and not icon_path:match("^[/\\]") then
+        full_path = r.GetResourcePath() .. "/Data/track_icons/" .. icon_path
+    end
+    if not r.file_exists(full_path) then return nil end
+    local ok, tex = pcall(r.ImGui_CreateImage, full_path)
+    if not ok or not tex then return nil end
+    r.ImGui_Attach(ctx, tex)
+    HeaderIcon.tex = tex
+    return tex
+end
+
+-- A rotary knob for the Buttons section (Knobs setting). Drawn at the cursor
+-- as size x size. Drag up/down or use the mouse wheel (Shift: fine steps);
+-- double-click left resets to opts.default. The lit arc runs from opts.center
+-- to the value, so the side of centre reads at a glance. Returns the new
+-- value, whether it is hovered and whether it was right-clicked.
+function DrawRotaryKnob(id, value, vmin, vmax, size, opts)
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    r.ImGui_InvisibleButton(ctx, "##knob_" .. id, size, size)
+    local hovered = r.ImGui_IsItemHovered(ctx)
+    local active = r.ImGui_IsItemActive(ctx)
+    local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+    local new_value = value
+    if active then
+        local _, dy = r.ImGui_GetMouseDelta(ctx)
+        if dy ~= 0 then new_value = new_value - dy * (shift and opts.fine or opts.drag) end
+    end
+    if hovered then
+        local wheel = r.ImGui_GetMouseWheel(ctx)
+        if wheel ~= 0 then new_value = new_value + wheel * (shift and opts.wheel_fine or opts.wheel) end
+        if r.ImGui_IsMouseDoubleClicked(ctx, 0) then new_value = opts.default end
+    end
+    new_value = math.max(vmin, math.min(vmax, new_value))
+    local right_clicked = hovered and r.ImGui_IsMouseClicked(ctx, 1)
+
+    local shown = new_value
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local cx, cy = x + size * 0.5, y + size * 0.5
+    local radius = size * 0.5 - 2
+    local a_min, a_max = math.pi * 0.75, math.pi * 2.25
+    local function angle(v) return a_min + (a_max - a_min) * ((v - vmin) / (vmax - vmin)) end
+    local a_val, a_center = angle(shown), angle(opts.center)
+    r.ImGui_DrawList_AddCircleFilled(dl, cx, cy, radius, hovered and 0x3A3A3AFF or 0x2A2A2AFF)
+    r.ImGui_DrawList_PathArcTo(dl, cx, cy, radius - 2, a_min, a_max, 32)
+    r.ImGui_DrawList_PathStroke(dl, 0x555555FF, 0, 3)
+    local from, to = math.min(a_center, a_val), math.max(a_center, a_val)
+    if to - from > 0.01 then
+        r.ImGui_DrawList_PathArcTo(dl, cx, cy, radius - 2, from, to, 24)
+        r.ImGui_DrawList_PathStroke(dl, (opts.warn_above and shown > opts.warn_above) and 0xE0A040FF or 0x5BA0E0FF, 0, 3)
+    end
+    r.ImGui_DrawList_AddLine(dl, cx, cy, cx + math.cos(a_val) * (radius - 4), cy + math.sin(a_val) * (radius - 4), 0xFFFFFFFF, 2)
+    if hovered and opts.tooltip then r.ImGui_SetTooltip(ctx, opts.tooltip(shown)) end
+    return new_value, hovered, right_clicked
+end
+
+-- Pan modes and reset, shared by the pan slider and the pan knobs.
+function DrawPanModeMenu(track, pan_mode)
+    if r.ImGui_BeginPopup(ctx, "PanModeMenu") then
+        if r.ImGui_MenuItem(ctx, "Reset Pan") then
+            if pan_mode == 6 then
+                r.SetMediaTrackInfo_Value(track, "D_DUALPANL", 0.0)
+                r.SetMediaTrackInfo_Value(track, "D_DUALPANR", 0.0)
+            else
+                r.SetMediaTrackInfo_Value(track, "D_PAN", 0.0)
+            end
+        end
+        if r.ImGui_MenuItem(ctx, "Stereo Pan") then
+            r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANSTEREOPAN"), 0)
+        end
+        if r.ImGui_MenuItem(ctx, "Stereo Balance") then
+            r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANBALANCENEW"), 0)
+        end
+        if r.ImGui_MenuItem(ctx, "Dual Pan") then
+            r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANDUALPAN"), 0)
+        end
+        if r.ImGui_MenuItem(ctx, "3x Balance") then
+            r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANBALANCEOLD"), 0)
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
+function PanLabel(v)
+    if math.abs(v) < 0.005 then return "C" end
+    return string.format("%d%s", math.floor(math.abs(v) * 100 + 0.5), v < 0 and "L" or "R")
+end
+
+MIX_KNOB_BIG, MIX_KNOB_SMALL = 44, 34
+
+-- The Buttons section's pan / volume / width as one row of knobs (Knobs
+-- setting): pan left (two knobs, L and R, in dual-pan mode), volume large in
+-- the middle, width right, each with its value underneath.
+function DrawMixKnobRow(track, row_width)
+    local pan_mode = r.GetMediaTrackInfo_Value(track, "I_PANMODE")
+    local knobs = {}
+    local pan_opts = { center = 0, default = 0, drag = 0.01, fine = 0.002, wheel = 0.05, wheel_fine = 0.01 }
+    if pan_mode == 6 then
+        knobs[#knobs + 1] = { id = "panL", key = "D_DUALPANL", min = -1, max = 1, size = MIX_KNOB_SMALL, kind = "pan", label = "L " }
+        knobs[#knobs + 1] = { id = "panR", key = "D_DUALPANR", min = -1, max = 1, size = MIX_KNOB_SMALL, kind = "pan", label = "R " }
+    else
+        knobs[#knobs + 1] = { id = "pan", key = "D_PAN", min = -1, max = 1, size = MIX_KNOB_SMALL, kind = "pan", label = "" }
+    end
+    knobs[#knobs + 1] = { id = "vol", size = MIX_KNOB_BIG, kind = "vol" }
+    knobs[#knobs + 1] = { id = "width", key = "D_WIDTH", min = -1, max = 1, size = MIX_KNOB_SMALL, kind = "width" }
+
+    local row_x, row_y = r.ImGui_GetCursorPos(ctx)
+    local slot = row_width / #knobs
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+    for k, knob in ipairs(knobs) do
+        local kx = row_x + (k - 1) * slot + (slot - knob.size) * 0.5
+        local ky = row_y + (MIX_KNOB_BIG - knob.size) * 0.5
+        r.ImGui_SetCursorPos(ctx, kx, ky)
+        local label
+        if knob.kind == "vol" then
+            local vol = r.GetMediaTrackInfo_Value(track, "D_VOL")
+            local db = (vol and vol > 0) and (20 * math.log(vol, 10)) or -60
+            db = math.max(-60, math.min(12, db))
+            local new_db, hovered, right = DrawRotaryKnob("vol", db, -60, 12, knob.size, {
+                center = 0, default = 0, drag = 0.3, fine = 0.05, wheel = 1, wheel_fine = 0.1, warn_above = 0,
+                tooltip = function(v) return string.format("Volume: %.1f dB", v) ..
+                    "\nDrag or wheel (Shift: fine), double-click 0 dB\nRight-click 0 dB / double right-click -12 dB" end })
+            if hovered and r.ImGui_IsMouseDoubleClicked(ctx, 1) then new_db = -12 elseif right then new_db = 0 end
+            if math.abs(new_db - db) > 0.0001 then r.SetMediaTrackInfo_Value(track, "D_VOL", 10 ^ (new_db / 20)) end
+            label = (new_db <= -59.95) and "-inf dB" or string.format("%.1f dB", new_db)
+        elseif knob.kind == "pan" then
+            local v = r.GetMediaTrackInfo_Value(track, knob.key)
+            local opts = { center = 0, default = 0, drag = pan_opts.drag, fine = pan_opts.fine, wheel = pan_opts.wheel, wheel_fine = pan_opts.wheel_fine,
+                tooltip = function(x) return (knob.label ~= "" and ("Pan " .. knob.label) or "Pan: ") .. PanLabel(x) ..
+                    "\nDrag or wheel (Shift: fine), double-click centre\nRight-click: pan mode" end }
+            local nv, _, right = DrawRotaryKnob(knob.id, v, -1, 1, knob.size, opts)
+            if right then r.ImGui_OpenPopup(ctx, "PanModeMenu") end
+            if math.abs(nv - v) > 0.00001 then r.SetMediaTrackInfo_Value(track, knob.key, nv) end
+            label = knob.label .. PanLabel(nv)
+        else
+            local v = r.GetMediaTrackInfo_Value(track, "D_WIDTH")
+            local nv, _, right = DrawRotaryKnob("width", v, -1, 1, knob.size, {
+                center = 0, default = 1, drag = 0.01, fine = 0.002, wheel = 0.05, wheel_fine = 0.01,
+                tooltip = function(x) return string.format("Width: %.0f%%", x * 100) ..
+                    "\nDrag or wheel (Shift: fine)\nDouble-click or right-click 100%" end })
+            if right then nv = 1 end
+            if math.abs(nv - v) > 0.00001 then r.SetMediaTrackInfo_Value(track, "D_WIDTH", nv) end
+            label = string.format("%.0f%%", nv * 100)
+        end
+        local tw = r.ImGui_CalcTextSize(ctx, label)
+        r.ImGui_SetCursorPos(ctx, row_x + (k - 1) * slot + (slot - tw) * 0.5, row_y + MIX_KNOB_BIG + 1)
+        r.ImGui_Text(ctx, label)
+    end
+    DrawPanModeMenu(track, pan_mode)
+    r.ImGui_SetCursorPos(ctx, row_x, row_y + MIX_KNOB_BIG + line_h + 4)
+    r.ImGui_Dummy(ctx, 0, 0)
+end
+
+-- Under the track header (header toggle with the picture icon): the track's
+-- icon, centred, or a + to pick one when the track has none. Picking and
+-- removing go through REAPER's own actions, as in the INFO panel:
+-- 40899 Track: Set track icon, 40900 Track: Remove track icon.
+function DrawMainTrackIconArea(track, width)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+    r.ImGui_PushID(ctx, "MainTrackIconArea")
+    local tex = GetHeaderTrackIcon(track)
+    local start_x = r.ImGui_GetCursorPosX(ctx)
+    if tex then
+        local iw, ih = r.ImGui_Image_GetSize(tex)
+        if iw and ih and iw > 0 and ih > 0 then
+            local box = 48
+            local scale = math.min(box / iw, box / ih, 1.5)
+            local dw, dh = math.max(1, math.floor(iw * scale)), math.max(1, math.floor(ih * scale))
+            r.ImGui_SetCursorPosX(ctx, start_x + math.max(0, (width - dw) * 0.5))
+            SafeImage(ctx, tex, dw, dh)
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Right-click to change or remove the track icon") end
+            if r.ImGui_BeginPopupContextItem(ctx, "MainTrackIconContext") then
+                if r.ImGui_MenuItem(ctx, "Set Track Icon...") then
+                    r.SetOnlyTrackSelected(track)
+                    r.Main_OnCommand(40899, 0)
+                end
+                if r.ImGui_MenuItem(ctx, "Remove Track Icon") then
+                    r.SetOnlyTrackSelected(track)
+                    r.Main_OnCommand(40900, 0)
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+        end
+    else
+        local size = 24
+        r.ImGui_SetCursorPosX(ctx, start_x + math.max(0, (width - size) * 0.5))
+        if DrawIconButton("plus", size) then
+            r.SetOnlyTrackSelected(track)
+            r.Main_OnCommand(40899, 0)
+        end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Set track icon...") end
+    end
+    r.ImGui_PopID(ctx)
+end
+
 function DrawBottomButtons()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then return end
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local track_info_width = math.max(window_width - 10, 125)
     local button_spacing = 3
-    if not config.hideVolumeSlider then
+    if not config.hideVolumeSlider and config.mix_knobs then
+        DrawMixKnobRow(TRACK, track_info_width)
+    elseif not config.hideVolumeSlider then
         local half_width = (track_info_width - button_spacing) / 2
       
         -- Pan slider met context menu
@@ -27838,29 +28132,7 @@ function DrawBottomButtons()
             end
         end
 
-        if r.ImGui_BeginPopup(ctx, "PanModeMenu") then
-            if r.ImGui_MenuItem(ctx, "Reset Pan") then
-                if pan_mode == 6 then
-                    r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANL", 0.0)
-                    r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANR", 0.0)
-                else
-                    r.SetMediaTrackInfo_Value(TRACK, "D_PAN", 0.0)
-                end
-            end
-            if r.ImGui_MenuItem(ctx, "Stereo Pan") then
-                r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANSTEREOPAN"), 0)
-            end
-            if r.ImGui_MenuItem(ctx, "Stereo Balance") then
-                r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANBALANCENEW"), 0)
-            end
-            if r.ImGui_MenuItem(ctx, "Dual Pan") then
-                r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANDUALPAN"), 0)
-            end
-            if r.ImGui_MenuItem(ctx, "3x Balance") then
-                r.Main_OnCommand(r.NamedCommandLookup("_SWS_AWPANBALANCEOLD"), 0)
-            end
-            r.ImGui_EndPopup(ctx)
-        end
+        DrawPanModeMenu(TRACK, pan_mode)
 
         -- Width slider
         r.ImGui_SameLine(ctx)
@@ -29051,7 +29323,13 @@ function GetMainButtonsHeight()
     local spacing_y = 3
     local height = 0
     if not config.hideVolumeSlider then
-        height = height + frame_h * 2 + spacing_y
+        -- Pan/Width row plus the volume row, or the one row of knobs with
+        -- their values underneath.
+        if config.mix_knobs then
+            height = height + MIX_KNOB_BIG + r.ImGui_GetTextLineHeight(ctx) + 4 + spacing_y
+        else
+            height = height + frame_h * 2 + spacing_y
+        end
     end
     height = height + button_frame_h * 3 + spacing_y * 2
     return height
@@ -29151,7 +29429,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                                     current_hovered_plugin = plugin_name
                                     LoadPluginScreenshot(current_hovered_plugin)
                                 end
-                                is_screenshot_visible = true
+                                is_screenshot_visible = true; RememberPreviewAnchor()
                             end
                             
                             ShowPluginContextMenu(plugin_name, "custom_main_" .. full_path .. "_" .. plugin_idx)
@@ -29163,7 +29441,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                     end
                 end
                 
-                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
                 r.ImGui_EndMenu(ctx)
@@ -29197,7 +29475,7 @@ function DrawCustomFoldersMenu(folders, path_prefix)
                     r.ImGui_EndPopup(ctx)
                 end
                 DrawCustomFoldersMenu(folder_content, full_path)
-                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     r.ImGui_CloseCurrentPopup(ctx)
                 end
                 r.ImGui_EndMenu(ctx)
@@ -29226,7 +29504,7 @@ function DrawPluginMenus()
       
         if r.ImGui_BeginMenu(ctx, "FAVORITES") then
             DrawFavorites()
-            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+            if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                 r.ImGui_CloseCurrentPopup(ctx)
             end
             r.ImGui_EndMenu(ctx)
@@ -29247,7 +29525,7 @@ if config.show_custom_folders and next(config.custom_folders) then
 
     if r.ImGui_BeginMenu(ctx, "CUSTOM") then
         DrawCustomFoldersMenu(config.custom_folders, "")
-        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
             r.ImGui_CloseCurrentPopup(ctx)
         end
         
@@ -29286,7 +29564,7 @@ end
                         end
                         local tree = GetFxChainsTree()
                         DrawFxChains(tree, nil, true)  -- true = toon hover preview in main window
-                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                     if has_selected then r.ImGui_SetNextItemOpen(ctx, true) end -- auto-expand FOLDERS header on startup when last opened was inside
                             r.ImGui_CloseCurrentPopup(ctx)
                         end
@@ -29305,7 +29583,7 @@ end
                         r.ImGui_Separator(ctx)
                         local tree = GetTrackTemplatesTree()
                         DrawTrackTemplates(tree)
-                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+                        if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                             r.ImGui_CloseCurrentPopup(ctx)
                         end
                     else
@@ -30206,8 +30484,16 @@ if not should_show_main_window then
     return
 end
 
+-- The hover preview shows only while a plugin is hovered in this frame. Every
+-- plugin row sets the flag again when hovered; without this reset a preview
+-- stayed up after moving back from a plugin to a folder in a parent menu,
+-- because the folder is an item too and nothing cleared the last plugin.
+is_screenshot_visible = false
+PreviewAnchor = nil
 local visible, open = r.ImGui_Begin(ctx, 'TK FX BROWSER', true, window_flags | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoScrollbar() | (config.show_screenshot_window and r.ImGui_WindowFlags_NoFocusOnAppearing() or 0))
 dock = r.ImGui_GetWindowDockID(ctx)
+-- For hover previews drawn from inside menus, which are other windows.
+do local mwx, mwy = r.ImGui_GetWindowPos(ctx); local mww, mwh = r.ImGui_GetWindowSize(ctx); MainWindowRect = { mwx, mwy, mww, mwh } end
 
 if visible then
     local main_window_pos_x, main_window_pos_y = r.ImGui_GetWindowPos(ctx)
@@ -30256,6 +30542,16 @@ if visible then
                         LoadPluginScreenshot(current_hovered_plugin)
                     end
                 end
+                -- Track icon area below this header: shown or hidden.
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPos(ctx, 40, 0)
+                if DrawIconButton((config.show_header_track_icon ~= false) and "trackicon" or "trackicon_off", 20) then
+                    config.show_header_track_icon = not (config.show_header_track_icon ~= false)
+                    SaveConfig()
+                end
+                if r.ImGui_IsItemHovered(ctx) then
+                    r.ImGui_SetTooltip(ctx, (config.show_header_track_icon ~= false) and "Hide track icon" or "Show track icon")
+                end
 
                 r.ImGui_SameLine(ctx)
                 r.ImGui_SetCursorPos(ctx, window_width - 40, 0)
@@ -30273,7 +30569,7 @@ if visible then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_PushFont(ctx, LargeFont, config.font_size + 4)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
-                local max_text_width = window_width - 90
+                local max_text_width = window_width - 130  -- room for 3 header buttons left, 2 right
                 local text_width = r.ImGui_CalcTextSize(ctx, header_label)
                 if text_width > max_text_width and max_text_width > 0 then
                     local ellipsis = "..."
@@ -30547,6 +30843,7 @@ if visible then
             if trackinfo_open then r.ImGui_EndChild(ctx) end
             r.ImGui_PopStyleVar(ctx)
             r.ImGui_PopStyleColor(ctx)
+            if config.show_header_track_icon ~= false then DrawMainTrackIconArea(TRACK, track_info_width) end
             
             if config.main_section_tags_enabled then
             if DrawCollapseHeader("TAGS", config.main_segment_tags_visible, "Show Tags", "Hide Tags") then
