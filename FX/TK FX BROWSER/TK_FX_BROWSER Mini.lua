@@ -1,8 +1,10 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.20
+-- @version 1.2.21
 -- @changelog:
 --[[ 
+    v1.2.21:
+        + TK Notes 2.8.0 (opened from the Mini as well): word-wise editing with Ctrl/Ctrl+Shift+Left/Right and Ctrl+Backspace/Delete, File > Auto-save TXT in project folder (shared with TK Workbench Notes) plus Show TXT in project folder, and the new action "TK Notes - Toggle focus between note and arrange view". Released together with TK FX BROWSER 3.2.24. Requested via the contact form
     v1.2.20:
         + Screenshots: A capture no longer saves a blank image. Plugins that draw their window with OpenGL or DirectX came back as one flat colour from a normal capture, and that blank file was then shown for the plugin for good. A flat capture is now taken again from the screen straight away (the same as the OpenGL/DX capture), which does see such plugins; if that is flat too, nothing is saved and an existing screenshot is kept. This also applies to bulk screenshots.
         + Screenshots: The OpenGL/DX capture also leaves the existing file alone when it comes out blank, instead of overwriting it.
