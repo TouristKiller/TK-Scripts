@@ -1,8 +1,21 @@
 ﻿-- @description TK MEDIA BROWSER
 -- @author TouristKiller
--- @version 1.3.0
+-- @version 1.4.0
 -- @changelog:
 --[[
+v1.4.0:
++ New: Normalize preview, the "norm" button on the transport row. Files from different packs no longer jump in level while you browse. Peak mode brings every file's loudest peak to a target (default -3 dBFS) and works straight away, because it reads the waveform the browser already caches. LUFS mode uses a file's stored LUFS reading and falls back to peak for files that were never analysed, since analysing means putting a temporary track in the project and clicking a file should never do that. The volume knob still works on top of it. Right-click the button for the mode and both targets; the tooltip shows the gain applied to the current file. Requested on the forum
++ Settings: Show Oscilloscope and Show Waveform checkboxes. The oscilloscope could already be hidden, but only with the small toggle at the end of the transport row, which few people found. With the waveform switched off, the file list takes its space in both layouts. Requested on the forum
++ Selection: Shift+click now selects a range, the way it does in every other browser, and Ctrl+A selects every file in view. Inserting moved to a double-click or Alt+click; Settings has a switch to turn double-click insert off. A range follows the order on screen, so in Grouped view it skips closed folders and in Tree view it follows the open branches. Tree view supports multi-selection now as well. Requested on the forum
++ Selection: inserting several files at once. Alt+click on a file that is part of a multi-selection inserts the whole selection end to end on the selected track, starting at the edit cursor and in the order of the list. The right-click menu offers that as well, plus "on separate tracks", which gives each file a new track of its own, named after the file, below the selected one. Both are a single undo step, and the edit cursor ends up after the last inserted file so the next insert follows on. A double-click still inserts just the one file, because its first click has already cleared the selection. Requested on the forum
++ Selection: the file that was highlighted before a Ctrl- or Shift-click counts as part of the selection, and right-clicking a file outside the selection acts on that file only, rather than on a selection somewhere else in the list
++ New: a row of your collections above the file list. A collection already works as a free-form label a file can carry any number of, so rather than adding a tag system as a third way of labelling files next to the automatic categories and the collections, the collections themselves are made quicker to use. Click one to show only the files in it, or Ctrl+click to combine several. Right-click one to add the selected files to it or remove them, and + makes a new collection with the selected files in it. Each shows how many files in the list it holds, the collections of the current file are outlined, and the row folds away with its arrow or can be switched off in Settings. A file in Drums / Kick also counts as being in Drums. Requested on the forum
++ Transport: the minimum display time label ("off" / "1s") and the Auto Key badge are drawn in the same font and colours as auto, sync and tape below them. They used to be in two different styles, one of them hard to read. The oscilloscope toggle now follows the badge instead of landing on top of it, and the left pane can no longer be dragged narrower than the transport needs, so nothing on it gets cut off or overlaps. The transport measures that width itself, because it depends on the fonts and on the key Auto Key shows
++ Waveform: a selection can be dragged straight from the waveform onto a track, as in REAPER's Media Explorer, and only that section is inserted. Over a selection the cursor turns into a hand: press there and drag. Snapping to the grid, fixed lanes and Shift for a new lane all work as they do when dragging from the file list. A press that does not move still acts as a click (new selection, seek), and dragging outside the selection still makes a new one. The section is not passed to plugin windows or other scripts as a file, because they would receive the whole sample. Until then, a section could only be inserted by dragging the file from the list after selecting part of it. Requested on the forum
++ Search: typing in the search box no longer lags after every letter. Measured on a 15,000 file location, each letter cost two full filter passes of about 15 ms each: the search bar filtered the list and then the list filtered it again. On top of that, the browser copied the whole visible list on every frame, about 19 ms, whether you were typing or not. Now the text appears in the box at once and the list follows after a short pause in typing, at once on Enter or when you leave the box, and immediately when the box is cleared. The filter runs once and remembers the lower-cased folder names. A letter that only adds to the term searches the previous hits instead of the whole location, which takes under 2 ms. The list copy is only made again when the list itself changes. Tree view was the slowest of all, because it counted the matches per folder by walking the tree: the first search read every folder of the library from disk, and the counting was redone for every visible folder on every frame. Those counts now come from the location's file cache, in one pass per term that takes 5 to 60 ms on the same location, and they match a count taken straight from disk. Reported on the forum
++ Settings: Settings and Keyboard Shortcuts open in a window of their own, switched with two buttons at the top, instead of taking the place of the file list. Like the browser it has no standard title bar but its own header in the window colour, with the same red close dot, and the sliders have a fixed width so their labels fit without making the window very wide. In a narrow dock the settings page did not fit, so the dock had to be widened every time something needed changing. Now the browser keeps showing its files while you adjust it, so the effect of a setting is visible straight away. The window can float or be docked, and it remembers its size and position. Escape closes it, and while it has focus the arrow keys no longer move through the file list
++ New: Set Category in the file menu. When the automatic category guesses wrong it can be corrected by hand, for one file or for a whole selection at once, and Automatic puts it back. Corrections are stored per file in CACHE/category_overrides.json and apply everywhere the category is used: the column, sorting and the Auto view
+
 v1.3.0:
 + Tree View: macOS AppleDouble metadata files whose names start with ._ are no longer shown or added by new scans, and are filtered from existing caches immediately
 + Sync: right-click the sync button to choose half-speed (/2), normal (1x) or double-speed (2x) tempo matching for previews and inserted media
@@ -1098,6 +1111,59 @@ end
 -- in as arguments because this sits above where they are declared.
 tkmb_display = { key = nil, cache = nil }
 
+-- Search. Typing used to lag after every letter in a large library: each letter
+-- filtered the whole location twice (once in the search bar, once in the list),
+-- lower-cased every folder name again on each pass, and loop() copied the full
+-- list on every frame. Now the filter waits for a short pause in typing, runs
+-- once, keeps the lower-cased folder names, and narrows the previous result when
+-- the new term only adds to the old one ("ki" -> "kic" searches the "ki" hits).
+-- Requested on the forum.
+tkmb_search = {
+    DELAY = 0.18,                                  -- seconds of quiet before filtering
+    text = nil, applied = nil, due = nil,          -- what is in the box vs what is filtered
+    parent_lower = setmetatable({}, { __mode = "k" }),
+    inc_base = nil, inc_term = nil, inc_result = nil,
+    vis_key = nil,
+}
+
+function tkmb_search.parent_of(file)
+    local lower = tkmb_search.parent_lower[file]
+    if not lower then
+        lower = string.lower(file.parent_folder or "")
+        tkmb_search.parent_lower[file] = lower
+    end
+    return lower
+end
+
+-- files matching term (case-insensitive, name or folder), in the order of files.
+-- base names the list being searched; when it is the same list as last time and
+-- the new term contains the old one, only the previous hits can still match.
+function tkmb_search.match(files, term, base)
+    local lower = string.lower(term or "")
+    base = tostring(base) .. "\0" .. tostring(files) .. "\0" .. #files
+    local source = files
+    local prev = tkmb_search.inc_term
+    if tkmb_search.inc_base == base and prev and prev ~= "" and tkmb_search.inc_result
+        and lower ~= prev and string.find(lower, prev, 1, true) then
+        source = tkmb_search.inc_result
+    end
+    local hits = {}
+    local find = string.find
+    for index = 1, #source do
+        local file = source[index]
+        local name_lower = file.name_lower
+        if not name_lower then
+            name_lower = string.lower(file.name or "")
+            file.name_lower = name_lower
+        end
+        if find(name_lower, lower, 1, true) or find(tkmb_search.parent_of(file), lower, 1, true) then
+            hits[#hits + 1] = file
+        end
+    end
+    tkmb_search.inc_base, tkmb_search.inc_term, tkmb_search.inc_result = base, lower, hits
+    return hits
+end
+
 function tkmb_display.list(sorted, narrowed)
     if not sorted or #sorted == 0 then return narrowed or {} end
     if not narrowed or #narrowed == 0 or #narrowed >= #sorted then return sorted end
@@ -1223,6 +1289,9 @@ local playback = {
     auto_trim_silence_threshold_db = -48,
     auto_trim_silence_padding_ms = 8,
     lufs_normalize_target = -18.0,
+    preview_normalize = false,
+    preview_normalize_mode = "peak",
+    preview_peak_target = -3.0,
     pending_autoplay_file = nil,
     pending_autoplay_time = 0
 }
@@ -1558,6 +1627,10 @@ local ui_settings = {
     folder_pane_left_align = false,
     group_by_folder = false,
     show_progress_bar = true,
+    show_waveform_panel = true,
+    double_click_insert = true,
+    show_tag_strip = true,
+    tag_strip_open = true,
     folder_grid = false,
     folder_tile_size = 96,
     strip_layout = false,
@@ -3309,7 +3382,12 @@ function AK.draw_badge(ctx, draw_list)
     -- rather than a button competing with the transport. The accent only appears once
     -- Auto Key is actually doing something.
     local label_color
-    if AK.enabled then
+    local style = AK.badge_style
+    if style then
+        -- Drawn by the transport: the same colours as the other labels on that row
+        -- (the "off" of the minimum display time), so the two read as one set.
+        label_color = AK.enabled and style.active or (hovered and style.hover or style.normal)
+    elseif AK.enabled then
         label_color = hsv_to_color(ui_settings.accent_hue, hovered and 1.0 or 0.8, hovered and 1.0 or 0.9)
     else
         local dim = math.max(0, math.min(1, (ui_settings.text_brightness or 1) * 0.55))
@@ -3326,7 +3404,9 @@ function AK.draw_badge(ctx, draw_list)
         r.ImGui_SetTooltip(ctx, tip)
     end
     if r.ImGui_IsItemClicked(ctx, 0) then r.ImGui_OpenPopup(ctx, "TKMB Auto Key") end
-    AK.draw_popup(ctx)
+    -- The transport draws the badge in its small font and calls the popup itself
+    -- once that font is popped again, so the popup keeps its normal text size.
+    if not style then AK.draw_popup(ctx) end
 end
 
 local save_fast_cache
@@ -3961,7 +4041,7 @@ local function refresh_file_cache(location)
         cache_mgmt.processed_files = 0
         cache_mgmt.total_files = 0
         cached_metadata = {}
-        category_cache = {}
+        category_cache = tkmb_catfix.fresh()
         cached_cat_counts = {}
         cached_cat_counts_loc = ""
         cached_cat_filter = {}
@@ -4145,13 +4225,224 @@ local function refresh_all_locations()
     return refresh_all_state.total
 end
 
-local function is_file_selected(file_path)
-    for _, selected_path in ipairs(file_location.selected_files) do
-        if selected_path == file_path then
-            return true
+-- Multi-selection. Shift+click selects a range, Ctrl+click toggles, Ctrl+A takes
+-- everything in view, and Alt+click or a double-click inserts. Shift+click used to
+-- insert; it was moved because every other browser uses it for ranges. A range
+-- is worked out from the order the files are on screen in, so in Grouped view it
+-- skips closed folders and in Tree view it follows the open branches. The tree
+-- has no list of its own, so it hands its files in as it draws them and the
+-- order of the previous frame is used. Grouped in one table: the chunk is close
+-- to Lua's 200 local limit.
+tkmb_sel = {
+    anchor = nil,
+    list = nil, plan = nil,            -- this frame's flat list, if one is drawn
+    last_list = nil, last_plan = nil,
+    tree_fill = {}, last_tree = {},    -- tree paths in drawing order
+    set = {}, set_src = nil, set_n = -1,
+}
+
+function tkmb_sel.frame()
+    tkmb_sel.last_list, tkmb_sel.last_plan = tkmb_sel.list, tkmb_sel.plan
+    tkmb_sel.list, tkmb_sel.plan = nil, nil
+    tkmb_sel.last_tree = tkmb_sel.tree_fill
+    tkmb_sel.tree_fill = {}
+end
+
+function tkmb_sel.lookup()
+    local sel = file_location.selected_files
+    if tkmb_sel.set_src ~= sel or tkmb_sel.set_n ~= #sel then
+        local set = {}
+        for _, path in ipairs(sel) do set[path] = true end
+        tkmb_sel.set, tkmb_sel.set_src, tkmb_sel.set_n = set, sel, #sel
+    end
+    return tkmb_sel.set
+end
+
+function tkmb_sel.ordered_paths()
+    local list = tkmb_sel.list or tkmb_sel.last_list
+    local plan = tkmb_sel.list and tkmb_sel.plan or tkmb_sel.last_plan
+    if list then
+        local out = {}
+        if plan then
+            for _, row in ipairs(plan.rows) do
+                local file = type(row) == "number" and list[row] or nil
+                if file and not file.is_dir and file.full_path then out[#out + 1] = file.full_path end
+            end
+        else
+            for _, file in ipairs(list) do
+                if not file.is_dir and file.full_path then out[#out + 1] = file.full_path end
+            end
+        end
+        return out
+    end
+    return tkmb_sel.last_tree
+end
+
+function tkmb_sel.select_all()
+    local paths = tkmb_sel.ordered_paths()
+    if #paths == 0 then return end
+    local sel = {}
+    for index, path in ipairs(paths) do sel[index] = path end
+    file_location.selected_files = sel
+end
+
+-- Ctrl or Shift held on a click. The file that was highlighted before counts as
+-- part of the selection, the way it does everywhere else.
+function tkmb_sel.modifier_click(path, ctrl, shift)
+    local current = playback.current_playing_file
+    if #file_location.selected_files == 0 and current and current ~= "" and current ~= path then
+        table.insert(file_location.selected_files, current)
+    end
+    if not shift then
+        local set = tkmb_sel.lookup()
+        if set[path] then
+            for index, selected in ipairs(file_location.selected_files) do
+                if selected == path then table.remove(file_location.selected_files, index) break end
+            end
+        else
+            table.insert(file_location.selected_files, path)
+        end
+        tkmb_sel.anchor = path
+        return
+    end
+    local order = tkmb_sel.ordered_paths()
+    local from, to
+    for index, p in ipairs(order) do
+        if p == tkmb_sel.anchor then from = index end
+        if p == path then to = index end
+    end
+    if not from then
+        for index, p in ipairs(order) do
+            if p == current then from = index break end
         end
     end
-    return false
+    if not to then return end
+    from = from or to
+    if from > to then from, to = to, from end
+    if not ctrl then file_location.selected_files = {} end
+    local set = tkmb_sel.lookup()
+    for index = from, to do
+        if not set[order[index]] then
+            table.insert(file_location.selected_files, order[index])
+            set[order[index]] = true
+        end
+    end
+end
+
+-- What a right-click acts on: the selection when the clicked file is part of
+-- it, otherwise just the clicked file.
+function tkmb_sel.targets(path)
+    if #file_location.selected_files > 0 and tkmb_sel.lookup()[path] then
+        return file_location.selected_files
+    end
+    return { path }
+end
+
+function tkmb_sel.insert(path)
+    local track = r.GetSelectedTrack(0, 0)
+    if not track then return false end
+    insert_media_on_track(path, track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(path))
+    return true
+end
+
+-- The selection in the order it is on screen, whatever order it was clicked
+-- in. Files that have scrolled out of the list keep their place at the end.
+function tkmb_sel.in_list_order(paths)
+    local wanted, out = {}, {}
+    for _, path in ipairs(paths) do wanted[path] = true end
+    for _, path in ipairs(tkmb_sel.ordered_paths()) do
+        if wanted[path] then
+            out[#out + 1] = path
+            wanted[path] = nil
+        end
+    end
+    for _, path in ipairs(paths) do
+        if wanted[path] then out[#out + 1] = path end
+    end
+    return out
+end
+
+-- Several files at once. "sequence" lays them end to end on the selected track
+-- from the edit cursor; "tracks" puts each on a new track of its own below the
+-- selected one, all starting at the edit cursor. Either way it is one undo
+-- step, and the edit cursor ends up after the last of them.
+function tkmb_sel.insert_many(paths, mode)
+    local track = r.GetSelectedTrack(0, 0)
+    if not track or #paths == 0 then return false end
+    paths = tkmb_sel.in_list_order(paths)
+    local start = r.GetCursorPosition()
+    local finish = start
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    r.Main_OnCommand(40289, 0) -- unselect all items, so the new ones end up selected
+    local next_index = math.floor(r.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+    local pos = start
+    for _, path in ipairs(paths) do
+        local target = track
+        if mode == "tracks" then
+            r.InsertTrackAtIndex(next_index, true)
+            target = r.GetTrack(0, next_index)
+            next_index = next_index + 1
+            local name = (path:match("([^/\\]+)$") or path):gsub("%.[^%.]+$", "")
+            r.GetSetMediaTrackInfo_String(target, "P_NAME", name, true)
+        end
+        r.SetEditCurPos(mode == "tracks" and start or pos, false, false)
+        local item = insert_media_on_track(path, target, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(path))
+        if item then
+            local item_end = r.GetMediaItemInfo_Value(item, "D_POSITION") + r.GetMediaItemInfo_Value(item, "D_LENGTH")
+            if mode ~= "tracks" then pos = item_end end
+            if item_end > finish then finish = item_end end
+        end
+    end
+    if mode == "tracks" then
+        -- The selected track stays the one you picked, not the last new one.
+        r.SetOnlyTrackSelected(track)
+    end
+    r.SetEditCurPos(finish, false, false)
+    r.PreventUIRefresh(-1)
+    r.UpdateArrange()
+    r.TrackList_AdjustWindows(false)
+    r.Undo_EndBlock(string.format("TK Media Browser: insert %d files%s", #paths, mode == "tracks" and " on separate tracks" or ""), -1)
+    return true
+end
+
+-- Alt+click: on a file that is part of a multi-selection the whole selection
+-- goes in, end to end; otherwise just that file. A double-click always means
+-- one file, because the first click of it has already cleared the selection.
+function tkmb_sel.alt_insert(path)
+    if #file_location.selected_files > 1 and tkmb_sel.lookup()[path] then
+        return tkmb_sel.insert_many(file_location.selected_files, "sequence")
+    end
+    return tkmb_sel.insert(path)
+end
+
+-- The insert entries at the top of a file's right-click menu.
+function tkmb_sel.insert_menu(path, targets)
+    local track = r.GetSelectedTrack(0, 0)
+    if not track then return end
+    if r.ImGui_MenuItem(ctx, "Insert at Edit Cursor") then
+        insert_media_on_track(path, track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(path))
+    end
+    if targets and #targets > 1 then
+        if r.ImGui_MenuItem(ctx, string.format("Insert %d files in sequence", #targets)) then
+            tkmb_sel.insert_many(targets, "sequence")
+        end
+        if r.ImGui_MenuItem(ctx, string.format("Insert %d files on separate tracks", #targets)) then
+            tkmb_sel.insert_many(targets, "tracks")
+        end
+    end
+    r.ImGui_Separator(ctx)
+end
+
+-- A double-click without modifiers on the item just drawn.
+function tkmb_sel.double_clicked()
+    if not ui_settings.double_click_insert then return false end
+    if not (r.ImGui_IsItemHovered(ctx) and r.ImGui_IsMouseDoubleClicked(ctx, 0)) then return false end
+    return not (r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift()) or r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt()))
+end
+
+local function is_file_selected(file_path)
+    return tkmb_sel.lookup()[file_path] == true
 end
 
 local function toggle_file_selection(file_path)
@@ -4418,6 +4709,9 @@ local function save_options()
             auto_trim_silence_threshold_db = playback.auto_trim_silence_threshold_db,
             auto_trim_silence_padding_ms = playback.auto_trim_silence_padding_ms,
             lufs_normalize_target = playback.lufs_normalize_target,
+            preview_normalize = playback.preview_normalize,
+            preview_normalize_mode = playback.preview_normalize_mode,
+            preview_peak_target = playback.preview_peak_target,
             current_db = current_db,
             remember_last_location = file_location.remember_last_location,
             last_location_index = file_location.selected_location_index,
@@ -4453,6 +4747,10 @@ local function save_options()
             folder_pane_left_align = ui_settings.folder_pane_left_align,
             group_by_folder = ui_settings.group_by_folder,
             show_progress_bar = ui_settings.show_progress_bar,
+            show_waveform_panel = ui_settings.show_waveform_panel,
+            double_click_insert = ui_settings.double_click_insert,
+            show_tag_strip = ui_settings.show_tag_strip,
+            tag_strip_open = ui_settings.tag_strip_open,
             folder_grid = ui_settings.folder_grid,
             folder_tile_size = ui_settings.folder_tile_size,
             folder_expanded = ui.folder_expanded,
@@ -4511,7 +4809,7 @@ function apply_filter_change()
     search_filter.cached_location = ""
     search_filter.filtered_files = {}
     tree_cache.cache = {}
-    category_cache = {}
+    category_cache = tkmb_catfix.fresh()
     cached_cat_counts = {}
     cached_cat_counts_loc = ""
     cached_cat_filter = {}
@@ -4545,6 +4843,9 @@ local function get_settings_table()
         auto_trim_silence_threshold_db = playback.auto_trim_silence_threshold_db,
         auto_trim_silence_padding_ms = playback.auto_trim_silence_padding_ms,
         lufs_normalize_target = playback.lufs_normalize_target,
+        preview_normalize = playback.preview_normalize,
+        preview_normalize_mode = playback.preview_normalize_mode,
+        preview_peak_target = playback.preview_peak_target,
         show_oscilloscope = ui.show_oscilloscope,
         waveform_grid_overlay = ui.waveform_grid_overlay,
         flat_view = file_location.flat_view,
@@ -4570,6 +4871,10 @@ local function get_settings_table()
         folder_pane_left_align = ui_settings.folder_pane_left_align,
         group_by_folder = ui_settings.group_by_folder,
         show_progress_bar = ui_settings.show_progress_bar,
+        show_waveform_panel = ui_settings.show_waveform_panel,
+        double_click_insert = ui_settings.double_click_insert,
+        show_tag_strip = ui_settings.show_tag_strip,
+        tag_strip_open = ui_settings.tag_strip_open,
         folder_grid = ui_settings.folder_grid,
         folder_tile_size = ui_settings.folder_tile_size,
         strip_layout = ui_settings.strip_layout,
@@ -4617,6 +4922,9 @@ local function apply_settings_from_table(settings)
     playback.auto_trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(settings.auto_trim_silence_threshold_db) or -48))
     playback.auto_trim_silence_padding_ms = math.max(0, math.min(250, tonumber(settings.auto_trim_silence_padding_ms) or 8))
     playback.lufs_normalize_target = settings.lufs_normalize_target or -18.0
+    playback.preview_normalize = settings.preview_normalize and true or false
+    playback.preview_normalize_mode = (settings.preview_normalize_mode == "lufs") and "lufs" or "peak"
+    playback.preview_peak_target = math.max(-24, math.min(0, tonumber(settings.preview_peak_target) or -3.0))
     waveform.leading_silence_cache = {}
     ui.show_oscilloscope = settings.show_oscilloscope
     ui.waveform_grid_overlay = settings.waveform_grid_overlay or false
@@ -4644,6 +4952,10 @@ local function apply_settings_from_table(settings)
     ui_settings.folder_pane_left_align = settings.folder_pane_left_align == true
     ui_settings.group_by_folder = settings.group_by_folder == true
     ui_settings.show_progress_bar = settings.show_progress_bar ~= false
+    ui_settings.show_waveform_panel = settings.show_waveform_panel ~= false
+    ui_settings.double_click_insert = settings.double_click_insert ~= false
+    ui_settings.show_tag_strip = settings.show_tag_strip ~= false
+    ui_settings.tag_strip_open = settings.tag_strip_open ~= false
     ui_settings.folder_grid = settings.folder_grid == true
     ui_settings.folder_tile_size = settings.folder_tile_size or 96
     ui_settings.strip_layout = settings.strip_layout == true
@@ -4743,6 +5055,7 @@ local function load_options()
             local ok, options = pcall(chunk)
             if not ok then options = nil end
             ui.current_view_mode = options.current_view_mode or "folders"
+            if ui.current_view_mode == "settings" or ui.current_view_mode == "shortcuts" then ui.current_view_mode = "folders" end
             if ui.current_view_mode == "ai_samples" then ui.current_view_mode = "auto" end
             file_location.last_folder_location = options.last_folder_location or ""
             file_location.last_folder_index = options.last_folder_index or 1
@@ -4798,6 +5111,9 @@ local function load_options()
             playback.auto_trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(options.auto_trim_silence_threshold_db) or -48))
             playback.auto_trim_silence_padding_ms = math.max(0, math.min(250, tonumber(options.auto_trim_silence_padding_ms) or 8))
             playback.lufs_normalize_target = options.lufs_normalize_target or -18.0
+            playback.preview_normalize = options.preview_normalize and true or false
+            playback.preview_normalize_mode = (options.preview_normalize_mode == "lufs") and "lufs" or "peak"
+            playback.preview_peak_target = math.max(-24, math.min(0, tonumber(options.preview_peak_target) or -3.0))
             current_db = options.current_db
             file_location.remember_last_location = options.remember_last_location ~= nil and options.remember_last_location or true
             file_location.search_all = options.search_all or false
@@ -4834,6 +5150,10 @@ local function load_options()
             ui_settings.folder_pane_left_align = options.folder_pane_left_align == true
             ui_settings.group_by_folder = options.group_by_folder == true
             ui_settings.show_progress_bar = options.show_progress_bar ~= false
+            ui_settings.show_waveform_panel = options.show_waveform_panel ~= false
+            ui_settings.double_click_insert = options.double_click_insert ~= false
+            ui_settings.show_tag_strip = options.show_tag_strip ~= false
+            ui_settings.tag_strip_open = options.tag_strip_open ~= false
             ui_settings.folder_grid = options.folder_grid == true
             ui_settings.folder_tile_size = options.folder_tile_size or 96
             ui_settings.strip_layout = options.strip_layout == true
@@ -4878,6 +5198,7 @@ local function load_options()
                     local ok2, options2 = pcall(chunk2)
                     if ok2 and options2 then
                         ui.current_view_mode = options2.current_view_mode or "folders"
+                        if ui.current_view_mode == "settings" or ui.current_view_mode == "shortcuts" then ui.current_view_mode = "folders" end
                         if ui.current_view_mode == "ai_samples" then ui.current_view_mode = "auto" end
                         file_location.last_folder_location = options2.last_folder_location or ""
                         file_location.last_folder_index = options2.last_folder_index or 1
@@ -4904,6 +5225,9 @@ local function load_options()
                         playback.auto_trim_silence_threshold_db = math.max(-96, math.min(-12, tonumber(options2.auto_trim_silence_threshold_db) or -48))
                         playback.auto_trim_silence_padding_ms = math.max(0, math.min(250, tonumber(options2.auto_trim_silence_padding_ms) or 8))
                         playback.lufs_normalize_target = options2.lufs_normalize_target or -18.0
+                        playback.preview_normalize = options2.preview_normalize and true or false
+                        playback.preview_normalize_mode = (options2.preview_normalize_mode == "lufs") and "lufs" or "peak"
+                        playback.preview_peak_target = math.max(-24, math.min(0, tonumber(options2.preview_peak_target) or -3.0))
                         current_db = options2.current_db
                         file_location.remember_last_location = options2.remember_last_location ~= nil and options2.remember_last_location or true
                         ui.remember_window_position = options2.remember_window_position ~= nil and options2.remember_window_position or true
@@ -4936,6 +5260,10 @@ local function load_options()
                         ui_settings.folder_pane_left_align = options2.folder_pane_left_align == true
                         ui_settings.group_by_folder = options2.group_by_folder == true
                         ui_settings.show_progress_bar = options2.show_progress_bar ~= false
+                        ui_settings.show_waveform_panel = options2.show_waveform_panel ~= false
+                        ui_settings.double_click_insert = options2.double_click_insert ~= false
+                        ui_settings.show_tag_strip = options2.show_tag_strip ~= false
+                        ui_settings.tag_strip_open = options2.tag_strip_open ~= false
                         ui_settings.folder_grid = options2.folder_grid == true
                         ui_settings.folder_tile_size = options2.folder_tile_size or 96
                         ui_settings.strip_layout = options2.strip_layout == true
@@ -5538,6 +5866,7 @@ local _ct = function() return file_location.collections_tree end
 function save_collections_tree()
     local ct = _ct()
     if not ct then return end
+    if tkmb_tags then tkmb_tags.version = tkmb_tags.version + 1 end
     local file = io.open(r.GetResourcePath() .. "/Scripts/TK_media_browser_collections.txt", "w")
     if file then
         local payload = {
@@ -6577,6 +6906,95 @@ function calculate_lufs_gain(entry)
     return db_to_linear(gain_db), gain_db
 end
 
+-- Normalize preview. The gain is worked out once per file and multiplied onto
+-- the volume knob, so the knob keeps meaning "how loud I want to hear things"
+-- and normalize only takes the differences between files away. Peak reads the
+-- waveform envelope the browser caches anyway: no analysis, no project change.
+-- LUFS uses a stored LUFS reading and falls back to peak for a file that was
+-- never analysed, because analysing means putting a temporary track into the
+-- project, and clicking a file should never do that. Requested on the forum.
+tkmb_norm = { path = nil, gain = 1.0, pending = false, label = "", started = 0 }
+
+function tkmb_norm.peak_of(path)
+    local data = tkmb_peaks.data[path]
+    if not data then
+        tkmb_peaks.load(path, not tkmb_peaks.job)
+        data = tkmb_peaks.data[path]
+    end
+    if not data then return nil end
+    local peak = 0
+    for index = 1, data.count do
+        local low, high = -(data.mins[index] or 0), data.maxs[index] or 0
+        if low > peak then peak = low end
+        if high > peak then peak = high end
+    end
+    return peak
+end
+
+-- Linear gain plus a label for the tooltip, or nil while the peaks are still
+-- being built.
+function tkmb_norm.resolve(path)
+    if not playback.preview_normalize then return 1.0, "off" end
+    if not path or path == "" or not is_audio_media_file(path) then return 1.0, "" end
+    if playback.preview_normalize_mode == "lufs" then
+        local entry = get_cached_lufs(path)
+        if entry then
+            local gain, gain_db = calculate_lufs_gain(entry)
+            return gain, string.format("%+.1f dB (LUFS)", gain_db)
+        end
+    end
+    local peak = tkmb_norm.peak_of(path)
+    if not peak then return nil end
+    if peak < 0.00001 then return 1.0, "silent file" end
+    local gain_db = (playback.preview_peak_target or -3.0) - 20 * math.log(peak, 10)
+    gain_db = math.max(-24.0, math.min(24.0, gain_db))
+    local suffix = playback.preview_normalize_mode == "lufs" and " (peak, no LUFS stored)" or " (peak)"
+    return db_to_linear(gain_db), string.format("%+.1f dB", gain_db) .. suffix
+end
+
+function tkmb_norm.volume(path)
+    path = path or playback.current_playing_file
+    if tkmb_norm.path ~= path then
+        tkmb_norm.path = path
+        tkmb_norm.started = r.time_precise()
+        local gain, label = tkmb_norm.resolve(path)
+        tkmb_norm.pending = (gain == nil)
+        tkmb_norm.gain = gain or 1.0
+        tkmb_norm.label = label or "measuring..."
+    end
+    return (playback.preview_volume or 1.0) * tkmb_norm.gain
+end
+
+-- Settings changed: forget the stored gain and push the new one out.
+function tkmb_norm.refresh()
+    tkmb_norm.path = nil
+    tkmb_norm.apply()
+end
+
+function tkmb_norm.apply()
+    if playback.playing_preview and not playback.is_paused
+        and not playback.is_midi_playback and not playback.is_video_playback then
+        r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", tkmb_norm.volume())
+    end
+end
+
+-- Once per frame: a file whose peaks were still being built gets its gain as
+-- soon as they exist, and a LUFS reading that just arrived is picked up.
+function tkmb_norm.tick()
+    if not playback.preview_normalize then return end
+    if tkmb_norm.pending then
+        local gain, label = tkmb_norm.resolve(tkmb_norm.path)
+        if gain then
+            tkmb_norm.pending = false
+            tkmb_norm.gain, tkmb_norm.label = gain, label
+            tkmb_norm.apply()
+        elseif r.time_precise() - tkmb_norm.started > 8 then
+            tkmb_norm.pending = false
+            tkmb_norm.label = "no peaks, played as is"
+        end
+    end
+end
+
 function store_lufs_result(file_path, integrated_lufs)
     local size, mtime = get_lufs_file_stat(file_path)
     lufs_cache[file_path] = {
@@ -6587,6 +7005,7 @@ function store_lufs_result(file_path, integrated_lufs)
         mtime = mtime
     }
     save_lufs_cache()
+    if tkmb_norm and tkmb_norm.path == file_path then tkmb_norm.refresh() end
 end
 
 function analyze_lufs_for_file(file_path)
@@ -6688,6 +7107,114 @@ function process_lufs_analysis_queue()
 end
 
 load_lufs_cache()
+
+-- Category overrides. The automatic category comes from the file name, and when
+-- that guesses wrong it can now be corrected by hand, for one file or for a
+-- whole selection at once. Overrides are kept by path in CACHE and win over the
+-- guess everywhere the category is read: the column, sorting and the Auto view.
+-- That works by catching the writes into category_cache and the counting pass
+-- of the categorizer, so none of the places that classify had to change.
+tkmb_catfix = {
+    map = {},
+    file = cache_dir .. "category_overrides.json",
+    classify_files = categorizer.classify_files,
+}
+
+function tkmb_catfix.load()
+    local handle = io.open(tkmb_catfix.file, "r")
+    if not handle then return end
+    local content = handle:read("*all")
+    handle:close()
+    local ok, data = pcall(json.decode, content)
+    if ok and type(data) == "table" and type(data.overrides) == "table" then
+        tkmb_catfix.map = data.overrides
+    end
+end
+
+function tkmb_catfix.save()
+    local handle = io.open(tkmb_catfix.file, "w")
+    if not handle then return end
+    handle:write(json.encode({ version = 1, overrides = tkmb_catfix.map }))
+    handle:close()
+end
+
+function tkmb_catfix.guess(path)
+    local name = path:match("([^/\\]+)$") or path
+    local folder = path:match("(.+)[/\\]") or ""
+    return (categorizer.classify(name, folder))
+end
+
+-- cat nil puts the files back on the automatic guess.
+function tkmb_catfix.set(paths, cat)
+    local counts = (ui.current_view_mode == "auto") and cached_cat_counts or nil
+    for _, path in ipairs(paths) do
+        local old = rawget(category_cache, path) or tkmb_catfix.guess(path)
+        tkmb_catfix.map[path] = cat
+        local new = cat or tkmb_catfix.guess(path)
+        rawset(category_cache, path, new)
+        if counts and old ~= new then
+            counts[old] = math.max(0, (counts[old] or 0) - 1)
+            counts[new] = (counts[new] or 0) + 1
+        end
+    end
+    cached_cat_filter = {}
+    cached_cat_filter_key = ""
+    if clear_sort_cache then clear_sort_cache() end
+    tkmb_catfix.save()
+end
+
+function tkmb_catfix.menu(paths)
+    if not paths or #paths == 0 then return end
+    local current = rawget(category_cache, paths[1]) or tkmb_catfix.guess(paths[1])
+    local overridden = false
+    for _, path in ipairs(paths) do
+        if tkmb_catfix.map[path] then overridden = true break end
+    end
+    local title = #paths > 1 and string.format("Set Category (%d files)", #paths) or "Set Category"
+    if r.ImGui_BeginMenu(ctx, title) then
+        local order = categorizer.get_category_order()
+        local list = {}
+        for _, cat in ipairs(order) do list[#list + 1] = cat end
+        list[#list + 1] = "other"
+        for _, cat in ipairs(list) do
+            if r.ImGui_MenuItem(ctx, cat, nil, #paths == 1 and cat == current) then
+                tkmb_catfix.set(paths, cat)
+            end
+        end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Automatic (from file name)", nil, false, overridden) then
+            tkmb_catfix.set(paths, nil)
+        end
+        r.ImGui_EndMenu(ctx)
+    end
+end
+
+categorizer.classify_files = function(file_list)
+    local results, counts = tkmb_catfix.classify_files(file_list)
+    for path, cat in pairs(results) do
+        local fixed = tkmb_catfix.map[path]
+        if fixed and fixed ~= cat then
+            results[path] = fixed
+            counts[cat] = math.max(0, (counts[cat] or 0) - 1)
+            counts[fixed] = (counts[fixed] or 0) + 1
+        end
+    end
+    return results, counts
+end
+
+-- category_cache is replaced by a fresh table in several places; every one of
+-- them goes through here so the replacement keeps catching writes.
+tkmb_catfix.meta = {
+    __newindex = function(t, path, cat)
+        rawset(t, path, tkmb_catfix.map[path] or cat)
+    end
+}
+function tkmb_catfix.fresh()
+    return setmetatable({}, tkmb_catfix.meta)
+end
+setmetatable(category_cache, tkmb_catfix.meta)
+
+tkmb_catfix.load()
 
 local function read_source_peaks(source, peakrate, start_time, channels, count, retry_empty)
     if retry_empty == nil then retry_empty = true end
@@ -7627,7 +8154,7 @@ local function get_flat_file_list(location)
                 search_filter.filtered_files = {}
                 if not cache_mgmt.loading_files then
                     cached_metadata = {}
-                    category_cache = {}
+                    category_cache = tkmb_catfix.fresh()
                     cached_cat_counts = {}
                     cached_cat_counts_loc = ""
                     cached_cat_filter = {}
@@ -7642,6 +8169,102 @@ local function get_flat_file_list(location)
     else
         return search_filter.cached_flat_files
     end
+end
+
+-- Tree view search. Each folder in the tree shows how many files below it match,
+-- and those counts used to be worked out by walking the tree itself - which
+-- meant reading every folder of the library from disk the first time, and
+-- counting again per folder on every frame. The location's file cache already
+-- lists every file with its full path, so the counts now come from that: one
+-- pass per term (narrowing the previous hits as the term grows), each hit added
+-- to its folder and every folder above it. Matching is as before: the file name
+-- only, and only file types that are switched on.
+tkmb_treesearch = {
+    loc = nil, files = nil,
+    key = nil, counts = nil,
+    inc_base = nil, inc_term = nil, inc_hits = nil,
+    normed = {}, parent = {},
+    dir_of = setmetatable({}, { __mode = "k" }),
+}
+
+function tkmb_treesearch.norm(path)
+    local n = tkmb_treesearch.normed[path]
+    if not n then
+        n = path:gsub("\\", "/"):gsub("/+", "/"):gsub("/$", ""):lower()
+        tkmb_treesearch.normed[path] = n
+    end
+    return n
+end
+
+function tkmb_treesearch.source(location)
+    if search_filter.cached_location == location and #search_filter.cached_flat_files > 0 then
+        return search_filter.cached_flat_files
+    end
+    if tkmb_treesearch.loc ~= location then
+        tkmb_treesearch.loc = location
+        tkmb_treesearch.files = load_fast_cache(location) or false
+    end
+    return tkmb_treesearch.files or nil
+end
+
+-- { [normalised folder path] = matches below it }, or nil without a file cache.
+function tkmb_treesearch.counts_for(location, term)
+    if not location or location == "" then return nil end
+    local files = tkmb_treesearch.source(location)
+    if not files then return nil end
+    local base = location .. "\0" .. tostring(files) .. "\0" .. #files .. "\0"
+        .. tostring(ui_settings.filter_audio) .. tostring(ui_settings.filter_midi)
+        .. tostring(ui_settings.filter_video) .. tostring(ui_settings.filter_image)
+    local key = base .. "\0" .. term
+    if key == tkmb_treesearch.key then return tkmb_treesearch.counts end
+
+    local source = files
+    local prev = tkmb_treesearch.inc_term
+    if tkmb_treesearch.inc_base == base and prev and tkmb_treesearch.inc_hits
+        and term ~= prev and string.find(term, prev, 1, true) then
+        source = tkmb_treesearch.inc_hits
+    end
+    local hits, find, lower = {}, string.find, string.lower
+    for index = 1, #source do
+        local file = source[index]
+        local name = file.name
+        if name and not file.is_dir then
+            local name_lower = file.name_lower
+            if not name_lower then
+                name_lower = lower(name)
+                file.name_lower = name_lower
+            end
+            if find(name_lower, term, 1, true) and is_file_visible(name) then
+                hits[#hits + 1] = file
+            end
+        end
+    end
+
+    local counts, parent = {}, tkmb_treesearch.parent
+    local root = tkmb_treesearch.norm(location)
+    for index = 1, #hits do
+        local file = hits[index]
+        local dir = tkmb_treesearch.dir_of[file]
+        if not dir then
+            dir = tkmb_treesearch.norm(file.full_path or ""):match("^(.*)/[^/]*$") or ""
+            tkmb_treesearch.dir_of[file] = dir
+        end
+        local guard = 0
+        while dir and dir ~= "" and guard < 64 do
+            counts[dir] = (counts[dir] or 0) + 1
+            if dir == root then break end
+            local up = parent[dir]
+            if up == nil then
+                up = dir:match("^(.*)/[^/]*$") or false
+                parent[dir] = up
+            end
+            dir = up or nil
+            guard = guard + 1
+        end
+    end
+    tkmb_treesearch.key, tkmb_treesearch.counts = key, counts
+    tkmb_treesearch.inc_base, tkmb_treesearch.inc_term, tkmb_treesearch.inc_hits = base, term, hits
+    return counts
 end
 
 local function build_all_locations_flat_list()
@@ -7858,7 +8481,7 @@ function apply_saved_search(index)
             presort_flat_files(flat)
             search_filter.cached_flat_files = flat
             search_filter.cached_location = file_location.current_location
-            category_cache = {}
+            category_cache = tkmb_catfix.fresh()
             cached_cat_filter = {}
             cached_cat_filter_key = ""
             build_category_counts(flat)
@@ -8188,7 +8811,7 @@ local function start_playback(file_path)
         playback.playing_source = nil
         return 
     end
-    r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", playback.preview_volume)
+    r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", tkmb_norm.volume(file_path))
     r.CF_Preview_SetValue(playback.playing_preview, "B_LOOP", playback.loop_play and 1 or 0)
     r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch(file_path))
     
@@ -8517,7 +9140,7 @@ local function pause_playback()
         if playback.playing_source and playback.paused_position then
             playback.playing_preview = r.CF_CreatePreview(playback.playing_source)
             if playback.playing_preview then
-                r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", playback.preview_volume)
+                r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", tkmb_norm.volume())
                 r.CF_Preview_SetValue(playback.playing_preview, "B_LOOP", playback.loop_play and 1 or 0)
                 r.CF_Preview_SetValue(playback.playing_preview, "D_PITCH", tkmb_applied_pitch())
                 r.CF_Preview_SetValue(playback.playing_preview, "D_PLAYRATE", playback.effective_playrate or 1.0)
@@ -8953,6 +9576,7 @@ function insert_media_on_track(file_path, track, use_original_speed, custom_play
     r.TrackList_AdjustWindows(false)
     r.UpdateArrange()
     tkmb_stop_preview_after_insert()
+    return item
 end
 
 function render_lufs_context_menu(file_path, files_to_process, insert_track)
@@ -9135,6 +9759,9 @@ end
 local function tkmb_try_native_drag(mx, my)
     if not tkmb_native_drag_available() then return false end
     if insert_state.native_drag_started then return false end
+    -- An OS drag carries a file, not part of one: a plugin window would get the
+    -- whole sample. A waveform section stays with the script's own insert.
+    if insert_state.drop_is_section then return false end
     local file_path = insert_state.drop_file
     if not file_path then return false end
     local rect = insert_state.win_rect
@@ -9179,8 +9806,19 @@ local function handle_reaper_drop()
         if tkmb_try_native_drag(mx, my) then
             return
         end
-        tkmb_drag.publish(insert_state.drop_file)
+        -- A waveform section is only known to this script, so other TK scripts are
+        -- not told about it: they would load the whole file.
+        if not insert_state.drop_is_section then
+            tkmb_drag.publish(insert_state.drop_file)
+        end
         local track, info = r.GetTrackFromPoint(mx, my)
+        -- Still over the browser: a section that has not left it yet must not
+        -- land on whatever track happens to lie under the browser window.
+        local rect = insert_state.win_rect
+        if insert_state.drop_is_section and rect and mx >= rect.x and mx <= rect.x + rect.w
+            and my >= rect.y and my <= rect.y + rect.h then
+            track = nil
+        end
         insert_state.drop_track = track
         insert_state.drop_lane = nil
         if track then
@@ -9222,9 +9860,78 @@ local function handle_reaper_drop()
         insert_state.drop_track = nil
         insert_state.drop_lane = nil
         insert_state.drop_new_lane = false
+        insert_state.drop_is_section = false
         insert_state.saved_cursor_pos = nil
         tkmb_drag.clear_hover()
         tkmb_drag.unpublish()
+    end
+end
+
+-- Dragging a waveform selection to the arrange, as in REAPER's Media Explorer.
+-- A press inside the selection picks the section up; once the mouse has moved a
+-- few pixels it rides the same drop path as a file dragged from the list, and
+-- the insert already trims to the selection of the file it belongs to. A press
+-- that does not move is handed back as an ordinary click (new selection / seek).
+-- Requested on the forum.
+tkmb_section = { pressed = nil, DRAG_PX = 4 }
+
+function tkmb_section.inside(file_path, x)
+    if not file_path or file_path == "" or not waveform.selection_active then return false end
+    if waveform.monitor_file_path ~= file_path then return false end
+    local s, e = waveform.monitor_sel_start or 0, waveform.monitor_sel_end or 0
+    if math.abs(e - s) <= 0.01 then return false end
+    local a = math.min(waveform.selection_start or 0, waveform.selection_end or 0)
+    local b = math.max(waveform.selection_start or 0, waveform.selection_end or 0)
+    return (b - a) >= 0.01 and x >= a and x <= b
+end
+
+function tkmb_section.press(file_path, x, mouse_x)
+    tkmb_section.pressed = {
+        path = file_path, x = x, mouse_x = mouse_x, dragging = false,
+        length = math.abs((waveform.monitor_sel_end or 0) - (waveform.monitor_sel_start or 0)),
+    }
+end
+
+-- What a click on the waveform did before this existed: drop the selection and
+-- start a new one at the mouse. The waveform's own release handling then sees a
+-- selection too short to keep and turns it into a seek.
+function tkmb_section.click(state)
+    waveform.play_cursor_position = state.x
+    waveform.slice_selected_index = nil
+    waveform.monitor_sel_start = 0
+    waveform.monitor_sel_end = 0
+    waveform.normalized_sel_start = 0
+    waveform.normalized_sel_end = 0
+    waveform.monitor_file_path = ""
+    waveform.is_dragging = true
+    waveform.selection_start = state.x
+    waveform.selection_end = state.x
+    waveform.selection_active = true
+    waveform.selection_auto = false
+end
+
+-- Once per frame, from the waveform, before its own release handling.
+function tkmb_section.update()
+    local state = tkmb_section.pressed
+    if not state then return end
+    if r.ImGui_IsMouseDown(ctx, 0) then
+        if not state.dragging then
+            local mx = r.ImGui_GetMousePos(ctx)
+            if math.abs(mx - state.mouse_x) > tkmb_section.DRAG_PX then
+                state.dragging = true
+                insert_state.drop_file = state.path
+                insert_state.drop_is_section = true
+                local ext = (state.path:match("%.([^%.]+)$") or ""):lower()
+                insert_state.is_midi = (ext == "mid" or ext == "midi")
+            end
+        end
+        if state.dragging then
+            r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_Hand())
+            r.ImGui_SetTooltip(ctx, string.format("Section of %.2f s - drop it on a track", state.length))
+        end
+    else
+        if not state.dragging then tkmb_section.click(state) end
+        tkmb_section.pressed = nil
     end
 end
 
@@ -10489,8 +11196,380 @@ function tkmb_group.draw_header(row, location)
     end
 end
 
+-- Collections as tags. A collection already is a free-form label a file can
+-- carry any number of, so instead of a third system next to the automatic
+-- categories and the collections, the collections are shown as tags: a row of
+-- chips above the file list. Click one to show only the files that carry it
+-- (Ctrl+click to combine), right-click to tag or untag the selected files. The
+-- chips of the file you are on are outlined. A file in Drums / Kick also counts
+-- as tagged Drums. Requested on the forum.
+tkmb_tags = {
+    version = 0, built = -1,
+    nodes = {}, by_path = {},
+    active = {}, active_n = 0, active_sig = "",
+    filter_key = nil, filter_cache = nil,
+    count_key = nil, counts = {}, counted_frame = -10,
+    MAX_ROWS = 3,
+}
+
+function tkmb_tags.key(group, sub, sub2)
+    local key = group
+    if sub and sub ~= "" then
+        key = key .. "\1" .. sub
+        if sub2 and sub2 ~= "" then key = key .. "\1" .. sub2 end
+    end
+    return key
+end
+
+function tkmb_tags.build()
+    if tkmb_tags.built == tkmb_tags.version then return end
+    tkmb_tags.built = tkmb_tags.version
+    local ct = file_location.collections_tree or {}
+    local by_path, group_used = {}, {}
+    for _, it in ipairs(ct.items or {}) do
+        if type(it.path) == "string" then
+            local group = it.group or "Uncategorized"
+            group_used[group] = true
+            local set = by_path[it.path]
+            if not set then set = {} by_path[it.path] = set end
+            set[group] = true
+            if it.subgroup and it.subgroup ~= "" then
+                local k2 = group .. "\1" .. it.subgroup
+                set[k2] = true
+                if it.subgroup2 and it.subgroup2 ~= "" then set[k2 .. "\1" .. it.subgroup2] = true end
+            end
+        end
+    end
+    local nodes, names = {}, {}
+    local function add(group, sub, sub2)
+        local name = sub2 or sub or group
+        nodes[#nodes + 1] = { key = tkmb_tags.key(group, sub, sub2), group = group, sub = sub, sub2 = sub2, name = name,
+                              parent = sub2 and sub or (sub and group or nil),
+                              path = group .. (sub and (" / " .. sub) or "") .. (sub2 and (" / " .. sub2) or "") }
+        names[name] = (names[name] or 0) + 1
+    end
+    for _, group in ipairs(get_collections_groups()) do
+        if group ~= "Uncategorized" or group_used[group] then
+            add(group, nil, nil)
+            for _, sub in ipairs(get_collections_subgroups(group)) do
+                add(group, sub, nil)
+                for _, sub2 in ipairs(get_collections_subgroups2(group, sub)) do
+                    add(group, sub, sub2)
+                end
+            end
+        end
+    end
+    -- Two subgroups called Kick in different groups get their parent in front.
+    for _, node in ipairs(nodes) do
+        node.label = (names[node.name] > 1 and node.parent) and (node.parent .. "/" .. node.name) or node.name
+    end
+    tkmb_tags.nodes, tkmb_tags.by_path = nodes, by_path
+    local exists = {}
+    for _, node in ipairs(nodes) do exists[node.key] = true end
+    for key in pairs(tkmb_tags.active) do
+        if not exists[key] then tkmb_tags.active[key] = nil end
+    end
+    tkmb_tags.update_sig()
+end
+
+function tkmb_tags.update_sig()
+    local keys, n = {}, 0
+    for key in pairs(tkmb_tags.active) do n = n + 1 keys[n] = key end
+    table.sort(keys)
+    tkmb_tags.active_n = n
+    tkmb_tags.active_sig = table.concat(keys, "\2")
+end
+
+function tkmb_tags.clear_filter()
+    tkmb_tags.active = {}
+    tkmb_tags.update_sig()
+end
+
+function tkmb_tags.toggle(key, combine)
+    if combine then
+        tkmb_tags.active[key] = (not tkmb_tags.active[key]) or nil
+    else
+        local only_this = tkmb_tags.active[key] and tkmb_tags.active_n == 1
+        tkmb_tags.active = {}
+        if not only_this then tkmb_tags.active[key] = true end
+    end
+    tkmb_tags.update_sig()
+    ui.scroll_to_top = true
+end
+
+-- Files on the list are counted per tag and, when tags are active, narrowed
+-- down to the files that carry all of them. Both passes are cached on the list
+-- they were made from.
+function tkmb_tags.filter(files)
+    if not ui_settings.show_tag_strip or ui.current_view_mode == "collections" then return files end
+    tkmb_tags.build()
+    local first = files[1] and files[1].full_path or ""
+    local last = files[#files] and files[#files].full_path or ""
+    local base = tostring(files) .. "\0" .. #files .. "\0" .. first .. "\0" .. last .. "\0" .. tkmb_tags.version
+    if base ~= tkmb_tags.count_key then
+        local counts = {}
+        for index = 1, #files do
+            local set = tkmb_tags.by_path[files[index].full_path]
+            if set then
+                for key in pairs(set) do counts[key] = (counts[key] or 0) + 1 end
+            end
+        end
+        tkmb_tags.counts, tkmb_tags.count_key = counts, base
+    end
+    tkmb_tags.counted_frame = r.ImGui_GetFrameCount(ctx)
+    if tkmb_tags.active_n == 0 then return files end
+    local key = base .. "\0" .. tkmb_tags.active_sig
+    if key == tkmb_tags.filter_key and tkmb_tags.filter_cache then return tkmb_tags.filter_cache end
+    local kept = {}
+    for index = 1, #files do
+        local set = tkmb_tags.by_path[files[index].full_path]
+        if set then
+            local ok = true
+            for active_key in pairs(tkmb_tags.active) do
+                if not set[active_key] then ok = false break end
+            end
+            if ok then kept[#kept + 1] = files[index] end
+        end
+    end
+    tkmb_tags.filter_key, tkmb_tags.filter_cache = key, kept
+    return kept
+end
+
+-- The most specific tags of one file, for the row tooltip.
+function tkmb_tags.names_for(path)
+    tkmb_tags.build()
+    local set = tkmb_tags.by_path[path]
+    if not set then return "" end
+    local out = {}
+    for _, node in ipairs(tkmb_tags.nodes) do
+        if set[node.key] then
+            local deeper = false
+            for key in pairs(set) do
+                if #key > #node.key and key:sub(1, #node.key + 1) == node.key .. "\1" then deeper = true break end
+            end
+            if not deeper then out[#out + 1] = node.path end
+        end
+    end
+    return table.concat(out, ", ")
+end
+
+-- What tagging acts on: the selection, or else the file you are on.
+function tkmb_tags.targets()
+    if #file_location.selected_files > 0 then return file_location.selected_files end
+    local current = playback.current_playing_file
+    if current and current ~= "" then return { current } end
+    return {}
+end
+
+function tkmb_tags.menu(node)
+    local targets = tkmb_tags.targets()
+    r.ImGui_TextDisabled(ctx, node.path)
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, tkmb_tags.active[node.key] and "Stop filtering on this collection" or "Show only files in this collection") then
+        tkmb_tags.toggle(node.key, false)
+    end
+    r.ImGui_Separator(ctx)
+    if #targets == 0 then
+        r.ImGui_TextDisabled(ctx, "Select files to add them")
+        return
+    end
+    local tagged = 0
+    for _, path in ipairs(targets) do
+        local set = tkmb_tags.by_path[path]
+        if set and set[node.key] then tagged = tagged + 1 end
+    end
+    local noun = #targets == 1 and "file" or string.format("%d files", #targets)
+    if tagged < #targets and r.ImGui_MenuItem(ctx, "Add " .. noun .. " to \"" .. node.label .. "\"") then
+        for _, path in ipairs(targets) do add_collections_item(path, node.group, node.sub, node.sub2) end
+    end
+    if tagged > 0 and r.ImGui_MenuItem(ctx, string.format("Remove %s from \"%s\"", tagged == 1 and "1 file" or (tagged .. " files"), node.label)) then
+        for _, path in ipairs(targets) do remove_collections_item_by_path(path, node.group, node.sub, node.sub2) end
+    end
+end
+
+function tkmb_tags.new_tag()
+    local rv, name = r.GetUserInputs("New collection", 1, "Collection name:,extrawidth=160", "")
+    if not rv then return end
+    name = (name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name == "" or name == "Uncategorized" then return end
+    local targets = tkmb_tags.targets()
+    if #targets > 0 then
+        for _, path in ipairs(targets) do add_collections_item(path, name, nil, nil) end
+    else
+        _ct_ensure_group_order(name)
+        save_collections_tree()
+    end
+end
+
+-- Colours are worked out opaque, against the window background the user set,
+-- so the text colour can be chosen for what is really behind it: dark on a
+-- light chip, light on a dark one, whatever the text brightness setting is.
+-- A translucent chip would look different on every background and no single
+-- text colour reads on all of them.
+function tkmb_tags.mix(color, amount)
+    local bg = math.floor((ui_settings.window_bg_brightness or 0.12) * 255 + 0.5)
+    local out = 0xFF
+    for shift = 8, 24, 8 do
+        local channel = (color >> shift) & 0xFF
+        out = out | (math.floor(bg + (channel - bg) * amount + 0.5) << shift)
+    end
+    return out
+end
+
+function tkmb_tags.ink(color)
+    local red, green, blue = (color >> 24) & 0xFF, (color >> 16) & 0xFF, (color >> 8) & 0xFF
+    local luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
+    return luminance > 0.55 and 0x141414FF or 0xF2F2F2FF
+end
+
+-- A button in the accent colour, the way the other action buttons are drawn.
+function tkmb_tags.accent_button(label, small)
+    local base = hsv_to_color(ui_settings.accent_hue, 0.75, 0.70, 1.0)
+    local hover = hsv_to_color(ui_settings.accent_hue, 0.75, 0.85, 1.0)
+    local press = hsv_to_color(ui_settings.accent_hue, 0.75, 0.55, 1.0)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), base)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hover)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), press)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), tkmb_tags.ink(base))
+    -- Not "small and SmallButton() or Button()": an unclicked SmallButton returns
+    -- false, and the or would then draw a second, full-size button.
+    local clicked
+    if small then
+        clicked = r.ImGui_SmallButton(ctx, label)
+    else
+        clicked = r.ImGui_Button(ctx, label)
+    end
+    r.ImGui_PopStyleColor(ctx, 4)
+    return clicked
+end
+
+function tkmb_tags.chip(node, count, file_set)
+    local base = get_collections_group_color(node.group) or hsv_to_color(ui_settings.accent_hue, 0.75, 0.70, 1.0)
+    base = math.floor(base) | 0xFF
+    local active = tkmb_tags.active[node.key]
+    local bg = active and base or tkmb_tags.mix(base, 0.35)
+    local hover = active and base or tkmb_tags.mix(base, 0.6)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), bg)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hover)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), base)
+    -- Hovered draws the hover colour, so the text follows that one then.
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    local label = count and (node.label .. "  " .. count) or node.label
+    local w, h = r.ImGui_CalcTextSize(ctx, label)
+    local mx, my = r.ImGui_GetMousePos(ctx)
+    local _, pad_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_FramePadding())
+    local under_mouse = mx >= x and mx <= x + w + 12 and my >= y and my <= y + h + pad_y * 2
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), tkmb_tags.ink(under_mouse and hover or bg))
+    local clicked = r.ImGui_Button(ctx, label .. "##tag_" .. node.key)
+    r.ImGui_PopStyleColor(ctx, 4)
+    if file_set and file_set[node.key] then
+        local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+        local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+        local window_bg = tkmb_tags.mix(0x000000FF, 0)
+        r.ImGui_DrawList_AddRect(r.ImGui_GetWindowDrawList(ctx), x1 - 1, y1 - 1, x2 + 1, y2 + 1, tkmb_tags.ink(window_bg), 4, 0, 1.5)
+    end
+    if clicked then
+        tkmb_tags.toggle(node.key, r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()))
+    end
+    if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_DelayNormal()) then
+        r.ImGui_SetTooltip(ctx, node.path .. "\nClick: show only this collection   Ctrl+Click: combine\nRight-click: add / remove the selected files")
+    end
+    if r.ImGui_BeginPopupContextItem(ctx, "##tagctx_" .. node.key) then
+        tkmb_tags.menu(node)
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
+function tkmb_tags.draw_strip()
+    if not ui_settings.show_tag_strip then return end
+    local mode = ui.current_view_mode
+    if mode == "collections" or mode == "settings" or mode == "shortcuts" then return end
+    tkmb_tags.build()
+    local nodes = tkmb_tags.nodes
+    local frame = r.ImGui_GetFrameCount(ctx)
+    local counts = (frame - tkmb_tags.counted_frame <= 2) and tkmb_tags.counts or nil
+    local file_set = tkmb_tags.by_path[playback.current_playing_file or ""]
+
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 4)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 6, 1)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ItemSpacing(), 4, 4)
+    local open = ui_settings.tag_strip_open
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
+    if r.ImGui_ArrowButton(ctx, "##tagstrip_toggle", open and r.ImGui_Dir_Down() or r.ImGui_Dir_Right()) then
+        ui_settings.tag_strip_open = not open
+        save_options()
+    end
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_SameLine(ctx)
+    r.ImGui_AlignTextToFramePadding(ctx)
+    if tkmb_tags.active_n > 0 then
+        local names = {}
+        for _, node in ipairs(nodes) do
+            if tkmb_tags.active[node.key] then names[#names + 1] = node.label end
+        end
+        r.ImGui_Text(ctx, "Collections: " .. table.concat(names, " + "))
+        r.ImGui_SameLine(ctx)
+        if tkmb_tags.accent_button("clear##tagstrip_clear", true) then tkmb_tags.clear_filter() end
+        if not counts then
+            r.ImGui_SameLine(ctx)
+            r.ImGui_TextDisabled(ctx, "(filters Flat, Grouped and Compact view)")
+        end
+    else
+        r.ImGui_TextDisabled(ctx, #nodes > 0 and "Collections" or "Collections - none yet: make one with +")
+    end
+
+    if open then
+        local avail = r.ImGui_GetContentRegionAvail(ctx)
+        local spacing = 4
+        local pad = 12
+        local x_used, rows, overflow = 0, 1, nil
+        for index, node in ipairs(nodes) do
+            local count = counts and counts[node.key] or nil
+            local text = count and (node.label .. "  " .. count) or node.label
+            local w = r.ImGui_CalcTextSize(ctx, text) + pad
+            if x_used > 0 and x_used + spacing + w > avail - 60 then
+                rows = rows + 1
+                if rows > tkmb_tags.MAX_ROWS then overflow = index break end
+                x_used = 0
+            elseif x_used > 0 then
+                r.ImGui_SameLine(ctx)
+            end
+            tkmb_tags.chip(node, count, file_set)
+            x_used = x_used + w + spacing
+        end
+        if x_used > 0 then r.ImGui_SameLine(ctx) end
+        if overflow then
+            if tkmb_tags.accent_button(string.format("+%d more##tagstrip_more", #nodes - overflow + 1)) then
+                r.ImGui_OpenPopup(ctx, "##tagstrip_overflow")
+            end
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_BeginPopup(ctx, "##tagstrip_overflow") then
+                for index = overflow, #nodes do
+                    local node = nodes[index]
+                    local count = counts and counts[node.key]
+                    if r.ImGui_Selectable(ctx, node.path .. (count and ("  (" .. count .. ")") or "") .. "##tagmore_" .. node.key, tkmb_tags.active[node.key] and true or false, r.ImGui_SelectableFlags_DontClosePopups()) then
+                        tkmb_tags.toggle(node.key, r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()))
+                    end
+                    if r.ImGui_BeginPopupContextItem(ctx, "##tagmorectx_" .. node.key) then
+                        tkmb_tags.menu(node)
+                        r.ImGui_EndPopup(ctx)
+                    end
+                end
+                r.ImGui_EndPopup(ctx)
+            end
+        end
+        if tkmb_tags.accent_button("+##tagstrip_new") then tkmb_tags.new_tag() end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "New collection.\nThe selected files go into it straight away.")
+        end
+    end
+    r.ImGui_PopStyleVar(ctx, 3)
+    r.ImGui_Separator(ctx)
+end
+
 function draw_file_list()
     if file_location.current_location ~= "" then
+            tkmb_tags.draw_strip()
             -- The list's vertical scrollbar belongs to the table, not to this child:
             -- the table is built with TableFlags_ScrollY and a table scrollbar ignores
             -- WindowFlags_NoScrollbar entirely. Zeroing ScrollbarSize is what the rest of
@@ -10530,14 +11609,23 @@ function draw_file_list()
                 end
                 local function display_tree(items, path)
                     local search_lower = search_filter.search_term ~= "" and string.lower(search_filter.search_term) or ""
+                    -- Match counts per folder come from the location's file cache in
+                    -- one pass per term. Only without a cache does the tree still read
+                    -- every folder from disk to count them, the way it used to.
+                    local tree_counts = search_lower ~= "" and tkmb_treesearch.counts_for(file_location.current_location, search_lower) or nil
                     for _, item in ipairs(items) do
                         local icon = item.is_dir and FOLDER_ICON or FILE_ICON
                         if item.is_dir then
-                            if search_lower ~= "" and not item.children_loaded and item.path then
-                                item.items = read_directory_recursive(item.path, true)
-                                item.children_loaded = true
+                            local match_count
+                            if tree_counts then
+                                match_count = tree_counts[tkmb_treesearch.norm(item.path or (path .. sep .. item.name))] or 0
+                            else
+                                if search_lower ~= "" and not item.children_loaded and item.path then
+                                    item.items = read_directory_recursive(item.path, true)
+                                    item.children_loaded = true
+                                end
+                                match_count = folder_match_count(item.items or {}, search_lower)
                             end
-                            local match_count = folder_match_count(item.items or {}, search_lower)
                             if match_count > 0 then
                                 local folder_path = item.path or (path .. sep .. item.name)
                                 local label = icon .. " " .. item.name
@@ -10628,7 +11716,25 @@ function draw_file_list()
                                 if did_push_text then
                                     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFFFFFF)
                                 end
-                                if r.ImGui_Selectable(ctx, icon .. " " .. item.name, item.name == playback.selected_file) then
+                                tkmb_sel.tree_fill[#tkmb_sel.tree_fill + 1] = file_path
+                                local tree_ctrl = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+                                local tree_shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+                                local tree_alt = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
+                                local tree_clicked = r.ImGui_Selectable(ctx, icon .. " " .. item.name .. "##" .. file_path, item.name == playback.selected_file or is_file_selected(file_path))
+                                if tree_clicked and tree_alt and not tree_ctrl and not tree_shift then
+                                    tkmb_sel.alt_insert(file_path)
+                                    tree_clicked = false
+                                elseif tree_clicked and (tree_ctrl or tree_shift) then
+                                    tkmb_sel.modifier_click(file_path, tree_ctrl, tree_shift)
+                                    tree_clicked = false
+                                elseif tree_clicked then
+                                    clear_file_selection()
+                                    tkmb_sel.anchor = file_path
+                                end
+                                if tkmb_sel.double_clicked() then
+                                    tkmb_sel.insert(file_path)
+                                end
+                                if tree_clicked then
                                     if not playback.auto_play and playback.current_playing_file ~= file_path then
                                         if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
                                             stop_playback()
@@ -10697,22 +11803,20 @@ function draw_file_list()
                                 
                                 if r.ImGui_BeginPopupContextItem(ctx, "tree_file_context_" .. item.name) then
                                     local insert_track = r.GetSelectedTrack(0, 0)
-                                    if insert_track then
-                                        if r.ImGui_MenuItem(ctx, "Insert at Edit Cursor") then
-                                            insert_media_on_track(file_path, insert_track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(file_path))
-                                        end
-                                        r.ImGui_Separator(ctx)
-                                    end
+                                    local tree_targets = tkmb_sel.targets(file_path)
+                                    tkmb_sel.insert_menu(file_path, tree_targets)
+                                    render_lufs_context_menu(file_path, tree_targets, insert_track)
 
-                                    render_lufs_context_menu(file_path, { file_path }, insert_track)
+                                    tkmb_catfix.menu(tree_targets)
+                                    r.ImGui_Separator(ctx)
 
-                                    render_remove_from_collection_menu(file_path, nil)
+                                    render_remove_from_collection_menu(file_path, #tree_targets > 1 and tree_targets or nil)
 
                                     render_rs5k_sampler_menu(file_path)
 
                                     r.ImGui_Text(ctx, "Add to Collection:")
                                     r.ImGui_Separator(ctx)
-                                    render_add_to_collection_menu(file_path, nil)
+                                    render_add_to_collection_menu(file_path, #tree_targets > 1 and tree_targets or nil)
                                     
                                     r.ImGui_EndPopup(ctx)
                                 end
@@ -10765,15 +11869,8 @@ function draw_file_list()
                             if search_filter._search_render_key == search_key and search_filter._search_render_cache then
                                 flat_files = search_filter._search_render_cache
                             else
-                                local search_lower = string.lower(search_filter.search_term)
-                                local searched = {}
-                                for _, file in ipairs(flat_files) do
-                                    local name_lower = file.name_lower or string.lower(file.name)
-                                    local parent_lower = string.lower(file.parent_folder or "")
-                                    if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
-                                        table.insert(searched, file)
-                                    end
-                                end
+                                local searched = tkmb_search.match(flat_files, search_filter.search_term,
+                                    "a\0" .. tostring(search_filter.cached_location) .. "\0" .. tostring(ui.auto_selected_category))
                                 flat_files = searched
                                 search_filter._search_render_key = search_key
                                 search_filter._search_render_cache = searched
@@ -10804,15 +11901,8 @@ function draw_file_list()
                             if search_filter._search_render_key == search_key and search_filter._search_render_cache then
                                 flat_files = search_filter._search_render_cache
                             else
-                                local search_lower = string.lower(search_filter.search_term)
-                                local searched = {}
-                                for _, file in ipairs(flat_files) do
-                                    local name_lower = file.name_lower or string.lower(file.name)
-                                    local parent_lower = string.lower(file.parent_folder or "")
-                                    if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
-                                        table.insert(searched, file)
-                                    end
-                                end
+                                local searched = tkmb_search.match(flat_files, search_filter.search_term,
+                                    "n\0" .. tostring(search_filter.cached_location))
                                 flat_files = searched
                                 search_filter._search_render_key = search_key
                                 search_filter._search_render_cache = searched
@@ -11157,6 +12247,7 @@ function draw_file_list()
                         -- scan when a location first loads, and that used to win.
                         local files_to_display = tkmb_display.list(search_filter.sorted_files, search_filter.filtered_files)
                         files_to_display = tkmb_shape.filter(files_to_display)
+                        files_to_display = tkmb_tags.filter(files_to_display)
                         ui.visible_files = files_to_display
                         
                         if ui.scroll_to_top then
@@ -11174,6 +12265,7 @@ function draw_file_list()
                         end
                         
                         local total_items = group_plan and #group_plan.rows or #files_to_display
+                        tkmb_sel.list, tkmb_sel.plan = files_to_display, group_plan
                         r.ImGui_ListClipper_Begin(ui.list_clipper, total_items)
                         
                         while r.ImGui_ListClipper_Step(ui.list_clipper) do
@@ -11268,17 +12360,16 @@ function draw_file_list()
                                 if r.ImGui_Selectable(ctx, icon .. " " .. display_name .. "##" .. file.full_path, is_single_selected or is_multi_selected, r.ImGui_SelectableFlags_SpanAllColumns()) then
                                     local ctrl_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
                                     local shift_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+                                    local alt_pressed = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt())
 
-                                    if shift_pressed then
-                                        local track = r.GetSelectedTrack(0, 0)
-                                        if track then
-                                            insert_media_on_track(file.full_path, track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(file.full_path))
-                                        end
-                                    elseif ctrl_pressed then
-                                        toggle_file_selection(file.full_path)
+                                    if alt_pressed and not ctrl_pressed and not shift_pressed then
+                                        tkmb_sel.alt_insert(file.full_path)
+                                    elseif shift_pressed or ctrl_pressed then
+                                        tkmb_sel.modifier_click(file.full_path, ctrl_pressed, shift_pressed)
                                         file_location.last_selected_index = i
                                     else
                                         clear_file_selection()
+                                        tkmb_sel.anchor = file.full_path
 
                                         if not playback.auto_play and playback.current_playing_file ~= file.full_path then
                                             if playback.playing_preview or playback.is_midi_playback or playback.is_video_playback then
@@ -11307,6 +12398,10 @@ function draw_file_list()
                                     end
                                 end
                                 
+                                if tkmb_sel.double_clicked() then
+                                    tkmb_sel.insert(file.full_path)
+                                end
+
                                 if ui.scroll_selected_file and ui.scroll_target_index == i and r.ImGui_SetScrollHereY then
                                     r.ImGui_SetScrollHereY(ctx, 0.5)
                                     ui.scroll_selected_file = false
@@ -11322,8 +12417,13 @@ function draw_file_list()
                                             r.ImGui_Text(ctx, label .. " - " .. tostring(why))
                                             r.ImGui_Separator(ctx)
                                         end
-                                        r.ImGui_Text(ctx, "Shift+Click: Insert at Edit Cursor")
-                                        r.ImGui_Text(ctx, "Ctrl+Click: Toggle Selection")
+                                        local row_tags = tkmb_tags.names_for(file.full_path)
+                                        if row_tags ~= "" then
+                                            r.ImGui_Text(ctx, "Collections: " .. row_tags)
+                                            r.ImGui_Separator(ctx)
+                                        end
+                                        r.ImGui_Text(ctx, ui_settings.double_click_insert and "Double-Click / Alt+Click: Insert at Edit Cursor" or "Alt+Click: Insert at Edit Cursor")
+                                        r.ImGui_Text(ctx, "Shift+Click: Select Range   Ctrl+Click: Toggle   Ctrl+A: All")
                                         r.ImGui_Text(ctx, "Right-Click: Context Menu")
                                         r.ImGui_PopFont(ctx)
                                         r.ImGui_EndTooltip(ctx)
@@ -11331,27 +12431,20 @@ function draw_file_list()
                                 end
 
                                 if r.ImGui_BeginPopupContextItem(ctx, "file_context_" .. tostring(i)) then
-                                    local files_to_process = {}
-                                    if #file_location.selected_files > 0 then
-                                        files_to_process = file_location.selected_files
-                                    else
-                                        table.insert(files_to_process, file.full_path)
-                                    end
-                                    
-                                    if #file_location.selected_files > 0 then
-                                        r.ImGui_Text(ctx, string.format("%d files selected", #file_location.selected_files))
+                                    local files_to_process = tkmb_sel.targets(file.full_path)
+
+                                    if #files_to_process > 1 then
+                                        r.ImGui_Text(ctx, string.format("%d files selected", #files_to_process))
                                         r.ImGui_Separator(ctx)
                                     end
                                     
                                     local insert_track = r.GetSelectedTrack(0, 0)
-                                    if insert_track then
-                                        if r.ImGui_MenuItem(ctx, "Insert at Edit Cursor") then
-                                            insert_media_on_track(file.full_path, insert_track, playback.use_original_speed, playback.current_playrate, AK.insert_pitch(file.full_path))
-                                        end
-                                        r.ImGui_Separator(ctx)
-                                    end
+                                    tkmb_sel.insert_menu(file.full_path, files_to_process)
 
                                     render_lufs_context_menu(file.full_path, files_to_process, insert_track)
+
+                                    tkmb_catfix.menu(files_to_process)
+                                    r.ImGui_Separator(ctx)
 
                                     render_remove_from_collection_menu(file.full_path, files_to_process)
 
@@ -11676,6 +12769,10 @@ function handle_keyboard_navigation()
         return false
     end
     
+    if r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()) and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_A()) then
+        tkmb_sel.select_all()
+        return true
+    end
     local key_up = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_UpArrow())
     local key_down = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_DownArrow())
     local key_enter = r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter())
@@ -12353,7 +13450,7 @@ function tkmb_ui.draw_view_tabs(pane_width)
         search_filter.cached_location = file_location.current_location
 
         if cached_cat_counts_loc ~= file_location.current_location then
-            category_cache = {}
+            category_cache = tkmb_catfix.fresh()
             build_category_counts(flat)
         end
 
@@ -12613,7 +13710,7 @@ function tkmb_ui.draw_nav_pane()
                             search_filter.cached_location = ""
                             search_filter.cached_flat_files = {}
                             cached_metadata = {}
-                            category_cache = {}
+                            category_cache = tkmb_catfix.fresh()
                             cached_cat_counts = {}
                             cached_cat_counts_loc = ""
                             cached_cat_filter = {}
@@ -13201,7 +14298,7 @@ function tkmb_ui.draw_nav_pane()
                     ui.auto_source_index = i
                     file_location.current_location = location
                     file_location.selected_location_index = i
-                    category_cache = {}
+                    category_cache = tkmb_catfix.fresh()
                     cached_cat_counts = {}
                     cached_cat_counts_loc = ""
                     cached_cat_filter = {}
@@ -14780,15 +15877,23 @@ function tkmb_ui.draw_transport()
     end
     r.ImGui_SameLine(ctx)
     pos_x, pos_y = r.ImGui_GetCursorScreenPos(ctx)
-    if r.ImGui_InvisibleButton(ctx, "##MinDisplayTime", button_size, button_size) then
+    -- Same font as auto / sync / tape below. That is wider than the 15px icon
+    -- buttons, so this one is as wide as the wider of its two labels and does
+    -- not change width when it is clicked.
+    local min_label = get_min_display_label()
+    r.ImGui_PushFont(ctx, medium_font, medium_font_size)
+    -- The parentheses keep just the width: as a last argument CalcTextSize would
+    -- hand math.max every value it returns, and ReaImGui returns a nil among them.
+    local min_box_w = math.max(button_size, math.max((r.ImGui_CalcTextSize(ctx, "off")), (r.ImGui_CalcTextSize(ctx, "1s"))) + 4)
+    local min_label_w, min_label_h = r.ImGui_CalcTextSize(ctx, min_label)
+    r.ImGui_PopFont(ctx)
+    if r.ImGui_InvisibleButton(ctx, "##MinDisplayTime", min_box_w, button_size) then
         cycle_min_display_time()
     end
     local min_display_active = (playback.min_display_time or 0) > 0
     local min_display_color = min_display_active and active_color or (r.ImGui_IsItemHovered(ctx) and hover_color or normal_color)
-    local min_label = get_min_display_label()
-    r.ImGui_PushFont(ctx, small_font, small_font_size)
-    local min_label_w, min_label_h = r.ImGui_CalcTextSize(ctx, min_label)
-    r.ImGui_DrawList_AddText(drawList, pos_x + (button_size - min_label_w) * 0.5, pos_y + (button_size - min_label_h) * 0.5, min_display_color, min_label)
+    r.ImGui_PushFont(ctx, medium_font, medium_font_size)
+    r.ImGui_DrawList_AddText(drawList, pos_x + (min_box_w - min_label_w) * 0.5, pos_y + (button_size - min_label_h) * 0.5, min_display_color, min_label)
     r.ImGui_PopFont(ctx)
     if r.ImGui_IsItemHovered(ctx) then
         local min_ms = math.floor((playback.min_display_time or 0) * 1000 + 0.5)
@@ -14808,11 +15913,28 @@ function tkmb_ui.draw_transport()
     -- Auto Key sits right beside the switch that hides the oscilloscope, because that is
     -- the scope it used to live in. This row is half empty at any width: eight 15px
     -- buttons on the left, a 12px toggle on the right, and the badge is 22 to 45px wide.
-    local ak_w = AK.badge_size(ctx)
-    r.ImGui_SetCursorPos(ctx, math.max(transport_start_x, transport_end_x - ak_w - 6), button_line_y)
+    -- The font of auto / sync / tape and the row's own colours, matching the
+    -- "off" label beside it. In a narrow pane the badge runs up against the
+    -- buttons on the left; the toggle then follows the badge instead of sitting
+    -- on top of it.
+    r.ImGui_PushFont(ctx, medium_font, medium_font_size)
+    AK.badge_style = { normal = normal_color, hover = hover_color, active = active_color }
+    local ak_w, ak_h = AK.badge_size(ctx)
+    -- The narrowest this row can be: the buttons, the badge at its widest label
+    -- ("key" or a key name such as "F#m") and the toggle. layout_classic keeps
+    -- the left pane from being dragged narrower than the transport needs.
+    local ak_max_w = math.max(ak_w, r.ImGui_CalcTextSize(ctx, "F#m") + 8, r.ImGui_CalcTextSize(ctx, "Bbm") + 8)
+    local win_pad_x = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_WindowPadding())
+    local row_min_w = transport_start_x + ak_max_w + 4 + toggle_size + toggle_spacing + win_pad_x
+    local ak_x = math.max(transport_start_x, transport_end_x - ak_w - 4)
+    r.ImGui_SetCursorPos(ctx, ak_x, button_line_y + math.max(0, (button_size - ak_h) * 0.5))
     AK.draw_badge(ctx, drawList)
+    AK.badge_style = nil
+    r.ImGui_PopFont(ctx)
+    AK.draw_popup(ctx)
 
-    r.ImGui_SetCursorPos(ctx, transport_end_x, button_line_y)
+    local toggle_pos_x = math.max(transport_end_x, ak_x + ak_w + 2)
+    r.ImGui_SetCursorPos(ctx, toggle_pos_x, button_line_y + math.max(0, (button_size - toggle_size) * 0.5))
 
     local toggle_x, toggle_y = r.ImGui_GetCursorScreenPos(ctx)
     if r.ImGui_InvisibleButton(ctx, "##OscilloscopeToggle", toggle_size, toggle_size) then
@@ -14835,7 +15957,7 @@ function tkmb_ui.draw_transport()
     end
 
     local opt_available = r.ImGui_GetContentRegionAvail(ctx)
-    local opt_btn_count = 5
+    local opt_btn_count = 6
     local opt_btn_width = math.floor(opt_available / opt_btn_count)
     local inactive_text = r.ImGui_ColorConvertDouble4ToU32(
         ui_settings.text_brightness,
@@ -14845,6 +15967,17 @@ function tkmb_ui.draw_transport()
     )
 
     r.ImGui_PushFont(ctx, medium_font, medium_font_size)
+    do
+        -- Six equal buttons, each at least as wide as the widest label plus a margin.
+        local widest = 0
+        for _, label in ipairs({ "auto", "sync", "tape", "link", "prog", "norm" }) do
+            widest = math.max(widest, (r.ImGui_CalcTextSize(ctx, label)))
+        end
+        local left_x = r.ImGui_GetCursorPosX(ctx)
+        local opt_min_w = left_x + (widest + 8) * opt_btn_count + win_pad_x
+        local knobs_min_w = left_x + 25 * 3 + 40 * 2 + win_pad_x
+        ui.transport_min_w = math.ceil(math.max(row_min_w, opt_min_w, knobs_min_w))
+    end
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ButtonTextAlign(), 0.5, 0.5)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)
@@ -14999,6 +16132,64 @@ function tkmb_ui.draw_transport()
         r.ImGui_SetTooltip(ctx, "Auto progress: play next file when current ends")
     end
 
+    r.ImGui_SameLine(ctx, 0, 0)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), playback.preview_normalize and active_color or inactive_text)
+    if r.ImGui_Button(ctx, "norm", opt_btn_width, small_button_height) then
+        playback.preview_normalize = not playback.preview_normalize
+        tkmb_norm.refresh()
+        save_options()
+    end
+    r.ImGui_PopStyleColor(ctx, 1)
+    if r.ImGui_IsItemHovered(ctx) then
+        local mode_text = playback.preview_normalize_mode == "lufs"
+            and string.format("LUFS, target %.1f LUFS", playback.lufs_normalize_target or -18.0)
+            or string.format("peak, target %.1f dBFS", playback.preview_peak_target or -3.0)
+        local now_text = (playback.preview_normalize and tkmb_norm.label ~= "") and ("\nThis file: " .. tkmb_norm.label) or ""
+        r.ImGui_SetTooltip(ctx, "Normalize preview playback (" .. mode_text .. ")" .. now_text .. "\nRight-click for options")
+    end
+    if r.ImGui_BeginPopupContextItem(ctx, "##NormOptions") then
+        if r.ImGui_Checkbox(ctx, "Normalize preview", playback.preview_normalize) then
+            playback.preview_normalize = not playback.preview_normalize
+            tkmb_norm.refresh()
+            save_options()
+        end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_RadioButton(ctx, "Peak", playback.preview_normalize_mode ~= "lufs") then
+            playback.preview_normalize_mode = "peak"
+            tkmb_norm.refresh()
+            save_options()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Brings every file's loudest peak to the target.\nInstant, uses the waveform the browser already reads.")
+        end
+        if r.ImGui_RadioButton(ctx, "LUFS", playback.preview_normalize_mode == "lufs") then
+            playback.preview_normalize_mode = "lufs"
+            tkmb_norm.refresh()
+            save_options()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Uses the stored LUFS reading of a file (right-click a file > LUFS to analyse).\nFiles without a reading fall back to peak.")
+        end
+        r.ImGui_SetNextItemWidth(ctx, 140)
+        local peak_changed, peak_value = r.ImGui_SliderDouble(ctx, "Peak target", playback.preview_peak_target or -3.0, -24.0, 0.0, "%.1f dBFS")
+        if peak_changed then
+            playback.preview_peak_target = peak_value
+            tkmb_norm.refresh()
+        end
+        if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then save_options() end
+        r.ImGui_SetNextItemWidth(ctx, 140)
+        local lufs_changed, lufs_value = r.ImGui_SliderDouble(ctx, "LUFS target", playback.lufs_normalize_target or -18.0, -36.0, -6.0, "%.1f LUFS")
+        if lufs_changed then
+            playback.lufs_normalize_target = lufs_value
+            tkmb_norm.refresh()
+        end
+        if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then save_options() end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Shared with \"Insert normalized\" in the file menu.")
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+
     r.ImGui_PopStyleColor(ctx, 3)
     r.ImGui_PopStyleVar(ctx, 1)
     r.ImGui_PopFont(ctx)
@@ -15049,7 +16240,7 @@ function tkmb_ui.draw_transport()
                 r.CF_Preview_SetValue(CF_Preview, "D_VOLUME", playback.preview_volume)
             end
             if playback.playing_preview and not playback.is_paused then
-                r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", playback.preview_volume)
+                r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", tkmb_norm.volume())
             end
         end
     elseif not r.ImGui_IsItemActive(ctx) then
@@ -15143,7 +16334,7 @@ function tkmb_ui.draw_transport()
                     r.SetMediaTrackInfo_Value(preview_track, "D_VOL", playback.preview_volume)
                 end
                 if playback.playing_preview and not playback.is_paused then
-                    r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", playback.preview_volume)
+                    r.CF_Preview_SetValue(playback.playing_preview, "D_VOLUME", tkmb_norm.volume())
                 end
             end
             ImGui_Knob_drag_y["volume"] = nil
@@ -15393,27 +16584,41 @@ function tkmb_ui.draw_topbar()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), search_hover_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
             r.ImGui_SetNextItemWidth(ctx, search_width)
-            local changed, new_search = r.ImGui_InputText(ctx, "##Search", search_filter.search_term)
+            -- The box shows what is typed at once; the filter follows after a short
+            -- pause, straight away on Enter / leaving the box, and at once when the
+            -- box is emptied. A term set from elsewhere (clear button, history, a
+            -- saved search) is picked up into the box.
+            if tkmb_search.text == nil or search_filter.search_term ~= tkmb_search.applied then
+                tkmb_search.text = search_filter.search_term
+                tkmb_search.applied = search_filter.search_term
+                tkmb_search.due = nil
+            end
+            local typed, typed_text = r.ImGui_InputText(ctx, "##Search", tkmb_search.text)
+            local now = r.time_precise()
+            if typed then
+                tkmb_search.text = typed_text
+                tkmb_search.due = now + ((typed_text == "") and 0 or tkmb_search.DELAY)
+            end
+            if tkmb_search.due and (r.ImGui_IsItemDeactivated(ctx) or r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Enter())) then
+                tkmb_search.due = now
+            end
+            local changed, new_search = false, search_filter.search_term
+            if tkmb_search.due and now >= tkmb_search.due then
+                tkmb_search.due = nil
+                tkmb_search.applied = tkmb_search.text
+                if tkmb_search.text ~= search_filter.search_term then
+                    changed, new_search = true, tkmb_search.text
+                end
+            end
         r.ImGui_PopStyleColor(ctx, 4)
         r.ImGui_PopStyleVar(ctx, 1)
         if changed then
             search_filter.search_term = new_search
-            clear_sort_cache() 
-            if file_location.flat_view and ui.current_view_mode ~= "collections" then
-                search_filter.filtered_files = {}
-                if search_filter.search_term ~= "" then
-                    local search_lower = string.lower(search_filter.search_term)
-                    for _, file in ipairs(search_filter.cached_flat_files) do
-                        local name_lower = file.name_lower or string.lower(file.name)
-                        local parent_lower = string.lower(file.parent_folder or "")
-                        if string.find(name_lower, search_lower, 1, true) or string.find(parent_lower, search_lower, 1, true) then
-                            table.insert(search_filter.filtered_files, file)
-                        end
-                    end
-                else
-                    search_filter.filtered_files = search_filter.cached_flat_files
-                end
-            elseif file_location.flat_view and ui.current_view_mode == "collections" then
+            clear_sort_cache()
+            -- Folder, Auto and all-locations lists filter themselves where the list
+            -- is built (tkmb_search.match), once per term; doing it here as well
+            -- was a second full pass for every letter. Collections still filter here.
+            if file_location.flat_view and ui.current_view_mode == "collections" then
                 search_filter.filtered_files = {}
                 if search_filter.search_term ~= "" then
                     local search_lower = string.lower(search_filter.search_term)
@@ -15631,11 +16836,11 @@ function tkmb_ui.draw_topbar()
                 r.Main_OnCommand(50125, 0)
             end
             r.ImGui_Separator(ctx)
-            if r.ImGui_MenuItem(ctx, "Settings", nil, ui.current_view_mode == "settings") then
-                ui.pending_view_mode = (ui.current_view_mode ~= "settings") and "settings" or "folders"
+            if r.ImGui_MenuItem(ctx, "Settings", nil, tkmb_setwin.open and tkmb_setwin.tab == "settings") then
+                tkmb_setwin.toggle("settings")
             end
-            if r.ImGui_MenuItem(ctx, "Keyboard Shortcuts", nil, ui.current_view_mode == "shortcuts") then
-                ui.pending_view_mode = (ui.current_view_mode ~= "shortcuts") and "shortcuts" or "folders"
+            if r.ImGui_MenuItem(ctx, "Keyboard Shortcuts", nil, tkmb_setwin.open and tkmb_setwin.tab == "shortcuts") then
+                tkmb_setwin.toggle("shortcuts")
             end
             r.ImGui_Separator(ctx)
             if r.ImGui_MenuItem(ctx, "Close") then
@@ -15781,882 +16986,1075 @@ function tkmb_ui.draw_topbar()
     end
 end
 
-function tkmb_ui.draw_main_content()
-    if ui.current_view_mode == "settings" then
+-- Settings and the shortcuts sheet used to replace the file list, which made
+-- them hard to use in a narrow dock. They now live in a window of their own
+-- (tkmb_setwin, two tabs), so the browser keeps showing its files beside them.
+tkmb_setwin = { open = false, tab = "settings", select_tab = nil, focused = false }
+
+-- Open on a tab; asking for the tab that is already showing closes the window.
+function tkmb_setwin.toggle(tab)
+    if tkmb_setwin.open and tkmb_setwin.tab == tab then
+        tkmb_setwin.open = false
+    else
+        tkmb_setwin.open = true
+        tkmb_setwin.tab = tab
+        tkmb_setwin.select_tab = tab
+    end
+end
+
+-- One of the two page buttons at the top: accent colour for the page that is
+-- showing, the browser's button colour for the other.
+function tkmb_setwin.page_button(label, tab, width)
+    local active = tkmb_setwin.tab == tab
+    local b = ui_settings.button_brightness or 0.25
+    local base = active and hsv_to_color(ui_settings.accent_hue, 0.75, 0.70, 1.0)
+        or r.ImGui_ColorConvertDouble4ToU32(b, b, b, 1.0)
+    local hover = active and hsv_to_color(ui_settings.accent_hue, 0.75, 0.85, 1.0)
+        or r.ImGui_ColorConvertDouble4ToU32(math.min(1, b * 1.2), math.min(1, b * 1.2), math.min(1, b * 1.2), 1.0)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), base)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), hover)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), base)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), tkmb_tags.ink(base))
+    if r.ImGui_Button(ctx, label .. "##tkmb_setwin_page_" .. tab, width, 0) then
+        tkmb_setwin.tab = tab
+    end
+    r.ImGui_PopStyleColor(ctx, 4)
+end
+
+-- Drawn after the browser window, inside the same style pushes, so it has the
+-- browser's colours and font. ImGui remembers its size, position and dock.
+function tkmb_setwin.draw()
+    tkmb_setwin.focused = false
+    if not tkmb_setwin.open then return end
+    if tkmb_setwin.select_tab then
+        tkmb_setwin.tab = tkmb_setwin.select_tab
+        tkmb_setwin.select_tab = nil
+    end
+    -- The title bar (and its tab when docked) in the window colour rather than
+    -- ImGui's default blue.
+    local bg = ui_settings.window_bg_brightness or 0.12
+    local title_bg = r.ImGui_ColorConvertDouble4ToU32(bg, bg, bg, 1.0)
+    local title_colors = { r.ImGui_Col_TitleBg(), r.ImGui_Col_TitleBgActive(), r.ImGui_Col_TitleBgCollapsed() }
+    for _, name in ipairs({ "ImGui_Col_Tab", "ImGui_Col_TabHovered", "ImGui_Col_TabSelected", "ImGui_Col_TabActive",
+                            "ImGui_Col_TabDimmed", "ImGui_Col_TabDimmedSelected", "ImGui_Col_TabUnfocused", "ImGui_Col_TabUnfocusedActive" }) do
+        if r[name] then title_colors[#title_colors + 1] = r[name]() end
+    end
+    for _, col in ipairs(title_colors) do r.ImGui_PushStyleColor(ctx, col, title_bg) end
+    r.ImGui_SetNextWindowSize(ctx, 560, 680, r.ImGui_Cond_FirstUseEver())
+    -- No ImGui title bar: like the browser itself, the window draws its own header
+    -- with the red close dot the TK scripts use. It moves by dragging any empty spot.
+    local visible, open = r.ImGui_Begin(ctx, "TK Media Browser - Settings###tkmb_settings_window", true,
+        r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_NoTitleBar())
+    r.ImGui_PopStyleColor(ctx, #title_colors)
+    if visible then
+        tkmb_setwin.focused = r.ImGui_IsWindowFocused(ctx, r.ImGui_FocusedFlags_RootAndChildWindows())
+        if tkmb_setwin.focused and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape())
+            and not r.ImGui_IsPopupOpen(ctx, '', r.ImGui_PopupFlags_AnyPopupId()) then
+            open = false
+        end
+        do
+            local dot_size = 14
+            local start_x = r.ImGui_GetCursorPosX(ctx)
+            local row_w = r.ImGui_GetContentRegionAvail(ctx)
+            r.ImGui_AlignTextToFramePadding(ctx)
+            r.ImGui_Text(ctx, "TK Media Browser - Settings")
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, start_x + row_w - dot_size)
+            local cl_x, cl_y = r.ImGui_GetCursorScreenPos(ctx)
+            local line_h = r.ImGui_GetFrameHeight(ctx)
+            r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + (line_h - dot_size) * 0.5)
+            cl_y = cl_y + (line_h - dot_size) * 0.5
+            if r.ImGui_InvisibleButton(ctx, "##tkmb_setwin_close", dot_size, dot_size) then
+                open = false
+            end
+            local cl_hovered = r.ImGui_IsItemHovered(ctx)
+            r.ImGui_DrawList_AddCircleFilled(r.ImGui_GetWindowDrawList(ctx), cl_x + dot_size / 2, cl_y + dot_size / 2, dot_size * 0.32,
+                cl_hovered and 0xFF6B6BFF or 0xD03A3AFF)
+            if cl_hovered then
+                r.ImGui_SetTooltip(ctx, "Close")
+            end
+        end
+        r.ImGui_Separator(ctx)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
-        r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
-
-        local accent_color = hsv_to_color(ui_settings.accent_hue)
-        local accent_hover = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8)
-        local accent_active = hsv_to_color(ui_settings.accent_hue, 1.0, 0.6)
-
-        local button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
-        local button_hover = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, 1.0)
-        local button_active = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.4, ui_settings.button_brightness * 1.4, ui_settings.button_brightness * 1.4, 1.0)
-
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), accent_color)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), accent_active)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button_hover)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button_active)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), button_color)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), button_hover)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), button_active)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), accent_color)
-
+        local avail = r.ImGui_GetContentRegionAvail(ctx)
+        local spacing = 4
+        local w = math.floor((avail - spacing) / 2)
+        tkmb_setwin.page_button("Settings", "settings", w)
+        r.ImGui_SameLine(ctx, 0, spacing)
+        tkmb_setwin.page_button("Keyboard Shortcuts", "shortcuts", w)
+        r.ImGui_PopStyleVar(ctx, 1)
         r.ImGui_Spacing(ctx)
-
-        local header_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
-        r.ImGui_SeparatorText(ctx, "Settings Presets")
-        r.ImGui_PopStyleColor(ctx, 1)
-
-        r.ImGui_Spacing(ctx)
-
-        local preset_list = get_preset_list()
-        if not ui.selected_preset_index then ui.selected_preset_index = 1 end
-        if not ui.new_preset_name then ui.new_preset_name = "" end
-
-        if #preset_list > 0 then
-            r.ImGui_Text(ctx, "Available Presets:")
-            r.ImGui_SetNextItemWidth(ctx, 300)
-            local combo_items = table.concat(preset_list, "\0") .. "\0"
-            local changed, new_index = r.ImGui_Combo(ctx, "##presets", ui.selected_preset_index - 1, combo_items)
-            if changed then
-                ui.selected_preset_index = new_index + 1
+        -- The page scrolls inside a child, so the buttons stay in view. Sliders get
+        -- a fixed width: by default they take two thirds of the window, which
+        -- pushed their labels off the right edge unless the window was made very wide.
+        if r.ImGui_BeginChild(ctx, "##tkmb_setwin_page", 0, 0) then
+            r.ImGui_PushItemWidth(ctx, 200)
+            if tkmb_setwin.tab == "shortcuts" then
+                tkmb_ui.draw_shortcuts_page()
+            else
+                tkmb_ui.draw_settings_page()
             end
+            r.ImGui_PopItemWidth(ctx)
+            r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_End(ctx)
+    end
+    if not open then tkmb_setwin.open = false end
+end
 
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Load Preset") then
-                if preset_list[ui.selected_preset_index] then
-                    local success, error_msg = load_preset(preset_list[ui.selected_preset_index])
-                    if not success then
-                        r.ShowMessageBox("Failed to load preset: " .. error_msg, "Error", 0)
-                    end
+function tkmb_ui.draw_settings_page()
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 3)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
+
+    local accent_color = hsv_to_color(ui_settings.accent_hue)
+    local accent_hover = hsv_to_color(ui_settings.accent_hue, 1.0, 0.8)
+    local accent_active = hsv_to_color(ui_settings.accent_hue, 1.0, 0.6)
+
+    local button_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness, ui_settings.button_brightness, ui_settings.button_brightness, 1.0)
+    local button_hover = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, ui_settings.button_brightness * 1.2, 1.0)
+    local button_active = r.ImGui_ColorConvertDouble4ToU32(ui_settings.button_brightness * 1.4, ui_settings.button_brightness * 1.4, ui_settings.button_brightness * 1.4, 1.0)
+
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), accent_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), accent_active)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), button_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), button_hover)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), button_active)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), button_color)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgHovered(), button_hover)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBgActive(), button_active)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), accent_color)
+
+    r.ImGui_Spacing(ctx)
+
+    local header_color = r.ImGui_ColorConvertDouble4ToU32(ui_settings.text_brightness, ui_settings.text_brightness, ui_settings.text_brightness, 1.0)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
+    r.ImGui_SeparatorText(ctx, "Settings Presets")
+    r.ImGui_PopStyleColor(ctx, 1)
+
+    r.ImGui_Spacing(ctx)
+
+    local preset_list = get_preset_list()
+    if not ui.selected_preset_index then ui.selected_preset_index = 1 end
+    if not ui.new_preset_name then ui.new_preset_name = "" end
+
+    if #preset_list > 0 then
+        r.ImGui_Text(ctx, "Available Presets:")
+        r.ImGui_SetNextItemWidth(ctx, 300)
+        local combo_items = table.concat(preset_list, "\0") .. "\0"
+        local changed, new_index = r.ImGui_Combo(ctx, "##presets", ui.selected_preset_index - 1, combo_items)
+        if changed then
+            ui.selected_preset_index = new_index + 1
+        end
+
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Load Preset") then
+            if preset_list[ui.selected_preset_index] then
+                local success, error_msg = load_preset(preset_list[ui.selected_preset_index])
+                if not success then
+                    r.ShowMessageBox("Failed to load preset: " .. error_msg, "Error", 0)
                 end
             end
+        end
 
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Resave") then
-                if preset_list[ui.selected_preset_index] then
-                    local preset_name = preset_list[ui.selected_preset_index]
-                    if save_preset(preset_name) then
-                    else
-                        r.ShowMessageBox("Failed to resave preset", "Error", 0)
-                    end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Resave") then
+            if preset_list[ui.selected_preset_index] then
+                local preset_name = preset_list[ui.selected_preset_index]
+                if save_preset(preset_name) then
+                else
+                    r.ShowMessageBox("Failed to resave preset", "Error", 0)
                 end
             end
+        end
 
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Delete") then
-                if preset_list[ui.selected_preset_index] then
-                    local ret = r.ShowMessageBox("Delete preset '" .. preset_list[ui.selected_preset_index] .. "'?", "Confirm", 4)
-                    if ret == 6 then 
-                        delete_preset(preset_list[ui.selected_preset_index])
-                        ui.selected_preset_index = 1
-                    end
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_Button(ctx, "Delete") then
+            if preset_list[ui.selected_preset_index] then
+                local ret = r.ShowMessageBox("Delete preset '" .. preset_list[ui.selected_preset_index] .. "'?", "Confirm", 4)
+                if ret == 6 then 
+                    delete_preset(preset_list[ui.selected_preset_index])
+                    ui.selected_preset_index = 1
                 end
+            end
+        end
+    else
+        r.ImGui_Text(ctx, "No presets found")
+    end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "Save Current Settings as Preset:")
+    r.ImGui_SetNextItemWidth(ctx, 300)
+    local ret, new_name = r.ImGui_InputText(ctx, "##preset_name", ui.new_preset_name)
+    if ret then
+        ui.new_preset_name = new_name
+    end
+
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Save Preset") then
+        if ui.new_preset_name and ui.new_preset_name ~= "" then
+            if save_preset(ui.new_preset_name) then
+                ui.new_preset_name = ""
+            else
+                r.ShowMessageBox("Failed to save preset", "Error", 0)
             end
         else
-            r.ImGui_Text(ctx, "No presets found")
+            r.ShowMessageBox("Please enter a preset name", "Error", 0)
         end
+    end
 
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Text(ctx, "Save Current Settings as Preset:")
-        r.ImGui_SetNextItemWidth(ctx, 300)
-        local ret, new_name = r.ImGui_InputText(ctx, "##preset_name", ui.new_preset_name)
-        if ret then
-            ui.new_preset_name = new_name
-        end
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
 
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "Save Preset") then
-            if ui.new_preset_name and ui.new_preset_name ~= "" then
-                if save_preset(ui.new_preset_name) then
-                    ui.new_preset_name = ""
-                else
-                    r.ShowMessageBox("Failed to save preset", "Error", 0)
-                end
-            else
-                r.ShowMessageBox("Please enter a preset name", "Error", 0)
-            end
-        end
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
+    r.ImGui_SeparatorText(ctx, "GUI Styling")
+    r.ImGui_PopStyleColor(ctx, 1)
 
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
 
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
-        r.ImGui_SeparatorText(ctx, "GUI Styling")
-        r.ImGui_PopStyleColor(ctx, 1)
+    local bg_changed, new_bg = r.ImGui_SliderDouble(ctx, "Window Color (Black to White)", ui_settings.window_bg_brightness, 0.0, 1.0, "%.2f")
+    if bg_changed then
+        ui_settings.window_bg_brightness = new_bg
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    local opacity_changed, new_opacity = r.ImGui_SliderDouble(ctx, "Window Opacity", ui_settings.window_opacity, 0.0, 1.0, "%.2f")
+    if opacity_changed then
+        ui_settings.window_opacity = new_opacity
+        save_options()
+    end
 
-        local bg_changed, new_bg = r.ImGui_SliderDouble(ctx, "Window Color (Black to White)", ui_settings.window_bg_brightness, 0.0, 1.0, "%.2f")
-        if bg_changed then
-            ui_settings.window_bg_brightness = new_bg
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local text_changed, new_text = r.ImGui_SliderDouble(ctx, "Text Color (Black to White)", ui_settings.text_brightness, 0.0, 1.0, "%.2f")
+    if text_changed then
+        ui_settings.text_brightness = new_text
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local opacity_changed, new_opacity = r.ImGui_SliderDouble(ctx, "Window Opacity", ui_settings.window_opacity, 0.0, 1.0, "%.2f")
-        if opacity_changed then
-            ui_settings.window_opacity = new_opacity
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local grid_changed, new_grid = r.ImGui_SliderDouble(ctx, "Grid & Ruler Color (Black to White)", ui_settings.grid_brightness, 0.0, 1.0, "%.2f")
+    if grid_changed then
+        ui_settings.grid_brightness = new_grid
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local text_changed, new_text = r.ImGui_SliderDouble(ctx, "Text Color (Black to White)", ui_settings.text_brightness, 0.0, 1.0, "%.2f")
-        if text_changed then
-            ui_settings.text_brightness = new_text
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local button_changed, new_button = r.ImGui_SliderDouble(ctx, "Button Color (Black to White)", ui_settings.button_brightness, 0.0, 1.0, "%.2f")
+    if button_changed then
+        ui_settings.button_brightness = new_button
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local grid_changed, new_grid = r.ImGui_SliderDouble(ctx, "Grid & Ruler Color (Black to White)", ui_settings.grid_brightness, 0.0, 1.0, "%.2f")
-        if grid_changed then
-            ui_settings.grid_brightness = new_grid
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local button_text_changed, new_button_text = r.ImGui_SliderDouble(ctx, "Button Text Color (Black to White)", ui_settings.button_text_brightness, 0.0, 1.0, "%.2f")
+    if button_text_changed then
+        ui_settings.button_text_brightness = new_button_text
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local button_changed, new_button = r.ImGui_SliderDouble(ctx, "Button Color (Black to White)", ui_settings.button_brightness, 0.0, 1.0, "%.2f")
-        if button_changed then
-            ui_settings.button_brightness = new_button
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local waveform_hue_changed, new_waveform_hue = r.ImGui_SliderDouble(ctx, "Waveform Color (Hue)", ui_settings.waveform_hue, 0.0, 1.0, "%.2f")
+    if waveform_hue_changed then
+        ui_settings.waveform_hue = new_waveform_hue
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local button_text_changed, new_button_text = r.ImGui_SliderDouble(ctx, "Button Text Color (Black to White)", ui_settings.button_text_brightness, 0.0, 1.0, "%.2f")
-        if button_text_changed then
-            ui_settings.button_text_brightness = new_button_text
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local waveform_thickness_changed, new_waveform_thickness = r.ImGui_SliderDouble(ctx, "Waveform Line Thickness", ui_settings.waveform_thickness, 1.0, 5.0, "%.1f")
+    if waveform_thickness_changed then
+        ui_settings.waveform_thickness = new_waveform_thickness
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local waveform_hue_changed, new_waveform_hue = r.ImGui_SliderDouble(ctx, "Waveform Color (Hue)", ui_settings.waveform_hue, 0.0, 1.0, "%.2f")
-        if waveform_hue_changed then
-            ui_settings.waveform_hue = new_waveform_hue
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local resolution_changed, new_resolution = r.ImGui_SliderDouble(ctx, "Waveform Resolution Detail", ui_settings.waveform_resolution_multiplier, 1.0, 8.0, "%.1fx")
+    if resolution_changed then
+        ui_settings.waveform_resolution_multiplier = new_resolution
+        waveform.cache = {}
+        waveform.cache_file = ""
+        waveform.spectral_cache = {}
+        waveform.spectral_cache_file = ""
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local waveform_thickness_changed, new_waveform_thickness = r.ImGui_SliderDouble(ctx, "Waveform Line Thickness", ui_settings.waveform_thickness, 1.0, 5.0, "%.1f")
-        if waveform_thickness_changed then
-            ui_settings.waveform_thickness = new_waveform_thickness
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local accent_hue_changed, new_accent_hue = r.ImGui_SliderDouble(ctx, "Accent Color (Hue)", ui_settings.accent_hue, 0.0, 1.0, "%.2f")
+    if accent_hue_changed then
+        ui_settings.accent_hue = new_accent_hue
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local resolution_changed, new_resolution = r.ImGui_SliderDouble(ctx, "Waveform Resolution Detail", ui_settings.waveform_resolution_multiplier, 1.0, 8.0, "%.1fx")
-        if resolution_changed then
-            ui_settings.waveform_resolution_multiplier = new_resolution
-            waveform.cache = {}
-            waveform.cache_file = ""
-            waveform.spectral_cache = {}
-            waveform.spectral_cache_file = ""
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local selection_hue_changed, new_selection_hue = r.ImGui_SliderDouble(ctx, "Selection Color (Hue)", ui_settings.selection_hue, 0.0, 1.0, "%.2f")
+    if selection_hue_changed then
+        ui_settings.selection_hue = new_selection_hue
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local accent_hue_changed, new_accent_hue = r.ImGui_SliderDouble(ctx, "Accent Color (Hue)", ui_settings.accent_hue, 0.0, 1.0, "%.2f")
-        if accent_hue_changed then
-            ui_settings.accent_hue = new_accent_hue
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local selection_sat_changed, new_selection_sat = r.ImGui_SliderDouble(ctx, "Selection Saturation (0=Gray, 1=Color)", ui_settings.selection_saturation, 0.0, 1.0, "%.2f")
+    if selection_sat_changed then
+        ui_settings.selection_saturation = new_selection_sat
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local selection_hue_changed, new_selection_hue = r.ImGui_SliderDouble(ctx, "Selection Color (Hue)", ui_settings.selection_hue, 0.0, 1.0, "%.2f")
-        if selection_hue_changed then
-            ui_settings.selection_hue = new_selection_hue
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    local button_height_changed, new_button_height = r.ImGui_SliderInt(ctx, "Folder/Collection Button Height", ui_settings.button_height, 15, 50)
+    if button_height_changed then
+        ui_settings.button_height = new_button_height
+        save_options()
+    end
 
-        r.ImGui_Spacing(ctx)
-        local selection_sat_changed, new_selection_sat = r.ImGui_SliderDouble(ctx, "Selection Saturation (0=Gray, 1=Color)", ui_settings.selection_saturation, 0.0, 1.0, "%.2f")
-        if selection_sat_changed then
-            ui_settings.selection_saturation = new_selection_sat
-            save_options()
-        end
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
 
-        r.ImGui_Spacing(ctx)
-        local button_height_changed, new_button_height = r.ImGui_SliderInt(ctx, "Folder/Collection Button Height", ui_settings.button_height, 15, 50)
-        if button_height_changed then
-            ui_settings.button_height = new_button_height
-            save_options()
-        end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
-
-        r.ImGui_Text(ctx, "Font:")
-        r.ImGui_SameLine(ctx)
-        r.ImGui_SetNextItemWidth(ctx, 200)
-        if r.ImGui_BeginCombo(ctx, "##FontSelect", ui_settings.selected_font) then
-            for _, font_name in ipairs(available_fonts) do
-                local is_selected = (ui_settings.selected_font == font_name)
-                if r.ImGui_Selectable(ctx, font_name, is_selected) then
-                    ui_settings.selected_font = font_name
-                    font_objects = {}
-                    update_fonts()
-                    save_options()
-                end
-                if is_selected then
-                    r.ImGui_SetItemDefaultFocus(ctx)
-                end
-            end
-            r.ImGui_EndCombo(ctx)
-        end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
-        local waveform_bg_changed, new_waveform_bg = r.ImGui_Checkbox(ctx, "Show Waveform Background", ui_settings.show_waveform_bg)
-        if waveform_bg_changed then
-            ui_settings.show_waveform_bg = new_waveform_bg
-            save_options()
-        end
-
-        r.ImGui_Spacing(ctx)
-        local cover_art_changed, new_cover_art = r.ImGui_Checkbox(ctx, "Show Cover Art", ui_settings.show_cover_art)
-        if cover_art_changed then
-            ui_settings.show_cover_art = new_cover_art
-            if not new_cover_art then
-                release_cover_image()
-            end
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show embedded MP3/WAV/FLAC cover art for the selected file, with cover/folder image fallback.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local folder_add_buttons_changed, new_folder_add_buttons = r.ImGui_Checkbox(ctx, "Show Folder (+) Buttons", ui_settings.show_folder_add_buttons)
-        if folder_add_buttons_changed then
-            ui_settings.show_folder_add_buttons = new_folder_add_buttons
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show or hide the (+) buttons in folder tree view that add folders to the left Folders list.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local flatten_search_changed, new_flatten_search = r.ImGui_Checkbox(ctx, "Flatten Search Results", ui_settings.flatten_search_results)
-        if flatten_search_changed then
-            ui_settings.flatten_search_results = new_flatten_search
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "While in folder (tree) view, show search results as a flat list of all matches.\nWhen the search field is empty the tree view returns.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local folder_match_changed, new_folder_match = r.ImGui_Checkbox(ctx, "Match Folder Pane Colour to Results", ui_settings.folder_pane_match_results)
-        if folder_match_changed then
-            ui_settings.folder_pane_match_results = new_folder_match
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "When enabled: unselected folder buttons use the same (less bright) grey as the results list.\nWhen disabled: folders use the brighter button colour.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local folder_align_changed, new_folder_align = r.ImGui_Checkbox(ctx, "Left-Align Folder Names", ui_settings.folder_pane_left_align)
-        if folder_align_changed then
-            ui_settings.folder_pane_left_align = new_folder_align
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Align the folder names in the Folders pane to the left, like the Collections tree.\nWhen disabled they stay centred on the button.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local scrollbar_changed, new_scrollbar = r.ImGui_Checkbox(ctx, "Hide Scrollbars", ui_settings.hide_scrollbar)
-        if scrollbar_changed then
-            ui_settings.hide_scrollbar = new_scrollbar
-            save_options()
-        end
-
-        r.ImGui_Spacing(ctx)
-        local passkeys_changed, new_passkeys = r.ImGui_Checkbox(ctx, "Pass Keyboard Shortcuts to REAPER", ui_settings.pass_keys_to_reaper)
-        if passkeys_changed then
-            ui_settings.pass_keys_to_reaper = new_passkeys
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Send keys that are not used by a text field to REAPER,\nso global shortcuts (e.g. closing this script) keep working while the browser has focus.\nKeys with a REAPER shortcut (Space, arrows, ...) then no longer control the browser.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local grid_changed, new_grid = r.ImGui_Checkbox(ctx, "Folder Pane as Image Grid", ui_settings.folder_grid)
-        if grid_changed then
-            ui_settings.folder_grid = new_grid
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show the folder locations as picture tiles instead of buttons.\nRight-click a folder to set its image; a file called cover.png or\ncover.jpg inside the folder is picked up automatically.")
-        end
-        if ui_settings.folder_grid then
-            r.ImGui_SetNextItemWidth(ctx, 160)
-            local size_changed, new_size = r.ImGui_SliderInt(ctx, "Tile size", ui_settings.folder_tile_size or 96, 48, 200)
-            if size_changed then
-                ui_settings.folder_tile_size = new_size
+    r.ImGui_Text(ctx, "Font:")
+    r.ImGui_SameLine(ctx)
+    r.ImGui_SetNextItemWidth(ctx, 200)
+    if r.ImGui_BeginCombo(ctx, "##FontSelect", ui_settings.selected_font) then
+        for _, font_name in ipairs(available_fonts) do
+            local is_selected = (ui_settings.selected_font == font_name)
+            if r.ImGui_Selectable(ctx, font_name, is_selected) then
+                ui_settings.selected_font = font_name
+                font_objects = {}
+                update_fonts()
                 save_options()
             end
-        end
-
-        r.ImGui_Spacing(ctx)
-        local progress_changed, new_progress = r.ImGui_Checkbox(ctx, "Show Progress Bar", ui_settings.show_progress_bar)
-        if progress_changed then
-            ui_settings.show_progress_bar = new_progress
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show the playback progress bar and time readout at the bottom of the transport.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local strip_changed, new_strip = r.ImGui_Checkbox(ctx, "Single Pane Layout (dockable strip)", ui_settings.strip_layout)
-        if strip_changed then
-            ui_settings.strip_layout = new_strip
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Stack everything in one column instead of two panes:\nfolders, file list, waveform, oscilloscope, transport.\nMeant for docking the browser as a narrow strip.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local compact_changed, new_compact = r.ImGui_Checkbox(ctx, "Compact View (side-dock)", ui_settings.compact_view)
-        if compact_changed then
-            ui_settings.compact_view = new_compact
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Replace the file table with a compact one-card-per-item layout.\nFilename bold, tags below (mp3 - 232.3kb - 11.23s - 44.1k).\nUses the same visible columns as tag selection.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local numaplayer_changed, new_numaplayer = r.ImGui_Checkbox(ctx, "Use Numa Player for MIDI", ui_settings.use_numaplayer)
-        if numaplayer_changed then
-            ui_settings.use_numaplayer = new_numaplayer
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Use Numa Player instead of ReaSynth for MIDI playback.\nFalls back to ReaSynth if Numa Player is not installed.\nPreset selection opens automatically on first use.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local selected_track_changed, new_selected_track = r.ImGui_Checkbox(ctx, "Use Selected Track for MIDI", ui_settings.use_selected_track_for_midi)
-        if selected_track_changed then
-            ui_settings.use_selected_track_for_midi = new_selected_track
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Play MIDI files through the currently selected track instead of creating a preview track.\nIf no track is selected, a message will be shown in the MIDI info field.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local selected_track_audio_changed, new_selected_track_audio = r.ImGui_Checkbox(ctx, "Use Selected Track for Audio", ui_settings.use_selected_track_for_audio)
-        if selected_track_audio_changed then
-            ui_settings.use_selected_track_for_audio = new_selected_track_audio
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Route audio preview through the currently selected track,\nso track FX, volume, pan and sends are applied to the preview.\nIf no track is selected, the preview falls back to the hardware output.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local skip_silence_changed, new_skip_silence = r.ImGui_Checkbox(ctx, "Skip First Silence", playback.skip_first_silence)
-        if skip_silence_changed then
-            playback.skip_first_silence = new_skip_silence
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Skip leading silence for audio preview and normal timeline inserts when no waveform selection or manual start position is active.")
-        end
-
-        if playback.skip_first_silence then
-            r.ImGui_Indent(ctx, 16)
-            local silence_threshold_changed, new_silence_threshold = r.ImGui_SliderDouble(ctx, "Silence Threshold", playback.skip_first_silence_threshold_db, -80.0, -12.0, "%.0f dB")
-            if silence_threshold_changed then
-                playback.skip_first_silence_threshold_db = new_silence_threshold
-                waveform.leading_silence_cache = {}
-                save_options()
+            if is_selected then
+                r.ImGui_SetItemDefaultFocus(ctx)
             end
-            local max_scan_changed, new_max_scan = r.ImGui_SliderDouble(ctx, "Max Silence Scan", playback.skip_first_silence_max_scan_seconds, 1.0, 10.0, "%.1fs")
-            if max_scan_changed then
-                playback.skip_first_silence_max_scan_seconds = new_max_scan
-                waveform.leading_silence_cache = {}
-                save_options()
-            end
-            r.ImGui_Unindent(ctx, 16)
         end
+        r.ImGui_EndCombo(ctx)
+    end
 
-        r.ImGui_Spacing(ctx)
-        local auto_trim_changed, new_auto_trim = r.ImGui_Checkbox(ctx, "Auto Remove Silence", playback.auto_trim_silence == true)
-        if auto_trim_changed then
-            playback.auto_trim_silence = new_auto_trim
-            if playback.auto_trim_silence then
-                if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
-            else
-                tkmb_clear_auto_trim_selection()
-            end
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    local waveform_bg_changed, new_waveform_bg = r.ImGui_Checkbox(ctx, "Show Waveform Background", ui_settings.show_waveform_bg)
+    if waveform_bg_changed then
+        ui_settings.show_waveform_bg = new_waveform_bg
+        save_options()
+    end
+
+    r.ImGui_Spacing(ctx)
+    local cover_art_changed, new_cover_art = r.ImGui_Checkbox(ctx, "Show Cover Art", ui_settings.show_cover_art)
+    if cover_art_changed then
+        ui_settings.show_cover_art = new_cover_art
+        if not new_cover_art then
+            release_cover_image()
+        end
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show embedded MP3/WAV/FLAC cover art for the selected file, with cover/folder image fallback.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local folder_add_buttons_changed, new_folder_add_buttons = r.ImGui_Checkbox(ctx, "Show Folder (+) Buttons", ui_settings.show_folder_add_buttons)
+    if folder_add_buttons_changed then
+        ui_settings.show_folder_add_buttons = new_folder_add_buttons
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show or hide the (+) buttons in folder tree view that add folders to the left Folders list.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local flatten_search_changed, new_flatten_search = r.ImGui_Checkbox(ctx, "Flatten Search Results", ui_settings.flatten_search_results)
+    if flatten_search_changed then
+        ui_settings.flatten_search_results = new_flatten_search
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "While in folder (tree) view, show search results as a flat list of all matches.\nWhen the search field is empty the tree view returns.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local folder_match_changed, new_folder_match = r.ImGui_Checkbox(ctx, "Match Folder Pane Colour to Results", ui_settings.folder_pane_match_results)
+    if folder_match_changed then
+        ui_settings.folder_pane_match_results = new_folder_match
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "When enabled: unselected folder buttons use the same (less bright) grey as the results list.\nWhen disabled: folders use the brighter button colour.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local folder_align_changed, new_folder_align = r.ImGui_Checkbox(ctx, "Left-Align Folder Names", ui_settings.folder_pane_left_align)
+    if folder_align_changed then
+        ui_settings.folder_pane_left_align = new_folder_align
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Align the folder names in the Folders pane to the left, like the Collections tree.\nWhen disabled they stay centred on the button.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local scrollbar_changed, new_scrollbar = r.ImGui_Checkbox(ctx, "Hide Scrollbars", ui_settings.hide_scrollbar)
+    if scrollbar_changed then
+        ui_settings.hide_scrollbar = new_scrollbar
+        save_options()
+    end
+
+    r.ImGui_Spacing(ctx)
+    local passkeys_changed, new_passkeys = r.ImGui_Checkbox(ctx, "Pass Keyboard Shortcuts to REAPER", ui_settings.pass_keys_to_reaper)
+    if passkeys_changed then
+        ui_settings.pass_keys_to_reaper = new_passkeys
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Send keys that are not used by a text field to REAPER,\nso global shortcuts (e.g. closing this script) keep working while the browser has focus.\nKeys with a REAPER shortcut (Space, arrows, ...) then no longer control the browser.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local grid_changed, new_grid = r.ImGui_Checkbox(ctx, "Folder Pane as Image Grid", ui_settings.folder_grid)
+    if grid_changed then
+        ui_settings.folder_grid = new_grid
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show the folder locations as picture tiles instead of buttons.\nRight-click a folder to set its image; a file called cover.png or\ncover.jpg inside the folder is picked up automatically.")
+    end
+    if ui_settings.folder_grid then
+        r.ImGui_SetNextItemWidth(ctx, 160)
+        local size_changed, new_size = r.ImGui_SliderInt(ctx, "Tile size", ui_settings.folder_tile_size or 96, 48, 200)
+        if size_changed then
+            ui_settings.folder_tile_size = new_size
             save_options()
         end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Automatically selects the non-silent part of audio files for preview and inserts. Manual waveform selections are preserved.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local osc_changed, new_osc = r.ImGui_Checkbox(ctx, "Show Oscilloscope", ui.show_oscilloscope and true or false)
+    if osc_changed then
+        ui.show_oscilloscope = new_osc
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show the oscilloscope above the transport.\nThe small toggle at the right of the transport does the same.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local wave_panel_changed, new_wave_panel = r.ImGui_Checkbox(ctx, "Show Waveform", ui_settings.show_waveform_panel)
+    if wave_panel_changed then
+        ui_settings.show_waveform_panel = new_wave_panel
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show the waveform under the file list.\nSwitched off, the file list takes its space.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local tagstrip_changed, new_tagstrip = r.ImGui_Checkbox(ctx, "Show Collections above the File List", ui_settings.show_tag_strip)
+    if tagstrip_changed then
+        ui_settings.show_tag_strip = new_tagstrip
+        if not new_tagstrip then tkmb_tags.clear_filter() end
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Your collections as a row above the file list.\nClick one to show only the files in it, right-click to add or remove the selected files.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local dbl_changed, new_dbl = r.ImGui_Checkbox(ctx, "Double-Click Inserts File", ui_settings.double_click_insert)
+    if dbl_changed then
+        ui_settings.double_click_insert = new_dbl
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Double-click a file to insert it at the edit cursor on the selected track.\nAlt+Click always does the same.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local progress_changed, new_progress = r.ImGui_Checkbox(ctx, "Show Progress Bar", ui_settings.show_progress_bar)
+    if progress_changed then
+        ui_settings.show_progress_bar = new_progress
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show the playback progress bar and time readout at the bottom of the transport.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local strip_changed, new_strip = r.ImGui_Checkbox(ctx, "Single Pane Layout (dockable strip)", ui_settings.strip_layout)
+    if strip_changed then
+        ui_settings.strip_layout = new_strip
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Stack everything in one column instead of two panes:\nfolders, file list, waveform, oscilloscope, transport.\nMeant for docking the browser as a narrow strip.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local compact_changed, new_compact = r.ImGui_Checkbox(ctx, "Compact View (side-dock)", ui_settings.compact_view)
+    if compact_changed then
+        ui_settings.compact_view = new_compact
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Replace the file table with a compact one-card-per-item layout.\nFilename bold, tags below (mp3 - 232.3kb - 11.23s - 44.1k).\nUses the same visible columns as tag selection.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local numaplayer_changed, new_numaplayer = r.ImGui_Checkbox(ctx, "Use Numa Player for MIDI", ui_settings.use_numaplayer)
+    if numaplayer_changed then
+        ui_settings.use_numaplayer = new_numaplayer
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Use Numa Player instead of ReaSynth for MIDI playback.\nFalls back to ReaSynth if Numa Player is not installed.\nPreset selection opens automatically on first use.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local selected_track_changed, new_selected_track = r.ImGui_Checkbox(ctx, "Use Selected Track for MIDI", ui_settings.use_selected_track_for_midi)
+    if selected_track_changed then
+        ui_settings.use_selected_track_for_midi = new_selected_track
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Play MIDI files through the currently selected track instead of creating a preview track.\nIf no track is selected, a message will be shown in the MIDI info field.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local selected_track_audio_changed, new_selected_track_audio = r.ImGui_Checkbox(ctx, "Use Selected Track for Audio", ui_settings.use_selected_track_for_audio)
+    if selected_track_audio_changed then
+        ui_settings.use_selected_track_for_audio = new_selected_track_audio
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Route audio preview through the currently selected track,\nso track FX, volume, pan and sends are applied to the preview.\nIf no track is selected, the preview falls back to the hardware output.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local skip_silence_changed, new_skip_silence = r.ImGui_Checkbox(ctx, "Skip First Silence", playback.skip_first_silence)
+    if skip_silence_changed then
+        playback.skip_first_silence = new_skip_silence
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Skip leading silence for audio preview and normal timeline inserts when no waveform selection or manual start position is active.")
+    end
+
+    if playback.skip_first_silence then
+        r.ImGui_Indent(ctx, 16)
+        local silence_threshold_changed, new_silence_threshold = r.ImGui_SliderDouble(ctx, "Silence Threshold", playback.skip_first_silence_threshold_db, -80.0, -12.0, "%.0f dB")
+        if silence_threshold_changed then
+            playback.skip_first_silence_threshold_db = new_silence_threshold
+            waveform.leading_silence_cache = {}
+            save_options()
         end
+        local max_scan_changed, new_max_scan = r.ImGui_SliderDouble(ctx, "Max Silence Scan", playback.skip_first_silence_max_scan_seconds, 1.0, 10.0, "%.1fs")
+        if max_scan_changed then
+            playback.skip_first_silence_max_scan_seconds = new_max_scan
+            waveform.leading_silence_cache = {}
+            save_options()
+        end
+        r.ImGui_Unindent(ctx, 16)
+    end
+
+    r.ImGui_Spacing(ctx)
+    local auto_trim_changed, new_auto_trim = r.ImGui_Checkbox(ctx, "Auto Remove Silence", playback.auto_trim_silence == true)
+    if auto_trim_changed then
+        playback.auto_trim_silence = new_auto_trim
         if playback.auto_trim_silence then
-            r.ImGui_Indent(ctx, 16)
-            local auto_trim_threshold_changed, new_auto_trim_threshold = r.ImGui_SliderDouble(ctx, "Auto Trim Threshold", playback.auto_trim_silence_threshold_db, -96.0, -12.0, "%.0f dB")
-            if auto_trim_threshold_changed then
-                playback.auto_trim_silence_threshold_db = new_auto_trim_threshold
-                waveform.silence_trim_cache = {}
-                if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
-                save_options()
-            end
-            local auto_trim_padding_changed, new_auto_trim_padding = r.ImGui_SliderDouble(ctx, "Auto Trim Padding", playback.auto_trim_silence_padding_ms, 0.0, 250.0, "%.0f ms")
-            if auto_trim_padding_changed then
-                playback.auto_trim_silence_padding_ms = new_auto_trim_padding
-                waveform.silence_trim_cache = {}
-                if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
-                save_options()
-            end
-            r.ImGui_Unindent(ctx, 16)
+            if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
+        else
+            tkmb_clear_auto_trim_selection()
         end
-
-        r.ImGui_Spacing(ctx)
-        local lufs_target_changed, new_lufs_target = r.ImGui_SliderDouble(ctx, "Normalize Target LUFS", playback.lufs_normalize_target, -30.0, -6.0, "%.1f LUFS")
-        if lufs_target_changed then
-            playback.lufs_normalize_target = new_lufs_target
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Automatically selects the non-silent part of audio files for preview and inserts. Manual waveform selections are preserved.")
+    end
+    if playback.auto_trim_silence then
+        r.ImGui_Indent(ctx, 16)
+        local auto_trim_threshold_changed, new_auto_trim_threshold = r.ImGui_SliderDouble(ctx, "Auto Trim Threshold", playback.auto_trim_silence_threshold_db, -96.0, -12.0, "%.0f dB")
+        if auto_trim_threshold_changed then
+            playback.auto_trim_silence_threshold_db = new_auto_trim_threshold
+            waveform.silence_trim_cache = {}
+            if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
             save_options()
         end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Used by the right-click normalized insert action when a saved LUFS analysis exists for the sample.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        local stop_on_insert_changed, new_stop_on_insert = r.ImGui_Checkbox(ctx, "Stop Preview On Insert/Load", playback.stop_on_insert)
-        if stop_on_insert_changed then
-            playback.stop_on_insert = new_stop_on_insert
+        local auto_trim_padding_changed, new_auto_trim_padding = r.ImGui_SliderDouble(ctx, "Auto Trim Padding", playback.auto_trim_silence_padding_ms, 0.0, 250.0, "%.0f ms")
+        if auto_trim_padding_changed then
+            playback.auto_trim_silence_padding_ms = new_auto_trim_padding
+            waveform.silence_trim_cache = {}
+            if playback.current_playing_file and playback.current_playing_file ~= "" then tkmb_apply_auto_trim_selection(playback.current_playing_file, true) end
             save_options()
         end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Stop the preview automatically after dragging/inserting to arrange or loading into RS5K/Cartridge.")
-        end
+        r.ImGui_Unindent(ctx, 16)
+    end
 
-        r.ImGui_Spacing(ctx)
-        local pitch_detection_changed, new_pitch_detection = r.ImGui_Checkbox(ctx, "Show Pitch Detection", ui.pitch_detection_enabled)
-        if pitch_detection_changed then
-            ui.pitch_detection_enabled = new_pitch_detection
+    r.ImGui_Spacing(ctx)
+    local lufs_target_changed, new_lufs_target = r.ImGui_SliderDouble(ctx, "Normalize Target LUFS", playback.lufs_normalize_target, -30.0, -6.0, "%.1f LUFS")
+    if lufs_target_changed then
+        playback.lufs_normalize_target = new_lufs_target
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Used by the right-click normalized insert action when a saved LUFS analysis exists for the sample.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local stop_on_insert_changed, new_stop_on_insert = r.ImGui_Checkbox(ctx, "Stop Preview On Insert/Load", playback.stop_on_insert)
+    if stop_on_insert_changed then
+        playback.stop_on_insert = new_stop_on_insert
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Stop the preview automatically after dragging/inserting to arrange or loading into RS5K/Cartridge.")
+    end
+
+    r.ImGui_Spacing(ctx)
+    local pitch_detection_changed, new_pitch_detection = r.ImGui_Checkbox(ctx, "Show Pitch Detection", ui.pitch_detection_enabled)
+    if pitch_detection_changed then
+        ui.pitch_detection_enabled = new_pitch_detection
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show real-time pitch detection during audio playback in the waveform view.\nDisplays the detected musical note and frequency.")
+    end
+
+    if ui.pitch_detection_enabled then
+        r.ImGui_Indent(ctx, 16)
+        r.ImGui_Text(ctx, "Preset:")
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_SmallButton(ctx, "Fast##pitch_preset_fast") then
+            ui_settings.pitch_stability_time_sec = 0.25
+            ui_settings.pitch_update_interval_sec = 0.1
+            ui_settings.pitch_consistency_tolerance = 0.20
+            ui_settings.pitch_history_size = 3
             save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show real-time pitch detection during audio playback in the waveform view.\nDisplays the detected musical note and frequency.")
-        end
-
-        if ui.pitch_detection_enabled then
-            r.ImGui_Indent(ctx, 16)
-            r.ImGui_Text(ctx, "Preset:")
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_SmallButton(ctx, "Fast##pitch_preset_fast") then
-                ui_settings.pitch_stability_time_sec = 0.25
-                ui_settings.pitch_update_interval_sec = 0.1
-                ui_settings.pitch_consistency_tolerance = 0.20
-                ui_settings.pitch_history_size = 3
-                save_options()
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_SmallButton(ctx, "Balanced##pitch_preset_bal") then
-                ui_settings.pitch_stability_time_sec = 0.6
-                ui_settings.pitch_update_interval_sec = 0.2
-                ui_settings.pitch_consistency_tolerance = 0.15
-                ui_settings.pitch_history_size = 5
-                save_options()
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_SmallButton(ctx, "Smooth##pitch_preset_smooth") then
-                ui_settings.pitch_stability_time_sec = 1.0
-                ui_settings.pitch_update_interval_sec = 0.25
-                ui_settings.pitch_consistency_tolerance = 0.10
-                ui_settings.pitch_history_size = 7
-                save_options()
-            end
-            r.ImGui_Spacing(ctx)
-            local stab_ms = math.floor((ui_settings.pitch_stability_time_sec or 0.6) * 1000 + 0.5)
-            local stab_changed, new_stab = r.ImGui_SliderInt(ctx, "Pitch Stability (ms)##pitch_stab", stab_ms, 100, 1500)
-            if stab_changed then
-                ui_settings.pitch_stability_time_sec = new_stab / 1000
-                save_options()
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "How long a pitch must remain consistent before being shown.\nHigher = more stable but slower; lower = more responsive.")
-            end
-
-            local upd_ms = math.floor((ui_settings.pitch_update_interval_sec or 0.2) * 1000 + 0.5)
-            local upd_changed, new_upd = r.ImGui_SliderInt(ctx, "Pitch Update (ms)##pitch_upd", upd_ms, 50, 500)
-            if upd_changed then
-                ui_settings.pitch_update_interval_sec = new_upd / 1000
-                save_options()
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "How often pitch is re-analyzed.\nLower = more CPU; higher = slower reaction.")
-            end
-
-            local tol_pct = math.floor((ui_settings.pitch_consistency_tolerance or 0.15) * 100 + 0.5)
-            local tol_changed, new_tol = r.ImGui_SliderInt(ctx, "Pitch Sensitivity (%)##pitch_tol", tol_pct, 5, 30)
-            if tol_changed then
-                ui_settings.pitch_consistency_tolerance = new_tol / 100
-                save_options()
-            end
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Allowed deviation between consecutive measurements before pitch is considered jumping.\nLower = stricter (more stable on clean tones); higher = tolerates vibrato/noise.")
-            end
-            r.ImGui_Unindent(ctx, 16)
-        end
-
-        r.ImGui_Spacing(ctx)
-        local nojump_changed, nojump_new = r.ImGui_Checkbox(ctx, "Saved Searches: don't jump to folder", ui_settings.saved_search_no_jump)
-        if nojump_changed then
-            ui_settings.saved_search_no_jump = nojump_new
-            save_options()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "When enabled, applying a saved search only loads its content\n(files, filters, search term) without switching the active view\nor changing the selected folder/location in the side panel.")
-        end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
-        r.ImGui_SeparatorText(ctx, "File Type Filters")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-
-        local f_audio_changed, f_audio_new = r.ImGui_Checkbox(ctx, "Audio##ftype", ui_settings.filter_audio)
-        if f_audio_changed then
-            ui_settings.filter_audio = f_audio_new
-            apply_filter_change()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show audio files: wav, mp3, aif, aiff, flac, ogg, wma, m4a, aac")
         end
         r.ImGui_SameLine(ctx)
-        local f_midi_changed, f_midi_new = r.ImGui_Checkbox(ctx, "MIDI##ftype", ui_settings.filter_midi)
-        if f_midi_changed then
-            ui_settings.filter_midi = f_midi_new
-            apply_filter_change()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show MIDI files: mid, midi")
-        end
-        r.ImGui_SameLine(ctx)
-        local f_video_changed, f_video_new = r.ImGui_Checkbox(ctx, "Video##ftype", ui_settings.filter_video)
-        if f_video_changed then
-            ui_settings.filter_video = f_video_new
-            apply_filter_change()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show video files: mp4, mov, avi, wmv, mkv")
-        end
-        r.ImGui_SameLine(ctx)
-        local f_image_changed, f_image_new = r.ImGui_Checkbox(ctx, "Images##ftype", ui_settings.filter_image)
-        if f_image_changed then
-            ui_settings.filter_image = f_image_new
-            apply_filter_change()
-        end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Show image files: jpg, jpeg, png, gif, bmp")
-        end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
-        r.ImGui_SeparatorText(ctx, "Table Columns Visibility")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-
-        r.ImGui_Text(ctx, "Essential:")
-
-        local ch1, val1 = r.ImGui_Checkbox(ctx, "Name##col", ui_settings.visible_columns.name)
-        if ch1 then ui_settings.visible_columns.name = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Category##col", ui_settings.visible_columns.category)
-        if ch1 then ui_settings.visible_columns.category = val1; category_cache = {}; cached_cat_counts = {}; cached_cat_counts_loc = ""; cached_cat_filter = {}; cached_cat_filter_key = ""; save_options() end
-        r.ImGui_SameLine(ctx, 320)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Type##col", ui_settings.visible_columns.type)
-        if ch1 then ui_settings.visible_columns.type = val1; save_options() end
-        r.ImGui_SameLine(ctx, 440)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Size##col", ui_settings.visible_columns.size)
-        if ch1 then ui_settings.visible_columns.size = val1; save_options() end
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Duration##col", ui_settings.visible_columns.duration)
-        if ch1 then ui_settings.visible_columns.duration = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Wave##col", ui_settings.visible_columns.wave or false)
-        if ch1 then ui_settings.visible_columns.wave = val1; save_options() end
-        if r.ImGui_IsItemHovered(ctx) then
-            r.ImGui_SetTooltip(ctx, "Waveform per file. Peaks are cached on disk, so only the first look at a file costs anything.")
-        end
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Sample Rate##col", ui_settings.visible_columns.sample_rate)
-        if ch1 then ui_settings.visible_columns.sample_rate = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Channels##col", ui_settings.visible_columns.channels)
-        if ch1 then ui_settings.visible_columns.channels = val1; save_options() end
-        r.ImGui_SameLine(ctx, 320)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "BPM##col", ui_settings.visible_columns.bpm)
-        if ch1 then ui_settings.visible_columns.bpm = val1; save_options() end
-        r.ImGui_SameLine(ctx, 440)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Key##col", ui_settings.visible_columns.key)
-        if ch1 then ui_settings.visible_columns.key = val1; save_options() end
-        r.ImGui_SameLine(ctx, 560)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "LUFS##col", ui_settings.visible_columns.lufs or false)
-        if ch1 then ui_settings.visible_columns.lufs = val1; save_options() end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
-
-        r.ImGui_Text(ctx, "Music Metadata:")
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Artist##col", ui_settings.visible_columns.artist)
-        if ch1 then ui_settings.visible_columns.artist = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Album##col", ui_settings.visible_columns.album)
-        if ch1 then ui_settings.visible_columns.album = val1; save_options() end
-        r.ImGui_SameLine(ctx, 320)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Title##col", ui_settings.visible_columns.title)
-        if ch1 then ui_settings.visible_columns.title = val1; save_options() end
-        r.ImGui_SameLine(ctx, 440)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Track##col", ui_settings.visible_columns.track)
-        if ch1 then ui_settings.visible_columns.track = val1; save_options() end
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Year##col", ui_settings.visible_columns.year)
-        if ch1 then ui_settings.visible_columns.year = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Genre##col", ui_settings.visible_columns.genre)
-        if ch1 then ui_settings.visible_columns.genre = val1; save_options() end
-        r.ImGui_SameLine(ctx, 320)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Comment##col", ui_settings.visible_columns.comment)
-        if ch1 then ui_settings.visible_columns.comment = val1; save_options() end
-        r.ImGui_SameLine(ctx, 440)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Composer##col", ui_settings.visible_columns.composer)
-        if ch1 then ui_settings.visible_columns.composer = val1; save_options() end
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Publisher##col", ui_settings.visible_columns.publisher)
-        if ch1 then ui_settings.visible_columns.publisher = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Time Signature##col", ui_settings.visible_columns.timesignature)
-        if ch1 then ui_settings.visible_columns.timesignature = val1; save_options() end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
-
-        r.ImGui_Text(ctx, "Technical Metadata:")
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Bitrate##col", ui_settings.visible_columns.bitrate)
-        if ch1 then ui_settings.visible_columns.bitrate = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Bit Depth##col", ui_settings.visible_columns.bitspersample)
-        if ch1 then ui_settings.visible_columns.bitspersample = val1; save_options() end
-        r.ImGui_SameLine(ctx, 320)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Encoder##col", ui_settings.visible_columns.encoder)
-        if ch1 then ui_settings.visible_columns.encoder = val1; save_options() end
-        r.ImGui_SameLine(ctx, 440)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Copyright##col", ui_settings.visible_columns.copyright)
-        if ch1 then ui_settings.visible_columns.copyright = val1; save_options() end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
-
-        r.ImGui_Text(ctx, "BWF Metadata:")
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Description##col", ui_settings.visible_columns.desc)
-        if ch1 then ui_settings.visible_columns.desc = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Originator##col", ui_settings.visible_columns.originator)
-        if ch1 then ui_settings.visible_columns.originator = val1; save_options() end
-        r.ImGui_SameLine(ctx, 320)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Orig Ref##col", ui_settings.visible_columns.originatorref)
-        if ch1 then ui_settings.visible_columns.originatorref = val1; save_options() end
-        r.ImGui_SameLine(ctx, 440)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Date##col", ui_settings.visible_columns.date)
-        if ch1 then ui_settings.visible_columns.date = val1; save_options() end
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "Time##col", ui_settings.visible_columns.time)
-        if ch1 then ui_settings.visible_columns.time = val1; save_options() end
-        r.ImGui_SameLine(ctx, 200)
-
-        ch1, val1 = r.ImGui_Checkbox(ctx, "UMID##col", ui_settings.visible_columns.umid)
-        if ch1 then ui_settings.visible_columns.umid = val1; save_options() end
-
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Separator(ctx)
-        r.ImGui_Spacing(ctx)
-
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF4444FF)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF6666FF)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF8888FF)
-        if r.ImGui_Button(ctx, "Reset to Default Settings", -1, 0) then
-            ui_settings.window_bg_brightness = 0.12
-            ui_settings.window_opacity = 0.94
-            ui_settings.text_brightness = 1.0
-            ui_settings.grid_brightness = 1.0
-            ui_settings.button_brightness = 0.25
-            ui_settings.button_text_brightness = 1.0
-            ui_settings.waveform_hue = 0.55
-            ui_settings.waveform_thickness = 1.0
-            ui_settings.waveform_resolution_multiplier = 2.0
-            ui_settings.accent_hue = 0.55
-            ui_settings.selection_hue = 0.16
-            ui_settings.selection_saturation = 1.0
-            ui_settings.show_waveform_bg = true
-            ui_settings.hide_scrollbar = false
-            ui_settings.button_height = 25
-            ui_settings.selected_font = "Arial"
-            font_objects = {}  
-            update_fonts()  
+        if r.ImGui_SmallButton(ctx, "Balanced##pitch_preset_bal") then
+            ui_settings.pitch_stability_time_sec = 0.6
+            ui_settings.pitch_update_interval_sec = 0.2
+            ui_settings.pitch_consistency_tolerance = 0.15
+            ui_settings.pitch_history_size = 5
             save_options()
         end
-        r.ImGui_PopStyleColor(ctx, 3)
+        r.ImGui_SameLine(ctx)
+        if r.ImGui_SmallButton(ctx, "Smooth##pitch_preset_smooth") then
+            ui_settings.pitch_stability_time_sec = 1.0
+            ui_settings.pitch_update_interval_sec = 0.25
+            ui_settings.pitch_consistency_tolerance = 0.10
+            ui_settings.pitch_history_size = 7
+            save_options()
+        end
+        r.ImGui_Spacing(ctx)
+        local stab_ms = math.floor((ui_settings.pitch_stability_time_sec or 0.6) * 1000 + 0.5)
+        local stab_changed, new_stab = r.ImGui_SliderInt(ctx, "Pitch Stability (ms)##pitch_stab", stab_ms, 100, 1500)
+        if stab_changed then
+            ui_settings.pitch_stability_time_sec = new_stab / 1000
+            save_options()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "How long a pitch must remain consistent before being shown.\nHigher = more stable but slower; lower = more responsive.")
+        end
 
-        r.ImGui_PopStyleColor(ctx, 9)
-        r.ImGui_PopStyleVar(ctx, 2)
-    elseif ui.current_view_mode == "shortcuts" then
-        -- Keyboard Shortcuts Panel
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue))
-        r.ImGui_Text(ctx, "KEYBOARD SHORTCUTS")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+        local upd_ms = math.floor((ui_settings.pitch_update_interval_sec or 0.2) * 1000 + 0.5)
+        local upd_changed, new_upd = r.ImGui_SliderInt(ctx, "Pitch Update (ms)##pitch_upd", upd_ms, 50, 500)
+        if upd_changed then
+            ui_settings.pitch_update_interval_sec = new_upd / 1000
+            save_options()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "How often pitch is re-analyzed.\nLower = more CPU; higher = slower reaction.")
+        end
 
-        -- Playback Controls
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "PLAYBACK")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "Spacebar           Play / Stop Preview")
-        r.ImGui_BulletText(ctx, "Enter/Return       Play / Pause Preview (resumes from pause position)")
-        r.ImGui_BulletText(ctx, "Shift+Click        Insert at Edit Cursor")
-        r.ImGui_BulletText(ctx, "Click Waveform     Seek to Position")
-        r.ImGui_BulletText(ctx, "Drag Waveform      Create Time Selection")
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+        local tol_pct = math.floor((ui_settings.pitch_consistency_tolerance or 0.15) * 100 + 0.5)
+        local tol_changed, new_tol = r.ImGui_SliderInt(ctx, "Pitch Sensitivity (%)##pitch_tol", tol_pct, 5, 30)
+        if tol_changed then
+            ui_settings.pitch_consistency_tolerance = new_tol / 100
+            save_options()
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Allowed deviation between consecutive measurements before pitch is considered jumping.\nLower = stricter (more stable on clean tones); higher = tolerates vibrato/noise.")
+        end
+        r.ImGui_Unindent(ctx, 16)
+    end
 
-        -- Drag & Drop
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "DRAG & DROP TO ARRANGE")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "Drag to Track      Insert file at drop position")
-        r.ImGui_BulletText(ctx, "Drag to Lane       Drop onto a fixed lane to insert there")
-        r.ImGui_BulletText(ctx, "Shift+Drag         Drop into a new fixed lane (auto-enables fixed lanes)")
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    local nojump_changed, nojump_new = r.ImGui_Checkbox(ctx, "Saved Searches: don't jump to folder", ui_settings.saved_search_no_jump)
+    if nojump_changed then
+        ui_settings.saved_search_no_jump = nojump_new
+        save_options()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "When enabled, applying a saved search only loads its content\n(files, filters, search term) without switching the active view\nor changing the selected folder/location in the side panel.")
+    end
 
-        -- Zoom & Navigation
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "ZOOM & NAVIGATION")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "Ctrl+Wheel         Horizontal Zoom (1x-8x)")
-        r.ImGui_BulletText(ctx, "Ctrl+Alt+Wheel     Vertical Zoom (0.5x-10x)")
-        r.ImGui_BulletText(ctx, "Wheel              Horizontal Scroll (when zoomed)")
-        r.ImGui_BulletText(ctx, "RESET Button       Reset All Zoom (visible when zoomed)")
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
+    r.ImGui_SeparatorText(ctx, "File Type Filters")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
 
-        -- Navigation
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "NAVIGATION")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "Up/Down Arrow      Navigate File List")
-        r.ImGui_BulletText(ctx, "Page Up/Down       Jump Multiple Files")
-        r.ImGui_BulletText(ctx, "Home/End           First/Last File")
-        r.ImGui_BulletText(ctx, "Click              Select File")
-        r.ImGui_BulletText(ctx, "Shift+Click        Range Selection")
-        r.ImGui_BulletText(ctx, "Ctrl+Click         Multi-Selection")
-        r.ImGui_BulletText(ctx, "Right-Click        Context Menu")
-        r.ImGui_BulletText(ctx, "Enter              Open/Close Folder (Tree View)")
-        r.ImGui_BulletText(ctx, "Left Arrow         Close Tree Node")
-        r.ImGui_BulletText(ctx, "Right Arrow        Open Tree Node")
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+    local f_audio_changed, f_audio_new = r.ImGui_Checkbox(ctx, "Audio##ftype", ui_settings.filter_audio)
+    if f_audio_changed then
+        ui_settings.filter_audio = f_audio_new
+        apply_filter_change()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show audio files: wav, mp3, aif, aiff, flac, ogg, wma, m4a, aac")
+    end
+    r.ImGui_SameLine(ctx)
+    local f_midi_changed, f_midi_new = r.ImGui_Checkbox(ctx, "MIDI##ftype", ui_settings.filter_midi)
+    if f_midi_changed then
+        ui_settings.filter_midi = f_midi_new
+        apply_filter_change()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show MIDI files: mid, midi")
+    end
+    r.ImGui_SameLine(ctx)
+    local f_video_changed, f_video_new = r.ImGui_Checkbox(ctx, "Video##ftype", ui_settings.filter_video)
+    if f_video_changed then
+        ui_settings.filter_video = f_video_new
+        apply_filter_change()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show video files: mp4, mov, avi, wmv, mkv")
+    end
+    r.ImGui_SameLine(ctx)
+    local f_image_changed, f_image_new = r.ImGui_Checkbox(ctx, "Images##ftype", ui_settings.filter_image)
+    if f_image_changed then
+        ui_settings.filter_image = f_image_new
+        apply_filter_change()
+    end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Show image files: jpg, jpeg, png, gif, bmp")
+    end
 
-        -- View Options
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "VIEW OPTIONS")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "SPECTRAL Button    Toggle FFT Frequency Analysis")
-        r.ImGui_BulletText(ctx, "GRID Button        Toggle Time Grid Overlay")
-        r.ImGui_BulletText(ctx, "SOLO Button        Solo Selected File (others hidden)")
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color)
+    r.ImGui_SeparatorText(ctx, "Table Columns Visibility")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
 
-        -- Waveform Features
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "WAVEFORM FEATURES")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "Spectral Colors:   Red=Bass, Orange=Low-Mid, Green=Mid,")
-        r.ImGui_Text(ctx, "                   Blue=High-Mid, Purple=High")
-        r.ImGui_BulletText(ctx, "Zoom Indicators:   H: Xx (horizontal), V: X.Xx (vertical)")
-        r.ImGui_BulletText(ctx, "Resolution:        Adjust in Settings (1x-8x detail)")
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+    r.ImGui_Text(ctx, "Essential:")
 
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "SLICE / INSERT")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "SLICE Button       Detect transients (uses Sens slider)")
-        r.ImGui_BulletText(ctx, "CLEAR Button       Remove all slice markers")
-        r.ImGui_BulletText(ctx, "Sens Slider        Slice detection sensitivity (0.0-1.0)")
-        r.ImGui_BulletText(ctx, "REV Button         Visual reverse + reverse inserted slices")
-        r.ImGui_BulletText(ctx, "INS Button         Insert sliced sample on track at cursor")
-        r.ImGui_BulletText(ctx, "FD Button          Disable auto-fades on inserted slices")
-        r.ImGui_BulletText(ctx, "RND Button         Click: generate random slice order (numbers shown). Right-click: clear. INS plays in this order")
-        r.ImGui_BulletText(ctx, "Alt+Click marker   Start drag (move slice marker)")
-        r.ImGui_BulletText(ctx, "Alt+DoubleClick    On marker: remove / on waveform: add marker")
-        r.ImGui_BulletText(ctx, "Alt+RightClick     Select slice segment (INS = only that slice)")
-        r.ImGui_Spacing(ctx)
-        r.ImGui_Spacing(ctx)
+    local ch1, val1 = r.ImGui_Checkbox(ctx, "Name##col", ui_settings.visible_columns.name)
+    if ch1 then ui_settings.visible_columns.name = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
 
-        -- Settings & Presets
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
-        r.ImGui_Text(ctx, "SETTINGS & PRESETS")
-        r.ImGui_PopStyleColor(ctx, 1)
-        r.ImGui_Spacing(ctx)
-        r.ImGui_BulletText(ctx, "Settings Icon      Access All Visual Settings")
-        r.ImGui_BulletText(ctx, "Save Preset        Store Current Settings to JSON")
-        r.ImGui_BulletText(ctx, "Load Preset        Restore Saved Settings")
-        r.ImGui_BulletText(ctx, "Delete Preset      Remove Saved Preset")
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Category##col", ui_settings.visible_columns.category)
+    if ch1 then ui_settings.visible_columns.category = val1; category_cache = tkmb_catfix.fresh(); cached_cat_counts = {}; cached_cat_counts_loc = ""; cached_cat_filter = {}; cached_cat_filter_key = ""; save_options() end
+    r.ImGui_SameLine(ctx, 320)
 
-    elseif ui.current_view_mode == "folders" or ui.current_view_mode == "collections" or ui.current_view_mode == "auto" or ui.current_view_mode == "searches" then
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Type##col", ui_settings.visible_columns.type)
+    if ch1 then ui_settings.visible_columns.type = val1; save_options() end
+    r.ImGui_SameLine(ctx, 440)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Size##col", ui_settings.visible_columns.size)
+    if ch1 then ui_settings.visible_columns.size = val1; save_options() end
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Duration##col", ui_settings.visible_columns.duration)
+    if ch1 then ui_settings.visible_columns.duration = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Wave##col", ui_settings.visible_columns.wave or false)
+    if ch1 then ui_settings.visible_columns.wave = val1; save_options() end
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Waveform per file. Peaks are cached on disk, so only the first look at a file costs anything.")
+    end
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Sample Rate##col", ui_settings.visible_columns.sample_rate)
+    if ch1 then ui_settings.visible_columns.sample_rate = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Channels##col", ui_settings.visible_columns.channels)
+    if ch1 then ui_settings.visible_columns.channels = val1; save_options() end
+    r.ImGui_SameLine(ctx, 320)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "BPM##col", ui_settings.visible_columns.bpm)
+    if ch1 then ui_settings.visible_columns.bpm = val1; save_options() end
+    r.ImGui_SameLine(ctx, 440)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Key##col", ui_settings.visible_columns.key)
+    if ch1 then ui_settings.visible_columns.key = val1; save_options() end
+    r.ImGui_SameLine(ctx, 560)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "LUFS##col", ui_settings.visible_columns.lufs or false)
+    if ch1 then ui_settings.visible_columns.lufs = val1; save_options() end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+
+    r.ImGui_Text(ctx, "Music Metadata:")
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Artist##col", ui_settings.visible_columns.artist)
+    if ch1 then ui_settings.visible_columns.artist = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Album##col", ui_settings.visible_columns.album)
+    if ch1 then ui_settings.visible_columns.album = val1; save_options() end
+    r.ImGui_SameLine(ctx, 320)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Title##col", ui_settings.visible_columns.title)
+    if ch1 then ui_settings.visible_columns.title = val1; save_options() end
+    r.ImGui_SameLine(ctx, 440)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Track##col", ui_settings.visible_columns.track)
+    if ch1 then ui_settings.visible_columns.track = val1; save_options() end
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Year##col", ui_settings.visible_columns.year)
+    if ch1 then ui_settings.visible_columns.year = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Genre##col", ui_settings.visible_columns.genre)
+    if ch1 then ui_settings.visible_columns.genre = val1; save_options() end
+    r.ImGui_SameLine(ctx, 320)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Comment##col", ui_settings.visible_columns.comment)
+    if ch1 then ui_settings.visible_columns.comment = val1; save_options() end
+    r.ImGui_SameLine(ctx, 440)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Composer##col", ui_settings.visible_columns.composer)
+    if ch1 then ui_settings.visible_columns.composer = val1; save_options() end
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Publisher##col", ui_settings.visible_columns.publisher)
+    if ch1 then ui_settings.visible_columns.publisher = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Time Signature##col", ui_settings.visible_columns.timesignature)
+    if ch1 then ui_settings.visible_columns.timesignature = val1; save_options() end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+
+    r.ImGui_Text(ctx, "Technical Metadata:")
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Bitrate##col", ui_settings.visible_columns.bitrate)
+    if ch1 then ui_settings.visible_columns.bitrate = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Bit Depth##col", ui_settings.visible_columns.bitspersample)
+    if ch1 then ui_settings.visible_columns.bitspersample = val1; save_options() end
+    r.ImGui_SameLine(ctx, 320)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Encoder##col", ui_settings.visible_columns.encoder)
+    if ch1 then ui_settings.visible_columns.encoder = val1; save_options() end
+    r.ImGui_SameLine(ctx, 440)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Copyright##col", ui_settings.visible_columns.copyright)
+    if ch1 then ui_settings.visible_columns.copyright = val1; save_options() end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+
+    r.ImGui_Text(ctx, "BWF Metadata:")
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Description##col", ui_settings.visible_columns.desc)
+    if ch1 then ui_settings.visible_columns.desc = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Originator##col", ui_settings.visible_columns.originator)
+    if ch1 then ui_settings.visible_columns.originator = val1; save_options() end
+    r.ImGui_SameLine(ctx, 320)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Orig Ref##col", ui_settings.visible_columns.originatorref)
+    if ch1 then ui_settings.visible_columns.originatorref = val1; save_options() end
+    r.ImGui_SameLine(ctx, 440)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Date##col", ui_settings.visible_columns.date)
+    if ch1 then ui_settings.visible_columns.date = val1; save_options() end
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "Time##col", ui_settings.visible_columns.time)
+    if ch1 then ui_settings.visible_columns.time = val1; save_options() end
+    r.ImGui_SameLine(ctx, 200)
+
+    ch1, val1 = r.ImGui_Checkbox(ctx, "UMID##col", ui_settings.visible_columns.umid)
+    if ch1 then ui_settings.visible_columns.umid = val1; save_options() end
+
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Separator(ctx)
+    r.ImGui_Spacing(ctx)
+
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0xFF4444FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0xFF6666FF)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0xFF8888FF)
+    if r.ImGui_Button(ctx, "Reset to Default Settings", -1, 0) then
+        ui_settings.window_bg_brightness = 0.12
+        ui_settings.window_opacity = 0.94
+        ui_settings.text_brightness = 1.0
+        ui_settings.grid_brightness = 1.0
+        ui_settings.button_brightness = 0.25
+        ui_settings.button_text_brightness = 1.0
+        ui_settings.waveform_hue = 0.55
+        ui_settings.waveform_thickness = 1.0
+        ui_settings.waveform_resolution_multiplier = 2.0
+        ui_settings.accent_hue = 0.55
+        ui_settings.selection_hue = 0.16
+        ui_settings.selection_saturation = 1.0
+        ui_settings.show_waveform_bg = true
+        ui_settings.hide_scrollbar = false
+        ui_settings.button_height = 25
+        ui_settings.selected_font = "Arial"
+        font_objects = {}  
+        update_fonts()  
+        save_options()
+    end
+    r.ImGui_PopStyleColor(ctx, 3)
+
+    r.ImGui_PopStyleColor(ctx, 9)
+    r.ImGui_PopStyleVar(ctx, 2)
+end
+
+function tkmb_ui.draw_shortcuts_page()
+    -- Keyboard Shortcuts Panel
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue))
+    r.ImGui_Text(ctx, "KEYBOARD SHORTCUTS")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Playback Controls
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "PLAYBACK")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Spacebar           Play / Stop Preview")
+    r.ImGui_BulletText(ctx, "Enter/Return       Play / Pause Preview (resumes from pause position)")
+    r.ImGui_BulletText(ctx, "Click Waveform     Seek to Position")
+    r.ImGui_BulletText(ctx, "Drag Waveform      Create Time Selection")
+    r.ImGui_BulletText(ctx, "Drag Selection     Drag the selected section onto a track (only that part is inserted)")
+    r.ImGui_BulletText(ctx, "norm Button        Normalize preview (right-click: Peak / LUFS, targets)")
+    r.ImGui_BulletText(ctx, "- Button           Hide / show the oscilloscope (end of the transport row)")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Selection & insert
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "SELECTION & INSERT")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Click              Select File")
+    r.ImGui_BulletText(ctx, "Shift+Click        Select Range")
+    r.ImGui_BulletText(ctx, "Ctrl+Click         Add / Remove File from Selection")
+    r.ImGui_BulletText(ctx, "Ctrl+Shift+Click   Add Range to Selection")
+    r.ImGui_BulletText(ctx, "Ctrl+A             Select All Files in View")
+    r.ImGui_BulletText(ctx, "Double-Click       Insert File at Edit Cursor (can be switched off in Settings)")
+    r.ImGui_BulletText(ctx, "Alt+Click          Insert File at Edit Cursor; on a selected file: the whole")
+    r.ImGui_Text(ctx, "                   selection, end to end")
+    r.ImGui_BulletText(ctx, "Right-Click        Insert in sequence / on separate tracks, Set Category,")
+    r.ImGui_Text(ctx, "                   LUFS, collections - for the whole selection")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Tags
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "COLLECTIONS ROW (ABOVE THE FILE LIST)")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Click              Show only files in this collection (click again: all)")
+    r.ImGui_BulletText(ctx, "Ctrl+Click         Combine collections (files must be in all of them)")
+    r.ImGui_BulletText(ctx, "Right-Click        Add / remove the selected files")
+    r.ImGui_BulletText(ctx, "+ Button           New collection, with the selected files in it")
+    r.ImGui_BulletText(ctx, "Arrow              Fold the row away")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Drag & Drop
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "DRAG & DROP TO ARRANGE")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Drag to Track      Insert file at drop position")
+    r.ImGui_BulletText(ctx, "Drag Selection     From the waveform: insert just the selected section")
+    r.ImGui_BulletText(ctx, "Drag to Lane       Drop onto a fixed lane to insert there")
+    r.ImGui_BulletText(ctx, "Shift+Drag         Drop into a new fixed lane (auto-enables fixed lanes)")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Zoom & Navigation
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "ZOOM & NAVIGATION")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Ctrl+Wheel         Horizontal Zoom (1x-8x)")
+    r.ImGui_BulletText(ctx, "Ctrl+Alt+Wheel     Vertical Zoom (0.5x-10x)")
+    r.ImGui_BulletText(ctx, "Wheel              Horizontal Scroll (when zoomed)")
+    r.ImGui_BulletText(ctx, "RESET Button       Reset All Zoom (visible when zoomed)")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Navigation
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "NAVIGATION")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Up/Down Arrow      Navigate File List")
+    r.ImGui_BulletText(ctx, "Page Up/Down       Jump Multiple Files")
+    r.ImGui_BulletText(ctx, "Home/End           First/Last File")
+    r.ImGui_BulletText(ctx, "Right-Click        Context Menu")
+    r.ImGui_BulletText(ctx, "Enter              Open/Close Folder (Tree View)")
+    r.ImGui_BulletText(ctx, "Left Arrow         Close Tree Node")
+    r.ImGui_BulletText(ctx, "Right Arrow        Open Tree Node")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- View Options
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "VIEW OPTIONS")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "SPECTRAL Button    Toggle FFT Frequency Analysis")
+    r.ImGui_BulletText(ctx, "GRID Button        Toggle Time Grid Overlay")
+    r.ImGui_BulletText(ctx, "SOLO Button        Solo Selected File (others hidden)")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Waveform Features
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "WAVEFORM FEATURES")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Spectral Colors:   Red=Bass, Orange=Low-Mid, Green=Mid,")
+    r.ImGui_Text(ctx, "                   Blue=High-Mid, Purple=High")
+    r.ImGui_BulletText(ctx, "Zoom Indicators:   H: Xx (horizontal), V: X.Xx (vertical)")
+    r.ImGui_BulletText(ctx, "Resolution:        Adjust in Settings (1x-8x detail)")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "SLICE / INSERT")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "SLICE Button       Detect transients (uses Sens slider)")
+    r.ImGui_BulletText(ctx, "CLEAR Button       Remove all slice markers")
+    r.ImGui_BulletText(ctx, "Sens Slider        Slice detection sensitivity (0.0-1.0)")
+    r.ImGui_BulletText(ctx, "REV Button         Visual reverse + reverse inserted slices")
+    r.ImGui_BulletText(ctx, "INS Button         Insert sliced sample on track at cursor")
+    r.ImGui_BulletText(ctx, "FD Button          Disable auto-fades on inserted slices")
+    r.ImGui_BulletText(ctx, "RND Button         Click: generate random slice order (numbers shown). Right-click: clear. INS plays in this order")
+    r.ImGui_BulletText(ctx, "Alt+Click marker   Start drag (move slice marker)")
+    r.ImGui_BulletText(ctx, "Alt+DoubleClick    On marker: remove / on waveform: add marker")
+    r.ImGui_BulletText(ctx, "Alt+RightClick     Select slice segment (INS = only that slice)")
+    r.ImGui_Spacing(ctx)
+    r.ImGui_Spacing(ctx)
+
+    -- Settings & Presets
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), hsv_to_color(ui_settings.accent_hue, 1.0, 0.8))
+    r.ImGui_Text(ctx, "SETTINGS & PRESETS")
+    r.ImGui_PopStyleColor(ctx, 1)
+    r.ImGui_Spacing(ctx)
+    r.ImGui_BulletText(ctx, "Menu > Settings    Opens this window on the Settings tab")
+    r.ImGui_BulletText(ctx, "Escape             Closes this window (in the browser: closes the browser)")
+    r.ImGui_BulletText(ctx, "Save Preset        Store Current Settings to JSON")
+    r.ImGui_BulletText(ctx, "Load Preset        Restore Saved Settings")
+    r.ImGui_BulletText(ctx, "Delete Preset      Remove Saved Preset")
+
+end
+
+function tkmb_ui.draw_main_content()
+    if ui.current_view_mode == "folders" or ui.current_view_mode == "collections" or ui.current_view_mode == "auto" or ui.current_view_mode == "searches" then
         draw_file_list()
     end
 end
@@ -17667,6 +19065,19 @@ function tkmb_ui.draw_waveform(divider_h, max_height)
             slice_marker_handled = true
         end
 
+        -- Over an existing selection the cursor turns into a hand, and a press
+        -- there picks the section up (tkmb_section) instead of starting a new one.
+        local over_section = not alt_down and not slice_marker_handled and not waveform.is_dragging
+            and not grid_hovered and not solo_hovered and not spectral_hovered
+            and tkmb_section.inside(file_path, normalized_x)
+        if over_section then
+            r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_Hand())
+            if r.ImGui_IsMouseClicked(ctx, 0) then
+                tkmb_section.press(file_path, normalized_x, mouse_x)
+                slice_marker_handled = true
+            end
+        end
+
         if r.ImGui_IsMouseClicked(ctx, 0) and not grid_hovered and not solo_hovered and not spectral_hovered and not slice_marker_handled then
             waveform.play_cursor_position = normalized_x
             waveform.slice_selected_index = nil
@@ -17718,6 +19129,7 @@ function tkmb_ui.draw_waveform(divider_h, max_height)
             waveform.selection_end = normalized_x
         end
     end
+    tkmb_section.update()
     if waveform.slice_press_index and not r.ImGui_IsMouseDown(ctx, 0) then
         local idx = waveform.slice_press_index
         if not waveform.slice_did_drag then
@@ -17904,7 +19316,7 @@ function tkmb_ui.select_location(i, location)
         search_filter.cached_location = ""
         search_filter.cached_flat_files = {}
         cached_metadata = {}
-        category_cache = {}
+        category_cache = tkmb_catfix.fresh()
         cached_cat_counts = {}
         cached_cat_counts_loc = ""
         cached_cat_filter = {}
@@ -17945,7 +19357,9 @@ end
 -- in both; all that differs is the order and what they are nested in.
 function tkmb_ui.layout_classic()
     local window_width = r.ImGui_GetContentRegionAvail(ctx)
-    local min_left_panel = 190
+    -- Never narrower than the transport needs; draw_transport measures that
+    -- every frame, since it depends on the fonts and the Auto Key label.
+    local min_left_panel = math.max(190, ui.transport_min_w or 0)
     local max_left_panel = math.max(min_left_panel, window_width - 200)
     local left_panel_width = math.max(min_left_panel, math.min(ui.left_panel_width or 200, max_left_panel))
     local right_panel_width = math.max(100, window_width - left_panel_width - 10)
@@ -18004,6 +19418,7 @@ function tkmb_ui.layout_classic()
         local _, win_pad_y = r.ImGui_GetStyleVar(ctx, r.ImGui_StyleVar_WindowPadding())
         local footer_extra_h = math.ceil(item_sp_y + frame_pad_y + (win_pad_y * 0.5) + 2)
         local FOOTER_H = ui.waveform_preview_height + divider_h + footer_extra_h
+        if not ui_settings.show_waveform_panel then FOOTER_H = 0 end
         tkmb_ui.draw_topbar()
         if ui.current_view_mode ~= "settings" and ui.current_view_mode ~= "shortcuts" then
             r.ImGui_Separator(ctx)
@@ -18016,7 +19431,9 @@ function tkmb_ui.layout_classic()
             tkmb_ui.draw_main_content()
             r.ImGui_EndChild(ctx)
         end
-        tkmb_ui.draw_waveform(divider_h)
+        if ui_settings.show_waveform_panel then
+            tkmb_ui.draw_waveform(divider_h)
+        end
         r.ImGui_EndChild(ctx)
     end
 end
@@ -18073,7 +19490,8 @@ function tkmb_ui.layout_strip()
 
     -- Padding each region carries besides its own height: the waveform its divider, the
     -- scope its separator and filename bar, the folder pane its divider.
-    local wave_extra = divider_h + math.ceil(item_sp_y + frame_pad_y + (win_pad_y * 0.5) + 2)
+    local show_wave = ui_settings.show_waveform_panel
+    local wave_extra = show_wave and (divider_h + math.ceil(item_sp_y + frame_pad_y + (win_pad_y * 0.5) + 2)) or 0
     local osc_extra = 0
     if ui.show_oscilloscope then
         osc_extra = select(2, r.ImGui_CalcTextSize(ctx, "X")) + 4 + (item_sp_y * 4) + divider_h
@@ -18083,7 +19501,7 @@ function tkmb_ui.layout_strip()
     local _, avail = r.ImGui_GetContentRegionAvail(ctx)
     local budget = avail - TRANSPORT_H - MIN_LIST_H - nav_extra - wave_extra - osc_extra
     local nav_h = show_nav and math.max(0, ui.strip_nav_height or 160) or 0
-    local wave_h = math.max(40, ui.waveform_preview_height)
+    local wave_h = show_wave and math.max(40, ui.waveform_preview_height) or 0
     local osc_h = ui.show_oscilloscope and math.max(40, ui.strip_osc_height or 110) or 0
     local need = nav_h + wave_h + osc_h
     if need > budget then
@@ -18094,7 +19512,7 @@ function tkmb_ui.layout_strip()
             give = math.min(over, osc_h - 40)
             osc_h, over = osc_h - give, over - give
         end
-        if over > 0 then
+        if over > 0 and wave_h > 0 then
             give = math.min(over, wave_h - 40)
             wave_h, over = wave_h - give, over - give
         end
@@ -18142,7 +19560,9 @@ function tkmb_ui.layout_strip()
         r.ImGui_EndChild(ctx)
     end
 
-    tkmb_ui.draw_waveform(divider_h, wave_cap)
+    if show_wave then
+        tkmb_ui.draw_waveform(divider_h, wave_cap)
+    end
     if ui.show_oscilloscope then
         -- Above the scope, so dragging up makes it taller - the same direction as the
         -- waveform divider. It stands in for the separator the scope draws for itself in
@@ -18178,6 +19598,8 @@ function loop()
     tkmb_thumb.budget = 2
     process_lufs_analysis_queue()
     tkmb_peaks.process()
+    tkmb_norm.tick()
+    tkmb_sel.frame()
     if not r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
         ctx = r.ImGui_CreateContext('TK Media Browser')
         normal_font = r.ImGui_CreateFont('sans-serif', font_size)
@@ -18197,7 +19619,6 @@ function loop()
     local has_files = (file_location.current_files and #file_location.current_files > 0) or (file_location.flat_view and search_filter.cached_flat_files and #search_filter.cached_flat_files > 0)
     if has_files then
         if file_location.flat_view then
-            ui.visible_files = {}
             -- Same list the table will draw, worked out the same way. This runs
             -- at the top of the frame and the file count is read further down,
             -- while the table is drawn afterwards, so without it the count
@@ -18207,17 +19628,26 @@ function loop()
             local files_to_use = tkmb_display.list(search_filter.sorted_files, search_filter.filtered_files)
             if #files_to_use == 0 then files_to_use = search_filter.cached_flat_files end
             files_to_use = tkmb_shape.filter(files_to_use)
-            for i = 1, #files_to_use do
-                local file = files_to_use[i]
-                if file and not file.is_dir then
-                    table.insert(ui.visible_files, {
-                        name = file.name,
-                        path = file.full_path,
-                        full_path = file.full_path,
-                        parent_folder = file.parent_folder
-                    })
+            -- The copy is only made again when the list itself changed. Making it
+            -- every frame cost about 19 ms on a 15,000 file location, which on its
+            -- own kept the browser under 60 frames a second.
+            local vis_key = tostring(files_to_use) .. "\0" .. #files_to_use
+            if tkmb_search.vis_key ~= vis_key or not tkmb_search.vis_list then
+                local vis = {}
+                for i = 1, #files_to_use do
+                    local file = files_to_use[i]
+                    if file and not file.is_dir then
+                        vis[#vis + 1] = {
+                            name = file.name,
+                            path = file.full_path,
+                            full_path = file.full_path,
+                            parent_folder = file.parent_folder
+                        }
+                    end
                 end
+                tkmb_search.vis_key, tkmb_search.vis_list = vis_key, vis
             end
+            ui.visible_files = tkmb_search.vis_list
         else
             ui.visible_files = build_visible_files_list(file_location.current_files, file_location.current_location)
             if search_filter.sorted_files and #search_filter.sorted_files > 0 then
@@ -18325,10 +19755,12 @@ function loop()
         local _wrw, _wrh = r.ImGui_GetWindowSize(ctx)
         insert_state.win_rect = { x = _wrx, y = _wry, w = _wrw, h = _wrh }
         
-        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) then
+        -- Keys typed while the settings window has focus belong to it: Escape
+        -- closes that window, not the browser, and the arrows do not walk the list.
+        if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape()) and not tkmb_setwin.focused then
             open = false
         end
-        if not r.ImGui_IsPopupOpen(ctx, '', r.ImGui_PopupFlags_AnyPopupId()) then
+        if not tkmb_setwin.focused and not r.ImGui_IsPopupOpen(ctx, '', r.ImGui_PopupFlags_AnyPopupId()) then
             handle_keyboard_navigation()
         end
         if ui.remember_window_position and not r.ImGui_IsWindowDocked(ctx) then
@@ -18352,6 +19784,7 @@ function loop()
         
         r.ImGui_End(ctx)
     end
+    tkmb_setwin.draw()
     
     if cache_mgmt.scan_message ~= "" then
         local viewport = r.ImGui_GetMainViewport(ctx)
