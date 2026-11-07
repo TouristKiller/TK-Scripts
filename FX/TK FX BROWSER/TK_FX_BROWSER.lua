@@ -1,8 +1,13 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.23
+-- @version 3.2.24
 -- @changelog:
 --[[
+    v3.2.24:
+        + TK Notes 2.8.0: Word-wise editing like any Windows text box. Ctrl+Left/Right jumps a word, Ctrl+Shift+Left/Right selects word by word (without the space behind it), Ctrl+Backspace/Delete removes the word before/after the caret. Bold and text-size formatting inside the word stays intact. Requested via the contact form
+        + TK Notes 2.8.0: File > Auto-save TXT in project folder keeps a plain-text copy of Project, Track and Item notes next to the .rpp, updated as you type (tabs become sections). Off by default and shared with TK Workbench Notes, which writes the same file. File > Show TXT in project folder opens it in Explorer or Finder. Requested via the contact form
+        + TK Notes 2.8.0: New action "TK Notes - Toggle focus between note and arrange view" (TK_Notes_Toggle_focus.lua). Give it any shortcut, type lyrics, press it to hand the keyboard to the arrange view for play/stop, and press it again to carry on typing where the cursor was. It works from inside the note as well, and starts TK Notes if needed. Needs js_ReaScriptAPI. Requested via the contact form
+        + TK Notes 2.8.0: Save as TXT no longer writes the hidden bold and size markers into the file
     v3.2.23:
         + Patchbay: FX node view: Replace FX... in a plugin's right-click menu swaps it for another plugin, picked through the same search and browse menus as Add FX. The new plugin takes over the old one's place: in series or in parallel, the pin routing for the pins both plugins have (so a sidechain stays wired), and a node position you set by hand. It is one undo step, and it is not offered on a container, where it would throw away everything inside. Requested by AndreiMir.
         + Patchbay: FX node view: Copy FX in the right-click menu, then Paste after this or Replace with copied on another plugin. The copy keeps all its settings and can be pasted on another track too. While something is copied, every Add FX popup (the + and = buttons, and a right-click on the empty canvas) offers it at the top, so it can also go in series, in parallel or at the end of the chain. Requested by AndreiMir.

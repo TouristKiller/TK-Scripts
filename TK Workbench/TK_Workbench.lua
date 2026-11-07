@@ -1,12 +1,12 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.3
+-- @version 1.0.4
 -- @changelog:
--- v1.0.3
---   + Idea Vault: A preview can now go into the project as audio on its own, without loading the track template behind it. Right-click an idea for "Insert preview as audio" on a new track or on the selected track, or use the new Insert audio button. You get the part exactly as it was played, as one item, without the instruments and FX that cost CPU, which is handy for trying parts out in the timeline. The item follows Lock to tempo, so an idea recorded at another tempo fits the grid without being transposed. Requested on the REAPER forum
---   + Idea Vault: Ideas can be dragged straight onto a track in the arrange to insert their preview as audio. The edit cursor follows the mouse while dragging, so you can see where the item will start, and dropping below the last track puts it on a new track
---   + Idea Vault: An inserted preview can be swapped for the idea's real tracks later. Select the item and press Swap for tracks in Idea Vault, or run the new action TK_Idea_Swap_To_Tracks.lua, which works without Workbench running and can go in the media item context menu. The tracks are loaded below the preview's track and lined up so the part plays exactly where the audio did, tempo fitting included, and a track Insert audio made for the preview is removed. One undo step, also for several previews at once. Ideas captured from now on also record where their preview starts, so the alignment is exact even when a time selection was used for the render
---   + Idea Vault: Load into project now fits exactly the tracks the template added, wherever REAPER puts them in the project, instead of assuming they land at the bottom
+-- v1.0.4
+--   + Notes: Word-wise editing like any Windows text box. Ctrl+Left/Right jumps a word, Ctrl+Shift+Left/Right selects word by word (without the space behind it), and Ctrl+Backspace/Delete removes the word before or after the caret. Bold and text-size formatting inside the word stays intact. Requested via the contact form
+--   + Notes: Shift+arrow keys now select text. Until now the keyboard could not select at all, and a plain arrow key left a mouse selection standing instead of collapsing it
+--   + Notes: Auto-save TXT in project folder (Notes settings, the ... button) keeps a plain-text copy of Project, Track, Item and Region notes next to the .rpp, updated as you type. It is one switch shared with TK Notes, and both write the same file in the same layout, with blocks as sections. Show TXT in project folder opens it in Explorer or Finder. Global notes and never-saved projects are skipped
+--   + Notes: New action "TK Workbench: Notes - Toggle focus between note and arrange view". Give it any shortcut, type lyrics, press it to hand the keyboard to the arrange view for play/stop, and press it again to carry on typing where the caret was. Notes reads the shortcut you assigned, so it works from inside the note as well, and it opens Workbench and the Notes view when needed. Requested via the contact form
 
 local r = reaper
 

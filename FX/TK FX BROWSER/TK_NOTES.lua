@@ -1,7 +1,12 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.7.0
+-- @version 2.8.0
 -- @changelog
+-- 2.8.0
+--   + Word-wise editing like any Windows text box: Ctrl+Left/Right jumps a word, Ctrl+Shift+Left/Right selects word by word (without the space behind it), Ctrl+Backspace/Delete removes the word before/after the caret. Bold and text-size formatting inside the word stays intact
+--   + File > Auto-save TXT in project folder: keeps a plain-text copy of Project, Track and Item notes next to the .rpp, updated as you type (tabs become sections). Off by default, and the same switch as in TK Workbench Notes, which writes the same file. Global notes and never-saved projects are skipped. File > Show TXT in project folder opens the folder with the file selected (Windows, macOS; on Linux the folder)
+--   + New action "TK Notes - Toggle focus between note and arrange view" (TK_Notes_Toggle_focus.lua): give it any shortcut in the Action list, then type lyrics, press the shortcut to hand the keyboard to the arrange view for play/stop, and press it again to carry on typing where the cursor was. TK Notes reads the shortcut you assigned, so it works from inside the note as well. Starts TK Notes if it is not running. Needs js_ReaScriptAPI
+--   + Save as TXT no longer writes the hidden bold and size markers into the file
 -- 2.7.0
 --   + Shared notes with TK Workbench: both scripts now read and write the same note, so a note taken in one appears in the other and either can edit it. Each still works entirely on its own - neither needs the other installed - and notes you already have are copied into the shared form the first time you open them, never moved or rewritten in place. If both scripts happened to hold a note on the same context, both are kept and shown side by side as an extra tab here and an extra note block there, because there is no way to tell which one you meant to keep
 --   + Fix: Global notes were lost on restart. They are stored in reaper-extstate.ini, which is a flat file that cannot hold a line break, so a note with more than one line was silently truncated to nothing. Line breaks are now encoded on the way in and decoded on the way out; notes written by earlier versions still read back exactly as they were. Reported by vik-tan
@@ -586,6 +591,145 @@ local function GetGlobalDefaults()
     return defaults
 end
 
+-- Optional plain-text copy of the note in the project folder, rewritten on
+-- every autosave. Off by default; one switch for all contexts, kept in
+-- ExtState and shared with TK Workbench's Notes module, which writes the same
+-- file the same way (NoteTxt in modules/notes.lua - keep the two in step). Global notes belong to no project, and a project that has never
+-- been saved has no folder, so both are skipped. Grouped in one table to spare
+-- top-level local slots.
+local TxtExport = { enabled = false, last_written = {} }
+
+function TxtExport.load_setting()
+    TxtExport.enabled = r.GetExtState(EXT_NAMESPACE, "txt_export") == "1"
+end
+
+function TxtExport.set_enabled(on)
+    TxtExport.enabled = on and true or false
+    r.SetExtState(EXT_NAMESPACE, "txt_export", TxtExport.enabled and "1" or "0", true)
+    TxtExport.last_written = {}
+end
+
+-- Folder and file name (without extension) of the project the note lives in.
+function TxtExport.project_location(proj)
+    if not proj then return nil end
+    local i = 0
+    while true do
+        local p, fn = r.EnumProjects(i, "")
+        if not p then return nil end
+        if p == proj then
+            if not fn or fn == "" then return nil end
+            local dir, file = fn:match("^(.*)[/\\]([^/\\]+)$")
+            if not dir then return nil end
+            return dir, (file:gsub("%.[Rr][Pp][Pp]%-?%w*$", ""))
+        end
+        i = i + 1
+    end
+end
+
+function TxtExport.safe_name(s)
+    s = tostring(s or ""):gsub('[<>:"/\\|%?%*%c]', "_"):gsub("^%s+", ""):gsub("[%s%.]+$", "")
+    if #s > 60 then s = s:sub(1, 60) end
+    return s
+end
+
+-- Hidden formatting tags have no meaning in a .txt file.
+function TxtExport.plain(text)
+    return (tostring(text or ""):gsub("{s=%d+}", ""):gsub("{/s}", ""):gsub("%*%*", ""))
+end
+
+-- Full path of the .txt for the note on screen, plus its folder; nil when the
+-- note has no project folder (Global notes, never-saved projects).
+function TxtExport.target()
+    if state.mode == "global" then return nil end
+    local dir, proj_name = TxtExport.project_location(state.current_proj)
+    if not dir then return nil end
+
+    local suffix
+    if state.mode == "project" then
+        suffix = ""
+    elseif state.mode == "track" and state.current_track_guid then
+        local track = state.current_track
+        if track and not r.ValidatePtr2(state.current_proj, track, "MediaTrack*") then track = nil end
+        local name = state.track_name
+        if track then
+            local _, tn = r.GetTrackName(track, "")
+            if tn and tn ~= "" then name = tn end
+        end
+        suffix = " - Track - " .. TxtExport.safe_name(name or "Track")
+    elseif state.mode == "item" and state.current_item_guid then
+        -- Item names repeat easily (same source file), so a short piece of the
+        -- GUID keeps two items from writing over each other's file.
+        local item = state.current_item
+        if item and not r.ValidatePtr2(state.current_proj, item, "MediaItem*") then item = nil end
+        local name = "Item"
+        local take = item and r.GetActiveTake(item)
+        if take then
+            local _, tn = r.GetTakeName(take)
+            if tn and tn ~= "" then name = tn:gsub("%.%w+$", "") end
+        end
+        local short = tostring(state.current_item_guid):gsub("[{}%-]", ""):sub(1, 6)
+        suffix = " - Item - " .. TxtExport.safe_name(name) .. " " .. short
+    else
+        return nil
+    end
+    return dir .. PATH_SEP .. proj_name .. " - Notes" .. suffix .. ".txt", dir
+end
+
+-- Opens the file manager on the note's .txt (selected), or on the project
+-- folder when the file has not been written yet. Explorer and Finder can
+-- select a file; Linux file managers have no common way to, so there the
+-- folder opens.
+function TxtExport.reveal()
+    local path, dir = TxtExport.target()
+    if not path then return end
+    local os_name = r.GetOS()
+    local exists = r.file_exists(path)
+    if os_name:match("^Win") then
+        if exists then
+            r.ExecProcess('explorer.exe /select,"' .. path .. '"', -1)
+        else
+            r.ExecProcess('explorer.exe "' .. dir .. '"', -1)
+        end
+    elseif os_name:match("^OSX") or os_name:match("^macOS") then
+        if exists then
+            r.ExecProcess('/usr/bin/open -R "' .. path .. '"', -1)
+        else
+            r.ExecProcess('/usr/bin/open "' .. dir .. '"', -1)
+        end
+    else
+        r.ExecProcess('xdg-open "' .. dir .. '"', -1)
+    end
+end
+
+function TxtExport.write()
+    -- Read live: TK Workbench's Notes module flips the same switch.
+    TxtExport.load_setting()
+    if not TxtExport.enabled then return end
+    local path = TxtExport.target()
+    if not path then return end
+
+    local body
+    if state.tabs_enabled and #state.tabs > 1 then
+        local parts = {}
+        for idx, tab in ipairs(state.tabs) do
+            local tab_text = (idx == state.active_tab_index) and state.text or tab.text
+            parts[#parts + 1] = "=== " .. (tab.name or ("Tab " .. idx)) .. " ===\n" .. TxtExport.plain(tab_text)
+        end
+        body = table.concat(parts, "\n\n")
+    else
+        body = TxtExport.plain(state.text)
+    end
+
+    if TxtExport.last_written[path] == body then return end
+    -- Do not leave empty files behind for notes that were never written in.
+    if body:match("^%s*$") and not r.file_exists(path) then return end
+    local file = io.open(path, "w")
+    if not file then return end
+    file:write(body)
+    file:close()
+    TxtExport.last_written[path] = body
+end
+
 local function LoadNotebook()
     if r.HasExtState(EXT_NAMESPACE, "auto_context") then
         state.auto_context = r.GetExtState(EXT_NAMESPACE, "auto_context") == "1"
@@ -594,7 +738,8 @@ local function LoadNotebook()
     if r.HasExtState(EXT_NAMESPACE, "window_pinned") then
         state.window_pinned = r.GetExtState(EXT_NAMESPACE, "window_pinned") == "1"
     end
-    
+    TxtExport.load_setting()
+
     UpdateActiveContext(true)
 end
 
@@ -861,6 +1006,7 @@ local function SaveNotebook()
     -- Written alongside the legacy keys, not instead of them: the old storage
     -- stays current so an older build of either script still finds its notes.
     SaveSharedStore()
+    TxtExport.write()
 
     if saved_text and saved_align and saved_color and saved_images and saved_strokes and saved_font_size and saved_font_family and saved_window_width and saved_window_height and saved_show_status and saved_tabs_enabled and saved_tabs_data then
         state.dirty = false
@@ -3518,6 +3664,159 @@ local function MoveCaretRight(text, caret)
     return next_after - 1
 end
 
+-- Word-wise caret movement and deletion (Ctrl+arrows, Ctrl+Backspace/Delete),
+-- behaving like a Windows text box. The text holds hidden formatting tags
+-- ({s=N}, {/s} and **); those are treated as transparent here so a word jump
+-- never stops inside one and a word delete never removes half of a pair.
+-- Grouped in one table to spare top-level local slots.
+-- TK Workbench's Notes module (modules/notes.lua) carries a copy of this
+-- table; keep the two the same.
+local NoteWords = {}
+
+function NoteWords.tokens(text)
+    local toks = {}
+    local len = #text
+    local i = 1
+    while i <= len do
+        local b = text:byte(i)
+        local e, cls
+        if b == 123 then
+            local open = text:match("^{s=%d+}", i)
+            if open then
+                e, cls = i + #open - 1, "fmt"
+            elseif text:match("^{/s}", i) then
+                e, cls = i + 3, "fmt"
+            end
+        elseif b == 42 and i < len and text:byte(i + 1) == 42 then
+            e, cls = i + 1, "fmt"
+        end
+        if not e then
+            local nxt = utf8.offset(text, 2, i)
+            e = (nxt or (len + 1)) - 1
+            if b == 10 then
+                cls = "nl"
+            elseif b == 32 or b == 9 or b == 13 then
+                cls = "space"
+            elseif b >= 128 or b == 39 or b == 95 or text:sub(i, i):match("%w") then
+                -- Non-ASCII counts as a letter, and so does the apostrophe, so
+                -- "don't" and "café" are one word each.
+                cls = "word"
+            else
+                cls = "punct"
+            end
+        end
+        toks[#toks + 1] = { s = i, e = e, cls = cls }
+        i = e + 1
+    end
+    return toks
+end
+
+-- Caret position (0-based byte offset) of the start of the word before caret.
+function NoteWords.left(text, caret)
+    local toks = NoteWords.tokens(text)
+    local k = #toks
+    while k >= 1 and toks[k].e > caret do k = k - 1 end
+    local skipped_space = false
+    while k >= 1 and (toks[k].cls == "fmt" or toks[k].cls == "space") do
+        if toks[k].cls == "space" then skipped_space = true end
+        k = k - 1
+    end
+    if k < 1 then return 0 end
+    if toks[k].cls == "nl" then
+        -- Blanks at the start of a line stop at that line start; from the line
+        -- start itself one more press steps back over the line break.
+        if skipped_space then return toks[k].e end
+        return toks[k].s - 1
+    end
+    local cls = toks[k].cls
+    local start = toks[k].s
+    while k >= 1 and (toks[k].cls == cls or toks[k].cls == "fmt") do
+        if toks[k].cls == cls then start = toks[k].s end
+        k = k - 1
+    end
+    return start - 1
+end
+
+-- Caret position of the start of the next word after caret (the word itself
+-- and the blanks behind it are passed, as in Notepad and Word).
+function NoteWords.right(text, caret)
+    local toks = NoteWords.tokens(text)
+    local n = #toks
+    local k = 1
+    while k <= n and toks[k].s <= caret do k = k + 1 end
+    while k <= n and toks[k].cls == "fmt" do k = k + 1 end
+    if k > n then return #text end
+    if toks[k].cls == "nl" then return toks[k].e end
+    local pos = caret
+    local cls = toks[k].cls
+    if cls ~= "space" then
+        while k <= n and (toks[k].cls == cls or toks[k].cls == "fmt") do
+            if toks[k].cls == cls then pos = toks[k].e end
+            k = k + 1
+        end
+    end
+    while k <= n and (toks[k].cls == "space" or toks[k].cls == "fmt") do
+        if toks[k].cls == "space" then pos = toks[k].e end
+        k = k + 1
+    end
+    return pos
+end
+
+-- Caret position of the end of the next word: blanks first, then the word,
+-- stopping right after it. Used for Ctrl+Right and Ctrl+Shift+Right so a word
+-- selection does not drag the trailing space along (Ctrl+Delete still uses
+-- NoteWords.right and takes the space with it).
+function NoteWords.word_end(text, caret)
+    local toks = NoteWords.tokens(text)
+    local n = #toks
+    local k = 1
+    while k <= n and toks[k].s <= caret do k = k + 1 end
+    local pos = caret
+    local skipped_space = false
+    while k <= n and (toks[k].cls == "space" or toks[k].cls == "fmt") do
+        if toks[k].cls == "space" then pos = toks[k].e; skipped_space = true end
+        k = k + 1
+    end
+    if k > n then return #text end
+    if toks[k].cls == "nl" then
+        -- Trailing blanks stop at the line end; from the line end itself one
+        -- more press steps over the line break.
+        if skipped_space then return pos end
+        return toks[k].e
+    end
+    local cls = toks[k].cls
+    while k <= n and (toks[k].cls == cls or toks[k].cls == "fmt") do
+        if toks[k].cls == cls then pos = toks[k].e end
+        k = k + 1
+    end
+    return pos
+end
+
+-- Removes the visible text between two caret positions but keeps any
+-- formatting tags inside the range, so bold and size pairs stay matched.
+-- Returns new_text, the caret (= range start), the number of line breaks
+-- removed (for shifting line colours), the range end after widening and the
+-- tags that were kept in place.
+function NoteWords.delete_range(text, a, b)
+    if a > b then a, b = b, a end
+    if a == b then return text, a, 0 end
+    local kept = {}
+    local removed_nl = 0
+    for _, t in ipairs(NoteWords.tokens(text)) do
+        if t.e > a and t.s <= b then
+            -- A caret parked inside a tag widens the range to the whole tag.
+            if t.s <= a then a = t.s - 1 end
+            if t.e > b then b = t.e end
+            if t.cls == "fmt" then
+                kept[#kept + 1] = text:sub(t.s, t.e)
+            elseif t.cls == "nl" then
+                removed_nl = removed_nl + 1
+            end
+        end
+    end
+    return text:sub(1, a) .. table.concat(kept) .. text:sub(b + 1), a, removed_nl, b, table.concat(kept)
+end
+
 local function BuildEditorLayout(ctx, text, wrap_width, line_height)
     local lines = {}
     local len = #text
@@ -4121,7 +4420,38 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
             end
         end
 
-        if r.ImGui_Key_Backspace and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Backspace(), true) then
+        -- Ctrl+Backspace / Ctrl+Delete with nothing selected: remove the word
+        -- before / after the caret. With a selection they fall through to the
+        -- normal handlers below, which delete the selection.
+        local function delete_word(forward)
+            local a, b
+            if forward then
+                a, b = editor.caret, NoteWords.right(state.text, editor.caret)
+            else
+                a, b = NoteWords.left(state.text, editor.caret), editor.caret
+            end
+            if a == b then return end
+            PushUndoState(true)
+            local first_line = GetSourceLineFromByte(state.text, a + 1)
+            local new_text, new_caret, nl_count = NoteWords.delete_range(state.text, a, b)
+            if nl_count > 0 then
+                for i = first_line + 1, first_line + nl_count do state.line_colors[i] = nil end
+                ShiftLineColors(state.line_colors, first_line + nl_count + 1, -nl_count)
+            end
+            state.text = new_text
+            editor.caret = new_caret
+            ClearSelection(editor, editor.caret)
+            text_changed = true
+            caret_changed = true
+        end
+        local word_backspace = ctrl_down and not HasSelection(editor) and r.ImGui_Key_Backspace
+            and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Backspace(), true)
+        local word_delete = ctrl_down and not HasSelection(editor) and r.ImGui_Key_Delete
+            and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Delete(), true)
+        if word_backspace then delete_word(false) end
+        if word_delete then delete_word(true) end
+
+        if not word_backspace and r.ImGui_Key_Backspace and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Backspace(), true) then
             if HasSelection(editor) then
                 PushUndoState(true)
                 local sel_start, sel_end = GetSelectionRange(editor)
@@ -4160,7 +4490,7 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
             end
         end
 
-        if r.ImGui_Key_Delete and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Delete(), true) then
+        if not word_delete and r.ImGui_Key_Delete and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Delete(), true) then
             if HasSelection(editor) then
                 PushUndoState(true)
                 local sel_start, sel_end = GetSelectionRange(editor)
@@ -4200,7 +4530,10 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
         end
 
         if r.ImGui_Key_LeftArrow and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_LeftArrow(), true) then
-            if HasSelection(editor) and not shift_down then
+            if ctrl_down then
+                -- Ctrl+Left jumps a word, Ctrl+Shift+Left selects it.
+                move_caret_to(NoteWords.left(state.text, editor.caret), shift_down)
+            elseif HasSelection(editor) and not shift_down then
                 local start_pos = GetSelectionRange(editor)
                 if start_pos then
                     move_caret_to(start_pos, false)
@@ -4214,7 +4547,14 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
         end
 
         if r.ImGui_Key_RightArrow and r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_RightArrow(), true) then
-            if HasSelection(editor) and not shift_down then
+            if ctrl_down then
+                -- Ctrl+Right jumps a word, Ctrl+Shift+Right selects it.
+                -- Ctrl+Right lands on the start of the next word; with Shift it
+                -- stops at the end of the word so the selection has no trailing space.
+                local target = shift_down and NoteWords.word_end(state.text, editor.caret)
+                    or NoteWords.right(state.text, editor.caret)
+                move_caret_to(target, shift_down)
+            elseif HasSelection(editor) and not shift_down then
                 local _, end_pos = GetSelectionRange(editor)
                 if end_pos then
                     move_caret_to(end_pos, false)
@@ -4371,10 +4711,27 @@ local function DrawMenuBar()
             if ok and path and path ~= "" then
                 local file = io.open(path, "w")
                 if file then
-                    file:write(state.text)
+                    file:write(TxtExport.plain(state.text))
                     file:close()
                 end
             end
+        end
+        TxtExport.load_setting()
+        if r.ImGui_MenuItem(ctx, "Auto-save TXT in project folder", nil, TxtExport.enabled) then
+            TxtExport.set_enabled(not TxtExport.enabled)
+            if TxtExport.enabled then TxtExport.write() end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+            r.ImGui_SetTooltip(ctx, "Keeps a plain-text copy of Project, Track and Item notes next to the .rpp,\nupdated as you type. Global notes and unsaved projects are skipped.")
+        end
+        local has_txt_target = TxtExport.target() ~= nil
+        if r.ImGui_MenuItem(ctx, "Show TXT in project folder", nil, false, has_txt_target) then
+            TxtExport.reveal()
+        end
+        if r.ImGui_IsItemHovered(ctx, r.ImGui_HoveredFlags_AllowWhenDisabled and r.ImGui_HoveredFlags_AllowWhenDisabled() or 0) then
+            r.ImGui_SetTooltip(ctx, has_txt_target
+                and "Opens the project folder with this note's .txt selected\n(just the folder if the file has not been written yet)."
+                or "Global notes and unsaved projects have no project folder.")
         end
         r.ImGui_Separator(ctx)
         local size_label = string.format("Apply window size (%dx%d)", state.window_width or 600, state.window_height or 400)
@@ -6511,6 +6868,299 @@ local function DrawEditor()
     DrawStatusBar(status_height)
 end
 
+-- Focus toggle between the note and the arrange view, driven by the action
+-- TK_Notes_Toggle_focus.lua so the user picks the shortcut in the Action list.
+-- Two ways in:
+--  * from REAPER: the action leaves a request in ExtState, picked up here on
+--    the next frame (and TK Notes takes the keyboard);
+--  * from inside TK Notes: this window captures the keyboard while typing,
+--    so REAPER never sees the shortcut. The keys bound to the action are
+--    therefore read from reaper-kb.ini and watched for here as well.
+-- Moving real OS focus needs js_ReaScriptAPI. The window-matching part is the
+-- same approach as TK Workbench's keyboard handling. Grouped in one table to
+-- spare top-level local slots.
+local NotesFocus = {
+    ACTION_FILE = "TK_Notes_Toggle_focus.lua",
+    chords = {},
+    kb_next_read = 0,
+    heartbeat_next = 0,
+    was_focused = false,
+    take_tries = nil,
+    hwnd = nil,
+    hold_until = 0,
+    ignore_requests_until = 0,
+}
+
+function NotesFocus.normalize(path)
+    return (tostring(path or ""):gsub("\\", "/"):gsub("/+", "/"):lower())
+end
+
+-- REAPER virtual-key codes (as stored in reaper-kb.ini) to ImGui key names.
+NotesFocus.VK = {
+    [8] = "Backspace", [9] = "Tab", [13] = "Enter", [27] = "Escape", [32] = "Space",
+    [33] = "PageUp", [34] = "PageDown", [35] = "End", [36] = "Home",
+    [37] = "LeftArrow", [38] = "UpArrow", [39] = "RightArrow", [40] = "DownArrow",
+    [45] = "Insert", [46] = "Delete",
+    [106] = "KeypadMultiply", [107] = "KeypadAdd", [109] = "KeypadSubtract",
+    [110] = "KeypadDecimal", [111] = "KeypadDivide",
+    [186] = "Semicolon", [187] = "Equal", [188] = "Comma", [189] = "Minus",
+    [190] = "Period", [191] = "Slash", [192] = "GraveAccent",
+    [219] = "LeftBracket", [220] = "Backslash", [221] = "RightBracket", [222] = "Apostrophe",
+}
+
+function NotesFocus.imgui_key(vk)
+    local name = NotesFocus.VK[vk]
+    if not name then
+        if vk >= 65 and vk <= 90 then name = string.char(vk)
+        elseif vk >= 48 and vk <= 57 then name = string.char(vk)
+        elseif vk >= 96 and vk <= 105 then name = "Keypad" .. (vk - 96)
+        elseif vk >= 112 and vk <= 123 then name = "F" .. (vk - 111)
+        end
+    end
+    local fn = name and r["ImGui_Key_" .. name]
+    return fn and fn() or nil
+end
+
+-- Re-read every few seconds so a shortcut assigned while TK Notes is open
+-- starts working without a restart.
+function NotesFocus.read_keymap()
+    local now = r.time_precise()
+    if now < NotesFocus.kb_next_read then return end
+    NotesFocus.kb_next_read = now + 3
+    NotesFocus.chords = {}
+    if not (r.ImGui_IsKeyChordPressed and r.ImGui_Mod_Ctrl) then return end
+    local file = io.open(RESOURCE_PATH .. "/reaper-kb.ini", "r")
+    if not file then return end
+    local scripts = NotesFocus.normalize(RESOURCE_PATH .. "/Scripts/")
+    local wanted_name = NotesFocus.normalize(NotesFocus.ACTION_FILE)
+    local id
+    local keys = {}
+    for line in file:lines() do
+        local head = line:sub(1, 4)
+        if head == "SCR " and not id then
+            local section, sid, path = line:match('^SCR%s+%d+%s+(%d+)%s+(%S+)%s+"[^"]*"%s+"?([^"]+)"?')
+            if section == "0" and path then
+                local full = NotesFocus.normalize(path)
+                if not full:match("^%a:/") and full:sub(1, 1) ~= "/" then full = scripts .. full end
+                if full:sub(-#wanted_name - 1) == "/" .. wanted_name then id = sid end
+            end
+        elseif head == "KEY " then
+            local mods, key, cmd, section = line:match("^KEY%s+(%d+)%s+(%d+)%s+(%S+)%s+(%d+)")
+            if section == "0" then keys[#keys + 1] = { tonumber(mods), tonumber(key), cmd } end
+        end
+    end
+    file:close()
+    if not id then return end
+    for _, k in ipairs(keys) do
+        local mods, key, cmd = k[1], k[2], k[3]
+        if cmd == "_" .. id and mods < 128 then
+            -- Without the virtual-key flag the number is a character code.
+            if mods & 1 == 0 then
+                local ch = string.char(key % 256):upper():byte()
+                key = ch
+            end
+            local ikey = NotesFocus.imgui_key(key)
+            if ikey then
+                local chord = ikey
+                if mods & 4 ~= 0 then chord = chord | r.ImGui_Mod_Shift() end
+                if mods & 8 ~= 0 then chord = chord | r.ImGui_Mod_Ctrl() end
+                if mods & 16 ~= 0 then chord = chord | r.ImGui_Mod_Alt() end
+                if mods & 32 ~= 0 and r.ImGui_Mod_Super then chord = chord | r.ImGui_Mod_Super() end
+                NotesFocus.chords[#NotesFocus.chords + 1] = chord
+            end
+        end
+    end
+end
+
+function NotesFocus.shortcut_pressed()
+    for _, chord in ipairs(NotesFocus.chords) do
+        if r.ImGui_IsKeyChordPressed(ctx, chord) then return true end
+    end
+    return false
+end
+
+function NotesFocus.has_js()
+    return r.JS_Window_SetFocus and r.JS_Window_HandleFromAddress and r.JS_Window_ListAllChild
+        and r.JS_Window_GetRect and r.GetMainHwnd and true or false
+end
+
+function NotesFocus.handles(list)
+    local result = {}
+    for address in tostring(list or ""):gmatch("[^,]+") do
+        local number = tonumber(address)
+        local hwnd = number and r.JS_Window_HandleFromAddress(number) or nil
+        if hwnd then result[#result + 1] = hwnd end
+    end
+    return result
+end
+
+function NotesFocus.is_imgui(hwnd)
+    local class = r.JS_Window_GetClassName and r.JS_Window_GetClassName(hwnd) or ""
+    return class == "ImGuiWindow" or class:match("^reaper_imgui") ~= nil
+end
+
+-- Every ReaImGui window: floating ones are top-level, docked ones live under
+-- the main window or under a floating docker it owns.
+function NotesFocus.imgui_windows()
+    local result, seen = {}, {}
+    local function consider(hwnd)
+        if hwnd and not seen[hwnd] and NotesFocus.is_imgui(hwnd) then
+            seen[hwnd] = true
+            result[#result + 1] = hwnd
+        end
+    end
+    local main = r.GetMainHwnd()
+    local parents = { main }
+    if r.JS_Window_ListAllTop then
+        local _, tops = r.JS_Window_ListAllTop()
+        for _, top in ipairs(NotesFocus.handles(tops)) do
+            consider(top)
+            local owner = r.JS_Window_GetRelated and r.JS_Window_GetRelated(top, "OWNER") or nil
+            if owner == main then parents[#parents + 1] = top end
+        end
+    end
+    for _, parent in ipairs(parents) do
+        local _, children = r.JS_Window_ListAllChild(parent)
+        for _, child in ipairs(NotesFocus.handles(children)) do consider(child) end
+    end
+    return result
+end
+
+-- Titles cannot be trusted (a docked window shows its tab text), so the
+-- ReaImGui window is picked whose rectangle matches where this frame drew.
+function NotesFocus.notes_hwnd()
+    local rect = NotesFocus.rect
+    if not rect or not NotesFocus.has_js() then return nil end
+    local left, top, right, bottom = rect[1], rect[2], rect[1] + rect[3], rect[2] + rect[4]
+    if r.ImGui_PointConvertNative then
+        left, top = r.ImGui_PointConvertNative(ctx, rect[1], rect[2], true)
+        right, bottom = r.ImGui_PointConvertNative(ctx, rect[1] + rect[3], rect[2] + rect[4], true)
+    end
+    local best, best_error = nil, math.huge
+    for _, hwnd in ipairs(NotesFocus.imgui_windows()) do
+        if not r.JS_Window_IsVisible or r.JS_Window_IsVisible(hwnd) then
+            local ok, l, t, rr, b = r.JS_Window_GetRect(hwnd)
+            if ok then
+                -- Native y can run upwards (macOS), so compare the edges either way up.
+                local err = math.abs(l - left) + math.abs(rr - right)
+                    + math.min(math.abs(t - top) + math.abs(b - bottom), math.abs(t - bottom) + math.abs(b - top))
+                if err < best_error then best, best_error = hwnd, err end
+            end
+        end
+    end
+    if best and best_error <= 80 then return best end
+    return nil
+end
+
+function NotesFocus.holds(hwnd)
+    local focused = r.JS_Window_GetFocus and r.JS_Window_GetFocus() or nil
+    if not hwnd or not focused then return false end
+    return focused == hwnd or (r.JS_Window_IsChild and r.JS_Window_IsChild(hwnd, focused)) == true
+end
+
+-- Only a real parent is followed: GetParent also answers with the OWNER of a
+-- top-level window, and a floating window is owned by REAPER's main window.
+function NotesFocus.root(hwnd)
+    local root = hwnd
+    if r.JS_Window_GetParent and r.JS_Window_IsChild then
+        for _ = 1, 16 do
+            local parent = r.JS_Window_GetParent(root)
+            if not parent or not r.JS_Window_IsChild(parent, root) then break end
+            root = parent
+        end
+    end
+    return root
+end
+
+-- Note -> arrange view. Child id 1000 of the main window is the arrange view.
+function NotesFocus.release()
+    NotesFocus.take_tries = nil
+    NotesFocus.hwnd = nil
+    if not NotesFocus.has_js() then return end
+    local main = r.GetMainHwnd()
+    local arrange = r.JS_Window_FindChildByID and r.JS_Window_FindChildByID(main, 1000) or nil
+    if r.JS_Window_SetForeground then r.JS_Window_SetForeground(main) end
+    r.JS_Window_SetFocus(arrange or main)
+    if r.SetCursorContext then r.SetCursorContext(1, nil) end
+end
+
+-- Arrange view -> note. ImGui is asked first; the OS focus follows after the
+-- frame, retried for a few frames and held for half a second, because REAPER
+-- can hand the focus back to the window the shortcut came from.
+function NotesFocus.request_take()
+    NotesFocus.take_tries = 10
+    NotesFocus.hwnd = nil
+    NotesFocus.want_imgui_focus = true
+    local editor = EnsureEditorState and EnsureEditorState() or nil
+    if editor then
+        editor.request_focus = true
+        editor.active = true
+        editor.scroll_to_caret = true
+    end
+end
+
+function NotesFocus.apply_pending()
+    if not NotesFocus.take_tries then return end
+    if not NotesFocus.has_js() then NotesFocus.take_tries = nil; return end
+    local now = r.time_precise()
+    local hwnd = NotesFocus.hwnd
+    if not hwnd then
+        hwnd = NotesFocus.notes_hwnd()
+        if not hwnd then
+            NotesFocus.take_tries = NotesFocus.take_tries - 1
+            if NotesFocus.take_tries <= 0 then NotesFocus.take_tries = nil end
+            return
+        end
+        NotesFocus.hwnd = hwnd
+        NotesFocus.hold_until = now + 0.5
+    end
+    if not NotesFocus.holds(hwnd) then
+        if r.JS_Window_SetForeground then r.JS_Window_SetForeground(NotesFocus.root(hwnd)) end
+        r.JS_Window_SetFocus(hwnd)
+    end
+    if now >= NotesFocus.hold_until then
+        NotesFocus.take_tries = nil
+        NotesFocus.hwnd = nil
+    end
+end
+
+-- Before Begin: heartbeat for the action, and requests coming from it.
+function NotesFocus.before_frame()
+    local now = r.time_precise()
+    if now >= NotesFocus.heartbeat_next then
+        r.SetExtState(EXT_NAMESPACE, "heartbeat", string.format("%.3f", now), false)
+        NotesFocus.heartbeat_next = now + 0.5
+    end
+    NotesFocus.read_keymap()
+    if r.GetExtState(EXT_NAMESPACE, "focus_toggle") ~= "" then
+        r.SetExtState(EXT_NAMESPACE, "focus_toggle", "", false)
+        -- The same key press can arrive both ways; the in-window one wins.
+        if now >= NotesFocus.ignore_requests_until then
+            if NotesFocus.was_focused then NotesFocus.release() else NotesFocus.request_take() end
+        end
+    end
+    if NotesFocus.want_imgui_focus and r.ImGui_SetNextWindowFocus then
+        r.ImGui_SetNextWindowFocus(ctx)
+    end
+    NotesFocus.want_imgui_focus = false
+end
+
+-- Inside the window: remember where it is and whether it has the keyboard,
+-- and catch the action's shortcut while typing. Returns true when the
+-- shortcut was pressed, so the keys are not also handled as editing.
+function NotesFocus.inside_window()
+    local x, y = r.ImGui_GetWindowPos(ctx)
+    local w, h = r.ImGui_GetWindowSize(ctx)
+    NotesFocus.rect = { x, y, w, h }
+    NotesFocus.was_focused = r.ImGui_IsWindowFocused(ctx, r.ImGui_FocusedFlags_RootAndChildWindows())
+    if NotesFocus.was_focused and #NotesFocus.chords > 0 and NotesFocus.shortcut_pressed() then
+        NotesFocus.ignore_requests_until = r.time_precise() + 0.3
+        NotesFocus.release()
+        return true
+    end
+    return false
+end
+
 local function Frame()
     local target_width = state.window_width or 600
     local target_height = state.window_height or 400
@@ -6564,8 +7214,12 @@ local function Frame()
         pushed_rounding = true
     end
 
+    NotesFocus.before_frame()
+
     local visible, open = r.ImGui_Begin(ctx, SCRIPT_NAME, true, window_flags)
     if visible then
+        NotesFocus.inside_window()
+
         -- Capture keyboard input when window has focus to prevent REAPER shortcuts
         if type(r.ImGui_SetNextFrameWantCaptureKeyboard) == "function" and 
            type(r.ImGui_IsWindowFocused) == "function" then
@@ -6597,6 +7251,7 @@ local function Frame()
         end
     end
     r.ImGui_End(ctx)
+    NotesFocus.apply_pending()
 
     if pushed_rounding and r.ImGui_PopStyleVar then
         r.ImGui_PopStyleVar(ctx)
