@@ -1,12 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.4
+-- @version 1.0.5
 -- @changelog:
--- v1.0.4
---   + Notes: Word-wise editing like any Windows text box. Ctrl+Left/Right jumps a word, Ctrl+Shift+Left/Right selects word by word (without the space behind it), and Ctrl+Backspace/Delete removes the word before or after the caret. Bold and text-size formatting inside the word stays intact. Requested via the contact form
---   + Notes: Shift+arrow keys now select text. Until now the keyboard could not select at all, and a plain arrow key left a mouse selection standing instead of collapsing it
---   + Notes: Auto-save TXT in project folder (Notes settings, the ... button) keeps a plain-text copy of Project, Track, Item and Region notes next to the .rpp, updated as you type. It is one switch shared with TK Notes, and both write the same file in the same layout, with blocks as sections. Show TXT in project folder opens it in Explorer or Finder. Global notes and never-saved projects are skipped
---   + Notes: New action "TK Workbench: Notes - Toggle focus between note and arrange view". Give it any shortcut, type lyrics, press it to hand the keyboard to the arrange view for play/stop, and press it again to carry on typing where the caret was. Notes reads the shortcut you assigned, so it works from inside the note as well, and it opens Workbench and the Notes view when needed. Requested via the contact form
+-- v1.0.5
+--   + Idea Vault: Fixed Swap for tracks scattering the items of an idea with more than one item on a track when the preview audio sat later in the song than where the idea was captured. REAPER keeps a track's items sorted by position, and moving them one by one let an item jump past the others, so some were moved twice and others not at all. The same mistake could misplace items when Load into project fitted a multi-item idea to a slower project tempo. Gluing items before capturing is no longer needed as a workaround. Reported by sridhar
 
 local r = reaper
 

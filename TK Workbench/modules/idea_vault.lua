@@ -8,7 +8,7 @@ local M = {
   id = "idea_vault",
   title = "Idea Vault",
   icon = "IDV",
-  version = "0.1.6"
+  version = "0.1.7"
 }
 
 local state = {

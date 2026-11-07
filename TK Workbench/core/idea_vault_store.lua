@@ -1065,6 +1065,21 @@ end
 -- acting on an idea
 --------------------------------------------------------------------------------
 
+-- A track's items, collected before any of them is moved. REAPER keeps a
+-- track's item list sorted by position, so moving one item past another
+-- renumbers them: walking the list by index while moving would then shift
+-- some items twice and skip others. Exactly that scattered the MIDI items of
+-- multi-item ideas on a swap whenever the audio sat later than the bar the
+-- idea was captured at (a move earlier keeps the order, a single item has
+-- nothing to pass). Reported by sridhar.
+local function track_items(track)
+  local items = {}
+  for j = 0, r.CountTrackMediaItems(track) - 1 do
+    items[#items + 1] = r.GetTrackMediaItem(track, j)
+  end
+  return items
+end
+
 local SCALED_ITEM_KEYS = { "D_POSITION", "D_LENGTH", "D_FADEINLEN", "D_FADEOUTLEN", "D_SNAPOFFSET" }
 
 -- A track template records no tempo of its own - not one TEMPO line, no stretch
@@ -1082,8 +1097,7 @@ local SCALED_ITEM_KEYS = { "D_POSITION", "D_LENGTH", "D_FADEINLEN", "D_FADEOUTLE
 local function fit_items_to_tempo(tracks, ratio)
   local count = 0
   for _, track in ipairs(tracks) do
-    for j = 0, r.CountTrackMediaItems(track) - 1 do
-      local item = r.GetTrackMediaItem(track, j)
+    for _, item in ipairs(track_items(track)) do
       for _, key in ipairs(SCALED_ITEM_KEYS) do
         local value = r.GetMediaItemInfo_Value(item, key)
         if value and value ~= 0 then r.SetMediaItemInfo_Value(item, key, value * ratio) end
@@ -1360,8 +1374,7 @@ end
 local function shift_tracks(tracks, offset)
   if math.abs(offset) < 1e-9 then return end
   for _, track in ipairs(tracks) do
-    for j = 0, r.CountTrackMediaItems(track) - 1 do
-      local item = r.GetTrackMediaItem(track, j)
+    for _, item in ipairs(track_items(track)) do
       r.SetMediaItemInfo_Value(item, "D_POSITION", r.GetMediaItemInfo_Value(item, "D_POSITION") + offset)
     end
     for e = 0, r.CountTrackEnvelopes(track) - 1 do
@@ -1372,8 +1385,14 @@ local function shift_tracks(tracks, offset)
         if ok then r.SetEnvelopePoint(env, p, time + offset, value, shape, tension, selected, true) end
       end
       if points > 0 then r.Envelope_SortPoints(env) end
+      -- Automation items have no handle, only an index into a list REAPER
+      -- also keeps sorted, so they are moved in the order that never lets one
+      -- pass another: from the last one backwards when moving later.
       if r.CountAutomationItems then
-        for a = 0, r.CountAutomationItems(env) - 1 do
+        local count = r.CountAutomationItems(env)
+        local first, last, step = 0, count - 1, 1
+        if offset > 0 then first, last, step = count - 1, 0, -1 end
+        for a = first, last, step do
           local pos = r.GetSetAutomationItemInfo(env, a, "D_POSITION", 0, false)
           r.GetSetAutomationItemInfo(env, a, "D_POSITION", pos + offset, true)
         end
