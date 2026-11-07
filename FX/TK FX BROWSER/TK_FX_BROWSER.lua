@@ -1,8 +1,14 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.27
+-- @version 3.2.28
 -- @changelog:
 --[[
+    v3.2.28:
+        + Main window: The meter can stand upright, as in REAPER's mixer (Settings > View > Main Window Sections > Vertical Meter, or right-click the meter). L and R bars in a dark meter well with the dB scale between them, the unlit part of each colour zone dimmed and an LED look, the held peak in a readout above each bar (red when it went over 0 dB) and a line at the held level. R, L and L-S/LRA show their two values as two bars the same way. Pan, volume and width then sit beside the meter instead of in the Buttons section, so the meter gets that height: as knobs in one column (pan on top - L and R side by side in dual-pan mode - then width, and the larger volume knob at the bottom) or, with Knobs off, as a channel strip: slim pan and width sliders on top (center, 25%L, 100%W as in REAPER; drag or wheel, Shift for fine steps, double-click to reset, right-click for the pan mode menu or 100% width) and a volume fader right beside the meter, with a mixer taper that gives more travel around 0 dB, a 0 dB mark and its value in a readout underneath (drag or wheel, Shift for fine steps, double-click or right-click 0 dB, double right-click -12 dB). Meter Height sets how tall it is; you can also drag the grip at the right end of the METER header (double-click it for the default height). The meter modes P, R, L and L-S/LRA are a segmented switch above it, meter and controls are centred as one block, and a thin line in the track's colour runs under it. Pan and width read the same everywhere now, also on the knobs in the Buttons section: center, 25%L, 100%W. Click the meter to reset the held values. When the meter section is folded in, pan, volume and width go back to the Buttons section. Requested by Ezaky
+        + Main window: The horizontal meter has the same look as the vertical one: the segmented mode switch, both bars stacked in one dark well with the dB scale between them and their names on the left, dimmed colour zones with an LED look, the held values in readouts on the right (red after going over 0 dB) and the track colour line underneath. R, L and L-S/LRA name their bars M, I, S and LRA; the hover tooltip tells what is measured and the current values. Click the meter to reset the held values.
+        + Main window: Pan, volume and width now live in the meter section, under the horizontal meter as well as beside the vertical one, so the Buttons section holds just the buttons. Under the horizontal meter they line up with it: with Knobs on the row of knobs, otherwise slim pan and width sliders (dual pan: L, R and width side by side) over a horizontal volume fader in the same style as the vertical one - VOL on the left, the fader across the meter's width with its mixer taper and 0 dB mark, and its value in a readout on the right. When the meter section is folded in or switched off, they move to the Buttons section in the same style.
+        + Main window: A track name that does not fit between the buttons of the track header now moves to its own row under them, where it can use nearly the full width, instead of being cut short; the header grows a little for it. Handy with the main window narrow in a side dock. Names that fit stay where they were.
+        + Fix: In the screenshot window with Projects open, the sort button behind the search field (when sorting by rating, "R") and the Projects reload button R had the same ID, so one could trigger or block the other. The sort buttons and the Projects buttons now have IDs of their own.
     v3.2.27:
         + Main window: The colours you give folders in the Browser/INFO panel (right-click > Set Color...) now show in the main window's menus too: the subfolders under All Plugins, Category, Developer and Folders, and the main headers. Only the folder's own name takes the colour, not the plugins in it. Your own (custom) folders already did this. Requested on the REAPER forum
         + Main window: Drag a plugin from the track's FX list onto another track in the arrange view or the mixer to move it there (hold Ctrl to copy it instead). While dragging, the tooltip says which track it will go to. Dropping inside the list still changes the order. Requested on the REAPER forum
@@ -1486,6 +1492,8 @@ function SetDefaultConfig()
         main_section_buttons_enabled = true,
         show_header_track_icon = true,
         mix_knobs = false,
+        meter_vertical = false,
+        meter_vertical_height = 220,
         show_chain_builder = false,
         show_chain_builder_button = true,
         chain_builder_plugins = {},
@@ -8397,7 +8405,18 @@ function ShowConfigWindow()
             r.ImGui_SameLine(ctx)
             r.ImGui_SetCursorPosX(ctx, column2_width)
             _, config.mix_knobs = r.ImGui_Checkbox(ctx, "Knobs##mw", config.mix_knobs == true)
-            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show pan, volume and width in the Buttons section as rotary knobs instead of sliders.") end
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show pan, volume and width as rotary knobs instead of sliders.") end
+            r.ImGui_SameLine(ctx)
+            r.ImGui_SetCursorPosX(ctx, column3_width)
+            _, config.meter_vertical = r.ImGui_Checkbox(ctx, "Vertical Meter##mw", config.meter_vertical == true)
+            if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Show the meter upright, as in REAPER's mixer, with pan, volume and width beside it.\nAlso: right-click the meter, and drag the grip in the METER header to resize it.") end
+            if config.meter_vertical then
+                r.ImGui_SameLine(ctx)
+                r.ImGui_SetCursorPosX(ctx, column4_width)
+                r.ImGui_SetNextItemWidth(ctx, 100)
+                local meter_h_changed, meter_h = r.ImGui_SliderInt(ctx, "Meter Height##mw", DrawMeterModule.GetHeight(config), DrawMeterModule.VERTICAL_MIN_HEIGHT, DrawMeterModule.VERTICAL_MAX_HEIGHT)
+                if meter_h_changed then config.meter_vertical_height = meter_h end
+            end
 
             r.ImGui_Dummy(ctx, 0, 8)
 
@@ -15481,7 +15500,7 @@ function ShowScreenshotControls()
             local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
             local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
             local button_height = r.ImGui_GetFrameHeight(ctx)
-            if r.ImGui_Button(ctx, sort_label, 20, button_height) then
+            if r.ImGui_Button(ctx, sort_label .. "##ss_sort_mode", 20, button_height) then
                 local next_mode
                 if effective_mode == "alphabet" then
                     next_mode = "rating"
@@ -15676,7 +15695,7 @@ function ShowScreenshotControls()
             local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
             local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
             local button_height = r.ImGui_GetFrameHeight(ctx)
-            if r.ImGui_Button(ctx, sort_label, 20, button_height) then
+            if r.ImGui_Button(ctx, sort_label .. "##ss_sort_mode", 20, button_height) then
                 local next_mode
                 if effective_mode == "alphabet" then
                     next_mode = "rating"
@@ -17533,7 +17552,10 @@ function DisplayCustomFoldersInBrowser(folders, path_prefix)
     r.ImGui_PopStyleVar(ctx) -- Pop IndentSpacing
 end
 
-function DrawCollapseHeader(label, is_expanded, tooltip_show, tooltip_hide)
+-- resize (optional): { height, min, max, default, set = fn(h) } puts a grip
+-- at the right end of the header that drags the section's height (up when
+-- the FX list above gives way, otherwise down); a click there does not fold.
+function DrawCollapseHeader(label, is_expanded, tooltip_show, tooltip_hide, resize)
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local avail_w = r.ImGui_GetContentRegionAvail(ctx)
     local screen_x, screen_y = r.ImGui_GetCursorScreenPos(ctx)
@@ -17544,7 +17566,9 @@ function DrawCollapseHeader(label, is_expanded, tooltip_show, tooltip_hide)
     local mouse_x, mouse_y = r.ImGui_GetMousePos(ctx)
     local is_hovered = mouse_x >= screen_x and mouse_x <= screen_x + avail_w and
                        mouse_y >= screen_y and mouse_y <= screen_y + header_h
-    local is_clicked = is_hovered and r.ImGui_IsMouseClicked(ctx, 0)
+    local grip_w = resize and 26 or 0
+    local in_grip = resize and is_hovered and mouse_x >= screen_x + avail_w - grip_w
+    local is_clicked = is_hovered and not in_grip and r.ImGui_IsMouseClicked(ctx, 0)
 
     local base_color = config.button_background_color or 0x333333FF
     local base_r = (base_color >> 24) & 0xFF
@@ -17586,9 +17610,44 @@ function DrawCollapseHeader(label, is_expanded, tooltip_show, tooltip_hide)
 
     r.ImGui_DrawList_AddText(dl, text_x, text_y, text_color, label)
 
+    local grip_active = false
+    if resize then
+        r.ImGui_SetCursorScreenPos(ctx, screen_x + avail_w - grip_w, screen_y)
+        r.ImGui_InvisibleButton(ctx, "##resize_" .. label, grip_w, header_h)
+        grip_active = r.ImGui_IsItemActive(ctx)
+        if r.ImGui_IsItemActivated(ctx) then
+            HeaderResize = { label = label, h = resize.height, y = mouse_y,
+                up = MainFXPanelFrame == r.ImGui_GetFrameCount(ctx), room = MainFXPanelHeight or 0 }
+        end
+        if grip_active and HeaderResize and HeaderResize.label == label then
+            local dy = mouse_y - HeaderResize.y
+            local h = HeaderResize.h + (HeaderResize.up and -dy or dy)
+            local max_h = resize.max
+            if HeaderResize.up then max_h = math.min(max_h, HeaderResize.h + math.max(0, HeaderResize.room - 60)) end
+            resize.set(math.floor(math.max(resize.min, math.min(max_h, h)) + 0.5))
+        end
+        if r.ImGui_IsItemDeactivated(ctx) then
+            HeaderResize = nil
+            SaveConfig()
+        end
+        if in_grip and r.ImGui_IsMouseDoubleClicked(ctx, 0) then
+            resize.set(resize.default)
+            SaveConfig()
+        end
+        if in_grip or grip_active then r.ImGui_SetMouseCursor(ctx, r.ImGui_MouseCursor_ResizeNS()) end
+        local gx, gy = screen_x + avail_w - grip_w * 0.5, screen_y + header_h * 0.5
+        local gcol = (in_grip or grip_active) and 0xFFFFFFE6 or 0xFFFFFF66
+        for _, off in ipairs({ -3, 0, 3 }) do
+            r.ImGui_DrawList_AddLine(dl, gx - 5, gy + off, gx + 5, gy + off, gcol, 1)
+        end
+        r.ImGui_SetCursorScreenPos(ctx, screen_x, screen_y)
+    end
+
     r.ImGui_Dummy(ctx, avail_w, header_h + 2)
 
-    if is_hovered then
+    if in_grip or grip_active then
+        r.ImGui_SetTooltip(ctx, string.format("Drag to resize (%d px)\nDouble-click: default height", resize.height))
+    elseif is_hovered then
         local tip = is_expanded and (tooltip_hide or ("Hide " .. label)) or (tooltip_show or ("Show " .. label))
         r.ImGui_SetTooltip(ctx, tip)
     end
@@ -17983,7 +18042,7 @@ function ShowBrowserPanel()
         local effective_mode = (config and config.sort_mode) or screenshot_sort_mode
         local sort_label = (effective_mode == "alphabet") and "A" or (effective_mode == "rating") and "R" or "P"
         local button_height = r.ImGui_GetFrameHeight(ctx)
-        if r.ImGui_Button(ctx, sort_label, 20, button_height) then
+        if r.ImGui_Button(ctx, sort_label .. "##folder_sort_mode", 20, button_height) then
             local next_mode
             if effective_mode == "alphabet" then
                 next_mode = "rating"
@@ -22780,16 +22839,16 @@ function ShowScreenshotWindow()
             end
             r.ImGui_PopItemWidth(ctx)
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "\xE2\x98\xB0", btn_w, btn_h) then
+            if r.ImGui_Button(ctx, "\xE2\x98\xB0##project_columns", btn_w, btn_h) then
                 r.ImGui_OpenPopup(ctx, "##ProjectColumnsMenu")
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "i", btn_w, btn_h) then
+            if r.ImGui_Button(ctx, "i##project_info", btn_w, btn_h) then
                 config.show_project_info = not config.show_project_info
                 SaveConfig()
             end
             r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "R", btn_w, btn_h) then
+            if r.ImGui_Button(ctx, "R##project_reload", btn_w, btn_h) then
                 if projects then
                     for _, p in ipairs(projects) do
                         p.cached_rpp_info = nil
@@ -22873,7 +22932,7 @@ function ShowScreenshotWindow()
                 if show_project_cover then
                     r.ImGui_SameLine(ctx)
                     local align = config.project_cover_align or "right"
-                    if r.ImGui_Button(ctx, align == "right" and "R" or "L", 20, 0) then
+                    if r.ImGui_Button(ctx, (align == "right" and "R" or "L") .. "##project_cover_align", 20, 0) then
                         config.project_cover_align = align == "right" and "left" or "right"
                         col_changed = true
                     end
@@ -26724,10 +26783,10 @@ function FilterBox()
 
     local top_buttons_height = 5
     local tags_height = (config.main_section_tags_enabled and config.main_segment_tags_visible) and current_tag_window_height or 0
-    local meter_height = (config.main_section_meter_enabled and config.main_segment_meter_visible) and 90 or 0
+    local meter_height = (config.main_section_meter_enabled and config.main_segment_meter_visible) and GetMainMeterHeight() or 0
     local meter_spacing = 5
     local bottom_buttons_height = (config.main_section_buttons_enabled and config.main_segment_buttons_visible) and 70 or 0
-    local volume_slider_height = config.hideVolumeSlider and 0 or 40
+    local volume_slider_height = (config.hideVolumeSlider or MixControlsInMeter()) and 0 or 40
     
     local total_ui_elements = top_buttons_height + tags_height + meter_height + meter_spacing + bottom_buttons_height + volume_slider_height
     local search_results_max_height = window_height - total_ui_elements - 100
@@ -26789,7 +26848,7 @@ function FilterBox()
     end
     r.ImGui_SameLine(ctx)
     local sort_label_main = (sort_mode == "alphabet") and "A" or ((sort_mode == "rating") and "R" or ((sort_mode == "type") and "P" or "Sc"))
-    if r.ImGui_Button(ctx, sort_label_main, x_button_width, button_height) then
+    if r.ImGui_Button(ctx, sort_label_main .. "##main_sort_mode", x_button_width, button_height) then
         if sort_mode == "score" then
             sort_mode = "alphabet"
         elseif sort_mode == "alphabet" then
@@ -27931,13 +27990,13 @@ end
 
 MIX_KNOB_BIG, MIX_KNOB_SMALL = 44, 34
 
--- The Buttons section's pan / volume / width as one row of knobs (Knobs
--- setting): pan left (two knobs, L and R, in dual-pan mode), volume large in
--- the middle, width right, each with its value underneath.
-function DrawMixKnobRow(track, row_width)
+-- Pan (L and R in dual-pan mode), volume and width as knob descriptions,
+-- shared by the Buttons row and the column beside the vertical meter.
+MIX_PAN_OPTS = { drag = 0.01, fine = 0.002, wheel = 0.05, wheel_fine = 0.01 }
+
+function BuildMixKnobs(track)
     local pan_mode = r.GetMediaTrackInfo_Value(track, "I_PANMODE")
     local knobs = {}
-    local pan_opts = { center = 0, default = 0, drag = 0.01, fine = 0.002, wheel = 0.05, wheel_fine = 0.01 }
     if pan_mode == 6 then
         knobs[#knobs + 1] = { id = "panL", key = "D_DUALPANL", min = -1, max = 1, size = MIX_KNOB_SMALL, kind = "pan", label = "L " }
         knobs[#knobs + 1] = { id = "panR", key = "D_DUALPANR", min = -1, max = 1, size = MIX_KNOB_SMALL, kind = "pan", label = "R " }
@@ -27946,7 +28005,50 @@ function DrawMixKnobRow(track, row_width)
     end
     knobs[#knobs + 1] = { id = "vol", size = MIX_KNOB_BIG, kind = "vol" }
     knobs[#knobs + 1] = { id = "width", key = "D_WIDTH", min = -1, max = 1, size = MIX_KNOB_SMALL, kind = "width" }
+    return knobs, pan_mode
+end
 
+-- Draws one knob at the cursor and returns the value text for under it.
+function DrawMixKnob(track, knob)
+    local label
+    if knob.kind == "vol" then
+        local vol = r.GetMediaTrackInfo_Value(track, "D_VOL")
+        local db = (vol and vol > 0) and (20 * math.log(vol, 10)) or -60
+        db = math.max(-60, math.min(12, db))
+        local new_db, hovered, right = DrawRotaryKnob("vol", db, -60, 12, knob.size, {
+            center = 0, default = 0, drag = 0.3, fine = 0.05, wheel = 1, wheel_fine = 0.1, warn_above = 0,
+            tooltip = function(v) return string.format("Volume: %.1f dB", v) ..
+                "\nDrag or wheel (Shift: fine), double-click 0 dB\nRight-click 0 dB / double right-click -12 dB" end })
+        if hovered and r.ImGui_IsMouseDoubleClicked(ctx, 1) then new_db = -12 elseif right then new_db = 0 end
+        if math.abs(new_db - db) > 0.0001 then r.SetMediaTrackInfo_Value(track, "D_VOL", 10 ^ (new_db / 20)) end
+        label = (new_db <= -59.95) and "-inf dB" or string.format("%.1f dB", new_db)
+    elseif knob.kind == "pan" then
+        local v = r.GetMediaTrackInfo_Value(track, knob.key)
+        local opts = { center = 0, default = 0, drag = MIX_PAN_OPTS.drag, fine = MIX_PAN_OPTS.fine, wheel = MIX_PAN_OPTS.wheel, wheel_fine = MIX_PAN_OPTS.wheel_fine,
+            tooltip = function(x) return (knob.label ~= "" and ("Pan " .. knob.label) or "Pan: ") .. PanLabel(x) ..
+                "\nDrag or wheel (Shift: fine), double-click centre\nRight-click: pan mode" end }
+        local nv, _, right = DrawRotaryKnob(knob.id, v, -1, 1, knob.size, opts)
+        if right then r.ImGui_OpenPopup(ctx, "PanModeMenu") end
+        if math.abs(nv - v) > 0.00001 then r.SetMediaTrackInfo_Value(track, knob.key, nv) end
+        label = StripPanText(nv)
+    else
+        local v = r.GetMediaTrackInfo_Value(track, "D_WIDTH")
+        local nv, _, right = DrawRotaryKnob("width", v, -1, 1, knob.size, {
+            center = 0, default = 1, drag = 0.01, fine = 0.002, wheel = 0.05, wheel_fine = 0.01,
+            tooltip = function(x) return string.format("Width: %.0f%%", x * 100) ..
+                "\nDrag or wheel (Shift: fine)\nDouble-click or right-click 100%" end })
+        if right then nv = 1 end
+        if math.abs(nv - v) > 0.00001 then r.SetMediaTrackInfo_Value(track, "D_WIDTH", nv) end
+        label = WidthText(nv)
+    end
+    return label
+end
+
+-- The Buttons section's pan / volume / width as one row of knobs (Knobs
+-- setting): pan left (two knobs, L and R, in dual-pan mode), volume large in
+-- the middle, width right, each with its value underneath.
+function DrawMixKnobRow(track, row_width)
+    local knobs, pan_mode = BuildMixKnobs(track)
     local row_x, row_y = r.ImGui_GetCursorPos(ctx)
     local slot = row_width / #knobs
     local line_h = r.ImGui_GetTextLineHeight(ctx)
@@ -27954,37 +28056,7 @@ function DrawMixKnobRow(track, row_width)
         local kx = row_x + (k - 1) * slot + (slot - knob.size) * 0.5
         local ky = row_y + (MIX_KNOB_BIG - knob.size) * 0.5
         r.ImGui_SetCursorPos(ctx, kx, ky)
-        local label
-        if knob.kind == "vol" then
-            local vol = r.GetMediaTrackInfo_Value(track, "D_VOL")
-            local db = (vol and vol > 0) and (20 * math.log(vol, 10)) or -60
-            db = math.max(-60, math.min(12, db))
-            local new_db, hovered, right = DrawRotaryKnob("vol", db, -60, 12, knob.size, {
-                center = 0, default = 0, drag = 0.3, fine = 0.05, wheel = 1, wheel_fine = 0.1, warn_above = 0,
-                tooltip = function(v) return string.format("Volume: %.1f dB", v) ..
-                    "\nDrag or wheel (Shift: fine), double-click 0 dB\nRight-click 0 dB / double right-click -12 dB" end })
-            if hovered and r.ImGui_IsMouseDoubleClicked(ctx, 1) then new_db = -12 elseif right then new_db = 0 end
-            if math.abs(new_db - db) > 0.0001 then r.SetMediaTrackInfo_Value(track, "D_VOL", 10 ^ (new_db / 20)) end
-            label = (new_db <= -59.95) and "-inf dB" or string.format("%.1f dB", new_db)
-        elseif knob.kind == "pan" then
-            local v = r.GetMediaTrackInfo_Value(track, knob.key)
-            local opts = { center = 0, default = 0, drag = pan_opts.drag, fine = pan_opts.fine, wheel = pan_opts.wheel, wheel_fine = pan_opts.wheel_fine,
-                tooltip = function(x) return (knob.label ~= "" and ("Pan " .. knob.label) or "Pan: ") .. PanLabel(x) ..
-                    "\nDrag or wheel (Shift: fine), double-click centre\nRight-click: pan mode" end }
-            local nv, _, right = DrawRotaryKnob(knob.id, v, -1, 1, knob.size, opts)
-            if right then r.ImGui_OpenPopup(ctx, "PanModeMenu") end
-            if math.abs(nv - v) > 0.00001 then r.SetMediaTrackInfo_Value(track, knob.key, nv) end
-            label = knob.label .. PanLabel(nv)
-        else
-            local v = r.GetMediaTrackInfo_Value(track, "D_WIDTH")
-            local nv, _, right = DrawRotaryKnob("width", v, -1, 1, knob.size, {
-                center = 0, default = 1, drag = 0.01, fine = 0.002, wheel = 0.05, wheel_fine = 0.01,
-                tooltip = function(x) return string.format("Width: %.0f%%", x * 100) ..
-                    "\nDrag or wheel (Shift: fine)\nDouble-click or right-click 100%" end })
-            if right then nv = 1 end
-            if math.abs(nv - v) > 0.00001 then r.SetMediaTrackInfo_Value(track, "D_WIDTH", nv) end
-            label = string.format("%.0f%%", nv * 100)
-        end
+        local label = DrawMixKnob(track, knob)
         local tw = r.ImGui_CalcTextSize(ctx, label)
         r.ImGui_SetCursorPos(ctx, row_x + (k - 1) * slot + (slot - tw) * 0.5, row_y + MIX_KNOB_BIG + 1)
         r.ImGui_Text(ctx, label)
@@ -27992,6 +28064,380 @@ function DrawMixKnobRow(track, row_width)
     DrawPanModeMenu(track, pan_mode)
     r.ImGui_SetCursorPos(ctx, row_x, row_y + MIX_KNOB_BIG + line_h + 4)
     r.ImGui_Dummy(ctx, 0, 0)
+end
+
+-- Pan / volume / width live in the meter section (under the horizontal
+-- meter, beside the vertical one) while it is shown; folded in or switched
+-- off, they go to the Buttons section.
+function MixControlsInMeter()
+    return not config.hideVolumeSlider
+        and config.main_section_meter_enabled and config.main_segment_meter_visible
+end
+
+-- The knob column beside the vertical meter (Knobs on), starting at the
+-- cursor: one centred column with pan (L and R side by side in dual-pan
+-- mode) on top, width under it and volume at the bottom.
+function DrawMixVertical(track, col_w, col_h)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+    local x0, y0 = r.ImGui_GetCursorScreenPos(ctx)
+    local line_h = r.ImGui_GetTextLineHeight(ctx)
+    r.ImGui_PushID(ctx, "MixVertical")
+    local knobs, pan_mode = BuildMixKnobs(track)
+    local pans, width_knob, vol_knob = {}, nil, nil
+    for _, knob in ipairs(knobs) do
+        if knob.kind == "pan" then pans[#pans + 1] = knob
+        elseif knob.kind == "width" then width_knob = knob
+        else vol_knob = knob end
+    end
+    local rows = { pans, { width_knob }, { vol_knob } }
+    local gap = 6
+    local needed = 0
+    for i, row in ipairs(rows) do
+        needed = needed + row[1].size + line_h + 1 + (i < #rows and gap or 0)
+    end
+    local top = y0 + math.max(0, (col_h - needed) * 0.5)
+    local cx = x0 + col_w * 0.5
+    for _, row in ipairs(rows) do
+        local size = row[1].size
+        local spacing = size + 12
+        for i, knob in ipairs(row) do
+            local kx = cx + (i - (#row + 1) * 0.5) * spacing
+            r.ImGui_SetCursorScreenPos(ctx, kx - size * 0.5, top)
+            local label = DrawMixKnob(track, knob)
+            local tw = r.ImGui_CalcTextSize(ctx, label)
+            r.ImGui_SetCursorScreenPos(ctx, kx - tw * 0.5, top + size + 1)
+            r.ImGui_Text(ctx, label)
+        end
+        top = top + size + line_h + 1 + gap
+    end
+    DrawPanModeMenu(track, pan_mode)
+    r.ImGui_PopID(ctx)
+end
+
+-- The channel strip beside the vertical meter (Knobs off): slim pan and
+-- width sliders on top, a volume fader along the meter with its readout
+-- underneath. The fader has a mixer taper: more travel around 0 dB.
+FADER_TAPER = { { -60, 0 }, { -40, 0.12 }, { -24, 0.3 }, { -12, 0.5 }, { -6, 0.62 }, { 0, 0.77 }, { 6, 0.89 }, { 12, 1 } }
+STRIP_ACCENT, STRIP_WARN = 0x5BA0E0FF, 0xE0A040FF
+StripDrag = {}
+
+function FaderPosFromDb(db)
+    if db <= -60 then return 0 end
+    if db >= 12 then return 1 end
+    for i = 2, #FADER_TAPER do
+        local a, b = FADER_TAPER[i - 1], FADER_TAPER[i]
+        if db <= b[1] then return a[2] + (db - a[1]) / (b[1] - a[1]) * (b[2] - a[2]) end
+    end
+    return 1
+end
+
+function FaderDbFromPos(t)
+    if t <= 0 then return -60 end
+    if t >= 1 then return 12 end
+    for i = 2, #FADER_TAPER do
+        local a, b = FADER_TAPER[i - 1], FADER_TAPER[i]
+        if t <= b[2] then return a[1] + (t - a[2]) / (b[2] - a[2]) * (b[1] - a[1]) end
+    end
+    return 12
+end
+
+function StripRowHeight()
+    return r.ImGui_GetTextLineHeight(ctx) + 14
+end
+
+function WidthText(v)
+    return string.format("%d%%W", math.floor(v * 100 + (v >= 0 and 0.5 or -0.5)))
+end
+
+function StripPanText(v)
+    if math.abs(v) < 0.005 then return "center" end
+    return string.format("%d%%%s", math.floor(math.abs(v) * 100 + 0.5), v < 0 and "L" or "R")
+end
+
+-- A slim horizontal slider: its value as text centred above a thin track,
+-- lit from opts.center to the handle. Drag (Shift: fine) or wheel,
+-- double-click resets to opts.default. Returns the new value, hovered and
+-- whether it was right-clicked.
+function DrawStripSlider(id, x, y, w, value, vmin, vmax, text_of, opts)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local lh = r.ImGui_GetTextLineHeight(ctx)
+    r.ImGui_SetCursorScreenPos(ctx, x, y)
+    r.ImGui_InvisibleButton(ctx, "##strip_" .. id, w, lh + 14)
+    local hovered, active = r.ImGui_IsItemHovered(ctx), r.ImGui_IsItemActive(ctx)
+    local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+    local tx1, tx2 = x + 6, x + w - 6
+    local span = math.max(1, tx2 - tx1)
+    local nv = value
+    if active then
+        local dx = r.ImGui_GetMouseDelta(ctx)
+        if dx ~= 0 then nv = nv + dx / span * (vmax - vmin) * (shift and 0.1 or 1) end
+    end
+    if hovered then
+        local wheel = r.ImGui_GetMouseWheel(ctx)
+        if wheel ~= 0 then nv = nv + wheel * (shift and opts.wheel_fine or opts.wheel) end
+        if r.ImGui_IsMouseDoubleClicked(ctx, 0) then nv = opts.default end
+    end
+    nv = math.max(vmin, math.min(vmax, nv))
+    local right = hovered and r.ImGui_IsMouseClicked(ctx, 1)
+
+    local text = text_of(nv)
+    local tw = r.ImGui_CalcTextSize(ctx, text)
+    r.ImGui_DrawList_AddText(dl, x + (w - tw) * 0.5, y, (hovered or active) and 0xFFFFFFFF or 0xC8C8C8FF, text)
+    local ty = y + lh + 7
+    local function px(v) return tx1 + (v - vmin) / (vmax - vmin) * span end
+    r.ImGui_DrawList_AddRectFilled(dl, tx1, ty - 2, tx2, ty + 2, 0x0B0B0BFF, 2)
+    r.ImGui_DrawList_AddRect(dl, tx1, ty - 2, tx2, ty + 2, 0x363636FF, 2)
+    local cx, hx = px(opts.center), px(nv)
+    r.ImGui_DrawList_AddLine(dl, cx, ty - 5, cx, ty + 5, 0x5A5A5AFF, 1)
+    if math.abs(hx - cx) > 0.5 then
+        r.ImGui_DrawList_AddRectFilled(dl, math.min(cx, hx), ty - 1, math.max(cx, hx), ty + 1, STRIP_ACCENT)
+    end
+    r.ImGui_DrawList_AddCircleFilled(dl, hx, ty, 5, (hovered or active) and 0xFFFFFFFF or 0xD0D0D0FF)
+    r.ImGui_DrawList_AddCircle(dl, hx, ty, 5, 0x101010FF, 0, 1.5)
+    if hovered and opts.tooltip then r.ImGui_SetTooltip(ctx, opts.tooltip(nv)) end
+    return nv, hovered, right
+end
+
+function DrawStripTop(track, x, y, w, pan_mode, one_row)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+    r.ImGui_PushID(ctx, "StripTop")
+    r.ImGui_PushFont(ctx, TinyFont, 10)
+    local row_h = StripRowHeight()
+    StripRowH = row_h
+    local gap = 6
+    local half = (w - gap) / 2
+    local function pan_slider(id, key, sx, sy, sw, name)
+        local v = r.GetMediaTrackInfo_Value(track, key)
+        local nv, _, right = DrawStripSlider(id, sx, sy, sw, v, -1, 1, StripPanText, {
+            center = 0, default = 0, wheel = 0.05, wheel_fine = 0.01,
+            tooltip = function(x) return name .. StripPanText(x) ..
+                "\nDrag or wheel (Shift: fine), double-click centre\nRight-click: pan mode" end })
+        if right then r.ImGui_OpenPopup(ctx, "PanModeMenu") end
+        if math.abs(nv - v) > 0.00001 then r.SetMediaTrackInfo_Value(track, key, nv) end
+    end
+    local wx, wy, ww
+    if pan_mode == 6 and one_row then
+        local third = (w - gap * 2) / 3
+        pan_slider("panL", "D_DUALPANL", x, y, third, "Pan L: ")
+        pan_slider("panR", "D_DUALPANR", x + third + gap, y, third, "Pan R: ")
+        wx, wy, ww = x + (third + gap) * 2, y, third
+    elseif pan_mode == 6 then
+        pan_slider("panL", "D_DUALPANL", x, y, half, "Pan L: ")
+        pan_slider("panR", "D_DUALPANR", x + half + gap, y, half, "Pan R: ")
+        wx, wy, ww = x, y + row_h + 2, w
+    else
+        pan_slider("pan", "D_PAN", x, y, half, "Pan: ")
+        wx, wy, ww = x + half + gap, y, half
+    end
+    local width = r.GetMediaTrackInfo_Value(track, "D_WIDTH")
+    local nw, _, right = DrawStripSlider("width", wx, wy, ww, width, -1, 1,
+        WidthText, {
+            center = 0, default = 1, wheel = 0.05, wheel_fine = 0.01,
+            tooltip = function(v) return string.format("Width: %.0f%%", v * 100) ..
+                "\nDrag or wheel (Shift: fine)\nDouble-click or right-click 100%" end })
+    if right then nw = 1 end
+    if math.abs(nw - width) > 0.00001 then r.SetMediaTrackInfo_Value(track, "D_WIDTH", nw) end
+    r.ImGui_PopFont(ctx)
+    DrawPanModeMenu(track, pan_mode)
+    r.ImGui_PopID(ctx)
+end
+
+function TrackVolumeDb(track)
+    local vol = r.GetMediaTrackInfo_Value(track, "D_VOL")
+    return (vol and vol > 0) and math.max(-60, math.min(12, 20 * math.log(vol, 10))) or -60
+end
+
+-- Input shared by the volume faders, right after their InvisibleButton:
+-- drag along the fader (Shift: fine) with the mixer taper, wheel (Shift:
+-- 0.1 dB), double-click 0 dB, right-click 0 dB, double right-click -12 dB.
+-- Sets the track volume; returns the new dB, hovered and active.
+function VolumeFaderInput(track, key, db, travel, vertical)
+    local hovered, active = r.ImGui_IsItemHovered(ctx), r.ImGui_IsItemActive(ctx)
+    local shift = r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift())
+    local new_db = db
+    if r.ImGui_IsItemActivated(ctx) then StripDrag[key] = FaderPosFromDb(db) end
+    if active and StripDrag[key] then
+        local dx, dy = r.ImGui_GetMouseDelta(ctx)
+        local d = vertical and -dy or dx
+        if d ~= 0 then
+            StripDrag[key] = math.max(0, math.min(1, StripDrag[key] + d / travel * (shift and 0.1 or 1)))
+            new_db = FaderDbFromPos(StripDrag[key])
+        end
+    end
+    if hovered then
+        local reset
+        local wheel = r.ImGui_GetMouseWheel(ctx)
+        if wheel ~= 0 then new_db, reset = math.max(-60, math.min(12, new_db + wheel * (shift and 0.1 or 0.5))), true end
+        if r.ImGui_IsMouseDoubleClicked(ctx, 0) then new_db, reset = 0, true end
+        if r.ImGui_IsMouseDoubleClicked(ctx, 1) then
+            new_db, reset = -12, true
+        elseif r.ImGui_IsMouseClicked(ctx, 1) then
+            new_db, reset = 0, true
+        end
+        if reset then StripDrag[key] = FaderPosFromDb(new_db) end
+        r.ImGui_SetTooltip(ctx, (new_db <= -59.95 and "Volume: -inf dB" or string.format("Volume: %.1f dB", new_db)) ..
+            "\nDrag (Shift: fine) or wheel, double-click 0 dB\nRight-click 0 dB / double right-click -12 dB")
+    end
+    if math.abs(new_db - db) > 0.0001 then
+        r.SetMediaTrackInfo_Value(track, "D_VOL", new_db <= -59.99 and 0 or 10 ^ (new_db / 20))
+    end
+    return new_db, hovered, active
+end
+
+-- A fader cap: shaded, with grip lines and a line in the accent colour
+-- across the middle (along the travel for a vertical fader).
+function DrawFaderCap(dl, x1, y1, x2, y2, hovered, active, accent, vertical)
+    r.ImGui_DrawList_AddRectFilled(dl, x1 + 1, y1 + 2, x2 + 1, y2 + 2, 0x00000090, 3)
+    local top_col = active and 0x9C9C9CFF or (hovered and 0x808080FF or 0x6C6C6CFF)
+    local bot_col = active and 0x4A4A4AFF or 0x2C2C2CFF
+    r.ImGui_DrawList_AddRectFilledMultiColor(dl, x1, y1, x2, y2, top_col, top_col, bot_col, bot_col)
+    r.ImGui_DrawList_AddRect(dl, x1, y1, x2, y2, 0x0A0A0AFF, 2)
+    local cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+    if vertical then
+        for _, off in ipairs({ -6, -3, 3, 6 }) do
+            r.ImGui_DrawList_AddLine(dl, x1 + 3, cy + off, x2 - 3, cy + off, 0x00000070)
+            r.ImGui_DrawList_AddLine(dl, x1 + 3, cy + off + 1, x2 - 3, cy + off + 1, 0xFFFFFF1C)
+        end
+        r.ImGui_DrawList_AddLine(dl, x1 + 2, cy, x2 - 2, cy, accent, 2)
+    else
+        for _, off in ipairs({ -4, 4 }) do
+            r.ImGui_DrawList_AddLine(dl, cx + off, y1 + 3, cx + off, y2 - 3, 0x00000070)
+            r.ImGui_DrawList_AddLine(dl, cx + off + 1, y1 + 3, cx + off + 1, y2 - 3, 0xFFFFFF1C)
+        end
+        r.ImGui_DrawList_AddLine(dl, cx, y1 + 2, cx, y2 - 2, accent, 2)
+    end
+end
+
+-- The volume fader in the lane x..x+w beside the meter's bars (top..bottom),
+-- its value in a readout underneath.
+function DrawVolumeFader(track, x, top, w, bottom)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local cap_w, cap_h = w - 8, 18
+    local f_top, f_bottom = top + 6, bottom - 6
+    local travel = math.max(10, f_bottom - f_top)
+    local cx = x + w * 0.5
+    local db = TrackVolumeDb(track)
+    r.ImGui_PushID(ctx, "VolumeFader")
+    r.ImGui_SetCursorScreenPos(ctx, x, f_top - cap_h * 0.5)
+    r.ImGui_InvisibleButton(ctx, "##fader", w, travel + cap_h)
+    local new_db, hovered, active = VolumeFaderInput(track, "fader", db, travel, true)
+
+    local function yOf(d) return f_bottom - FaderPosFromDb(d) * travel end
+    for _, d in ipairs({ 12, 6, 0, -6, -12, -24, -40 }) do
+        local ty = yOf(d)
+        local len, col = 4, 0x505050FF
+        if d == 0 then len, col = 7, 0xB0B0B0FF end
+        r.ImGui_DrawList_AddLine(dl, x + 1, ty, x + 1 + len, ty, col)
+        r.ImGui_DrawList_AddLine(dl, x + w - 1 - len, ty, x + w - 1, ty, col)
+    end
+    r.ImGui_DrawList_AddRectFilled(dl, cx - 2.5, top - 3, cx + 2.5, bottom + 3, 0x080808FF, 2)
+    r.ImGui_DrawList_AddRect(dl, cx - 2.5, top - 3, cx + 2.5, bottom + 3, 0x3A3A3AFF, 2)
+    local cy = yOf(new_db)
+    local accent = new_db > 0 and STRIP_WARN or STRIP_ACCENT
+    r.ImGui_DrawList_AddRectFilled(dl, cx - 1, cy, cx + 1, bottom + 2, (accent & 0xFFFFFF00) | 0x80)
+    DrawFaderCap(dl, cx - cap_w * 0.5, cy - cap_h * 0.5, cx + cap_w * 0.5, cy + cap_h * 0.5, hovered, active, accent, true)
+
+    r.ImGui_PushFont(ctx, TinyFont, 9)
+    local lh = r.ImGui_GetTextLineHeight(ctx)
+    local txt = new_db <= -59.95 and "-inf" or string.format("%.1f", new_db)
+    DrawMeterModule.DrawReadout(r, ctx, x + 1, bottom + 5, x + w - 1, bottom + 5 + lh + 2, txt,
+        new_db > 0 and STRIP_WARN or (new_db <= -59.95 and DrawMeterModule.PALETTE.dim_text or 0xE0E0E0FF))
+    r.ImGui_PopFont(ctx)
+    r.ImGui_PopID(ctx)
+end
+
+HFADER_H = 22
+
+-- The horizontal volume fader on the horizontal meter's grid: VOL in the
+-- label column, the fader over the bars' width, its value in the readout
+-- column.
+function DrawVolumeFaderH(track, x, y, w)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local label_w, readout_w = DrawMeterModule.H_LABEL_W, DrawMeterModule.H_READOUT_W
+    local left, right = x + label_w, x + w - readout_w - DrawMeterModule.H_GAP
+    local h = HFADER_H
+    local cap_w, cap_h = 14, h - 2
+    local f_left, f_right = left + 7, right - 7
+    local travel = math.max(10, f_right - f_left)
+    local cy = y + h * 0.5
+    local db = TrackVolumeDb(track)
+    r.ImGui_PushID(ctx, "VolumeFaderH")
+    r.ImGui_SetCursorScreenPos(ctx, left, y)
+    r.ImGui_InvisibleButton(ctx, "##hfader", math.max(10, right - left), h)
+    local new_db, hovered, active = VolumeFaderInput(track, "hfader", db, travel, false)
+
+    local function xOf(d) return f_left + FaderPosFromDb(d) * travel end
+    for _, d in ipairs({ -40, -24, -12, -6, 0, 6, 12 }) do
+        local tx = xOf(d)
+        local len, col = 3, 0x505050FF
+        if d == 0 then len, col = 5, 0xB0B0B0FF end
+        r.ImGui_DrawList_AddLine(dl, tx, y + 1, tx, y + 1 + len, col)
+        r.ImGui_DrawList_AddLine(dl, tx, y + h - 1 - len, tx, y + h - 1, col)
+    end
+    r.ImGui_DrawList_AddRectFilled(dl, left, cy - 2.5, right, cy + 2.5, 0x080808FF, 2)
+    r.ImGui_DrawList_AddRect(dl, left, cy - 2.5, right, cy + 2.5, 0x3A3A3AFF, 2)
+    local cx = xOf(new_db)
+    local accent = new_db > 0 and STRIP_WARN or STRIP_ACCENT
+    r.ImGui_DrawList_AddRectFilled(dl, left + 1, cy - 1, cx, cy + 1, (accent & 0xFFFFFF00) | 0x80)
+    DrawFaderCap(dl, cx - cap_w * 0.5, cy - cap_h * 0.5, cx + cap_w * 0.5, cy + cap_h * 0.5, hovered, active, accent, false)
+
+    r.ImGui_PushFont(ctx, TinyFont, 9)
+    local text_col = r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1)
+    local lw, lh = r.ImGui_CalcTextSize(ctx, "VOL")
+    r.ImGui_DrawList_AddText(dl, x + (label_w - 3 - lw) * 0.5, cy - lh * 0.5, text_col, "VOL")
+    local txt = new_db <= -59.95 and "-inf" or string.format("%.1f", new_db)
+    DrawMeterModule.DrawReadout(r, ctx, x + w - readout_w, cy - 8, x + w, cy + 8, txt,
+        new_db > 0 and STRIP_WARN or (new_db <= -59.95 and DrawMeterModule.PALETTE.dim_text or 0xE0E0E0FF))
+    r.ImGui_PopFont(ctx)
+    r.ImGui_PopID(ctx)
+end
+
+-- Pan / volume / width in a row block of HorizontalMixHeight(): under the
+-- horizontal meter, or in the Buttons section when the meter is folded in.
+-- Knobs: the row of knobs. Otherwise the slim pan and width sliders (dual
+-- pan: L, R and width) over the volume fader, on the meter's grid.
+function HorizontalMixHeight()
+    if config.mix_knobs then return MIX_KNOB_BIG + r.ImGui_GetTextLineHeight(ctx) + 10 end
+    return (StripRowH or 27) + 4 + HFADER_H + 6
+end
+
+function DrawHorizontalMix(track, x, y, w)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+    if config.mix_knobs then
+        r.ImGui_SetCursorScreenPos(ctx, x, y + 4)
+        DrawMixKnobRow(track, w)
+        return
+    end
+    local label_w = DrawMeterModule.H_LABEL_W
+    local pan_mode = r.GetMediaTrackInfo_Value(track, "I_PANMODE")
+    DrawStripTop(track, x + label_w, y, w - label_w, pan_mode, true)
+    DrawVolumeFaderH(track, x, y + (StripRowH or 27) + 4, w)
+end
+
+-- What the meter shows with its bars: under the horizontal meter the mix
+-- row, beside the vertical one the knob column (Knobs on) or the channel
+-- strip (Knobs off); nil when pan / volume / width are in the Buttons section.
+function BuildMeterMix()
+    if not MixControlsInMeter() or not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then return nil end
+    if not config.meter_vertical then
+        return { horizontal = { h = HorizontalMixHeight(), draw = function(x, y, w) DrawHorizontalMix(TRACK, x, y, w) end } }
+    end
+    local pan_mode = r.GetMediaTrackInfo_Value(TRACK, "I_PANMODE")
+    if config.mix_knobs then
+        return { gap = 12, column_w = pan_mode == 6 and 84 or 60,
+            column = function(w, h) DrawMixVertical(TRACK, w, h) end }
+    end
+    r.ImGui_PushFont(ctx, TinyFont, 10)
+    local row_h = StripRowHeight()
+    r.ImGui_PopFont(ctx)
+    local rows = pan_mode == 6 and 2 or 1
+    return { strip = {
+        gap = 4, fader_w = 34,
+        top_h = rows * row_h + (rows - 1) * 2 + 6,
+        top = function(x, y, w) DrawStripTop(TRACK, x, y, w, pan_mode) end,
+        fader = function(x, top, w, bottom) DrawVolumeFader(TRACK, x, top, w, bottom) end,
+    } }
 end
 
 -- Under the track header (header toggle with the picture icon): the track's
@@ -28041,91 +28487,11 @@ function DrawBottomButtons()
     local window_width = r.ImGui_GetWindowWidth(ctx)
     local track_info_width = math.max(window_width - 10, 125)
     local button_spacing = 3
-    if not config.hideVolumeSlider and config.mix_knobs then
-        DrawMixKnobRow(TRACK, track_info_width)
-    elseif not config.hideVolumeSlider then
-        local half_width = (track_info_width - button_spacing) / 2
-      
-        -- Pan slider met context menu
-        r.ImGui_PushItemWidth(ctx, half_width)
-        local pan_mode = r.GetMediaTrackInfo_Value(TRACK, "I_PANMODE")
-
-        if pan_mode == 6 then -- Dual Pan mode
-            -- Linker pan slider
-            r.ImGui_PushItemWidth(ctx, half_width/2 - 2)
-            local pan_L = r.GetMediaTrackInfo_Value(TRACK, "D_DUALPANL")
-            local pan_L_changed, new_pan_L = r.ImGui_SliderDouble(ctx, "##PanL", pan_L, -1, 1, "L: %.2f")
-            if r.ImGui_IsItemClicked(ctx, 1) then
-                r.ImGui_OpenPopup(ctx, "PanModeMenu")
-            end
-            
-            if pan_L_changed then
-                r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANL", new_pan_L)
-            end
-            
-            -- Rechter pan slider
-            r.ImGui_SameLine(ctx)
-            r.ImGui_PushItemWidth(ctx, half_width/2 - 2)
-            local pan_R = r.GetMediaTrackInfo_Value(TRACK, "D_DUALPANR")
-            local pan_R_changed, new_pan_R = r.ImGui_SliderDouble(ctx, "##PanR", pan_R, -1, 1, "R: %.2f")
-            if r.ImGui_IsItemClicked(ctx, 1) then
-                r.ImGui_OpenPopup(ctx, "PanModeMenu")
-            end
-            if pan_R_changed then
-                r.SetMediaTrackInfo_Value(TRACK, "D_DUALPANR", new_pan_R)
-            end
-        else
-            -- Normale pan slider
-            local pan = r.GetMediaTrackInfo_Value(TRACK, "D_PAN")
-            local pan_changed, new_pan = r.ImGui_SliderDouble(ctx, "##Pan", pan, -1, 1, "Pan: %.2f")
-            if r.ImGui_IsItemClicked(ctx, 1) then
-                r.ImGui_OpenPopup(ctx, "PanModeMenu")
-            end
-            if pan_changed then
-                r.SetMediaTrackInfo_Value(TRACK, "D_PAN", new_pan)
-            end
-        end
-
-        DrawPanModeMenu(TRACK, pan_mode)
-
-        -- Width slider
-        r.ImGui_SameLine(ctx)
-        r.ImGui_PushItemWidth(ctx, half_width)
-        local width = r.GetMediaTrackInfo_Value(TRACK, "D_WIDTH")
-        local display_width = width * 100
-        local width_changed, new_width = r.ImGui_SliderDouble(ctx, "##Width", display_width, -100, 100, "Width: %.0f%%")
-        if r.ImGui_IsItemClicked(ctx, 1) then  -- rechtsklik
-            r.SetMediaTrackInfo_Value(TRACK, "D_WIDTH", 1.0)  -- reset naar 100%
-        end
-        if width_changed then
-            r.SetMediaTrackInfo_Value(TRACK, "D_WIDTH", new_width / 100)
-        end
-        
-        -- volume slider
-        local volume = r.GetMediaTrackInfo_Value(TRACK, "D_VOL")
-        if volume and volume > 0 then
-            local volume_db = math.floor(20 * math.log(volume, 10) + 0.5)
-            r.ImGui_PushItemWidth(ctx, track_info_width)
-            
-            local changed, new_volume_db = r.ImGui_SliderInt(ctx, "##Volume", volume_db, -60, 12, "%d dB")
-    
-            if r.ImGui_IsItemHovered(ctx) then
-                r.ImGui_SetTooltip(ctx, "Rightclick 0db /double Rightclick -12db")
-                if r.ImGui_IsMouseDoubleClicked(ctx, 1) then
-                    new_volume_db = -12
-                    changed = true
-                elseif r.ImGui_IsMouseClicked(ctx, 1) then
-                    new_volume_db = 0
-                    changed = true
-                end
-            end
-    
-            if changed then
-                local new_volume = 10^(new_volume_db/20)
-                r.SetMediaTrackInfo_Value(TRACK, "D_VOL", new_volume)
-            end
-            r.ImGui_PopItemWidth(ctx)
-        end
+    if not config.hideVolumeSlider and not MixControlsInMeter() then
+        local mx, my = r.ImGui_GetCursorScreenPos(ctx)
+        DrawHorizontalMix(TRACK, mx, my, track_info_width)
+        r.ImGui_SetCursorScreenPos(ctx, mx, my)
+        r.ImGui_Dummy(ctx, track_info_width, HorizontalMixHeight())
     end
     r.ImGui_PushFont(ctx, NormalFont, config.font_size - 1)
     local num_buttons_row1 = 3
@@ -29371,7 +29737,7 @@ end
 function CalculateTopHeight(config)
     local height = 0
 
-    height = height + 50
+    height = height + (MainHeaderHeight or 50)
     if config.main_section_tags_enabled and config.main_segment_tags_visible then height = height + 65 end
     return height
 end
@@ -29404,21 +29770,17 @@ function GetMainButtonsHeight()
     local button_frame_h = math.max(1, frame_h - 1)
     local spacing_y = 3
     local height = 0
-    if not config.hideVolumeSlider then
-        -- Pan/Width row plus the volume row, or the one row of knobs with
-        -- their values underneath.
-        if config.mix_knobs then
-            height = height + MIX_KNOB_BIG + r.ImGui_GetTextLineHeight(ctx) + 4 + spacing_y
-        else
-            height = height + frame_h * 2 + spacing_y
-        end
+    if not config.hideVolumeSlider and not MixControlsInMeter() then
+        height = height + HorizontalMixHeight() + spacing_y
     end
     height = height + button_frame_h * 3 + spacing_y * 2
     return height
 end
 
 function GetMainMeterHeight()
-    return 90
+    local h = DrawMeterModule.GetHeight(config)
+    if not config.meter_vertical and MixControlsInMeter() then h = h + HorizontalMixHeight() end
+    return h
 end
 
 function CalculateBottomSectionHeight(config)
@@ -29889,6 +30251,7 @@ function DrawMainTrackFXPanel(fx_mode)
     local window_h = r.ImGui_GetWindowHeight(ctx)
     local available_height = window_h - current_y - below_h
     if available_height < 50 then available_height = 50 end
+    MainFXPanelHeight, MainFXPanelFrame = available_height, r.ImGui_GetFrameCount(ctx)
 
     local child_id = show_input_fx and "MainInputFXPanel" or (show_item_fx and "MainItemFXPanel" or "MainTrackFXPanel")
     local thumbnail_view = (show_input_fx and config.main_inputfx_thumbnail_view) or (show_item_fx and config.main_itemfx_thumbnail_view) or ((not show_input_fx and not show_item_fx) and config.main_trackfx_thumbnail_view)
@@ -30617,7 +30980,15 @@ if visible then
             local track_info_width = math.max(window_width - 10, 125)  -- Minimaal 125, of vensterbreedte - 20
             
             local trackinfo_flags = r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse() | r.ImGui_WindowFlags_NoNavInputs()
-            local trackinfo_open = r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, 50, 0, trackinfo_flags)
+            r.ImGui_PushFont(ctx, LargeFont, config.font_size + 4)
+            local header_name_w, header_name_h = r.ImGui_CalcTextSize(ctx, header_label)
+            r.ImGui_PopFont(ctx)
+            -- A name that does not fit between the header buttons gets its own
+            -- row under them, nearly the full width; the header grows for it.
+            local name_below = header_name_w > track_info_width - 130
+            local header_h = name_below and math.floor(22 + header_name_h + r.ImGui_GetTextLineHeight(ctx) + 6) or 50
+            MainHeaderHeight = header_h
+            local trackinfo_open = r.ImGui_BeginChild(ctx, "TrackInfo", track_info_width, header_h, 0, trackinfo_flags)
             if trackinfo_open then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x3F3F3F7F)
@@ -30664,7 +31035,7 @@ if visible then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), text_color)
                 r.ImGui_PushFont(ctx, LargeFont, config.font_size + 4)
                 local window_width = r.ImGui_GetWindowWidth(ctx)
-                local max_text_width = window_width - 130  -- room for 3 header buttons left, 2 right
+                local max_text_width = name_below and (window_width - 12) or (window_width - 130)  -- under the buttons, or between 3 left and 2 right
                 local text_width = r.ImGui_CalcTextSize(ctx, header_label)
                 if text_width > max_text_width and max_text_width > 0 then
                     local ellipsis = "..."
@@ -30680,7 +31051,7 @@ if visible then
                 local pos_x = (window_width - text_width - 7) * 0.5
                 local window_height = r.ImGui_GetWindowHeight(ctx)
                 local text_height = r.ImGui_GetTextLineHeight(ctx)
-                local pos_y = math.max(2, math.min((window_height - text_height) * 0.4, 8))
+                local pos_y = name_below and 22 or math.max(2, math.min((window_height - text_height) * 0.4, 8))
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), 0x00000000)  -- Volledig doorzichtige knop
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), 0x00000000)  -- Licht grijs bij hover
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonActive(), 0x00000000)  -- Donkerder grijs bij klik
@@ -31840,12 +32211,18 @@ if visible then
             end
             end
             if config.main_section_meter_enabled then
-            if DrawCollapseHeader("METER", config.main_segment_meter_visible, "Show Meter", "Hide Meter") then
+            local meter_resize = (config.meter_vertical and config.main_segment_meter_visible) and {
+                height = DrawMeterModule.GetHeight(config),
+                min = DrawMeterModule.VERTICAL_MIN_HEIGHT, max = DrawMeterModule.VERTICAL_MAX_HEIGHT,
+                default = DrawMeterModule.VERTICAL_DEFAULT_HEIGHT,
+                set = function(h) config.meter_vertical_height = h end,
+            } or nil
+            if DrawCollapseHeader("METER", config.main_segment_meter_visible, "Show Meter", "Hide Meter", meter_resize) then
                 config.main_segment_meter_visible = not config.main_segment_meter_visible
                 SaveConfig()
             end
             if config.main_segment_meter_visible then
-                DrawMeterModule.DrawMeter(r, ctx, config, TRACK, TinyFont)
+                DrawMeterModule.DrawMeter(r, ctx, config, TRACK, TinyFont, BuildMeterMix())
             end
             end
             if config.main_section_buttons_enabled then
