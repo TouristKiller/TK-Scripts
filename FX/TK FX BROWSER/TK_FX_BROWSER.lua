@@ -1,8 +1,13 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.26
+-- @version 3.2.27
 -- @changelog:
 --[[
+    v3.2.27:
+        + Main window: The colours you give folders in the Browser/INFO panel (right-click > Set Color...) now show in the main window's menus too: the subfolders under All Plugins, Category, Developer and Folders, and the main headers. Only the folder's own name takes the colour, not the plugins in it. Your own (custom) folders already did this. Requested on the REAPER forum
+        + Main window: Drag a plugin from the track's FX list onto another track in the arrange view or the mixer to move it there (hold Ctrl to copy it instead). While dragging, the tooltip says which track it will go to. Dropping inside the list still changes the order. Requested on the REAPER forum
+        + Main window: The track FX list has Cut Plugin next to Copy Plugin; pasting after a cut moves the plugin, also to another track. Right-click an empty part of the list to paste at the end of the chain - this now also works on a track that has no FX yet, and in the thumbnail view. The clipboard remembers the plugin itself, so pasting still takes the right one after the chain has changed
+        + Track FX lists: The main window's FX list (list and thumbnail view) and the Track FX list in the INFO panel of the screenshot window now share one right-click menu: Bypass/Enable, Offline/Online, Float Window, Show in FX Chain, Move Up/Down, Cut/Copy/Paste Plugin, Copy to all tracks, Favorites, A/B Snapshot and Delete. The INFO panel also gets dragging a plugin onto another track (Ctrl: copy) and pasting by right-clicking an empty part of its Track FX list
     v3.2.26:
         + Screenshots: The hover previews of plugins and FX chains are now placed beside the menu the plugin is in, instead of following the mouse pointer: they stay in one place while you move along a name, sit the same distance from every menu whether it is narrow or wide, and are always kept on screen. Settings > Screenshots has Preview X Offset (the gap beside the menu) and Preview Y Offset (from the top of the row), typed in with -/+ buttons, and Reset Preview Offset for the standard 10/0. The previews also no longer take the mouse, so they cannot blink on and off. Requested on the REAPER forum
         + Main window: The track's icon can be shown just below the track header, so you can tell at a glance which track you are on; the new picture button next to the eye in the header shows or hides it. A track without an icon shows a + there to pick one, and right-clicking an icon changes or removes it, as in the INFO panel. Requested on the REAPER forum
@@ -17591,6 +17596,16 @@ function DrawCollapseHeader(label, is_expanded, tooltip_show, tooltip_hide)
     return is_clicked
 end
 
+-- The colour given to a folder or main header in the Browser/INFO panel
+-- (right-click > Set Color...), for the menus in the main window. nil when
+-- none is set.
+function GetBrowserItemColor(category_name, item_name)
+    local colors = config and config.browser_item_colors
+    local color = colors and colors[GetBrowserItemColorKey(category_name, item_name)]
+    if type(color) == "number" then return color end
+    return nil
+end
+
 function GetBrowserItemColorKey(category_name, item_name)
     return tostring(category_name or "") .. ":" .. tostring(item_name or "")
 end
@@ -19325,6 +19340,7 @@ function ShowBrowserPanel()
                                 end
                                 if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                                     r.ImGui_SetDragDropPayload(ctx, "INFO_TRACKFX_DRAG", tostring(i))
+                                    FXDrag.source(TRACK, i)
                                     r.ImGui_Text(ctx, fx_name)
                                     r.ImGui_EndDragDropSource(ctx)
                                 end
@@ -19380,6 +19396,7 @@ function ShowBrowserPanel()
                                 end
                                 if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                                     r.ImGui_SetDragDropPayload(ctx, "INFO_TRACKFX_DRAG", tostring(i))
+                                    FXDrag.source(TRACK, i)
                                     r.ImGui_Text(ctx, fx_name)
                                     r.ImGui_EndDragDropSource(ctx)
                                 end
@@ -19409,77 +19426,7 @@ function ShowBrowserPanel()
                             end
                             if tfx_color_count > 0 then r.ImGui_PopStyleColor(ctx, tfx_color_count) end
                             if r.ImGui_BeginPopup(ctx, "InfoTrackFXCtx_" .. i) then
-                                local is_bypassed = not r.TrackFX_GetEnabled(TRACK, i)
-                                if r.ImGui_MenuItem(ctx, is_bypassed and "Enable" or "Bypass") then
-                                    r.Undo_BeginBlock()
-                                    r.TrackFX_SetEnabled(TRACK, i, is_bypassed)
-                                    r.Undo_EndBlock(is_bypassed and "Enable FX" or "Bypass FX", -1)
-                                end
-                                local is_offline = r.TrackFX_GetOffline(TRACK, i)
-                                if r.ImGui_MenuItem(ctx, is_offline and "Online" or "Offline") then
-                                    r.Undo_BeginBlock()
-                                    r.TrackFX_SetOffline(TRACK, i, not is_offline)
-                                    r.Undo_EndBlock(is_offline and "Set FX Online" or "Set FX Offline", -1)
-                                end
-                                r.ImGui_Separator(ctx)
-                                if r.ImGui_MenuItem(ctx, "Show in FX Chain") then
-                                    r.TrackFX_Show(TRACK, i, 1)
-                                end
-                                if r.ImGui_MenuItem(ctx, "Float Window") then
-                                    r.TrackFX_Show(TRACK, i, 3)
-                                end
-                                r.ImGui_Separator(ctx)
-                                if i > 0 and r.ImGui_MenuItem(ctx, "Move Up") then
-                                    r.Undo_BeginBlock()
-                                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i - 1, true)
-                                    r.Undo_EndBlock("Move FX Up", -1)
-                                end
-                                if i < fx_count - 1 and r.ImGui_MenuItem(ctx, "Move Down") then
-                                    r.Undo_BeginBlock()
-                                    r.TrackFX_CopyToTrack(TRACK, i, TRACK, i + 2, true)
-                                    r.Undo_EndBlock("Move FX Down", -1)
-                                end
-                                r.ImGui_Separator(ctx)
-                                if r.ImGui_MenuItem(ctx, "Delete") then
-                                    r.Undo_BeginBlock()
-                                    r.TrackFX_Delete(TRACK, i)
-                                    r.Undo_EndBlock("Delete FX", -1)
-                                end
-                                r.ImGui_Separator(ctx)
-                                local ab_info = GetABInfo(TRACK, i, false, nil)
-                                if r.ImGui_BeginMenu(ctx, "A/B Snapshot") then
-                                    local a_label = ab_info and ab_info.has_a and "Save A (overwrite)" or "Save A"
-                                    if r.ImGui_MenuItem(ctx, a_label) then
-                                        SaveFXSnapshot(TRACK, i, "a", false, nil)
-                                    end
-                                    local b_label = ab_info and ab_info.has_b and "Save B (overwrite)" or "Save B"
-                                    if r.ImGui_MenuItem(ctx, b_label) then
-                                        SaveFXSnapshot(TRACK, i, "b", false, nil)
-                                    end
-                                    if ab_info and ab_info.has_a and ab_info.has_b then
-                                        r.ImGui_Separator(ctx)
-                                        local swap_to = (ab_info.active == "a") and "b" or "a"
-                                        if r.ImGui_MenuItem(ctx, "Toggle A/B  [" .. string.upper(swap_to) .. "]") then
-                                            RestoreFXSnapshot(TRACK, i, swap_to, false, nil)
-                                        end
-                                    end
-                                    if ab_info and (ab_info.has_a or ab_info.has_b) then
-                                        r.ImGui_Separator(ctx)
-                                        if ab_info.has_a then
-                                            local ra = ab_info.active == "a" and "Load A (active)" or "Load A"
-                                            if r.ImGui_MenuItem(ctx, ra) then
-                                                RestoreFXSnapshot(TRACK, i, "a", false, nil)
-                                            end
-                                        end
-                                        if ab_info.has_b then
-                                            local rb = ab_info.active == "b" and "Load B (active)" or "Load B"
-                                            if r.ImGui_MenuItem(ctx, rb) then
-                                                RestoreFXSnapshot(TRACK, i, "b", false, nil)
-                                            end
-                                        end
-                                    end
-                                    r.ImGui_EndMenu(ctx)
-                                end
+                                DrawTrackFXMenu(TRACK, i, fx_count)
                                 r.ImGui_EndPopup(ctx)
                             end
                         end
@@ -19488,6 +19435,8 @@ function ShowBrowserPanel()
                 end
                 local _, tfx_zone_ey = r.ImGui_GetCursorScreenPos(ctx)
                 if tfx_zone_ey - tfx_zone_sy < 20 then tfx_zone_ey = tfx_zone_sy + 20 end
+                FXClip.panel_menu(TRACK, tfx_zone_sx, tfx_zone_sy, tfx_zone_sx + tfx_zone_w, tfx_zone_ey)
+                FXDrag.update()
                 if dragging_fx_name then
                     local mx, my = r.ImGui_GetMousePos(ctx)
                     if mx >= tfx_zone_sx and mx <= tfx_zone_sx + tfx_zone_w and my >= tfx_zone_sy and my <= tfx_zone_ey then
@@ -27231,7 +27180,12 @@ function DrawItems(tbl, main_cat_name)
         r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         r.ImGui_SetNextWindowSize(ctx, config.fx_list_width or 280, 0)
        
-        if r.ImGui_BeginMenu(ctx, tbl[i].name) then
+        -- Only the label takes the folder's colour, not the menu it opens.
+        local item_color = GetBrowserItemColor(main_cat_name, tbl[i].name)
+        if item_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), item_color) end
+        local item_menu_open = r.ImGui_BeginMenu(ctx, tbl[i].name)
+        if item_color then r.ImGui_PopStyleColor(ctx) end
+        if item_menu_open then
             if main_cat_name == "FOLDERS" then
                 local pinned = {}
                 local favorites = {}
@@ -28281,6 +28235,207 @@ function DrawBottomButtons()
 end
 
 -- Content-only version of ShowTrackFX for main window toggle
+-- Clipboard for the main window's track FX list. Copy and Cut remember the
+-- plugin by its GUID, so pasting still takes the right one after the chain
+-- has changed. Paste after Cut moves the plugin (also to another track) and
+-- empties the clipboard. copied_plugin stays the global the other FX menus
+-- (item FX, screenshot window) read, with .track/.index as before.
+FXClip = {}
+
+function FXClip.index_of(track, guid)
+    if not guid or not track or not r.ValidatePtr(track, "MediaTrack*") then return nil end
+    for i = 0, r.TrackFX_GetCount(track) - 1 do
+        if r.TrackFX_GetFXGUID(track, i) == guid then return i end
+    end
+    return nil
+end
+
+function FXClip.copy(track, idx, cut)
+    copied_plugin = { track = track, index = idx, guid = r.TrackFX_GetFXGUID(track, idx), cut = cut and true or nil }
+end
+
+function FXClip.paste(track, dest)
+    local c = copied_plugin
+    if not c then return end
+    if c.track then
+        local idx = c.guid and FXClip.index_of(c.track, c.guid) or nil
+        if not idx then copied_plugin = nil return end -- the source plugin is gone
+        r.Undo_BeginBlock()
+        r.TrackFX_CopyToTrack(c.track, idx, track, dest, c.cut == true)
+        r.Undo_EndBlock(c.cut and "Move FX (cut and paste)" or "Paste FX", -1)
+        if c.cut then copied_plugin = nil end
+    elseif c.take then
+        local _, orig_name = r.TakeFX_GetFXName(c.take, c.index, "")
+        AddFXToTrack(track, orig_name)
+    end
+end
+
+function FXClip.paste_label()
+    return (copied_plugin and copied_plugin.cut) and "Paste Plugin (move)" or "Paste Plugin"
+end
+
+-- Right-click on an empty part of the list - also when the track has no FX
+-- yet: paste at the end of the chain.
+-- Opened on the press of the right button, like the plugin menus, and only
+-- when no item is under the mouse and no menu is open. (BeginPopupContextWindow
+-- opens on release: by then the plugin's own menu had appeared under the
+-- mouse, no item was hovered any more, and this menu replaced it at once.)
+function FXClip.panel_menu(track, x1, y1, x2, y2)
+    local in_zone = true
+    if x1 then
+        local mx, my = r.ImGui_GetMousePos(ctx)
+        in_zone = mx >= x1 and mx <= x2 and my >= y1 and my <= y2
+    end
+    if in_zone and r.ImGui_IsMouseClicked(ctx, 1) and r.ImGui_IsWindowHovered(ctx)
+        and not r.ImGui_IsAnyItemHovered(ctx)
+        and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
+        r.ImGui_OpenPopup(ctx, "TrackFXPanelCtx")
+    end
+    if r.ImGui_BeginPopup(ctx, "TrackFXPanelCtx") then
+        if copied_plugin then
+            if r.ImGui_MenuItem(ctx, FXClip.paste_label()) then FXClip.paste(track, r.TrackFX_GetCount(track)) end
+        else
+            r.ImGui_TextDisabled(ctx, "No plugin copied")
+        end
+        r.ImGui_EndPopup(ctx)
+    end
+end
+
+-- Dragging a plugin out of the track FX list onto another track in the
+-- arrange view or the mixer moves it there (Ctrl: copies it), at the end of
+-- that track's chain. Dropping inside the list still reorders, as before.
+FXDrag = { drag = nil }
+
+function FXDrag.target_at_mouse()
+    if r.ImGui_IsWindowHovered(ctx, r.ImGui_HoveredFlags_AnyWindow()) then return nil end
+    local x, y = r.GetMousePosition()
+    return (r.GetTrackFromPoint(x, y))
+end
+
+-- Ctrl from the OS when js_ReaScriptAPI is there: over the arrange view the
+-- keyboard does not belong to this window.
+function FXDrag.ctrl()
+    if r.JS_Mouse_GetState then return (r.JS_Mouse_GetState(4) & 4) ~= 0 end
+    return r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl())
+end
+
+-- Called inside a drag source of the list: remembers the plugin and shows
+-- in the drag tooltip what letting go would do.
+function FXDrag.source(track, idx)
+    FXDrag.drag = { track = track, guid = r.TrackFX_GetFXGUID(track, idx), frame = r.ImGui_GetFrameCount(ctx) }
+    local target = FXDrag.target_at_mouse()
+    if target and target ~= track then
+        local _, tn = r.GetTrackName(target)
+        r.ImGui_TextColored(ctx, 0x40C040FF, (FXDrag.ctrl() and "Copy to: " or "Move to: ") .. (tn or "track"))
+    end
+end
+
+-- After the list is drawn: on release outside the window, do the move/copy.
+function FXDrag.update()
+    local d = FXDrag.drag
+    if not d then return end
+    if r.ImGui_GetFrameCount(ctx) - d.frame > 2 then FXDrag.drag = nil return end
+    if r.ImGui_IsMouseDown(ctx, 0) and not r.ImGui_IsMouseReleased(ctx, 0) then return end
+    FXDrag.drag = nil
+    local target = FXDrag.target_at_mouse()
+    if not target or target == d.track then return end
+    local idx = FXClip.index_of(d.track, d.guid)
+    if not idx then return end
+    local copy = FXDrag.ctrl()
+    r.Undo_BeginBlock()
+    r.TrackFX_CopyToTrack(d.track, idx, target, r.TrackFX_GetCount(target), not copy)
+    r.Undo_EndBlock(copy and "Copy FX to track" or "Move FX to track", -1)
+end
+
+-- One right-click menu for a plugin in any track FX list: the main window's
+-- list and thumbnail view, and the INFO panel of the screenshot window. It
+-- combines what those menus had separately (the INFO panel had no copy and
+-- paste, the main window no move, offline or A/B).
+function DrawTrackFXMenu(track, i, fx_count)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") then return end
+    local enabled = r.TrackFX_GetEnabled(track, i)
+    if r.ImGui_MenuItem(ctx, enabled and "Bypass" or "Enable") then
+        r.Undo_BeginBlock()
+        r.TrackFX_SetEnabled(track, i, not enabled)
+        r.Undo_EndBlock(enabled and "Bypass FX" or "Enable FX", -1)
+    end
+    local offline = r.TrackFX_GetOffline(track, i)
+    if r.ImGui_MenuItem(ctx, offline and "Online" or "Offline") then
+        r.Undo_BeginBlock()
+        r.TrackFX_SetOffline(track, i, not offline)
+        r.Undo_EndBlock(offline and "Set FX Online" or "Set FX Offline", -1)
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Float Window") then r.TrackFX_Show(track, i, 3) end
+    if r.ImGui_MenuItem(ctx, "Show in FX Chain") then r.TrackFX_Show(track, i, 1) end
+    r.ImGui_Separator(ctx)
+    if i > 0 and r.ImGui_MenuItem(ctx, "Move Up") then
+        r.Undo_BeginBlock()
+        r.TrackFX_CopyToTrack(track, i, track, i - 1, true)
+        r.Undo_EndBlock("Move FX Up", -1)
+    end
+    if i < fx_count - 1 and r.ImGui_MenuItem(ctx, "Move Down") then
+        r.Undo_BeginBlock()
+        r.TrackFX_CopyToTrack(track, i, track, i + 2, true)
+        r.Undo_EndBlock("Move FX Down", -1)
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Cut Plugin") then FXClip.copy(track, i, true) end
+    if r.ImGui_MenuItem(ctx, "Copy Plugin") then FXClip.copy(track, i, false) end
+    if r.ImGui_MenuItem(ctx, FXClip.paste_label(), nil, false, copied_plugin ~= nil) then FXClip.paste(track, i + 1) end
+    if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
+        IS_COPYING_TO_ALL_TRACKS = true
+        r.Undo_BeginBlock()
+        for j = 0, r.CountTracks(0) - 1 do
+            local target = r.GetTrack(0, j)
+            if target ~= track then
+                r.TrackFX_CopyToTrack(track, i, target, r.TrackFX_GetCount(target), false)
+            end
+        end
+        r.Undo_EndBlock("Copy FX to all tracks", -1)
+        IS_COPYING_TO_ALL_TRACKS = false
+    end
+    r.ImGui_Separator(ctx)
+    local _, fx_name = r.TrackFX_GetFXName(track, i, "")
+    if favorite_set[fx_name] then
+        if r.ImGui_MenuItem(ctx, "Remove from Favorites") then RemoveFromFavorites(fx_name) end
+    else
+        if r.ImGui_MenuItem(ctx, "Add to Favorites") then AddToFavorites(fx_name) end
+    end
+    local ab_info = GetABInfo(track, i, false, nil)
+    if r.ImGui_BeginMenu(ctx, "A/B Snapshot") then
+        if r.ImGui_MenuItem(ctx, (ab_info and ab_info.has_a) and "Save A (overwrite)" or "Save A") then
+            SaveFXSnapshot(track, i, "a", false, nil)
+        end
+        if r.ImGui_MenuItem(ctx, (ab_info and ab_info.has_b) and "Save B (overwrite)" or "Save B") then
+            SaveFXSnapshot(track, i, "b", false, nil)
+        end
+        if ab_info and ab_info.has_a and ab_info.has_b then
+            r.ImGui_Separator(ctx)
+            local swap_to = (ab_info.active == "a") and "b" or "a"
+            if r.ImGui_MenuItem(ctx, "Toggle A/B  [" .. string.upper(swap_to) .. "]") then
+                RestoreFXSnapshot(track, i, swap_to, false, nil)
+            end
+        end
+        if ab_info and (ab_info.has_a or ab_info.has_b) then
+            r.ImGui_Separator(ctx)
+            if ab_info.has_a and r.ImGui_MenuItem(ctx, ab_info.active == "a" and "Load A (active)" or "Load A") then
+                RestoreFXSnapshot(track, i, "a", false, nil)
+            end
+            if ab_info.has_b and r.ImGui_MenuItem(ctx, ab_info.active == "b" and "Load B (active)" or "Load B") then
+                RestoreFXSnapshot(track, i, "b", false, nil)
+            end
+        end
+        r.ImGui_EndMenu(ctx)
+    end
+    r.ImGui_Separator(ctx)
+    if r.ImGui_MenuItem(ctx, "Delete") then
+        r.Undo_BeginBlock()
+        r.TrackFX_Delete(track, i)
+        r.Undo_EndBlock("Delete FX", -1)
+    end
+end
+
 function ShowTrackFXContent()
     if not TRACK or not reaper.ValidatePtr(TRACK, "MediaTrack*") then
         r.ImGui_Text(ctx, "No track selected")
@@ -28311,6 +28466,7 @@ function ShowTrackFXContent()
             end
             if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                 r.ImGui_SetDragDropPayload(ctx, "MAIN_TRACKFX_DRAG", tostring(i))
+                FXDrag.source(TRACK, i)
                 r.ImGui_Text(ctx, fx_name)
                 r.ImGui_EndDragDropSource(ctx)
             end
@@ -28332,68 +28488,15 @@ function ShowTrackFXContent()
                 r.ImGui_OpenPopup(ctx, "TrackFXContentCtx_" .. i)
             end
             if r.ImGui_BeginPopup(ctx, "TrackFXContentCtx_" .. i) then
-                if r.ImGui_MenuItem(ctx, "Delete") then
-                    r.TrackFX_Delete(TRACK, i)
-                end
-                if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
-                    IS_COPYING_TO_ALL_TRACKS = true
-                    local track_count = r.CountTracks(0)
-                    for j = 0, track_count - 1 do
-                        local target_track = r.GetTrack(0, j)
-                        if target_track ~= TRACK then
-                            r.TrackFX_CopyToTrack(TRACK, i, target_track, r.TrackFX_GetCount(target_track), false)
-                        end
-                    end
-                    IS_COPYING_TO_ALL_TRACKS = false
-                end
-                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
-                    copied_plugin = {track = TRACK, index = i}
-                end
-                if copied_plugin and r.ImGui_MenuItem(ctx, "Paste Plugin") then
-                    if copied_plugin.track then
-                        r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, i + 1, false)
-                    elseif copied_plugin.take then
-                        local _, orig_name = r.TakeFX_GetFXName(copied_plugin.take, copied_plugin.index, "")
-                        AddFXToTrack(TRACK, orig_name)
-                    end
-                end
-                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
-                    r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
-                end
-                if favorite_set[fx_name] then
-                    if r.ImGui_MenuItem(ctx, "Remove from Favorites") then
-                        RemoveFromFavorites(fx_name)
-                    end
-                else
-                    if r.ImGui_MenuItem(ctx, "Add to Favorites") then
-                        AddToFavorites(fx_name)
-                    end
-                end
+                DrawTrackFXMenu(TRACK, i, fx_count)
                 r.ImGui_EndPopup(ctx)
             end
             r.ImGui_PopID(ctx)
         end
     else
         r.ImGui_Text(ctx, "No FX on Track")
-        if r.ImGui_IsItemClicked(ctx, 1) then
-            r.ImGui_OpenPopup(ctx, "NoTrackFXContextMenu")
-        end
-        if r.ImGui_BeginPopup(ctx, "NoTrackFXContextMenu") then
-            if copied_plugin then
-                if r.ImGui_MenuItem(ctx, "Paste Plugin") then
-                    if copied_plugin.track then
-                        r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, 0, false)
-                    elseif copied_plugin.take then
-                        local _, orig_name = r.TakeFX_GetFXName(copied_plugin.take, copied_plugin.index, "")
-                        AddFXToTrack(TRACK, orig_name)
-                    end
-                end
-            else
-                r.ImGui_Text(ctx, "No plugin copied")
-            end
-            r.ImGui_EndPopup(ctx)
-        end
     end
+    FXClip.panel_menu(TRACK)
 end
 
 -- Content-only version of ShowItemFX for main window toggle
@@ -28517,6 +28620,7 @@ function ShowTrackFXContentThumbnail()
     local fx_count = r.TrackFX_GetCount(TRACK)
     if fx_count == 0 then
         r.ImGui_Text(ctx, "No FX on Track")
+        FXClip.panel_menu(TRACK)
         return
     end
     local track_bypassed = r.GetMediaTrackInfo_Value(TRACK, "I_FXEN") == 0
@@ -28560,6 +28664,7 @@ function ShowTrackFXContentThumbnail()
                 r.ImGui_DrawList_AddText(dl, cx + 3, cy + 1, 0x00FF88FF, slot_label)
                 if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                     r.ImGui_SetDragDropPayload(ctx, "MAIN_TRACKFX_DRAG", tostring(i))
+                    FXDrag.source(TRACK, i)
                     r.ImGui_Text(ctx, fx_name)
                     r.ImGui_EndDragDropSource(ctx)
                 end
@@ -28612,6 +28717,7 @@ function ShowTrackFXContentThumbnail()
                 end
                 if r.ImGui_BeginDragDropSource(ctx, r.ImGui_DragDropFlags_None()) then
                     r.ImGui_SetDragDropPayload(ctx, "MAIN_TRACKFX_DRAG", tostring(i))
+                    FXDrag.source(TRACK, i)
                     r.ImGui_Text(ctx, fx_name)
                     r.ImGui_EndDragDropSource(ctx)
                 end
@@ -28634,38 +28740,14 @@ function ShowTrackFXContentThumbnail()
                 end
             end
             if r.ImGui_BeginPopup(ctx, "MainTrackFXThumbCtx_" .. i) then
-                if r.ImGui_MenuItem(ctx, "Delete") then
-                    r.TrackFX_Delete(TRACK, i)
-                end
-                if r.ImGui_MenuItem(ctx, is_enabled and "Bypass plugin" or "Unbypass plugin") then
-                    r.TrackFX_SetEnabled(TRACK, i, not is_enabled)
-                end
-                if r.ImGui_MenuItem(ctx, "Copy Plugin") then
-                    copied_plugin = {track = TRACK, index = i}
-                end
-                if copied_plugin and r.ImGui_MenuItem(ctx, "Paste Plugin") then
-                    if copied_plugin.track then
-                        r.TrackFX_CopyToTrack(copied_plugin.track, copied_plugin.index, TRACK, i + 1, false)
-                    elseif copied_plugin.take then
-                        local _, orig_name = r.TakeFX_GetFXName(copied_plugin.take, copied_plugin.index, "")
-                        AddFXToTrack(TRACK, orig_name)
-                    end
-                end
-                if r.ImGui_MenuItem(ctx, "Copy to all tracks") then
-                    local track_count = r.CountTracks(0)
-                    for j = 0, track_count - 1 do
-                        local target_track = r.GetTrack(0, j)
-                        if target_track ~= TRACK then
-                            r.TrackFX_CopyToTrack(TRACK, i, target_track, r.TrackFX_GetCount(target_track), false)
-                        end
-                    end
-                end
+                DrawTrackFXMenu(TRACK, i, fx_count)
                 r.ImGui_EndPopup(ctx)
             end
             r.ImGui_PopID(ctx)
         end
     end
     r.ImGui_PopStyleVar(ctx)
+    FXClip.panel_menu(TRACK)
 end
 
 function ShowInputFXContent()
@@ -29502,7 +29584,11 @@ function DrawPluginMenus()
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
       
-        if r.ImGui_BeginMenu(ctx, "FAVORITES") then
+        local fav_color = GetBrowserItemColor("MAIN", "FAVORITES")
+        if fav_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), fav_color) end
+        local fav_menu_open = r.ImGui_BeginMenu(ctx, "FAVORITES")
+        if fav_color then r.ImGui_PopStyleColor(ctx) end
+        if fav_menu_open then
             DrawFavorites()
             if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
                 r.ImGui_CloseCurrentPopup(ctx)
@@ -29523,7 +29609,11 @@ if config.show_custom_folders and next(config.custom_folders) then
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
 
-    if r.ImGui_BeginMenu(ctx, "CUSTOM") then
+    local custom_color = GetBrowserItemColor("MAIN", "CUSTOM")
+    if custom_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), custom_color) end
+    local custom_menu_open = r.ImGui_BeginMenu(ctx, "CUSTOM")
+    if custom_color then r.ImGui_PopStyleColor(ctx) end
+    if custom_menu_open then
         DrawCustomFoldersMenu(config.custom_folders, "")
         if not r.ImGui_IsAnyItemHovered(ctx) and not r.ImGui_IsWindowHovered(ctx) and not r.ImGui_IsPopupOpen(ctx, "", r.ImGui_PopupFlags_AnyPopupId()) then
             r.ImGui_CloseCurrentPopup(ctx)
@@ -29553,7 +29643,11 @@ end
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
          
-                if r.ImGui_BeginMenu(ctx, CAT_TEST[i].name) then
+                local header_color = GetBrowserItemColor("MAIN", CAT_TEST[i].name)
+                if header_color then r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), header_color) end
+                local header_menu_open = r.ImGui_BeginMenu(ctx, CAT_TEST[i].name)
+                if header_color then r.ImGui_PopStyleColor(ctx) end
+                if header_menu_open then
                     if CAT_TEST[i].name == "FX CHAINS" then
                         -- Only log once when menu first opens (with cooldown)
                         local current_time = r.time_precise()
@@ -29823,6 +29917,7 @@ function DrawMainTrackFXPanel(fx_mode)
         end
         r.ImGui_EndChild(ctx)
     end
+    if not show_item_fx and not show_input_fx then FXDrag.update() end
     if not r.ImGui_IsAnyItemHovered(ctx) then
         current_hovered_plugin = nil
     end

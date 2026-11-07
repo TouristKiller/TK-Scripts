@@ -571,7 +571,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.26" author="TouristKiller" time="2026-11-07T19:45:00Z">
+    <version name="3.2.27" author="TouristKiller" time="2026-11-07T21:40:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -588,14 +588,12 @@
     <source main="main" file="TK_Notes_Toggle_focus.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Notes_Toggle_focus.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
-                v3.2.26:
-                + Screenshots: The hover previews of plugins and FX chains are now placed beside the menu the plugin is in, instead of following the mouse pointer: they stay in one place while you move along a name, sit the same distance from every menu whether it is narrow or wide, and are always kept on screen. Settings > Screenshots has Preview X Offset (the gap beside the menu) and Preview Y Offset (from the top of the row), typed in with -/+ buttons, and Reset Preview Offset for the standard 10/0. The previews also no longer take the mouse, so they cannot blink on and off. Requested on the REAPER forum
-                + Main window: The track's icon can be shown just below the track header, so you can tell at a glance which track you are on; the new picture button next to the eye in the header shows or hides it. A track without an icon shows a + there to pick one, and right-clicking an icon changes or removes it, as in the INFO panel. Requested on the REAPER forum
-                + Main window: Pan, volume and width can be rotary knobs instead of sliders (Settings > View > Main Window Sections > Knobs): pan left (L and R in dual-pan mode), a larger volume knob in the middle, width right, each with its value underneath. Drag up/down or use the mouse wheel, Shift for fine steps, double-click to reset. Right-click works as on the sliders: pan mode menu, 0 dB (double right-click -12 dB), 100% width. The lit arc shows the side of centre, and turns amber for volume above 0 dB. Requested on the REAPER forum
-                + Fix: The plugin menus in the main window (All Plugins, Category, Developer, Favorites, Custom, FX Chains and the rest) closed when the mouse rested on the --Pinned End-- or --Favorites End-- line, or between two entries, because nothing counted as hovered there. They now stay open while the mouse is anywhere over the menu, and close once it leaves.
-                + Fix: A screenshot preview stayed on screen after moving back from a plugin to a folder in a parent menu (for example from a plugin in a subfolder back to the folder above it). The preview now shows only while a plugin is under the mouse.
-                + Fix: The meter's R, L and L-S/LRA modes showed nothing. They read REAPER's Loudness Meter on the master's monitoring FX, but looked for it by file name while REAPER reports its display name, and read fixed parameter numbers that had shifted in newer versions of that meter. It is now found by its display name and its values by their parameter names. Those modes measure the master mix, and now say so ("Master RMS-M" and so on); P still measures the selected track. With the transport stopped, the integrated values and LRA show -- instead of the last run, until the next play starts a new measurement.
-                + TK FX BROWSER Mini 1.2.23: the menu fix and the meter fix above.
+                v3.2.27:
+                + Main window: The colours you give folders in the Browser/INFO panel (right-click > Set Color...) now show in the main window's menus too: the subfolders under All Plugins, Category, Developer and Folders, and the main headers. Only the folder's own name takes the colour, not the plugins in it. Your own (custom) folders already did this. Requested on the REAPER forum
+                + Main window: Drag a plugin from the track's FX list onto another track in the arrange view or the mixer to move it there (hold Ctrl to copy it instead). While dragging, the tooltip says which track it will go to. Dropping inside the list still changes the order. Requested on the REAPER forum
+                + Main window: The track FX list has Cut Plugin next to Copy Plugin; pasting after a cut moves the plugin, also to another track. Right-click an empty part of the list to paste at the end of the chain - this now also works on a track that has no FX yet, and in the thumbnail view. The clipboard remembers the plugin itself, so pasting still takes the right one after the chain has changed
+                + Track FX lists: The main window's FX list (list and thumbnail view) and the Track FX list in the INFO panel of the screenshot window now share one right-click menu: Bypass/Enable, Offline/Online, Float Window, Show in FX Chain, Move Up/Down, Cut/Copy/Paste Plugin, Copy to all tracks, Favorites, A/B Snapshot and Delete. The INFO panel also gets dragging a plugin onto another track (Ctrl: copy) and pasting by right-clicking an empty part of its Track FX list
+                + TK FX BROWSER Mini 1.2.24: the folder colours in the main window menus, and the shared Track FX menu, dragging and pasting in the INFO panel.
 ]]></changelog>
     </version>
     </reapack>
