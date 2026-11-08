@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.19
+-- @version 0.9.20
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -368,6 +368,10 @@ local PAGES = {
             Off(lay_off_or("tkNoIoCol", "tkNameOnly"), T("IO button", "tkHideIoBtn", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNoFxCol", "tkNameOnly"), S("FX column width", "sectionRightW", THIS_LAYOUT)),
             Off(lay_on("tkNoIoCol", "tkNameOnly"), S("IO column width", "tkIoW", THIS_LAYOUT, "0 gives it the width of the FX column. Like that one, it's at least 46.")),
+            Off(lay_on("tkNameOnly"), T("FX parameters", "tkHideParms", THIS_LAYOUT,
+                "The FX parameters you show in track controls, under the controls. Off hides them on this layout; they stay in the project and come back when you turn it on again.", true)),
+            Off(lay_on("tkNameOnly"), T("Embedded FX", "tkHideEmbed", THIS_LAYOUT,
+                "An FX's own embedded UI under the controls. Without FX parameters beside it, it takes the whole width.", true)),
             Off(lay_on("tkNameOnly"), T("Meter", "tkHideMeter", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly", "tkHideMeter"), T("Meter on the left", "tkMeterLeft", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT)),
@@ -390,6 +394,8 @@ local PAGES = {
             Off(global_on("tkMasterMeterOnly"), T("IO column", "tkMasterNoIo", nil, "Without its column, the IO button moves to the first row.", true)),
             Off(global_off_or("tkMasterNoFx", "tkMasterMeterOnly"), T("FX button", "tkMasterHideFxBtn", nil, nil, true)),
             Off(global_off_or("tkMasterNoIo", "tkMasterMeterOnly"), T("IO button", "tkMasterHideIoBtn", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly"), T("FX parameters", "tkMasterHideParms", nil, nil, true)),
+            Off(global_on("tkMasterMeterOnly"), T("Embedded FX", "tkMasterHideEmbed", nil, "It takes the FX parameters' place; off brings those back.", true)),
             Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), T("Meter on the left", "tkMasterMeterLeft")),
             Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), S("Meter width", "tkMasterMeterW", nil, "0 follows the tracks on layout A. Any other width no longer lines up with them.")),
         } },
@@ -2696,7 +2702,7 @@ local GUIDE = {
         "The buttons on the lowest row are, from the left: automation mode, phase, fixed item lanes, FX and IO columns, meter, freeze and unfreeze. Buttons that don't fit are left out, so make the panel wider or the track taller to see them.",
         "The columns and meter buttons work on all tracks with the same layout as the one you click; the master's buttons only on the master. The columns button hides the FX and IO columns, and brings back the ones that were shown. It also turns on REAPER's options to show FX and sends in the track panel. The FX and IO buttons are the headers of those columns; without a column, they move to the first row. Set the columns' width on the Track panel page.",
         "A track with fixed item lanes has a blue strip at the left of its window, whether the lanes are open or closed.",
-        "To add a knob for an FX parameter: in the FX window, choose Param > FX parameter list > Show in track controls. It appears under the controls, so the track has to be tall enough.",
+        "To add a knob for an FX parameter: in the FX window, choose Param > FX parameter list > Show in track controls. It appears under the controls, so the track has to be tall enough. FX parameters and Embedded FX on the Track panel page hide them per layout, without taking them out of the project.",
         "An FX with an embedded UI shows under the controls too, once it's turned on: right-click the FX in the FX chain. Make the track taller to see it.",
     } },
     { "Master", {

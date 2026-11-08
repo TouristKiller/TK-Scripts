@@ -56,7 +56,8 @@ lists, menus and borders. That takes effect after a restart.
   with an A). A magnet beside it turns snap on and off.
 - **Track panel:** a choice of slider handles, sliders or knobs for volume and pan, which can
   also sit on the first row so they show on the lowest track height, record arm and monitor on
-  the left or right of that row, FX and IO columns, FX parameters under the controls, buttons for
+  the left or right of that row, FX and IO columns, FX parameters and embedded FX under the controls
+  (each can be hidden per layout), buttons for
   fixed lanes and freeze, and a blue strip on tracks with fixed lanes. The master has the
   same windows, with its hardware outputs in the IO column, or can be one big meter.
 - **Layouts:** A, B and C can each leave out or move parts of the track panel and mixer

@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.19" author="TouristKiller" time="2026-11-08T22:13:01Z">
+    <version name="0.9.20" author="TouristKiller" time="2026-11-08T23:17:45Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -543,11 +543,8 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Record arm and monitor on the left (Track panel page, per layout). They move to the start of the first row, with the FX and IO buttons when those are in it, so the knobs, mute and solo sit next to the meter. Requested by Ezaky.
-+ Added: Day and night (Look page): Light by day and Dark by night, from times you set (08:00 and 19:00 at first). It switches only when the time comes, never while REAPER plays, records or is paused, nor with the settings window open, and a look you choose yourself stays until the next switch. It runs with the metronome and grid watcher. Requested by Ezaky.
-+ Changed: on the Light look a selected track takes on the accent colour, at the selection strength, instead of a white wash that hardly showed on the light panels. In the track panel, the mixer and on the master. Requested by Ezaky.
-+ Changed: a metronome and grid watcher still running from before an update is restarted with the new version when the settings window opens, or when the grid box or day and night is turned on.
-+ Fixed: with an embedded FX UI beside the FX parameters at the bottom of a track, the parameters took half of their half. They now take their whole half, and the embedded UI the other.
++ Added: FX parameters and Embedded FX switches (Track panel page, per layout, and for the master). Off hides them under the controls; they stay in the project. With the parameters hidden, an embedded FX UI takes the whole width.
++ Fixed: with wider section margins, FX parameters and an embedded FX UI ran past the bottom and right edge of the track's window. They now stay inside it.
 ]]></changelog>
     </version>
     </reapack>
