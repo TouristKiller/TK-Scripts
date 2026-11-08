@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.16
+-- @version 0.9.17
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -779,16 +779,58 @@ function parts.files(part)
     return files
 end
 
+-- Every value a part's colour lines can have in this look: from each of its choices in
+-- each accent colour, and the look's own, which an update puts back.
+parts.known_cache = {}
+function parts.known(zip, part)
+    local theme = zip:match("([^\\/]+)%.ReaperThemeZip$") or ""
+    local id = theme .. "|" .. part
+    if parts.known_cache[id] then return parts.known_cache[id] end
+    local known = {}
+    local function add(text)
+        for key, value in (text or ""):gmatch("([%w_]+)=(%-?%w+)") do
+            known[key] = known[key] or {}
+            known[key][value] = true
+        end
+    end
+    if part == "display" then
+        for _, choice in ipairs(parts.variants.display) do
+            local pack = parts.display_pack(zip, choice[1])
+            add(pack and pack["keys.txt"])
+        end
+    else
+        local prefix = "parts/" .. part .. "/"
+        for _, choice in ipairs(parts.variants.accent) do
+            local pack = parts.pack(zip, choice[1])
+            for name, data in pairs(pack or {}) do
+                if part == "accent" and name == "keys.txt"
+                    or name:sub(1, #prefix) == prefix and name:match("^[^/]+/keys%.txt$", #prefix + 1) then
+                    add(data)
+                end
+            end
+        end
+    end
+    for key, value in (read_all(here .. "dist/" .. theme .. ".factory.ReaperTheme") or ""):gmatch("([%w_]+)=(%-?%w+)") do
+        if known[key] then known[key][value] = true end
+    end
+    parts.known_cache[id] = known
+    return known
+end
+
 -- A part can also need lines in the theme's colour file: keys.txt beside its images.
--- Returns whether that file already has them, and the text it should hold.
-function parts.keys(keys, zip)
+-- Returns whether that file already has them, and the text it should hold. With
+-- parts.keep_own, a colour you set yourself (one no choice of this part has) stays.
+function parts.keys(keys, zip, part)
     local loose = zip:gsub("Zip$", "")
     local text = read_all(loose)
     if not keys or not text then return true end
+    local known = parts.keep_own and part and parts.known(zip, part)
     local same = true
     for key, value in keys:gmatch("([%w_]+)=(%-?%w+)") do
         text = text:gsub("([\r\n]" .. key .. "=)(%-?%w+)", function(head, old)
-            if old ~= value then same = false end
+            if old == value then return nil end
+            if known and not (known[key] and known[key][old]) then return nil end
+            same = false
             return head .. value
         end, 1)
     end
@@ -806,7 +848,7 @@ function parts.write_accent(variant, zip, root)
     end
     local ok, err = Zip.replace(zip, files)
     if not ok then return nil, err end
-    local same, text, loose = parts.keys(pack["keys.txt"], zip)
+    local same, text, loose = parts.keys(pack["keys.txt"], zip, "accent")
     if not same then
         ok, err = Zip.save(loose, text)
         if not ok then return nil, err end
@@ -838,7 +880,7 @@ function parts.write_display(variant, zip, root, accent)
     if pack["rtconfig.txt"] then files[root .. "/rtconfig.txt"] = layout:sub(2) end
     local ok, err = Zip.replace(zip, files)
     if not ok then return nil, err end
-    local same, text, loose = parts.keys(display["keys.txt"], zip)
+    local same, text, loose = parts.keys(display["keys.txt"], zip, "display")
     if same then return true end
     return Zip.save(loose, text)
 end
@@ -859,7 +901,7 @@ function parts.write(part, variant, zip, accent)
         local ok, err = Zip.replace(zip, files)
         if not ok then return nil, err end
     end
-    local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip)
+    local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip, part)
     if same then return true end
     return Zip.save(loose, text)
 end
@@ -873,9 +915,9 @@ function parts.accent_in_zip(variant, zip, root)
     local display = chosen ~= parts.default.display and parts.display_pack(zip, chosen)
     for name, data in pairs(pack) do
         local skinned = display and (display[name] or name == "rtconfig.txt")
-        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" and not skinned and crcs[root .. "/" .. name] ~= Zip.crc32(data) then return false end
+        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" and not skinned and crcs[root .. "/" .. name] ~= Zip.stored_crc(pack, name) then return false end
     end
-    return (parts.keys(pack["keys.txt"], zip))
+    return (parts.keys(pack["keys.txt"], zip, "accent"))
 end
 
 function parts.in_zip(part, variant, zip)
@@ -883,10 +925,10 @@ function parts.in_zip(part, variant, zip)
     local root = Zip.root(zip)
     if part == "accent" then return not root or parts.accent_in_zip(variant, zip, root) end
     local name = parts.files(part)[1]
-    if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip)) end
+    if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local data = parts.read(zip, nil, part, variant, name)
     if not root or not data then return true end
-    return Zip.crc_of(zip, root .. "/" .. name) == Zip.crc32(data) and (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip))
+    return Zip.crc_of(zip, root .. "/" .. name) == Zip.crc32(data) and (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part))
 end
 
 -- REAPER keeps the images of the theme that is already loaded, so step off it first:
@@ -918,7 +960,8 @@ function parts.choose(part, variant, forced)
         state.msg = "Save or undo your colour changes first: this reloads the theme."
         return false
     end
-    local ok, err = parts.write(part, variant)
+    local zip = parts.zip_path()
+    local ok, err = Zip.batch(zip, parts.write, part, variant, zip)
     if not ok then
         state.msg = "Could not change the theme file: " .. tostring(err) .. "."
         return false
@@ -934,12 +977,21 @@ end
 function parts.restore()
     parts.load()
     if not look.current() then return end
-    local changed = false
-    for part, variant in pairs(parts.chosen) do
-        if not parts.in_zip(part, variant) and parts.write(part, variant) then changed = true end
-    end
-    if look.apply_icons(look.current()) then changed = true end
-    if changed then parts.reload() end
+    local zip = parts.zip_path()
+    Zip.hold(function()
+        local wrote = false
+        parts.keep_own = true
+        local ok = Zip.batch(zip, function()
+            for part, variant in pairs(parts.chosen) do
+                if not parts.in_zip(part, variant, zip) and parts.write(part, variant, zip) then wrote = true end
+            end
+            return true
+        end)
+        parts.keep_own = nil
+        local changed = wrote and ok
+        if look.apply_icons(look.current()) then changed = true end
+        if changed then parts.reload() end
+    end)
 end
 
 function parts.picture(path)
@@ -1386,10 +1438,14 @@ local function factory_colour(key)
         for name, value in text:gmatch("([%w_]+)=(-?%d+)") do
             factory_colours[name] = file_to_native(tonumber(value) & 0xFFFFFF)
         end
-        -- an accent colour changes some of what the look comes with
-        local pack = parts.pack(parts.zip_path())
-        for name, value in ((pack and pack["keys.txt"]) or ""):gmatch("([%w_]+)=(-?%d+)") do
-            factory_colours[name] = file_to_native(tonumber(value) & 0xFFFFFF)
+        -- an accent colour changes some of what the look comes with, and darkness goes over that
+        local zip = parts.zip_path()
+        local pack = parts.pack(zip)
+        local shade = parts.read(zip, nil, "shade", parts.chosen.shade or parts.default.shade, "keys.txt")
+        for _, keys in ipairs({ pack and pack["keys.txt"] or "", shade or "" }) do
+            for name, value in keys:gmatch("([%w_]+)=(-?%d+)") do
+                factory_colours[name] = file_to_native(tonumber(value) & 0xFFFFFF)
+            end
         end
     end
     return factory_colours[key]
@@ -1405,14 +1461,17 @@ end
 
 remember_colours = function()
     local lines = {}
+    local keys = {}
     for _, group in ipairs(COLOUR_GROUPS) do
         for _, entry in ipairs(group[2]) do
-            for _, key in ipairs(entry[2]) do
-                local factory = factory_colour(key)
-                local current = r.GetThemeColor(key, 0) & 0xFFFFFF
-                if factory and factory ~= current then lines[#lines + 1] = key .. "=" .. current end
-            end
+            for _, key in ipairs(entry[2]) do keys[#keys + 1] = key end
         end
+    end
+    for _, key in ipairs(ARRANGE_EXTRA) do keys[#keys + 1] = key end
+    for _, key in ipairs(keys) do
+        local factory = factory_colour(key)
+        local current = r.GetThemeColor(key, 0) & 0xFFFFFF
+        if factory and factory ~= current then lines[#lines + 1] = key .. "=" .. current end
     end
     if #lines == 0 then
         os.remove(my_colours_file())
@@ -1995,7 +2054,7 @@ local function apply_signature(sig)
         return
     end
     if handle_is_dot() then set_handle(false) end      -- the mixer's handle by layout, else the cap won't show
-    look.apply_saved(sig.saved)
+    look.keep_mood(look.apply_saved, sig.saved)
     set_param("tkTransPlate", sig.plate, true)
     set_param("tkPlateLogo", sig.logo, true)
     set_param("customColorDepthParam", 0, true)     -- plain rims
@@ -2116,9 +2175,13 @@ function look.switch(entry, forced)
         local factory = read_all(here .. "dist/" .. entry.theme .. ".factory.ReaperTheme")
         if factory then write_all(loose, factory) end
     end
-    for part, variant in pairs(parts.chosen) do
-        if not parts.in_zip(part, variant, zip) then parts.write(part, variant, zip) end
-    end
+    parts.keep_own = true
+    Zip.batch(zip, function()
+        for part, variant in pairs(parts.chosen) do
+            if not parts.in_zip(part, variant, zip) then parts.write(part, variant, zip) end
+        end
+    end)
+    parts.keep_own = nil
     look.apply_icons(entry)
 
     local on_look, values, processing, layouts = look.current(), {}, {}, {}
@@ -2256,6 +2319,24 @@ function look.current_mood(entry)
     return nil
 end
 
+-- Runs fn, which changes the look's own colours (darkness, say), and puts the colour
+-- setting that was on back over them; your own colours are then noted against the new ones.
+function look.keep_mood(fn, ...)
+    local entry = look.current()
+    local mood = entry and look.current_mood(entry)
+    local res = table.pack(fn(...))
+    if res[1] == false then return table.unpack(res, 1, res.n) end
+    parts.forget_factory()
+    if entry and look.current() == entry and mood and mood ~= MOODS[1] then
+        look.each_mood_colour(entry, mood, set_colour)
+        repaint_after_colour()
+        save_colours()
+    elseif look.current() then
+        remember_colours()
+    end
+    return table.unpack(res, 1, res.n)
+end
+
 local function draw_moods(current)
     local active = look.current_mood(current)
     r.ImGui_Dummy(ctx, 0, 2)
@@ -2284,6 +2365,7 @@ end
 local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 }, { "red", "Red", 0xE8303A, 0xC41A24 } }
 
 local DISPLAYS = { { "standard", "Standard" }, { "ice", "Ice" }, { "amber", "Amber" }, { "green", "Green" }, { "red", "Red" }, { "blue", "Blue" } }
+parts.variants = { accent = ACCENTS, display = DISPLAYS }
 
 local function draw_display()
     r.ImGui_Dummy(ctx, 0, 2)
@@ -2301,7 +2383,7 @@ local function draw_shade()
     r.ImGui_Dummy(ctx, 0, 2)
     if not begin_card("Darkness", "lks") then return end
     local picked = parts.buttons("shade", "shade", SHADES, parts.chosen.shade or parts.default.shade)
-    if picked and parts.choose("shade", picked) then state.msg = "Darkness changed." end
+    if picked and look.keep_mood(parts.choose, "shade", picked) then state.msg = "Darkness changed." end
     r.ImGui_Dummy(ctx, 0, 2)
     hint_text("Black takes the arrange view, track lanes, lists, mixer, MIDI editor and dockers close to black. The panels and buttons stay as they are. Choosing one reloads the theme, so the screen may blink.")
     r.ImGui_EndChild(ctx)
@@ -2323,7 +2405,7 @@ local function draw_accents(current)
             local x, y = r.ImGui_GetItemRectMin(ctx)
             local x2, y2 = r.ImGui_GetItemRectMax(ctx)
             r.ImGui_DrawList_AddRect(r.ImGui_GetWindowDrawList(ctx), x - 2, y - 2, x2 + 2, y2 + 2, rgba(UI.ink), 3, 0, 2)
-        elseif clicked and parts.choose("accent", accent[1]) then
+        elseif clicked and look.keep_mood(parts.choose, "accent", accent[1]) then
             state.msg = accent[2] .. " is on."
         end
     end

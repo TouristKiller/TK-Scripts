@@ -24,12 +24,34 @@ function Zip.crc32(s)
     return c ~ 0xFFFFFFFF
 end
 
-local function read_file(path)
+local function read_raw(path)
     local f = io.open(path, "rb")
     if not f then return nil end
     local s = f:read("a")
     f:close()
     return s
+end
+
+-- While held, a theme zip is read once; Zip.save keeps it up to date.
+local held, pending
+
+local function cacheable(path)
+    return held and path:find("%.ReaperThemeZip$") ~= nil
+end
+
+local function read_file(path)
+    if not cacheable(path) then return read_raw(path) end
+    if held[path] == nil then held[path] = read_raw(path) or false end
+    return held[path] or nil
+end
+
+function Zip.hold(fn, ...)
+    if held then return fn(...) end
+    held = {}
+    local res = table.pack(pcall(fn, ...))
+    held = nil
+    if not res[1] then error(res[2], 0) end
+    return table.unpack(res, 2, res.n)
 end
 
 -- the entries in the zip's own order, from the central directory at its end
@@ -66,46 +88,60 @@ local function read_data(s, e)
     return s:sub(start, start + e.csize - 1)
 end
 
--- the folder the theme's images are in, inside the zip
-function Zip.root(path)
+-- what Zip.root, Zip.crc_of and Zip.crc_map need, read once per zip while held
+local function index_of(path)
+    local cached = held and held["index:" .. path]
+    if cached then return cached end
     local s = read_file(path)
     local entries = s and read_entries(s)
+    local index = { crcs = {} }
     for _, e in ipairs(entries or {}) do
-        local root = e.name:match("^(.*)/rtconfig%.txt$")
-        if root and not root:find("/", 1, true) then return root end
+        if not index.root then
+            local root = e.name:match("^(.*)/rtconfig%.txt$")
+            if root and not root:find("/", 1, true) then index.root = root end
+        end
+        index.crcs[e.name] = e.crc
     end
-    return nil
+    if cacheable(path) then held["index:" .. path] = index end
+    return index
+end
+
+-- the folder the theme's images are in, inside the zip
+function Zip.root(path)
+    return index_of(path).root
 end
 
 -- the checksum of one file in the zip, to tell whether it holds the file you expect
 function Zip.crc_of(path, name)
-    local s = read_file(path)
-    local entries = s and read_entries(s)
-    for _, e in ipairs(entries or {}) do
-        if e.name == name then return e.crc end
-    end
-    return nil
+    return index_of(path).crcs[name]
 end
 
--- every file of a zip made without compression: { [name] = contents }
+-- every file of a zip made without compression: { [name] = contents }, and their checksums
+local stored_crcs = setmetatable({}, { __mode = "k" })
 function Zip.read_stored(path)
     local s = read_file(path)
     local entries = s and read_entries(s)
     if not entries then return nil end
-    local files = {}
+    local files, crcs = {}, {}
     for _, e in ipairs(entries) do
         if e.method ~= 0 then return nil end
         files[e.name] = read_data(s, e)
+        crcs[e.name] = e.crc
     end
+    stored_crcs[files] = crcs
     return files
+end
+
+-- the checksum of a file from Zip.read_stored, as its zip holds it
+function Zip.stored_crc(files, name)
+    local crcs = stored_crcs[files]
+    return crcs and crcs[name] or Zip.crc32(files[name])
 end
 
 -- the checksums of all files in a zip: { [name] = crc }
 function Zip.crc_map(path)
-    local s = read_file(path)
-    local entries = s and read_entries(s)
     local crcs = {}
-    for _, e in ipairs(entries or {}) do crcs[e.name] = e.crc end
+    for name, crc in pairs(index_of(path).crcs) do crcs[name] = crc end
     return crcs
 end
 
@@ -115,8 +151,13 @@ function Zip.same_files(path, folder)
     local entries = s and read_entries(s)
     if not entries then return false end
     for _, e in ipairs(entries) do
-        local data = read_file(folder .. e.name)
-        if not data or Zip.crc32(data) ~= e.crc then return false end
+        local data = read_raw(folder .. e.name)
+        if not data then return false end
+        if e.method == 0 then
+            if data ~= read_data(s, e) then return false end
+        elseif Zip.crc32(data) ~= e.crc then
+            return false
+        end
     end
     return true
 end
@@ -143,6 +184,7 @@ end
 -- Written next to the file and swapped in, so REAPER never reads half a file and a
 -- full disk leaves the old one alone. Returns true, or nil and what went wrong.
 function Zip.save(path, data)
+    if held then held[path], held["index:" .. path] = nil, nil end
     local tmp, old = path .. ".tmp", path .. ".old"
     local f = io.open(tmp, "wb")
     if not f then return nil, "can't write next to the theme file" end
@@ -153,12 +195,12 @@ function Zip.save(path, data)
         return nil, "can't write next to the theme file (is the disk full?)"
     end
     -- never swap in anything but what was meant: something else may write there too
-    if read_file(tmp) ~= data then
+    if read_raw(tmp) ~= data then
         os.remove(tmp)
         return nil, "the theme file couldn't be written correctly, please try again"
     end
     os.remove(old)
-    local existed = read_file(path) ~= nil
+    local existed = read_raw(path) ~= nil
     if existed and not os.rename(path, old) then
         os.remove(tmp)
         return nil, "the theme file is in use"
@@ -173,7 +215,7 @@ function Zip.save(path, data)
 end
 
 -- files: { [name in the zip] = contents }. Returns true, or nil and what went wrong.
-function Zip.replace(path, files)
+local function replace_now(path, files)
     local s = read_file(path)
     if not s then return nil, "can't read the theme file" end
     local entries, err = read_entries(s)
@@ -217,6 +259,33 @@ function Zip.replace(path, files)
     out[#out + 1] = string.pack("<c4I2I2I2I2I4I4I2", "PK\5\6", 0, 0, #entries, #entries, #directory, at, 0)
 
     return Zip.save(path, table.concat(out))
+end
+
+-- Inside Zip.batch the zip at that path is written once, at the end, with every file
+-- given to Zip.replace; a later one for the same name wins, as it would on disk.
+function Zip.replace(path, files)
+    if pending and pending.path == path then
+        for name, data in pairs(files) do pending.files[name] = data end
+        return true
+    end
+    return replace_now(path, files)
+end
+
+-- Runs fn and returns what it returns, unless writing the zip then fails: nil and why.
+function Zip.batch(path, fn, ...)
+    if pending then return fn(...) end
+    return Zip.hold(function(...)
+        pending = { path = path, files = {} }
+        local res = table.pack(pcall(fn, ...))
+        local files = pending.files
+        pending = nil
+        if not res[1] then error(res[2], 0) end
+        if next(files) then
+            local ok, err = replace_now(path, files)
+            if not ok then return nil, err end
+        end
+        return table.unpack(res, 2, res.n)
+    end, ...)
 end
 
 -- REAPER keeps a loaded theme's images until another theme has been loaded. A

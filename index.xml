@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.16" author="TouristKiller" time="2026-11-08T01:01:04Z">
+    <version name="0.9.17" author="TouristKiller" time="2026-11-08T02:07:18Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -539,8 +539,10 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Blue Angel, a second one-click preset on the Presets page: Dark in blue, with a blue display and the Blue Angel on a silver transport plate.
-+ Added: Blue Angel as a plate logo on the General page, beside TK-S73 and Red Devil.
++ Fixed: a colour setting (Warm, Cool, Neutral, Inverted) now builds on the chosen darkness. With Black, Cool gave lanes in the standard brightness and a selected track lane in black; now all of it follows Black. Choosing another darkness or accent colour keeps the colour setting that's on, and Reset on the Colours page goes back to the darkness's colour.
++ Fixed: opening the settings window no longer puts back the colour setting or colours you changed yourself. Its check for your choices after an update now leaves a colour alone that none of them uses. After an update, Inverted also comes back in full.
++ Fixed: with some combinations, such as an accent colour with Black darkness, opening the settings window reloaded the theme every time.
++ Changed: the settings window opens faster. Its check that your choices are still in the theme reads the theme once, and putting them back after an update writes the theme once instead of once per choice. Choosing an accent colour or another part is quicker too.
 ]]></changelog>
     </version>
     </reapack>
