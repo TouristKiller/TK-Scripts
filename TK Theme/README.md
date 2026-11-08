@@ -33,9 +33,10 @@ lists, menus and borders. That takes effect after a restart.
 - **Text buttons on toolbars:** plain, or with a quiet cell behind them, and small, normal or large text.
 - **FX and send lists:** plain, or a subtle grid above the mixer's strips, and sends in the colour of their destination track.
 - **Transport plate:** Black or Silver: brushed metal behind the whole transport, with screws and
-  a maker's plate (TK-S73 or the Red Devil), on the General page. The rate can sit on it as a knob.
+  a maker's plate (TK-S73, the Red Devil or the Blue Angel), on the General page. The rate can sit on it as a knob.
 - **Darkness:** Black takes Dark's arrange, lanes, lists, mixer, MIDI editor and dockers close to black.
 - **Red Devil:** one click on the Presets page: Dark in red and near black, with the Red Devil on a black plate.
+- **Blue Angel:** one click on the Presets page: Dark in blue, with a blue display and the Blue Angel on a silver plate.
 - **Colour settings:** Standard, Warm, Cool, Neutral and Inverted, for the arrange, grid, mixer
   background and lists. Inverted gives Dark a light arrange and Light a dark one.
 - **Meters:** six types with colour steps, and segments in three sizes. The steps assume

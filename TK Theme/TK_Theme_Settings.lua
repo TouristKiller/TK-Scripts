@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.15
+-- @version 0.9.16
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -323,7 +323,7 @@ local PAGES = {
         { "Transport", {
             { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
             T("Rate as a knob", "tkRateKnob", nil, "With a plate: the rate as a knob on the right of the plate, mirroring the maker's plate. Off keeps the slider in the display."),
-            { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil" } },
+            { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil", "Blue Angel" } },
             { kind = "startup", label = "Metronome light at startup",
               hint = "Without it the metronome button shows its state after the first click. Adds one line to Scripts/__startup.lua; switching it off removes that line again." },
         } },
@@ -1978,38 +1978,48 @@ local function draw_undo_card()
     end
 end
 
-local RED_DEVIL = "\nlook=TK Theme Dark\npart:accent=red\npart:display=red\npart:shade=black"
-    .. "\npart:mcp_volthumb=classic_accent\npart:tcp_thumb=classic_accent\npart:mcp_pan=classic_accent\n"
+local SIGNATURES = {
+    { name = "Red Devil", id = "prd", plate = 1, logo = 1,
+      saved = "\nlook=TK Theme Dark\npart:accent=red\npart:display=red\npart:shade=black"
+          .. "\npart:mcp_volthumb=classic_accent\npart:tcp_thumb=classic_accent\npart:mcp_pan=classic_accent\n",
+      hint = "The Dark look in red and near black: red accent colour, red display, Black darkness, the black transport plate with the Red Devil on it, plain rims without track colour, track names in red and classic handles with a red line. Everything else stays as it is, each can be changed back on its own, and Undo brings back what you had." },
+    { name = "Blue Angel", id = "pba", plate = 2, logo = 2,
+      saved = "\nlook=TK Theme Dark\npart:accent=blue\npart:display=blue\npart:shade=standard"
+          .. "\npart:mcp_volthumb=classic_accent\npart:tcp_thumb=classic_accent\npart:mcp_pan=classic_accent\n",
+      hint = "The Dark look in blue: blue accent colour, blue display, Standard darkness, the silver transport plate with the Blue Angel on it, plain rims without track colour, track names in blue and classic handles with a blue line. Everything else stays as it is, each can be changed back on its own, and Undo brings back what you had." },
+}
 
-local function apply_red_devil()
+local function apply_signature(sig)
     if not save_undo() then
         state.msg = "Nothing changed: couldn't save the current settings for undo."
         return
     end
     if handle_is_dot() then set_handle(false) end      -- the mixer's handle by layout, else the cap won't show
-    look.apply_saved(RED_DEVIL)
-    set_param("tkTransPlate", 1, true)
-    set_param("tkPlateLogo", 1, true)
+    look.apply_saved(sig.saved)
+    set_param("tkTransPlate", sig.plate, true)
+    set_param("tkPlateLogo", sig.logo, true)
     set_param("customColorDepthParam", 0, true)     -- plain rims
     set_param("tkNameAccent", 1, true)
     r.ThemeLayout_RefreshAll()
-    state.msg = "Red Devil is on. Undo brings back what you had."
+    state.msg = sig.name .. " is on. Undo brings back what you had."
 end
 
-local function draw_red_devil()
-    if begin_card("Red Devil", "prd") then
-        hint_text("The Dark look in red and near black: red accent colour, red display, Black darkness, the black transport plate with the Red Devil on it, plain rims without track colour, track names in red and classic handles with a red line. Everything else stays as it is, each can be changed back on its own, and Undo brings back what you had.")
-        r.ImGui_SetCursorPosX(ctx, LABEL_W)
-        if r.ImGui_Button(ctx, "Apply Red Devil") then apply_red_devil() end
-        r.ImGui_EndChild(ctx)
+local function draw_signatures()
+    for _, sig in ipairs(SIGNATURES) do
+        if begin_card(sig.name, sig.id) then
+            hint_text(sig.hint)
+            r.ImGui_SetCursorPosX(ctx, LABEL_W)
+            if r.ImGui_Button(ctx, "Apply " .. sig.name) then apply_signature(sig) end
+            r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_Dummy(ctx, 0, 2)
     end
-    r.ImGui_Dummy(ctx, 0, 2)
 end
 
 local function draw_presets()
     hint_text("A preset holds every setting, colour, the colour processing, chosen actions, the look, the meter type and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
     r.ImGui_Dummy(ctx, 0, 2)
-    draw_red_devil()
+    draw_signatures()
     if begin_card("Save as a new preset", "ps") then
         row_label("Name")
         r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
