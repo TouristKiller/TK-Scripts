@@ -27,6 +27,8 @@ lists, menus and borders. That takes effect after a restart.
   and images, and your layout settings, colour setting, accent colour and display go along. In
   Options > Themes they are two themes: choosing one there works too, but your settings only go
   along from the Look page.
+- **Day and night:** Light by day and Dark by night, at times you set on the Look page. It
+  waits while REAPER plays or records, and a look you choose yourself stays until the next switch.
 - **Accent colours:** Blue, Orange, Violet and Red, for selections, FX buttons, highlights, meters
   and the theme's icons.
 - **Display:** Ice, Amber, Green, Red or Blue: dark glass on the transport with everything on it
@@ -53,7 +55,8 @@ lists, menus and borders. That takes effect after a restart.
   signature. Click it to choose the grid, or an adaptive grid that follows the zoom (shown
   with an A). A magnet beside it turns snap on and off.
 - **Track panel:** a choice of slider handles, sliders or knobs for volume and pan, which can
-  also sit on the first row so they show on the lowest track height, FX and IO columns, FX parameters under the controls, buttons for
+  also sit on the first row so they show on the lowest track height, record arm and monitor on
+  the left or right of that row, FX and IO columns, FX parameters under the controls, buttons for
   fixed lanes and freeze, and a blue strip on tracks with fixed lanes. The master has the
   same windows, with its hardware outputs in the IO column, or can be one big meter.
 - **Layouts:** A, B and C can each leave out or move parts of the track panel and mixer

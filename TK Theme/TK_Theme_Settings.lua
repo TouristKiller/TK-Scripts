@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.18
+-- @version 0.9.19
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -10,7 +10,12 @@
 --   Reset          everything above back to how the theme comes, and undoing that
 local r = reaper
 
+-- run by the watcher to change the look by the time of day: no window, no message
+local Auto = dofile(debug.getinfo(1, "S").source:match("^@(.*[\\/])") .. "TK_Theme_Auto.lua")
+local AUTO_LOOK = Auto.take_request()
+
 if not r.ImGui_CreateContext then
+    if AUTO_LOOK then return end
     r.ShowMessageBox("This window needs ReaImGui (install it with ReaPack).", "TK Theme Settings", 0)
     return
 end
@@ -20,6 +25,7 @@ do
     local _, _, version = r.ImGui_GetVersion()
     local major, minor = tostring(version):match("^(%d+)%.(%d+)")
     if not major or tonumber(major) == 0 and tonumber(minor) < 10 then
+        if AUTO_LOOK then return end
         r.ShowMessageBox("This window needs ReaImGui 0.10 or newer (found " .. tostring(version)
             .. "). Update it with ReaPack.", "TK Theme Settings", 0)
         return
@@ -305,7 +311,7 @@ local PAGES = {
         } },
         { "Tracks and strips", {
             S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims."),
-            S("Selection strength", "selectStrength", nil, "How much a selected track lightens."),
+            S("Selection strength", "selectStrength", nil, "How much a selected track stands out: lighter on Dark, in the accent colour on Light."),
             T("Track names in track colour", "colorTrackLabels"),
             T("Track names in accent colour", "tkNameAccent", nil, "Goes before the track colour: with both on, names show in the accent colour."),
             T("Selection dot", "selDot", nil, "The small dot on the track number."),
@@ -354,6 +360,8 @@ local PAGES = {
             Off(lay_on("tkNameOnly"), T("Mute and solo", "tkHideMs", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly", "tkHideMs"), T("Mute and solo on the left", "tkMsLeft", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly"), T("Record arm and monitor", "tkHideArm", THIS_LAYOUT, nil, true)),
+            Off(lay_on("tkNameOnly"), T("Record arm and monitor on the left", "tkArmLeft", THIS_LAYOUT,
+                "At the start of the first row, with the FX and IO buttons when they're in it. Mute, solo and the knobs on the first row then sit next to the meter.")),
             Off(lay_on("tkNameOnly"), T("FX column", "tkNoFxCol", THIS_LAYOUT, "Without its column, the FX button moves to the first row.", true)),
             Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without its column, the IO button moves to the first row.", true)),
             Off(lay_off_or("tkNoFxCol", "tkNameOnly"), T("FX button", "tkHideFxBtn", THIS_LAYOUT, nil, true)),
@@ -545,10 +553,10 @@ local function load_startup()
     startup.on = id ~= nil and (read_all(startup_file) or ""):find(id, 1, true) ~= nil
 end
 
--- the grid box needs the watcher, also before the first click on the metronome
+-- the grid box and day and night need the watcher, also before the first click on the
+-- metronome; one still running from before an update is restarted with the new code
 start_watcher = function()
-    local beat = tonumber(r.GetExtState("TK_Theme_Watch", "beat"))
-    if beat and r.time_precise() - beat < 3 then return end
+    if Auto.watcher_current() then return end
     local _, cmd = watcher_id()
     if cmd then r.Main_OnCommand(cmd, 0) end
 end
@@ -2528,6 +2536,48 @@ end
 
 local SHADES = { { "standard", "Standard" }, { "black", "Black" } }
 
+-- Light by day, Dark by night: the watcher switches when the schedule turns
+local function draw_auto()
+    r.ImGui_Dummy(ctx, 0, 2)
+    if not begin_card("Day and night", "lka") then return end
+    local on = Auto.on()
+    row_label("Switch by the time of day")
+    if toggle("auto_on", on) then
+        on = not on
+        Auto.enable(on)
+        if on then
+            start_watcher()
+            state.msg = "Day and night is on: the look follows the time of day."
+        end
+    end
+    local light, dark = Auto.times()
+    for _, t in ipairs({ { "light", "Light from", light }, { "dark", "Dark from", dark } }) do
+        local key, label, minute = t[1], t[2], t[3]
+        row_label(label)
+        r.ImGui_SetNextItemWidth(ctx, 70)
+        local shown = state["auto_" .. key] or string.format("%02d:%02d", minute // 60, minute % 60)
+        local changed, text = r.ImGui_InputText(ctx, "##auto_" .. key, shown)
+        if changed then state["auto_" .. key] = text end
+        if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+            if Auto.set_time(key, state["auto_" .. key]) then
+                state.msg = label .. " " .. select(2, Auto.parse(state["auto_" .. key])) .. "."
+            else
+                state.msg = "Not a time: use hours and minutes, like 08:00 or 19:30."
+            end
+            state["auto_" .. key] = nil
+        end
+    end
+    row_label("Note it in the console")
+    local notify = r.GetExtState(Auto.SECTION, "notify") ~= "0"
+    if toggle("auto_notify", notify) then r.SetExtState(Auto.SECTION, "notify", notify and "0" or "1", true) end
+    r.ImGui_Dummy(ctx, 0, 2)
+    hint_text("Switches only when the time comes, and never while REAPER plays, records or is paused, nor with this window open: then it waits until that's over. A look you choose yourself stays until the next switch. It runs with the metronome and grid watcher, so turn on \"Metronome and grid at startup\" on the General page to have it after a restart too. The switch reloads the theme, so the screen blinks once.")
+    if on and light == dark then
+        hint_text("Light and Dark start at the same time, so nothing switches.")
+    end
+    r.ImGui_EndChild(ctx)
+end
+
 local function draw_shade()
     r.ImGui_Dummy(ctx, 0, 2)
     if not begin_card("Darkness", "lks") then return end
@@ -2608,6 +2658,7 @@ local function draw_look()
         draw_accents(current)
         if current.name == "Dark" then draw_shade() end
         draw_display()
+        draw_auto()
     end
     local wants_dark = current and current.name == "Dark"
     if IS_WINDOWS and current and dark.on ~= wants_dark then
@@ -2632,6 +2683,7 @@ local GUIDE = {
         "A transport plate on General puts brushed metal, with screws and a maker's plate, behind the whole transport, which gets a little taller. It goes with any look and display skin.",
         "A display skin gives the transport's glass and what's on it one colour of its own, in every look. The accent colour doesn't reach it.",
         "The same page chooses an accent colour: Blue, Orange or Violet, for selections, FX buttons, highlights, meters and the theme's icons. Mute, solo, record and play keep their own colours, and so do the TK_ icons on your own toolbars.",
+        "Day and night, on the Look page, switches to Light and Dark at the times you set. It waits while REAPER plays, records or is paused, and while this window is open, and a look you choose yourself stays until the next switch. It needs the metronome and grid watcher, which \"Metronome and grid at startup\" starts with REAPER.",
         "In Options > Themes the looks are listed as TK Theme Dark and TK Theme Light. Choosing one there works too, but your settings only go along when you change the look on this page.",
     } },
     { "Transport", {
@@ -2654,6 +2706,7 @@ local GUIDE = {
         "Each track can use layout A, B or C. In the track panel they look the same until you change one on the Track panel page, for example to give your busses only a name, FX, mute and solo, with a wide meter on the left. Settings that don't count at the moment show grey. Name only turns a track into a divider: its name, large and centred, growing with the track's height.",
         "Under Set track height you set a fixed height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
         "Volume and pan on the first row puts them beside the name, so they also show on the lowest track height. Name width then sets the room for the name. Volume and pan as chooses Sliders, Knobs or Auto, which shows knobs when a slider wouldn't have the room. Knobs sit side by side, and on the first row the name takes the room they leave.",
+        "The first row runs from the name to mute and solo, then record arm and monitor next to the meter. Record arm and monitor on the left moves those to the start of the row, so the knobs, mute and solo end up next to the meter; Mute and solo on the left moves those to the start instead.",
     } },
     { "Mixer", {
         "Choose the fader handle on the Mixer page, for all layouts. In the track's layout menu, each layout has a twin with the word Dot; this switch moves tracks between them. A project opened later follows the next time this window opens.",
@@ -2803,12 +2856,14 @@ local function startup_checks()
     restore_my_colours()
     if handle_is_dot() then sync_track_handles(true) end
     refresh_palette()
-    if P.tkGridBox and P.tkGridBox.value ~= 0 then start_watcher() end
+    if P.tkGridBox and P.tkGridBox.value ~= 0 or Auto.on() then start_watcher() end
 end
 
 local frame = 0
 local function loop()
     frame = frame + 1
+    -- tells the day and night switch that this window is open, so it waits
+    if frame % 20 == 1 then r.SetExtState(SCRIPT, "open", tostring(r.time_precise()), false) end
     if state.checking and frame > 1 then
         state.checking = false
         startup_checks()
@@ -2831,7 +2886,11 @@ local function loop()
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, vars)
     r.ImGui_PopStyleColor(ctx, colours)
-    if open then r.defer(loop) end
+    if open then
+        r.defer(loop)
+    else
+        r.DeleteExtState(SCRIPT, "open", false)
+    end
 end
 
 -- the theme's buttons call these scripts by action ID, which only exists once
@@ -2871,6 +2930,22 @@ load_startup()
 refresh_palette()
 load_params()
 load_dark()
+
+if AUTO_LOOK then
+    -- only between the schedule's checks: the watcher made sure nothing plays and this window is shut
+    local entry
+    for _, e in ipairs(look.list) do
+        if e.theme == AUTO_LOOK then entry = e end
+    end
+    if entry and look.current() and look.current() ~= entry and r.GetPlayState() == 0 then
+        parts.load()
+        if look.switch(entry, true) and r.GetExtState(Auto.SECTION, "notify") ~= "0" then
+            r.ShowConsoleMsg("TK Theme: " .. entry.name .. " look, by the time of day.\n")
+        end
+    end
+    return
+end
+
 state.checking = true
 state.restart = r.GetExtState(SCRIPT, "restart") == "1"
 state.welcome = IS_WINDOWS and not dark.saved and r.GetExtState(SCRIPT, "welcomed") == ""

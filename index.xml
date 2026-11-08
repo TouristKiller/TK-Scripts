@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.18" author="TouristKiller" time="2026-11-08T19:11:41Z">
+    <version name="0.9.19" author="TouristKiller" time="2026-11-08T22:13:01Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -209,6 +209,7 @@
      <source file="TK_Theme_Slot.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Slot.lua</source>
      <source file="TK_Theme_Zip.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Zip.lua</source>
      <source file="TK_Theme_Grid.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid.lua</source>
+     <source file="TK_Theme_Auto.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Auto.lua</source>
      <source file="dist/darkmode_colors.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/darkmode_colors.txt</source>
      <source file="dist/TK Theme Dark.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Dark.factory.ReaperTheme</source>
      <source file="dist/TK Theme Light.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Light.factory.ReaperTheme</source>
@@ -542,13 +543,11 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: a grid box on the display, beside the time signature (General page, off at first). It shows the grid; click it for a menu to choose the division, triplet, dotted, swing, frame, measure, or an adaptive grid that follows the zoom (Narrow, Medium or Wide), in every REAPER version. A magnet beside it turns snap on and off and lights while it's on. "Metronome light at startup" is now "Metronome and grid at startup".
-+ Changed: loading a preset, Red Devil, Blue Angel, Undo or a factory reset now changes the theme in one go and reloads it once, instead of once per part, also when the preset is for the other look. Quicker, and the screen blinks only once.
-+ Changed: the settings window appears right away. Its check that your choices are still in the theme runs just after, with "Checking the theme..." in the window meanwhile.
-+ Changed: the colour setting (Warm, Cool, Neutral, Inverted) now goes along when you change the look, like the accent colour and display, in the new look's version of it. Colours you set yourself on the Colours page stay with each look.
-+ Fixed: after an update, your own colours of the other look come back when you switch to it, not only when the settings window opens.
-+ Fixed: the columns button in the track panel brings back the columns that were shown, so with only the FX column on, it no longer shows the IO column too.
-+ Fixed: with the theme's zip chosen in Options > Themes instead of its .ReaperTheme, darkness, Red Devil, Blue Angel and your own colours didn't show until you chose a colour setting, and were gone after a restart. The settings window now loads the .ReaperTheme, which holds them.
++ Added: Record arm and monitor on the left (Track panel page, per layout). They move to the start of the first row, with the FX and IO buttons when those are in it, so the knobs, mute and solo sit next to the meter. Requested by Ezaky.
++ Added: Day and night (Look page): Light by day and Dark by night, from times you set (08:00 and 19:00 at first). It switches only when the time comes, never while REAPER plays, records or is paused, nor with the settings window open, and a look you choose yourself stays until the next switch. It runs with the metronome and grid watcher. Requested by Ezaky.
++ Changed: on the Light look a selected track takes on the accent colour, at the selection strength, instead of a white wash that hardly showed on the light panels. In the track panel, the mixer and on the master. Requested by Ezaky.
++ Changed: a metronome and grid watcher still running from before an update is restarted with the new version when the settings window opens, or when the grid box or day and night is turned on.
++ Fixed: with an embedded FX UI beside the FX parameters at the bottom of a track, the parameters took half of their half. They now take their whole half, and the embedded UI the other.
 ]]></changelog>
     </version>
     </reapack>

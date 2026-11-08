@@ -146,9 +146,14 @@ function Grid.watching()
     return beat ~= nil and r.time_precise() - beat < 3
 end
 
--- starts the watcher when it isn't running, so the grid box keeps up with other changes
+-- starts the watcher when it isn't running, or restarts one from before an update
 function Grid.start_watcher(folder)
-    if Grid.watching() then return end
+    local ok, Auto = pcall(dofile, folder .. "TK_Theme_Auto.lua")
+    if ok and Auto and Auto.watcher_current then
+        if Auto.watcher_current() then return end
+    elseif Grid.watching() then
+        return
+    end
     local path = folder .. "TK_Theme_Metronome_Watch.lua"
     local f = io.open(path, "rb")
     if not f then return end
