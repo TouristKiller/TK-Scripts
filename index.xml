@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.17" author="TouristKiller" time="2026-11-08T02:07:18Z">
+    <version name="0.9.18" author="TouristKiller" time="2026-11-08T19:11:41Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -191,6 +191,8 @@
      <source main="main" file="TK_Theme_Make_Divider.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Make_Divider.lua</source>
      <source main="main" file="TK_Theme_Toggle_TCP_Lists.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Toggle_TCP_Lists.lua</source>
      <source main="main" file="TK_Theme_Toggle_TCP_Meter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Toggle_TCP_Meter.lua</source>
+     <source main="main" file="TK_Theme_Grid_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid_Menu.lua</source>
+     <source main="main" file="TK_Theme_Snap.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Snap.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_actions.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_actions.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_bay.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_bay.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_clock.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_clock.lua</source>
@@ -206,6 +208,7 @@
      <source main="main" file="slots/TK_Theme_Slot_vkb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_vkb.lua</source>
      <source file="TK_Theme_Slot.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Slot.lua</source>
      <source file="TK_Theme_Zip.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Zip.lua</source>
+     <source file="TK_Theme_Grid.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid.lua</source>
      <source file="dist/darkmode_colors.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/darkmode_colors.txt</source>
      <source file="dist/TK Theme Dark.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Dark.factory.ReaperTheme</source>
      <source file="dist/TK Theme Light.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Light.factory.ReaperTheme</source>
@@ -539,10 +542,13 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Fixed: a colour setting (Warm, Cool, Neutral, Inverted) now builds on the chosen darkness. With Black, Cool gave lanes in the standard brightness and a selected track lane in black; now all of it follows Black. Choosing another darkness or accent colour keeps the colour setting that's on, and Reset on the Colours page goes back to the darkness's colour.
-+ Fixed: opening the settings window no longer puts back the colour setting or colours you changed yourself. Its check for your choices after an update now leaves a colour alone that none of them uses. After an update, Inverted also comes back in full.
-+ Fixed: with some combinations, such as an accent colour with Black darkness, opening the settings window reloaded the theme every time.
-+ Changed: the settings window opens faster. Its check that your choices are still in the theme reads the theme once, and putting them back after an update writes the theme once instead of once per choice. Choosing an accent colour or another part is quicker too.
++ Added: a grid box on the display, beside the time signature (General page, off at first). It shows the grid; click it for a menu to choose the division, triplet, dotted, swing, frame, measure, or an adaptive grid that follows the zoom (Narrow, Medium or Wide), in every REAPER version. A magnet beside it turns snap on and off and lights while it's on. "Metronome light at startup" is now "Metronome and grid at startup".
++ Changed: loading a preset, Red Devil, Blue Angel, Undo or a factory reset now changes the theme in one go and reloads it once, instead of once per part, also when the preset is for the other look. Quicker, and the screen blinks only once.
++ Changed: the settings window appears right away. Its check that your choices are still in the theme runs just after, with "Checking the theme..." in the window meanwhile.
++ Changed: the colour setting (Warm, Cool, Neutral, Inverted) now goes along when you change the look, like the accent colour and display, in the new look's version of it. Colours you set yourself on the Colours page stay with each look.
++ Fixed: after an update, your own colours of the other look come back when you switch to it, not only when the settings window opens.
++ Fixed: the columns button in the track panel brings back the columns that were shown, so with only the FX column on, it no longer shows the IO column too.
++ Fixed: with the theme's zip chosen in Options > Themes instead of its .ReaperTheme, darkness, Red Devil, Blue Angel and your own colours didn't show until you chose a colour setting, and were gone after a restart. The settings window now loads the .ReaperTheme, which holds them.
 ]]></changelog>
     </version>
     </reapack>

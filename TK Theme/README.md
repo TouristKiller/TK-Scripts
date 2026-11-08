@@ -24,8 +24,9 @@ lists, menus and borders. That takes effect after a restart.
 ## What's in it
 
 - **Looks:** Dark and Light, chosen on the Look page of the settings. A look changes colours
-  and images, and your layout settings go along. In Options > Themes they are two themes:
-  choosing one there works too, but your settings only go along from the Look page.
+  and images, and your layout settings, colour setting, accent colour and display go along. In
+  Options > Themes they are two themes: choosing one there works too, but your settings only go
+  along from the Look page.
 - **Accent colours:** Blue, Orange, Violet and Red, for selections, FX buttons, highlights, meters
   and the theme's icons.
 - **Display:** Ice, Amber, Green, Red or Blue: dark glass on the transport with everything on it
@@ -45,9 +46,12 @@ lists, menus and borders. That takes effect after a restart.
   transport. Each button can run an action of your choice. When the transport
   gets too narrow, they move to a second row.
 - **Metronome button** that lights up while the metronome is on. Click its small
-  arrow for the metronome settings. "Metronome light at startup" also keeps it
+  arrow for the metronome settings. "Metronome and grid at startup" also keeps it
   right before your first click; it adds one line to `Scripts/__startup.lua`,
   and switching it off removes that line again.
+- **Grid box** (General page, off at first): the grid on the display beside the time
+  signature. Click it to choose the grid, or an adaptive grid that follows the zoom (shown
+  with an A). A magnet beside it turns snap on and off.
 - **Track panel:** a choice of slider handles, sliders or knobs for volume and pan, which can
   also sit on the first row so they show on the lowest track height, FX and IO columns, FX parameters under the controls, buttons for
   fixed lanes and freeze, and a blue strip on tracks with fixed lanes. The master has the
