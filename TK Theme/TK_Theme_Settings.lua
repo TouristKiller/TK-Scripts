@@ -1,6 +1,6 @@
 -- @description TK Theme: settings
 -- @author TouristKiller
--- @version 0.9.20
+-- @version 0.9.21
 -- The theme's own settings window, in place of the Default 7 Theme Adjuster
 -- (rtconfig.txt names it with adjuster_script). Its colours are read from the
 -- loaded theme, so it follows whatever the theme looks like.
@@ -287,6 +287,10 @@ local function not_form(form)
         return current ~= form
     end
 end
+-- off while a track panel plate is on (it lays the panel out itself), or when `when` says so
+local function plate_or(when)
+    return function() return global_value("tkTcpPlate") or (when ~= nil and when()) end
+end
 local function global_on(...)
     local names = { ... }
     return function()
@@ -308,6 +312,14 @@ local PAGES = {
     { title = "General", cards = {
         { "Meters", {
             { kind = "meter", label = "Type", hint = "For the track panel and the mixer, in every look. Medium and Large segments grow with the height of the meter. Choosing one reloads the theme, so the screen may blink." },
+        } },
+        { "MIDI editor", {
+            { kind = "part", part = "midi_keys", label = "Key seams", choices = { { "accent", "Accent" }, { "black", "Black" } },
+              hint = "The lines between the white keys of the piano roll. REAPER uses the same colour for the key under the mouse, so with Black that key turns dark too. Choosing one reloads the theme, so the screen may blink." },
+        } },
+        { "Items", {
+            { kind = "part", part = "items", label = "Items", choices = { { "classic", "Classic" }, { "reversed", "Reversed" } },
+              hint = "Classic: items in the track colour with a dark waveform. Reversed: dark items with the waveform and MIDI notes in the track colour. The theme sets REAPER's item tint for it, so nothing changes in your preferences. Choosing one reloads the theme; if items don't change straight away, restart REAPER." },
         } },
         { "Tracks and strips", {
             S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims."),
@@ -341,9 +353,13 @@ local PAGES = {
     } },
     { title = "Track panel", cards = {
         { "All tracks", {
+            { kind = "choice", label = "Plate", param = "tkTcpPlate", choices = { "Standard", "Silver", "Black" }, part = "tcp_hw", parts = { "standard", "silver", "black" },
+              hint = "Silver or Black puts the track panel and the master on a brushed plate. Tall tracks get a low glass band (name, level, input and the small buttons) with R, M, S and the knobs as hardware under it; middle tracks a one-row band; low tracks one row with R, M, S and the volume knob. FX parameter knobs turn hardware too, and the section margins are at least 10. The plates are made for the Dark look; in Light they work, but look best in Dark. Choosing one reloads the theme, so the screen may blink." },
+            { kind = "choice", label = "Track number", param = "tkNumStyle", choices = { "Colour", "Stripe" },
+              hint = "Colour fills the number column with the track colour. Stripe keeps it in the panel's colour with a thin stripe of the track colour, quieter beside a plate." },
             { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES,
               hint = "For volume, pan and width, in all layouts, on the master and in envelope lanes. Choosing one reloads the theme, so the screen may blink." },
-            S("Section margins", "sectionMargin", nil, "Space around the windows, in track panels and envelope lanes. Clicking between or in the windows selects the track."),
+            S("Section margins", "sectionMargin", nil, "Space around the windows, in track panels and envelope lanes. Clicking between or in the windows selects the track. With a plate the track panels and the master use a fixed 10; this still sets the envelope lanes."),
             S("Folder indent", "tcpfolderIndentSize"),
         } },
         { "Per layout", {
@@ -351,16 +367,16 @@ local PAGES = {
             T("Name only", "tkNameOnly", THIS_LAYOUT, "Just the track's name, large and centred, for a divider or a folder."),
             Off(lay_on("tkNameOnly"), T("Volume", "tkHideVol", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Pan", "tkHidePan", THIS_LAYOUT, nil, true)),
-            Off(lay_on("tkNameOnly"), T("Volume and pan on the first row", "tkTopSliders", THIS_LAYOUT, "Beside the name, so they also show on the lowest track height. A narrow track panel leaves them out.")),
-            Off(lay_off_or("tkTopSliders", "tkNameOnly"), S("Name width", "tkNameW", THIS_LAYOUT, "The sliders take what's left of the row.")),
-            Off(lay_on("tkNameOnly"), { kind = "choice", label = "Volume and pan as", param = "tkKnobs", layouts = THIS_LAYOUT, choices = KNOB_CHOICE,
+            Off(plate_or(lay_on("tkNameOnly")), T("Volume and pan on the first row", "tkTopSliders", THIS_LAYOUT, "Beside the name, so they also show on the lowest track height. A narrow track panel leaves them out.")),
+            Off(plate_or(lay_off_or("tkTopSliders", "tkNameOnly")), S("Name width", "tkNameW", THIS_LAYOUT, "The sliders take what's left of the row.")),
+            Off(plate_or(lay_on("tkNameOnly")), { kind = "choice", label = "Volume and pan as", param = "tkKnobs", layouts = THIS_LAYOUT, choices = KNOB_CHOICE,
                 hint = "Auto shows a knob when a slider wouldn't have the room." }),
             Off(lay_on("tkNameOnly"), T("Input row", "tkHideInput", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Button row", "tkHideButtons", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Mute and solo", "tkHideMs", THIS_LAYOUT, nil, true)),
-            Off(lay_on("tkNameOnly", "tkHideMs"), T("Mute and solo on the left", "tkMsLeft", THIS_LAYOUT)),
+            Off(plate_or(lay_on("tkNameOnly", "tkHideMs")), T("Mute and solo on the left", "tkMsLeft", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly"), T("Record arm and monitor", "tkHideArm", THIS_LAYOUT, nil, true)),
-            Off(lay_on("tkNameOnly"), T("Record arm and monitor on the left", "tkArmLeft", THIS_LAYOUT,
+            Off(plate_or(lay_on("tkNameOnly")), T("Record arm and monitor on the left", "tkArmLeft", THIS_LAYOUT,
                 "At the start of the first row, with the FX and IO buttons when they're in it. Mute, solo and the knobs on the first row then sit next to the meter.")),
             Off(lay_on("tkNameOnly"), T("FX column", "tkNoFxCol", THIS_LAYOUT, "Without its column, the FX button moves to the first row.", true)),
             Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without its column, the IO button moves to the first row.", true)),
@@ -383,11 +399,11 @@ local PAGES = {
         } },
         { "Master", {
             T("Only a meter", "tkMasterMeterOnly", nil, "The whole master becomes one big meter."),
-            T("Rack screws", "tkMasterScrews", nil, "On the left of the master, like the ones on the transport."),
+            Off(plate_or(), T("Rack screws", "tkMasterScrews", nil, "On the left of the master, like the ones on the transport. A track panel plate has screws of its own.")),
             Off(global_on("tkMasterMeterOnly"), T("Meter", "tkMasterHideMeter", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Volume", "tkMasterHideVol", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Pan", "tkMasterHidePan", nil, nil, true)),
-            Off(global_on("tkMasterMeterOnly"), { kind = "choice", label = "Volume and pan as", param = "tkMasterKnobs", choices = KNOB_CHOICE,
+            Off(plate_or(global_on("tkMasterMeterOnly")), { kind = "choice", label = "Volume and pan as", param = "tkMasterKnobs", choices = KNOB_CHOICE,
                 hint = "Auto shows a knob when a slider wouldn't have the room." }),
             Off(global_on("tkMasterMeterOnly"), T("Mute and solo", "tkMasterHideMs", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("FX column", "tkMasterNoFx", nil, "Without its column, the FX button moves to the first row.", true)),
@@ -425,6 +441,7 @@ local PAGES = {
             T("Sidebar when selected", "mcpSidebarSel", THIS_LAYOUT), T("Sidebar when armed", "mcpSidebarRecarm", THIS_LAYOUT),
             Off(no_sidebar, S("Sidebar width", "sidebarWidth", THIS_LAYOUT)),
             Off(no_sidebar, S("Sidebar columns", "tkSidebarCols", THIS_LAYOUT, "For the FX and send lists. More columns need a wider sidebar.")),
+            Off(no_sidebar, T("Sidebar on the right", "tkSidebarRight", THIS_LAYOUT, "The sidebar after the strip instead of before it.")),
         } },
         { "Buttons", {
             T("I/O button", "mcpNormalShowRoute", THIS_LAYOUT), T("FX buttons", "mcpNormalShowSecFx", THIS_LAYOUT),
@@ -715,8 +732,12 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard" },
-    images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" } } }
+    default = { midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard" },
+    images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
+        -- the track panel's knobs and R / M / S: the theme's own, or hardware for the plate (the first differs per variant)
+        tcp_hw = { "tcp_vol_knob_stack", "tcp_pan_knob_stack", "tcp_wid_knob_stack", "tcp_fxparm_knob_stack", "track_mute_off_ol", "track_mute_on",
+            "track_solo_off_ol", "track_solo_on", "track_recarm_off_ol", "track_recarm_on_ol", "track_recarm_norec_ol",
+            "track_recarm_auto_ol", "track_recarm_auto_on_ol", "track_recarm_auto_norec_ol", "track_mono", "track_stereo_ol" } } }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
 
@@ -787,7 +808,7 @@ end
 function parts.files(part)
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
     if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
-    if part == "toolbar_text" or part == "send_tint" or part == "shade" then return {} end  -- lines in the colour file only
+    if part == "toolbar_text" or part == "send_tint" or part == "shade" or part == "items" or part == "midi_keys" then return {} end  -- lines in the colour file only
     if part ~= "meter" then
         local files = {}
         for _, name in ipairs(parts.images_of[part] or { part }) do
@@ -864,6 +885,15 @@ function parts.keys(keys, zip, part)
     return same, text, loose
 end
 
+-- Reversed items: REAPER tints the waveform with the track colour, not the item's background.
+-- tinttcp in the layout overrides REAPER's own "Tint media item" preferences: 298 is Default
+-- 7's (backgrounds), 2 the waveform.
+function parts.layout_fix(text, items)
+    items = items or parts.chosen.items or parts.default.items
+    local value = items == "reversed" and "2" or "298"
+    return (text:gsub("([\r\n])tinttcp %d+", "%1tinttcp " .. value, 1))
+end
+
 -- the meter comes from the pack too, so an accent writes the chosen type in its own colour,
 -- and the other parts go back over what it holds
 function parts.write_accent(variant, zip, root)
@@ -871,7 +901,9 @@ function parts.write_accent(variant, zip, root)
     if not pack then return nil, "this colour is missing" end
     local files = {}
     for name, data in pairs(pack) do
-        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" then files[root .. "/" .. name] = data end
+        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" then
+            files[root .. "/" .. name] = name == "rtconfig.txt" and parts.layout_fix(data) or data
+        end
     end
     local ok, err = Zip.replace(zip, files)
     if not ok then return nil, err end
@@ -904,7 +936,7 @@ function parts.write_display(variant, zip, root, accent)
     for name, line in (display["lines.txt"] or ""):gmatch("([^\t\n]+)\t([^\n]*)") do
         layout = layout:gsub("\n[ \t]*set " .. name:gsub("%p", "%%%0") .. "[ \t][^\r\n]*", function() return "\n" .. line end, 1)
     end
-    if pack["rtconfig.txt"] then files[root .. "/rtconfig.txt"] = layout:sub(2) end
+    if pack["rtconfig.txt"] then files[root .. "/rtconfig.txt"] = parts.layout_fix(layout:sub(2), parts.items_now) end
     local ok, err = Zip.replace(zip, files)
     if not ok then return nil, err end
     local same, text, loose = parts.keys(display["keys.txt"], zip, "display")
@@ -918,6 +950,18 @@ function parts.write(part, variant, zip, accent)
     if not root then return nil, "the loaded theme has no zip" end
     if part == "accent" then return parts.write_accent(variant, zip, root) end
     if part == "display" then return parts.write_display(variant, zip, root, accent) end
+    if part == "items" then
+        -- its colours, then the layout with its tinttcp (from the pack, with the display's lines)
+        local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip, part)
+        if not same then
+            local ok, err = Zip.save(loose, text)
+            if not ok then return nil, err end
+        end
+        parts.items_now = variant
+        local ok, err = parts.write_display(parts.chosen.display or parts.default.display, zip, root, accent)
+        parts.items_now = nil
+        return ok, err
+    end
     local files = {}
     for _, name in ipairs(parts.files(part)) do
         local data = parts.read(zip, accent, part, variant, name)
@@ -942,7 +986,11 @@ function parts.accent_in_zip(variant, zip, root)
     local display = chosen ~= parts.default.display and parts.display_pack(zip, chosen)
     for name, data in pairs(pack) do
         local skinned = display and (display[name] or name == "rtconfig.txt")
-        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" and not skinned and crcs[root .. "/" .. name] ~= Zip.stored_crc(pack, name) then return false end
+        local want = Zip.stored_crc(pack, name)
+        if name == "rtconfig.txt" and (parts.chosen.items or parts.default.items) ~= parts.default.items then
+            want = Zip.crc32(parts.layout_fix(data))     -- Reversed items: the layout has its own tinttcp
+        end
+        if name ~= "keys.txt" and name:sub(1, 6) ~= "parts/" and not skinned and crcs[root .. "/" .. name] ~= want then return false end
     end
     return (parts.keys(pack["keys.txt"], zip, "accent"))
 end
@@ -1336,6 +1384,8 @@ local function draw_setting(item, id)
             if clicked and not active then
                 for _, n in ipairs(names) do set_param(n, i - 1, true) end
                 r.ThemeLayout_RefreshAll()
+                -- a choice that also needs images: the part that goes with it
+                if item.part and item.parts[i] and look.current() then parts.choose(item.part, item.parts[i]) end
             end
         end
         r.ImGui_PopID(ctx)

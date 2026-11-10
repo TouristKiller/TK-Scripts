@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.20" author="TouristKiller" time="2026-11-08T23:17:45Z">
+    <version name="0.9.21" author="TouristKiller" time="2026-11-10T10:16:32Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -543,8 +543,11 @@
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: FX parameters and Embedded FX switches (Track panel page, per layout, and for the master). Off hides them under the controls; they stay in the project. With the parameters hidden, an embedded FX UI takes the whole width.
-+ Fixed: with wider section margins, FX parameters and an embedded FX UI ran past the bottom and right edge of the track's window. They now stay inside it.
++ Added: Track panel plate (Track panel page, Plate: Standard / Silver / Black). Silver or Black puts the tracks and the master on a brushed plate: a low glass band for the name, level, input and small buttons, with R, M, S and the knobs as hardware under it. Middle and low tracks get a one-row layout. FX parameter knobs turn hardware too, FX parameters and embedded FX UIs sit in their own glass window, and the glass has rounded corners. Settings that don't apply on a plate are greyed out. The plates are made for the Dark look; they work in Light, but look best in Dark.
++ Added: Track number (Track panel page): Colour fills the number column with the track colour, as before; Stripe keeps it in the panel's colour with a thin stripe of the track colour, quieter beside a plate.
++ Added: Items: Classic / Reversed (General page). Reversed gives dark items with the waveform and MIDI notes in the track colour. The theme sets REAPER's item tint for it, so nothing changes in your preferences; if items don't change straight away, restart REAPER.
++ Added: MIDI editor key seams: Accent / Black (General page). The lines between the white keys of the piano roll, in black for those who see them better.
++ Added: Sidebar on the right (Mixer page, per layout). Puts the mixer's FX and send sidebar after the strip instead of before it.
 ]]></changelog>
     </version>
     </reapack>
