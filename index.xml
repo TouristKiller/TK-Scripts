@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.21" author="TouristKiller" time="2026-11-10T10:16:32Z">
+    <version name="0.9.30" author="TouristKiller" time="2026-11-12T03:48:46Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -337,6 +337,24 @@
      <source type="data" file="toolbar_icons/150/TK_Trim.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Trim.png</source>
      <source type="data" file="toolbar_icons/150/TK_Undo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Undo.png</source>
      <source type="data" file="toolbar_icons/150/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Unfreeze.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_40.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_40.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_50.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_50.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_60.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_60.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_Tall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_Tall.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Bridge.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Bridge.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Planks.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Planks.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Planks_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Planks_Plate.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Teak_Tall_Plate.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_40.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_40.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_50.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_50.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_60.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_60.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_Tall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_Tall.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Bridge.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Bridge.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Planks.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Planks.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Planks_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Planks_Plate.png</source>
+     <source type="data" file="toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/150/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/150/TK_Zoom.png</source>
      <source type="data" file="toolbar_icons/200/TK_Actions_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Actions_off.png</source>
      <source type="data" file="toolbar_icons/200/TK_Actions_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Actions_on.png</source>
@@ -439,6 +457,24 @@
      <source type="data" file="toolbar_icons/200/TK_Trim.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Trim.png</source>
      <source type="data" file="toolbar_icons/200/TK_Undo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Undo.png</source>
      <source type="data" file="toolbar_icons/200/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Unfreeze.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_40.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_40.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_50.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_50.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_60.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_60.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_Tall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_Tall.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Bridge.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Bridge.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Planks.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Planks.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Planks_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Planks_Plate.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Teak_Tall_Plate.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_40.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_40.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_50.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_50.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_60.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_60.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_Tall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_Tall.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Bridge.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Bridge.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Planks.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Planks.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Planks_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Planks_Plate.png</source>
+     <source type="data" file="toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/200/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/200/TK_Zoom.png</source>
      <source type="data" file="toolbar_icons/TK_Actions_off.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Actions_off.png</source>
      <source type="data" file="toolbar_icons/TK_Actions_on.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Actions_on.png</source>
@@ -541,13 +577,38 @@
      <source type="data" file="toolbar_icons/TK_Trim.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Trim.png</source>
      <source type="data" file="toolbar_icons/TK_Undo.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Undo.png</source>
      <source type="data" file="toolbar_icons/TK_Unfreeze.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Unfreeze.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_40.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_40.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_50.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_50.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_60.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_60.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_Tall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_Tall.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_Tall_Bridge.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_Tall_Bridge.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_Tall_Planks.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_Tall_Planks.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_Tall_Planks_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_Tall_Planks_Plate.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Teak_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Teak_Tall_Plate.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_40.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_40.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_50.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_50.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_60.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_60.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Bridge.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Bridge.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Planks.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Planks.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Planks_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Planks_Plate.png</source>
+     <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Track panel plate (Track panel page, Plate: Standard / Silver / Black). Silver or Black puts the tracks and the master on a brushed plate: a low glass band for the name, level, input and small buttons, with R, M, S and the knobs as hardware under it. Middle and low tracks get a one-row layout. FX parameter knobs turn hardware too, FX parameters and embedded FX UIs sit in their own glass window, and the glass has rounded corners. Settings that don't apply on a plate are greyed out. The plates are made for the Dark look; they work in Light, but look best in Dark.
-+ Added: Track number (Track panel page): Colour fills the number column with the track colour, as before; Stripe keeps it in the panel's colour with a thin stripe of the track colour, quieter beside a plate.
-+ Added: Items: Classic / Reversed (General page). Reversed gives dark items with the waveform and MIDI notes in the track colour. The theme sets REAPER's item tint for it, so nothing changes in your preferences; if items don't change straight away, restart REAPER.
-+ Added: MIDI editor key seams: Accent / Black (General page). The lines between the white keys of the piano roll, in black for those who see them better.
-+ Added: Sidebar on the right (Mixer page, per layout). Puts the mixer's FX and send sidebar after the strip instead of before it.
++ Added: Mixer plate (Mixer page, Plate: Standard / Silver / Black). The mixer's strips and the master go on brushed metal like the track panel: one glass window at the top with the small buttons, pan and width as hardware knobs with their values engraved, a hardware fader with tick marks beside the meter, R, M and S as caps, and the name in its own glass. Wide, intermediate and narrow strips each have their own layout; the narrow one shows the input as a symbol and the name standing. More values shows the level as engraved text. The master grows its meter with its width.
++ Added: Wood (Track panel page, with a plate: Off / Walnut / Teak). The number column becomes a wooden rail down the track panels and envelope lanes, with the number, the folder buttons and the track colour on it, and the plates screwed onto it. Right rail adds a second one on the right. The master gets them too.
++ Added: Folders as a rack. On a plate, a child track's plate hangs on a rack rail with mounting holes in its indent, one rail per level, from the folder's plate down to the last child.
++ Added: Bigger Phillips screws and milled grooves on all plates; the plates are drawn taller with a finer grain and a soft sheen, so tall tracks and strips no longer show stretched brushing.
++ Added: Envelope lanes on a plate: a glass window with bypass, name and the settings button, and the arm and level as the hardware R cap and knob beside or under it.
++ Added: Lamps meter. Round lamps as on old hi-fi gear for the meter lying in the track panel plate (Meter in the plate, Track panel page). The meter type has a second choice for it, Lying: the same as standing, or Lamps.
++ Added: Display light (General page, Displays: Off / Soft / Bright). A faint light from the bottom edge of the track panel's and the mixer's display windows, for a little depth. Meters keep their own glass, unlit.
++ Added: Track number for the mixer (Mixer page: Colour / Stripe), apart from the track panel's. Stripe also reaches the envelope lanes now.
++ Added: Black Metal and Quicksilver presets (Presets page). The whole rack in one click: black plates with walnut, red and the Black Metal guitar on the transport plate, or silver plates with teak, blue and the Quicksilver drop. Both logos can also be chosen on their own.
++ Added: Wooden toolbar bars. TK_Wood_Bar_ icons for a toolbar of their own above the track panels, to go with the rails: laths of 30 to 60 pixels and Tall boards (plain, with a nameplate, as a meter bridge or as planks) that fill a toolbar of any height up to 150.
++ Changed: Settings that don't apply with the choices above them are now hidden instead of greyed out, with a line saying how many. The mixer's settings per strip width stay greyed, as they only wait for a wider or narrower mixer.
++ Fixed: On the Black plate the bevel and grooves were drawn as on silver, as light lines; they are now as quiet as on silver.
 ]]></changelog>
     </version>
     </reapack>

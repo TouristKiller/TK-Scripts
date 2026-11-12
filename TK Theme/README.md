@@ -36,14 +36,23 @@ lists, menus and borders. That takes effect after a restart.
 - **Text buttons on toolbars:** plain, or with a quiet cell behind them, and small, normal or large text.
 - **FX and send lists:** plain, or a subtle grid above the mixer's strips, and sends in the colour of their destination track.
 - **Transport plate:** Black or Silver: brushed metal behind the whole transport, with screws and
-  a maker's plate (TK-S73, the Red Devil or the Blue Angel), on the General page. The rate can sit on it as a knob.
+  a maker's plate (TK-S73, Red Devil, Blue Angel, Black Metal or Quicksilver), on the General page. The rate can sit on it as a knob.
+- **Track panel and mixer plates:** Silver or Black puts the tracks, the master and the mixer's
+  strips on brushed metal in a rack: Phillips screws, milled grooves, glass windows, and R, M, S,
+  knobs and faders as hardware with tick marks. Folders hang on rack rails with mounting holes,
+  envelope lanes get the hardware arm and knob, and the display windows can be lit faintly from below.
+- **Wood:** walnut or teak rails beside the plates, on the left and optionally on the right,
+  with the track number, folder buttons and track colour on them; the master too.
 - **Darkness:** Black takes Dark's arrange, lanes, lists, mixer, MIDI editor and dockers close to black.
 - **Red Devil:** one click on the Presets page: Dark in red and near black, with the Red Devil on a black plate.
 - **Blue Angel:** one click on the Presets page: Dark in blue, with a blue display and the Blue Angel on a silver plate.
+- **Black Metal** and **Quicksilver:** one click each on the Presets page: the whole rack in black with walnut
+  and red, or in silver with teak and blue, each with its own logo on the transport plate.
 - **Colour settings:** Standard, Warm, Cool, Neutral and Inverted, for the arrange, grid, mixer
   background and lists. Inverted gives Dark a light arrange and Light a dark one.
 - **Meters:** six types with colour steps, and segments in three sizes. The steps assume
-  REAPER's standard meter range of -60 to +6 dB.
+  REAPER's standard meter range of -60 to +6 dB. The meter lying in a track panel plate has a
+  choice of its own: the same type, or round lamps as on old hi-fi gear.
 - **Transport:** up to two windows of extra buttons, left and right of the
   transport. Each button can run an action of your choice. When the transport
   gets too narrow, they move to a second row.
@@ -87,6 +96,11 @@ click Icon, and choose a `TK_` icon. A button that toggles has an `_off` and an 
 choose `_off`. The settings window puts the icons of the chosen look in `Data/toolbar_icons`,
 over the earlier ones of this set. These `TK_` icons keep the look's blue under another accent
 colour; the theme's own icons follow it.
+
+`TK_Wood_Bar_` icons are wooden bars for a toolbar of their own above the track panels, to go
+with the wooden rails: laths 30 to 60 pixels high, and `_Tall` boards (plain, with a nameplate,
+as a meter bridge or as planks) that fill a toolbar of any height up to 150. Give the button an
+action that does nothing, such as "Action: No-op (no action)".
 
 ## Good to know
 
