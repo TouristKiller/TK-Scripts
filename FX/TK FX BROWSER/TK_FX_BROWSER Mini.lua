@@ -1,8 +1,10 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.25
+-- @version 1.2.26
 -- @changelog:
 --[[ 
+    v1.2.26:
+        + Appearance: Follow TK Theme (Settings, next to Reset Theme), as in TK FX BROWSER 3.2.30: the Mini takes the colours of TK Theme (0.9.41 or newer) and follows them live. The window frame becomes a soft tone of the theme instead of your border grey, and the plugin names under the screenshots stay readable. Switched off, your own colours come back.
     v1.2.25:
         + Screenshots: A capture no longer waits a fixed time before taking the picture. After the Screenshot Delay (now the minimum wait) the plugin window is checked every quarter second, and the screenshot is taken once the window has really been drawn - so fast plugins are done sooner, and slow instruments that need a few seconds to show their interface get up to 8 seconds instead of being captured as an empty window. Reported on the forum.
         + Fix: Capture Missing Screenshots (and the other folder screenshot captures) reported every plugin as done, for example "5/5", even when no screenshot was saved. The closing message now counts only the screenshots that were really saved, and lists the plugins that got none with the reason: window stayed blank, no plugin window, plugin hidden, or skipped after an earlier crash. Reported on the forum.
@@ -6968,6 +6970,106 @@ function OpenScreenshotsFolder()
     end
 end
 
+-- TK Theme: its colours, when "Follow TK Theme" is on (Settings, next to Reset Theme).
+-- TK Theme's settings window writes them by role to Data/TK Theme/palette.txt and counts
+-- each change in an ExtState, so they follow a new look, accent or colour setting live.
+-- Off again, the colours come back from your own grey values.
+TKThemePal = { rev = nil, on = false, started = false }
+
+function TKThemeReadPalette()
+    local f = io.open(r.GetResourcePath() .. "/Data/TK Theme/palette.txt", "rb")
+    if not f then return nil end
+    local text = f:read("a")
+    f:close()
+    local p = {}
+    for k, hex in text:gmatch("([%w_]+)=#(%x%x%x%x%x%x)") do p[k] = tonumber(hex, 16) end
+    if not (p.panel and p.base and p.raised and p.glass and p.ink and p.text and p.accent) then return nil end
+    p.light = text:match("mode=(%a+)") == "light"
+    return p
+end
+
+function TKThemeMix(a, b, t)
+    local out = 0
+    for s = 16, 0, -8 do
+        local x, y = (a >> s) & 255, (b >> s) & 255
+        out = out | (math.floor(x + (y - x) * t + 0.5) << s)
+    end
+    return out
+end
+
+function TKThemeRGBA(c, a)
+    return (c << 8) | math.floor((a or 1) * 255 + 0.5)
+end
+
+function TKThemeGrayColors()
+    local function g(v, a)
+        v = (v or 128) / 255
+        return r.ImGui_ColorConvertDouble4ToU32(v, v, v, a or 1)
+    end
+    config.background_color = g(config.background_gray, config.window_alpha)
+    config.dropdown_bg_color = g(config.dropdown_bg_gray)
+    config.text_color = g(config.text_gray)
+    config.button_background_color = g(config.button_background_gray)
+    config.button_hover_color = g(config.button_hover_gray)
+    config.frame_bg_color = g(config.frame_bg_gray)
+    config.frame_bg_hover_color = g(config.frame_bg_hover_gray)
+    config.frame_bg_active_color = g(config.frame_bg_active_gray)
+    config.slider_grab_color = g(config.slider_grab_gray)
+    config.slider_active_color = g(config.slider_active_gray)
+    config.tab_color = g(config.tab_gray)
+    config.tab_hovered_color = g(config.tab_hovered_gray)
+    config.checkmark_color = nil
+    config.tk_border_color = nil
+    config.tk_name_color = nil
+end
+
+function TKThemeApply(force)
+    if not TKThemePal.started then
+        TKThemePal.started = true
+        -- colours saved while following: your own again when it's off
+        if not config.follow_tk_theme then TKThemeGrayColors() end
+        force = true
+    end
+    if not config.follow_tk_theme then
+        if TKThemePal.on then
+            TKThemePal.on = false
+            TKThemeGrayColors()
+        end
+        return
+    end
+    local rev = r.GetExtState("TK Theme Palette", "rev")
+    if not force and TKThemePal.on and rev == TKThemePal.rev then return end
+    TKThemePal.rev = rev
+    local p = TKThemeReadPalette()
+    if not p then
+        if TKThemePal.on then
+            TKThemePal.on = false
+            TKThemeGrayColors()
+        end
+        return
+    end
+    TKThemePal.on = true
+    local M, C = TKThemeMix, TKThemeRGBA
+    -- Light: neutral and a step apart; its base follows the colour setting (Warm, Cool)
+    local card = p.light and M(p.panel, 0xFFFFFF, 0.45) or p.base
+    config.background_color = C(p.panel, config.window_alpha)
+    config.dropdown_bg_color = C(card)
+    config.text_color = C(p.text)
+    config.button_background_color = C(p.raised)
+    config.button_hover_color = C(M(p.raised, p.accent, 0.25))
+    config.frame_bg_color = C(p.glass)
+    config.frame_bg_hover_color = C(M(p.glass, p.accent, 0.10))
+    config.frame_bg_active_color = C(M(p.glass, p.accent, 0.20))
+    config.slider_grab_color = C(p.soft or p.text)
+    config.slider_active_color = C(p.accent)
+    config.tab_color = C(p.raised)
+    config.tab_hovered_color = C(M(p.raised, p.accent, 0.35))
+    config.checkmark_color = C(p.accent)
+    -- a soft frame instead of your own border grey, and names readable on the theme
+    config.tk_border_color = C(M(p.panel, p.text, 0.3))
+    config.tk_name_color = C(p.text)
+end
+
 function ImportThemeFromMediaBrowser()
     local options_path = r.GetResourcePath() .. "/Scripts/TK_media_browser_options.txt"
     local f = io.open(options_path, "r")
@@ -7427,6 +7529,17 @@ function ShowConfigWindow()
                     r.ImGui_EndCombo(ctx)
                 end
                 r.ImGui_PopItemWidth(ctx)
+            end
+
+            r.ImGui_SetCursorPosX(ctx, column1_width)
+            local tk_changed, tk_on = r.ImGui_Checkbox(ctx, "Follow TK Theme", config.follow_tk_theme == true)
+            if tk_changed then
+                config.follow_tk_theme = tk_on
+                TKThemeApply(true)
+                SaveConfig()
+            end
+            if r.ImGui_IsItemHovered(ctx) then
+                r.ImGui_SetTooltip(ctx, "Take the colours of TK Theme (0.9.41 or newer): its look, accent and colour setting, live.\nOff: your own colours below again.")
             end
 
             -- NEW SECTION FOR CUSTOM FOLDERS APPEARANCE
@@ -10318,7 +10431,7 @@ function ShowPluginScreenshot()
                 r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 2,2)
                 r.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowBorderSize(), config.window_border_size)
 
-                local border_color = r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
+                local border_color = config.tk_border_color or r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_PopupBg(), 0x000000FF)
                 r.ImGui_PushStyleColor(ctx, reaper.ImGui_Col_FrameBg(), 0x000000FF)
@@ -10550,7 +10663,7 @@ function ShowFxChainPreview(chain_path, chain_name)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), padding, padding)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), config.window_border_size)
 
-        local border_color = r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
+        local border_color = config.tk_border_color or r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), border_color)
         
@@ -10667,7 +10780,7 @@ function ShowFxChainPreview(chain_path, chain_name)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), padding, padding)
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), config.window_border_size)
 
-        local border_color = r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
+        local border_color = config.tk_border_color or r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), border_color)
         
@@ -20992,7 +21105,7 @@ function DrawUniformLayout(screenshots, top_offset)
     local u_bg = apply_brightness(config.uniform_bg_color or 0x000000FF)
     local u_border = apply_brightness(config.uniform_border_color or 0x505050FF)
     local u_hover = apply_brightness(config.uniform_hover_color or 0x4FC1E9FF)
-    local u_name = apply_brightness(config.uniform_name_color or 0xC0C0C0FF)
+    local u_name = apply_brightness(config.tk_name_color or config.uniform_name_color or 0xC0C0C0FF)
 
     if top_offset > 0 then r.ImGui_Dummy(ctx, 0, top_offset) end
     if not top_screenshot_spacing_applied then
@@ -22407,7 +22520,7 @@ function ShowScreenshotWindow()
     r.ImGui_SetNextWindowSize(ctx, math.max(min_width, config.screenshot_window_width), window_height, r.ImGui_Cond_FirstUseEver())
     
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), config.window_border_size)
-    local main_border_color = r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
+    local main_border_color = config.tk_border_color or r.ImGui_ColorConvertDouble4ToU32(config.window_border_gray/255, config.window_border_gray/255, config.window_border_gray/255, 1)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), main_border_color)
     
     local visible, open = r.ImGui_Begin(ctx, "Screenshots MINI##NoTitle", true, window_flags)
@@ -29310,6 +29423,7 @@ function Main()
             ClearScreenshotCache(true)
             last_cleanup_time = now
         end
+        TKThemeApply()
         if r.ImGui_ValidatePtr(ctx, 'ImGui_Context*') then
             pushed_main_styles = true
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameRounding(), 2)
@@ -29319,7 +29433,7 @@ function Main()
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabMinSize(), 8)
             r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_GrabRounding(), 3)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), config.background_color)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), config.text_color or r.ImGui_ColorConvertDouble4ToU32(config.text_gray/255, config.text_gray/255, config.text_gray/255, 1))
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), config.button_background_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ButtonHovered(), config.button_hover_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Tab(), config.tab_color)
@@ -29330,7 +29444,7 @@ function Main()
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrab(), config.slider_grab_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_SliderGrabActive(), config.slider_active_color)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_PopupBg(), config.dropdown_bg_color)
-            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_CheckMark(), config.checkmark_color or r.ImGui_ColorConvertDouble4ToU32(0.7, 0.7, 0.7, 1.0))
             r.ImGui_PushFont(ctx, NormalFont, config.font_size)
             r.ImGui_SetNextWindowBgAlpha(ctx, config.window_alpha)
         else
