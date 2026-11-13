@@ -230,6 +230,7 @@ end
 -- ---------------------------------------------------------------- pages
 
 local start_watcher     -- further down, with the startup line it shares the watcher with
+local rewrite_meters    -- further down, with the parts: the meters' images again, after a switch
 local function S(label, param, layouts, hint) return { kind = "slider", label = label, param = param, layouts = layouts, hint = hint } end
 -- one slider for a setting that exists once more for selected and armed strips
 local function Grow(label, param, also) return { kind = "slider", label = label, param = param, layouts = THIS_LAYOUT, also = also } end
@@ -316,97 +317,102 @@ end
 local KNOB_CHOICE = { "Auto", "Sliders", "Knobs" }
 local SLIDER_HANDLES = { { "dot", "Dot" }, { "ring", "Ring" }, { "bar", "Bar" }, { "cap", "Cap" }, { "classic", "Classic" }, { "classic_accent", "Accent" } }
 
+-- both panels Basic: no glass anywhere, so what lights or colours the glass does nothing
+local function all_basic()
+    return global_value("tkTcpBasic") and not global_value("tkTcpPlate") and global_value("tkMcpBasic") and not global_value("tkMcpPlate")
+end
+
 local PAGES = {
     { title = "Look", draw = "look" },
     { title = "General", cards = {
         { "Meters", {
-            { kind = "meter", label = "Type", hint = "Standing meters: the track panel's meter column, the mixer and the master, in every look. Medium and Large segments grow with the height of the meter. Choosing one reloads the theme, so the screen may blink." },
+            { kind = "meter", label = "Type", hint = "Standing meters in the track panel, the mixer and the master. Medium and Large segments grow with the meter." },
+            (function()
+                local item = T("Unlit segments", "tkMeterNoUnlit", nil, "Off: only what lights up shows, on the meter's background. Every meter, in every style.", true)
+                item.after = function() rewrite_meters() end
+                return item
+            end)(),
         } },
         { "Displays", {
-            { kind = "part", part = "display_light", label = "Light", choices = { { "off", "Off" }, { "soft", "Soft" }, { "bright", "Bright" } },
-              hint = "A faint light from the bottom edge of the track panel's and the mixer's display windows, as on a display lit from behind, for a little depth. Meters keep their own glass, unlit. Choosing one reloads the theme, so the screen may blink." },
-        } },
-        { "MIDI editor", {
-            { kind = "part", part = "midi_keys", label = "Key seams", choices = { { "accent", "Accent" }, { "black", "Black" } },
-              hint = "The lines between the white keys of the piano roll. REAPER uses the same colour for the key under the mouse, so with Black that key turns dark too. Choosing one reloads the theme, so the screen may blink." },
-        } },
-        { "Items", {
-            { kind = "part", part = "items", label = "Items", choices = { { "classic", "Classic" }, { "reversed", "Reversed" } },
-              hint = "Classic: items in the track colour with a dark waveform. Reversed: dark items with the waveform and MIDI notes in the track colour. The theme sets REAPER's item tint for it, so nothing changes in your preferences. Choosing one reloads the theme; if items don't change straight away, restart REAPER." },
+            -- (look is a local further down: the loaded theme's name says the same)
+            Off(function() return not ((r.GetLastColorThemeFile() or ""):find("TK Theme Light", 1, true)
+                and (global_value("tkTcpPlate") or global_value("tkMcpPlate"))) end,
+              { kind = "part", part = "light_glass", label = "Glass", choices = { { "light", "Light" }, { "dark", "Dark" } },
+                hint = "Light look with a plate: light display windows, or dark as in the Dark look." }),
+            Grey(all_basic, { kind = "part", part = "display_light", label = "Light", choices = { { "off", "Off" }, { "soft", "Soft" }, { "bright", "Bright" } },
+              hint = "A faint light from the bottom edge of the display windows. Basic has none." }),
         } },
         { "Tracks and strips", {
             S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims."),
-            S("Selection strength", "selectStrength", nil, "How much a selected track stands out: lighter on Dark, in the accent colour on Light."),
-            T("Track names in track colour", "colorTrackLabels"),
-            T("Track names in accent colour", "tkNameAccent", nil, "Goes before the track colour: with both on, names show in the accent colour."),
+            T("Volume line in track colour", "tkLineVolTrk", nil, "The line on the volume slider and the mixer's fader. Off: neutral."),
+            T("Pan line in track colour", "tkLinePanTrk", nil, "The lines on pan and width. Off: neutral."),
+            S("Selection strength", "selectStrength", nil, "How much a selected track stands out."),
+            Grey(all_basic, T("Track names in track colour", "colorTrackLabels", nil, "Basic keeps names readable on the tint instead.")),
+            T("Track names in accent colour", "tkNameAccent", nil, "Goes before the track colour."),
             T("Selection dot", "selDot", nil, "The small dot on the track number."),
-        } },
-        { "Text and spacing", {
+            { kind = "part", part = "send_tint", label = "Send colours", choices = { { "off", "Off" }, { "subtle", "Subtle" }, { "medium", "Medium" } },
+              hint = "Sends in the colour of the track they go to." },
             S("Text brightness", "textBrightness"),
         } },
-        { "Main window", {
-            { kind = "menubar", label = "Menu bar",
-              hint = "Give the action TK_Theme_Toggle_Menu_Bar a shortcut to do this from the keyboard. The menu bar comes back when REAPER restarts." },
+        { "Items", {
+            { kind = "part", part = "items", label = "Items", choices = { { "classic", "Classic" }, { "reversed", "Reversed" } },
+              hint = "Classic: items in the track colour, a dark waveform. Reversed: dark items, the waveform in the track colour." },
         } },
-        { "Toolbars", {
+        { "MIDI editor", {
+            { kind = "part", part = "midi_keys", label = "Key seams", choices = { { "accent", "Accent" }, { "black", "Black" } },
+              hint = "The lines between the white keys of the piano roll." },
+        } },
+        { "Window and toolbars", {
+            { kind = "menubar", label = "Menu bar", hint = "TK_Theme_Toggle_Menu_Bar does this from a shortcut." },
             { kind = "part", part = "toolbar_blank", label = "Text buttons", choices = { { "plain", "Plain" }, { "cell", "Cell" } },
-              hint = "A quiet cell behind toolbar buttons that show text. Choosing one reloads the theme, so the screen may blink." },
-            { kind = "part", part = "toolbar_text", label = "Text size", choices = { { "small", "Small" }, { "normal", "Normal" }, { "large", "Large" } },
-              hint = "The text on toolbar buttons, which REAPER draws itself. Choosing one reloads the theme, so the screen may blink." },
-        } },
-        { "Transport", {
-            { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
-            T("Rate as a knob", "tkRateKnob", nil, "With a plate: the rate as a knob on the right of the plate, mirroring the maker's plate. Off keeps the slider in the display."),
-            { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil", "Blue Angel", "Black Metal", "Quicksilver" } },
-            { kind = "toggle", label = "Grid box", param = "tkGridBox", after = function(on) if on then start_watcher() end end,
-              hint = "The grid on the display, beside the time signature. Click it to choose the grid, or an adaptive grid that follows the zoom, shown with an A. The magnet turns snap on and off, the dots open REAPER's snap/grid settings. The adaptive grid follows the zoom while the watcher runs: turn on \"Metronome and grid at startup\" to have it right away." },
-            { kind = "startup", label = "Metronome and grid at startup",
-              hint = "Without it the metronome button and the grid box show their state after the first click on one of them. Adds one line to Scripts/__startup.lua; switching it off removes that line again." },
+              hint = "A quiet cell behind toolbar buttons that show text." },
+            { kind = "part", part = "toolbar_text", label = "Text size", choices = { { "small", "Small" }, { "normal", "Normal" }, { "large", "Large" } } },
         } },
     } },
     { title = "Track panel", cards = {
         { "All tracks", {
-            { kind = "choice", label = "Plate", param = "tkTcpPlate", choices = { "Standard", "Silver", "Black" }, part = "tcp_hw", parts = { "standard", "silver", "black" },
-              hint = "Silver or Black puts the track panel and the master on a brushed plate. Tall tracks get a low glass band (name, level, input and the small buttons) with R, M, S and the knobs as hardware under it; middle tracks a one-row band; low tracks one row with R, M, S and the volume knob. FX parameter knobs turn hardware too, and the section margins are at least 10. The plates are made for the Dark look; in Light they work, but look best in Dark. Choosing one reloads the theme, so the screen may blink." },
+            { kind = "choice", label = "Style", param = "tkTcpPlate", choices = { "Standard", "Silver", "Black", "Basic" }, part = "tcp_hw", parts = { "standard", "silver", "black", "basic" }, extra = "tkTcpBasic",
+              hint = "Basic: no windows, the controls on the panel. Silver and Black: a brushed plate with hardware knobs and caps, made for the Dark look." },
             Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Wood", param = "tkWood", choices = { "Off", "Walnut", "Teak" },
-              hint = "With a plate: the number column as a wooden rail down the left of the track panels and envelope lanes, the plates screwed onto it, with the number, the folder buttons and the track colour as a stripe on it." }),
-            Off(function() return not (global_value("tkTcpPlate") and global_value("tkWood")) end, T("Right rail", "tkRailRight", nil,
-              "A second wooden rail on the right of the track panels and envelope lanes. It takes its width from the panel.")),
+              hint = "With a plate: the number column as a wooden rail, the track colour as a stripe on it." }),
+            Off(function() return not (global_value("tkTcpPlate") and global_value("tkWood")) end, T("Right rail", "tkRailRight", nil, "A second rail on the right.")),
             Off(function() return not global_value("tkTcpPlate") end, T("Meter in the plate", "tkPlMeterIn", nil,
-              "With a plate: the meter lies in the plate, between R, M, S and the knobs (on low tracks between the name and R), and its column on the right goes to the glass. Its type is Lying on the General page (Lamps, or the same as standing). Narrow panels keep the meter on the right, standing.")),
-            { kind = "choice", label = "Track number", param = "tkNumStyle", choices = { "Colour", "Stripe" },
-              hint = "Colour fills the number column with the track colour. Stripe keeps it in the panel's colour with a thin stripe of the track colour, quieter beside a plate." },
-            { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES,
-              hint = "For volume, pan and width, in all layouts, on the master and in envelope lanes. Choosing one reloads the theme, so the screen may blink." },
-            S("Section margins", "sectionMargin", nil, "Space around the windows, in track panels and envelope lanes. Clicking between or in the windows selects the track. With a plate the track panels and the master use a fixed 10; this still sets the envelope lanes."),
+              "The meter lies in the plate between the controls. Its type: Meters on the General page.")),
+            Off(function() return not (global_value("tkTcpPlate") and global_value("tkPlMeterIn")) end,
+              { kind = "choice", label = "Lying meter", param = "tkPlMeterShort", choices = { "Long", "Short" },
+                hint = "Short stays in the plate on narrower panels. Short lamps are 6.",
+                -- the lamps have a strip per length
+                after = function() rewrite_meters(true) end }),
+            T("Layout button", "tkTcpLayBtn", nil, "Shows the track's layout (A, B, C); click for the next. Selected tracks go along."),
+            Off(function() return global_value("tkTcpPlate") and global_value("tkWood") end, { kind = "choice", label = "Track number", param = "tkNumStyle", choices = { "Colour", "Stripe" },
+              hint = "Colour fills the number column; Stripe is a thin line of the track colour." }),
+            { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES, hint = "For volume, pan and width, also on the master and in envelope lanes." },
+            S("Section margins", "sectionMargin", nil, "Space around the windows. With a plate the panels keep 10."),
             S("Folder indent", "tcpfolderIndentSize"),
         } },
         { "Per layout", {
-            { kind = "layout", label = "Layout", hint = "These settings are for the tracks on this layout. Set a track's layout in its right-click menu. The columns and meter buttons in a track panel change them too, for that track's layout." },
-            T("Name only", "tkNameOnly", THIS_LAYOUT, "Just the track's name, large and centred, for a divider or a folder."),
+            { kind = "layout", label = "Layout", hint = "For the tracks on this layout. Set a track's layout in its right-click menu." },
+            T("Name only", "tkNameOnly", THIS_LAYOUT, "Just the name, large: a divider or a folder."),
             Off(lay_on("tkNameOnly"), T("Volume", "tkHideVol", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Pan", "tkHidePan", THIS_LAYOUT, nil, true)),
-            Off(plate_or(lay_on("tkNameOnly")), T("Volume and pan on the first row", "tkTopSliders", THIS_LAYOUT, "Beside the name, so they also show on the lowest track height. A narrow track panel leaves them out.")),
-            Off(plate_or(lay_off_or("tkTopSliders", "tkNameOnly")), S("Name width", "tkNameW", THIS_LAYOUT, "The sliders take what's left of the row.")),
+            Off(plate_or(lay_on("tkNameOnly")), T("Volume and pan on the first row", "tkTopSliders", THIS_LAYOUT, "Beside the name, also on the lowest tracks.")),
+            Off(plate_or(lay_off_or("tkTopSliders", "tkNameOnly")), S("Name width", "tkNameW", THIS_LAYOUT, "The sliders take the rest.")),
             Off(plate_or(lay_on("tkNameOnly")), { kind = "choice", label = "Volume and pan as", param = "tkKnobs", layouts = THIS_LAYOUT, choices = KNOB_CHOICE,
-                hint = "Auto shows a knob when a slider wouldn't have the room." }),
+                hint = "Auto: a knob where a slider has no room." }),
             Off(lay_on("tkNameOnly"), T("Input row", "tkHideInput", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Button row", "tkHideButtons", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Mute and solo", "tkHideMs", THIS_LAYOUT, nil, true)),
             Off(plate_or(lay_on("tkNameOnly", "tkHideMs")), T("Mute and solo on the left", "tkMsLeft", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly"), T("Record arm and monitor", "tkHideArm", THIS_LAYOUT, nil, true)),
-            Off(plate_or(lay_on("tkNameOnly")), T("Record arm and monitor on the left", "tkArmLeft", THIS_LAYOUT,
-                "At the start of the first row, with the FX and IO buttons when they're in it. Mute, solo and the knobs on the first row then sit next to the meter.")),
-            Off(lay_on("tkNameOnly"), T("FX column", "tkNoFxCol", THIS_LAYOUT, "Without its column, the FX button moves to the first row.", true)),
-            Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without its column, the IO button moves to the first row.", true)),
+            Off(plate_or(lay_on("tkNameOnly")), T("Record arm and monitor on the left", "tkArmLeft", THIS_LAYOUT, "At the start of the first row.")),
+            Off(lay_on("tkNameOnly"), T("FX column", "tkNoFxCol", THIS_LAYOUT, "Without it, the FX button moves to the first row.", true)),
+            Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without it, the IO button moves to the first row.", true)),
             Off(lay_off_or("tkNoFxCol", "tkNameOnly"), T("FX button", "tkHideFxBtn", THIS_LAYOUT, nil, true)),
             Off(lay_off_or("tkNoIoCol", "tkNameOnly"), T("IO button", "tkHideIoBtn", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNoFxCol", "tkNameOnly"), S("FX column width", "sectionRightW", THIS_LAYOUT)),
-            Off(lay_on("tkNoIoCol", "tkNameOnly"), S("IO column width", "tkIoW", THIS_LAYOUT, "0 gives it the width of the FX column. Like that one, it's at least 46.")),
-            Off(lay_on("tkNameOnly"), T("FX parameters", "tkHideParms", THIS_LAYOUT,
-                "The FX parameters you show in track controls, under the controls. Off hides them on this layout; they stay in the project and come back when you turn it on again.", true)),
-            Off(lay_on("tkNameOnly"), T("Embedded FX", "tkHideEmbed", THIS_LAYOUT,
-                "An FX's own embedded UI under the controls. Without FX parameters beside it, it takes the whole width.", true)),
+            Off(lay_on("tkNoIoCol", "tkNameOnly"), S("IO column width", "tkIoW", THIS_LAYOUT, "0: as the FX column.")),
+            Off(lay_on("tkNameOnly"), T("FX parameters", "tkHideParms", THIS_LAYOUT, "The FX parameters shown in track controls.", true)),
+            Off(lay_on("tkNameOnly"), T("Embedded FX", "tkHideEmbed", THIS_LAYOUT, "An FX's embedded UI under the controls.", true)),
             Off(lay_on("tkNameOnly"), T("Meter", "tkHideMeter", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly", "tkHideMeter"), T("Meter on the left", "tkMeterLeft", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT)),
@@ -414,48 +420,58 @@ local PAGES = {
             Off(lay_on("tkNameOnly", "tkHideInput"), S("Input text size", "tcpInputFontSize", THIS_LAYOUT)),
         } },
         { "Set track height", {
-            { kind = "tracks", hint = "A fixed height for the tracks selected now: it stays when you select other tracks, and it does not follow the selection (a theme can't resize tracks by itself). Saved per track, in the project. Moving the slider changes nothing until you click a button, so a new track on a layout gets its height the next time you click. Make divider needs Name only on that layout. Layout A includes tracks on the default layout. REAPER's zoom actions leave a locked track's height alone." },
+            { kind = "tracks", hint = "A fixed height for the selected tracks, saved in the project. Make divider needs Name only on that layout." },
         } },
         { "Master", {
             T("Only a meter", "tkMasterMeterOnly", nil, "The whole master becomes one big meter."),
-            Off(plate_or(), T("Rack screws", "tkMasterScrews", nil, "On the left of the master, like the ones on the transport. A track panel plate has screws of its own.")),
+            Off(plate_or(), T("Rack screws", "tkMasterScrews", nil, "On the left of the master, as on the transport.")),
             Off(global_on("tkMasterMeterOnly"), T("Meter", "tkMasterHideMeter", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Volume", "tkMasterHideVol", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("Pan", "tkMasterHidePan", nil, nil, true)),
             Off(plate_or(global_on("tkMasterMeterOnly")), { kind = "choice", label = "Volume and pan as", param = "tkMasterKnobs", choices = KNOB_CHOICE,
-                hint = "Auto shows a knob when a slider wouldn't have the room." }),
+                hint = "Auto: a knob where a slider has no room." }),
             Off(global_on("tkMasterMeterOnly"), T("Mute and solo", "tkMasterHideMs", nil, nil, true)),
-            Off(global_on("tkMasterMeterOnly"), T("FX column", "tkMasterNoFx", nil, "Without its column, the FX button moves to the first row.", true)),
-            Off(global_on("tkMasterMeterOnly"), T("IO column", "tkMasterNoIo", nil, "Without its column, the IO button moves to the first row.", true)),
+            Off(global_on("tkMasterMeterOnly"), T("FX column", "tkMasterNoFx", nil, "Without it, the FX button moves to the first row.", true)),
+            Off(global_on("tkMasterMeterOnly"), T("IO column", "tkMasterNoIo", nil, "Without it, the IO button moves to the first row.", true)),
             Off(global_off_or("tkMasterNoFx", "tkMasterMeterOnly"), T("FX button", "tkMasterHideFxBtn", nil, nil, true)),
             Off(global_off_or("tkMasterNoIo", "tkMasterMeterOnly"), T("IO button", "tkMasterHideIoBtn", nil, nil, true)),
             Off(global_on("tkMasterMeterOnly"), T("FX parameters", "tkMasterHideParms", nil, nil, true)),
-            Off(global_on("tkMasterMeterOnly"), T("Embedded FX", "tkMasterHideEmbed", nil, "It takes the FX parameters' place; off brings those back.", true)),
+            Off(global_on("tkMasterMeterOnly"), T("Embedded FX", "tkMasterHideEmbed", nil, "It takes the FX parameters' place.", true)),
             Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), T("Meter on the left", "tkMasterMeterLeft")),
-            Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), S("Meter width", "tkMasterMeterW", nil, "0 follows the tracks on layout A. Any other width no longer lines up with them.")),
+            Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), S("Meter width", "tkMasterMeterW", nil, "0: as the tracks on layout A.")),
+        } },
+        { "Envelope lanes", {
+            T("Show value", "showEnvValue"), T("Follow the track's indent", "indentEnvcp"),
+            S("Name length", "envcpLabelLength"), S("Fader length", "envcpFaderLength"), S("Name size", "envcpFontSize"),
         } },
     } },
     { title = "Mixer", cards = {
-        { "Plate", {
-            { kind = "choice", label = "Plate", param = "tkMcpPlate", choices = { "Standard", "Silver", "Black" }, part = "mcp_hw", parts = { "standard", "silver", "black" }, mixer_plate = true,
-              hint = "Silver or Black puts the mixer's strips on a brushed plate, with the knobs and R, M, S as hardware. The fader, pan and width become slots in the metal with hardware handles; the handles you chose come back with Standard. Separate from the track panel's plate. Made for the Dark look. Choosing one reloads the theme, so the screen may blink." },
-            { kind = "choice", label = "Track number", param = "tkMcpNumStyle", choices = { "Colour", "Stripe" },
-              hint = "Colour fills the number under each strip with the track colour. Stripe keeps it in the panel's colour with a thin stripe of the track colour under the number, quieter beside a plate." },
+        { "Style", {
+            { kind = "choice", label = "Style", param = "tkMcpPlate", choices = { "Standard", "Silver", "Black", "Basic" }, part = "mcp_hw", parts = { "standard", "silver", "black", "basic" }, mixer_plate = true, extra = "tkMcpBasic",
+              hint = "Basic: no windows. Silver and Black: a brushed plate with hardware knobs, caps and fader slots, made for the Dark look." },
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Wood", param = "tkMcpWood", choices = { "Off", "Walnut", "Teak" },
+              hint = "With a plate: a wooden armrest along the bottom, with the numbers on it." }),
         } },
         { "Handles", {
-            Off(function() return global_value("tkMcpPlate") end, { kind = "handle", label = "Fader", hint = "For all layouts. A project opened later follows the next time this window opens. All but Dot reload the theme, so the screen may blink. With the mixer's plate the fader has its hardware handle." }),
+            Off(function() return global_value("tkMcpPlate") end, { kind = "handle", label = "Fader", hint = "For all layouts." }),
             Off(function() return global_value("tkMcpPlate") end, { kind = "part", part = "mcp_pan", label = "Pan and width", choices = SLIDER_HANDLES,
-              hint = "For all layouts and the master. Choosing one reloads the theme, so the screen may blink. With the mixer's plate they have hardware handles." }),
+              hint = "For all layouts and the master." }),
         } },
         { "FX and send lists", {
             { kind = "part", part = "mcp_extmixbg", label = "Above the strips", choices = { { "plain", "Plain" }, { "grid", "Grid" } },
-              hint = "A grid shows the slots, also the empty ones. Choosing one reloads the theme, so the screen may blink." },
-            { kind = "part", part = "send_tint", label = "Send colours", choices = { { "off", "Off" }, { "subtle", "Subtle" }, { "medium", "Medium" } },
-              hint = "Sends in the colour of the track they go to, in the mixer and the track panel. Choosing one reloads the theme, so the screen may blink." },
+              hint = "A grid shows the slots, the empty ones too." },
+        } },
+        { "All strips", {
+            T("Layout key", "tkMcpLayBtn", nil, "Shows the strip's layout (A, B, C); click for the next. Selected tracks go along."),
+            Off(function() return global_value("tkMcpPlate") and global_value("tkMcpWood") end, { kind = "choice", label = "Track number", param = "tkMcpNumStyle", choices = { "Colour", "Stripe" },
+              hint = "Colour fills the number; Stripe is a thin line of the track colour." }),
+            S("Folder indent", "mcpfolderIndentSize"),
+            Off(function() return global_value("tkMcpPlate") or global_value("tkMcpBasic") end,
+              S("Window margins", "tkMcpGlassM", nil, "Space between the windows and the strip's edges.")),
         } },
         { "Per layout", {
-            { kind = "layout", label = "Layout", hint = "These settings are for the strips on this layout. Layout A is the standard strip, B the narrow one, and C has a sidebar and more values. Set a track's layout in its right-click menu." },
-            S("Width", "mcpWidth", THIS_LAYOUT, "Under 52 this is a narrow strip, under 88 an intermediate one, from 88 a normal one."),
+            { kind = "layout", label = "Layout", hint = "For the strips on this layout: A standard, B narrow, C with a sidebar. Set it in a track's right-click menu." },
+            S("Width", "mcpWidth", THIS_LAYOUT, "Under 52 a narrow strip, under 88 an intermediate one (with a plate 76 and 100)."),
             S("Width when selected", "mcpWidthSel", THIS_LAYOUT), S("Width when armed", "mcpWidthRecarm", THIS_LAYOUT),
             Grow("Wider per channel", "mcpNchanGrow", { "mcpNchanGrowSel", "mcpNchanGrowRecarm" }),
             S("Name size", "mcpLabelSize", THIS_LAYOUT),
@@ -465,8 +481,8 @@ local PAGES = {
             T("Sidebar", "mcpSidebar", THIS_LAYOUT, "The FX and send lists beside the strip instead of above it."),
             T("Sidebar when selected", "mcpSidebarSel", THIS_LAYOUT), T("Sidebar when armed", "mcpSidebarRecarm", THIS_LAYOUT),
             Off(no_sidebar, S("Sidebar width", "sidebarWidth", THIS_LAYOUT)),
-            Off(no_sidebar, S("Sidebar columns", "tkSidebarCols", THIS_LAYOUT, "For the FX and send lists. More columns need a wider sidebar.")),
-            Off(no_sidebar, T("Sidebar on the right", "tkSidebarRight", THIS_LAYOUT, "The sidebar after the strip instead of before it.")),
+            Off(no_sidebar, S("Sidebar columns", "tkSidebarCols", THIS_LAYOUT, "More columns need a wider sidebar.")),
+            Off(no_sidebar, T("Sidebar on the right", "tkSidebarRight", THIS_LAYOUT)),
         } },
         { "Buttons", {
             T("I/O button", "mcpNormalShowRoute", THIS_LAYOUT), T("FX buttons", "mcpNormalShowSecFx", THIS_LAYOUT),
@@ -479,41 +495,46 @@ local PAGES = {
         { "Normal strip", {
             Grey(not_form(3), S("Show input from height", "mcpNormalShowSecIn", THIS_LAYOUT, "A lower mixer drops the input window.")),
             Grey(not_form(3), S("Show pan from height", "mcpNormalShowSecPan", THIS_LAYOUT, "A lower mixer drops the pan window.")),
+            Grey(function() return not_form(3)() or global_value("tkMcpPlate") end, { kind = "choice", label = "Pan and width as", param = "tkMcpKnobs", layouts = THIS_LAYOUT, choices = { "Sliders", "Knobs" },
+                hint = "Dual pan keeps its sliders; a plate has knobs of its own." }),
         } },
         { "Intermediate strip", {
             Grey(not_form(2), S("Show input from height", "mcpInterShowSecIn", THIS_LAYOUT)),
-            Grey(not_form(2), S("Show buttons from height", "mcpInterShowSecButtons", THIS_LAYOUT)),
+            Grey(function() return not_form(2)() or global_value("tkMcpPlate") end, S("Show buttons from height", "mcpInterShowSecButtons", THIS_LAYOUT)),
             Grey(not_form(2), S("Show pan from height", "mcpInterShowSecPan", THIS_LAYOUT)),
         } },
         { "Narrow strip", {
-            Grey(not_form(1), S("Name height", "mcpStripLabelHeight", THIS_LAYOUT)),
-            Grey(not_form(1), S("Input height", "mcpStripInputHeight", THIS_LAYOUT)),
-            Grey(not_form(1), S("Meter height", "mcpStripMeterHeight", THIS_LAYOUT)),
-            Grey(not_form(1), S("Volume height", "mcpStripVolumeHeight", THIS_LAYOUT)),
             Grey(not_form(1), T("FX and send lists", "mcpStripHideExtmixer", THIS_LAYOUT, nil, true)),
-        } },
-        { "All strips", {
-            S("Folder indent", "mcpfolderIndentSize"),
         } },
         { "Master", {
             S("Width", "masterMcpWidth"), T("Volume and pan values", "masterMcpVals"),
             T("Name", "masterMcpLabels"), T("Meter values", "masterMcpMeterVals"),
+            T("Pan", "tkMasterMcpHidePan", nil, "Off gives the meter and fader the room.", true),
+            Off(function() return global_value("tkMcpPlate") end, { kind = "choice", label = "Pan and width as", param = "tkMasterMcpKnobs", choices = { "Sliders", "Knobs" },
+              hint = "Dual pan keeps its sliders." }),
+            { kind = "choice", label = "List columns", param = "tkMasterListCols", choices = { "Auto", "1", "2", "3", "4" },
+              hint = "The FX and send lists over the master. Auto: as many as fit." },
+            { kind = "choice", label = "Side column", param = "tkMasterSideCol", choices = { "Off", "Left", "Right" },
+              hint = "The strip in a narrow column; the lists and plugins get the rest." },
         } },
     } },
-    { title = "Envelopes", cards = {
-        { "Envelope lanes", {
-            T("Show value", "showEnvValue"), T("Follow the track's indent", "indentEnvcp"),
-            S("Name length", "envcpLabelLength"), S("Fader length", "envcpFaderLength"), S("Name size", "envcpFontSize"),
+    { title = "Transport", cards = {
+        { "Plate and grid", {
+            { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
+            Off(function() return not global_value("tkTransPlate") end, T("Rate as a knob", "tkRateKnob", nil, "On the right of the plate. Off keeps the slider in the display.")),
+            Off(function() return not global_value("tkTransPlate") end, { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil", "Blue Angel", "Black Metal", "Quicksilver" } }),
+            { kind = "toggle", label = "Grid box", param = "tkGridBox", after = function(on) if on then start_watcher() end end,
+              hint = "The grid on the display: click it to choose the grid, or an adaptive one." },
+            { kind = "startup", label = "Metronome and grid at startup",
+              hint = "Shows the metronome's and the grid's state from the start, and keeps Day and night running." },
         } },
-    } },
-    { title = "Transport buttons", cards = {
         { "Button windows", {
-            T("Rack screws", "tkTransScrews", nil, "Screws at both ends of the transport, as if it's mounted in a rack."),
-            T("Left window at the far left", "tkBtnLeftEdge", nil, "Otherwise it sits right beside the transport buttons. Only when the transport is centred."),
-            T("Right window at the far right", "tkBtnRightEdge", nil, "Otherwise it sits right beside the readouts."),
+            T("Rack screws", "tkTransScrews", nil, "Screws at both ends, as if mounted in a rack."),
+            T("Left window at the far left", "tkBtnLeftEdge", nil, "Otherwise beside the transport buttons. Only with the transport centred."),
+            T("Right window at the far right", "tkBtnRightEdge", nil, "Otherwise beside the readouts."),
         } },
         { "Transport", {
-            N("Metronome", "metro", "With a small arrow beside it for the metronome and pre-roll settings."),
+            N("Metronome", "metro", "With a small arrow for the metronome and pre-roll settings."),
         } },
         { "Project", {
             N("New project", "new"), N("Open project", "open"), N("Save project", "save"),
@@ -575,9 +596,27 @@ local function toggle(id, on)
     return clicked
 end
 
+-- a choice that reloads the theme gets a small round arrow after its label (the Guide says
+-- what it means; pointing at it says so too)
+local reload_mark = false
 local function row_label(label)
     r.ImGui_AlignTextToFramePadding(ctx)
     r.ImGui_Text(ctx, label)
+    if reload_mark then
+        reload_mark = false
+        local x1, y1 = r.ImGui_GetItemRectMin(ctx)
+        local x2, y2 = r.ImGui_GetItemRectMax(ctx)
+        local cx, cy, rr = x2 + 10, (y1 + y2) / 2, 4
+        local dl = r.ImGui_GetWindowDrawList(ctx)
+        local col = rgba(UI.soft)
+        r.ImGui_DrawList_PathArcTo(dl, cx, cy, rr, math.rad(-70), math.rad(220))
+        r.ImGui_DrawList_PathStroke(dl, col, 0, 1.4)
+        local ax, ay = cx + rr * math.cos(math.rad(-70)), cy + rr * math.sin(math.rad(-70))
+        r.ImGui_DrawList_AddTriangleFilled(dl, ax - 2.6, ay - 2.2, ax + 2.4, ay - 0.6, ax - 0.4, ay + 2.6, col)
+        if r.ImGui_IsMouseHoveringRect(ctx, cx - 7, cy - 7, cx + 7, cy + 7) then
+            r.ImGui_SetTooltip(ctx, "Reloads the theme: the screen may blink.")
+        end
+    end
     r.ImGui_SameLine(ctx, LABEL_W)
 end
 
@@ -781,7 +820,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the glass of the track panel's and the mixer's displays (meters have glass of their own)
         display_light = { "tcpGlass", "tcpGlassRound" },
@@ -855,9 +894,41 @@ function parts.read(zip, accent, part, variant, file)
     if part == "meter_lying" then
         if file == "keys.txt" then return nil end
         part, variant = "meter", parts.lying_type(variant)
+        -- the lamps lying Short: a strip of 6 (the 11 would squash)
+        if variant == "lamps" and file ~= "preview.png" and global_value("tkPlMeterShort") then variant = "lamps_s" end
     end
+    -- Unlit segments off (General > Meters): each type's images with the unlit half see-through
+    if part == "meter" and file ~= "preview.png" and global_value("tkMeterNoUnlit") then variant = variant .. "_nu" end
     local pack = parts.pack(zip, accent)
-    return pack and pack["parts/" .. part .. "/" .. variant .. "/" .. file]
+    if not pack then return nil end
+    if part == "light_glass" then
+        -- the light ones that differ per accent are the pack's own
+        local data = parts.glass_get(zip, accent, "parts/light_glass/" .. variant .. "/" .. file)
+        if data or file == "keys.txt" then return data end
+        return variant == "light" and pack[file] or nil
+    end
+    -- the meter and the display light on dark glass, when Light has it
+    if (part == "meter" or part == "display_light") and parts.glass_dark(zip) then
+        local dark = parts.glass_get(zip, accent, "parts/dg_" .. part .. "/" .. variant .. "/" .. file)
+        if dark then return dark end
+    end
+    return pack["parts/" .. part .. "/" .. variant .. "/" .. file]
+end
+
+-- the layout's lines for dark glass: "line number<TAB>line", numbered from 0
+function parts.glass_layout(text, pack, zip, accent)
+    local fix = pack and pack["parts/light_glass/lines.txt"]
+    if not fix and zip then fix = parts.glass_get(zip, accent, "parts/light_glass/lines.txt") end
+    if not fix or not text then return text end
+    local out = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do out[#out + 1] = line end
+    for idx, line in fix:gmatch("(%d+)\t([^\n]*)") do
+        local at = tonumber(idx) + 1
+        if out[at] then out[at] = line .. (out[at]:sub(-1) == "\r" and "\r" or "") end
+    end
+    if text:sub(-1) ~= "\n" then return table.concat(out, "\n"):sub(1, -1) end
+    out[#out] = nil
+    return table.concat(out, "\n") .. "\n"
 end
 
 -- the type the lying meter shows: Same as standing is the meter's type (Lamps only lie)
@@ -875,8 +946,56 @@ function parts.display_pack(zip, variant)
     return parts.packs[path]
 end
 
+-- Dark glass in the Light look: only Light's packs have it
+function parts.is_light(zip)
+    return (zip or ""):find("TK Theme Light", 1, true) ~= nil
+end
+
+-- what all accents share of dark glass is in glass.zip beside the accents' packs
+function parts.glass_get(zip, accent, path)
+    local pack = parts.pack(zip, accent)
+    local data = pack and pack[path]
+    if data then return data end
+    local theme = (zip:match("([^\\/]+)%.ReaperThemeZip$") or "")
+    local gpath = here .. "dist/accents/" .. theme .. "/glass.zip"
+    if parts.packs[gpath] == nil then parts.packs[gpath] = Zip.read_stored(gpath) or false end
+    return parts.packs[gpath] and parts.packs[gpath][path] or nil
+end
+
+function parts.glass_dark(zip)
+    return parts.is_light(zip) and (parts.glass_now or parts.chosen.light_glass or parts.default.light_glass) == "dark"
+end
+
 -- the images of a part, as they are named in the theme. Meters have no scaled versions
-function parts.files(part)
+function parts.files(part, zip, accent)
+    if part == "light_glass" then
+        -- the panels' glass and what's on it, as the generator found them in this look's pack
+        zip = zip or parts.zip_path()
+        local pack = parts.pack(zip, accent)
+        local files, seen, prefix = {}, {}, "parts/light_glass/dark/"
+        parts.glass_get(zip, accent, "")       -- loads glass.zip
+        local theme = (zip:match("([^\\/]+)%.ReaperThemeZip$") or "")
+        local shared = parts.packs[here .. "dist/accents/" .. theme .. "/glass.zip"]
+        for _, src in ipairs({ pack or {}, shared or {} }) do
+            for name in pairs(src) do
+                if name:sub(1, #prefix) == prefix and not name:find("preview%.png$") and not name:find("keys%.txt$") then
+                    local rel = name:sub(#prefix + 1)
+                    if not seen[rel] then seen[rel] = true; files[#files + 1] = rel end
+                end
+            end
+        end
+        table.sort(files)
+        return files
+    end
+    if part == "basic" then
+        local pack = parts.pack(zip or parts.zip_path(), accent) or {}
+        local files, prefix = {}, "parts/basic/on/"
+        for name in pairs(pack) do
+            if name:sub(1, #prefix) == prefix and not name:find("preview%.png$") then files[#files + 1] = name:sub(#prefix + 1) end
+        end
+        table.sort(files)
+        return files
+    end
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
     if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
     if part == "toolbar_text" or part == "send_tint" or part == "shade" or part == "items" or part == "midi_keys" then return {} end  -- lines in the colour file only
@@ -987,9 +1106,12 @@ function parts.write_accent(variant, zip, root)
     if not ok then return nil, err end
     ok, err = parts.write("meter_lying", parts.chosen.meter_lying or parts.default.meter_lying, zip, variant)
     if not ok then return nil, err end
+    local basic = parts.chosen.basic or parts.default.basic
+    if basic == "off" then parts.write("basic", "off", zip, variant) end
     for part, chosen in pairs(parts.chosen) do
-        if part ~= "accent" and part ~= "meter" and part ~= "meter_lying" then parts.write(part, chosen, zip, variant) end
+        if part ~= "accent" and part ~= "meter" and part ~= "meter_lying" and part ~= "basic" then parts.write(part, chosen, zip, variant) end
     end
+    if basic == "on" then parts.write("basic", "on", zip, variant) end
     return true
 end
 
@@ -1005,7 +1127,9 @@ function parts.write_display(variant, zip, root, accent)
             files[root .. "/" .. name] = variant == "standard" and pack[name] or data
         end
     end
-    local layout = "\n" .. (pack["rtconfig.txt"] or "")
+    local base = pack["rtconfig.txt"] or ""
+    if parts.glass_dark(zip) then base = parts.glass_layout(base, pack, zip, accent) end
+    local layout = "\n" .. base
     for name, line in (display["lines.txt"] or ""):gmatch("([^\t\n]+)\t([^\n]*)") do
         layout = layout:gsub("\n[ \t]*set " .. name:gsub("%p", "%%%0") .. "[ \t][^\r\n]*", function() return "\n" .. line end, 1)
     end
@@ -1035,14 +1159,45 @@ function parts.write(part, variant, zip, accent)
         parts.items_now = nil
         return ok, err
     end
+    if part == "light_glass" then
+        if not parts.is_light(zip) then return true end       -- only Light has it
+        parts.glass_now = variant
+        local files = {}
+        for _, name in ipairs(parts.files(part, zip, accent)) do
+            local data = parts.read(zip, accent, part, variant, name)
+            if not data then parts.glass_now = nil return nil, "the images of this choice are missing" end
+            files[root .. "/" .. name] = data
+        end
+        local ok, err = true, nil
+        if next(files) then ok, err = Zip.replace(zip, files) end
+        if ok then
+            local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip, part)
+            if not same then ok, err = Zip.save(loose, text) end
+        end
+        if ok then ok, err = parts.write_display(parts.chosen.display or parts.default.display, zip, root, accent) end
+        for _, p in ipairs({ "meter", "meter_lying", "display_light" }) do
+            if ok then ok, err = parts.write(p, parts.chosen[p] or parts.default[p], zip, accent) end
+        end
+        parts.glass_now = nil
+        -- Basic's buttons and lists go over the glass's
+        if ok and (parts.basic_now or parts.chosen.basic) == "on" then ok, err = parts.write("basic", "on", zip, accent) end
+        return ok, err
+    end
     local files = {}
-    for _, name in ipairs(parts.files(part)) do
+    for _, name in ipairs(parts.files(part, zip, accent)) do
         local data = parts.read(zip, accent, part, variant, name)
         if not data then return nil, "the images of this choice are missing" end
         files[root .. "/" .. name] = data
     end
     if next(files) then
         local ok, err = Zip.replace(zip, files)
+        if not ok then return nil, err end
+    end
+    if part == "basic" and variant == "off" and parts.is_light(zip) and (parts.chosen.light_glass or parts.default.light_glass) == "dark" then
+        -- Basic's off images are the light glass's: the dark glass goes back over them
+        parts.basic_now = "off"
+        local ok, err = parts.write("light_glass", "dark", zip, accent)
+        parts.basic_now = nil
         if not ok then return nil, err end
     end
     local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip, part)
@@ -1057,8 +1212,13 @@ function parts.accent_in_zip(variant, zip, root)
     -- a display skin has its own images, and its colours in the layout
     local chosen = parts.chosen.display or parts.default.display
     local display = chosen ~= parts.default.display and parts.display_pack(zip, chosen)
+    local glass = {}
+    if parts.glass_dark(zip) then
+        for _, name in ipairs(parts.files("light_glass", zip, variant)) do glass[name] = true end
+        glass["rtconfig.txt"] = true
+    end
     for name, data in pairs(pack) do
-        local skinned = display and (display[name] or name == "rtconfig.txt")
+        local skinned = (display and (display[name] or name == "rtconfig.txt")) or glass[name]
         local want = Zip.stored_crc(pack, name)
         if name == "rtconfig.txt" and (parts.chosen.items or parts.default.items) ~= parts.default.items then
             want = Zip.crc32(parts.layout_fix(data))     -- Reversed items: the layout has its own tinttcp
@@ -1072,7 +1232,19 @@ function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
     local root = Zip.root(zip)
     if part == "accent" then return not root or parts.accent_in_zip(variant, zip, root) end
-    local name = parts.files(part)[1]
+    -- Basic's images (and the mixer's Basic keys): every file, so one remade on its own
+    -- (tk_theme_parts.py) comes in too. Not under Light's dark glass, which has its own.
+    if (part == "basic" or (part == "mcp_hw" or part == "tcp_hw") and variant == "basic") and not parts.glass_dark(zip) then
+        local pack = parts.pack(zip)
+        if not root or not pack then return true end
+        local crcs = Zip.crc_map(zip)
+        for _, name in ipairs(parts.files(part, zip)) do
+            local key = "parts/" .. part .. "/" .. variant .. "/" .. name
+            if pack[key] and crcs[root .. "/" .. name] ~= Zip.stored_crc(pack, key) then return false end
+        end
+        return true
+    end
+    local name = parts.files(part, zip)[1]
     if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local data = parts.read(zip, nil, part, variant, name)
     if not root or not data then return true end
@@ -1175,8 +1347,10 @@ function parts.restore()
         parts.keep_own = true
         local ok = Zip.batch(zip, function()
             for part, variant in pairs(parts.chosen) do
-                if not parts.in_zip(part, variant, zip) and parts.write(part, variant, zip) then wrote = true end
+                if part ~= "basic" and not parts.in_zip(part, variant, zip) and parts.write(part, variant, zip) then wrote = true end
             end
+            local basic = parts.chosen.basic
+            if basic and not parts.in_zip("basic", basic, zip) and parts.write("basic", basic, zip) then wrote = true end
             return true
         end)
         parts.keep_own = nil
@@ -1184,6 +1358,18 @@ function parts.restore()
         if look.apply_icons(look.current()) then changed = true end
         if changed then parts.reload() end
     end)
+end
+
+-- the meters' images again, after a switch that picks other ones (Unlit segments; Short,
+-- which only the lamps lying have a strip for: lamps_only)
+rewrite_meters = function(lamps_only)
+    if not look.current() then return end
+    local lying = parts.chosen.meter_lying or parts.default.meter_lying
+    if lamps_only then
+        if parts.lying_type(lying) == "lamps" then parts.choose("meter_lying", lying) end
+        return
+    end
+    parts.choose_many({ { "meter", parts.chosen.meter or parts.default.meter }, { "meter_lying", lying } })
 end
 
 function parts.picture(path)
@@ -1341,7 +1527,12 @@ local function draw_meter(item, id)
     r.ImGui_Dummy(ctx, 0, 2)
     row_label("Lying")
     picked = parts.buttons(id .. "_lying", "meter_lying", LYING, lying)
-    if picked then parts.choose("meter_lying", picked) end
+    if picked then
+        -- the layout can't see an image: it learns from this whether the lamps are lying (no
+        -- longer used by the layout, which gives the lamps a short strip of their own)
+        if P.tkPlLamps then set_param("tkPlLamps", picked == "lamps" and 1 or 0, true) end
+        parts.choose("meter_lying", picked)
+    end
     hint_text("The meter lying in the track panel's plate (Plate and Meter in the plate, Track panel page): the same type as standing, or round lamps as on old hi-fi gear.")
 end
 
@@ -1451,6 +1642,7 @@ local function draw_selected_tracks(id)
 end
 
 local function draw_setting(item, id)
+    reload_mark = item.kind == "part" or item.kind == "meter" or item.kind == "handle" or (item.kind == "choice" and item.part ~= nil)
     if item.kind == "layout" then
         draw_layout_choice(item, id)
     elseif item.kind == "tracks" then
@@ -1468,9 +1660,14 @@ local function draw_setting(item, id)
         if not p then return end
         row_label(item.label)
         r.ImGui_PushID(ctx, id)
+        local extra = item.extra and P[item.extra]
+        local extra_on = extra and math.floor(extra.value) == 1
         for i, name in ipairs(item.choices) do
             if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
-            local active = math.floor(p.value) == i - 1
+            local is_extra = extra and i == #item.choices
+            local active
+            if is_extra then active = extra_on
+            else active = math.floor(p.value) == i - 1 and not extra_on end
             if active then
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
@@ -1478,13 +1675,22 @@ local function draw_setting(item, id)
             local clicked = r.ImGui_Button(ctx, name, 66, 0)
             if active then r.ImGui_PopStyleColor(ctx, 2) end
             if clicked and not active then
-                for _, n in ipairs(names) do set_param(n, i - 1, true) end
+                for _, n in ipairs(names) do set_param(n, is_extra and 0 or i - 1, true) end
+                if extra then set_param(item.extra, is_extra and 1 or 0, true) end
                 r.ThemeLayout_RefreshAll()
+                if item.after then item.after(i - 1) end
                 -- a choice that also needs images: the part that goes with it
                 if item.part and item.parts[i] and look.current() then
                     local list = { { item.part, item.parts[i] } }
                     if item.mixer_plate then
-                        for _, extra in ipairs(parts.mixer_plate_handles(i)) do list[#list + 1] = extra end
+                        for _, more in ipairs(parts.mixer_plate_handles(is_extra and 1 or i)) do list[#list + 1] = more end
+                    end
+                    if extra then
+                        -- Basic's buttons and lists: on with a Basic track panel, or a Basic mixer
+                        -- beside a track panel without a plate; off goes first, on last
+                        local tcp_b = global_value("tkTcpBasic")
+                        local want = (tcp_b or (global_value("tkMcpBasic") and not global_value("tkTcpPlate"))) and "on" or "off"
+                        if want == "off" then table.insert(list, 1, { "basic", "off" }) else list[#list + 1] = { "basic", "on" } end
                     end
                     parts.choose_many(list)
                 end
@@ -1543,6 +1749,7 @@ local CHILD_FLAGS = (r.ImGui_ChildFlags_AutoResizeY and r.ImGui_ChildFlags_AutoR
     | (r.ImGui_ChildFlags_AlwaysUseWindowPadding and r.ImGui_ChildFlags_AlwaysUseWindowPadding() or 0)
 
 local function begin_card(title, id)
+    reload_mark = false
     if not r.ImGui_BeginChild(ctx, "##card" .. id, 0, 0, CHILD_FLAGS) then return false end
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
     r.ImGui_Text(ctx, title)
@@ -2285,14 +2492,24 @@ local SIGNATURES = {
       saved = "\nlook=TK Theme Dark\npart:accent=blue\npart:display=blue\npart:shade=standard"
           .. "\npart:mcp_volthumb=classic_accent\npart:tcp_thumb=classic_accent\npart:mcp_pan=classic_accent\n",
       hint = "The Dark look in blue: blue accent colour, blue display, Standard darkness, the silver transport plate with the Blue Angel on it, plain rims without track colour, track names in blue and classic handles with a blue line. Everything else stays as it is, each can be changed back on its own, and Undo brings back what you had." },
-    { name = "Black Metal", id = "pbm", plate = 1, logo = 3, params = { tkTcpPlate = 2, tkMcpPlate = 2, tkWood = 1, tkRailRight = 1 },
+    { name = "Black Metal", id = "pbm", plate = 1, logo = 3, params = { tkTcpPlate = 2, tkMcpPlate = 2, tkWood = 1, tkMcpWood = 1, tkRailRight = 1, tkTcpBasic = 0, tkMcpBasic = 0 },
       saved = "\nlook=TK Theme Dark\npart:accent=red\npart:display=red\npart:shade=black"
-          .. "\npart:tcp_hw=black\npart:mcp_hw=black\npart:mcp_volthumb=hw\npart:mcp_pan=hw\n",
+          .. "\npart:basic=off\npart:tcp_hw=black\npart:mcp_hw=black\npart:mcp_volthumb=hw\npart:mcp_pan=hw\n",
       hint = "The Dark look as a black rack: black plates on the track panels, the master and the mixer, walnut rails on both sides, red accent colour, red display, Black darkness, and the black transport plate with the Black Metal guitar on it; plain rims without track colour and track names in red. Everything else stays as it is, each can be changed back on its own, and Undo brings back what you had." },
-    { name = "Quicksilver", id = "pqs", plate = 2, logo = 4, params = { tkTcpPlate = 1, tkMcpPlate = 1, tkWood = 2, tkRailRight = 1 },
+    { name = "Quicksilver", id = "pqs", plate = 2, logo = 4, params = { tkTcpPlate = 1, tkMcpPlate = 1, tkWood = 2, tkMcpWood = 2, tkRailRight = 1, tkTcpBasic = 0, tkMcpBasic = 0 },
       saved = "\nlook=TK Theme Dark\npart:accent=blue\npart:display=blue\npart:shade=standard"
-          .. "\npart:tcp_hw=silver\npart:mcp_hw=silver\npart:mcp_volthumb=hw\npart:mcp_pan=hw\n",
+          .. "\npart:basic=off\npart:tcp_hw=silver\npart:mcp_hw=silver\npart:mcp_volthumb=hw\npart:mcp_pan=hw\n",
       hint = "The Dark look as a silver rack: silver plates on the track panels, the master and the mixer, teak rails on both sides, blue accent colour, blue display, Standard darkness, and the silver transport plate with the Quicksilver drop on it; plain rims without track colour and track names in blue. Everything else stays as it is, each can be changed back on its own, and Undo brings back what you had." },
+    { name = "Basic Dark", id = "pbd", plate = 0, logo = 0, depth = 30, name_accent = 0, mood = "Neutral", fader_dot = true,
+      params = { tkTcpPlate = 0, tkMcpPlate = 0, tkTcpBasic = 1, tkMcpBasic = 1, tkWood = 0, tkMcpWood = 0, tkNumStyle = 0, tkMcpNumStyle = 0, tkTcpLayBtn = 1, tkMcpLayBtn = 1 },
+      saved = "\nlook=TK Theme Dark\npart:accent=graphite\npart:display=standard\npart:shade=black\npart:meter=segment"
+          .. "\npart:tcp_thumb=dot\npart:mcp_pan=dot\npart:tcp_hw=basic\npart:mcp_hw=basic\npart:basic=on\n",
+      hint = "The Dark look flat and quiet, as in most DAWs: Basic track panels and mixer, graphite accent, Neutral colours, Black darkness, a light track colour tint, dot handles and the layout keys." },
+    { name = "Basic Light", id = "pbl", plate = 0, logo = 0, depth = 30, name_accent = 0, mood = "Neutral", fader_dot = true,
+      params = { tkTcpPlate = 0, tkMcpPlate = 0, tkTcpBasic = 1, tkMcpBasic = 1, tkWood = 0, tkMcpWood = 0, tkNumStyle = 0, tkMcpNumStyle = 0, tkTcpLayBtn = 1, tkMcpLayBtn = 1 },
+      saved = "\nlook=TK Theme Light\npart:accent=graphite\npart:display=standard\npart:meter=segment"
+          .. "\npart:tcp_thumb=dot\npart:mcp_pan=dot\npart:tcp_hw=basic\npart:mcp_hw=basic\npart:basic=on\n",
+      hint = "The Light look flat and quiet, as in most DAWs: Basic track panels and mixer, graphite accent, Neutral colours, a light track colour tint, dot handles and the layout keys." },
 }
 
 local function apply_signature(sig)
@@ -2305,8 +2522,12 @@ local function apply_signature(sig)
     set_param("tkTransPlate", sig.plate, true)
     set_param("tkPlateLogo", sig.logo, true)
     for name, value in pairs(sig.params or {}) do set_param(name, value, true) end
-    set_param("customColorDepthParam", 0, true)     -- plain rims
-    set_param("tkNameAccent", 1, true)
+    set_param("customColorDepthParam", sig.depth or 0, true)     -- plain rims, unless the preset says
+    set_param("tkNameAccent", sig.name_accent or 1, true)
+    if sig.fader_dot then set_handle(true) end
+    -- a colour setting of its own (keep_mood above put back the one that was on)
+    local entry, mood = look.current(), sig.mood and look.mood_named(sig.mood)
+    if entry and mood then look.apply_mood(entry, mood) end
     r.ThemeLayout_RefreshAll()
     state.msg = sig.name .. " is on. Undo brings back what you had."
 end
@@ -2517,27 +2738,51 @@ function look.has_own_colours()
 end
 
 -- Colour settings: the look's own background colours, warmer, cooler or without colour,
--- keeping how light they are. A light look shows a tint far more, so it gets less of it.
--- They live in the colour file like any other colour, and presets keep them.
-local MOODS = { { "Standard" }, { "Warm", 1.16, 1.0, 0.78 }, { "Cool", 0.82, 1.0, 1.2 }, { "Neutral", 1, 1, 1 }, { "Inverted", invert = true } }
+-- keeping how light they are. Each has a hue and a saturation (per look) of its own, in HSL:
+-- a dark colour then turns as warm or cool as a light one (a factor on red and blue barely
+-- moved Dark's near-black backgrounds). They live in the colour file like any other colour,
+-- and presets keep them.
+local MOODS = { { "Standard" }, { "Warm", hue = 34, dark = 0.26, light = 0.42 }, { "Cool", hue = 214, dark = 0.30, light = 0.42 },
+    { "Neutral", hue = 0, dark = 0, light = 0 }, { "Inverted", invert = true } }
 local MOOD_KEYS = look.mood_keys
 
+function look.mood_named(name)
+    for _, m in ipairs(MOODS) do
+        if m[1] == name then return m end
+    end
+end
+
+local function hue_rgb(p, q, t)
+    if t < 0 then t = t + 1 elseif t > 1 then t = t - 1 end
+    if t < 1 / 6 then return p + (q - p) * 6 * t end
+    if t < 1 / 2 then return q end
+    if t < 2 / 3 then return p + (q - p) * (2 / 3 - t) * 6 end
+    return p
+end
+
 function look.mood_colour(native, mood, amount)
-    if not mood[2] then return native end
+    if not mood.hue then return native end
     local rgb = native_to_rgb(native)
-    local c = { rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255 }
-    local lum = 0.3 * c[1] + 0.59 * c[2] + 0.11 * c[3]
-    local out = 0
-    for i = 1, 3 do
-        local v = c[i] + (lum * mood[i + 1] - c[i]) * amount
-        out = out << 8 | math.max(0, math.min(255, math.floor(v + 0.5)))
+    local R, G, B = (rgb >> 16 & 255) / 255, (rgb >> 8 & 255) / 255, (rgb & 255) / 255
+    local l = (math.max(R, G, B) + math.min(R, G, B)) / 2     -- the lightness stays
+    local s, h = amount, mood.hue / 360
+    local out
+    if s == 0 then
+        local v = math.floor(l * 255 + 0.5)
+        out = v << 16 | v << 8 | v
+    else
+        local q = l < 0.5 and l * (1 + s) or l + s - l * s
+        local p = 2 * l - q
+        local function ch(t) return math.max(0, math.min(255, math.floor(hue_rgb(p, q, t) * 255 + 0.5))) end
+        out = ch(h + 1 / 3) << 16 | ch(h) << 8 | ch(h - 1 / 3)
     end
     return rgb_to_native(out)
 end
 
+-- the saturation: Dark's backgrounds need a little more to show as much
 function look.mood_amount(entry, mood)
-    if mood[1] == "Neutral" then return 1 end
-    return entry.name == "Dark" and 0.85 or 0.4
+    if not mood.hue then return 0 end
+    return entry.name == "Dark" and mood.dark or mood.light
 end
 
 -- the other look's colours as it comes, from the file a factory reset uses
@@ -2690,12 +2935,12 @@ local function draw_moods(current)
         end
     end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("For the arrange, grid, mixer background and lists: what REAPER draws itself. Panels and the glass windows are images, so they keep their colours. Inverted gives this look the other look's arrange: light on Dark, dark on Light. This replaces your own colours for these parts, and a preset can keep them.")
+    hint_text("The colours REAPER draws itself: arrange, grid, mixer background and lists. Inverted takes the other look's arrange.")
     r.ImGui_EndChild(ctx)
 end
 
 -- the accent's own colour per look, for its button
-local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 }, { "red", "Red", 0xE8303A, 0xC41A24 } }
+local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 }, { "red", "Red", 0xE8303A, 0xC41A24 }, { "graphite", "Graphite", 0xA8AEB8, 0x5C6370 } }
 
 local DISPLAYS = { { "standard", "Standard" }, { "ice", "Ice" }, { "amber", "Amber" }, { "green", "Green" }, { "red", "Red" }, { "blue", "Blue" } }
 parts.variants = { accent = ACCENTS, display = DISPLAYS }
@@ -2706,7 +2951,7 @@ local function draw_display()
     local picked = parts.buttons("display", "display", DISPLAYS, parts.chosen.display or parts.default.display)
     if picked and parts.choose("display", picked) then state.msg = "Display changed." end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("The transport's glass and everything on it, in one colour, as on a piece of hardware. Record, play and repeat keep their own colours. Standard follows the look and its accent colour. Choosing one reloads the theme, so the screen may blink.")
+    hint_text("The transport's glass in one colour, as on hardware. Standard follows the accent colour. Reloads the theme.")
     r.ImGui_EndChild(ctx)
 end
 
@@ -2747,7 +2992,7 @@ local function draw_auto()
     local notify = r.GetExtState(Auto.SECTION, "notify") ~= "0"
     if toggle("auto_notify", notify) then r.SetExtState(Auto.SECTION, "notify", notify and "0" or "1", true) end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("Switches only when the time comes, and never while REAPER plays, records or is paused, nor with this window open: then it waits until that's over. A look you choose yourself stays until the next switch. It runs with the metronome and grid watcher, so turn on \"Metronome and grid at startup\" on the General page to have it after a restart too. The switch reloads the theme, so the screen blinks once.")
+    hint_text("Switches Light and Dark at these times, never while REAPER plays or records. Needs \"Metronome and grid at startup\" on the Transport page.")
     if on and light == dark then
         hint_text("Light and Dark start at the same time, so nothing switches.")
     end
@@ -2760,7 +3005,7 @@ local function draw_shade()
     local picked = parts.buttons("shade", "shade", SHADES, parts.chosen.shade or parts.default.shade)
     if picked and look.keep_mood(parts.choose, "shade", picked) then state.msg = "Darkness changed." end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("Black takes the arrange view, track lanes, lists, mixer, MIDI editor and dockers close to black. The panels and buttons stay as they are. Choosing one reloads the theme, so the screen may blink.")
+    hint_text("Black takes the arrange, lanes, lists, mixer and MIDI editor close to black. Reloads the theme.")
     r.ImGui_EndChild(ctx)
 end
 
@@ -2785,12 +3030,12 @@ local function draw_accents(current)
         end
     end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("The colour of what's on: selections, FX buttons, highlights, meters, and icons when you point at them. Mute, solo, record and play keep their own colours. Choosing one reloads the theme, so the screen may blink.")
+    hint_text("The colour of what's on: selections, FX, highlights, meters. Mute, solo, record and play keep theirs. Reloads the theme.")
     r.ImGui_EndChild(ctx)
 end
 
 local function draw_look()
-    hint_text("A look sets the colours and images of the whole theme. Your layout settings stay as they are, and so do the colour setting, accent colour and display below, in the new look's version. Colours you change on the Colours page are kept per look.")
+    hint_text("A look sets the theme's colours and images. Your settings and choices below go along.")
     r.ImGui_Dummy(ctx, 0, 2)
     local current = look.current()
     if begin_card("Look", "lk") then
@@ -2855,21 +3100,25 @@ end
 
 local GUIDE = {
     { "Look", {
+        "A small round arrow after a setting's name means that choosing it reloads the theme, so the screen may blink. Point at the arrow to read it. If items don't change straight away after choosing Classic or Reversed, restart REAPER.",
         "The Look page chooses Dark or Light. A look changes colours and images only: your layout settings go along. Colours you changed are kept per look, and a preset remembers which look it was saved with. When a look uses your own colours, this page says so and can take it back to the look's own.",
-        "A transport plate on General puts brushed metal, with screws and a maker's plate, behind the whole transport, which gets a little taller. It goes with any look and display skin.",
+        "A transport plate, on the Transport page, puts brushed metal, with screws and a maker's plate, behind the whole transport, which gets a little taller. It goes with any look and display skin.",
         "A display skin gives the transport's glass and what's on it one colour of its own, in every look. The accent colour doesn't reach it.",
-        "The same page chooses an accent colour: Blue, Orange or Violet, for selections, FX buttons, highlights, meters and the theme's icons. Mute, solo, record and play keep their own colours, and so do the TK_ icons on your own toolbars.",
+        "The same page chooses an accent colour: Blue, Orange, Violet, Red or Graphite (a calm grey), for selections, FX buttons, highlights, meters and the theme's icons. Mute, solo, record and play keep their own colours, and so do the TK_ icons on your own toolbars.",
         "Day and night, on the Look page, switches to Light and Dark at the times you set. It waits while REAPER plays, records or is paused, and while this window is open, and a look you choose yourself stays until the next switch. It needs the metronome and grid watcher, which \"Metronome and grid at startup\" starts with REAPER.",
         "In Options > Themes the looks are listed as TK Theme Dark and TK Theme Light. Choosing one there works too, but your settings only go along when you change the look on this page.",
     } },
     { "Transport", {
         "The gear at the end of the transport opens this window.",
-        "The metronome button lights up while the metronome is on. Its small arrow opens the metronome settings. To have the light right before your first click, turn on \"Metronome and grid at startup\" on the General page.",
-        "The grid box, on the General page, shows the grid on the display beside the time signature. Click it for a menu to choose the grid: the division, triplet, dotted, swing, frame, measure, or an adaptive grid. Adaptive (Narrow, Medium or Wide) picks the division for the zoom as you zoom, keeping triplet, dotted or swing, and shows an A before the grid. Choosing a division yourself turns it off. The magnet turns snap on and off and lights while it's on; the dots open REAPER's snap/grid settings. Use one adaptive grid at a time: another script that sets the grid as you zoom, or REAPER's own adaptive grid, turns this one off.",
-        "Extra buttons sit in a window to the left or right of the transport. Choose them on the Transport buttons page, where a button can also run an action of your own. When the transport gets too narrow, these windows move to a second row.",
+        "The metronome button lights up while the metronome is on. Its small arrow opens the metronome settings. To have the light right before your first click, turn on \"Metronome and grid at startup\" on the Transport page.",
+        "The grid box, on the Transport page, shows the grid on the display beside the time signature. Click it for a menu to choose the grid: the division, triplet, dotted, swing, frame, measure, or an adaptive grid. Adaptive (Narrow, Medium or Wide) picks the division for the zoom as you zoom, keeping triplet, dotted or swing, and shows an A before the grid. Choosing a division yourself turns it off. The magnet turns snap on and off and lights while it's on; the dots open REAPER's snap/grid settings. Use one adaptive grid at a time: another script that sets the grid as you zoom, or REAPER's own adaptive grid, turns this one off.",
+        "Extra buttons sit in a window to the left or right of the transport. Choose them on the Transport page, where a button can also run an action of your own. When the transport gets too narrow, these windows move to a second row.",
     } },
     { "Track panel", {
-        "The buttons on the lowest row are, from the left: automation mode, phase, fixed item lanes, FX and IO columns, meter, freeze and unfreeze. Buttons that don't fit are left out, so make the panel wider or the track taller to see them.",
+        "Style: Standard has glass windows. Basic leaves them out: the name and controls stand on the panel, and the name stays readable on any track colour. Silver and Black put the track panel and the master on a brushed plate: tall tracks get a low glass band (name, level, input and the small buttons) with R, M, S and the knobs as hardware under it, middle tracks a one-row band, low tracks one row. FX parameter knobs turn hardware too, and the section margins are 10; the envelope lanes keep yours. The plates are made for the Dark look.",
+        "Meter in the plate lays the meter in the plate, between R, M, S and the knobs, on low tracks between the name and R. Narrow panels keep it standing on the right. Its type is Lying, under Meters on the General page.",
+        "The buttons on the lowest row are, from the left: automation mode, phase, fixed item lanes, FX and IO columns, meter, freeze and unfreeze, and the layout button when it's on. Buttons that don't fit are left out, so make the panel wider or the track taller to see them.",
+        "The layout button shows the track's layout and takes it to the next one: A, B, C and round to A. Click it on one of several selected tracks and they all go along. The mixer has a layout key of its own, on the Mixer page, for the mixer layout.",
         "The columns and meter buttons work on all tracks with the same layout as the one you click; the master's buttons only on the master. The columns button hides the FX and IO columns, and brings back the ones that were shown. It also turns on REAPER's options to show FX and sends in the track panel. The FX and IO buttons are the headers of those columns; without a column, they move to the first row. Set the columns' width on the Track panel page.",
         "A track with fixed item lanes has a blue strip at the left of its window, whether the lanes are open or closed.",
         "To add a knob for an FX parameter: in the FX window, choose Param > FX parameter list > Show in track controls. It appears under the controls, so the track has to be tall enough. FX parameters and Embedded FX on the Track panel page hide them per layout, without taking them out of the project.",
@@ -2880,11 +3129,13 @@ local GUIDE = {
     } },
     { "Layouts", {
         "Each track can use layout A, B or C. In the track panel they look the same until you change one on the Track panel page, for example to give your busses only a name, FX, mute and solo, with a wide meter on the left. Settings that don't count at the moment show grey. Name only turns a track into a divider: its name, large and centred, growing with the track's height.",
-        "Under Set track height you set a fixed height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut.",
+        "Under Set track height you set a fixed height and lock it, or make dividers in one go. The action TK_Theme_Make_Divider does the same from a shortcut. The height stays when you select other tracks and doesn't follow the selection (a theme can't resize tracks by itself); moving the slider changes nothing until you click a button. Layout A includes tracks on the default layout, and REAPER's zoom actions leave a locked height alone.",
         "Volume and pan on the first row puts them beside the name, so they also show on the lowest track height. Name width then sets the room for the name. Volume and pan as chooses Sliders, Knobs or Auto, which shows knobs when a slider wouldn't have the room. Knobs sit side by side, and on the first row the name takes the room they leave.",
         "The first row runs from the name to mute and solo, then record arm and monitor next to the meter. Record arm and monitor on the left moves those to the start of the row, so the knobs, mute and solo end up next to the meter; Mute and solo on the left moves those to the start instead.",
     } },
     { "Mixer", {
+        "Style on the Mixer page works as in the track panel, on its own. On a plate the fader, pan and width are slots with hardware handles; the handles you chose come back with Standard or Basic. Wood adds an armrest with the numbers on it, and folders hang on rack rails under their strips.",
+        "Basic's keys and lists are images the track panel and the mixer share: a Basic mixer beside a track panel without a plate gives that track panel Basic's keys too.",
         "Choose the fader handle on the Mixer page, for all layouts. In the track's layout menu, each layout has a twin with the word Dot; this switch moves tracks between them. A project opened later follows the next time this window opens.",
         "The handles of the pan and width sliders have their own choice there, and the Track panel page has one for its volume, pan and width sliders. Layouts A, B and C each have their own settings. The width decides the form: a narrow strip under 52, an intermediate one under 88, a normal one from 88. What doesn't count for the current form shows grey. A sidebar puts the FX and send lists beside the strip.",
         "Turn on the FX and send lists by right-clicking the mixer. An FX's embedded UI shows in that list when the strip is tall enough.",
@@ -3028,6 +3279,30 @@ local function startup_checks()
         load_params()
     end
     parts.restore()
+    -- a colour setting chosen before its colours were worked out anew: as it is now
+    -- (only when the colours are still exactly what it gave: refresh_mood checks)
+    if look.current() then look.refresh_mood(look.current()) end
+    -- whether the lying meter is the lamps (see draw_meter)
+    if P.tkPlLamps then
+        local lamps = (parts.chosen.meter_lying or parts.default.meter_lying) == "lamps" and 1 or 0
+        if math.floor(P.tkPlLamps.value) ~= lamps then set_param("tkPlLamps", lamps, true) end
+    end
+    -- Basic's buttons and lists follow its switches, also when those were set before the
+    -- images came (or by hand in REAPER's own theme adjuster)
+    if look.current() and P.tkTcpBasic then
+        local want = (global_value("tkTcpBasic") or (global_value("tkMcpBasic") and not global_value("tkTcpPlate"))) and "on" or "off"
+        local list = {}
+        if (parts.chosen.basic or parts.default.basic) ~= want then list[#list + 1] = { "basic", want } end
+        -- the mixer's R / M / S follow the mixer's own choice
+        local hw = parts.chosen.mcp_hw or parts.default.mcp_hw
+        if global_value("tkMcpBasic") and not global_value("tkMcpPlate") and hw ~= "basic" then list[#list + 1] = { "mcp_hw", "basic" }
+        elseif not global_value("tkMcpBasic") and hw == "basic" then list[#list + 1] = { "mcp_hw", "standard" } end
+        -- and the track panel's knobs and R / M / S its own
+        local thw = parts.chosen.tcp_hw or parts.default.tcp_hw
+        if global_value("tkTcpBasic") and not global_value("tkTcpPlate") and thw ~= "basic" then list[#list + 1] = { "tcp_hw", "basic" }
+        elseif not global_value("tkTcpBasic") and thw == "basic" then list[#list + 1] = { "tcp_hw", "standard" } end
+        if #list > 0 then parts.choose_many(list, true) end
+    end
     if look.current() and look.own_colours() then r.ThemeLayout_RefreshAll() end
     restore_my_colours()
     if handle_is_dot() then sync_track_handles(true) end
@@ -3035,16 +3310,46 @@ local function startup_checks()
     if P.tkGridBox and P.tkGridBox.value ~= 0 or Auto.on() then start_watcher() end
 end
 
+-- the first frames: only this, so the window is there at once; the checks and the first
+-- full page (which can take a while: the packs are read) come after it, with this still
+-- on screen meanwhile
+local function draw_loading()
+    local w, h = r.ImGui_GetContentRegionAvail(ctx)
+    local title, sub = "TK Theme", "Loading settings..."
+    r.ImGui_PushFont(ctx, font, 24)
+    local tw, th = r.ImGui_CalcTextSize(ctx, title)
+    r.ImGui_SetCursorPos(ctx, (w - tw) / 2, h / 2 - th)
+    r.ImGui_Text(ctx, title)
+    r.ImGui_PopFont(ctx)
+    local sw = r.ImGui_CalcTextSize(ctx, sub)
+    r.ImGui_SetCursorPosX(ctx, (w - sw) / 2)
+    r.ImGui_TextDisabled(ctx, sub)
+end
+
 local frame = 0
 local function loop()
     frame = frame + 1
     -- tells the day and night switch that this window is open, so it waits
     if frame % 20 == 1 then r.SetExtState(SCRIPT, "open", tostring(r.time_precise()), false) end
-    if state.checking and frame > 1 then
+    -- (a new window is often not drawn on its first frame: the checks wait until the
+    -- loading screen has been on screen twice, or half a second in a hidden dock tab)
+    local loading = state.checking
+    if state.checking and ((state.loading_shown or 0) >= 2 or frame > 30) then
         state.checking = false
+        loading = false
         startup_checks()
     end
     poll_action_picker()
+    -- dark glass in Light goes with a plate: with none left, the glass goes back to light (once)
+    if frame % 30 == 0 then
+        local cur = look.current()
+        local plated = global_value("tkTcpPlate") or global_value("tkMcpPlate")
+        if plated then state.glass_back_tried = nil end
+        if cur and cur.name == "Light" and not plated and parts.chosen.light_glass == "dark" and not state.glass_back_tried then
+            state.glass_back_tried = true
+            parts.choose("light_glass", "light")
+        end
+    end
     if frame % 60 == 0 and not r.ImGui_IsAnyItemActive(ctx) then
         load_params()     -- the panel's own buttons change these too
         refresh_palette()
@@ -3054,9 +3359,14 @@ local function loop()
     r.ImGui_SetNextWindowSize(ctx, 780, 640, r.ImGui_Cond_FirstUseEver())
     local visible, open = r.ImGui_Begin(ctx, SCRIPT, true, r.ImGui_WindowFlags_NoCollapse())
     if visible then
-        draw_nav()
-        r.ImGui_SameLine(ctx)
-        draw_content()
+        if loading then
+            draw_loading()
+            state.loading_shown = (state.loading_shown or 0) + 1
+        else
+            draw_nav()
+            r.ImGui_SameLine(ctx)
+            draw_content()
+        end
         r.ImGui_End(ctx)
     end
     r.ImGui_PopFont(ctx)
@@ -3072,8 +3382,8 @@ end
 -- the theme's buttons call these scripts by action ID, which only exists once
 -- they are in the action list; once per install location is enough
 local function register_helpers()
-    if r.GetExtState(SCRIPT, "registered5") == here then return end
-    local files = { "TK_Theme_Settings.lua", "TK_Theme_Toggle_TCP_Lists.lua", "TK_Theme_Toggle_TCP_Meter.lua",
+    if r.GetExtState(SCRIPT, "registered6") == here then return end
+    local files = { "TK_Theme_Settings.lua", "TK_Theme_Toggle_TCP_Lists.lua", "TK_Theme_Toggle_TCP_Meter.lua", "TK_Theme_Cycle_Layout.lua",
         "TK_Theme_Metronome.lua", "TK_Theme_Metronome_Watch.lua", "TK_Theme_Toggle_Menu_Bar.lua", "TK_Theme_Make_Divider.lua",
         "TK_Theme_Grid_Menu.lua", "TK_Theme_Snap.lua" }
     for _, key in ipairs(SLOT_KEYS) do files[#files + 1] = "slots/TK_Theme_Slot_" .. key .. ".lua" end
@@ -3086,7 +3396,7 @@ local function register_helpers()
             ok = false
         end
     end
-    if ok then r.SetExtState(SCRIPT, "registered5", here, true) end
+    if ok then r.SetExtState(SCRIPT, "registered6", here, true) end
 end
 
 -- REAPER's Theme Adjuster action (the gear in the transport) only looks directly

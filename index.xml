@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.30" author="TouristKiller" time="2026-11-12T03:48:46Z">
+    <version name="0.9.40" author="TouristKiller" time="2026-11-13T20:28:40Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -191,6 +191,7 @@
      <source main="main" file="TK_Theme_Make_Divider.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Make_Divider.lua</source>
      <source main="main" file="TK_Theme_Toggle_TCP_Lists.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Toggle_TCP_Lists.lua</source>
      <source main="main" file="TK_Theme_Toggle_TCP_Meter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Toggle_TCP_Meter.lua</source>
+     <source main="main" file="TK_Theme_Cycle_Layout.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Cycle_Layout.lua</source>
      <source main="main" file="TK_Theme_Grid_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid_Menu.lua</source>
      <source main="main" file="TK_Theme_Snap.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Snap.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_actions.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_actions.lua</source>
@@ -218,10 +219,13 @@
      <source file="dist/look_icons/TK Theme Dark.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/look_icons/TK%20Theme%20Dark.zip</source>
      <source file="dist/look_icons/TK Theme Light.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/look_icons/TK%20Theme%20Light.zip</source>
      <source file="dist/accents/TK Theme Dark/blue.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/blue.zip</source>
+     <source file="dist/accents/TK Theme Dark/graphite.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/graphite.zip</source>
      <source file="dist/accents/TK Theme Dark/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/orange.zip</source>
      <source file="dist/accents/TK Theme Dark/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/red.zip</source>
      <source file="dist/accents/TK Theme Dark/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/violet.zip</source>
      <source file="dist/accents/TK Theme Light/blue.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/blue.zip</source>
+     <source file="dist/accents/TK Theme Light/glass.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/glass.zip</source>
+     <source file="dist/accents/TK Theme Light/graphite.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/graphite.zip</source>
      <source file="dist/accents/TK Theme Light/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/orange.zip</source>
      <source file="dist/accents/TK Theme Light/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/red.zip</source>
      <source file="dist/accents/TK Theme Light/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/violet.zip</source>
@@ -597,18 +601,28 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Mixer plate (Mixer page, Plate: Standard / Silver / Black). The mixer's strips and the master go on brushed metal like the track panel: one glass window at the top with the small buttons, pan and width as hardware knobs with their values engraved, a hardware fader with tick marks beside the meter, R, M and S as caps, and the name in its own glass. Wide, intermediate and narrow strips each have their own layout; the narrow one shows the input as a symbol and the name standing. More values shows the level as engraved text. The master grows its meter with its width.
-+ Added: Wood (Track panel page, with a plate: Off / Walnut / Teak). The number column becomes a wooden rail down the track panels and envelope lanes, with the number, the folder buttons and the track colour on it, and the plates screwed onto it. Right rail adds a second one on the right. The master gets them too.
-+ Added: Folders as a rack. On a plate, a child track's plate hangs on a rack rail with mounting holes in its indent, one rail per level, from the folder's plate down to the last child.
-+ Added: Bigger Phillips screws and milled grooves on all plates; the plates are drawn taller with a finer grain and a soft sheen, so tall tracks and strips no longer show stretched brushing.
-+ Added: Envelope lanes on a plate: a glass window with bypass, name and the settings button, and the arm and level as the hardware R cap and knob beside or under it.
-+ Added: Lamps meter. Round lamps as on old hi-fi gear for the meter lying in the track panel plate (Meter in the plate, Track panel page). The meter type has a second choice for it, Lying: the same as standing, or Lamps.
-+ Added: Display light (General page, Displays: Off / Soft / Bright). A faint light from the bottom edge of the track panel's and the mixer's display windows, for a little depth. Meters keep their own glass, unlit.
-+ Added: Track number for the mixer (Mixer page: Colour / Stripe), apart from the track panel's. Stripe also reaches the envelope lanes now.
-+ Added: Black Metal and Quicksilver presets (Presets page). The whole rack in one click: black plates with walnut, red and the Black Metal guitar on the transport plate, or silver plates with teak, blue and the Quicksilver drop. Both logos can also be chosen on their own.
-+ Added: Wooden toolbar bars. TK_Wood_Bar_ icons for a toolbar of their own above the track panels, to go with the rails: laths of 30 to 60 pixels and Tall boards (plain, with a nameplate, as a meter bridge or as planks) that fill a toolbar of any height up to 150.
-+ Changed: Settings that don't apply with the choices above them are now hidden instead of greyed out, with a line saying how many. The mixer's settings per strip width stay greyed, as they only wait for a wider or narrower mixer.
-+ Fixed: On the Black plate the bevel and grooves were drawn as on silver, as light lines; they are now as quiet as on silver.
++ Added: Basic, a fourth Style beside Standard, Silver and Black (Track panel and Mixer pages, each on its own). No display windows: the names sit straight on the panel, in ink that follows the panel and track colour, the small keys are see-through symbols, the lists have see-through slots, and the meters sit in a plain well. Knobs and R / M / S get a flat style of their own.
++ Added: Basic Dark and Basic Light presets (Presets page): Basic on both panels, the new Graphite accent, Neutral colours, filled track numbers, dot handles and the layout keys.
++ Added: Graphite accent colour.
++ Added: Layout button in the track panel and layout key in the mixer (Track panel and Mixer pages). It shows the track's layout (A, B, C); a click goes to the next, selected tracks go along. Also as an action: TK_Theme_Cycle_Layout.
++ Added: Master side column (Mixer page, Master: Off / Left / Right). The master strip becomes one narrow column (keys, meter, pan and width, the fader, M and S) and the FX list with embedded plugins gets all the rest, at full height. Made for a master docked on its own beside the arrange. In every style, plates included. Requested by Ezaky.
++ Added: Master list columns (Mixer page, Master: Auto / 1 to 4), so a wide master no longer splits its FX list into two columns. Requested by Ezaky.
++ Added: Pan and width as knobs in the mixer without a plate (Mixer page, per layout, and for the master), and a switch to hide the master's pan.
++ Added: Lying meter Long / Short (Track panel page, with Meter in the plate). Short is 40 pixels shorter, so the track name keeps more room on narrow panels; the lamps get a short strip of 6. Requested by Ezaky.
++ Added: Unlit segments on / off (General page, Meters). Off shows only what lights up, on the meter's background: every meter type, standing and lying, in every style.
++ Added: Dark display glass in the Light look (General page, Displays, with a plate), as in the Dark look.
++ Added: Wooden armrest under the mixer strips (Mixer page, with a plate: Off / Walnut / Teak).
++ Added: Window margins for the mixer's display windows (Mixer page).
++ Added: Volume line and pan line in the track colour, or neutral (General page).
++ Changed: The colour settings (Warm, Cool, Neutral) now set a fixed hue instead of shifting red and blue, so they show clearly in the arrange in both looks.
++ Changed: The small keys in the track panel's first row and the mixer's key column sit at one even pitch.
++ Changed: The narrow mixer strip has the plate's layout in Standard and Basic too: pan and width above the meter and fader, and a taller meter. Its four height sliders are gone.
++ Changed: The settings window is reorganised. Plate is now called Style; the transport has a page of its own; envelope lanes moved to the Track panel page; hints are one line, with the details in the Guide; settings that reload the theme carry a round arrow.
++ Changed: The settings window opens straight away, with a loading screen while it reads your choices.
++ Changed: The dimmed labels on the transport are easier to read in both looks, also with the display skins.
++ Changed: A bigger "i" on the mixer's menu key.
++ Fixed: In the Light look a black line ran down the middle of every meter.
++ Fixed: The master's layout key could disappear when its key column was short.
 ]]></changelog>
     </version>
     </reapack>

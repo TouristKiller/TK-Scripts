@@ -29,7 +29,7 @@ lists, menus and borders. That takes effect after a restart.
   along from the Look page.
 - **Day and night:** Light by day and Dark by night, at times you set on the Look page. It
   waits while REAPER plays or records, and a look you choose yourself stays until the next switch.
-- **Accent colours:** Blue, Orange, Violet and Red, for selections, FX buttons, highlights, meters
+- **Accent colours:** Blue, Orange, Violet, Red and Graphite, for selections, FX buttons, highlights, meters
   and the theme's icons.
 - **Display:** Ice, Amber, Green, Red or Blue: dark glass on the transport with everything on it
   in one colour, in both looks. Standard follows the look and its accent colour.
@@ -37,12 +37,17 @@ lists, menus and borders. That takes effect after a restart.
 - **FX and send lists:** plain, or a subtle grid above the mixer's strips, and sends in the colour of their destination track.
 - **Transport plate:** Black or Silver: brushed metal behind the whole transport, with screws and
   a maker's plate (TK-S73, Red Devil, Blue Angel, Black Metal or Quicksilver), on the General page. The rate can sit on it as a knob.
+- **Basic:** a flat style for the track panel and the mixer, each on its own: no display windows,
+  names straight on the panel, see-through symbol keys and list slots, meters in a plain well.
+  Basic Dark and Basic Light on the Presets page set the whole look in one click.
 - **Track panel and mixer plates:** Silver or Black puts the tracks, the master and the mixer's
   strips on brushed metal in a rack: Phillips screws, milled grooves, glass windows, and R, M, S,
   knobs and faders as hardware with tick marks. Folders hang on rack rails with mounting holes,
   envelope lanes get the hardware arm and knob, and the display windows can be lit faintly from below.
+  In the Light look the plates can have the dark display windows of the Dark look.
 - **Wood:** walnut or teak rails beside the plates, on the left and optionally on the right,
-  with the track number, folder buttons and track colour on them; the master too.
+  with the track number, folder buttons and track colour on them; the master too. The mixer
+  can have a wooden armrest under its strips.
 - **Darkness:** Black takes Dark's arrange, lanes, lists, mixer, MIDI editor and dockers close to black.
 - **Red Devil:** one click on the Presets page: Dark in red and near black, with the Red Devil on a black plate.
 - **Blue Angel:** one click on the Presets page: Dark in blue, with a blue display and the Blue Angel on a silver plate.
@@ -52,7 +57,8 @@ lists, menus and borders. That takes effect after a restart.
   background and lists. Inverted gives Dark a light arrange and Light a dark one.
 - **Meters:** six types with colour steps, and segments in three sizes. The steps assume
   REAPER's standard meter range of -60 to +6 dB. The meter lying in a track panel plate has a
-  choice of its own: the same type, or round lamps as on old hi-fi gear.
+  choice of its own: the same type, or round lamps as on old hi-fi gear, Long or Short. Unlit
+  segments can be switched off for every meter.
 - **Transport:** up to two windows of extra buttons, left and right of the
   transport. Each button can run an action of your choice. When the transport
   gets too narrow, they move to a second row.
@@ -71,8 +77,10 @@ lists, menus and borders. That takes effect after a restart.
   same windows, with its hardware outputs in the IO column, or can be one big meter.
 - **Layouts:** A, B and C can each leave out or move parts of the track panel and mixer
   strip. Name only turns a track into a divider, and a track's height can be set and locked.
-- **Mixer:** five fader handles to choose from by their picture, handles for pan and width, a sidebar with 1 to 4 columns, and settings for the
-  normal, intermediate and narrow strip.
+  A layout button in the track panel and the mixer shows the layout and goes to the next.
+- **Mixer:** five fader handles to choose from by their picture, handles for pan and width or knobs, a sidebar with 1 to 4 columns, and settings for the
+  normal, intermediate and narrow strip. The master can be a narrow side column beside its FX
+  list, for a master docked on its own with embedded plugins.
 - **Envelope lanes, media items, MIDI editor, inline MIDI editor:** all redrawn.
 - **Settings:** every option on one page per area, a colour editor with a reset per colour,
   kept per look, colour processing for the whole theme, presets that remember their look, a
