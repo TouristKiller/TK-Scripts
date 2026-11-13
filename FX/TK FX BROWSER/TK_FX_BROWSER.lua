@@ -1,8 +1,12 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.28
+-- @version 3.2.29
 -- @changelog:
 --[[
+    v3.2.29:
+        + Screenshots: A capture no longer waits a fixed time before taking the picture. After the Screenshot Delay (now the minimum wait) the plugin window is checked every quarter second, and the screenshot is taken once the window has really been drawn - so fast plugins are done sooner, and slow instruments that need a few seconds to show their interface get up to 8 seconds instead of being captured as an empty window. Reported on the forum.
+        + Fix: Capture Missing Screenshots (and the other folder screenshot captures) reported every plugin as done, for example "5/5", even when no screenshot was saved. The closing message now counts only the screenshots that were really saved, and lists the plugins that got none with the reason: window stayed blank, no plugin window, plugin hidden, or skipped after an earlier crash. Reported on the forum.
+        + Fix: Make Screenshot (OpenGL/DX) wrote "saved" in the log and lowered the missing-screenshot count even when its picture came out blank and nothing was saved.
     v3.2.28:
         + Main window: The meter can stand upright, as in REAPER's mixer (Settings > View > Main Window Sections > Vertical Meter, or right-click the meter). L and R bars in a dark meter well with the dB scale between them, the unlit part of each colour zone dimmed and an LED look, the held peak in a readout above each bar (red when it went over 0 dB) and a line at the held level. R, L and L-S/LRA show their two values as two bars the same way. Pan, volume and width then sit beside the meter instead of in the Buttons section, so the meter gets that height: as knobs in one column (pan on top - L and R side by side in dual-pan mode - then width, and the larger volume knob at the bottom) or, with Knobs off, as a channel strip: slim pan and width sliders on top (center, 25%L, 100%W as in REAPER; drag or wheel, Shift for fine steps, double-click to reset, right-click for the pan mode menu or 100% width) and a volume fader right beside the meter, with a mixer taper that gives more travel around 0 dB, a 0 dB mark and its value in a readout underneath (drag or wheel, Shift for fine steps, double-click or right-click 0 dB, double right-click -12 dB). Meter Height sets how tall it is; you can also drag the grip at the right end of the METER header (double-click it for the default height). The meter modes P, R, L and L-S/LRA are a segmented switch above it, meter and controls are centred as one block, and a thin line in the track's colour runs under it. Pan and width read the same everywhere now, also on the knobs in the Buttons section: center, 25%L, 100%W. Click the meter to reset the held values. When the meter section is folded in, pan, volume and width go back to the Buttons section. Requested by Ezaky
         + Main window: The horizontal meter has the same look as the vertical one: the segmented mode switch, both bars stacked in one dark well with the dB scale between them and their names on the left, dimmed colour zones with an LED look, the held values in readouts on the right (red after going over 0 dB) and the track colour line underneath. R, L and L-S/LRA name their bars M, I, S and LRA; the hover tooltip tells what is measured and the current values. Click the meter to reset the held values.
@@ -9542,9 +9546,41 @@ function IsBlankCapture(bmp, w, h)
     return true
 end
 
+-- True once the plugin's window exists and shows more than one flat colour,
+-- read from the window or, for GPU-drawn interfaces, from the screen. There
+-- is no way to ask a plugin whether its interface is drawn; this is the
+-- closest sign. Used to poll instead of waiting a fixed time.
+function IsPluginWindowDrawn(fx_index)
+    local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+    if not hwnd then return false end
+    if IsOSX() or not r.JS_LICE_GetPixel then return true end
+    local _, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
+    local w, h = right - left, bottom - top
+    if w < 8 or h < 8 then return false end
+    local bmp = r.JS_LICE_CreateBitmap(true, w, h)
+    local bmpDC = r.JS_LICE_GetDC(bmp)
+    local srcDC = r.JS_GDI_GetClientDC(hwnd)
+    r.JS_GDI_Blit(bmpDC, 0, 0, srcDC, 0, 0, w, h)
+    r.JS_GDI_ReleaseDC(hwnd, srcDC)
+    local blank = IsBlankCapture(bmp, w, h)
+    if blank and r.JS_GDI_GetScreenDC then
+        local screenDC = r.JS_GDI_GetScreenDC()
+        if screenDC then
+            r.JS_GDI_Blit(bmpDC, 0, 0, screenDC, left, top, w, h)
+            r.JS_GDI_ReleaseDC(nil, screenDC)
+            blank = IsBlankCapture(bmp, w, h)
+        end
+    end
+    r.JS_LICE_DestroyBitmap(bmp)
+    return not blank
+end
+
+-- Why a capture failed is left in CAPTURE_FAIL_REASON (global: this file has
+-- few top-level local slots left).
 function CaptureScreenshot(plugin_name, fx_index)
     local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
     local captured = false
+    CAPTURE_FAIL_REASON = nil
     if hwnd then
         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
         local filename
@@ -9607,6 +9643,7 @@ function CaptureScreenshot(plugin_name, fx_index)
         end
         local file = not blank_capture and io.open(filename, "rb") or nil
         if blank_capture then
+            CAPTURE_FAIL_REASON = "window stayed blank"
             print("Screenshot came out blank, nothing saved: " .. plugin_name)
         elseif file then
             local size = file:seek("end")
@@ -9615,12 +9652,15 @@ function CaptureScreenshot(plugin_name, fx_index)
                 print("Screenshot Saved " .. filename .. " (Grootte: " .. size .. " bytes)")
                 captured = true
             else
+                CAPTURE_FAIL_REASON = "empty file"
                 print("Screenshot File is Empty: " .. filename)
             end
         else
+            CAPTURE_FAIL_REASON = "could not write file"
             print("Cant make screenshot: " .. filename)
         end
     else
+        CAPTURE_FAIL_REASON = "no plugin window"
         print("No Plugin Window " .. plugin_name)
     end
     r.TrackFX_Show(TRACK, fx_index, 2)
@@ -9684,8 +9724,12 @@ function CaptureScreenshotScreen(plugin_name, fx_index)
                 r.JS_LICE_DestroyBitmap(srcBmp)
             end
         end
-        log_to_file("Screenshot (Screen Capture) saved: " .. plugin_name)
-        if MissingShots then MissingShots.forget(plugin_name) end
+        if r.file_exists(filename) then
+            log_to_file("Screenshot (Screen Capture) saved: " .. plugin_name)
+            if MissingShots then MissingShots.forget(plugin_name) end
+        else
+            print("Screenshot (OpenGL/DX) came out blank, nothing saved: " .. plugin_name)
+        end
     else
         log_to_file("No Plugin Window for screen capture: " .. plugin_name)
     end
@@ -10147,26 +10191,28 @@ function GetNextPlugin(current_plugin)
     return "None - This is the last plugin"
 end
 
+-- callback(ok, reason): ok is true only when a screenshot file was written;
+-- reason says why not (shown in the folder capture summary).
 function MakeScreenshot(plugin_name, callback, is_individual)
     local original_callback = callback
-    callback = function()
+    callback = function(ok, reason)
         IS_CAPTURING_SCREENSHOT = false
-        if original_callback then original_callback() end
+        if original_callback then original_callback(ok == true, reason) end
     end
 
     if not plugin_name then
         log_to_file("Error: Attempted to make screenshot with nil plugin name")
-        if callback then callback() end
+        if callback then callback(false, "no plugin name") end
         return false
     end
-    
+
     log_to_file("Starting screenshot process for: " .. plugin_name .. " at " .. os.date("%Y-%m-%d %H:%M:%S"))
-  
-    
+
+
     log_to_file("Next Up: " .. GetNextPlugin(plugin_name))
     if CheckPluginCrashHistory(plugin_name) then
         log_to_file("Skipping previously crashed plugin: " .. plugin_name)
-        if callback then callback() end
+        if callback then callback(false, "skipped: crashed during an earlier capture") end
         return false
     end
 
@@ -10175,7 +10221,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
     local success = pcall(function()
         if not IsPluginVisible(plugin_name) then
             IS_CAPTURING_SCREENSHOT = false
-            if callback then callback() end
+            if callback then callback(false, "skipped: plugin is hidden") end
             return
         end
 
@@ -10230,36 +10276,64 @@ function MakeScreenshot(plugin_name, callback, is_individual)
             local fx_index = AddFXToTrack(TRACK, plugin_name)
             r.TrackFX_Show(TRACK, fx_index, 3)
            
-            Wait(function()
-
-                if IsARAPlugin(TRACK, fx_index) then
-                    CaptureARAScreenshot(TRACK, fx_index, plugin_name)
-                    log_to_file("Screenshot Success: " .. plugin_name .. " (ARA)")
-                    if MissingShots then MissingShots.forget(plugin_name) end
-                else
-                    local captured = CaptureScreenshot(plugin_name, fx_index)
-                    if captured then
-                        log_to_file("Screenshot Success: " .. plugin_name)
-                        if MissingShots then MissingShots.forget(plugin_name) end
-                    else
-                        log_to_file("Screenshot Failed: " .. plugin_name)
-                    end
-                end
+            local wait_start = r.time_precise()
+            local function finish(ok, reason)
                 if RequestClearScreenshotCache then RequestClearScreenshotCache() end
                 r.TrackFX_Show(TRACK, fx_index, 2)
                 r.TrackFX_Delete(TRACK, fx_index)
                 ClearPendingCapture()
-                EnsurePluginRemoved(fx_index, callback)
-            end)
+                EnsurePluginRemoved(fx_index, function() callback(ok, reason) end)
+            end
+            -- Screenshot Delay is the minimum wait. After that the window is
+            -- checked every 0.25 s until it shows more than one flat colour,
+            -- then must still look drawn at the next check (0.25 s later),
+            -- so a half-drawn interface can
+            -- finish; slow instruments get up to 8 s (or twice the delay).
+            local min_wait = config.screenshot_delay or 0.5
+            local max_wait = math.max(8.0, min_wait * 2)
+            local next_poll, drawn_since = 0, nil
+            local function capture_now()
+                if CaptureScreenshot(plugin_name, fx_index) then
+                    log_to_file("Screenshot Success: " .. plugin_name .. string.format(" (%.1f s)", r.time_precise() - wait_start))
+                    if MissingShots then MissingShots.forget(plugin_name) end
+                    finish(true)
+                else
+                    log_to_file("Screenshot Failed: " .. plugin_name .. " (" .. tostring(CAPTURE_FAIL_REASON) .. ")")
+                    finish(false, CAPTURE_FAIL_REASON or "capture failed")
+                end
+            end
+            local function poll()
+                local now = r.time_precise()
+                local elapsed = now - wait_start
+                if elapsed < min_wait or now < next_poll then r.defer(poll) return end
+                if IsARAPlugin(TRACK, fx_index) then
+                    CaptureARAScreenshot(TRACK, fx_index, plugin_name)
+                    log_to_file("Screenshot Success: " .. plugin_name .. " (ARA)")
+                    if MissingShots then MissingShots.forget(plugin_name) end
+                    finish(true)
+                    return
+                end
+                if IsPluginWindowDrawn(fx_index) then
+                    drawn_since = drawn_since or now
+                    if now - drawn_since >= 0.2 then capture_now() return end
+                else
+                    drawn_since = nil
+                end
+                -- Out of time: one last try, which reports why it failed.
+                if elapsed >= max_wait then capture_now() return end
+                next_poll = now + 0.25
+                r.defer(poll)
+            end
+            r.defer(poll)
         else
-            if callback then callback() end
+            if callback then callback(false, "skipped: x86 bridged plugin") end
         end
     end)
 
     if not success then
         log_to_file("CRASH: " .. plugin_name .. " at " .. os.date("%Y-%m-%d %H:%M:%S"))
         ClearPendingCapture()
-        if callback then callback() end
+        if callback then callback(false, "error during capture") end
         return false
     end
 
@@ -10492,7 +10566,7 @@ end
 
 function StartSingleScreenshotCapture(plugin_name, cb, force)
     if not plugin_name or plugin_name == '' then if cb then cb(false) end return end
-    if IsX86Bridged(plugin_name) and config.include_x86_bridged == false then if cb then cb(false) end return end
+    if IsX86Bridged(plugin_name) and config.include_x86_bridged == false then if cb then cb(false, "skipped: x86 bridged plugin") end return end
     if not force then
         if config.screenshot_size_option ~= 1 and ScreenshotExists and ScreenshotExists(plugin_name, config.screenshot_size_option) then
             if cb then cb(true) end
@@ -10500,13 +10574,13 @@ function StartSingleScreenshotCapture(plugin_name, cb, force)
         end
     end
     local ok, err = pcall(function()
-        MakeScreenshot(plugin_name, function()
-            if cb then cb(true) end
+        MakeScreenshot(plugin_name, function(shot_ok, reason)
+            if cb then cb(shot_ok, reason) end
         end, true)
     end)
     if not ok then
         log_to_file("Single screenshot crash/err: " .. tostring(err))
-        if cb then cb(false) end
+        if cb then cb(false, "error during capture") end
     end
 end
 
@@ -10731,19 +10805,35 @@ function StartFolderScreenshots(folder_name, explicit_plugin_list)
     bulk_screenshot_progress = 0
 
     local idx = 1
+    local failed = {}
     local function nextShot()
         if idx > #plugins then
             bulk_screenshot_progress = 0
-            reaper.ShowMessageBox("Screenshots map klaar: " .. folder_name .. " (" .. loaded_fx_count .. "/" .. total_fx_count .. ")", "Map screenshots", 0)
+            -- loaded_fx_count counts saved screenshots only, so a folder
+            -- where every capture failed no longer reports n/n.
+            local msg = "Screenshots saved for " .. folder_name .. ": " .. loaded_fx_count .. " of " .. total_fx_count
+            if #failed > 0 then
+                msg = msg .. "\n\nNo screenshot for:"
+                for i, f in ipairs(failed) do
+                    if i > 15 then msg = msg .. "\n... and " .. (#failed - 15) .. " more (see the log)" break end
+                    msg = msg .. "\n- " .. GetDisplayPluginName(f.name) .. " (" .. f.reason .. ")"
+                end
+                msg = msg .. "\n\nA blank window usually means the plugin needs longer to draw:"
+                    .. "\nraise Screenshot Delay in Settings, or use the OpenGL/DX capture"
+                    .. "\nfrom the plugin's right-click menu."
+            end
+            reaper.ShowMessageBox(msg, "Folder screenshots", 0)
             return
         end
         local plugin_name = plugins[idx]
         idx = idx + 1
-        StartSingleScreenshotCapture(plugin_name, function(ok)
+        StartSingleScreenshotCapture(plugin_name, function(ok, reason)
             if ok then
                 loaded_fx_count = loaded_fx_count + 1
-                bulk_screenshot_progress = loaded_fx_count / total_fx_count
+            else
+                failed[#failed + 1] = { name = plugin_name, reason = reason or "capture failed" }
             end
+            bulk_screenshot_progress = (idx - 1) / total_fx_count
             r.defer(nextShot)
         end)
     end
