@@ -1,9 +1,9 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.5
+-- @version 1.0.6
 -- @changelog:
--- v1.0.5
---   + Idea Vault: Fixed Swap for tracks scattering the items of an idea with more than one item on a track when the preview audio sat later in the song than where the idea was captured. REAPER keeps a track's items sorted by position, and moving them one by one let an item jump past the others, so some were moved twice and others not at all. The same mistake could misplace items when Load into project fitted a multi-item idea to a slower project tempo. Gluing items before capturing is no longer needed as a workaround. Reported by sridhar
+-- v1.0.6
+--   + Theme: New "TK Theme" preset. It takes the colours of TK Theme (0.9.41 or newer) and follows them live when you change its look, accent colour or colour setting, with neutral backgrounds in the Light look. Without TK Theme it falls back to the REAPER theme.
 
 local r = reaper
 
@@ -3104,6 +3104,8 @@ local function draw_frame()
   if (app.settings.theme_preset or "Graphite") ~= Theme.current_preset then
     app.settings.theme_preset = Theme.set_preset(app.settings.theme_preset or "Graphite", app.settings.custom_themes)
   end
+  -- the TK Theme preset follows TK Theme's palette when its look or colours change
+  Theme.follow_tk_theme()
   local scaled_font_pushed = push_scaled_font()
   local theme_stack = Theme.push(ctx, app.settings.child_bg_alpha or 1.0)
   local workspace_style_vars = push_workspace_style()

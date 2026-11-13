@@ -143,6 +143,39 @@ local function theme_rgb(key, fallback)
 end
 
 local UI = {}
+
+-- The palette for the other TK scripts (TK Workbench's "TK Theme" preset, and more to come):
+-- this window's own colours by role, in Data/TK Theme/palette.txt, written when they change,
+-- with a counter in an ExtState that they can watch cheaply. Only for TK Theme's looks.
+local PALETTE_SECTION, palette_written = "TK Theme Palette", nil
+local function publish_palette()
+    local theme = (r.GetLastColorThemeFile() or ""):match("([^\\/]+)%.ReaperTheme") or ""
+    if not theme:find("TK Theme", 1, true) then return end
+    local hex = function(c) return string.format("#%06x", c & 0xFFFFFF) end
+    local p = UI.panel
+    local lum = (((p >> 16) & 255) * 299 + ((p >> 8) & 255) * 587 + (p & 255) * 114) / 1000
+    local lines = { "theme=" .. theme, "mode=" .. (lum > 128 and "light" or "dark") }
+    for _, k in ipairs({ "panel", "base", "raised", "glass", "ink", "text", "dim", "soft", "accent", "warn" }) do
+        lines[#lines + 1] = k .. "=" .. hex(UI[k])
+    end
+    lines[#lines + 1] = "danger=" .. hex(theme_rgb("col_vuclip", 0xFF3B6B))
+    local text = table.concat(lines, "\n") .. "\n"
+    local dir = r.GetResourcePath() .. "/Data/TK Theme"
+    if palette_written == nil then
+        local f = io.open(dir .. "/palette.txt", "rb")
+        palette_written = f and f:read("a") or ""
+        if f then f:close() end
+    end
+    if text == palette_written then return end
+    r.RecursiveCreateDirectory(dir, 0)
+    local f = io.open(dir .. "/palette.txt", "wb")
+    if not f then return end
+    f:write(text)
+    f:close()
+    palette_written = text
+    r.SetExtState(PALETTE_SECTION, "rev", tostring(r.time_precise()), false)
+end
+
 local function refresh_palette()
     UI.panel = theme_rgb("col_main_bg2", 0x252930)
     UI.base = theme_rgb("col_tracklistbg", 0x16191E)
@@ -154,6 +187,7 @@ local function refresh_palette()
     UI.accent = theme_rgb("genlist_hilite", 0x36B9FF)
     UI.soft = mix(UI.dim, UI.ink, 0.45)
     UI.warn = 0xFFB22E
+    publish_palette()
 end
 
 local function push_theme()

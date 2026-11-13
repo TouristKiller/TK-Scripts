@@ -3,6 +3,9 @@ local UIScale = require("core.ui_scale")
 local M = {}
 
 M.reaper_preset_name = "REAPER Theme"
+-- follows TK Theme's own palette (Data/TK Theme/palette.txt, written by its settings window)
+M.tk_preset_name = "TK Theme"
+M.tk_palette_section = "TK Theme Palette"
 
 M.reaper_preset_modes = {
   [M.reaper_preset_name] = "balanced",
@@ -14,6 +17,7 @@ M.preset_order = {
   M.reaper_preset_name,
   "REAPER Theme - Panel",
   "REAPER Theme - Color",
+  "TK Theme",
   "Graphite",
   "Light",
   "Blue",
@@ -333,11 +337,92 @@ end
 
 M.colors = copy_colors(M.presets[M.current_preset])
 
+-- TK Theme's palette: its settings window's colours by role (see TK_Theme_Settings.lua,
+-- publish_palette), laid out as that window draws itself. Without the file: the REAPER theme.
+local function read_tk_palette()
+  local f = io.open(r.GetResourcePath() .. "/Data/TK Theme/palette.txt", "rb")
+  if not f then return nil end
+  local pal = {}
+  local text = f:read("a")
+  f:close()
+  for key, hex in text:gmatch("([%w_]+)=#(%x%x%x%x%x%x)") do
+    pal[key] = tonumber(hex, 16) * 0x100 + 0xFF
+  end
+  pal.light = text:match("mode=(%a+)") == "light"
+  if not (pal.panel and pal.base and pal.raised and pal.glass and pal.ink and pal.text and pal.accent) then return nil end
+  return pal
+end
+
+local function make_tk_colors()
+  local p = read_tk_palette()
+  if not p then return make_reaper_colors("balanced") end
+  local soft = p.soft or blend(p.dim or p.text, p.ink, 0.45)
+  if p.light then
+    -- Light: neutral and a step apart, as the theme's own windows. Base (the track list's
+    -- background) follows the colour setting (Warm, Cool), which as a whole panel reads
+    -- as one tinted slab; the accent carries the colour instead
+    local card = blend(p.panel, 0xFFFFFFFF, 0.45)
+    return copy_colors({
+      window_bg = p.panel,
+      child_bg = card,
+      popup_bg = card,
+      frame_bg = p.glass,
+      frame_hover = blend(p.glass, p.accent, 0.08),
+      header = blend(card, p.accent, 0.18),
+      header_hover = blend(card, p.accent, 0.28),
+      separator = blend(p.panel, p.text, 0.22),
+      border = blend(p.panel, p.text, 0.28),
+      text = p.text,
+      text_dim = soft,
+      badge_text = luminance(p.accent) > 0.55 and 0x000000DD or 0xFFFFFFFF,
+      accent = p.accent,
+      accent_soft = blend(p.accent, card, 0.65),
+      warning = p.warn or 0xB86E00FF,
+      danger = p.danger or 0xC4414BFF
+    })
+  end
+  return copy_colors({
+    window_bg = p.panel,
+    child_bg = p.base,
+    popup_bg = p.base,
+    frame_bg = p.glass,
+    frame_hover = blend(p.glass, p.ink, 0.08),
+    header = p.raised,
+    header_hover = blend(p.raised, p.ink, 0.1),
+    separator = p.raised,
+    border = p.raised,
+    text = p.text,
+    text_dim = soft,
+    badge_text = luminance(p.accent) > 0.55 and 0x000000DD or 0xFFFFFFFF,
+    accent = p.accent,
+    accent_soft = blend(p.accent, p.panel, 0.6),
+    warning = p.warn or 0xFFB22EFF,
+    danger = p.danger or 0xFF3B6BFF
+  })
+end
+
+-- with the TK Theme preset: its colours again once TK Theme's palette changed (a new look,
+-- accent or colour setting). Cheap: one ExtState read. Returns true when it changed.
+function M.follow_tk_theme()
+  if M.current_preset ~= M.tk_preset_name then return false end
+  local rev = r.GetExtState(M.tk_palette_section, "rev")
+  if rev == M.tk_palette_rev then return false end
+  M.tk_palette_rev = rev
+  M.colors = make_tk_colors()
+  return true
+end
+
 function M.build_reaper_theme(name)
   return make_reaper_colors(M.reaper_preset_modes[name or M.reaper_preset_name] or "balanced")
 end
 
 function M.set_preset(name, custom_themes)
+  if name == M.tk_preset_name then
+    M.current_preset = name
+    M.tk_palette_rev = r.GetExtState(M.tk_palette_section, "rev")
+    M.colors = make_tk_colors()
+    return M.current_preset
+  end
   local reaper_mode = M.reaper_preset_modes[name]
   if reaper_mode then
     M.current_preset = name
@@ -366,6 +451,7 @@ end
 
 function M.is_reserved_preset_name(name)
   name = tostring(name or ""):lower()
+  if name == M.tk_preset_name:lower() then return true end
   for preset_name in pairs(M.reaper_preset_modes or {}) do
     if preset_name:lower() == name then return true end
   end
