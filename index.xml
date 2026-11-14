@@ -646,7 +646,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.30" author="TouristKiller" time="2026-11-14T00:02:54Z">
+    <version name="3.2.31" author="TouristKiller" time="2026-11-14T12:45:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -663,9 +663,10 @@
     <source main="main" file="TK_Notes_Toggle_focus.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Notes_Toggle_focus.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
-    v3.2.30:
-        + Appearance: Follow TK Theme (Settings, next to Reset Theme). The browser takes the colours of TK Theme (0.9.41 or newer) and follows them live when you change its look, accent colour or colour setting: backgrounds, text, buttons, fields, tabs, sliders and the plugin names under the screenshots. In the Light look it keeps neutral backgrounds. Switched off, your own colours come back.
-        + Mini 1.2.26: Appearance: Follow TK Theme (Settings, next to Reset Theme), as in TK FX BROWSER 3.2.30: the Mini takes the colours of TK Theme (0.9.41 or newer) and follows them live. The window frame becomes a soft tone of the theme instead of your border grey, and the plugin names under the screenshots stay readable. Switched off, your own colours come back.
+                v3.2.31:
+                + Screenshots: x86 plugins (and other bridged plugins whose interface is not embedded in REAPER) can be captured again. They open their own window in the bridge process, which REAPER does not report, so every capture ended with "no plugin window". The browser now finds that window itself and brings it to the front before taking the picture. This also applies to Make Screenshot (OpenGL/DX). Reported by Makkie65.
+                + Screenshots: Plain interfaces with large flat areas and a few thin controls (ReaSynDr, for example) were taken for an empty window and not saved. The check now looks at many more points of the window before it calls a capture blank. Reported by Makkie65.
+                + TK FX BROWSER Mini 1.2.27: the same screenshot fixes.
 ]]></changelog>
     </version>
     </reapack>

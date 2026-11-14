@@ -1,8 +1,11 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.26
+-- @version 1.2.27
 -- @changelog:
 --[[ 
+    v1.2.27:
+        + Screenshots: x86 plugins (and other bridged plugins whose interface is not embedded in REAPER) can be captured again. They open their own window in the bridge process, which REAPER does not report, so every capture ended with "no plugin window". The browser now finds that window itself and brings it to the front before taking the picture. This also applies to Make Screenshot (OpenGL/DX). Reported by Makkie65.
+        + Screenshots: Plain interfaces with large flat areas and a few thin controls (ReaSynDr, for example) were taken for an empty window and not saved. The check now looks at many more points of the window before it calls a capture blank. Reported by Makkie65.
     v1.2.26:
         + Appearance: Follow TK Theme (Settings, next to Reset Theme), as in TK FX BROWSER 3.2.30: the Mini takes the colours of TK Theme (0.9.41 or newer) and follows them live. The window frame becomes a soft tone of the theme instead of your border grey, and the plugin names under the screenshots stay readable. Switched off, your own colours come back.
     v1.2.25:
@@ -9398,25 +9401,78 @@ end
 -- A capture of a window whose plugin draws with OpenGL or DirectX, or has
 -- not drawn its UI yet, comes back as one flat colour. Saved, that blank file
 -- is then shown for the plugin for good, so the capture functions check a
--- 7x7 grid of pixels first and keep the old file instead.
+-- grid of pixels first and keep the old file instead. The grid is 24x24: a
+-- 7x7 grid could land entirely on the flat background of a plain interface
+-- with a few thin controls (ReaSynDr) and call it blank.
 function IsBlankCapture(bmp, w, h)
     if not (r.JS_LICE_GetPixel and bmp and w and h and w > 0 and h > 0) then return false end
     local first
-    for gy = 1, 7 do
-        for gx = 1, 7 do
-            local color = r.JS_LICE_GetPixel(bmp, math.floor(w * gx / 8), math.floor(h * gy / 8))
+    for gy = 1, 24 do
+        for gx = 1, 24 do
+            local color = r.JS_LICE_GetPixel(bmp, math.floor(w * (gx - 0.5) / 24), math.floor(h * (gy - 0.5) / 24))
             if first == nil then first = color elseif color ~= first then return false end
         end
     end
     return true
 end
 
+-- Bridged plugins (x86, or set to run in a separate process) whose interface
+-- is not embedded open their own window in the bridge process, and
+-- TrackFX_GetFloatingWindow returns nothing for them. ShotWin.snapshot() is
+-- taken just before a plugin is added for a screenshot; ShotWin.find() then
+-- falls back to a top-level window that appeared since and carries the
+-- plugin's name in its title (or, failing that, the only new window).
+-- Global table on purpose: this file has few top-level local slots left.
+-- Same code as in TK_FX_BROWSER Mini.lua; keep the two copies the same.
+ShotWin = { before = nil }
+
+function ShotWin.list()
+    local out = {}
+    if not r.JS_Window_ListAllTop then return out end
+    local _, list = r.JS_Window_ListAllTop()
+    for addr in (list or ""):gmatch("[^,]+") do
+        local hwnd = r.JS_Window_HandleFromAddress(tonumber(addr))
+        if hwnd then out[#out + 1] = hwnd end
+    end
+    return out
+end
+
+function ShotWin.snapshot()
+    ShotWin.before = {}
+    for _, hwnd in ipairs(ShotWin.list()) do
+        ShotWin.before[r.JS_Window_AddressFromHandle(hwnd)] = true
+    end
+end
+
+function ShotWin.find(fx_index, plugin_name)
+    local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+    if hwnd or not ShotWin.before or IsOSX() then return hwnd end
+    local core = (plugin_name or ""):gsub("^[%w]+:%s*", ""):gsub("%s*%(.*$", ""):lower()
+    local main_hwnd = r.GetMainHwnd()
+    local found, only, count = nil, nil, 0
+    for _, w in ipairs(ShotWin.list()) do
+        if w ~= main_hwnd and not ShotWin.before[r.JS_Window_AddressFromHandle(w)] and r.JS_Window_IsVisible(w) then
+            local title = (r.JS_Window_GetTitle(w) or "")
+            local _, wl, wt, wr, wb = r.JS_Window_GetClientRect(w)
+            if not title:match("^TK FX BROWSER") and (wr - wl) >= 64 and (wb - wt) >= 32 then
+                if core ~= "" and title:lower():find(core, 1, true) then found = w break end
+                only, count = w, count + 1
+            end
+        end
+    end
+    found = found or (count == 1 and only) or nil
+    -- A window of another process can open behind REAPER, and the screen
+    -- read would then capture REAPER instead: bring it to the front.
+    if found and r.JS_Window_SetForeground then r.JS_Window_SetForeground(found) end
+    return found
+end
+
 -- True once the plugin's window exists and shows more than one flat colour,
 -- read from the window or, for GPU-drawn interfaces, from the screen. There
 -- is no way to ask a plugin whether its interface is drawn; this is the
 -- closest sign. Used to poll instead of waiting a fixed time.
-function IsPluginWindowDrawn(fx_index)
-    local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+function IsPluginWindowDrawn(fx_index, plugin_name)
+    local hwnd = ShotWin.find(fx_index, plugin_name)
     if not hwnd then return false end
     if IsOSX() or not r.JS_LICE_GetPixel then return true end
     local _, left, top, right, bottom = r.JS_Window_GetClientRect(hwnd)
@@ -9443,7 +9499,7 @@ end
 -- Why a capture failed is left in CAPTURE_FAIL_REASON (global: this file has
 -- few top-level local slots left).
 function CaptureScreenshot(plugin_name, fx_index)
-    local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+    local hwnd = ShotWin.find(fx_index, plugin_name)
     local captured = false
     CAPTURE_FAIL_REASON = nil
     if hwnd then
@@ -9534,7 +9590,7 @@ function CaptureScreenshot(plugin_name, fx_index)
 end
 
 function CaptureScreenshotScreen(plugin_name, fx_index)
-    local hwnd = r.TrackFX_GetFloatingWindow(TRACK, fx_index)
+    local hwnd = ShotWin.find(fx_index, plugin_name)
     if hwnd then
         local safe_name = plugin_name:gsub("[^%w%s-]", "_")
         local filename
@@ -9605,6 +9661,7 @@ end
 function StartScreenCaptureScreenshot(plugin_name, callback)
     if not plugin_name or plugin_name == '' then if callback then callback() end return end
     IS_CAPTURING_SCREENSHOT = true
+    ShotWin.snapshot()
     local fx_index = AddFXToTrack(TRACK, plugin_name)
     r.TrackFX_Show(TRACK, fx_index, 3)
     local start_time = r.time_precise()
@@ -9793,6 +9850,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
 
         if not IsX86Bridged(plugin_name) or config.include_x86_bridged then
             WritePendingCapture(plugin_name)
+            ShotWin.snapshot()
             local fx_index = AddFXToTrack(TRACK, plugin_name)
             r.TrackFX_Show(TRACK, fx_index, 3)
            
@@ -9833,7 +9891,7 @@ function MakeScreenshot(plugin_name, callback, is_individual)
                     finish(true)
                     return
                 end
-                if IsPluginWindowDrawn(fx_index) then
+                if IsPluginWindowDrawn(fx_index, plugin_name) then
                     drawn_since = drawn_since or now
                     if now - drawn_since >= 0.2 then capture_now() return end
                 else
