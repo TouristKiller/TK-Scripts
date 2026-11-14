@@ -36,7 +36,8 @@ lists, menus and borders. That takes effect after a restart.
 - **Text buttons on toolbars:** plain, or with a quiet cell behind them, and small, normal or large text.
 - **FX and send lists:** plain, or a subtle grid above the mixer's strips, and sends in the colour of their destination track.
 - **Transport plate:** Black or Silver: brushed metal behind the whole transport, with screws and
-  a maker's plate (TK-S73, Red Devil, Blue Angel, Black Metal or Quicksilver), on the General page. The rate can sit on it as a knob.
+  a maker's plate (TK-S73, Red Devil, Blue Angel, Black Metal, Quicksilver, or your own name and
+  icons engraved in the same style), on the Transport page. The rate can sit on it as a knob.
 - **Basic:** a flat style for the track panel and the mixer, each on its own: no display windows,
   names straight on the panel, see-through symbol keys and list slots, meters in a plain well.
   Basic Dark and Basic Light on the Presets page set the whole look in one click.
@@ -44,7 +45,9 @@ lists, menus and borders. That takes effect after a restart.
   strips on brushed metal in a rack: Phillips screws, milled grooves, glass windows, and R, M, S,
   knobs and faders as hardware with tick marks. Folders hang on rack rails with mounting holes,
   envelope lanes get the hardware arm and knob, and the display windows can be lit faintly from below.
-  In the Light look the plates can have the dark display windows of the Dark look.
+  In the Light look the plates can have the dark display windows of the Dark look. Record arm can be
+  a cap, an analog lamp or a lit glass button, and the selected track can light an LED in the rail
+  and lighten its plate.
 - **Wood:** walnut or teak rails beside the plates, on the left and optionally on the right,
   with the track number, folder buttons and track colour on them; the master too. The mixer
   can have a wooden armrest under its strips.
@@ -82,6 +85,7 @@ lists, menus and borders. That takes effect after a restart.
   normal, intermediate and narrow strip. The master can be a narrow side column beside its FX
   list, for a master docked on its own with embedded plugins.
 - **Envelope lanes, media items, MIDI editor, inline MIDI editor:** all redrawn.
+- **Theme codes:** your whole look as one line of text (Presets page, Share), to post and to paste.
 - **Settings:** every option on one page per area, a colour editor with a reset per colour,
   kept per look, colour processing for the whole theme, presets that remember their look, a
   factory reset that you can undo, and a Guide page that explains the theme.

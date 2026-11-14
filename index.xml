@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.41" author="TouristKiller" time="2026-11-13T22:40:00Z">
+    <version name="0.9.50" author="TouristKiller" time="2026-11-14T11:49:55Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -211,7 +211,10 @@
      <source file="TK_Theme_Zip.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Zip.lua</source>
      <source file="TK_Theme_Grid.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid.lua</source>
      <source file="TK_Theme_Auto.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Auto.lua</source>
+     <source file="TK_Theme_Plate.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Plate.lua</source>
+     <source file="TK_Theme_Code.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Code.lua</source>
      <source file="dist/darkmode_colors.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/darkmode_colors.txt</source>
+     <source file="dist/plate_font.bin">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/plate_font.bin</source>
      <source file="dist/TK Theme Dark.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Dark.factory.ReaperTheme</source>
      <source file="dist/TK Theme Light.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Light.factory.ReaperTheme</source>
      <source file="dist/looks/TK Theme Dark.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/looks/TK%20Theme%20Dark.png</source>
@@ -601,8 +604,17 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: The colours of TK Theme are shared with other TK scripts. TK Workbench's new "TK Theme" preset (Workbench 1.0.6) follows your look, accent and colour setting, live.
-+ Fixed: On a plate with pan hidden, the volume knob now moves to the right instead of leaving a gap. The master plate too.
++ Added: Your own name on the transport plate (Transport page, Plate logo: Own name). A small top line and a name, engraved like TK-S73 on the Black and Silver plates, with icons such as a star, a note or a microphone. Long names get smaller to fit, and your name comes back after an update and in the other look.
++ Added: Theme codes (Presets page, Share). Copy your look as one line of text to post on the forum, and paste someone else's to try it, with Undo. A code holds the look, settings, parts, colours, colour processing, fader handle and your name on the plate; not your transport buttons' actions or the dark mode colours. Codes keep working in later versions.
++ Added: Record arm styles on the plates (Track panel and Mixer pages, each on its own): Cap as before, Lamp (an analog indicator with a chrome bezel and a red lens that glows) and Glass white or Glass red (a square push button of frosted glass, lit from behind when armed). Requested by Ezaky.
++ Added: The selected track on a plate, two switches that work on their own or together: an LED strip in the accent colour in the wooden rail (on the plate's edge without wood), and the plate a step lighter (track panel and mixer). Requested by Ezaky.
++ Added: A "Rebuilding theme..." notice, always on top, while a change rebuilds and reloads the theme, so the moment it takes no longer looks like a hang.
++ Changed: On a plate, FX parameters and embedded FX (ReaEQ and others) start right under the track's controls and use the height that was left empty. Requested by Ezaky.
++ Changed: Choice buttons in the settings window are as wide as their longest name and wrap into evenly filled rows.
++ Fixed: FX parameters switched on without any parameters no longer show an empty black bar on a plate.
++ Fixed: The meter in the plate stays in narrower track panels when there is no width knob or pan is hidden, and Short now really lets the panel be narrower.
++ Fixed: In a narrow track panel on a plate, the standing meter no longer covers the right wooden rail, and the plate itself can be narrower.
++ Fixed: Record arm and the other buttons on a plate could show as the round standard ones after opening the settings, until the next time.
 ]]></changelog>
     </version>
     </reapack>

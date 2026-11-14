@@ -254,6 +254,23 @@ end
 
 local state = { page = 1, restart = false, msg = nil, confirm = nil, factory_dark = false }
 
+-- Rebuilding the theme (writing its zip, reloading it) holds the window still for a moment.
+-- A change started in the window waits two frames while "Rebuilding theme..." shows, then
+-- runs; what it calls on the way runs at once. Outside the window's drawing (opening, day and
+-- night, tests) everything runs at once. See deferred() and the loop.
+local busy = { queue = {}, ui = false, running = false, shown = 0, frames = 0 }
+local function deferred(fn)
+    return function(...)
+        if busy.ui and not busy.running then
+            local args = table.pack(...)
+            busy.queue[#busy.queue + 1] = function() return fn(table.unpack(args, 1, args.n)) end
+            busy.shown, busy.frames = 0, 0
+            return true
+        end
+        return fn(...)
+    end
+end
+
 local function set_param(name, value, persist)
     local p = P[name]
     if not p then return end
@@ -265,6 +282,7 @@ end
 
 local start_watcher     -- further down, with the startup line it shares the watcher with
 local rewrite_meters    -- further down, with the parts: the meters' images again, after a switch
+local plate_name        -- further down, with the parts: your own name on the transport plate
 local function S(label, param, layouts, hint) return { kind = "slider", label = label, param = param, layouts = layouts, hint = hint } end
 -- one slider for a setting that exists once more for selected and armed strips
 local function Grow(label, param, also) return { kind = "slider", label = label, param = param, layouts = THIS_LAYOUT, also = also } end
@@ -410,6 +428,12 @@ local PAGES = {
             Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Wood", param = "tkWood", choices = { "Off", "Walnut", "Teak" },
               hint = "With a plate: the number column as a wooden rail, the track colour as a stripe on it." }),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkWood")) end, T("Right rail", "tkRailRight", nil, "A second rail on the right.")),
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "part", part = "tcp_recarm", label = "Record arm",
+              choices = { { "cap", "Cap" }, { "lamp", "Lamp" }, { "glass_white", "Glass white" }, { "glass_red", "Glass red" } } }),
+            Off(function() return not global_value("tkTcpPlate") end, T("Selected track: LED", "tkSelLed", nil,
+              "A lit strip in the accent colour, in the wooden rail (without wood: on the plate's edge).")),
+            Off(function() return not global_value("tkTcpPlate") end, T("Selected track: plate lit", "tkSelLit", nil,
+              "The selected track's plate a step lighter; the mixer's strips too.")),
             Off(function() return not global_value("tkTcpPlate") end, T("Meter in the plate", "tkPlMeterIn", nil,
               "The meter lies in the plate between the controls. Its type: Meters on the General page.")),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkPlMeterIn")) end,
@@ -485,6 +509,10 @@ local PAGES = {
               hint = "Basic: no windows. Silver and Black: a brushed plate with hardware knobs, caps and fader slots, made for the Dark look." },
             Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Wood", param = "tkMcpWood", choices = { "Off", "Walnut", "Teak" },
               hint = "With a plate: a wooden armrest along the bottom, with the numbers on it." }),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_recarm", label = "Record arm",
+              choices = { { "cap", "Cap" }, { "lamp", "Lamp" }, { "glass_white", "Glass white" }, { "glass_red", "Glass red" } } }),
+            Off(function() return not global_value("tkMcpPlate") end, T("Selected strip: plate lit", "tkSelLit", nil,
+              "The selected strip's plate a step lighter; the track panel's too.")),
         } },
         { "Handles", {
             Off(function() return global_value("tkMcpPlate") end, { kind = "handle", label = "Fader", hint = "For all layouts." }),
@@ -556,7 +584,10 @@ local PAGES = {
         { "Plate and grid", {
             { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
             Off(function() return not global_value("tkTransPlate") end, T("Rate as a knob", "tkRateKnob", nil, "On the right of the plate. Off keeps the slider in the display.")),
-            Off(function() return not global_value("tkTransPlate") end, { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil", "Blue Angel", "Black Metal", "Quicksilver" } }),
+            Off(function() return not global_value("tkTransPlate") end, { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil", "Blue Angel", "Black Metal", "Quicksilver", "Own name" },
+              after = function(v) if v == 5 then plate_name.ensure() end end }),
+            Off(function() return not (global_value("tkTransPlate") and P.tkPlateLogo and math.floor(P.tkPlateLogo.value) == 5) end,
+              { kind = "platename", label = "Your name" }),
             { kind = "toggle", label = "Grid box", param = "tkGridBox", after = function(on) if on then start_watcher() end end,
               hint = "The grid on the display: click it to choose the grid, or an adaptive one." },
             { kind = "startup", label = "Metronome and grid at startup",
@@ -854,10 +885,15 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the glass of the track panel's and the mixer's displays (meters have glass of their own)
         display_light = { "tcpGlass", "tcpGlassRound" },
+        -- record arm on the plates (Lamp, Glass): only the R; Cap is the hardware part's own
+        tcp_recarm = { "track_recarm_off_ol", "track_recarm_on_ol", "track_recarm_norec_ol", "track_recarm_auto_ol",
+            "track_recarm_auto_on_ol", "track_recarm_auto_norec_ol" },
+        mcp_recarm = { "mcp_recarm_off_ol", "mcp_recarm_on_ol", "mcp_recarm_norec_ol", "mcp_recarm_auto_ol",
+            "mcp_recarm_auto_on_ol", "mcp_recarm_auto_norec_ol" },
         -- the track panel's knobs and R / M / S: the theme's own, or hardware for the plate (the first differs per variant)
         mcp_hw = { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack", "mcp_mute_off_ol", "mcp_mute_on",
             "mcp_solo_off_ol", "mcp_solo_on", "mcp_recarm_off_ol", "mcp_recarm_on_ol", "mcp_recarm_norec_ol",
@@ -866,6 +902,7 @@ local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen
             "track_solo_off_ol", "track_solo_on", "track_recarm_off_ol", "track_recarm_on_ol", "track_recarm_norec_ol",
             "track_recarm_auto_ol", "track_recarm_auto_on_ol", "track_recarm_auto_norec_ol", "track_mono", "track_stereo_ol",
             "envcp_arm_off_ol", "envcp_arm_on", "envcp_knob_stack" } } }
+parts.RECARM_HW = { tcp_recarm = "tcp_hw", mcp_recarm = "mcp_hw" }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
 
@@ -1217,11 +1254,39 @@ function parts.write(part, variant, zip, accent)
         if ok and (parts.basic_now or parts.chosen.basic) == "on" then ok, err = parts.write("basic", "on", zip, accent) end
         return ok, err
     end
+    -- record arm on the plates: Cap is the hardware part's own R, so that part is written
+    -- again for it; Lamp and Glass only count on a plate (the hardware Silver or Black)
+    local recarm_hw = parts.RECARM_HW[part]
+    if recarm_hw then
+        -- the layout can't see an image: it learns from this that the R is a lamp (a round shadow)
+        local lp = part == "tcp_recarm" and "tkTcpRecLamp" or "tkMcpRecLamp"
+        local want = variant == "lamp" and 1 or 0
+        if P[lp] and math.floor(P[lp].value) ~= want then set_param(lp, want, true) end
+        local hw = parts.chosen[recarm_hw] or parts.default[recarm_hw]
+        if hw ~= "silver" and hw ~= "black" then return true end
+        if variant == "cap" then
+            parts.recarm_skip = true
+            local ok, err = parts.write(recarm_hw, hw, zip, accent)
+            parts.recarm_skip = nil
+            return ok, err
+        end
+    end
     local files = {}
     for _, name in ipairs(parts.files(part, zip, accent)) do
         local data = parts.read(zip, accent, part, variant, name)
         if not data then return nil, "the images of this choice are missing" end
         files[root .. "/" .. name] = data
+    end
+    -- the hardware brings its own R: a chosen Lamp or Glass goes over it again
+    local rp = (part == "tcp_hw" and "tcp_recarm") or (part == "mcp_hw" and "mcp_recarm") or nil
+    if rp and not parts.recarm_skip and (variant == "silver" or variant == "black") then
+        local rv = parts.chosen[rp] or parts.default[rp]
+        if rv ~= "cap" then
+            for _, name in ipairs(parts.files(rp, zip, accent)) do
+                local data = parts.read(zip, accent, rp, rv, name)
+                if data then files[root .. "/" .. name] = data end
+            end
+        end
     end
     if next(files) then
         local ok, err = Zip.replace(zip, files)
@@ -1233,6 +1298,18 @@ function parts.write(part, variant, zip, accent)
         local ok, err = parts.write("light_glass", "dark", zip, accent)
         parts.basic_now = nil
         if not ok then return nil, err end
+    end
+    -- Basic's images hold R / M / S too (the theme's own): on a plate its hardware goes back
+    -- over them, with the record arm chosen for it. Without this a Basic written as the window
+    -- opened left the plate with the round buttons until the next opening
+    if part == "basic" then
+        for _, hwp in ipairs({ "tcp_hw", "mcp_hw" }) do
+            local hv = parts.chosen[hwp] or parts.default[hwp]
+            if hv == "silver" or hv == "black" then
+                local ok, err = parts.write(hwp, hv, zip, accent)
+                if not ok then return nil, err end
+            end
+        end
     end
     local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip, part)
     if same then return true end
@@ -1264,6 +1341,10 @@ end
 
 function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
+    if parts.RECARM_HW[part] then
+        local hw = parts.chosen[parts.RECARM_HW[part]] or parts.default[parts.RECARM_HW[part]]
+        if variant == "cap" or (hw ~= "silver" and hw ~= "black") then return true end
+    end
     local root = Zip.root(zip)
     if part == "accent" then return not root or parts.accent_in_zip(variant, zip, root) end
     -- Basic's images (and the mixer's Basic keys): every file, so one remade on its own
@@ -1385,6 +1466,10 @@ function parts.restore()
             end
             local basic = parts.chosen.basic
             if basic and not parts.in_zip("basic", basic, zip) and parts.write("basic", basic, zip) then wrote = true end
+            for rp in pairs(parts.RECARM_HW) do
+                local rv = parts.chosen[rp]
+                if rv and not parts.in_zip(rp, rv, zip) and parts.write(rp, rv, zip) then wrote = true end
+            end
             return true
         end)
         parts.keep_own = nil
@@ -1404,6 +1489,90 @@ rewrite_meters = function(lamps_only)
         return
     end
     parts.choose_many({ { "meter", parts.chosen.meter or parts.default.meter }, { "meter_lying", lying } })
+end
+
+-- Your own name on the transport plate (Plate logo: Own name, 5). TK_Theme_Plate.lua sets the
+-- two lines in the build's letters (dist/plate_font.bin) and writes the images
+-- transPlateOwnBlack / Silver at every scale into the theme; the lines are kept in
+-- Data/TK Theme/plate_name.txt, so they come back after an update or in the other look.
+local Plate = dofile(here .. "TK_Theme_Plate.lua")
+plate_name = { file = r.GetResourcePath() .. "/Data/TK Theme/plate_name.txt", top = "", name = "", loaded = false }
+
+function plate_name.load()
+    if plate_name.loaded then return end
+    plate_name.loaded = true
+    local s = read_all(plate_name.file)
+    if s then
+        plate_name.top = s:match("top=([^\n]*)") or ""
+        plate_name.name = s:match("name=([^\n]*)") or ""
+    end
+    if plate_name.top == "" and plate_name.name == "" then plate_name.top, plate_name.name = "REAPER SYSTEMS", "TK-S73" end
+end
+
+function plate_name.save()
+    r.RecursiveCreateDirectory(r.GetResourcePath() .. "/Data/TK Theme", 0)
+    write_all(plate_name.file, "top=" .. plate_name.top .. "\nname=" .. plate_name.name .. "\n")
+end
+
+function plate_name.font()
+    if plate_name.f == nil then plate_name.f = Plate.load(here .. "dist/plate_font.bin") or false end
+    return plate_name.f
+end
+
+-- the theme's images (or nil), named as in the zip
+function plate_name.files(root)
+    local font = plate_name.font()
+    if not font then return nil end
+    local out = {}
+    for rel, png in pairs(Plate.images(font, plate_name.top, plate_name.name, Zip.crc32)) do out[root .. "/" .. rel] = png end
+    return out
+end
+
+-- puts the images in the loaded look's theme when Own name is chosen and they are not
+-- there yet (or differ); force: write them anyway. Returns true when it wrote them
+function plate_name.ensure(force)
+    plate_name.load()
+    if not P.tkPlateLogo or math.floor(P.tkPlateLogo.value) ~= 5 or not look.current() then return false end
+    local zip = parts.zip_path()
+    local root = Zip.root(zip)
+    local files = root and plate_name.files(root)
+    if not files then return false end
+    if not force then
+        local same = true
+        for name, png in pairs(files) do
+            if Zip.crc_of(zip, name) ~= Zip.crc32(png) then same = false break end
+        end
+        if same then return false end
+    end
+    local ok, err = Zip.replace(zip, files)
+    if not ok then
+        state.msg = "Could not write the plate: " .. tostring(err) .. "."
+        return false
+    end
+    parts.reload()
+    return true
+end
+
+-- the preview: the 200% image on the plate's colour, made again when the text changes
+function plate_name.preview()
+    local silver = P.tkTransPlate and math.floor(P.tkTransPlate.value) == 2
+    local key = (silver and "S" or "B") .. "|" .. plate_name.top .. "|" .. plate_name.name
+    if plate_name.key ~= key then
+        plate_name.key = key
+        if plate_name.img and r.ImGui_Detach then pcall(r.ImGui_Detach, ctx, plate_name.img) end
+        plate_name.img = nil
+        local font = plate_name.font()
+        if font then
+            local A, W, H = Plate.coverage(font, plate_name.top, plate_name.name, 2)
+            local png = Plate.png(W, H, Plate.rgba(A, W, H, Plate.PLATES[silver and "Silver" or "Black"], 2), Zip.crc32)
+            local ok, img = pcall(r.ImGui_CreateImageFromMem, png)
+            if ok and img then
+                r.ImGui_Attach(ctx, img)
+                plate_name.img = img
+            end
+        end
+    end
+    return plate_name.img, silver
 end
 
 function parts.picture(path)
@@ -1675,6 +1844,48 @@ local function draw_selected_tracks(id)
     if no_name_only then r.ImGui_EndDisabled(ctx) end
 end
 
+-- Plate logo: Own name. Two lines (the small one may stay empty), icons that go into the
+-- name as [star] and the like, the plate as it will look, and Apply, which writes it
+local function draw_plate_name(item, id)
+    if not look.current() then return end
+    plate_name.load()
+    r.ImGui_PushID(ctx, id)
+    row_label("Top line")
+    r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
+    local ch1, v1 = r.ImGui_InputText(ctx, "##top", plate_name.top)
+    if ch1 then plate_name.top = v1:sub(1, 40) end
+    row_label("Name")
+    r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
+    local ch2, v2 = r.ImGui_InputText(ctx, "##name", plate_name.name)
+    if ch2 then plate_name.name = v2:sub(1, 60) end
+    row_label("Icons")
+    for i, icon in ipairs(Plate.ICONS) do
+        if i > 1 and (i - 1) % 5 ~= 0 then r.ImGui_SameLine(ctx, 0, 2) elseif i > 1 then r.ImGui_SetCursorPosX(ctx, LABEL_W) end
+        if r.ImGui_Button(ctx, icon .. "##icon", 54, 0) then plate_name.name = plate_name.name .. "[" .. icon .. "]" end
+        if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Adds [" .. icon .. "] to the name.") end
+    end
+    row_label("Preview")
+    local img, silver = plate_name.preview()
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    local pw, ph = Plate.W * 2 + 16, Plate.H * 2 + 12
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    r.ImGui_DrawList_AddRectFilled(dl, x, y, x + pw, y + ph, rgba(silver and 0x9EA1A5 or 0x2C2E31), 4)
+    if img then
+        r.ImGui_SetCursorScreenPos(ctx, x + 8, y + 6)
+        r.ImGui_Image(ctx, img, Plate.W * 2, Plate.H * 2)
+    else
+        r.ImGui_Dummy(ctx, pw, ph)
+        r.ImGui_Text(ctx, "plate_font.bin is missing: update TK Theme.")
+    end
+    r.ImGui_SetCursorPosX(ctx, LABEL_W)
+    if r.ImGui_Button(ctx, "Apply##plate") then
+        plate_name.save()
+        plate_name.ensure(true)
+    end
+    r.ImGui_PopID(ctx)
+    hint_text("Long lines get smaller to fit the plate. Icons: [star], [heart], [note] and the rest, typed or with the buttons.")
+end
+
 local function draw_setting(item, id)
     reload_mark = item.kind == "part" or item.kind == "meter" or item.kind == "handle" or (item.kind == "choice" and item.part ~= nil)
     if item.kind == "layout" then
@@ -1688,6 +1899,8 @@ local function draw_setting(item, id)
         draw_handle(item, id)
     elseif item.kind == "meter" then
         draw_meter(item, id)
+    elseif item.kind == "platename" then
+        draw_plate_name(item, id)
     elseif item.kind == "choice" then
         local names = expand(item.param, item.layouts)
         local p = P[names[1]]
@@ -1696,8 +1909,23 @@ local function draw_setting(item, id)
         r.ImGui_PushID(ctx, id)
         local extra = item.extra and P[item.extra]
         local extra_on = extra and math.floor(extra.value) == 1
+        -- one width for every button of the row, wide enough for its longest name (at least
+        -- 66); a row too wide for the window goes over evenly filled lines under each other
+        local bw = 66
+        for _, name in ipairs(item.choices) do
+            local tw = r.ImGui_CalcTextSize(ctx, name)
+            if tw + 16 > bw then bw = math.ceil(tw + 16) end
+        end
+        local avail = r.ImGui_GetContentRegionAvail(ctx)
+        local per_row = #item.choices
+        if per_row * (bw + 2) - 2 > avail then
+            local rows = math.ceil(per_row * (bw + 2) / math.max(bw + 2, avail + 2))
+            per_row = math.max(1, math.ceil(#item.choices / rows))
+        end
         for i, name in ipairs(item.choices) do
-            if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
+            if i > 1 then
+                if (i - 1) % per_row == 0 then r.ImGui_SetCursorPosX(ctx, LABEL_W) else r.ImGui_SameLine(ctx, 0, 2) end
+            end
             local is_extra = extra and i == #item.choices
             local active
             if is_extra then active = extra_on
@@ -1706,7 +1934,7 @@ local function draw_setting(item, id)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
             end
-            local clicked = r.ImGui_Button(ctx, name, 66, 0)
+            local clicked = r.ImGui_Button(ctx, name, bw, 0)
             if active then r.ImGui_PopStyleColor(ctx, 2) end
             if clicked and not active then
                 for _, n in ipairs(names) do set_param(n, is_extra and 0 or i - 1, true) end
@@ -2504,6 +2732,130 @@ local function load_preset(name, with_dark)
     state.msg = 'Loaded "' .. name .. '". ' .. table.concat(notes, " ")
 end
 
+-- ---------------------------------------------------------------- theme codes
+
+-- A theme code (Presets page, Share) is the look as one line of text: what differs from the
+-- defaults and from the look's factory colours, the parts, colour processing, fader handle
+-- and your name on the plate (TK_Theme_Code.lua packs it). Not the transport buttons'
+-- actions, which are numbers on one computer, nor the dark mode colours, which are REAPER's.
+local Code = dofile(here .. "TK_Theme_Code.lua")
+
+local function code_data()
+    local data = { params = {}, colours = {}, parts = {}, processing = {} }
+    local entry = look.current()
+    if entry then data.look = entry.theme end
+    for _, n in ipairs(order) do
+        if not LIVE[n] and math.floor(P[n].value) ~= math.floor(P[n].def) then data.params[n] = math.floor(P[n].value) end
+    end
+    for part, def in pairs(parts.default) do
+        local v = parts.chosen[part] or def
+        if v ~= def then data.parts[part] = v end
+    end
+    colour_keys(function(key)
+        local now, fac = r.GetThemeColor(key, 0), factory_colour(key)
+        if now and now ~= -1 and fac and (now & 0xFFFFFF) ~= (fac & 0xFFFFFF) then data.colours[key] = native_to_file(now) end
+    end)
+    for _, id in ipairs(processing_ids()) do
+        local name, _, value, def = r.ThemeLayout_GetParameter(id)
+        if name and math.floor(value) ~= math.floor(def) then data.processing[id] = math.floor(value) end
+    end
+    data.handle = handle_is_dot() and "dot" or "cap"
+    if P.tkPlateLogo and math.floor(P.tkPlateLogo.value) == 5 then
+        plate_name.load()
+        data.plate = { top = plate_name.top, name = plate_name.name }
+    end
+    return data
+end
+
+-- the code's look in full: what it doesn't hold goes back to its default, as with a preset
+local function apply_code(code)
+    local data, why = Code.decode(code, Zip.crc32)
+    if not data then
+        state.msg = why
+        return
+    end
+    if not look.current() then
+        state.msg = "Load one of TK Theme's looks first."
+        return
+    end
+    if not save_undo() then
+        state.msg = "Nothing was applied: couldn't save the current settings for undo."
+        return
+    end
+    local unknown = data.unknown or 0
+    local lines = { "" }
+    if data.look then lines[#lines + 1] = "look=" .. data.look end
+    for part, def in pairs(parts.default) do lines[#lines + 1] = "part:" .. part .. "=" .. (data.parts[part] or def) end
+    for part in pairs(data.parts) do
+        if not parts.default[part] then unknown = unknown + 1 end
+    end
+    look.apply_saved(table.concat(lines, "\n") .. "\n")
+    parts.forget_factory()          -- the look may be the other one now
+    reset_processing()
+    for _, id in ipairs(processing_ids()) do
+        if data.processing[id] then r.ThemeLayout_SetParameter(id, data.processing[id], true) end
+    end
+    for _, n in ipairs(order) do
+        if not LIVE[n] then
+            local v = data.params[n] or math.floor(P[n].def)
+            v = math.max(math.floor(P[n].min), math.min(math.floor(P[n].max), v))
+            P[n].value = v
+            r.ThemeLayout_SetParameter(P[n].idx, v, true)
+        end
+    end
+    for n in pairs(data.params) do
+        if not P[n] then unknown = unknown + 1 end
+    end
+    look.own_colours()
+    r.ThemeLayout_RefreshAll()
+    if data.handle then set_handle(data.handle == "dot") end
+    local notes = {}
+    changed_colours = {}
+    colour_keys(function(key)
+        local native = data.colours[key] and file_to_native(data.colours[key]) or factory_colour(key)
+        if native then
+            r.SetThemeColor(key, native, 1)
+            changed_colours[key] = native
+        end
+    end)
+    if not save_colours() then notes[#notes + 1] = "Its colours are shown, but couldn't be saved to the theme file." end
+    if data.plate then
+        plate_name.load()
+        plate_name.top, plate_name.name = data.plate.top:sub(1, 40), data.plate.name:sub(1, 60)
+        plate_name.save()
+    end
+    load_params()
+    refresh_palette()
+    repaint_after_colour()
+    plate_name.ensure()
+    if unknown > 0 then
+        notes[#notes + 1] = unknown .. (unknown == 1 and " setting is" or " settings are") .. " from a newer TK Theme and left out."
+    end
+    state.msg = "Theme code applied. " .. table.concat(notes, " ")
+end
+
+local function draw_share()
+    if not begin_card("Share", "sh") then return end
+    hint_text("A theme code is your look as one line of text: post it, and others paste it here. Your transport buttons' actions and the dark mode colours stay out.")
+    row_label("Your look")
+    if r.ImGui_Button(ctx, "Copy code") then
+        local code = Code.encode(code_data(), Zip.crc32)
+        r.ImGui_SetClipboardText(ctx, code)
+        state.msg = "Copied your theme code (" .. #code .. " characters): paste it where you like."
+    end
+    row_label("A code to use")
+    r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
+    local changed, text = r.ImGui_InputText(ctx, "##code_in", state.code_in or "")
+    if changed then state.code_in = text end
+    r.ImGui_SameLine(ctx)
+    if r.ImGui_Button(ctx, "Paste") then state.code_in = r.ImGui_GetClipboardText(ctx) or "" end
+    r.ImGui_SetCursorPosX(ctx, LABEL_W)
+    if confirm_button("code_apply", "Apply code", "Click again to apply") then apply_code(state.code_in) end
+    r.ImGui_SetCursorPosX(ctx, LABEL_W)
+    hint_text("Undo brings back what you had. Save it as a preset to keep it.")
+    r.ImGui_EndChild(ctx)
+end
+
 local function draw_undo_card()
     local date = undo_date()
     if not date then return end
@@ -2582,6 +2934,8 @@ local function draw_presets()
     hint_text("A preset holds every setting, colour, the colour processing, chosen actions, the look, the meter type and the fader handle. Track heights belong to a project, and the metronome light at startup and the menu bar stay as they are.")
     r.ImGui_Dummy(ctx, 0, 2)
     draw_signatures()
+    draw_share()
+    r.ImGui_Dummy(ctx, 0, 2)
     if begin_card("Save as a new preset", "ps") then
         row_label("Name")
         r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
@@ -2741,6 +3095,8 @@ function look.switch(entry, forced, choices, own_colours)
     end
     repaint_after_colour()
     if not dark.dirty then load_dark() end
+    -- the other look's theme has your name on its plate too
+    plate_name.ensure()
     return true
 end
 
@@ -3313,6 +3669,8 @@ local function startup_checks()
         load_params()
     end
     parts.restore()
+    -- your own name on the plate, when the theme lost it (an update, the other look)
+    plate_name.ensure()
     -- a colour setting chosen before its colours were worked out anew: as it is now
     -- (only when the colours are still exactly what it gave: refresh_mood checks)
     if look.current() then look.refresh_mood(look.current()) end
@@ -3320,6 +3678,11 @@ local function startup_checks()
     if P.tkPlLamps then
         local lamps = (parts.chosen.meter_lying or parts.default.meter_lying) == "lamps" and 1 or 0
         if math.floor(P.tkPlLamps.value) ~= lamps then set_param("tkPlLamps", lamps, true) end
+    end
+    -- whether the record arm is the lamp (its round shadow), as with the lamps above
+    for rp, lp in pairs({ tcp_recarm = "tkTcpRecLamp", mcp_recarm = "tkMcpRecLamp" }) do
+        local want = (parts.chosen[rp] or parts.default[rp]) == "lamp" and 1 or 0
+        if P[lp] and math.floor(P[lp].value) ~= want then set_param(lp, want, true) end
     end
     -- Basic's buttons and lists follow its switches, also when those were set before the
     -- images came (or by hand in REAPER's own theme adjuster)
@@ -3360,6 +3723,38 @@ local function draw_loading()
     r.ImGui_TextDisabled(ctx, sub)
 end
 
+-- while a change waits to rebuild the theme: a small window of its own, always on top and
+-- centred over the settings window (busy.at: its centre, kept while that was drawn), so it
+-- shows over the pages and over any other window. Returns whether it was drawn
+local function draw_rebuilding()
+    local cx, cy = table.unpack(busy.at or { 400, 300 })
+    r.ImGui_SetNextWindowPos(ctx, cx, cy, r.ImGui_Cond_Always(), 0.5, 0.5)
+    local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoMove()
+        | r.ImGui_WindowFlags_NoCollapse() | r.ImGui_WindowFlags_AlwaysAutoResize() | r.ImGui_WindowFlags_NoSavedSettings()
+        | r.ImGui_WindowFlags_NoScrollbar() | (r.ImGui_WindowFlags_NoDocking and r.ImGui_WindowFlags_NoDocking() or 0)
+        | (r.ImGui_WindowFlags_TopMost and r.ImGui_WindowFlags_TopMost() or 0)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), rgba(UI.raised))
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Border(), rgba(UI.accent))
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 1.5)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 8)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 26, 16)
+    local visible = r.ImGui_Begin(ctx, "TK Theme rebuilding##busy", false, flags)
+    if visible then
+        r.ImGui_PushFont(ctx, font, 20)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
+        r.ImGui_Text(ctx, "Rebuilding theme...")
+        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_PopFont(ctx)
+        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.soft))
+        r.ImGui_Text(ctx, "One moment: the theme is written and reloaded.")
+        r.ImGui_PopStyleColor(ctx)
+        r.ImGui_End(ctx)
+    end
+    r.ImGui_PopStyleVar(ctx, 3)
+    r.ImGui_PopStyleColor(ctx, 2)
+    return visible
+end
+
 local frame = 0
 local function loop()
     frame = frame + 1
@@ -3372,6 +3767,22 @@ local function loop()
         state.checking = false
         loading = false
         startup_checks()
+    end
+    -- a change that waited until "Rebuilding theme..." was on screen (twice, or half a second
+    -- in a hidden dock tab): now it runs, with that still showing
+    busy.frames = busy.frames + 1
+    if #busy.queue > 0 and (busy.shown >= 2 or busy.frames > 30) then
+        local queue = busy.queue
+        busy.queue = {}
+        busy.running = true
+        for _, job in ipairs(queue) do
+            local ok, err = pcall(job)
+            if not ok then
+                state.msg = "Something went wrong while rebuilding the theme: " .. tostring(err)
+                r.ShowConsoleMsg("TK Theme: " .. tostring(err) .. "\n")
+            end
+        end
+        busy.running = false
     end
     poll_action_picker()
     -- dark glass in Light goes with a plate: with none left, the glass goes back to light (once)
@@ -3397,12 +3808,18 @@ local function loop()
             draw_loading()
             state.loading_shown = (state.loading_shown or 0) + 1
         else
+            busy.ui = true
             draw_nav()
             r.ImGui_SameLine(ctx)
             draw_content()
+            busy.ui = false
+            local wx, wy = r.ImGui_GetWindowPos(ctx)
+            local ww, wh = r.ImGui_GetWindowSize(ctx)
+            busy.at = { wx + ww / 2, wy + wh / 2 }
         end
         r.ImGui_End(ctx)
     end
+    if #busy.queue > 0 and draw_rebuilding() then busy.shown = busy.shown + 1 end
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, vars)
     r.ImGui_PopStyleColor(ctx, colours)
@@ -3412,6 +3829,18 @@ local function loop()
         r.DeleteExtState(SCRIPT, "open", false)
     end
 end
+
+-- what rebuilds or reloads the theme, started in the window: "Rebuilding theme..." first
+-- (deferred, at the top). Everything else goes through these, so a part, a look, a preset,
+-- a code, a reset or undo and your plate's name all show it
+parts.choose_many = deferred(parts.choose_many)
+look.switch = deferred(look.switch)
+plate_name.ensure = deferred(plate_name.ensure)
+load_preset = deferred(load_preset)
+apply_code = deferred(apply_code)
+apply_signature = deferred(apply_signature)
+factory_reset = deferred(factory_reset)
+undo_reset = deferred(undo_reset)
 
 -- the theme's buttons call these scripts by action ID, which only exists once
 -- they are in the action list; once per install location is enough
