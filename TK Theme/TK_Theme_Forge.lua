@@ -47,9 +47,21 @@ Forge.FINISHES = {
     { name = "Dark cork", base = 2, work = "Cork", group = "Cork", nogloss = true, fastens = true, wear_style = "paper", ramp = { { 6, 2, 1 }, { 105, 71, 44 }, { 204, 144, 92 } }, corr = "dents", bare = { 190, 150, 110 }, bare_a = 0.8,
       labels = { gloss = false, contrast = "Grain" } },
     { name = "Black", base = 2, ramp = { { 8, 9, 10 }, { 44, 46, 49 }, { 150, 154, 160 } }, corr = "rust" },
+    -- Plain: no image at all; REAPER fills the plate in one colour, fixed or the track's
+    { name = "Plain", base = 1, group = "Plain", plain = true, ramp = { { 0, 0, 0 }, { 128, 128, 128 }, { 255, 255, 255 } }, corr = "rust" },
 }
 Forge.CORR_LABEL = { rust = "Rust", verdigris = "Verdigris", tarnish = "Tarnish", oxide = "Oxide", heat = "Heat tint", stains = "Stains", varnish = "Worn varnish", dents = "Dents" }
-Forge.GROUPS = { "Metal", "Cardboard", "Wood", "Cork" }
+Forge.GROUPS = { "Metal", "Cardboard", "Wood", "Cork", "Plain" }
+
+-- Plain's Style: light colours on Silver (dark text on it), dark ones and the track colour on Black
+function Forge.base_of(m)
+    local fin = Forge.finish(m.finish)
+    if not fin.plain then return fin.base end
+    if (m.track or 0) > 0 then return 2 end
+    local c = m.colour or 0xA0282C
+    local l = ((c >> 16) & 255) * 0.299 + ((c >> 8) & 255) * 0.587 + (c & 255) * 0.114
+    return l >= 140 and 1 or 2
+end
 
 -- the work plate a finish is made from: Silver, Black or Cardboard
 function Forge.source(fin) return fin.work or Forge.BASE_NAME[fin.base] end
@@ -57,6 +69,7 @@ function Forge.source(fin) return fin.work or Forge.BASE_NAME[fin.base] end
 -- whether a material has a layer over its plate: corrosion, or for cardboard stains or creases
 function Forge.layered(m)
     local fin = Forge.finish(m.finish)
+    if fin.plain then return false end
     return m.corrosion > 0 or (fin.creases and m.gloss > 0) or false
 end
 
@@ -1308,6 +1321,51 @@ function Forge.plate_images(kind, o, bases, crc32)
     return files
 end
 
+-- The rails: the lath beside the track panel (also the master's and the envelope lanes') and
+-- the mixer's armrest, in place of walnut or teak. Cut from the middle of the material's work
+-- plate (clear of its edges, screws and grooves), recoloured as its plates are, and shaded
+-- round across, as the wooden laths are. Sizes at 100% as tcpWoodWalnut / mcpWoodArmWalnut
+Forge.RAILS = {
+    { name = "tcpWoodMat", w = 20, h = 400, from = "mcpPlate", across = "x", box = { 0.3, 0.7, 0.15, 0.85 } },
+    { name = "mcpWoodArmMat", w = 400, h = 20, from = "tcpPlate", across = "y", box = { 0.15, 0.85, 0.3, 0.7 } },
+}
+
+function Forge.rail_images(m, bases, crc32)
+    local fin, files = Forge.finish(m.finish), {}
+    for _, R in ipairs(Forge.RAILS) do
+        for _, sc in ipairs(Forge.SCALES) do
+            local W, H, px = bases(R.from .. Forge.source(fin), sc[1])
+            if not W then return nil, "no " .. R.from .. Forge.source(fin) .. " in the theme" end
+            local lut = Forge.lut(fin, Forge.median(W, H, px), plate_gloss(fin, m), m.contrast)
+            local w, h = math.floor(R.w * sc[2] + 0.5), math.floor(R.h * sc[2] + 0.5)
+            local x0, x1 = math.floor(W * R.box[1]), math.floor(W * R.box[2])
+            local y0, y1 = math.floor(H * R.box[3]), math.floor(H * R.box[4])
+            local n = R.across == "x" and w or h
+            local shade = {}
+            for i = 0, n - 1 do shade[i] = 0.82 + 0.28 * math.sin(math.pi * (i + 0.5) / n) ^ 0.6 end
+            local out = {}
+            for y = 0, h - 1 do
+                local sy = y0 + math.floor((y + 0.5) * (y1 - y0) / h)
+                for x = 0, w - 1 do
+                    local sx = x0 + math.floor((x + 0.5) * (x1 - x0) / w)
+                    local at = (sy * W + sx) * 4 + 1
+                    local r, g, b = byte(px, at, at + 2)
+                    local cr, cg, cb = byte(lut[(r * 77 + g * 150 + b * 29) >> 8], 1, 3)
+                    local f = shade[R.across == "x" and x or y]
+                    out[y * w + x + 1] = char(clamp(cr * f), clamp(cg * f), clamp(cb * f), 255)
+                end
+            end
+            files[sc[1] .. R.name .. ".png"] = Forge.png_packed(w, h, concat(out), crc32)
+        end
+    end
+    return files
+end
+
+function Forge.rail_key(m)
+    local fin = Forge.finish(m.finish)
+    return string.format("rails %d|%s|%.2f|%.2f", Forge.VERSION, m.finish, plate_gloss(fin, m), m.contrast)
+end
+
 -- the corrosion on one plate: its patterns (Forge.RUST_VARIANTS) at every scale
 function Forge.rust_images(kind, o, crc32)
     local K, fin, files = Forge.KINDS[kind], Forge.finish(o.finish), {}
@@ -1339,7 +1397,7 @@ function Forge.fasten_key(o)
 end
 
 -- whether a material has something holding it
-function Forge.fastened(m) return (m.fasten or 1) > 1 end
+function Forge.fastened(m) return (m.fasten or 1) > 1 and not Forge.finish(m.finish).plain end
 
 function Forge.rust_key(o)
     local fin = Forge.finish(o.finish)
@@ -1484,8 +1542,18 @@ end
 -- other material is drawn. The Materials page edits a draft; Apply makes it so.
 local E
 local ui = { sel = nil, saving = nil, picked = {} }   -- the page's own state (further down)
+-- On the plates (wear, a coffee ring, graffiti): what the page shows until Apply sets it.
+-- v: parameter -> the value picked; scratch, graffiti: a new pattern asked for
+ui.plate = { v = {}, scratch = false, graffiti = false }
+Forge.PLATE_SETTINGS = {
+    { "tkPatina", "Wear", { "Off", "Light", "Used", "Road-worn" } },
+    { "tkGraffiti", "Graffiti", { "Off", "Light", "Wild" } },
+    { "tkGrafColours", "Graffiti colours", { "Neon", "Accent" }, needs = { "tkGraffiti" } },
+    { "tkGrafSticker", "Name stickers", { "Off", "On" }, needs = { "tkGraffiti" } },
+    { "tkGrafStkCol", "Sticker colour", { "Graffiti", "Track colour" }, needs = { "tkGraffiti", "tkGrafSticker" } },
+}
 Forge.FACTORY = { gloss = 0.4, contrast = 0.5, corrosion = 0, seed = 1832, fasten = 1 }
-local FIELDS = { "finish", "gloss", "contrast", "corrosion", "seed", "fasten" }
+local FIELDS = { "finish", "gloss", "contrast", "corrosion", "seed", "fasten", "colour", "track" }
 local PLATES = { { "tcp", "Track panel" }, { "mcp", "Mixer" }, { "trans", "Transport" } }
 
 function Forge.bind(env)
@@ -1498,13 +1566,14 @@ end
 local function new_base(finish)
     local f, own = Forge.FACTORY, Forge.finish(finish).defaults or {}
     return { finish = finish, gloss = own.gloss or f.gloss, contrast = own.contrast or f.contrast,
-             corrosion = own.corrosion or f.corrosion, seed = f.seed, fasten = f.fasten }
+             corrosion = own.corrosion or f.corrosion, seed = f.seed, fasten = f.fasten, colour = 0xA0282C, track = 0 }
 end
 
 local function copy(o)
     local c = {}
     for _, k in ipairs(FIELDS) do c[k] = o[k] end
     c.fasten = c.fasten or 1
+    c.colour, c.track = c.colour or 0xA0282C, c.track or 0
     return c
 end
 
@@ -1546,12 +1615,14 @@ function Forge.factory(m)
 end
 
 local function fields_line(m)
-    return string.format("finish=%s gloss=%.2f contrast=%.2f corrosion=%.2f seed=%d fasten=%d", m.finish, m.gloss, m.contrast, m.corrosion, m.seed, m.fasten or 1)
+    return string.format("finish=%s gloss=%.2f contrast=%.2f corrosion=%.2f seed=%d fasten=%d colour=%06x track=%d", m.finish, m.gloss, m.contrast,
+        m.corrosion, m.seed, m.fasten or 1, m.colour or 0xA0282C, m.track or 0)
 end
 
 local function parse_fields(s, m)
     for k, v in s:gmatch("(%a+)=(%S+)") do
         if k == "finish" then m.finish = Forge.finish(v).name
+        elseif k == "colour" then m.colour = tonumber(v, 16) or m.colour
         elseif m[k] ~= nil then m[k] = tonumber(v) or m[k] end
     end
     return m
@@ -1566,7 +1637,7 @@ function Forge.load()
         for line in f:read("a"):gmatch("[^\r\n]+") do
             local kind, rest = line:match("^(%a+) (.*)$")
             if kind == "use" then
-                local plate, id = rest:match("^(%a+)=(.*)$")
+                local plate, id = rest:match("^([%a_]+)=(.*)$")
                 if plate then lib.use[plate] = id end
             elseif kind == "base" then
                 local name, fields = rest:match("^([^:]+): (.*)$")
@@ -1602,8 +1673,8 @@ end
 local function save()
     E.r.RecursiveCreateDirectory(Forge.dir, 0)
     local lib, lines = Forge.applied, {}
-    for _, p in ipairs(PLATES) do
-        if lib.use[p[1]] then lines[#lines + 1] = "use " .. p[1] .. "=" .. lib.use[p[1]] end
+    for _, kind in ipairs({ "tcp", "mcp", "trans", "rails", "hw_knobs", "hw_caps", "hw_brackets", "hw_screws" }) do
+        if lib.use[kind] then lines[#lines + 1] = "use " .. kind .. "=" .. lib.use[kind] end
     end
     for _, f in ipairs(Forge.FINISHES) do
         local m = lib.bases[f.name]
@@ -1631,7 +1702,7 @@ function Forge.current(kind)
     if not plate then return nil end
     local id = Forge.applied.use[kind]
     local m = Forge.get(Forge.applied, id)
-    if m and Forge.finish(m.finish).base == plate then return id end
+    if m and Forge.base_of(m) == plate then return id end
     return plate == 1 and "base:Silver" or "base:Black"
 end
 
@@ -1642,6 +1713,14 @@ local function drawn(kind)
     if not m or Forge.factory(m) then return nil end
     local mat = param(MAT_PARAM[kind]) or 0
     return mat > 0 and m or nil
+end
+
+-- the rails' material (an id) while Rails is Material somewhere, else nil
+function Forge.rail_current()
+    Forge.load()
+    if (param("tkWood") or 0) ~= 3 and (param("tkMcpWood") or 0) ~= 3 then return nil end
+    local id = Forge.applied.use.rails
+    return Forge.get(Forge.applied, id) and id or "base:Walnut"
 end
 
 -- for the wear (TK_Theme_Patina): its colour on the plates that show a drawn material
@@ -1764,9 +1843,35 @@ function Forge.ensure(force)
             out(fasten_names, fname)
         end
     end
+    -- the rails
+    local rail_names = {}
+    for _, sc in ipairs(Forge.SCALES) do
+        for _, R in ipairs(Forge.RAILS) do rail_names[#rail_names + 1] = root .. "/" .. sc[1] .. R.name .. ".png" end
+    end
+    local rlname = root .. "/tk_forge_rails.txt"
+    local rid = Forge.rail_current()
+    local rm = rid and Forge.get(Forge.applied, rid)
+    if rm then
+        local key = Forge.rail_key(rm)
+        if force or E.Zip.crc_of(zip, rlname) ~= E.Zip.crc32(key) then
+            E.r.RecursiveCreateDirectory(Forge.dir, 0)
+            reader = reader or Forge.reader(E.Zip, zip, root, Forge.dir)
+            local made, err = Forge.rail_images(rm, reader, E.Zip.crc32)
+            if not made then
+                E.state.msg = "Could not make the rails: " .. tostring(err) .. "."
+                return false
+            end
+            for rel, png in pairs(made) do files[root .. "/" .. rel] = png end
+            files[rlname] = key
+            mark("rails drawn")
+        end
+    else
+        out(rail_names, rlname)
+    end
     if reader then tidy_cache(zip, root) end
     -- the proof of concept's one key, from before plates and layers had keys of their own
     if E.Zip.crc_of(zip, root .. "/tk_forge.txt") then files[root .. "/tk_forge.txt"] = false end
+    for k, v in pairs(Forge.hw_files(zip, root)) do files[k] = v end
     if next(files) == nil then return false end
     local ok, werr = E.Zip.replace(zip, files)
     if not ok then
@@ -1788,18 +1893,41 @@ local function rust_param()
     end
     E.set_param("tkRust", any and 1 or 0, true)
     E.set_param("tkFasten", held and 1 or 0, true)
+    local rm = Forge.get(Forge.applied, Forge.rail_current())
+    E.set_param("tkRailInk", (rm and Forge.finish(rm.finish).base == 2) and 1 or 0, true)
+end
+
+-- Rails chosen on the Track panel or Mixer page (Off, Walnut, Teak, Material): the material's
+-- rails drawn or taken out, and the text on them light or dark. Run inside E.together
+function Forge.rails_changed()
+    if not E then return end
+    Forge.load()
+    rust_param()
+    Forge.ensure()
 end
 
 -- a plate gets a material: its Style becomes the plate the material is made from, and the
 -- material switch says whether Forge draws it. Run inside E.together (one write, one reload)
+local PLAIN_PARAM = { tcp = "tkTcpPlain", mcp = "tkMcpPlain", trans = "tkTransPlain" }
 local function put_on(kind, id)
     local m = Forge.get(Forge.applied, id)
     if not m then return end
     Forge.applied.use[kind] = id
-    local base = Forge.finish(m.finish).base
+    local base = Forge.base_of(m)
     E.set_style(kind, base == 1 and "silver" or "black")
-    -- the switch holds the Style's value it is shown with (the transport counts the other way)
-    E.set_param(MAT_PARAM[kind], Forge.factory(m) and 0 or Forge.KINDS[kind].values[base], true)
+    local plain = Forge.finish(m.finish).plain
+    -- the switch holds the Style's value it is shown with (the transport counts the other way);
+    -- Plain draws nothing: REAPER fills the plate in its colour
+    E.set_param(MAT_PARAM[kind], (Forge.factory(m) or plain) and 0 or Forge.KINDS[kind].values[base], true)
+    local pp = PLAIN_PARAM[kind]
+    E.set_param(pp, plain and (((m.track or 0) > 0 and kind ~= "trans") and 2 or 1) or 0, true)
+    if kind ~= "trans" then E.set_param(pp .. "Screws", (plain and (m.fasten or 1) == 6) and 1 or 0, true) end
+    if plain then
+        local c = m.colour or 0xA0282C
+        E.set_param(pp .. "R", (c >> 16) & 255, true)
+        E.set_param(pp .. "G", (c >> 8) & 255, true)
+        E.set_param(pp .. "B", c & 255, true)
+    end
 end
 
 -- Material chosen on the Track panel or Mixer page: the material it had, at once
@@ -1823,6 +1951,7 @@ end
 function Forge.off(kind)
     if not E then return end
     E.set_param(MAT_PARAM[kind], 0, true)
+    E.set_param(PLAIN_PARAM[kind], 0, true)
     rust_param()
     Forge.ensure()
 end
@@ -1834,11 +1963,18 @@ function Forge.apply()
     local before = Forge.applied
     local draft = copy_lib(Forge.draft)
     -- a deleted material's plates fall back on the base material it was made from
-    for _, p in ipairs(PLATES) do
+    for _, p in ipairs({ PLATES[1], PLATES[2], PLATES[3], { "rails" } }) do
         local id = draft.use[p[1]]
         if id and not Forge.get(draft, id) then
             local m = Forge.get(before, id)
             draft.use[p[1]] = "base:" .. (m and m.finish or "Silver")
+        end
+    end
+    for _, G in ipairs(Forge.HW) do
+        local id = draft.use[G.key]
+        if id and not Forge.get(draft, id) then
+            local m = Forge.get(before, id)
+            draft.use[G.key] = m and ("base:" .. m.finish) or nil
         end
     end
     timing = { last = E.r.time_precise(), lines = {} }
@@ -1851,7 +1987,17 @@ function Forge.apply()
             local picked = draft.use[kind] ~= before.use[kind] or ui.picked[kind]
             if draft.use[kind] and (picked or Forge.current(kind)) then put_on(kind, draft.use[kind]) end
         end
+        if draft.use.rails and (draft.use.rails ~= before.use.rails or ui.picked.rails) then
+            local tcp_on, mcp_on = (param("tkWood") or 0) > 0, (param("tkMcpWood") or 0) > 0
+            if tcp_on or not mcp_on then E.set_param("tkWood", 3, true) end
+            if mcp_on or not tcp_on then E.set_param("tkMcpWood", 3, true) end
+        end
         rust_param()
+        -- On the plates: their switches, and new patterns where asked for
+        for name, v in pairs(ui.plate.v) do E.set_param(name, v, true) end
+        if ui.plate.scratch then E.patina.new_seed() end
+        if ui.plate.graffiti then E.patina.graffiti_seed(true) end
+        ui.plate = { v = {}, scratch = false, graffiti = false }
         mark("style and settings")
         E.r.ThemeLayout_RefreshAll()
         Forge.ensure()
@@ -1876,9 +2022,24 @@ function Forge.code_materials()
     local out
     for _, p in ipairs(PLATES) do
         local m = drawn(p[1])
+        local cur = Forge.get(Forge.applied, Forge.current(p[1]))
+        if not m and cur and Forge.finish(cur.finish).plain and (param(PLAIN_PARAM[p[1]]) or 0) > 0 then m = cur end
         if m then
             out = out or {}
             out[p[1]] = copy(m)
+            if Forge.finish(m.finish).plain then out[p[1]].seed, out[p[1]].gloss = m.colour or 0, m.track or 0 end
+        end
+    end
+    local rm = Forge.get(Forge.applied, Forge.rail_current())
+    if rm then
+        out = out or {}
+        out.rails = copy(rm)
+    end
+    for _, G in ipairs(Forge.HW) do
+        local hm = Forge.get(Forge.applied, Forge.applied.use[G.key])
+        if Forge.is_metal(hm) then
+            out = out or {}
+            out[G.key] = copy(hm)
         end
     end
     return out
@@ -1890,13 +2051,29 @@ function Forge.from_code(materials)
     if not E or not materials then return end
     Forge.load()
     local lib = Forge.applied
-    for _, p in ipairs(PLATES) do
+    for _, p in ipairs({ PLATES[1], PLATES[2], PLATES[3], { "rails" } }) do
         local m = materials[p[1]]
         if m and Forge.finish(m.finish).name == m.finish then
             local name = m.finish .. " (shared)"
             if not lib.saved[name] then lib.order[#lib.order + 1] = name end
             lib.saved[name] = { finish = m.finish, gloss = m.gloss, contrast = m.contrast, corrosion = m.corrosion, seed = m.seed, fasten = m.fasten or 1 }
+            if Forge.finish(m.finish).plain then
+                lib.saved[name].colour, lib.saved[name].track = m.seed, (m.gloss or 0) >= 0.5 and 1 or 0
+                lib.saved[name].seed, lib.saved[name].gloss = 1832, 0.4
+            end
             lib.use[p[1]] = "saved:" .. name
+        end
+    end
+    -- the hardware: as the code has it, or as it comes
+    for _, G in ipairs(Forge.HW) do
+        local m = materials[G.key]
+        if m and Forge.finish(m.finish).name == m.finish then
+            local name = m.finish .. " (shared)"
+            if not lib.saved[name] then lib.order[#lib.order + 1] = name end
+            lib.saved[name] = { finish = m.finish, gloss = m.gloss, contrast = m.contrast, corrosion = m.corrosion, seed = m.seed, fasten = m.fasten or 1 }
+            lib.use[G.key] = "saved:" .. name
+        else
+            lib.use[G.key] = nil
         end
     end
     save()
@@ -1904,9 +2081,315 @@ function Forge.from_code(materials)
     rust_param()
 end
 
+-- ---------------------------------------------------------------- hardware
+-- Knobs, fader caps, folder brackets and screws in a metal of your own (Materials page,
+-- Hardware). Their shape is the part you chose; the Forge recolours the theme's own Silver
+-- hardware: grey metal only, so white pointers and ticks, black skirts and the accent stay.
+-- Knobs: only the cap, found per frame from its middle. parts: { part, images, the variant
+-- recoloured, the variants it applies to }; theme: images in the theme itself, the first of
+-- each set recoloured into all of them (their originals kept in the theme under tk_orig/)
+Forge.HW = {
+    { key = "hw_knobs", label = "Knobs", cap = true, parts = {
+        { "tcp_hw", { "tcp_vol_knob_stack", "tcp_pan_knob_stack", "tcp_wid_knob_stack", "tcp_fxparm_knob_stack", "envcp_knob_stack" }, "silver", { silver = true, black = true } },
+        { "mcp_hw", { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack" }, "silver", { silver = true, black = true } } } },
+    { key = "hw_caps", label = "Fader caps", parts = {
+        -- the metal caps, each recoloured from itself (Long throw, Colour cap and Wide grip keep theirs)
+        { "mcp_volthumb", { "mcp_volthumb" }, "chosen", { hw = true, hw_chrome = true, hw_round = true, hw_studio = true } },
+        { "mcp_pan", { "mcp_panthumb", "mcp_widththumb" }, "hw", { hw = true } } } },
+    { key = "hw_brackets", label = "Brackets", theme = {
+        { "tcpRackRailS", "tcpRackRailB" }, { "tcpRackEndS", "tcpRackEndB" }, { "tcpRackHeadS", "tcpRackHeadB" },
+        { "mcpRackRailS", "mcpRackRailB" }, { "mcpRackEndS", "mcpRackEndB" }, { "mcpRackStartS", "mcpRackStartB" } } },
+    { key = "hw_screws", label = "Screws", theme = { { "transScrew1" }, { "transScrew2" }, { "transScrew3" }, { "transScrew4" } } },
+}
+
+-- a material hardware can have: a metal
+function Forge.is_metal(m)
+    return m ~= nil and (Forge.finish(m.finish).group or "Metal") == "Metal"
+end
+
+local function clamp01(v) return v < 0 and 0 or (v > 1 and 1 or v) end
+
+-- one image's pixels in the metal: px RGBA rows, W x H; cap: a stack of W x W knob frames
+function Forge.hw_recolour(W, H, px, fin, m, cap)
+    local n = W * H
+    local wt, Ls = {}, {}
+    for i = 0, n - 1 do
+        local r, g, b, a = byte(px, i * 4 + 1, i * 4 + 4)
+        local L = (r * 77 + g * 150 + b * 29) >> 8
+        Ls[i] = L
+        local w = 0
+        if a > 0 then
+            local mx, mn = math.max(r, g, b), math.min(r, g, b)
+            w = clamp01(1 - ((mx - mn) / 255 - 0.08) * 8) * clamp01((232 - L) / 22)
+        end
+        wt[i] = w
+    end
+    if cap and H % W == 0 then
+        -- the cap: lighter than the black skirt, reached from the middle of each frame
+        local inside = {}
+        for f = 0, H // W - 1 do
+            local y0 = f * W
+            local start = (y0 + W // 2) * W + W // 2
+            local stack, seen = { start }, { [start] = true }
+            while #stack > 0 do
+                local i = stack[#stack]
+                stack[#stack] = nil
+                local alpha = byte(px, i * 4 + 4)
+                if Ls[i] > 45 and alpha > 128 then
+                    inside[i] = true
+                    local x, y = i % W, i // W
+                    for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+                        local nx, ny = x + d[1], y + d[2]
+                        if nx >= 0 and nx < W and ny >= y0 and ny < y0 + W then
+                            local j = ny * W + nx
+                            if not seen[j] then seen[j] = true stack[#stack + 1] = j end
+                        end
+                    end
+                end
+            end
+        end
+        for i = 0, n - 1 do
+            if not inside[i] then
+                -- the cap's soft rim: half
+                local x, y = i % W, i // W
+                local rim = Ls[i] > 30 and ((x > 0 and inside[i - 1]) or (x < W - 1 and inside[i + 1])
+                    or (y > 0 and inside[i - W]) or (y < H - 1 and inside[i + W]))
+                wt[i] = rim and wt[i] * 0.5 or 0
+            end
+        end
+    end
+    -- the middle lightness of what changes goes onto the finish's middle colour
+    local hist, total = {}, 0
+    for L = 0, 255 do hist[L] = 0 end
+    for i = 0, n - 1 do
+        if wt[i] > 0.5 then hist[Ls[i]] = hist[Ls[i]] + 1 total = total + 1 end
+    end
+    local mid, sum = 128, 0
+    for L = 0, 255 do
+        sum = sum + hist[L]
+        if total > 0 and sum >= total / 2 then mid = L break end
+    end
+    local lut = Forge.lut(fin, mid, plate_gloss(fin, m), m.contrast)
+    local out = {}
+    for i = 0, n - 1 do
+        local at = i * 4 + 1
+        local w = wt[i]
+        if w <= 0.004 then
+            out[i + 1] = px:sub(at, at + 3)
+        else
+            local r, g, b, a = byte(px, at, at + 3)
+            local cr, cg, cb = byte(lut[Ls[i]], 1, 3)
+            out[i + 1] = char(clamp(r + (cr - r) * w), clamp(g + (cg - g) * w), clamp(b + (cb - b) * w), a)
+        end
+    end
+    return concat(out)
+end
+
+-- what the theme will hold: what this run hands over first, else the file as it is
+local function now_data(zip, name)
+    local p = E.Zip.pending_file and E.Zip.pending_file(zip, name)
+    if p ~= nil then return p or nil end
+    local data, method = E.Zip.read_entry(zip, name)
+    return data and Forge.unzip(data, method or 0)
+end
+local function now_crc(zip, name)
+    local p = E.Zip.pending_file and E.Zip.pending_file(zip, name)
+    if p ~= nil then return p and E.Zip.crc32(p) or nil end
+    return E.Zip.crc_of(zip, name)
+end
+
+-- the hardware's images as they should be: { [entry] = png or false }. A group's key file
+-- holds what decided it and one image with its checksum: a part written over it since (a
+-- Style, an accent) shows as another checksum, and the group is drawn again
+-- a hardware group as it stands: its metal (or nil), what its images must be drawn for, what
+-- the theme's key says they were, and whether they still are (one image per part with its
+-- checksum: each must still be ours)
+local function hw_state(zip, root, G)
+    local function chosen(part) return E.parts.chosen[part] or E.parts.default[part] or "" end
+    local m = Forge.get(Forge.applied, Forge.applied.use[G.key])
+    if not Forge.is_metal(m) then m = nil end
+    local stored = now_data(zip, root .. "/tk_forge_" .. G.key .. ".txt")
+    local desc
+    if m then
+        local fin = Forge.finish(m.finish)
+        local srcs = {}
+        for _, p in ipairs(G.parts or {}) do srcs[#srcs + 1] = p[1] .. "=" .. chosen(p[1]) end
+        desc = string.format("hw %d|%s|%s|%.2f|%.2f|%s|%s", Forge.VERSION, G.key, m.finish, plate_gloss(fin, m), m.contrast,
+            chosen("accent"), concat(srcs, ","))
+    end
+    local valid = false
+    if stored and desc and stored:sub(1, #desc + 1) == desc .. "|" then
+        valid = true
+        for sname, scrc in stored:sub(#desc + 2):gmatch("([^;@]+)@(%x+)") do
+            if sname ~= "-" and now_crc(zip, sname) ~= tonumber(scrc, 16) then valid = false end
+        end
+    end
+    return m, desc, stored, valid
+end
+
+-- for the settings window's check at opening (parts.in_zip): a part whose images the
+-- hardware's metal has recoloured, and still as drawn, is in place as it is. Without this the
+-- check put the part's own images back and the metal was drawn again: two reloads each time
+function Forge.hw_owns(zip, part)
+    if not (E and E.parts.chosen and E.parts.read) then return false end
+    Forge.load()
+    local root = E.Zip.root(zip)
+    if not root then return false end
+    for _, G in ipairs(Forge.HW) do
+        for _, p in ipairs(G.parts or {}) do
+            if p[1] == part and p[4][E.parts.chosen[part] or E.parts.default[part] or ""] then
+                local m, _, _, valid = hw_state(zip, root, G)
+                if m and valid then return true end
+            end
+        end
+    end
+    return false
+end
+
+function Forge.hw_files(zip, root)
+    local files = {}
+    if not (E.parts.chosen and E.parts.read) then return files end
+    local function chosen(part) return E.parts.chosen[part] or E.parts.default[part] or "" end
+    for _, G in ipairs(Forge.HW) do
+        local keyname = root .. "/tk_forge_" .. G.key .. ".txt"
+        local m, desc, stored, valid = hw_state(zip, root, G)
+        if m and not valid then
+            local fin, first, samples = Forge.finish(m.finish), nil, {}
+            local function sample()
+                if first then samples[#samples + 1] = string.format("%s@%08x", first[1], E.Zip.crc32(first[2])) end
+                first = nil
+            end
+            local function put(name, data)
+                local W, H, px = Forge.decode(data)
+                if not W then return end
+                local png = Forge.png_packed(W, H, Forge.hw_recolour(W, H, px, fin, m, G.cap), E.Zip.crc32)
+                files[name] = png
+                first = first or { name, png }
+            end
+            for _, p in ipairs(G.parts or {}) do
+                local on = p[4][chosen(p[1])]
+                for _, img in ipairs(p[2]) do
+                    for _, sc in ipairs(Forge.SCALES) do
+                        local file = sc[1] .. img .. ".png"
+                        if on then
+                            local data = E.parts.read(zip, nil, p[1], p[3] == "chosen" and chosen(p[1]) or p[3], file)
+                            if data then put(root .. "/" .. file, data) end
+                        elseif stored then
+                            -- not hardware now: the part's own images back
+                            local data = E.parts.read(zip, nil, p[1], chosen(p[1]), file)
+                            if data then files[root .. "/" .. file] = data end
+                        end
+                    end
+                end
+                sample()
+            end
+            for _, set in ipairs(G.theme or {}) do
+                for _, sc in ipairs(Forge.SCALES) do
+                    for _, img in ipairs(set) do
+                        local name, orig = root .. "/" .. sc[1] .. img .. ".png", root .. "/tk_orig/" .. sc[1] .. img .. ".png"
+                        if not now_crc(zip, orig) then files[orig] = now_data(zip, name) end
+                    end
+                    local src = files[root .. "/tk_orig/" .. sc[1] .. set[1] .. ".png"] or now_data(zip, root .. "/tk_orig/" .. sc[1] .. set[1] .. ".png")
+                    if src then
+                        local W, H, px = Forge.decode(src)
+                        if W then
+                            local png = Forge.png_packed(W, H, Forge.hw_recolour(W, H, px, fin, m, false), E.Zip.crc32)
+                            for _, img in ipairs(set) do files[root .. "/" .. sc[1] .. img .. ".png"] = png end
+                            first = first or { root .. "/" .. sc[1] .. set[1] .. ".png", png }
+                        end
+                    end
+                end
+                sample()
+            end
+            files[keyname] = desc .. "|" .. (#samples > 0 and concat(samples, ";") or "-@0")
+        elseif not m and stored then
+            -- back to as it comes
+            for _, p in ipairs(G.parts or {}) do
+                for _, img in ipairs(p[2]) do
+                    for _, sc in ipairs(Forge.SCALES) do
+                        local file = sc[1] .. img .. ".png"
+                        local data = E.parts.read(zip, nil, p[1], chosen(p[1]), file)
+                        if data then files[root .. "/" .. file] = data end
+                    end
+                end
+            end
+            for _, set in ipairs(G.theme or {}) do
+                for _, sc in ipairs(Forge.SCALES) do
+                    for _, img in ipairs(set) do
+                        local orig = root .. "/tk_orig/" .. sc[1] .. img .. ".png"
+                        local data = now_data(zip, orig)
+                        if data then
+                            files[root .. "/" .. sc[1] .. img .. ".png"] = data
+                            files[orig] = false
+                        end
+                    end
+                end
+            end
+            files[keyname] = false
+        end
+    end
+    return files
+end
+
+-- after parts were written (parts.together): the hardware drawn again where they went over it
+function Forge.hw_ensure()
+    if not E or not E.look.current() then return false end
+    Forge.load()
+    local zip = E.parts.zip_path()
+    local root = E.Zip.root(zip)
+    if not root then return false end
+    local files = Forge.hw_files(zip, root)
+    if next(files) == nil then return false end
+    local ok = E.Zip.replace(zip, files)
+    if ok then E.parts.reload() end
+    return ok
+end
+
+-- ---- presets and undo: which material is on what, with its settings
+local USE_KINDS = { "tcp", "mcp", "trans", "rails", "hw_knobs", "hw_caps", "hw_brackets", "hw_screws" }
+
+function Forge.saved_lines(lines)
+    Forge.load()
+    for _, kind in ipairs(USE_KINDS) do
+        local id = Forge.applied.use[kind]
+        local m = Forge.get(Forge.applied, id)
+        if m then lines[#lines + 1] = "material:" .. kind .. "=" .. id .. "|" .. fields_line(m) end
+    end
+end
+
+-- a preset's (or undo's) materials back on their plates: the same material where your
+-- library still has it as it was, else kept as a saved one "<name> (<label>)". A preset
+-- from before materials were kept leaves them as they are (false). Run before Forge.ensure
+function Forge.from_saved(text, label)
+    if not E then return false end
+    Forge.load()
+    local lib, got, any = Forge.applied, {}, false
+    for kind, id, fields in ("\n" .. text):gmatch("[\r\n]material:([%w_]+)=([^|\r\n]+)|([^\r\n]*)") do
+        any = true
+        local m = parse_fields(fields, new_base("Silver"))
+        local have = Forge.get(lib, id)
+        if have and same(have, m) then
+            got[kind] = id
+        else
+            local name = (id:match("^%a+:(.*)$") or m.finish) .. " (" .. label .. ")"
+            if not lib.saved[name] then lib.order[#lib.order + 1] = name end
+            lib.saved[name] = m
+            got[kind] = "saved:" .. name
+        end
+    end
+    if not any then return false end
+    for _, kind in ipairs(USE_KINDS) do lib.use[kind] = got[kind] end
+    save()
+    Forge.draft = copy_lib(lib)
+    ui.picked = {}
+    rust_param()
+    return true
+end
+
 function Forge.discard()
     Forge.draft = copy_lib(Forge.applied)
     ui.picked = {}
+    ui.plate = { v = {}, scratch = false, graffiti = false }
 end
 
 -- ---- pictures: a plate in a material, made in memory
@@ -1941,6 +2424,17 @@ end
 -- a track panel plate in material m, w x h at 100% (drawn at 200% and halved), with its
 -- corrosion; as a table of 4-byte strings
 local function picture(m, w, h)
+    if Forge.finish(m.finish).plain then
+        local tiles = {}
+        local list = (m.track or 0) > 0 and { 0xC83C3C, 0x3C78DC, 0xF0C828, 0x78C85A, 0x9658D2 } or { m.colour or 0xA0282C }
+        for y = 0, h - 1 do
+            for x = 0, w - 1 do
+                local c = list[math.floor(x * #list / w) + 1]
+                tiles[#tiles + 1] = char((c >> 16) & 255, (c >> 8) & 255, c & 255, 255)
+            end
+        end
+        return tiles
+    end
     local reader = reader_now()
     if not reader then return nil end
     local fin = Forge.finish(m.finish)
@@ -1970,7 +2464,7 @@ local function image_of(tiles, w, h)
 end
 
 local function recipe(m)
-    return string.format("%s|%.2f|%.2f|%.2f|%d", m.finish, m.gloss, m.contrast, m.corrosion, m.seed)
+    return string.format("%s|%.2f|%.2f|%.2f|%d|%06x|%d", m.finish, m.gloss, m.contrast, m.corrosion, m.seed, m.colour or 0, m.track or 0)
 end
 
 -- the small picture of a material (120 x 28), made once; one new one per frame at most, so
@@ -2038,6 +2532,9 @@ local function used_on(lib, id)
         local now = Forge.current(p[1])
         if lib.use[p[1]] == id and now == id then list[#list + 1] = p[2] end
     end
+    for _, G in ipairs(Forge.HW) do
+        if lib.use[G.key] == id then list[#list + 1] = G.label end
+    end
     return concat(list, ", ")
 end
 
@@ -2079,8 +2576,25 @@ local function tiles_row(list)
     end
 end
 
+-- a plate setting as the page shows it: picked, or as it is
+local function plate_value(name)
+    local v = ui.plate.v[name]
+    if v == nil then v = param(name) or 0 end
+    return v
+end
+
 local function changes()
     local a, d, out = Forge.applied, Forge.draft, {}
+    for _, s in ipairs(Forge.PLATE_SETTINGS) do
+        local v = ui.plate.v[s[1]]
+        if v ~= nil and v ~= (param(s[1]) or 0) then out[#out + 1] = s[2] .. "  ->  " .. s[3][v + 1] end
+    end
+    local cof = ui.plate.v.tkCoffee
+    if cof ~= nil and cof ~= (param("tkCoffee") or 0) then
+        out[#out + 1] = cof > 0 and ("Coffee ring on track " .. cof) or "Coffee ring wiped off"
+    end
+    if ui.plate.scratch then out[#out + 1] = "New scratches" end
+    if ui.plate.graffiti then out[#out + 1] = "New graffiti" end
     for _, f in ipairs(Forge.FINISHES) do
         if not same(a.bases[f.name], d.bases[f.name]) then out[#out + 1] = f.name .. " changed" end
     end
@@ -2091,11 +2605,18 @@ local function changes()
     for _, n in ipairs(a.order) do
         if not d.saved[n] then out[#out + 1] = "Deleted: " .. n end
     end
-    for _, p in ipairs(PLATES) do
-        local picked = ui.picked[p[1]] and not Forge.current(p[1])
+    for _, p in ipairs({ PLATES[1], PLATES[2], PLATES[3], { "rails", "Rails" } }) do
+        local current = p[1] == "rails" and Forge.rail_current() or (p[1] ~= "rails" and Forge.current(p[1]))
+        local picked = ui.picked[p[1]] and not current
         if d.use[p[1]] ~= a.use[p[1]] or picked then
             local _, name = Forge.get(d, d.use[p[1]])
             out[#out + 1] = p[2] .. "  ->  " .. (name or "?")
+        end
+    end
+    for _, G in ipairs(Forge.HW) do
+        if d.use[G.key] ~= a.use[G.key] then
+            local _, name = Forge.get(d, d.use[G.key])
+            out[#out + 1] = G.label .. "  ->  " .. (name or "As now")
         end
     end
     return out
@@ -2111,7 +2632,7 @@ end
 function Forge.draw()
     local r, ctx = E.r, E.ctx
     Forge.load()
-    E.hint_text("Pick a material and set it up, then choose which plates use it. Nothing is built until you press Apply. New in 0.9.80, and still growing.")
+    E.hint_text("Pick a material and set it up, then choose which plates use it. Nothing is built until you press Apply.")
     r.ImGui_Dummy(ctx, 0, 2)
     if not E.look.current() then
         E.hint_text("Choose one of TK Theme's looks first.")
@@ -2119,6 +2640,106 @@ function Forge.draw()
     end
     local d = Forge.draft
     if not Forge.get(d, ui.sel) then ui.sel = Forge.current("tcp") or Forge.current("mcp") or "base:Silver" end
+
+    -- the selected material's settings and preview, drawn right under the row it is in
+    local function editor()
+        local m, name = Forge.get(d, ui.sel)
+        local fin = Forge.finish(m.finish)
+        local is_base = ui.sel:match("^base:") ~= nil
+        if E.begin_card(name, "forge_edit") then
+            local own = fin.name == "Silver" or fin.name == "Black"
+            local info = (is_base and "base material" or ("saved, from " .. m.finish))
+                .. (own and ", the theme's own plate" or fin.plain and ", one flat colour, nothing drawn" or (", made from " .. Forge.source(fin)))
+            local where = used_on(Forge.applied, ui.sel)
+            if where ~= "" then info = info .. "   ·   used on: " .. where end
+            if Forge.factory(m) then info = info .. "   ·   as it comes: the theme's own images" end
+            soft(info)
+            r.ImGui_Dummy(ctx, 0, 2)
+            local labels = fin.labels or {}
+            if fin.plain then
+                E.row_label("Colour")
+                local track = (m.track or 0) > 0
+                if chip("Fixed colour", not track, 110) then m.track = 0 end
+                r.ImGui_SameLine(ctx, 0, 2)
+                if chip("Track colour", track, 110) then m.track = 1 end
+                if not track then
+                    E.row_label("")
+                    local changed, col = r.ImGui_ColorEdit3(ctx, "##plain_colour", m.colour or 0xA0282C)
+                    if changed then m.colour = col end
+                end
+                E.row_label("Screws")
+                local screws = (m.fasten or 1) == 6
+                if chip("Off", not screws, 60) then m.fasten = 1 end
+                r.ImGui_SameLine(ctx, 0, 2)
+                if chip("On", screws, 60) then m.fasten = 6 end
+                E.hint_text("The plate in one colour, nothing drawn: knobs, glass and the rest stay as they are. Track colour: every track its own (the transport takes the fixed one). Screws: in the corners of the track panels and the mixer, in the metal chosen under Hardware.")
+                goto plain_done
+            end
+            if labels.gloss ~= false then m.gloss = percent(labels.gloss or "Gloss", "gloss", m.gloss) end
+            m.contrast = percent(labels.contrast or "Contrast", "contrast", m.contrast)
+            m.corrosion = percent(Forge.CORR_LABEL[fin.corr], "corr", m.corrosion)
+            if fin.fastens then
+                E.row_label("Fastening")
+                for i, name in ipairs(Forge.FASTENINGS) do
+                    if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
+                    if chip(name, (m.fasten or 1) == i) then m.fasten = i end
+                end
+            end
+            E.row_label("Pattern")
+            r.ImGui_Text(ctx, tostring(m.seed))
+            r.ImGui_SameLine(ctx)
+            if r.ImGui_Button(ctx, "New pattern") then m.seed = math.floor(r.time_precise() * 1000) % 999983 + 1 end
+            ::plain_done::
+            r.ImGui_Dummy(ctx, 0, 2)
+            r.ImGui_SetCursorPosX(ctx, E.LABEL_W)
+            if is_base then
+                if r.ImGui_Button(ctx, "Reset") then d.bases[m.finish] = new_base(m.finish) end
+            else
+                if r.ImGui_Button(ctx, "Delete") then
+                    d.saved[name] = nil
+                    for i, n in ipairs(d.order) do if n == name then table.remove(d.order, i) break end end
+                    ui.sel = "base:" .. m.finish
+                end
+            end
+            r.ImGui_SameLine(ctx)
+            if ui.saving then
+                r.ImGui_SetNextItemWidth(ctx, 200)
+                local changed, text = r.ImGui_InputText(ctx, "##forge_name", ui.saving)
+                if changed then ui.saving = text:gsub("[:=\r\n]", "") end
+                r.ImGui_SameLine(ctx)
+                local nm = (ui.saving or ""):match("^%s*(.-)%s*$")
+                local taken = d.saved[nm] ~= nil
+                if r.ImGui_Button(ctx, "Save") and nm ~= "" and not taken then
+                    local c = copy(m)
+                    d.saved[nm] = c
+                    d.order[#d.order + 1] = nm
+                    ui.sel, ui.saving = "saved:" .. nm, nil
+                end
+                r.ImGui_SameLine(ctx)
+                if r.ImGui_Button(ctx, "Cancel") then ui.saving = nil end
+                if taken then r.ImGui_SameLine(ctx) soft("that name is taken", E.UI.warn) end
+            else
+                if r.ImGui_Button(ctx, "Save material...") then ui.saving = name .. " 2" end
+                r.ImGui_SameLine(ctx)
+                E.hint_text(is_base and "Reset: back to how " .. name .. " comes." or "Delete: plates that use it go back to " .. m.finish .. ".")
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_Dummy(ctx, 0, 2)
+
+        if E.begin_card("Preview", "forge_prev") then
+            local img = preview_image(m)
+            if img then
+                r.ImGui_Image(ctx, img, 500, 84)
+                E.hint_text(string.format("100%%, a track 84 px high (drawn in %.1f s). Here only: the theme is not touched until Apply.", preview.took or 0))
+            else
+                E.hint_text("No preview: the plates were not found in the theme.")
+            end
+            r.ImGui_EndChild(ctx)
+        end
+        r.ImGui_Dummy(ctx, 0, 2)
+
+    end
 
     if E.begin_card("Materials", "forge_lib") then
         for _, group in ipairs(Forge.GROUPS) do
@@ -2134,6 +2755,8 @@ function Forge.draw()
             end
             tiles_row(bases)
             r.ImGui_Dummy(ctx, 0, 2)
+            local sel = ui.sel:match("^base:(.*)$")
+            if sel and (Forge.finish(sel).group or "Metal") == group then editor() end
         end
         r.ImGui_Dummy(ctx, 0, 4)
         soft("Saved")
@@ -2147,82 +2770,10 @@ function Forge.draw()
                 saved[#saved + 1] = { id, d.saved[n], n, where ~= "" and ("used: " .. where) or "", where ~= "" }
             end
             tiles_row(saved)
-        end
-        r.ImGui_EndChild(ctx)
-    end
-    r.ImGui_Dummy(ctx, 0, 2)
-
-    local m, name = Forge.get(d, ui.sel)
-    local fin = Forge.finish(m.finish)
-    local is_base = ui.sel:match("^base:") ~= nil
-    if E.begin_card(name, "forge_edit") then
-        local own = fin.name == "Silver" or fin.name == "Black"
-        local info = (is_base and "base material" or ("saved, from " .. m.finish))
-            .. (own and ", the theme's own plate" or (", made from " .. Forge.source(fin)))
-        local where = used_on(Forge.applied, ui.sel)
-        if where ~= "" then info = info .. "   ·   used on: " .. where end
-        if Forge.factory(m) then info = info .. "   ·   as it comes: the theme's own images" end
-        soft(info)
-        r.ImGui_Dummy(ctx, 0, 2)
-        local labels = fin.labels or {}
-        if labels.gloss ~= false then m.gloss = percent(labels.gloss or "Gloss", "gloss", m.gloss) end
-        m.contrast = percent(labels.contrast or "Contrast", "contrast", m.contrast)
-        m.corrosion = percent(Forge.CORR_LABEL[fin.corr], "corr", m.corrosion)
-        if fin.fastens then
-            E.row_label("Fastening")
-            for i, name in ipairs(Forge.FASTENINGS) do
-                if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
-                if chip(name, (m.fasten or 1) == i) then m.fasten = i end
+            if ui.sel:match("^saved:") then
+                r.ImGui_Dummy(ctx, 0, 2)
+                editor()
             end
-        end
-        E.row_label("Pattern")
-        r.ImGui_Text(ctx, tostring(m.seed))
-        r.ImGui_SameLine(ctx)
-        if r.ImGui_Button(ctx, "New pattern") then m.seed = math.floor(r.time_precise() * 1000) % 999983 + 1 end
-        r.ImGui_Dummy(ctx, 0, 2)
-        r.ImGui_SetCursorPosX(ctx, E.LABEL_W)
-        if is_base then
-            if r.ImGui_Button(ctx, "Reset") then d.bases[m.finish] = new_base(m.finish) end
-        else
-            if r.ImGui_Button(ctx, "Delete") then
-                d.saved[name] = nil
-                for i, n in ipairs(d.order) do if n == name then table.remove(d.order, i) break end end
-                ui.sel = "base:" .. m.finish
-            end
-        end
-        r.ImGui_SameLine(ctx)
-        if ui.saving then
-            r.ImGui_SetNextItemWidth(ctx, 200)
-            local changed, text = r.ImGui_InputText(ctx, "##forge_name", ui.saving)
-            if changed then ui.saving = text:gsub("[:=\r\n]", "") end
-            r.ImGui_SameLine(ctx)
-            local nm = (ui.saving or ""):match("^%s*(.-)%s*$")
-            local taken = d.saved[nm] ~= nil
-            if r.ImGui_Button(ctx, "Save") and nm ~= "" and not taken then
-                local c = copy(m)
-                d.saved[nm] = c
-                d.order[#d.order + 1] = nm
-                ui.sel, ui.saving = "saved:" .. nm, nil
-            end
-            r.ImGui_SameLine(ctx)
-            if r.ImGui_Button(ctx, "Cancel") then ui.saving = nil end
-            if taken then r.ImGui_SameLine(ctx) soft("that name is taken", E.UI.warn) end
-        else
-            if r.ImGui_Button(ctx, "Save material...") then ui.saving = name .. " 2" end
-            r.ImGui_SameLine(ctx)
-            E.hint_text(is_base and "Reset: back to how " .. name .. " comes." or "Delete: plates that use it go back to " .. m.finish .. ".")
-        end
-        r.ImGui_EndChild(ctx)
-    end
-    r.ImGui_Dummy(ctx, 0, 2)
-
-    if E.begin_card("Preview", "forge_prev") then
-        local img = preview_image(m)
-        if img then
-            r.ImGui_Image(ctx, img, 500, 84)
-            E.hint_text(string.format("100%%, a track 84 px high (drawn in %.1f s). Here only: the theme is not touched until Apply.", preview.took or 0))
-        else
-            E.hint_text("No preview: the plates were not found in the theme.")
         end
         r.ImGui_EndChild(ctx)
     end
@@ -2261,6 +2812,140 @@ function Forge.draw()
                     or "Style is not Material now: pick a material here to make it so", ui.picked[kind] and E.UI.warn or E.UI.dim)
             end
         end
+        -- the rails: beside the track panels (and the master and envelope lanes), the mixer's armrest
+        do
+            local id = d.use.rails or Forge.rail_current() or "base:Walnut"
+            local rm, shown = Forge.get(d, id)
+            E.row_label("Rails")
+            local img = Forge.thumb(rm)
+            if img then
+                r.ImGui_Image(ctx, img, 60, 14)
+                r.ImGui_SameLine(ctx)
+            end
+            r.ImGui_SetNextItemWidth(ctx, 200)
+            if r.ImGui_BeginCombo(ctx, "##use_rails", shown or "Choose...") then
+                for _, it in ipairs(all) do
+                    if Forge.finish(it[2].finish).plain then goto next_rail end
+                    local timg = Forge.thumb(it[2])
+                    if timg then
+                        r.ImGui_Image(ctx, timg, 60, 14)
+                        r.ImGui_SameLine(ctx)
+                    end
+                    if r.ImGui_Selectable(ctx, it[3] .. "##r" .. it[1], it[1] == id) then
+                        d.use.rails = it[1]
+                        ui.picked.rails = true
+                    end
+                    ::next_rail::
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            if not Forge.rail_current() then
+                r.ImGui_SameLine(ctx)
+                soft(ui.picked.rails and "Rails become Material on Apply"
+                    or "Rails are not Material now: pick a material here to make them so", ui.picked.rails and E.UI.warn or E.UI.dim)
+            end
+        end
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_Dummy(ctx, 0, 2)
+
+    if E.begin_card("Hardware", "forge_hw") then
+        local metals = {}
+        for _, it in ipairs(names_in(d)) do
+            if Forge.is_metal(it[2]) then metals[#metals + 1] = it end
+        end
+        local function chosen(part) return E.parts.chosen[part] or E.parts.default[part] or "" end
+        for _, G in ipairs(Forge.HW) do
+            local id = d.use[G.key]
+            local m, shown = Forge.get(d, id)
+            E.row_label(G.label)
+            local img = m and Forge.thumb(m)
+            if img then
+                r.ImGui_Image(ctx, img, 60, 14)
+                r.ImGui_SameLine(ctx)
+            end
+            r.ImGui_SetNextItemWidth(ctx, 200)
+            if r.ImGui_BeginCombo(ctx, "##" .. G.key, shown or "As now") then
+                if r.ImGui_Selectable(ctx, "As now##" .. G.key, id == nil) then d.use[G.key] = nil end
+                for _, it in ipairs(metals) do
+                    local timg = Forge.thumb(it[2])
+                    if timg then
+                        r.ImGui_Image(ctx, timg, 60, 14)
+                        r.ImGui_SameLine(ctx)
+                    end
+                    if r.ImGui_Selectable(ctx, it[3] .. "##" .. G.key .. it[1], it[1] == id) then d.use[G.key] = it[1] end
+                end
+                r.ImGui_EndCombo(ctx)
+            end
+            -- where the shape chosen isn't hardware, there is nothing to colour
+            if id and G.parts then
+                local any = false
+                for _, p in ipairs(G.parts) do if p[4][chosen(p[1])] then any = true end end
+                if not any then
+                    r.ImGui_SameLine(ctx)
+                    soft(G.key == "hw_knobs" and "shows with Style Material (its hardware knobs)"
+                        or "shows with the Hardware fader handle", E.UI.dim)
+                end
+            end
+            if G.key == "hw_knobs" then
+                r.ImGui_SameLine(ctx, 0, 12)
+                if r.ImGui_Button(ctx, "Same for all") then
+                    for _, H in ipairs(Forge.HW) do d.use[H.key] = id end
+                end
+            end
+        end
+        E.hint_text("Knobs and caps keep their shape (the parts you chose); only the metal changes. Screws: the transport's. The mute, solo and record keys keep their colours.")
+        r.ImGui_EndChild(ctx)
+    end
+    r.ImGui_Dummy(ctx, 0, 2)
+
+    -- wear, a coffee ring and graffiti on whatever plate shows: picked here, drawn on Apply
+    if E.begin_card("On the plates", "forge_on") then
+        if (param("tkTcpPlate") or 0) == 0 and (param("tkMcpPlate") or 0) == 0 then
+            E.hint_text("With a plate on the track panel or the mixer (their Style: Material).")
+        else
+            local function pick(name, i)
+                ui.plate.v[name] = (i ~= (param(name) or 0)) and i or nil
+            end
+            for _, s in ipairs(Forge.PLATE_SETTINGS) do
+                local shown = true
+                for _, need in ipairs(s.needs or {}) do if plate_value(need) == 0 then shown = false end end
+                if shown then
+                    E.row_label(s[2])
+                    local now = plate_value(s[1])
+                    for i, label in ipairs(s[3]) do
+                        if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
+                        if chip(label .. "##" .. s[1], now == i - 1, 96) then pick(s[1], i - 1) end
+                    end
+                    if s[1] == "tkPatina" and now > 0 then
+                        E.row_label("")
+                        if r.ImGui_Button(ctx, "New scratches") then ui.plate.scratch = true end
+                        if ui.plate.scratch then r.ImGui_SameLine(ctx) soft("new ones on Apply", E.UI.warn) end
+                        -- the coffee ring, under the wear
+                    end
+                    if s[1] == "tkPatina" then
+                        E.row_label("Coffee ring")
+                        local cof = plate_value("tkCoffee")
+                        if cof > 0 then
+                            r.ImGui_AlignTextToFramePadding(ctx)
+                            r.ImGui_Text(ctx, "On track " .. cof)
+                            r.ImGui_SameLine(ctx, 0, 8)
+                        end
+                        if r.ImGui_Button(ctx, cof > 0 and "Spill again" or "Spill") then pick("tkCoffee", E.patina.spill()) end
+                        if cof > 0 then
+                            r.ImGui_SameLine(ctx, 0, 2)
+                            if r.ImGui_Button(ctx, "Wipe off") then pick("tkCoffee", 0) end
+                        end
+                    end
+                end
+            end
+            if plate_value("tkGraffiti") > 0 then
+                E.row_label("")
+                if r.ImGui_Button(ctx, "New graffiti") then ui.plate.graffiti = true end
+                if ui.plate.graffiti then r.ImGui_SameLine(ctx) soft("new graffiti on Apply", E.UI.warn) end
+            end
+        end
+        E.hint_text("For the track panel and the mixer together. Like the rest of this page: drawn on Apply.")
         r.ImGui_EndChild(ctx)
     end
     r.ImGui_Dummy(ctx, 0, 6)

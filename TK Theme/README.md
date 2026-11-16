@@ -50,23 +50,34 @@ lists, menus and borders. That takes effect after a restart.
   and lighten its plate.
 - **Materials (new):** make the plates your own on the Materials page: metals (Gunmetal, Titanium,
   Copper, Brass, Bronze, Anodized blue, red and black), cardboard (Kraft, Grey board, White board),
-  wood (Teak, Walnut) and cork. Each has its own wear: rust, verdigris, oxide or heat tint on metal,
+  wood (Teak, Walnut), cork, and Plain: one flat colour, a fixed one or each track's own, with or
+  without screws. Each has its own wear: rust, verdigris, oxide or heat tint on metal,
   water stains and creases on board, worn varnish on wood, dents on cork; staples, tape, push pins or
   screws can hold it. Drawn on your own computer from the theme's own plates: nothing extra to download.
   Save a setting under a name of its own, and use another material on the track panel, the mixer
-  and the transport. Materials go along in theme codes.
-- **Wear and a coffee ring:** scratches and rubbed edges on the plates (Light, Used, Road-worn), drawn
-  from a seed of your own so no two setups look the same, and a coffee ring on one track.
-- **Wood:** walnut or teak rails beside the plates, on the left and optionally on the right,
-  with the track number, folder buttons and track colour on them; the master too. The mixer
-  can have a wooden armrest under its strips.
+  and the transport. Materials go along in theme codes and presets. Nothing is drawn until Apply.
+- **Hardware in metal:** knobs, fader caps, folder brackets and the transport's screws in any metal
+  (Materials page, Hardware). The knobs keep their shape, their ticks and pointer; only the cap changes.
+- **Fader caps:** on a mixer with a plate, Console, Long throw, Chrome, Colour cap (in your accent
+  colour), Round top, Wide grip, or Studio, a finely detailed machined cap (Mixer page, Fader cap).
+- **On the plates:** wear (Light, Used, Road-worn), a coffee ring on one track, and graffiti: spray
+  paint, splats with drips and doodles, Light or Wild, in neon or your accent colour, every track its
+  own, with the track names on torn stickers if you like, in the graffiti's colours or the track's
+  (Materials page, On the plates). All drawn from a seed of your own, so no two setups look the same.
+- **Rails:** walnut or teak rails beside the plates, or any material from the Materials page, on the
+  left and optionally on the right, with the track number, folder buttons and track colour on them;
+  the master too. The mixer can have an armrest under its strips.
 - **Darkness:** Black takes Dark's arrange, lanes, lists, mixer, MIDI editor and dockers close to black.
 - **Red Devil:** one click on the Presets page: Dark in red and near black, with the Red Devil on a black plate.
 - **Blue Angel:** one click on the Presets page: Dark in blue, with a blue display and the Blue Angel on a silver plate.
 - **Black Metal** and **Quicksilver:** one click each on the Presets page: the whole rack in black with walnut
   and red, or in silver with teak and blue, each with its own logo on the transport plate.
-- **Colour settings:** Standard, Warm, Cool, Neutral and Inverted, for the arrange, grid, mixer
-  background and lists. Inverted gives Dark a light arrange and Light a dark one.
+- **Colour settings:** Standard, Warm, Cool and Neutral, for the arrange, grid, mixer
+  background and lists. The Inverted switch gives Dark a light arrange and Light a dark one,
+  in any of the four.
+- **Colours page:** your own colours for the arrange (also the empty area under the track panels,
+  the lines between tracks, play cursor and area selection), the timeline, markers and regions,
+  media items and their names, the mixer and the lists. They go along in presets and theme codes.
 - **Meters:** six types with colour steps, and segments in three sizes. The steps assume
   REAPER's standard meter range of -60 to +6 dB. The meter lying in a track panel plate has a
   choice of its own: the same type, or round lamps as on old hi-fi gear, Long or Short. Unlit

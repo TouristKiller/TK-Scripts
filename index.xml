@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.80" author="TouristKiller" time="2026-11-16T10:05:17Z">
+    <version name="0.9.90" author="TouristKiller" time="2026-11-16T21:29:06Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -215,6 +215,7 @@
      <source file="TK_Theme_Code.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Code.lua</source>
      <source file="TK_Theme_Patina.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Patina.lua</source>
      <source file="TK_Theme_Forge.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Forge.lua</source>
+     <source file="TK_Theme_Graffiti.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Graffiti.lua</source>
      <source file="dist/darkmode_colors.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/darkmode_colors.txt</source>
      <source file="dist/plate_font.bin">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/plate_font.bin</source>
      <source file="dist/TK Theme Dark.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Dark.factory.ReaperTheme</source>
@@ -224,11 +225,13 @@
      <source file="dist/look_icons/TK Theme Dark.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/look_icons/TK%20Theme%20Dark.zip</source>
      <source file="dist/look_icons/TK Theme Light.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/look_icons/TK%20Theme%20Light.zip</source>
      <source file="dist/accents/TK Theme Dark/blue.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/blue.zip</source>
+     <source file="dist/accents/TK Theme Dark/common.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/common.zip</source>
      <source file="dist/accents/TK Theme Dark/graphite.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/graphite.zip</source>
      <source file="dist/accents/TK Theme Dark/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/orange.zip</source>
      <source file="dist/accents/TK Theme Dark/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/red.zip</source>
      <source file="dist/accents/TK Theme Dark/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/violet.zip</source>
      <source file="dist/accents/TK Theme Light/blue.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/blue.zip</source>
+     <source file="dist/accents/TK Theme Light/common.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/common.zip</source>
      <source file="dist/accents/TK Theme Light/glass.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/glass.zip</source>
      <source file="dist/accents/TK Theme Light/graphite.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/graphite.zip</source>
      <source file="dist/accents/TK Theme Light/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/orange.zip</source>
@@ -606,12 +609,23 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Materials (a new page in Settings): make the plates your own. Metals (Gunmetal, Titanium, Copper, Brass, Bronze, Anodized blue, red and black), cardboard (Kraft, Grey board, White board), wood (Teak, Walnut) and cork, each with its own wear: rust, verdigris, oxide or heat tint on metal, water stains and creases on board, worn varnish and glass rings on wood, dents on cork. Staples, tape, push pins or screws can hold a plate. Everything is drawn on your own computer from the theme's own plates, so there is nothing extra to download. Set a material up, save it under a name of its own, and give the track panel, the mixer and the transport each their own; the master follows. Nothing is built until you press Apply.
-+ Added: Wear on the plates (Track panel and Mixer pages): Light, Used or Road-worn, with scratches and edges and corners rubbed bare. It is drawn from a seed of your own, so no two setups look the same, and New scratches draws them again. On board and cork the edges fray instead.
-+ Added: A coffee ring on one track's plate, spilt on a random track, in the mixer too. Spill again, or wipe it off.
-+ Changed: Style on the Track panel and Mixer pages is now Standard, Basic or Material, and the transport's Plate is Standard or Material. Silver and Black are under Material, next to your own materials. Your settings, presets and theme codes keep working as they did.
-+ Changed: Choices in Settings that change images (handles, meters, wear, your own name, materials) take about half the time: the theme is opened again directly instead of loading a full copy first. A Style change no longer reloads twice, and applying a theme code reloads once instead of up to four times.
-+ Changed: Theme codes take the plates' own materials along, so a code with copper plates gives copper plates elsewhere.
++ Added: Hardware in a metal of your own (Materials page, Hardware): knobs, fader caps, folder brackets and the transport's screws in any metal. The knobs keep their shape, ticks and white pointer; only the cap takes the metal.
++ Added: Fader caps for a mixer with a plate (Mixer page, Fader cap): Console, Long throw, Chrome, Colour cap in your accent colour, Round top, Wide grip, and Studio, a finely detailed machined cap.
++ Added: Plain, a new material: the plates in one flat colour, a fixed one or each track's own colour, with or without screws in the corners. Nothing is drawn, so it is there at once.
++ Added: Rails in any material: Rails (Track panel and Mixer pages) is now Off, Walnut, Teak or Material, with the material chosen on the Materials page.
++ Added: Graffiti on the plates: spray paint, splats with drips and doodles, Light or Wild, in neon or your accent colour, every track its own. Optionally the track names on torn stickers, in the graffiti's colours or in the track colour. Drawn from a seed of your own, like the wear.
++ Added: More on the Colours page: the empty area under the track panels on its own, the lines between tracks, play cursor, area selection, the timeline, markers and regions, and item names.
++ Changed: Wear, the coffee ring and graffiti moved to the Materials page (On the plates). Each is one setting for the track panel and the mixer together, and like the rest of that page they are drawn when you press Apply.
++ Changed: Inverted is now a switch beside Standard, Warm, Cool and Neutral: the other look's arrange in any of the four colour settings.
++ Changed: On the Materials page the selected material's settings appear right under its row.
++ Changed: The General page hides what a plate covers (track colour strength, selection strength, the lines in track colour) when both the track panel and the mixer have one.
++ Changed: Presets keep the materials on the plates, rails and hardware, and show them at once when loaded.
++ Changed: A smaller download: what the accent colours share is shipped once, about 79 MB instead of 112.
++ Fixed: Opening the settings window with hardware knobs on a plate wrote the theme again and reloaded it twice each time (a flicker and up to half a minute). It now opens in a few seconds without reloading.
++ Fixed: On the master, the plate's corrosion, wear and fastening ran over the right rail.
++ Fixed: On a folder, the bottom left fastening went through the bracket's head.
++ Fixed: Between a side window and a meter on the right, a plate now keeps your own section margin instead of 20 pixels.
++ Fixed: The level's label grows with the interface scale (from REAPER 7.86's Default 7, which the theme now builds on).
 ]]></changelog>
     </version>
     </reapack>

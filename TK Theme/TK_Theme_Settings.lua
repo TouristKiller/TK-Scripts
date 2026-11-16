@@ -253,6 +253,24 @@ local function expand(param, layouts, also)
 end
 
 local state = { page = 1, restart = false, msg = nil, confirm = nil, factory_dark = false }
+-- what opening the window did, step by step (Data/TK Theme/open_log.txt), to find what is slow
+-- (only with "openlog" in Data/TK Theme/dev.txt)
+do
+    local f = io.open(r.GetResourcePath() .. "/Data/TK Theme/dev.txt", "rb")
+    local dev = f and f:read("a") or ""
+    if f then f:close() end
+    if dev:find("openlog", 1, true) then
+        state.log_t0 = r.time_precise()
+        state.log_file = r.GetResourcePath() .. "/Data/TK Theme/open_log.txt"
+        local g = io.open(state.log_file, "wb")
+        if g then g:write("") g:close() end
+    end
+end
+function state.log(msg)
+    if not state.log_t0 or r.time_precise() - state.log_t0 > 120 then return end
+    local f = io.open(state.log_file, "ab")
+    if f then f:write(string.format("%7.2f s  %s\n", r.time_precise() - state.log_t0, msg)) f:close() end
+end
 
 -- Rebuilding the theme (writing its zip, reloading it) holds the window still for a moment.
 -- A change started in the window waits two frames while "Rebuilding theme..." shows, then
@@ -375,6 +393,37 @@ local function all_basic()
     return global_value("tkTcpBasic") and not global_value("tkTcpPlate") and global_value("tkMcpBasic") and not global_value("tkMcpPlate")
 end
 
+-- on the plates, whichever shows one (Materials page, On the plates): one setting each for
+-- the track panel and the mixer together
+-- (kept on state, not as locals: the main chunk is at Lua's limit of 200)
+state.any_plate = function() return global_value("tkTcpPlate") or global_value("tkMcpPlate") end
+state.PLATE_ITEMS = {
+    Off(function() return not state.any_plate() end, { kind = "choice", label = "Wear", param = "tkPatina",
+      choices = { "Off", "Light", "Used", "Road-worn" }, after = function() patina.ensure() end,
+      hint = "Scratches, rubbed edges and corners, on the plates of the track panel and the mixer. Drawn for you alone: no one else has the same." }),
+    Off(function() return not (state.any_plate() and global_value("tkPatina")) end, { kind = "rescratch", label = "" }),
+    Off(function() return not state.any_plate() end, { kind = "coffee", label = "Coffee ring" }),
+    Off(function() return not state.any_plate() end, { kind = "choice", label = "Graffiti", param = "tkGraffiti",
+      choices = { "Off", "Light", "Wild" }, after = function() patina.graffiti_ensure() end,
+      hint = "Spray paint, splats with drips and doodles on the plates of the track panel and the mixer, every track its own. Drawn for you alone." }),
+    Off(function() return not (state.any_plate() and global_value("tkGraffiti")) end, { kind = "choice", label = "Graffiti colours", param = "tkGrafColours",
+      choices = { "Neon", "Accent" }, after = function() patina.graffiti_ensure() end,
+      hint = "Neon: pink, yellow, cyan, green, orange and violet. Accent: your accent colour, lighter and darker, with white and black." }),
+    Off(function() return not (state.any_plate() and global_value("tkGraffiti")) end, (function()
+        local item = T("Name stickers", "tkGrafSticker", nil, "Each track's name on a torn sticker over its window, in the graffiti's colours; the name dark on it.")
+        item.after = function() patina.graffiti_ensure() end
+        return item
+    end)()),
+    Off(function() return not (state.any_plate() and global_value("tkGraffiti") and global_value("tkGrafSticker")) end, { kind = "choice", label = "Sticker colour",
+      param = "tkGrafStkCol", choices = { "Graffiti", "Track colour" }, after = function() patina.graffiti_ensure() end,
+      hint = "Track colour: white sticker paper with the track's colour printed on it, the name dark or white to match. A track without a colour keeps the graffiti's." }),
+    Off(function() return not (state.any_plate() and global_value("tkGraffiti")) end, { kind = "regraffiti", label = "" }),
+}
+
+-- what a plate covers: the panel's track colour fill, the selection's overlay and the lines on
+-- sliders it has no sliders for. Hidden when both the track panel and the mixer have a plate
+state.both_plates = function() return global_value("tkTcpPlate") and global_value("tkMcpPlate") end
+
 local PAGES = {
     { title = "Look", draw = "look" },
     { title = "General", cards = {
@@ -396,10 +445,10 @@ local PAGES = {
               hint = "A faint light from the bottom edge of the display windows. Basic has none." }),
         } },
         { "Tracks and strips", {
-            S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims."),
-            T("Volume line in track colour", "tkLineVolTrk", nil, "The line on the volume slider and the mixer's fader. Off: neutral."),
-            T("Pan line in track colour", "tkLinePanTrk", nil, "The lines on pan and width. Off: neutral."),
-            S("Selection strength", "selectStrength", nil, "How much a selected track stands out."),
+            Off(state.both_plates, S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims. Not on a plate: there the track colour is the stripe on the number.")),
+            Off(state.both_plates, T("Volume line in track colour", "tkLineVolTrk", nil, "The line on the volume slider and the mixer's fader. Off: neutral. A plate's knobs and caps have none.")),
+            Off(state.both_plates, T("Pan line in track colour", "tkLinePanTrk", nil, "The lines on pan and width. Off: neutral. A plate's knobs have none.")),
+            Off(state.both_plates, S("Selection strength", "selectStrength", nil, "How much a selected track stands out. On a plate: Selected track: plate lit or LED, on the Track panel page.")),
             Grey(all_basic, T("Track names in track colour", "colorTrackLabels", nil, "Basic keeps names readable on the tint instead.")),
             T("Track names in accent colour", "tkNameAccent", nil, "Goes before the track colour."),
             T("Selection dot", "selDot", nil, "The small dot on the track number."),
@@ -430,8 +479,10 @@ local PAGES = {
             { kind = "plate", plate = "tcp", label = "Style", param = "tkTcpPlate", extra = "tkTcpBasic", part = "tcp_hw",
               hint = "Basic: no windows, the controls on the panel. Material: a brushed plate with hardware knobs and caps, made for the Dark look." },
             Off(function() return not global_value("tkTcpPlate") end, { kind = "plate_material", plate = "tcp", label = "Material" }),
-            Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Wood", param = "tkWood", choices = { "Off", "Walnut", "Teak" },
-              hint = "With a plate: the number column as a wooden rail, the track colour as a stripe on it." }),
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Rails", param = "tkWood", choices = { "Off", "Walnut", "Teak", "Material" },
+              after = function() patina.forge.rails_changed() end,
+              hint = "With a plate: the number column as a rail, the track colour as a stripe on it. Walnut and Teak are the theme's own; Material uses one from the Materials page." }),
+            Off(function() return not (global_value("tkTcpPlate") and P.tkWood and P.tkWood.value == 3) end, { kind = "plate_material", plate = "rails", label = "Rail material" }),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkWood")) end, T("Right rail", "tkRailRight", nil, "A second rail on the right.")),
             Off(function() return not global_value("tkTcpPlate") end, { kind = "part", part = "tcp_recarm", label = "Record arm",
               choices = { { "cap", "Cap" }, { "lamp", "Lamp" }, { "glass_white", "Glass white" }, { "glass_red", "Glass red" } } }),
@@ -439,11 +490,7 @@ local PAGES = {
               "A lit strip in the accent colour, in the wooden rail (without wood: on the plate's edge).")),
             Off(function() return not global_value("tkTcpPlate") end, T("Selected track: plate lit", "tkSelLit", nil,
               "The selected track's plate a step lighter; the mixer's strips too.")),
-            Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Wear", param = "tkPatina",
-              choices = { "Off", "Light", "Used", "Road-worn" }, after = function() patina.ensure() end,
-              hint = "Scratches, rubbed edges and corners, on the plates of the track panel and the mixer. Drawn for you alone: no one else has the same." }),
-            Off(function() return not (global_value("tkTcpPlate") and global_value("tkPatina")) end, { kind = "rescratch", label = "" }),
-            Off(function() return not global_value("tkTcpPlate") end, { kind = "coffee", label = "Coffee ring" }),
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "see_materials", label = "Wear and paint" }),
             Off(function() return not global_value("tkTcpPlate") end, T("Meter in the plate", "tkPlMeterIn", nil,
               "The meter lies in the plate between the controls. Its type: Meters on the General page.")),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkPlMeterIn")) end,
@@ -518,20 +565,22 @@ local PAGES = {
             { kind = "plate", plate = "mcp", label = "Style", param = "tkMcpPlate", extra = "tkMcpBasic", part = "mcp_hw", mixer_plate = true,
               hint = "Basic: no windows. Material: a brushed plate with hardware knobs, caps and fader slots, made for the Dark look." },
             Off(function() return not global_value("tkMcpPlate") end, { kind = "plate_material", plate = "mcp", label = "Material" }),
-            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Wood", param = "tkMcpWood", choices = { "Off", "Walnut", "Teak" },
-              hint = "With a plate: a wooden armrest along the bottom, with the numbers on it." }),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Rails", param = "tkMcpWood", choices = { "Off", "Walnut", "Teak", "Material" },
+              after = function() patina.forge.rails_changed() end,
+              hint = "With a plate: an armrest along the bottom, with the numbers on it. Walnut and Teak are the theme's own; Material uses one from the Materials page (the same as the track panels' rails)." }),
+            Off(function() return not (global_value("tkMcpPlate") and P.tkMcpWood and P.tkMcpWood.value == 3) end, { kind = "plate_material", plate = "rails", label = "Rail material" }),
             Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_recarm", label = "Record arm",
               choices = { { "cap", "Cap" }, { "lamp", "Lamp" }, { "glass_white", "Glass white" }, { "glass_red", "Glass red" } } }),
             Off(function() return not global_value("tkMcpPlate") end, T("Selected strip: plate lit", "tkSelLit", nil,
               "The selected strip's plate a step lighter; the track panel's too.")),
-            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Wear", param = "tkPatina",
-              choices = { "Off", "Light", "Used", "Road-worn" }, after = function() patina.ensure() end,
-              hint = "Scratches, rubbed edges and corners, on the plates of the track panel and the mixer. Drawn for you alone: no one else has the same." }),
-            Off(function() return not (global_value("tkMcpPlate") and global_value("tkPatina")) end, { kind = "rescratch", label = "" }),
-            Off(function() return not global_value("tkMcpPlate") end, { kind = "coffee", label = "Coffee ring" }),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "see_materials", label = "Wear and paint" }),
         } },
         { "Handles", {
             Off(function() return global_value("tkMcpPlate") end, { kind = "handle", label = "Fader", hint = "For all layouts." }),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_volthumb", label = "Fader cap",
+              choices = { { "hw", "Console" }, { "hw_long", "Long throw" }, { "hw_chrome", "Chrome" }, { "hw_colour", "Colour cap" },
+                          { "hw_round", "Round top" }, { "hw_wide", "Wide grip" }, { "hw_studio", "Studio" } },
+              hint = "The fader's cap on a plate. Colour cap is in your accent colour. The metal ones (Console, Chrome, Round top, Studio) take the metal chosen under Hardware on the Materials page." }),
             Off(function() return global_value("tkMcpPlate") end, { kind = "part", part = "mcp_pan", label = "Pan and width", choices = SLIDER_HANDLES,
               hint = "For all layouts and the master." }),
         } },
@@ -885,24 +934,31 @@ end
 -- the mixer's plate brings hardware handles (fader, pan and width) and keeps the ones chosen
 -- before, the Dot layouts included, to give them back with Standard
 local MIXER_HANDLES = "mixer_handles_before_plate"
+-- the hardware caps a plate can have (Mixer page, Fader cap): Console and the six more
+local function is_hw_cap(v) return (v or ""):sub(1, 2) == "hw" end
+local HW_CAP_KEPT = "mixer_hw_cap"
 local function mixer_plate_handles(parts, i)
+    local now = parts.chosen.mcp_volthumb or ""
     if i > 1 then
-        if (parts.chosen.mcp_volthumb or "") ~= "hw" then
+        if not is_hw_cap(now) then
             local vol = handle_is_dot() and "dot" or (parts.chosen.mcp_volthumb or parts.default.mcp_volthumb)
             r.SetExtState("TK Theme", MIXER_HANDLES, vol .. "|" .. (parts.chosen.mcp_pan or parts.default.mcp_pan), true)
         end
         if handle_is_dot() then set_handle(false) end
-        return { { "mcp_volthumb", "hw" }, { "mcp_pan", "hw" } }
+        -- the hardware cap chosen last (Console the first time)
+        local cap = is_hw_cap(now) and now or r.GetExtState("TK Theme", HW_CAP_KEPT)
+        return { { "mcp_volthumb", is_hw_cap(cap) and cap or "hw" }, { "mcp_pan", "hw" } }
     end
+    if is_hw_cap(now) then r.SetExtState("TK Theme", HW_CAP_KEPT, now, true) end
     local saved = r.GetExtState("TK Theme", MIXER_HANDLES)
-    if saved == "" and (parts.chosen.mcp_volthumb or "") ~= "hw" then return {} end
+    if saved == "" and not is_hw_cap(now) then return {} end
     r.DeleteExtState("TK Theme", MIXER_HANDLES, true)
     local vol, pan = saved:match("^([^|]*)|(.*)$")
     if vol == "dot" then
         set_handle(true)
         vol = nil
     end
-    return { { "mcp_volthumb", (vol and vol ~= "" and vol ~= "hw") and vol or parts.default.mcp_volthumb },
+    return { { "mcp_volthumb", (vol and vol ~= "" and not is_hw_cap(vol)) and vol or parts.default.mcp_volthumb },
              { "mcp_pan", (pan and pan ~= "" and pan ~= "hw") and pan or parts.default.mcp_pan } }
 end
 
@@ -978,8 +1034,14 @@ end
 parts.packs = {}
 function parts.pack(zip, accent)
     accent = accent or parts.chosen.accent or parts.default.accent
-    local path = here .. "dist/accents/" .. (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. "/" .. accent .. ".zip"
-    if parts.packs[path] == nil then parts.packs[path] = Zip.read_stored(path) or false end
+    local dir = here .. "dist/accents/" .. (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. "/"
+    local path = dir .. accent .. ".zip"
+    if parts.packs[path] == nil then
+        -- the accent's own files over what every accent shares (common.zip, not in older packs)
+        local own = Zip.read_stored(path)
+        local common = own and Zip.read_stored(dir .. "common.zip")
+        parts.packs[path] = own and (common and Zip.merge_stored(common, own) or own) or false
+    end
     return parts.packs[path]
 end
 
@@ -1354,8 +1416,17 @@ function parts.accent_in_zip(variant, zip, root)
         for _, name in ipairs(parts.files("light_glass", zip, variant)) do glass[name] = true end
         glass["rtconfig.txt"] = true
     end
+    -- files a part chosen other than its default puts in their place (the hardware knobs over
+    -- the accent's own, say): the part's own check sees to them. Compared here they always
+    -- differed, and the accent was written again, with every part, at each opening
+    local by_part = {}
+    for part, v in pairs(parts.chosen) do
+        if part ~= "accent" and part ~= "display" and v ~= parts.default[part] then
+            for _, name in ipairs(parts.files(part, zip, variant)) do by_part[name] = true end
+        end
+    end
     for name, data in pairs(pack) do
-        local skinned = (display and (display[name] or name == "rtconfig.txt")) or glass[name]
+        local skinned = (display and (display[name] or name == "rtconfig.txt")) or glass[name] or by_part[name]
         local want = Zip.stored_crc(pack, name)
         if name == "rtconfig.txt" and (parts.chosen.items or parts.default.items) ~= parts.default.items then
             want = Zip.crc32(parts.layout_fix(data))     -- Reversed items: the layout has its own tinttcp
@@ -1379,12 +1450,28 @@ function parts.in_zip(part, variant, zip)
         local pack = parts.pack(zip)
         if not root or not pack then return true end
         local crcs = Zip.crc_map(zip)
+        -- Basic off shares files with the hardware (R, M, S, the knobs): a hardware part
+        -- chosen puts its own there, and its own check sees to them. Compared here they always
+        -- differed, so Basic was written again over the hardware at each opening
+        local by_part = {}
+        if part == "basic" and variant == "off" then
+            for other, v in pairs(parts.chosen) do
+                if other ~= "basic" and other ~= "accent" and other ~= "display" and v ~= parts.default[other] then
+                    for _, name in ipairs(parts.files(other, zip)) do by_part[name] = true end
+                end
+            end
+        end
         for _, name in ipairs(parts.files(part, zip)) do
             local key = "parts/" .. part .. "/" .. variant .. "/" .. name
-            if pack[key] and crcs[root .. "/" .. name] ~= Zip.stored_crc(pack, key) then return false end
+            if not by_part[name] and pack[key] and crcs[root .. "/" .. name] ~= Zip.stored_crc(pack, key) then
+                if state.log then state.log("in_zip " .. part .. "=" .. variant .. ": " .. name .. " differs") end
+                return false
+            end
         end
         return true
     end
+    -- recoloured in a metal (Materials page, Hardware) and still as drawn: that is in place
+    if patina and patina.forge.hw_owns(zip, part) then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local name = parts.files(part, zip)[1]
     if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local data = parts.read(zip, nil, part, variant, name)
@@ -1406,6 +1493,7 @@ end
 -- 2026-11-15 (tests/TK_Theme_Reload_Probe2.lua), at half the time of the old way. The old
 -- way, a full copy loaded first as a stand-in, stays: "standin" in Data/TK Theme/dev.txt
 function parts.reload()
+    state.log("RELOAD, asked by:" .. (debug.traceback("", 2):gsub("\n%s*", " | "):sub(1, 400)))
     local current = parts.loaded_theme()
     r.PreventUIRefresh(1)
     if parts.standin == nil then
@@ -1436,7 +1524,12 @@ function parts.together(fn)
     if not look.current() then return fn() end
     local real, again = parts.reload, false
     parts.reload = function() again = true end
-    local ok, res, err = pcall(Zip.batch, parts.zip_path(), fn)
+    local ok, res, err = pcall(Zip.batch, parts.zip_path(), function()
+        local a, b = fn()
+        -- parts written over the hardware's metal (a Style, an accent): drawn again
+        if patina and patina.forge and patina.forge.hw_ensure then patina.forge.hw_ensure() end
+        return a, b
+    end)
     parts.reload = real
     if not ok then state.msg = "Could not change the theme file: " .. tostring(res) .. "."
     elseif res == nil and err then state.msg = "Could not change the theme file: " .. tostring(err) .. "." end
@@ -1511,19 +1604,28 @@ function parts.restore()
         parts.keep_own = true
         local ok = Zip.batch(zip, function()
             for part, variant in pairs(parts.chosen) do
-                if part ~= "basic" and not parts.in_zip(part, variant, zip) and parts.write(part, variant, zip) then wrote = true end
+                if part ~= "basic" and not parts.in_zip(part, variant, zip) then
+                    state.log("restore: " .. part .. "=" .. tostring(variant) .. " not in place, written again")
+                    if parts.write(part, variant, zip) then wrote = true end
+                end
             end
             local basic = parts.chosen.basic
-            if basic and not parts.in_zip("basic", basic, zip) and parts.write("basic", basic, zip) then wrote = true end
+            if basic and not parts.in_zip("basic", basic, zip) then
+                state.log("restore: basic=" .. basic .. " not in place, written again")
+                if parts.write("basic", basic, zip) then wrote = true end
+            end
             for rp in pairs(parts.RECARM_HW) do
                 local rv = parts.chosen[rp]
-                if rv and not parts.in_zip(rp, rv, zip) and parts.write(rp, rv, zip) then wrote = true end
+                if rv and not parts.in_zip(rp, rv, zip) then
+                    state.log("restore: " .. rp .. "=" .. rv .. " not in place, written again")
+                    if parts.write(rp, rv, zip) then wrote = true end
+                end
             end
             return true
         end)
         parts.keep_own = nil
         local changed = wrote and ok
-        if look.apply_icons(look.current()) then changed = true end
+        if look.apply_icons(look.current()) then changed = true state.log("restore: the icons written again") end
         if changed then parts.reload() end
     end)
 end
@@ -1734,7 +1836,8 @@ end
 -- the line under Style when it is Material: which material, and where to change it
 function patina.draw_plate_material(item, id)
     local F = patina.forge
-    local current = F.current(item.plate)
+    local current
+    if item.plate == "rails" then current = F.rail_current() else current = F.current(item.plate) end
     if not current then return end
     row_label(item.label)
     r.ImGui_PushID(ctx, id)
@@ -1756,7 +1859,7 @@ function patina.draw_plate_material(item, id)
             F.select(current)
             state.page, state.confirm, state.msg = page, nil, nil
         end
-    else
+    elseif item.plate ~= "rails" then
         -- without the Materials page: the theme's own two
         for i, key in ipairs({ "Silver", "Black" }) do
             if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
@@ -1786,9 +1889,95 @@ function patina.new_seed()
     write_all(patina.file, "seed=" .. patina.seed .. "\n")
 end
 
+-- Graffiti (Track panel and Mixer pages): TK_Theme_Graffiti.lua draws seven variants per plate
+-- from a seed of its own (Data/TK Theme/graffiti.txt); tk_graffiti.txt in the theme says what
+-- was drawn. Off, or without plates, its images go out of the theme again
+patina.graffiti = { lib = dofile(here .. "TK_Theme_Graffiti.lua"), file = r.GetResourcePath() .. "/Data/TK Theme/graffiti.txt" }
+
+function patina.graffiti_seed(new)
+    local G = patina.graffiti
+    if not new and G.seed then return G.seed end
+    local s = not new and read_all(G.file)
+    G.seed = s and tonumber(s:match("seed=(%d+)"))
+    if not G.seed then
+        G.seed = math.floor(r.time_precise() * 1000) % 999979 + 1
+        r.RecursiveCreateDirectory(r.GetResourcePath() .. "/Data/TK Theme", 0)
+        write_all(G.file, "seed=" .. G.seed .. "\n")
+    end
+    return G.seed
+end
+
+function patina.graffiti_ensure(force)
+    if not look.current() or not P.tkGraffiti then return false end
+    local G = patina.graffiti
+    local zip = parts.zip_path()
+    local root = Zip.root(zip)
+    if not root then return false end
+    local key_name = root .. "/tk_graffiti.txt"
+    local level = math.floor(P.tkGraffiti.value)
+    local kinds = { tcp = P.tkTcpPlate ~= nil and P.tkTcpPlate.value > 0, mcp = P.tkMcpPlate ~= nil and P.tkMcpPlate.value > 0 }
+    if level == 0 or not (kinds.tcp or kinds.mcp) then
+        if not Zip.crc_of(zip, key_name) then return false end
+        local files = { [key_name] = false }
+        for _, n in ipairs(G.lib.names()) do
+            if Zip.crc_of(zip, root .. "/" .. n) then files[root .. "/" .. n] = false end
+        end
+        Zip.replace(zip, files)
+        parts.reload()
+        return true
+    end
+    -- the colours: neon, or the accent's (as the look shows it)
+    local palette, pal_key = G.lib.PALETTES.neon, "neon"
+    if P.tkGrafColours and P.tkGrafColours.value > 0 then
+        local want, rgb = parts.chosen.accent or parts.default.accent, 0x36B9FF
+        for _, a in ipairs(parts.variants.accent or {}) do
+            if a[1] == want then rgb = look.current().name == "Dark" and a[3] or a[4] end
+        end
+        palette = G.lib.accent_palette({ rgb >> 16 & 255, rgb >> 8 & 255, rgb & 255 })
+        pal_key = string.format("%06x", rgb)
+    end
+    local seed = patina.graffiti_seed()
+    local stickers = P.tkGrafSticker ~= nil and P.tkGrafSticker.value > 0
+    local sticker_track = stickers and P.tkGrafStkCol ~= nil and P.tkGrafStkCol.value > 0
+    local key = string.format("graffiti 2|%d|%d|%s|%s|%s|%s", level, seed, kinds.tcp and "tcp" or "-", kinds.mcp and "mcp" or "-", pal_key,
+        stickers and (sticker_track and "stickers track" or "stickers") or "-")
+    if not force and Zip.crc_of(zip, key_name) == Zip.crc32(key) then return false end
+    local files = { [key_name] = key }
+    local made = G.lib.images(patina.lib.util, { level = level, seed = seed, palette = palette, kinds = kinds, stickers = stickers, sticker_track = sticker_track, png = patina.forge.png_packed }, Zip.crc32)
+    for rel, png in pairs(made) do files[root .. "/" .. rel] = png end
+    -- a plate without graffiti now: its old images out
+    for _, n in ipairs(G.lib.names()) do
+        if not made[n] and Zip.crc_of(zip, root .. "/" .. n) then files[root .. "/" .. n] = false end
+    end
+    local ok, err = Zip.replace(zip, files)
+    if not ok then
+        state.msg = "Could not write the graffiti: " .. tostring(err) .. "."
+        return false
+    end
+    parts.reload()
+    return true
+end
+
+function patina.draw_regraffiti(item, id)
+    if not look.current() then return end
+    r.ImGui_PushID(ctx, id)
+    row_label(item.label)
+    if r.ImGui_Button(ctx, "New graffiti") then
+        patina.graffiti_seed(true)
+        parts.together(function() patina.graffiti_ensure(true) end)
+    end
+    r.ImGui_PopID(ctx)
+end
+
 -- draws the images into the loaded look's theme when they are wanted and not there yet;
--- force: draw them anyway. Returns true when it wrote them
+-- force: draw them anyway (the wear only: the graffiti has its own button). Returns true
+-- when it wrote them
 function patina.ensure(force)
+    local graffiti = patina.graffiti_ensure()
+    return patina.wear_ensure(force) or graffiti
+end
+
+function patina.wear_ensure(force)
     if not look.current() or not P.tkPatina then return false end
     patina.load()
     local grade = math.floor(P.tkPatina.value)
@@ -1874,6 +2063,18 @@ function look.save_lines(lines)
     local entry = look.current()
     if entry then lines[#lines + 1] = "look=" .. entry.theme end
     for part, variant in pairs(parts.chosen) do lines[#lines + 1] = "part:" .. part .. "=" .. variant end
+    -- the materials on the plates, rails and hardware (Materials page)
+    if patina and patina.forge then patina.forge.saved_lines(lines) end
+end
+
+-- after a preset or undo has set its parameters: its materials, the plates' images and the
+-- wear drawn for them now, in one write (the window used to need reopening for it)
+function look.materials_from_saved(text, label)
+    parts.together(function()
+        patina.forge.from_saved(text, label)
+        patina.forge.ensure()
+        patina.ensure()
+    end)
 end
 
 -- with_mood: the colour setting goes along to another look (Red Devil, Blue Angel); a
@@ -2197,6 +2398,17 @@ local function draw_setting(item, id)
         draw_plate_name(item, id)
     elseif item.kind == "rescratch" then
         patina.draw_rescratch(item, id)
+    elseif item.kind == "see_materials" then
+        row_label(item.label)
+        r.ImGui_PushID(ctx, id)
+        if r.ImGui_Button(ctx, "Wear, coffee ring, graffiti: Materials page") then
+            for i, pg in ipairs(PAGES) do
+                if pg.draw == "materials" then state.page, state.confirm, state.msg = i, nil, nil end
+            end
+        end
+        r.ImGui_PopID(ctx)
+    elseif item.kind == "regraffiti" then
+        patina.draw_regraffiti(item, id)
     elseif item.kind == "coffee" then
         patina.draw_coffee(item, id)
     elseif item.kind == "plate" then
@@ -2387,13 +2599,24 @@ end
 
 local COLOUR_GROUPS = {
     { "Arrange", {
-        { "Empty area", { "col_arrangebg", "col_tracklistbg" } }, { "Track lanes", { "col_tr1_bg", "col_tr2_bg" } },
+        { "Empty area", { "col_arrangebg" } }, { "Empty area under the track panels", { "col_tracklistbg" } },
+        { "Track lanes", { "col_tr1_bg", "col_tr2_bg" } }, { "Lines between tracks", { "col_tr1_divline", "col_tr2_divline" } },
         { "Grid, measures", { "col_gridlines2" } }, { "Grid, beats", { "col_gridlines3" } }, { "Grid, between beats", { "col_gridlines" } },
-        { "Edit cursor", { "col_cursor", "col_cursor2" } },
+        { "Edit cursor", { "col_cursor", "col_cursor2" } }, { "Play cursor", { "playcursor_color" } },
+        { "Area selection", { "areasel_fill" } },
+    } },
+    { "Timeline", {
+        { "Background", { "col_tl_bg" } }, { "Numbers", { "col_tl_fg" } }, { "Numbers, in between", { "col_tl_fg2" } },
+        { "Time selection", { "col_tl_bgsel", "col_tl_bgsel2" } },
+    } },
+    { "Markers and regions", {
+        { "Markers", { "marker" } }, { "Regions", { "region" } },
+        { "Marker lane", { "marker_lane_bg" } }, { "Region lane", { "region_lane_bg" } },
     } },
     { "Media items", {
         { "Items without a colour", { "col_mi_bg", "col_mi_bg2" } }, { "Waveform", { "col_tr1_peaks", "col_tr2_peaks" } },
         { "Waveform when selected", { "col_tr1_ps2", "col_tr2_ps2" } },
+        { "Item name", { "col_mi_label" } }, { "Item name when selected", { "col_mi_label_sel" } },
     } },
     { "Mixer", { { "Empty area", { "col_mixerbg" } } } },
     { "Lists in themed windows", {
@@ -2857,6 +3080,7 @@ local function undo_reset()
     end
     clear_undo()
     load_params()
+    look.materials_from_saved(s, "undo")
     load_dark()
     refresh_palette()
     return true
@@ -3032,6 +3256,7 @@ local function load_preset(name, with_dark)
         notes[#notes + 1] = missing .. (missing == 1 and " chosen action isn't" or " chosen actions aren't") .. " on this computer, so those buttons do nothing."
     end
     load_params()
+    look.materials_from_saved(s, name)
     load_dark()
     refresh_palette()
     repaint_after_colour()
@@ -3419,7 +3644,7 @@ end
 
 look.invert_keys = { col_arrangebg = true, col_tr1_bg = true, col_gridlines2 = true, col_gridlines3 = true,
     col_gridlines = true, col_cursor = true }
-look.mood_keys = { col_arrangebg = true, col_tr1_bg = true, col_gridlines2 = true, col_gridlines3 = true,
+look.mood_keys = { col_arrangebg = true, col_tracklistbg = true, col_tr1_bg = true, col_gridlines2 = true, col_gridlines3 = true,
     col_gridlines = true, col_mixerbg = true, genlist_bg = true, genlist_selbg = true }
 
 -- colours from the Colours page or a preset stay with a look, which can look like a
@@ -3450,7 +3675,15 @@ end
 -- moved Dark's near-black backgrounds). They live in the colour file like any other colour,
 -- and presets keep them.
 local MOODS = { { "Standard" }, { "Warm", hue = 34, dark = 0.26, light = 0.42 }, { "Cool", hue = 214, dark = 0.30, light = 0.42 },
-    { "Neutral", hue = 0, dark = 0, light = 0 }, { "Inverted", invert = true } }
+    { "Neutral", hue = 0, dark = 0, light = 0 } }
+-- Inverted is a switch over them: each has a twin with the other look's arrange, in that
+-- colour setting ("Inverted" is Standard's, the name it had when it was a setting of its own)
+for i = 1, 4 do
+    local m = MOODS[i]
+    local twin = { i == 1 and "Inverted" or (m[1] .. " inverted"), hue = m.hue, dark = m.dark, light = m.light, invert = true }
+    m.twin, twin.twin, m.base, twin.base = twin, m, m, m
+    MOODS[#MOODS + 1] = twin
+end
 local MOOD_KEYS = look.mood_keys
 
 function look.mood_named(name)
@@ -3492,6 +3725,12 @@ function look.mood_amount(entry, mood)
     return entry.name == "Dark" and mood.dark or mood.light
 end
 
+-- the same for the other look's arrange (Inverted): its own amount
+function look.other_amount(entry, mood)
+    if not mood.hue then return 0 end
+    return entry.name == "Dark" and mood.light or mood.dark
+end
+
 -- the other look's colours as it comes, from the file a factory reset uses
 look.other_colours = {}
 function look.other_colour(entry, key)
@@ -3515,14 +3754,12 @@ function look.each_mood_colour(entry, mood, fn)
             local factory = (MOOD_KEYS[key] or look.invert_keys[key]) and factory_colour(key)
             if factory then
                 local value = look.mood_colour(factory, MOOD_KEYS[key] and mood or MOODS[1], look.mood_amount(entry, mood))
-                if mood.invert and look.invert_keys[key] then value = look.other_colour(entry, key) or factory end
-                if mood.invert and key == "col_arrangebg" then
-                    -- the same entry holds the empty area under the track panels, which stays
-                    fn({ key, { key } }, value)
-                    fn({ "col_tracklistbg", { "col_tracklistbg" } }, factory_colour("col_tracklistbg"))
-                else
-                    fn(item, value)
+                if mood.invert and look.invert_keys[key] then
+                    -- the other look's arrange, in this colour setting
+                    local other = look.other_colour(entry, key)
+                    value = other and look.mood_colour(other, MOOD_KEYS[key] and mood or MOODS[1], look.other_amount(entry, mood)) or factory
                 end
+                fn(item, value)
             end
         end
     end
@@ -3626,23 +3863,41 @@ end
 
 local function draw_moods(current)
     local active = look.current_mood(current)
+    local inverted = active and active.invert or false
     r.ImGui_Dummy(ctx, 0, 2)
     if not begin_card("Colour setting", "lkm") then return end
-    for i, mood in ipairs(MOODS) do
+    for i = 1, 4 do
+        local mood = inverted and MOODS[i].twin or MOODS[i]
         if i > 1 then r.ImGui_SameLine(ctx, 0, 6) end
         local on = mood == active
-        local sample = mood.invert and look.other_colour(current, "col_tr1_bg") or factory_colour("col_tr1_bg")
-        sample = sample and look.mood_colour(sample, mood, look.mood_amount(current, mood))
+        local sample
+        if inverted then
+            sample = look.other_colour(current, "col_tr1_bg")
+            sample = sample and look.mood_colour(sample, mood, look.other_amount(current, mood))
+        else
+            sample = factory_colour("col_tr1_bg")
+            sample = sample and look.mood_colour(sample, mood, look.mood_amount(current, mood))
+        end
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(on and mix(UI.raised, UI.accent, 0.55) or sample and native_to_rgb(sample) or UI.raised))
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
-        local clicked = r.ImGui_Button(ctx, mood[1] .. "##mood", 90, 30)
+        local clicked = r.ImGui_Button(ctx, mood.base[1] .. "##mood", 90, 30)
         r.ImGui_PopStyleColor(ctx, 2)
         if clicked and not on then
             state.msg = look.apply_mood(current, mood) and (mood[1] .. " is on.") or "Could not write the theme file."
         end
     end
+    -- the switch: the other look's arrange, in the colour setting that is on (Standard if none)
+    r.ImGui_SameLine(ctx, 0, 16)
+    r.ImGui_SetCursorPosY(ctx, r.ImGui_GetCursorPosY(ctx) + 5)
+    local changed, inv = r.ImGui_Checkbox(ctx, "Inverted##moodinv", inverted)
+    if changed then
+        local base = active and active.base or MOODS[1]
+        local mood = inv and base.twin or base
+        state.msg = look.apply_mood(current, mood) and (inv and ("Inverted: " .. (current.name == "Dark" and "Light" or "Dark") .. "'s arrange, " .. base[1] .. ".")
+            or (base[1] .. " is on.")) or "Could not write the theme file."
+    end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("The colours REAPER draws itself: arrange, grid, mixer background and lists. Inverted takes the other look's arrange.")
+    hint_text("The colours REAPER draws itself: arrange, grid, mixer background and lists. Inverted switches to the other look's arrange, in the colour setting you pick.")
     r.ImGui_EndChild(ctx)
 end
 
@@ -3848,7 +4103,7 @@ local GUIDE = {
         "Turn on the FX and send lists by right-clicking the mixer. An FX's embedded UI shows in that list when the strip is tall enough.",
     } },
     { "Colours", {
-        "The Look page also has colour settings: Standard, Warm, Cool, Neutral and Inverted. They change the arrange, grid, mixer background and lists; Inverted gives a look the other look's arrange. Panels and glass windows are images, so they stay as they are. A colour setting goes along when you change the look, in that look's version of it.",
+        "The Look page also has colour settings: Standard, Warm, Cool and Neutral. They change the arrange, grid, mixer background and lists. The Inverted switch beside them gives a look the other look's arrange, in whichever of the four you pick. Panels and glass windows are images, so they stay as they are. A colour setting goes along when you change the look, in that look's version of it.",
         "A colour that differs from the theme's own gets a Reset button, and Reset all colours does them all. A change is temporary until you click Save colours; Undo changes goes back to the last saved colours.",
         "An update of the theme replaces its colour file. Colours you saved come back by themselves the next time you open this window.",
         "Colour processing changes the whole theme at once, images included: gamma, highlights, midtones, shadows, saturation and tint.",
@@ -3890,7 +4145,9 @@ patina.forge.bind({ r = r, ctx = ctx, UI = UI, rgba = rgba, mix = mix, params = 
     set_param = set_param, set_style = function(...) return patina.set_style(...) end,
     together = function(fn) return parts.together(fn) end, Zip = Zip,
     parts = parts, look = look, state = state, patina = patina, begin_card = begin_card,
-    row_label = row_label, hint_text = hint_text, LABEL_W = LABEL_W })
+    row_label = row_label, hint_text = hint_text, LABEL_W = LABEL_W,
+    -- the On the plates card (wear, coffee ring, graffiti): drawn as on the other pages
+    plate_items = state.PLATE_ITEMS, draw_setting = function(item, id) return draw_setting(item, id) end })
 
 local function draw_nav()
     if r.ImGui_BeginChild(ctx, "##nav", 170, 0, r.ImGui_ChildFlags_AlwaysUseWindowPadding and r.ImGui_ChildFlags_AlwaysUseWindowPadding() or 0) then
@@ -3985,20 +4242,27 @@ end
 
 -- after an update, putting your choices back can take a moment: the window shows first
 local function startup_checks()
+    state.log("checks start")
     -- the zip chosen itself: its colours are the theme's own, not the ones kept here
     local loose, from_zip = parts.loaded_theme()
     if from_zip and look.current() then
+        state.log("the zip itself was loaded: its loose colour file opened")
         r.OpenColorThemeFile(loose)
         load_params()
     end
     parts.restore()
+    state.log("parts.restore done")
     -- your own name on the plate and your wear, when the theme lost them (an update, the other look)
     plate_name.ensure()
+    state.log("plate_name.ensure done")
     patina.ensure()
+    state.log("patina.ensure done (wear, graffiti)")
     patina.forge.ensure()
+    state.log("forge.ensure done")
     -- a colour setting chosen before its colours were worked out anew: as it is now
     -- (only when the colours are still exactly what it gave: refresh_mood checks)
     if look.current() then look.refresh_mood(look.current()) end
+    state.log("refresh_mood done")
     -- whether the lying meter is the lamps (see draw_meter)
     if P.tkPlLamps then
         local lamps = (parts.chosen.meter_lying or parts.default.meter_lying) == "lamps" and 1 or 0
@@ -4025,10 +4289,12 @@ local function startup_checks()
         elseif not global_value("tkTcpBasic") and thw == "basic" then list[#list + 1] = { "tcp_hw", "standard" } end
         if #list > 0 then parts.choose_many(list, true) end
     end
-    if look.current() and look.own_colours() then r.ThemeLayout_RefreshAll() end
+    state.log("switches done")
+    if look.current() and look.own_colours() then r.ThemeLayout_RefreshAll() state.log("own colours: layout refreshed") end
     restore_my_colours()
     if handle_is_dot() then sync_track_handles(true) end
     refresh_palette()
+    state.log("checks end")
     if P.tkGridBox and P.tkGridBox.value ~= 0 or Auto.on() then start_watcher() end
 end
 
@@ -4100,6 +4366,7 @@ local function loop()
         local queue = busy.queue
         busy.queue = {}
         busy.running = true
+        state.log(#queue .. " waiting job(s) run")
         for _, job in ipairs(queue) do
             local ok, err = pcall(job)
             if not ok then

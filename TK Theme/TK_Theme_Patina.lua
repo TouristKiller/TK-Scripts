@@ -1,5 +1,5 @@
 -- @noindex
--- Wear on the plates (Track panel and Mixer pages, Wear) and a coffee ring on one track.
+-- Wear on the plates (Materials page, On the plates) and a coffee ring on one track.
 -- Nothing of it ships: the settings window draws it here, from your own seed, so no two
 -- users have the same scratches. Three variants per plate, which the theme picks by the
 -- track's number; the images stretch like the plates (a pink marker ring, fixed corners).

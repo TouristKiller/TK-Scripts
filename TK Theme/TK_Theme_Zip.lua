@@ -143,6 +143,20 @@ function Zip.stored_crc(files, name)
     return crcs and crcs[name] or Zip.crc32(files[name])
 end
 
+-- two tables from Zip.read_stored as one, b's files over a's (their checksums along)
+function Zip.merge_stored(a, b)
+    local files, crcs = {}, {}
+    for _, t in ipairs({ a, b }) do
+        local c = stored_crcs[t]
+        for name, data in pairs(t) do
+            files[name] = data
+            crcs[name] = c and c[name] or nil
+        end
+    end
+    stored_crcs[files] = crcs
+    return files
+end
+
 -- the checksums of all files in a zip: { [name] = crc }
 function Zip.crc_map(path)
     local crcs = {}
@@ -295,6 +309,12 @@ function Zip.replace(path, files)
         return true
     end
     return replace_now(path, files)
+end
+
+-- what a batch running now will write for this entry: its contents, false (taken out) or nil
+function Zip.pending_file(path, name)
+    if pending and pending.path == path then return pending.files[name] end
+    return nil
 end
 
 -- Runs fn and returns what it returns, unless writing the zip then fails: nil and why.
