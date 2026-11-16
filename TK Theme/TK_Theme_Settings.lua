@@ -1497,9 +1497,22 @@ function parts.reload()
     local current = parts.loaded_theme()
     r.PreventUIRefresh(1)
     if parts.standin == nil then
-        parts.standin = ((read_all(r.GetResourcePath() .. "/Data/TK Theme/dev.txt") or ""):find("standin", 1, true)) ~= nil
+        -- Opening the loaded theme again directly is only proven on Windows. On Linux, REAPER
+        -- crashed at every change since 0.9.80 (reported 2026-11-16): it seems to keep reading
+        -- the old file it had open. Elsewhere another theme goes first, as before 0.9.80: a
+        -- small one (the colours without images, "light"), which costs next to nothing.
+        -- In Data/TK Theme/dev.txt: "standin" the full copy of before, "light" the small one
+        -- (also on Windows, to try it), "direct" neither
+        local dev = read_all(r.GetResourcePath() .. "/Data/TK Theme/dev.txt") or ""
+        parts.standin = dev:find("standin", 1, true) ~= nil
+        parts.light_standin = not parts.standin and (dev:find("light", 1, true) ~= nil or (not IS_WINDOWS and not dev:find("direct", 1, true)))
     end
-    if parts.standin then
+    local light = parts.light_standin and Zip.make_light_stand_in(current)
+    if light then
+        r.OpenColorThemeFile(light)
+        r.OpenColorThemeFile(current)
+        Zip.remove_stand_in(current, r.GetResourcePath() .. "/reaper-themeconfig.ini")
+    elseif parts.standin or parts.light_standin then
         local config = r.GetResourcePath() .. "/reaper-themeconfig.ini"
         local step = Zip.make_stand_in(current, config)
             or r.GetResourcePath() .. "/ColorThemes/Default_7.0.ReaperThemeZip"

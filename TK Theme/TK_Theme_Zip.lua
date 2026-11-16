@@ -380,6 +380,19 @@ function Zip.make_stand_in(current, config)
     return Zip.save(path, loose) and path or folder .. STAND_IN .. ".ReaperThemeZip"
 end
 
+-- A small stand-in: the loaded theme's colour file without its images (no ui_img line), so
+-- REAPER shows its own built-in images for a moment, in the same colours. It loads in next to
+-- no time, where the full copy above cost a second load of the whole theme. Returns its path,
+-- or nil when the loaded theme has no loose colour file (then the full copy goes instead)
+function Zip.make_light_stand_in(current)
+    local folder = current:match("^(.*[\\/])[^\\/]+%.ReaperTheme$")
+    local loose = folder and read_file(current)
+    if not loose then return nil end
+    loose = loose:gsub("[\r\n]ui_img=[^\r\n]*", "")
+    local path = folder .. STAND_IN .. ".ReaperTheme"
+    return Zip.save(path, loose) and path or nil
+end
+
 function Zip.remove_stand_in(current, config)
     local folder = current:match("^(.*[\\/])")
     if not folder then return end

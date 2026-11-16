@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.90" author="TouristKiller" time="2026-11-16T21:29:06Z">
+    <version name="0.9.91" author="TouristKiller" time="2026-11-17T00:04:25Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -609,23 +609,7 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Hardware in a metal of your own (Materials page, Hardware): knobs, fader caps, folder brackets and the transport's screws in any metal. The knobs keep their shape, ticks and white pointer; only the cap takes the metal.
-+ Added: Fader caps for a mixer with a plate (Mixer page, Fader cap): Console, Long throw, Chrome, Colour cap in your accent colour, Round top, Wide grip, and Studio, a finely detailed machined cap.
-+ Added: Plain, a new material: the plates in one flat colour, a fixed one or each track's own colour, with or without screws in the corners. Nothing is drawn, so it is there at once.
-+ Added: Rails in any material: Rails (Track panel and Mixer pages) is now Off, Walnut, Teak or Material, with the material chosen on the Materials page.
-+ Added: Graffiti on the plates: spray paint, splats with drips and doodles, Light or Wild, in neon or your accent colour, every track its own. Optionally the track names on torn stickers, in the graffiti's colours or in the track colour. Drawn from a seed of your own, like the wear.
-+ Added: More on the Colours page: the empty area under the track panels on its own, the lines between tracks, play cursor, area selection, the timeline, markers and regions, and item names.
-+ Changed: Wear, the coffee ring and graffiti moved to the Materials page (On the plates). Each is one setting for the track panel and the mixer together, and like the rest of that page they are drawn when you press Apply.
-+ Changed: Inverted is now a switch beside Standard, Warm, Cool and Neutral: the other look's arrange in any of the four colour settings.
-+ Changed: On the Materials page the selected material's settings appear right under its row.
-+ Changed: The General page hides what a plate covers (track colour strength, selection strength, the lines in track colour) when both the track panel and the mixer have one.
-+ Changed: Presets keep the materials on the plates, rails and hardware, and show them at once when loaded.
-+ Changed: A smaller download: what the accent colours share is shipped once, about 79 MB instead of 112.
-+ Fixed: Opening the settings window with hardware knobs on a plate wrote the theme again and reloaded it twice each time (a flicker and up to half a minute). It now opens in a few seconds without reloading.
-+ Fixed: On the master, the plate's corrosion, wear and fastening ran over the right rail.
-+ Fixed: On a folder, the bottom left fastening went through the bracket's head.
-+ Fixed: Between a side window and a meter on the right, a plate now keeps your own section margin instead of 20 pixels.
-+ Fixed: The level's label grows with the interface scale (from REAPER 7.86's Default 7, which the theme now builds on).
++ Fixed: On Linux, REAPER crashed at every change in TK Theme Settings that changes images (since 0.9.80). Settings now steps onto a small stand-in theme (your colours, no images) before reloading TK Theme, on Linux and macOS. Windows keeps reloading directly. Reported by a Linux user on the forum.
 ]]></changelog>
     </version>
     </reapack>
