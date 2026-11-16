@@ -17,9 +17,14 @@ function Zip.crc32(s)
             crc_table[i] = c
         end
     end
-    local c = 0xFFFFFFFF
-    for i = 1, #s do
-        c = crc_table[(c ~ s:byte(i)) & 0xFF] ~ (c >> 8)
+    -- the bytes taken 4096 at a time: one call into string.byte per block, not per byte
+    local c, n, byte = 0xFFFFFFFF, #s, string.byte
+    local t = crc_table
+    for i = 1, n, 4096 do
+        local b = { byte(s, i, i + 4095 < n and i + 4095 or n) }
+        for j = 1, #b do
+            c = t[(c ~ b[j]) & 0xFF] ~ (c >> 8)
+        end
     end
     return c ~ 0xFFFFFFFF
 end
@@ -145,6 +150,17 @@ function Zip.crc_map(path)
     return crcs
 end
 
+-- one file of a zip as it is stored: its bytes and its method (0 stored, 8 deflated), so a
+-- caller with its own inflate can read a compressed entry (TK_Theme_Forge reads the plates)
+function Zip.read_entry(path, name)
+    local s = read_file(path)
+    local entries = s and read_entries(s)
+    for _, e in ipairs(entries or {}) do
+        if e.name == name then return read_data(s, e), e.method end
+    end
+    return nil
+end
+
 -- whether every file in the zip is in the folder, unchanged
 function Zip.same_files(path, folder)
     local s = read_file(path)
@@ -214,7 +230,8 @@ function Zip.save(path, data)
     return true
 end
 
--- files: { [name in the zip] = contents }. Returns true, or nil and what went wrong.
+-- files: { [name in the zip] = contents, or false to take the file out }. Returns true,
+-- or nil and what went wrong.
 local function replace_now(path, files)
     local s = read_file(path)
     if not s then return nil, "can't read the theme file" end
@@ -227,20 +244,29 @@ local function replace_now(path, files)
         e.method, e.flags, e.crc, e.csize, e.usize = 0, e.flags & ~8, Zip.crc32(data), #data, #data
         e.data = data
     end
+    local kept = {}
     for _, e in ipairs(entries) do
-        if todo[e.name] then
-            fresh(e, todo[e.name])
-            todo[e.name] = nil
+        local new = todo[e.name]
+        todo[e.name] = nil
+        if new == false then
+            -- taken out
+        elseif new then
+            fresh(e, new)
+            kept[#kept + 1] = e
         else
             e.data = read_data(s, e)
             if not e.data then return nil, "damaged zip file" end
             e.flags = e.flags & ~8      -- the sizes go in the header below
+            kept[#kept + 1] = e
         end
     end
+    entries = kept
     for name, data in pairs(todo) do
-        local e = { name = name, made = 20, needed = 20, flags = 0, time = 0, date = 33, attr = 0, local_at = 0 }
-        fresh(e, data)
-        entries[#entries + 1] = e
+        if data ~= false then
+            local e = { name = name, made = 20, needed = 20, flags = 0, time = 0, date = 33, attr = 0, local_at = 0 }
+            fresh(e, data)
+            entries[#entries + 1] = e
+        end
     end
 
     local out, at, central = {}, 0, {}

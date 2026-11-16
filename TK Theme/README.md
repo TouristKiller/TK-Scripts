@@ -35,19 +35,28 @@ lists, menus and borders. That takes effect after a restart.
   in one colour, in both looks. Standard follows the look and its accent colour.
 - **Text buttons on toolbars:** plain, or with a quiet cell behind them, and small, normal or large text.
 - **FX and send lists:** plain, or a subtle grid above the mixer's strips, and sends in the colour of their destination track.
-- **Transport plate:** Black or Silver: brushed metal behind the whole transport, with screws and
+- **Transport plate:** Material: Black, Silver or a material of your own behind the whole transport, with screws and
   a maker's plate (TK-S73, Red Devil, Blue Angel, Black Metal, Quicksilver, or your own name and
   icons engraved in the same style), on the Transport page. The rate can sit on it as a knob.
 - **Basic:** a flat style for the track panel and the mixer, each on its own: no display windows,
   names straight on the panel, see-through symbol keys and list slots, meters in a plain well.
   Basic Dark and Basic Light on the Presets page set the whole look in one click.
-- **Track panel and mixer plates:** Silver or Black puts the tracks, the master and the mixer's
+- **Track panel and mixer plates:** Style Material (Silver, Black or a material of your own) puts the tracks, the master and the mixer's
   strips on brushed metal in a rack: Phillips screws, milled grooves, glass windows, and R, M, S,
   knobs and faders as hardware with tick marks. Folders hang on rack rails with mounting holes,
   envelope lanes get the hardware arm and knob, and the display windows can be lit faintly from below.
   In the Light look the plates can have the dark display windows of the Dark look. Record arm can be
   a cap, an analog lamp or a lit glass button, and the selected track can light an LED in the rail
   and lighten its plate.
+- **Materials (new):** make the plates your own on the Materials page: metals (Gunmetal, Titanium,
+  Copper, Brass, Bronze, Anodized blue, red and black), cardboard (Kraft, Grey board, White board),
+  wood (Teak, Walnut) and cork. Each has its own wear: rust, verdigris, oxide or heat tint on metal,
+  water stains and creases on board, worn varnish on wood, dents on cork; staples, tape, push pins or
+  screws can hold it. Drawn on your own computer from the theme's own plates: nothing extra to download.
+  Save a setting under a name of its own, and use another material on the track panel, the mixer
+  and the transport. Materials go along in theme codes.
+- **Wear and a coffee ring:** scratches and rubbed edges on the plates (Light, Used, Road-worn), drawn
+  from a seed of your own so no two setups look the same, and a coffee ring on one track.
 - **Wood:** walnut or teak rails beside the plates, on the left and optionally on the right,
   with the track number, folder buttons and track colour on them; the master too. The mixer
   can have a wooden armrest under its strips.

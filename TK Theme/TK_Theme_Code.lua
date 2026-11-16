@@ -174,6 +174,27 @@ tkSelLed
 tkSelLit
 tkTcpRecLamp
 tkMcpRecLamp
+tkPatina
+tkCoffee
+tkTcpMat
+tkMcpMat
+tkTransMat
+tkRust
+tcp
+mcp
+trans
+Silver
+Black
+Gunmetal
+Copper
+Brass
+Anodized
+Bronze
+Titanium
+Kraft
+Teak
+Walnut
+Cork
 ]]
 
 local words, index = {}, {}
@@ -280,7 +301,7 @@ end
 
 -- -------------------------------------------------------------- codes
 
-local TAG = { look = 1, params = 2, colours = 3, parts = 4, processing = 5, handle = 6, plate = 7 }
+local TAG = { look = 1, params = 2, colours = 3, parts = 4, processing = 5, handle = 6, plate = 7, materials = 8 }
 
 local function sorted_keys(t, numeric)
     local keys = {}
@@ -291,7 +312,8 @@ end
 
 -- data: { look = theme name, params = { name = number }, colours = { key = 0xBBGGRR as in a
 -- .ReaperTheme }, parts = { part = variant }, processing = { id = number }, handle = "dot"
--- or "cap", plate = { top = text, name = text } }; every field may be missing
+-- or "cap", plate = { top = text, name = text }, materials = { tcp = { finish, gloss, contrast,
+-- corrosion (0..1), seed } } (the plates' own materials, Materials page) }; every field may be missing
 function Code.encode(data, crc32)
     local sections = {}
     local function section(tag, body) sections[#sections + 1] = string.char(tag) .. varint(#body) .. body end
@@ -309,6 +331,11 @@ function Code.encode(data, crc32)
     list(TAG.processing, data.processing, function(k, v) return varint(zigzag(k)) .. varint(zigzag(math.floor(v))) end, true)
     if data.handle then section(TAG.handle, string.char(data.handle == "dot" and 1 or 0)) end
     if data.plate then section(TAG.plate, text(data.plate.top or "") .. text(data.plate.name or "")) end
+    local pct = function(v) return string.char(math.max(0, math.min(100, math.floor((v or 0) * 100 + 0.5)))) end
+    list(TAG.materials, data.materials, function(k, m)
+        return ref(k) .. ref(m.finish) .. pct(m.gloss) .. pct(m.contrast) .. pct(m.corrosion) .. varint(math.floor(m.seed or 0))
+            .. string.char(math.max(1, math.min(255, math.floor(m.fasten or 1))))
+    end)
     local body = table.concat(sections)
     return Code.PREFIX .. Code.b64(string.pack(">I4", crc32(body)) .. body)
 end
@@ -325,7 +352,7 @@ function Code.decode(code, crc32)
     if not raw or #raw < 4 or crc32(raw:sub(5)) ~= string.unpack(">I4", raw) then
         return nil, "This code is incomplete or damaged: copy it again, as a whole."
     end
-    local data, unknown = { params = {}, colours = {}, parts = {}, processing = {} }, 0
+    local data, unknown = { params = {}, colours = {}, parts = {}, processing = {}, materials = {} }, 0
     local rd = { s = raw, at = 5 }
     while rd.at <= #raw do
         local tag = raw:byte(rd.at)
@@ -374,6 +401,19 @@ function Code.decode(code, crc32)
             data.handle = body:byte(1) == 1 and "dot" or "cap"
         elseif tag == TAG.plate then
             data.plate = { top = read_text(sr) or "", name = read_text(sr) or "" }
+        elseif tag == TAG.materials then
+            each(function()
+                local k, f = read_ref(sr), read_ref(sr)
+                local b = read_bytes(sr, 3)
+                local seed = read_varint(sr)
+                local fasten = read_bytes(sr, 1)
+                if k == nil or f == nil or not b or not seed or not fasten then return false end
+                if k and f then
+                    data.materials[k] = { finish = f, gloss = b:byte(1) / 100, contrast = b:byte(2) / 100,
+                                          corrosion = b:byte(3) / 100, seed = seed, fasten = fasten:byte(1) }
+                end
+                return true
+            end)
         end
         -- (another tag: from a newer TK Theme, skipped)
     end

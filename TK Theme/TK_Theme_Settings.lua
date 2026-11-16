@@ -283,6 +283,7 @@ end
 local start_watcher     -- further down, with the startup line it shares the watcher with
 local rewrite_meters    -- further down, with the parts: the meters' images again, after a switch
 local plate_name        -- further down, with the parts: your own name on the transport plate
+local patina            -- further down, with the plate's name: wear and a coffee ring on the plates
 local function S(label, param, layouts, hint) return { kind = "slider", label = label, param = param, layouts = layouts, hint = hint } end
 -- one slider for a setting that exists once more for selected and armed strips
 local function Grow(label, param, also) return { kind = "slider", label = label, param = param, layouts = THIS_LAYOUT, also = also } end
@@ -423,8 +424,12 @@ local PAGES = {
     } },
     { title = "Track panel", cards = {
         { "All tracks", {
-            { kind = "choice", label = "Style", param = "tkTcpPlate", choices = { "Standard", "Silver", "Black", "Basic" }, part = "tcp_hw", parts = { "standard", "silver", "black", "basic" }, extra = "tkTcpBasic",
-              hint = "Basic: no windows, the controls on the panel. Silver and Black: a brushed plate with hardware knobs and caps, made for the Dark look." },
+            -- Standard, Basic or Material; Material is Silver, Black or a material of your own,
+            -- shown on the line under it (see patina.draw_plate). The values stay as they were:
+            -- tkTcpPlate 0 none, 1 Silver, 2 Black; tkTcpBasic for Basic
+            { kind = "plate", plate = "tcp", label = "Style", param = "tkTcpPlate", extra = "tkTcpBasic", part = "tcp_hw",
+              hint = "Basic: no windows, the controls on the panel. Material: a brushed plate with hardware knobs and caps, made for the Dark look." },
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "plate_material", plate = "tcp", label = "Material" }),
             Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Wood", param = "tkWood", choices = { "Off", "Walnut", "Teak" },
               hint = "With a plate: the number column as a wooden rail, the track colour as a stripe on it." }),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkWood")) end, T("Right rail", "tkRailRight", nil, "A second rail on the right.")),
@@ -434,6 +439,11 @@ local PAGES = {
               "A lit strip in the accent colour, in the wooden rail (without wood: on the plate's edge).")),
             Off(function() return not global_value("tkTcpPlate") end, T("Selected track: plate lit", "tkSelLit", nil,
               "The selected track's plate a step lighter; the mixer's strips too.")),
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Wear", param = "tkPatina",
+              choices = { "Off", "Light", "Used", "Road-worn" }, after = function() patina.ensure() end,
+              hint = "Scratches, rubbed edges and corners, on the plates of the track panel and the mixer. Drawn for you alone: no one else has the same." }),
+            Off(function() return not (global_value("tkTcpPlate") and global_value("tkPatina")) end, { kind = "rescratch", label = "" }),
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "coffee", label = "Coffee ring" }),
             Off(function() return not global_value("tkTcpPlate") end, T("Meter in the plate", "tkPlMeterIn", nil,
               "The meter lies in the plate between the controls. Its type: Meters on the General page.")),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkPlMeterIn")) end,
@@ -505,14 +515,20 @@ local PAGES = {
     } },
     { title = "Mixer", cards = {
         { "Style", {
-            { kind = "choice", label = "Style", param = "tkMcpPlate", choices = { "Standard", "Silver", "Black", "Basic" }, part = "mcp_hw", parts = { "standard", "silver", "black", "basic" }, mixer_plate = true, extra = "tkMcpBasic",
-              hint = "Basic: no windows. Silver and Black: a brushed plate with hardware knobs, caps and fader slots, made for the Dark look." },
+            { kind = "plate", plate = "mcp", label = "Style", param = "tkMcpPlate", extra = "tkMcpBasic", part = "mcp_hw", mixer_plate = true,
+              hint = "Basic: no windows. Material: a brushed plate with hardware knobs, caps and fader slots, made for the Dark look." },
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "plate_material", plate = "mcp", label = "Material" }),
             Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Wood", param = "tkMcpWood", choices = { "Off", "Walnut", "Teak" },
               hint = "With a plate: a wooden armrest along the bottom, with the numbers on it." }),
             Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_recarm", label = "Record arm",
               choices = { { "cap", "Cap" }, { "lamp", "Lamp" }, { "glass_white", "Glass white" }, { "glass_red", "Glass red" } } }),
             Off(function() return not global_value("tkMcpPlate") end, T("Selected strip: plate lit", "tkSelLit", nil,
               "The selected strip's plate a step lighter; the track panel's too.")),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Wear", param = "tkPatina",
+              choices = { "Off", "Light", "Used", "Road-worn" }, after = function() patina.ensure() end,
+              hint = "Scratches, rubbed edges and corners, on the plates of the track panel and the mixer. Drawn for you alone: no one else has the same." }),
+            Off(function() return not (global_value("tkMcpPlate") and global_value("tkPatina")) end, { kind = "rescratch", label = "" }),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "coffee", label = "Coffee ring" }),
         } },
         { "Handles", {
             Off(function() return global_value("tkMcpPlate") end, { kind = "handle", label = "Fader", hint = "For all layouts." }),
@@ -582,7 +598,10 @@ local PAGES = {
     } },
     { title = "Transport", cards = {
         { "Plate and grid", {
-            { kind = "choice", label = "Plate", param = "tkTransPlate", choices = { "Standard", "Black", "Silver" } },
+            -- Standard or Material (Black, Silver or a material of your own); tkTransPlate stays
+            -- 0 none, 1 Black, 2 Silver
+            { kind = "plate", plate = "trans", label = "Plate", param = "tkTransPlate", styles = { "standard", "material" } },
+            Off(function() return not global_value("tkTransPlate") end, { kind = "plate_material", plate = "trans", label = "Material" }),
             Off(function() return not global_value("tkTransPlate") end, T("Rate as a knob", "tkRateKnob", nil, "On the right of the plate. Off keeps the slider in the display.")),
             Off(function() return not global_value("tkTransPlate") end, { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil", "Blue Angel", "Black Metal", "Quicksilver", "Own name" },
               after = function(v) if v == 5 then plate_name.ensure() end end }),
@@ -626,6 +645,13 @@ local PAGES = {
     { title = "Reset", draw = "reset" },
     { title = "Guide", draw = "guide" },
 }
+-- the Materials page (TK Material Forge, TK_Theme_Forge.lua), after Transport
+for i, page in ipairs(PAGES) do
+    if page.title == "Transport" then
+        table.insert(PAGES, i + 1, { title = "Materials", draw = "materials" })
+        break
+    end
+end
 if not IS_WINDOWS then
     for i, page in ipairs(PAGES) do
         if page.draw == "darkmode" then
@@ -1376,22 +1402,45 @@ function parts.loaded_theme()
     return current, false
 end
 
+-- The theme opened again shows the images just written into its zip: tested in REAPER on
+-- 2026-11-15 (tests/TK_Theme_Reload_Probe2.lua), at half the time of the old way. The old
+-- way, a full copy loaded first as a stand-in, stays: "standin" in Data/TK Theme/dev.txt
 function parts.reload()
     local current = parts.loaded_theme()
-    local config = r.GetResourcePath() .. "/reaper-themeconfig.ini"
-    local step = Zip.make_stand_in(current, config)
-        or r.GetResourcePath() .. "/ColorThemes/Default_7.0.ReaperThemeZip"
     r.PreventUIRefresh(1)
-    if read_all(step) then r.OpenColorThemeFile(step) end
-    r.OpenColorThemeFile(current)
+    if parts.standin == nil then
+        parts.standin = ((read_all(r.GetResourcePath() .. "/Data/TK Theme/dev.txt") or ""):find("standin", 1, true)) ~= nil
+    end
+    if parts.standin then
+        local config = r.GetResourcePath() .. "/reaper-themeconfig.ini"
+        local step = Zip.make_stand_in(current, config)
+            or r.GetResourcePath() .. "/ColorThemes/Default_7.0.ReaperThemeZip"
+        if read_all(step) then r.OpenColorThemeFile(step) end
+        r.OpenColorThemeFile(current)
+        Zip.remove_stand_in(current, config)
+    else
+        r.OpenColorThemeFile(current)
+    end
     r.PreventUIRefresh(-1)
-    Zip.remove_stand_in(current, config)
     load_params()
     refresh_palette()
     r.ThemeLayout_RefreshAll()
     r.UpdateArrange()
     r.TrackList_AdjustWindows(false)
     r.DockWindowRefresh()
+end
+
+-- fn's steps (wear, parts, ...) each write the zip and reload the theme; run together they
+-- write it once and reload once. A Style change did both, at twice the wait
+function parts.together(fn)
+    if not look.current() then return fn() end
+    local real, again = parts.reload, false
+    parts.reload = function() again = true end
+    local ok, res, err = pcall(Zip.batch, parts.zip_path(), fn)
+    parts.reload = real
+    if not ok then state.msg = "Could not change the theme file: " .. tostring(res) .. "."
+    elseif res == nil and err then state.msg = "Could not change the theme file: " .. tostring(err) .. "." end
+    if again then real() end
 end
 
 -- writes each choice into the zip, in order, and notes it as chosen; returns how many
@@ -1573,6 +1622,212 @@ function plate_name.preview()
         end
     end
     return plate_name.img, silver
+end
+
+-- Wear on the plates (Wear: Light, Used, Road-worn) and a coffee ring on one track. Nothing
+-- of it ships: TK_Theme_Patina.lua draws it from your own seed (Data/TK Theme/patina.txt) for
+-- the plates in use, and it goes into the loaded look's theme. tk_patina.txt in the theme
+-- says what was drawn, so nothing is drawn again until a choice changes
+patina = { lib = dofile(here .. "TK_Theme_Patina.lua"), file = r.GetResourcePath() .. "/Data/TK Theme/patina.txt" }
+-- TK Material Forge (proof of concept, the Materials page): your own finish on the plates.
+-- Its page is Materials, after Transport; see TK_Theme_Forge.lua
+patina.forge = dofile(here .. "TK_Theme_Forge.lua")
+
+-- The plates' Style: Standard, Basic or Material, Material being Silver, Black or a material
+-- of your own (the Materials page). What each means is spelled out here, not taken from where
+-- its button sits: the parameter values, the hardware part and the mixer's fader handles
+patina.STYLE = {
+    standard = { value = 0, basic = 0, part = "standard", handles = 1 },
+    basic = { value = 0, basic = 1, part = "basic", handles = 1 },
+    silver = { value = 1, basic = 0, part = "silver", handles = 2 },
+    black = { value = 2, basic = 0, part = "black", handles = 3 },
+}
+
+-- the Style item of the track panel ("tcp") or the mixer ("mcp")
+function patina.plate_item(kind)
+    for _, page in ipairs(PAGES) do
+        for _, card in ipairs(page.cards or {}) do
+            for _, it in ipairs(card[2]) do
+                if it.kind == "plate" and it.plate == kind then return it end
+            end
+        end
+    end
+end
+
+function patina.style_of(item)
+    local v = P[item.param] and math.floor(P[item.param].value) or 0
+    if item.plate == "trans" then           -- the transport counts the other way: 1 Black, 2 Silver
+        return v == 2 and "silver" or v == 1 and "black" or "standard"
+    end
+    if v == 1 then return "silver" elseif v == 2 then return "black" end
+    if item.extra and global_value(item.extra) then return "basic" end
+    return "standard"
+end
+
+-- the Style set: its parameters, then the images that go with it (the hardware, the mixer's
+-- handles, Basic's buttons). Callers run it inside parts.together
+function patina.set_style(kind, key)
+    local item = patina.plate_item(kind)
+    local S = patina.STYLE[key]
+    if not item or not S or not P[item.param] then return end
+    if patina.style_of(item) == key then return end
+    if kind == "trans" then
+        -- the transport's plate is one parameter, no images go with it
+        set_param(item.param, key == "silver" and 2 or key == "black" and 1 or 0, true)
+        r.ThemeLayout_RefreshAll()
+        return
+    end
+    set_param(item.param, S.value, true)
+    if item.extra then set_param(item.extra, S.basic, true) end
+    r.ThemeLayout_RefreshAll()
+    if not look.current() then return end
+    local list = { { item.part, S.part } }
+    if item.mixer_plate then
+        for _, more in ipairs(parts.mixer_plate_handles(S.handles)) do list[#list + 1] = more end
+    end
+    -- Basic's buttons and lists: on with a Basic track panel, or a Basic mixer beside a
+    -- track panel without a plate; off goes first, on last
+    local want = (global_value("tkTcpBasic") or (global_value("tkMcpBasic") and not global_value("tkTcpPlate"))) and "on" or "off"
+    if want == "off" then table.insert(list, 1, { "basic", "off" }) else list[#list + 1] = { "basic", "on" } end
+    parts.choose_many(list)
+end
+
+patina.STYLE_NAMES = { { "standard", "Standard" }, { "basic", "Basic" }, { "material", "Material" } }
+
+function patina.draw_plate(item, id)
+    if not P[item.param] then return end
+    row_label(item.label)
+    r.ImGui_PushID(ctx, id)
+    local now = patina.style_of(item)
+    local shown = (now == "silver" or now == "black") and "material" or now
+    local first = true
+    for _, s in ipairs(patina.STYLE_NAMES) do
+        local offered = not item.styles
+        for _, k in ipairs(item.styles or {}) do if k == s[1] then offered = true end end
+        if not offered then goto next_style end
+        if not first then r.ImGui_SameLine(ctx, 0, 2) end
+        first = false
+        local active = shown == s[1]
+        if active then
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
+        end
+        local clicked = r.ImGui_Button(ctx, s[2], 96, 0)
+        if active then r.ImGui_PopStyleColor(ctx, 2) end
+        if clicked and not active then
+            if s[1] == "material" then
+                -- the material this plate had last, or Silver
+                patina.forge.use_now(item.plate)
+            else
+                parts.together(function()
+                    patina.set_style(item.plate, s[1])
+                    patina.forge.off(item.plate)
+                    patina.ensure()
+                end)
+            end
+        end
+        ::next_style::
+    end
+    r.ImGui_PopID(ctx)
+end
+
+-- the line under Style when it is Material: which material, and where to change it
+function patina.draw_plate_material(item, id)
+    local F = patina.forge
+    local current = F.current(item.plate)
+    if not current then return end
+    row_label(item.label)
+    r.ImGui_PushID(ctx, id)
+    local page
+    for i, pg in ipairs(PAGES) do
+        if pg.draw == "materials" then page = i end
+    end
+    if page then
+        local m, name = F.get(F.applied, current)
+        local img = F.thumb(m)
+        if img then
+            r.ImGui_Image(ctx, img, 120, 28)
+            r.ImGui_SameLine(ctx)
+        end
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_Text(ctx, name or "?")
+        r.ImGui_SameLine(ctx, 0, 12)
+        if r.ImGui_Button(ctx, "Change...") then
+            F.select(current)
+            state.page, state.confirm, state.msg = page, nil, nil
+        end
+    else
+        -- without the Materials page: the theme's own two
+        for i, key in ipairs({ "Silver", "Black" }) do
+            if i > 1 then r.ImGui_SameLine(ctx, 0, 2) end
+            local active = current == "base:" .. key
+            if active then
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
+                r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
+            end
+            local clicked = r.ImGui_Button(ctx, key, 96, 0)
+            if active then r.ImGui_PopStyleColor(ctx, 2) end
+            if clicked and not active then F.use_now(item.plate, "base:" .. key) end
+        end
+    end
+    r.ImGui_PopID(ctx)
+end
+
+function patina.load()
+    if patina.seed then return end
+    local s = read_all(patina.file)
+    patina.seed = s and tonumber(s:match("seed=(%d+)"))
+    if not patina.seed then patina.new_seed() end
+end
+
+function patina.new_seed()
+    patina.seed = math.floor(r.time_precise() * 1000) % 999983 + 1
+    r.RecursiveCreateDirectory(r.GetResourcePath() .. "/Data/TK Theme", 0)
+    write_all(patina.file, "seed=" .. patina.seed .. "\n")
+end
+
+-- draws the images into the loaded look's theme when they are wanted and not there yet;
+-- force: draw them anyway. Returns true when it wrote them
+function patina.ensure(force)
+    if not look.current() or not P.tkPatina then return false end
+    patina.load()
+    local grade = math.floor(P.tkPatina.value)
+    local coffee = P.tkCoffee ~= nil and P.tkCoffee.value > 0
+    local o = { grade = grade, seed = patina.seed, coffee = coffee,
+                tcp = patina.lib.plate(P.tkTcpPlate and P.tkTcpPlate.value), mcp = patina.lib.plate(P.tkMcpPlate and P.tkMcpPlate.value) }
+    if (grade == 0 and not coffee) or not (o.tcp or o.mcp) then return false end
+    local zip = parts.zip_path()
+    local root = Zip.root(zip)
+    if not root then return false end
+    local key = string.format("wear 1|%d|%d|%s|%s|%s", grade, patina.seed, o.tcp or "-", o.mcp or "-", coffee and "coffee" or "-")
+    -- on a plate with your own finish the wear takes its colour (Materials page)
+    o.looks = patina.forge.wear_looks()
+    for _, kind in ipairs({ "tcp", "mcp" }) do
+        local own = o.looks and o.looks[kind]
+        if own then key = key .. string.format("|%s %d %d %d %s", kind, own.wear[1], own.wear[2], own.wear[3], own.style or "metal") end
+    end
+    local key_name = root .. "/tk_patina.txt"
+    if not force and Zip.crc_of(zip, key_name) == Zip.crc32(key) then return false end
+    local files = { [key_name] = key }
+    for rel, png in pairs(patina.lib.images(o, Zip.crc32)) do files[root .. "/" .. rel] = png end
+    local ok, err = Zip.replace(zip, files)
+    if not ok then
+        state.msg = "Could not write the wear: " .. tostring(err) .. "."
+        return false
+    end
+    parts.reload()
+    return true
+end
+
+-- the coffee on another track than now: one of the project's, at random
+function patina.spill()
+    local count = r.CountTracks(0)
+    local now = P.tkCoffee and math.floor(P.tkCoffee.value) or 0
+    local pick = 1
+    if count > 1 then
+        repeat pick = math.random(1, count) until pick ~= now
+    end
+    return pick
 end
 
 function parts.picture(path)
@@ -1886,8 +2141,47 @@ local function draw_plate_name(item, id)
     hint_text("Long lines get smaller to fit the plate. Icons: [star], [heart], [note] and the rest, typed or with the buttons.")
 end
 
+-- Wear: other scratches, from a new seed
+function patina.draw_rescratch(item, id)
+    if not look.current() then return end
+    r.ImGui_PushID(ctx, id)
+    row_label(item.label)
+    if r.ImGui_Button(ctx, "New scratches") then
+        patina.new_seed()
+        patina.ensure(true)
+    end
+    r.ImGui_PopID(ctx)
+end
+
+-- a coffee ring on one track's plate: spilt on a track at random, again, or wiped off
+function patina.draw_coffee(item, id)
+    local p = P.tkCoffee
+    if not p or not look.current() then return end
+    r.ImGui_PushID(ctx, id)
+    row_label(item.label)
+    local on = math.floor(p.value)
+    local function set(v)
+        set_param("tkCoffee", v, true)
+        r.ThemeLayout_RefreshAll()
+        if v > 0 then patina.ensure() end
+    end
+    if on == 0 then
+        if r.ImGui_Button(ctx, "Spill") then set(patina.spill()) end
+    else
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_Text(ctx, "On track " .. on)
+        r.ImGui_SameLine(ctx, 0, 8)
+        if r.ImGui_Button(ctx, "Spill again") then set(patina.spill()) end
+        r.ImGui_SameLine(ctx, 0, 2)
+        if r.ImGui_Button(ctx, "Wipe off") then set(0) end
+    end
+    r.ImGui_PopID(ctx)
+    r.ImGui_SetCursorPosX(ctx, LABEL_W)
+    hint_text("A dried mug ring on one track's plate, picked at random; in the mixer too.")
+end
+
 local function draw_setting(item, id)
-    reload_mark = item.kind == "part" or item.kind == "meter" or item.kind == "handle" or (item.kind == "choice" and item.part ~= nil)
+    reload_mark = item.kind == "part" or item.kind == "meter" or item.kind == "handle" or item.kind == "plate" or (item.kind == "choice" and item.part ~= nil)
     if item.kind == "layout" then
         draw_layout_choice(item, id)
     elseif item.kind == "tracks" then
@@ -1901,6 +2195,14 @@ local function draw_setting(item, id)
         draw_meter(item, id)
     elseif item.kind == "platename" then
         draw_plate_name(item, id)
+    elseif item.kind == "rescratch" then
+        patina.draw_rescratch(item, id)
+    elseif item.kind == "coffee" then
+        patina.draw_coffee(item, id)
+    elseif item.kind == "plate" then
+        patina.draw_plate(item, id)
+    elseif item.kind == "plate_material" then
+        patina.draw_plate_material(item, id)
     elseif item.kind == "choice" then
         local names = expand(item.param, item.layouts)
         local p = P[names[1]]
@@ -1940,22 +2242,26 @@ local function draw_setting(item, id)
                 for _, n in ipairs(names) do set_param(n, is_extra and 0 or i - 1, true) end
                 if extra then set_param(item.extra, is_extra and 1 or 0, true) end
                 r.ThemeLayout_RefreshAll()
-                if item.after then item.after(i - 1) end
-                -- a choice that also needs images: the part that goes with it
-                if item.part and item.parts[i] and look.current() then
-                    local list = { { item.part, item.parts[i] } }
-                    if item.mixer_plate then
-                        for _, more in ipairs(parts.mixer_plate_handles(is_extra and 1 or i)) do list[#list + 1] = more end
+                -- what follows (the wear for this plate, the part that goes with the choice)
+                -- goes into the theme in one write and one reload
+                parts.together(function()
+                    if item.after then item.after(i - 1) end
+                    -- a choice that also needs images: the part that goes with it
+                    if item.part and item.parts[i] and look.current() then
+                        local list = { { item.part, item.parts[i] } }
+                        if item.mixer_plate then
+                            for _, more in ipairs(parts.mixer_plate_handles(is_extra and 1 or i)) do list[#list + 1] = more end
+                        end
+                        if extra then
+                            -- Basic's buttons and lists: on with a Basic track panel, or a Basic mixer
+                            -- beside a track panel without a plate; off goes first, on last
+                            local tcp_b = global_value("tkTcpBasic")
+                            local want = (tcp_b or (global_value("tkMcpBasic") and not global_value("tkTcpPlate"))) and "on" or "off"
+                            if want == "off" then table.insert(list, 1, { "basic", "off" }) else list[#list + 1] = { "basic", "on" } end
+                        end
+                        parts.choose_many(list)
                     end
-                    if extra then
-                        -- Basic's buttons and lists: on with a Basic track panel, or a Basic mixer
-                        -- beside a track panel without a plate; off goes first, on last
-                        local tcp_b = global_value("tkTcpBasic")
-                        local want = (tcp_b or (global_value("tkMcpBasic") and not global_value("tkTcpPlate"))) and "on" or "off"
-                        if want == "off" then table.insert(list, 1, { "basic", "off" }) else list[#list + 1] = { "basic", "on" } end
-                    end
-                    parts.choose_many(list)
-                end
+                end)
             end
         end
         r.ImGui_PopID(ctx)
@@ -2764,6 +3070,7 @@ local function code_data()
         plate_name.load()
         data.plate = { top = plate_name.top, name = plate_name.name }
     end
+    data.materials = patina.forge.code_materials()
     return data
 end
 
@@ -2789,45 +3096,53 @@ local function apply_code(code)
     for part in pairs(data.parts) do
         if not parts.default[part] then unknown = unknown + 1 end
     end
-    look.apply_saved(table.concat(lines, "\n") .. "\n")
-    parts.forget_factory()          -- the look may be the other one now
-    reset_processing()
-    for _, id in ipairs(processing_ids()) do
-        if data.processing[id] then r.ThemeLayout_SetParameter(id, data.processing[id], true) end
-    end
-    for _, n in ipairs(order) do
-        if not LIVE[n] then
-            local v = data.params[n] or math.floor(P[n].def)
-            v = math.max(math.floor(P[n].min), math.min(math.floor(P[n].max), v))
-            P[n].value = v
-            r.ThemeLayout_SetParameter(P[n].idx, v, true)
-        end
-    end
-    for n in pairs(data.params) do
-        if not P[n] then unknown = unknown + 1 end
-    end
-    look.own_colours()
-    r.ThemeLayout_RefreshAll()
-    if data.handle then set_handle(data.handle == "dot") end
+    -- everything that writes the theme (the parts, your name, the wear, the materials) in one
+    -- write and one reload: each on its own reloaded it, up to four times
     local notes = {}
-    changed_colours = {}
-    colour_keys(function(key)
-        local native = data.colours[key] and file_to_native(data.colours[key]) or factory_colour(key)
-        if native then
-            r.SetThemeColor(key, native, 1)
-            changed_colours[key] = native
+    parts.together(function()
+        look.apply_saved(table.concat(lines, "\n") .. "\n")
+        parts.forget_factory()          -- the look may be the other one now
+        reset_processing()
+        for _, id in ipairs(processing_ids()) do
+            if data.processing[id] then r.ThemeLayout_SetParameter(id, data.processing[id], true) end
         end
+        for _, n in ipairs(order) do
+            if not LIVE[n] then
+                local v = data.params[n] or math.floor(P[n].def)
+                v = math.max(math.floor(P[n].min), math.min(math.floor(P[n].max), v))
+                P[n].value = v
+                r.ThemeLayout_SetParameter(P[n].idx, v, true)
+            end
+        end
+        for n in pairs(data.params) do
+            if not P[n] then unknown = unknown + 1 end
+        end
+        look.own_colours()
+        r.ThemeLayout_RefreshAll()
+        if data.handle then set_handle(data.handle == "dot") end
+        changed_colours = {}
+        colour_keys(function(key)
+            local native = data.colours[key] and file_to_native(data.colours[key]) or factory_colour(key)
+            if native then
+                r.SetThemeColor(key, native, 1)
+                changed_colours[key] = native
+            end
+        end)
+        if not save_colours() then notes[#notes + 1] = "Its colours are shown, but couldn't be saved to the theme file." end
+        if data.plate then
+            plate_name.load()
+            plate_name.top, plate_name.name = data.plate.top:sub(1, 40), data.plate.name:sub(1, 60)
+            plate_name.save()
+        end
+        load_params()
+        refresh_palette()
+        repaint_after_colour()
+        -- the plates' own materials: kept as saved materials, then drawn
+        patina.forge.from_code(data.materials)
+        plate_name.ensure()
+        patina.ensure()
+        patina.forge.ensure()
     end)
-    if not save_colours() then notes[#notes + 1] = "Its colours are shown, but couldn't be saved to the theme file." end
-    if data.plate then
-        plate_name.load()
-        plate_name.top, plate_name.name = data.plate.top:sub(1, 40), data.plate.name:sub(1, 60)
-        plate_name.save()
-    end
-    load_params()
-    refresh_palette()
-    repaint_after_colour()
-    plate_name.ensure()
     if unknown > 0 then
         notes[#notes + 1] = unknown .. (unknown == 1 and " setting is" or " settings are") .. " from a newer TK Theme and left out."
     end
@@ -3095,8 +3410,10 @@ function look.switch(entry, forced, choices, own_colours)
     end
     repaint_after_colour()
     if not dark.dirty then load_dark() end
-    -- the other look's theme has your name on its plate too
+    -- the other look's theme has your name on its plate too, and your wear
     plate_name.ensure()
+    patina.ensure()
+    patina.forge.ensure()
     return true
 end
 
@@ -3505,7 +3822,7 @@ local GUIDE = {
         "Extra buttons sit in a window to the left or right of the transport. Choose them on the Transport page, where a button can also run an action of your own. When the transport gets too narrow, these windows move to a second row.",
     } },
     { "Track panel", {
-        "Style: Standard has glass windows. Basic leaves them out: the name and controls stand on the panel, and the name stays readable on any track colour. Silver and Black put the track panel and the master on a brushed plate: tall tracks get a low glass band (name, level, input and the small buttons) with R, M, S and the knobs as hardware under it, middle tracks a one-row band, low tracks one row. FX parameter knobs turn hardware too, and the section margins are 10; the envelope lanes keep yours. The plates are made for the Dark look.",
+        "Style: Standard has glass windows. Basic leaves them out: the name and controls stand on the panel, and the name stays readable on any track colour. Material puts the track panel and the master on a brushed plate (Silver or Black): tall tracks get a low glass band (name, level, input and the small buttons) with R, M, S and the knobs as hardware under it, middle tracks a one-row band, low tracks one row. FX parameter knobs turn hardware too, and the section margins are 10; the envelope lanes keep yours. The plates are made for the Dark look.",
         "Meter in the plate lays the meter in the plate, between R, M, S and the knobs, on low tracks between the name and R. Narrow panels keep it standing on the right. Its type is Lying, under Meters on the General page.",
         "The buttons on the lowest row are, from the left: automation mode, phase, fixed item lanes, FX and IO columns, meter, freeze and unfreeze, and the layout button when it's on. Buttons that don't fit are left out, so make the panel wider or the track taller to see them.",
         "The layout button shows the track's layout and takes it to the next one: A, B, C and round to A. Click it on one of several selected tracks and they all go along. The mixer has a layout key of its own, on the Mixer page, for the mixer layout.",
@@ -3568,6 +3885,12 @@ end
 -- ---------------------------------------------------------------- window
 
 local DRAWERS = { look = draw_look, colours = draw_colours, darkmode = draw_darkmode, reset = draw_reset, presets = draw_presets, processing = draw_processing, guide = draw_guide }
+DRAWERS.materials = function() patina.forge.draw() end
+patina.forge.bind({ r = r, ctx = ctx, UI = UI, rgba = rgba, mix = mix, params = function() return P end,
+    set_param = set_param, set_style = function(...) return patina.set_style(...) end,
+    together = function(fn) return parts.together(fn) end, Zip = Zip,
+    parts = parts, look = look, state = state, patina = patina, begin_card = begin_card,
+    row_label = row_label, hint_text = hint_text, LABEL_W = LABEL_W })
 
 local function draw_nav()
     if r.ImGui_BeginChild(ctx, "##nav", 170, 0, r.ImGui_ChildFlags_AlwaysUseWindowPadding and r.ImGui_ChildFlags_AlwaysUseWindowPadding() or 0) then
@@ -3669,8 +3992,10 @@ local function startup_checks()
         load_params()
     end
     parts.restore()
-    -- your own name on the plate, when the theme lost it (an update, the other look)
+    -- your own name on the plate and your wear, when the theme lost them (an update, the other look)
     plate_name.ensure()
+    patina.ensure()
+    patina.forge.ensure()
     -- a colour setting chosen before its colours were worked out anew: as it is now
     -- (only when the colours are still exactly what it gave: refresh_mood checks)
     if look.current() then look.refresh_mood(look.current()) end
@@ -3834,8 +4159,12 @@ end
 -- (deferred, at the top). Everything else goes through these, so a part, a look, a preset,
 -- a code, a reset or undo and your plate's name all show it
 parts.choose_many = deferred(parts.choose_many)
+parts.together = deferred(parts.together)
 look.switch = deferred(look.switch)
 plate_name.ensure = deferred(plate_name.ensure)
+patina.ensure = deferred(patina.ensure)
+patina.forge.ensure = deferred(patina.forge.ensure)
+patina.forge.apply = deferred(patina.forge.apply)
 load_preset = deferred(load_preset)
 apply_code = deferred(apply_code)
 apply_signature = deferred(apply_signature)
