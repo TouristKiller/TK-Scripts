@@ -449,6 +449,8 @@ local PAGES = {
                 hint = "Light look with a plate: light display windows, or dark as in the Dark look." }),
             Grey(all_basic, { kind = "part", part = "display_light", label = "Light", choices = { { "off", "Off" }, { "soft", "Soft" }, { "bright", "Bright" } },
               hint = "A faint light from the bottom edge of the display windows. Basic has none." }),
+            Grey(all_basic, T("Unselected tracks dimmed", "tkLcdDim", nil,
+              "The display windows of the tracks and strips that aren't selected go darker, with their text. REAPER's own small buttons on them keep their light. Basic has none.")),
         } },
         { "Tracks and strips", {
             Off(state.both_plates, S("Track colour strength", "customColorDepthParam", nil, "How much of the track colour tints panels and rims. Not on a plate: there the track colour is the stripe on the number.")),
@@ -666,6 +668,9 @@ local PAGES = {
               hint = "The grid on the display: click it to choose the grid, or an adaptive one." },
             { kind = "startup", label = "Metronome and grid at startup",
               hint = "Shows the metronome's and the grid's state from the start, and keeps Day and night running." },
+        } },
+        { "Time display", {
+            { kind = "timefont", label = "Font" },
         } },
         { "Button windows", {
             T("Rack screws", "tkTransScrews", nil, "Screws at both ends, as if mounted in a rack."),
@@ -973,7 +978,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", track_lcd = "own", time_font = "standard" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the glass of the track panel's and the mixer's displays (meters have glass of their own)
         display_light = { "tcpGlass", "tcpGlassRound" },
@@ -1052,6 +1057,12 @@ function parts.pack(zip, accent)
 end
 
 function parts.read(zip, accent, part, variant, file)
+    if part == "time_font" then return file == "keys.txt" and parts.time_font_keys(variant, zip) or nil end
+    if part == "track_lcd" then
+        local _, _, shown = parts.lcd_on()
+        local display = parts.display_pack(zip, shown)
+        return display and display["tracks/" .. (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. "/" .. file]
+    end
     if part == "display" then
         local display = parts.display_pack(zip, variant)
         return display and display[file]
@@ -1071,6 +1082,11 @@ function parts.read(zip, accent, part, variant, file)
         local data = parts.glass_get(zip, accent, "parts/light_glass/" .. variant .. "/" .. file)
         if data or file == "keys.txt" then return data end
         return variant == "light" and pack[file] or nil
+    end
+    -- the track LCDs in a display's colour bring their own glass: the display light's images
+    if part == "display_light" and file ~= "preview.png" and file ~= "keys.txt" and parts.lcd_on() then
+        local glass = parts.read(zip, accent, "track_lcd", nil, file)
+        if glass then return glass end
     end
     -- the meter and the display light on dark glass, when Light has it
     if (part == "meter" or part == "display_light") and parts.glass_dark(zip) then
@@ -1128,11 +1144,72 @@ function parts.glass_get(zip, accent, path)
 end
 
 function parts.glass_dark(zip)
-    return parts.is_light(zip) and (parts.glass_now or parts.chosen.light_glass or parts.default.light_glass) == "dark"
+    return parts.is_light(zip) and ((parts.glass_now or parts.chosen.light_glass or parts.default.light_glass) == "dark" or (parts.lcd_on()))
+end
+
+-- Track LCDs (Look page, Display): whether the track panels' and strips' glass is in the
+-- display's colours now, the choice (own, display, full) and the display. A write in progress
+-- (parts.lcd_now, parts.display_now) counts over what is chosen: that is noted after the write
+parts.LCD_ACCENT = { red = "red", blue = "blue", amber = "orange", violet = "violet", green = "green", ice = "graphite" }
+parts.ACCENT_LCD = { red = "red", blue = "blue", orange = "amber", violet = "violet", green = "green", graphite = "ice" }
+function parts.lcd_on(shown)
+    local mode = parts.lcd_now or parts.chosen.track_lcd or parts.default.track_lcd
+    local display = shown or parts.display_now or parts.chosen.display or parts.default.display
+    return mode ~= "own" and display ~= "standard", mode, display
+end
+
+-- the track LCD images the display's pack has for this look and choice: only the glass for
+-- "Display colour", everything on it too for "Like the transport"
+function parts.lcd_files(zip, display, mode)
+    local dir = "tracks/" .. (zip:match("([^\\/]+)%.ReaperThemeZip$") or "") .. "/"
+    local list = {}
+    if mode == "display" then
+        for rel in (display[dir .. "glass.txt"] or ""):gmatch("[^\r\n]+") do list[#list + 1] = rel end
+    elseif mode == "full" then
+        for name in pairs(display) do
+            if name:sub(1, #dir) == dir and name:find("%.png$") and name:sub(#dir + 1, #dir + 4) ~= "own/" then
+                list[#list + 1] = name:sub(#dir + 1)
+            end
+        end
+        table.sort(list)
+    end
+    return list, dir
+end
+
+-- In "Display colour" and "Like the transport" the display and the accent go together: a
+-- display chosen brings its accent, an accent its display (Standard has no colour: the accent
+-- stays). Choices that name both (a preset) are left as they are.
+function parts.couple(choices)
+    local want = {}
+    for _, c in ipairs(choices) do want[c[1]] = c[2] end
+    local mode = want.track_lcd or parts.chosen.track_lcd or parts.default.track_lcd
+    if mode == "own" or (want.accent and want.display) then return choices end
+    local out = {}
+    local accent_now = parts.chosen.accent or parts.default.accent
+    if want.display or want.track_lcd then
+        -- the accent first: writing it writes every part again
+        local a = parts.LCD_ACCENT[want.display or parts.chosen.display or parts.default.display]
+        if a and a ~= accent_now and not want.accent then out[#out + 1] = { "accent", a } end
+        for _, c in ipairs(choices) do out[#out + 1] = c end
+    elseif want.accent then
+        for _, c in ipairs(choices) do out[#out + 1] = c end
+        local d = parts.ACCENT_LCD[want.accent]
+        if d and d ~= (parts.chosen.display or parts.default.display) then out[#out + 1] = { "display", d } end
+    else
+        return choices
+    end
+    return out
 end
 
 -- the images of a part, as they are named in the theme. Meters have no scaled versions
 function parts.files(part, zip, accent)
+    if part == "track_lcd" then
+        zip = zip or parts.zip_path()
+        local on, mode, shown = parts.lcd_on()
+        local display = on and parts.display_pack(zip, shown)
+        if not display then return {} end
+        return (parts.lcd_files(zip, display, mode))
+    end
     if part == "light_glass" then
         -- the panels' glass and what's on it, as the generator found them in this look's pack
         zip = zip or parts.zip_path()
@@ -1163,7 +1240,7 @@ function parts.files(part, zip, accent)
     end
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
     if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
-    if part == "toolbar_text" or part == "send_tint" or part == "shade" or part == "items" or part == "midi_keys" then return {} end  -- lines in the colour file only
+    if part == "toolbar_text" or part == "send_tint" or part == "shade" or part == "items" or part == "midi_keys" or part == "time_font" then return {} end  -- lines in the colour file only
     if part ~= "meter" and part ~= "meter_lying" then
         local files = {}
         for _, name in ipairs(parts.images_of[part] or { part }) do
@@ -1196,7 +1273,10 @@ function parts.known(zip, part)
             known[key][value] = true
         end
     end
-    if part == "display" then
+    if part == "time_font" then
+        add(parts.time_font_keys("standard", zip))
+        add("trans_font=" .. parts.TIME_FONT_LCD)
+    elseif part == "display" then
         for _, choice in ipairs(parts.variants.display) do
             local pack = parts.display_pack(zip, choice[1])
             add(pack and pack["keys.txt"])
@@ -1288,12 +1368,52 @@ function parts.write_display(variant, zip, root, accent)
     if not display or not pack then return nil, "this display is missing" end
     local files = {}
     for name, data in pairs(display) do
-        if name:find("%.png$") and name ~= "preview.png" then
+        if name:find("%.png$") and name ~= "preview.png" and name:sub(1, 7) ~= "tracks/" then
             files[root .. "/" .. name] = variant == "standard" and pack[name] or data
+        end
+    end
+    -- the track LCDs: Dark's own glass images back where a display's are (the accent's own
+    -- over them), then the display's when they are on. Light's own come from its light_glass
+    -- part, which writes them before it comes here
+    local on, mode = parts.lcd_on(variant)
+    local list, dir = parts.lcd_files(zip, display, on and mode or "own")
+    local restored = false
+    if not parts.is_light(zip) then
+        local std = parts.display_pack(zip, "standard") or {}
+        local own = dir .. "own/"
+        local probe = std[own .. "tcpGlass.png"]
+        if probe and Zip.crc_of(zip, root .. "/tcpGlass.png") ~= Zip.crc32(probe) or (on and mode == "display") then
+            for name, data in pairs(std) do
+                if name:sub(1, #own) == own then
+                    local rel = name:sub(#own + 1)
+                    files[root .. "/" .. rel] = pack[rel] or data
+                    restored = true
+                end
+            end
+        end
+    end
+    if on then
+        for _, rel in ipairs(list) do
+            local data = display[dir .. rel]
+            if data then files[root .. "/" .. rel] = data end
         end
     end
     local base = pack["rtconfig.txt"] or ""
     if parts.glass_dark(zip) then base = parts.glass_layout(base, pack, zip, accent) end
+    if on then
+        -- the layout's lines for the track LCDs: numbered from 0, as the light glass's
+        local fix = display[dir .. "lines_" .. mode .. ".txt"]
+        if fix then
+            local out = {}
+            for line in (base .. "\n"):gmatch("(.-)\n") do out[#out + 1] = line end
+            for idx, line in fix:gmatch("(%d+)\t([^\n]*)") do
+                local at = tonumber(idx) + 1
+                if out[at] then out[at] = line .. (out[at]:sub(-1) == "\r" and "\r" or "") end
+            end
+            out[#out] = nil
+            base = table.concat(out, "\n") .. "\n"
+        end
+    end
     local layout = "\n" .. base
     for name, line in (display["lines.txt"] or ""):gmatch("([^\t\n]+)\t([^\n]*)") do
         layout = layout:gsub("\n[ \t]*set " .. name:gsub("%p", "%%%0") .. "[ \t][^\r\n]*", function() return "\n" .. line end, 1)
@@ -1301,6 +1421,17 @@ function parts.write_display(variant, zip, root, accent)
     if pack["rtconfig.txt"] then files[root .. "/rtconfig.txt"] = parts.layout_fix(layout:sub(2), parts.items_now) end
     local ok, err = Zip.replace(zip, files)
     if not ok then return nil, err end
+    -- Basic's buttons go over the glass's own that came back
+    if restored and (parts.basic_now or parts.chosen.basic) == "on" then
+        ok, err = parts.write("basic", "on", zip, accent)
+        if not ok then return nil, err end
+    end
+    -- the glass that came back (or the display's) with the display light chosen
+    local glow = parts.chosen.display_light or parts.default.display_light
+    if (restored or on) and glow ~= parts.default.display_light then
+        ok, err = parts.write("display_light", glow, zip, accent)
+        if not ok then return nil, err end
+    end
     local same, text, loose = parts.keys(display["keys.txt"], zip, "display")
     if same then return true end
     return Zip.save(loose, text)
@@ -1311,7 +1442,17 @@ function parts.write(part, variant, zip, accent)
     local root = Zip.root(zip)
     if not root then return nil, "the loaded theme has no zip" end
     if part == "accent" then return parts.write_accent(variant, zip, root) end
-    if part == "display" then return parts.write_display(variant, zip, root, accent) end
+    if part == "display" or part == "track_lcd" then
+        if part == "display" then parts.display_now = variant else parts.lcd_now = variant end
+        local ok, err
+        if parts.is_light(zip) then
+            ok, err = parts.write("light_glass", parts.chosen.light_glass or parts.default.light_glass, zip, accent)
+        else
+            ok, err = parts.write_display(parts.display_now or parts.chosen.display or parts.default.display, zip, root, accent)
+        end
+        parts.display_now, parts.lcd_now = nil, nil
+        return ok, err
+    end
     if part == "items" then
         -- its colours, then the layout with its tinttcp (from the pack, with the display's lines)
         local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip, part)
@@ -1326,6 +1467,8 @@ function parts.write(part, variant, zip, accent)
     end
     if part == "light_glass" then
         if not parts.is_light(zip) then return true end       -- only Light has it
+        -- the track LCDs in a display's colour are on dark glass
+        if parts.lcd_on() then variant = "dark" end
         parts.glass_now = variant
         local files = {}
         for _, name in ipairs(parts.files(part, zip, accent)) do
@@ -1339,7 +1482,7 @@ function parts.write(part, variant, zip, accent)
             local same, text, loose = parts.keys(parts.read(zip, accent, part, variant, "keys.txt"), zip, part)
             if not same then ok, err = Zip.save(loose, text) end
         end
-        if ok then ok, err = parts.write_display(parts.chosen.display or parts.default.display, zip, root, accent) end
+        if ok then ok, err = parts.write_display(parts.display_now or parts.chosen.display or parts.default.display, zip, root, accent) end
         for _, p in ipairs({ "meter", "meter_lying", "display_light" }) do
             if ok then ok, err = parts.write(p, parts.chosen[p] or parts.default[p], zip, accent) end
         end
@@ -1444,6 +1587,8 @@ end
 
 function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
+    if part == "light_glass" and parts.is_light(zip) and parts.lcd_on() then return true end
+    if part == "track_lcd" and not parts.lcd_on() then return true end
     if parts.RECARM_HW[part] then
         local hw = parts.chosen[parts.RECARM_HW[part]] or parts.default[parts.RECARM_HW[part]]
         if variant == "cap" or (hw ~= "silver" and hw ~= "black") then return true end
@@ -1567,6 +1712,7 @@ end
 -- one reload. Returns whether any of them was made.
 function parts.choose_many(choices, forced)
     if #choices == 0 then return false end
+    choices = parts.couple(choices)
     if not look.current() then
         state.msg = "Load one of TK Theme's looks first."
         return false
@@ -1580,6 +1726,9 @@ function parts.choose_many(choices, forced)
     for part, variant in pairs(parts.chosen) do before[part] = variant end
     local ok, err = Zip.batch(zip, function()
         made = parts.write_choices(choices, zip)
+        -- parts written over the hardware's metal (an accent the display brought along, say):
+        -- drawn again, as parts.together does
+        if made > 0 and patina and patina.forge and patina.forge.hw_ensure then patina.forge.hw_ensure() end
         return true
     end)
     if not ok then
@@ -2129,9 +2278,11 @@ function parts.buttons(id, part, choices, current)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
         end
         local x = r.ImGui_GetCursorPosX(ctx)
-        local image = parts.image(part, key)
+        local image = not parts.text_buttons[part] and parts.image(part, key)
         local clicked
-        if image then
+        if parts.text_buttons[part] then
+            clicked = r.ImGui_Button(ctx, name .. "##" .. key, 0, 30)
+        elseif image then
             local w, h = r.ImGui_Image_GetSize(image)
             clicked = r.ImGui_ImageButton(ctx, "##" .. key, image, w, h)
         else
@@ -2139,10 +2290,12 @@ function parts.buttons(id, part, choices, current)
         end
         if active then r.ImGui_PopStyleColor(ctx) end
         local width = r.ImGui_GetItemRectSize(ctx)
-        r.ImGui_SetCursorPosX(ctx, x + (width - r.ImGui_CalcTextSize(ctx, name)) / 2)
-        r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(active and UI.ink or UI.text))
-        r.ImGui_Text(ctx, name)
-        r.ImGui_PopStyleColor(ctx)
+        if not parts.text_buttons[part] then
+            r.ImGui_SetCursorPosX(ctx, x + (width - r.ImGui_CalcTextSize(ctx, name)) / 2)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(active and UI.ink or UI.text))
+            r.ImGui_Text(ctx, name)
+            r.ImGui_PopStyleColor(ctx)
+        end
         r.ImGui_EndGroup(ctx)
         last_w = r.ImGui_GetItemRectSize(ctx)
         if clicked and not active then picked = key end
@@ -2398,6 +2551,8 @@ local function draw_setting(item, id)
         if not r.TK_SetMainMenuVisible then return end
     elseif item.kind == "handle" then
         draw_handle(item, id)
+    elseif item.kind == "timefont" then
+        state.draw_timefont(item, id)
     elseif item.kind == "meter" then
         draw_meter(item, id)
     elseif item.kind == "platename" then
@@ -3908,18 +4063,178 @@ local function draw_moods(current)
 end
 
 -- the accent's own colour per look, for its button
-local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Orange", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 }, { "red", "Red", 0xE8303A, 0xC41A24 }, { "graphite", "Graphite", 0xA8AEB8, 0x5C6370 } }
+-- orange shows as Amber, the name of the display it goes with (its id stays: presets, codes)
+local ACCENTS = { { "blue", "Blue", 0x36B9FF, 0x0A7FD0 }, { "orange", "Amber", 0xFF9F2E, 0xC96A00 }, { "violet", "Violet", 0xB388FF, 0x6A3FD6 }, { "red", "Red", 0xE8303A, 0xC41A24 }, { "green", "Green", 0x3FD88A, 0x1F9A57 }, { "graphite", "Graphite", 0xA8AEB8, 0x5C6370 } }
 
-local DISPLAYS = { { "standard", "Standard" }, { "ice", "Ice" }, { "amber", "Amber" }, { "green", "Green" }, { "red", "Red" }, { "blue", "Blue" } }
-parts.variants = { accent = ACCENTS, display = DISPLAYS }
+local DISPLAYS = { { "standard", "Standard" }, { "ice", "Ice" }, { "amber", "Amber" }, { "green", "Green" }, { "red", "Red" }, { "blue", "Blue" }, { "violet", "Violet" } }
+parts.variants = { accent = ACCENTS, display = DISPLAYS,
+    track_lcd = { { "own", "As now" }, { "display", "Display colour" }, { "full", "Like the transport" } },
+    time_font = { { "standard", "Standard" }, { "lcd", "LCD" } } }
+parts.text_buttons = { track_lcd = true, time_font = true }
+
+-- The transport's time in an LCD font (Transport page, Time display): TK LCD, DSEG14 Classic Bold
+-- by keshikan with its glyphs at 65.5% of its line (tk_theme_lcd_font.py: REAPER picks the time's
+-- line height itself, and DSEG's digits fill the whole line), free under the SIL Open Font License (dist/fonts, licence beside it). A theme can't
+-- bring a font, so a button puts it in the user's own font folder (no admin rights); REAPER
+-- sees it after a restart. trans_font is the transport's own font: only the big time changes
+parts.TIME_FONT_FILE = "TKLCD-Bold.ttf"
+parts.TIME_FONT_LCD = "ECFFFFFF000000000000000000000000BC0200000000000003020122544B204C4344000000000000000000000000000000000000000000000000000061"
+function parts.font_dirs()
+    local test = os.getenv("TK_TEST_FONT_DIR")
+    if test then return { test } end
+    local home = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
+    if IS_WINDOWS then
+        return { (os.getenv("LOCALAPPDATA") or (home .. "\\AppData\\Local")) .. "\\Microsoft\\Windows\\Fonts",
+                 (os.getenv("WINDIR") or "C:\\Windows") .. "\\Fonts" }
+    elseif r.GetOS():find("OSX", 1, true) or r.GetOS():find("mac", 1, true) then
+        return { home .. "/Library/Fonts", "/Library/Fonts" }
+    end
+    return { home .. "/.local/share/fonts", home .. "/.fonts", "/usr/share/fonts/truetype", "/usr/local/share/fonts" }
+end
+
+function parts.time_font_installed()
+    for _, dir in ipairs(parts.font_dirs()) do
+        local f = io.open(dir .. "/" .. parts.TIME_FONT_FILE, "rb")
+        if f then f:close() return true end
+    end
+    return false
+end
+
+-- the colour file's line for a choice: Standard is the look's own (its factory colour file),
+-- and LCD only where the font is installed (a preset from another computer keeps Standard)
+function parts.time_font_keys(variant, zip)
+    if variant == "lcd" and parts.time_font_installed() then return "trans_font=" .. parts.TIME_FONT_LCD .. "\n" end
+    local theme = (zip or parts.zip_path()):match("([^\\/]+)%.ReaperThemeZip$") or ""
+    local own = (read_all(here .. "dist/" .. theme .. ".factory.ReaperTheme") or ""):match("[\r\n]trans_font=(%x+)")
+    return own and ("trans_font=" .. own .. "\n") or nil
+end
+
+function parts.install_time_font()
+    local data = read_all(here .. "dist/fonts/" .. parts.TIME_FONT_FILE)
+    if not data then return nil, "the font file is missing from TK Theme's folder" end
+    local dir = parts.font_dirs()[1]
+    r.RecursiveCreateDirectory(dir, 0)
+    local path = dir .. (IS_WINDOWS and "\\" or "/") .. parts.TIME_FONT_FILE
+    if not write_all(path, data) then return nil, "could not write " .. path end
+    if IS_WINDOWS then
+        -- registered for this user only, as Windows' own "Install" does without admin rights
+        r.ExecProcess('reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts" /v "TK LCD Bold (TrueType)" /t REG_SZ /d "'
+            .. path .. '" /f', 10000)
+    elseif not (r.GetOS():find("OSX", 1, true) or r.GetOS():find("mac", 1, true)) then
+        r.ExecProcess('fc-cache -f "' .. dir .. '"', 30000)
+    end
+    state.time_font_fresh = true
+    return true
+end
+
+-- Transport page, Time display: Install first, then Standard or LCD
+state.draw_timefont = function(item, id)
+    if not look.current() then return end
+    row_label(item.label)
+    local chosen = parts.chosen.time_font or parts.default.time_font
+    if not parts.time_font_installed() then
+        r.ImGui_PushID(ctx, id)
+        if r.ImGui_Button(ctx, "Install LCD font") then
+            local ok, err = parts.install_time_font()
+            state.msg = ok and "LCD font installed: choose LCD here. If the time keeps the standard font, restart REAPER." or ("Could not install the font: " .. tostring(err) .. ".")
+        end
+        r.ImGui_PopID(ctx)
+        hint_text("TK LCD, made from DSEG14 by keshikan (free, SIL Open Font License): the transport's time as on a hardware display. It goes into your own font folder, no admin rights needed. Usually it works at once; otherwise after restarting REAPER.")
+        if chosen == "lcd" then
+            hint_text("LCD is chosen (by a preset or code), but the font isn't installed here: the time shows the standard font.")
+        end
+        return
+    end
+    local picked = parts.buttons(id, "time_font", parts.variants.time_font, chosen)
+    if picked and parts.choose("time_font", picked) then state.msg = "Time display changed." end
+    if state.time_font_fresh then
+        hint_text("Installed just now: if LCD shows the standard font, restart REAPER.")
+    end
+    hint_text("LCD: TK LCD (from DSEG14), as on a hardware display. Only the big time; the selection and BPM keep the theme's font. The font has no square brackets, which REAPER puts around the play state. Reloads the theme.")
+end
+
+-- Accent colour, display and track LCDs are picked first and applied together: one rebuild,
+-- however many of them change. What Apply will bring shows at once, the accent or display that
+-- goes along with the track LCDs too (parts.couple)
+parts.pending = {}
+parts.PENDING = { "accent", "display", "track_lcd" }
+function parts.shown(part)
+    return parts.pending[part] or parts.chosen[part] or parts.default[part]
+end
+
+function parts.stage(part, variant)
+    local p = parts.pending
+    p[part] = variant
+    if parts.shown("track_lcd") ~= "own" then
+        if part == "accent" then
+            p.display = parts.ACCENT_LCD[variant] or p.display
+        else
+            p.accent = parts.LCD_ACCENT[parts.shown("display")] or p.accent
+        end
+    end
+    for _, k in ipairs(parts.PENDING) do
+        if p[k] == (parts.chosen[k] or parts.default[k]) then p[k] = nil end
+    end
+end
+
+function parts.apply_pending()
+    local p, list = parts.pending, {}
+    for _, k in ipairs(parts.PENDING) do
+        if p[k] then list[#list + 1] = { k, p[k] } end
+    end
+    if #list == 0 then return false end
+    -- a choice that shows nothing (the track LCDs while the display is Standard) is only noted
+    local mode = p.track_lcd or parts.chosen.track_lcd or parts.default.track_lcd
+    local shown = p.display or parts.chosen.display or parts.default.display
+    if #list == 1 and p.track_lcd and not parts.lcd_on() and (mode == "own" or shown == "standard") then
+        parts.chosen.track_lcd = p.track_lcd
+        parts.save()
+        parts.pending = {}
+        return true
+    end
+    local ok = look.keep_mood(parts.choose_many, list)
+    if ok then parts.pending = {} end
+    return ok
+end
+
+-- the Apply row, under the accent colours and under the display while something waits
+function parts.draw_apply(id)
+    local p = parts.pending
+    if not (p.accent or p.display or p.track_lcd) then return end
+    local function label(list, key)
+        for _, c in ipairs(list) do if c[1] == key then return c[2] end end
+        return key
+    end
+    local names = {}
+    if p.accent then names[#names + 1] = "accent " .. label(ACCENTS, p.accent) end
+    if p.display then names[#names + 1] = "display " .. label(DISPLAYS, p.display) end
+    if p.track_lcd then names[#names + 1] = "track LCDs " .. label(parts.variants.track_lcd, p.track_lcd) end
+    r.ImGui_Dummy(ctx, 0, 4)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(UI.accent))
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.base))
+    local go = r.ImGui_Button(ctx, "Apply##apply" .. id, 90, 28)
+    r.ImGui_PopStyleColor(ctx, 2)
+    r.ImGui_SameLine(ctx, 0, 6)
+    local undo = r.ImGui_Button(ctx, "Cancel##cancel" .. id, 70, 28)
+    hint_text("Not applied yet: " .. table.concat(names, ", ") .. ". Apply rebuilds the theme once for all of it.")
+    if go and parts.apply_pending() then state.msg = "Applied: " .. table.concat(names, ", ") .. "." end
+    if undo then parts.pending = {} end
+end
 
 local function draw_display()
     r.ImGui_Dummy(ctx, 0, 2)
     if not begin_card("Display", "lkv") then return end
-    local picked = parts.buttons("display", "display", DISPLAYS, parts.chosen.display or parts.default.display)
-    if picked and parts.choose("display", picked) then state.msg = "Display changed." end
+    local picked = parts.buttons("display", "display", DISPLAYS, parts.shown("display"))
+    if picked then parts.stage("display", picked) end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("The transport's glass in one colour, as on hardware. Standard follows the accent colour. Reloads the theme.")
+    hint_text("The transport's glass in one colour, as on hardware. Standard follows the accent colour.")
+    r.ImGui_Dummy(ctx, 0, 4)
+    r.ImGui_Text(ctx, "Track LCDs")
+    local lcd = parts.buttons("track_lcd", "track_lcd", parts.variants.track_lcd, parts.shown("track_lcd"))
+    if lcd then parts.stage("track_lcd", lcd) end
+    r.ImGui_Dummy(ctx, 0, 2)
+    hint_text("The display windows of the track panels and the mixer. Display colour: in the display's colour, and the accent goes with the display (Ice with Graphite; Standard keeps your accent). Like the transport: their buttons in it too, dimmed when off. Unselected tracks dimmed: General page, Displays.")
+    parts.draw_apply("display")
     r.ImGui_EndChild(ctx)
 end
 
@@ -3980,7 +4295,7 @@ end
 local function draw_accents(current)
     r.ImGui_Dummy(ctx, 0, 2)
     if not begin_card("Accent colour", "lka") then return end
-    local chosen = parts.chosen.accent or parts.default.accent
+    local chosen = parts.shown("accent")
     for i, accent in ipairs(ACCENTS) do
         if i > 1 then r.ImGui_SameLine(ctx, 0, 6) end
         local colour = current.name == "Dark" and accent[3] or accent[4]
@@ -3993,12 +4308,13 @@ local function draw_accents(current)
             local x, y = r.ImGui_GetItemRectMin(ctx)
             local x2, y2 = r.ImGui_GetItemRectMax(ctx)
             r.ImGui_DrawList_AddRect(r.ImGui_GetWindowDrawList(ctx), x - 2, y - 2, x2 + 2, y2 + 2, rgba(UI.ink), 3, 0, 2)
-        elseif clicked and look.keep_mood(parts.choose, "accent", accent[1]) then
-            state.msg = accent[2] .. " is on."
+        elseif clicked then
+            parts.stage("accent", accent[1])
         end
     end
     r.ImGui_Dummy(ctx, 0, 2)
-    hint_text("The colour of what's on: selections, FX, highlights, meters. Mute, solo, record and play keep theirs. Reloads the theme.")
+    hint_text("The colour of what's on: selections, FX, highlights, meters. Mute, solo, record and play keep theirs. Apply rebuilds the theme.")
+    parts.draw_apply("accent")
     r.ImGui_EndChild(ctx)
 end
 

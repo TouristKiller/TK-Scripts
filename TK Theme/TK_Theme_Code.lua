@@ -195,6 +195,12 @@ Kraft
 Teak
 Walnut
 Cork
+track_lcd
+own
+full
+tkLcdDim
+time_font
+lcd
 ]]
 
 local words, index = {}, {}

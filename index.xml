@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.92" author="TouristKiller" time="2026-11-17T12:04:54Z">
+    <version name="0.9.93" author="TouristKiller" time="2026-11-17T20:34:56Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -227,6 +227,7 @@
      <source file="dist/accents/TK Theme Dark/blue.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/blue.zip</source>
      <source file="dist/accents/TK Theme Dark/common.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/common.zip</source>
      <source file="dist/accents/TK Theme Dark/graphite.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/graphite.zip</source>
+     <source file="dist/accents/TK Theme Dark/green.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/green.zip</source>
      <source file="dist/accents/TK Theme Dark/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/orange.zip</source>
      <source file="dist/accents/TK Theme Dark/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/red.zip</source>
      <source file="dist/accents/TK Theme Dark/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Dark/violet.zip</source>
@@ -234,6 +235,7 @@
      <source file="dist/accents/TK Theme Light/common.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/common.zip</source>
      <source file="dist/accents/TK Theme Light/glass.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/glass.zip</source>
      <source file="dist/accents/TK Theme Light/graphite.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/graphite.zip</source>
+     <source file="dist/accents/TK Theme Light/green.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/green.zip</source>
      <source file="dist/accents/TK Theme Light/orange.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/orange.zip</source>
      <source file="dist/accents/TK Theme Light/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/red.zip</source>
      <source file="dist/accents/TK Theme Light/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/accents/TK%20Theme%20Light/violet.zip</source>
@@ -244,6 +246,9 @@
      <source file="dist/display/green.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/display/green.zip</source>
      <source file="dist/display/ice.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/display/ice.zip</source>
      <source file="dist/display/red.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/display/red.zip</source>
+     <source file="dist/display/violet.zip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/display/violet.zip</source>
+     <source file="dist/fonts/TKLCD-Bold.ttf">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/fonts/TKLCD-Bold.ttf</source>
+     <source file="dist/fonts/TKLCD-LICENSE.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/fonts/TKLCD-LICENSE.txt</source>
      <source type="theme" file="TK Theme Dark.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Dark.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Dark.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Dark.ReaperTheme</source>
      <source type="theme" file="TK Theme Light.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK%20Theme%20Light.ReaperThemeZip</source>
@@ -609,8 +614,14 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Fixed: On Linux, REAPER crashed at every change in TK Theme Settings that rebuilds the theme's images (since 0.9.50). The cause was the small "Rebuilding theme..." window; on Linux and macOS that notice is now a bar at the top of the settings window. Windows is unchanged.
-+ Changed: The reload works as in 0.9.90 again; the stand-in theme 0.9.91 added for Linux wasn't the cause and is gone. Thanks to the Linux user on the forum for the report.
++ Added: Track LCDs (Look page, Display): the display windows of the track panels and the mixer in the display's colour (Display colour), or like the transport with their buttons in it too, dimmed when off (Like the transport). The accent and the display go together then.
++ Added: Unselected tracks dimmed (General page, Displays): the display windows of the tracks and strips that aren't selected go darker, with their text.
++ Added: Green as an accent colour and Violet as a display; the accent Orange is now called Amber, like its display.
++ Added: An optional LCD font for the transport's time (Transport page, Time display): TK LCD, made from DSEG14 by keshikan (SIL Open Font License). A button installs it in your own font folder, no admin rights needed.
++ Changed: Accent colour, display and track LCDs are picked first and applied together with one Apply, so the theme is rebuilt once.
++ Fixed: The transport's time jittered while playing: its font (now Tahoma Bold) has digits of one width.
++ Fixed: Hardware in a metal lost its metal when the accent changed along with the display.
++ Changed: The folder rack has 22 mounting holes per level instead of 24 (REAPER draws only about 200 elements per track panel).
 ]]></changelog>
     </version>
     </reapack>
