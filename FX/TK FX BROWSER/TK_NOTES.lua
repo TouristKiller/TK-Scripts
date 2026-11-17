@@ -1,7 +1,9 @@
 -- @description TK Notes
 -- @author TouristKiller
--- @version 2.8.0
+-- @version 2.8.1
 -- @changelog
+-- 2.8.1
+--   + Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
 -- 2.8.0
 --   + Word-wise editing like any Windows text box: Ctrl+Left/Right jumps a word, Ctrl+Shift+Left/Right selects word by word (without the space behind it), Ctrl+Backspace/Delete removes the word before/after the caret. Bold and text-size formatting inside the word stays intact
 --   + File > Auto-save TXT in project folder: keeps a plain-text copy of Project, Track and Item notes next to the .rpp, updated as you type (tabs become sections). Off by default, and the same switch as in TK Workbench Notes, which writes the same file. Global notes and never-saved projects are skipped. File > Show TXT in project folder opens the folder with the file selected (Windows, macOS; on Linux the folder)
@@ -3275,32 +3277,23 @@ local function DrawTextFragment(draw_list, x, y, color, text, bold, size)
 
     local base_size = state.font_size or 14
     size = size or base_size
-    local use_ex = font ~= nil and type(r.ImGui_DrawList_AddTextEx) == "function"
+    local pushed = not font or size ~= base_size
+    if pushed then r.ImGui_PushFont(ctx, font, size) end
+    r.ImGui_DrawList_AddText(draw_list, x, y, color, text)
 
-    local function draw(px, py)
-        if use_ex then
-            r.ImGui_DrawList_AddTextEx(draw_list, font, size, px, py, color, text)
-        else
-            r.ImGui_DrawList_AddText(draw_list, px, py, color, text)
+    if bold then
+        local thickness = math.max(0.9, size * 0.065)
+        local offsets = {
+            {thickness, 0},
+            {-thickness, 0},
+            {0, thickness},
+            {0, -thickness},
+        }
+        for _, offset in ipairs(offsets) do
+            r.ImGui_DrawList_AddText(draw_list, x + offset[1], y + offset[2], color, text)
         end
     end
-
-    if not bold then
-        draw(x, y)
-        return
-    end
-
-    local thickness = math.max(0.9, size * 0.065)
-    local offsets = {
-        {0, 0},
-        {thickness, 0},
-        {-thickness, 0},
-        {0, thickness},
-        {0, -thickness},
-    }
-    for _, offset in ipairs(offsets) do
-        draw(x + offset[1], y + offset[2])
-    end
+    if pushed then r.ImGui_PopFont(ctx) end
 end
 
 local function CalculateLineOffset(line, wrap_width, alignment)
@@ -3832,10 +3825,32 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
     local current_size = base_size
     local size_stack = {}
 
+    local run_text, run_size, run_bold, run_width = "", nil, nil, 0
+    local measured_size
+    -- Measure each prefix of the text that will be drawn together. CalcTextSize
+    -- rounds its result, so summing individual measurements drifts across a line.
+    local function measure_char(info)
+        if info.is_format then return end
+        if info.size ~= run_size or info.bold ~= run_bold then
+            run_text, run_size, run_bold, run_width = "", info.size, info.bold, 0
+        end
+        if measured_size ~= run_size then
+            if measured_size then r.ImGui_PopFont(ctx) end
+            r.ImGui_PushFont(ctx, font, run_size)
+            measured_size = run_size
+        end
+        run_text = run_text .. info.char
+        local width = r.ImGui_CalcTextSize(ctx, run_text)
+        info.width = width - run_width
+        run_width = width
+    end
+
     local function recalc_width()
+        run_size = nil
         current_width = 0
         last_break_idx = nil
         for idx, info in ipairs(current_chars) do
+            measure_char(info)
             current_width = current_width + info.width
             local ch = info.char
             if ch == " " or ch == "\t" then
@@ -3914,6 +3929,7 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
             i = i + 1
         elseif byte == 10 then
             finalize_line(line_start_byte, current_chars, i)
+            run_size = nil
             current_chars = {}
             current_width = 0
             last_break_idx = nil
@@ -3982,15 +3998,8 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
             if not next_i then next_i = len + 1 end
             local char = text:sub(i, next_i - 1)
             char_index = char_index + 1
-            local width = select(1, r.ImGui_CalcTextSize(ctx, char))
-            if not width or width <= 0 then
-                width = current_size * 0.55
-            else
-                width = width * (current_size / base_size)
-            end
             local info = {
                 char = char,
-                width = width,
                 byte_start = i,
                 byte_end = next_i - 1,
                 index = char_index,
@@ -3998,8 +4007,9 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
                 bold = bold_active,
                 size = current_size,
             }
+            measure_char(info)
             table.insert(current_chars, info)
-            current_width = current_width + width
+            current_width = current_width + info.width
             if char == " " or char == "\t" then
                 last_break_idx = #current_chars
             end
@@ -4033,6 +4043,7 @@ local function BuildEditorLayout(ctx, text, wrap_width, line_height)
     end
 
     finalize_line(line_start_byte, current_chars, nil)
+    if measured_size then r.ImGui_PopFont(ctx) end
 
     local layout = {
         lines = lines,
@@ -4630,24 +4641,12 @@ local function HandleEditorInput(ctx, editor, layout, wrap_width, line_height, m
 end
 
 BuildFont = function()
-    if font and type(r.ImGui_Detach) == "function" then
-        r.ImGui_Detach(ctx, font)
-    end
+    local ok, new_font = pcall(r.ImGui_CreateFont, state.font_family or "sans-serif")
+    if not ok or not new_font then return end
 
-    local new_font
-    if type(r.ImGui_CreateFont) == "function" then
-        local ok, created = pcall(r.ImGui_CreateFont, state.font_family or "sans-serif", state.font_size)
-        if ok then new_font = created end
-    end
-
-    if not new_font then
-        return
-    end
-
+    r.ImGui_Attach(ctx, new_font)
+    if font then r.ImGui_Detach(ctx, font) end
     font = new_font
-    if type(r.ImGui_Attach) == "function" then
-        r.ImGui_Attach(ctx, font)
-    end
 end
 
 local function DrawMenuBar()

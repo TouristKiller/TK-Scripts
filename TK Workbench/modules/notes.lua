@@ -13,7 +13,7 @@ local M = {
   id = "notes",
   title = "Notes",
   icon = "NOT",
-  version = "0.3.0"
+  version = "0.3.1"
 }
 
 local EXT_NAMESPACE = "TK_WORKBENCH_NOTES"
@@ -1903,35 +1903,24 @@ local function toggle_checkbox_line(block, line)
   mark_dirty(block)
 end
 
-local function scaled_text_width(ctx, text, font_size)
-  local width = r.ImGui_CalcTextSize and (r.ImGui_CalcTextSize(ctx, text) or 0) or 0
-  local current_size = r.ImGui_GetFontSize and (r.ImGui_GetFontSize(ctx) or DEFAULT_FONT_SIZE) or DEFAULT_FONT_SIZE
-  if width <= 0 then width = (font_size or current_size) * 0.45 end
-  if font_size and current_size > 0 then width = width * (font_size / current_size) end
-  return width
-end
-
 local function get_note_font(ctx, family, font_size)
-  if not r.ImGui_CreateFont then return nil end
-  family = normalize_font_family(family)
-  font_size = normalize_font_size(font_size)
-  local key = family .. "|" .. tostring(font_size)
+  if state.font_cache_ctx ~= ctx then
+    state.font_cache = {}
+    state.font_cache_ctx = ctx
+  end
+  local key = font_size and (family .. "|" .. font_size) or family
   local cached = state.font_cache[key]
   if cached then return cached end
-  local ok, font = pcall(r.ImGui_CreateFont, family, font_size)
+  local ok, font
+  if font_size then
+    ok, font = pcall(r.ImGui_CreateFont, family, font_size)
+  else
+    ok, font = pcall(r.ImGui_CreateFont, family)
+  end
   if not ok or not font then return nil end
-  if r.ImGui_Attach then pcall(r.ImGui_Attach, ctx, font) end
+  r.ImGui_Attach(ctx, font)
   state.font_cache[key] = font
   return font
-end
-
-
-local function draw_text_sized(ctx, draw_list, x, y, color, text, font_size, font)
-  if r.ImGui_DrawList_AddTextEx and font_size then
-    local ok = pcall(r.ImGui_DrawList_AddTextEx, draw_list, font, font_size, x, y, color, text)
-    if ok then return end
-  end
-  r.ImGui_DrawList_AddText(draw_list, x, y, color, text)
 end
 
 local function file_exists(path)
@@ -2083,7 +2072,7 @@ local function draw_note_images(ctx, draw_list, block, rects, origin_x, origin_y
   end
 end
 
-local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
+local function build_body_layout(ctx, text, wrap_width, line_height, font_size, font_family, legacy_font)
   local lines = {}
   local current_chars = {}
   local current_width = 0
@@ -2095,18 +2084,46 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
   local size_stack = {}
   text = tostring(text or "")
 
+  local bold_lookup = build_bold_lookup(text)
+  local run_text, run_size, run_bold, run_width = "", nil, nil, 0
+  local measured_size
+  -- Measure each prefix of the text that will be drawn together. CalcTextSize
+  -- rounds its result, so summing individual measurements drifts across a line.
+  local function measure_char(info)
+    if info.is_format then return end
+    if info.size ~= run_size or info.bold ~= run_bold then
+      run_text, run_size, run_bold, run_width = "", info.size, info.bold, 0
+    end
+    if measured_size ~= run_size then
+      if measured_size then r.ImGui_PopFont(ctx) end
+      if legacy_font then
+        r.ImGui_PushFont(ctx, get_note_font(ctx, font_family, run_size) or r.ImGui_GetFont(ctx))
+      else
+        r.ImGui_PushFont(ctx, get_note_font(ctx, font_family), run_size)
+      end
+      measured_size = run_size
+    end
+    run_text = run_text .. info.char
+    local width = r.ImGui_CalcTextSize(ctx, run_text)
+    info.width = width - run_width
+    run_width = width
+  end
+
   local function recalc_width()
+    run_size = nil
     current_width = 0
     last_break_idx = nil
     for idx, info in ipairs(current_chars) do
+      measure_char(info)
       current_width = current_width + info.width
       if info.char == " " or info.char == "\t" then last_break_idx = idx end
     end
   end
 
   local function finalize_line(start_byte, chars, newline_byte)
-    local line = { start_byte = start_byte, newline_byte = newline_byte, source_line = get_source_line_from_byte(text, start_byte - 1), checkbox = checkbox_checked ~= nil, checked = checkbox_checked == true, chars = {}, width = 0, text = "" }
+    local line = { start_byte = start_byte, newline_byte = newline_byte, source_line = get_source_line_from_byte(text, start_byte - 1), checkbox = checkbox_checked ~= nil, checked = checkbox_checked == true, chars = {}, fragments = {}, width = 0, text = "" }
     local parts = {}
+    local fragment
     local x = 0
     local max_size = font_size
     for idx, info in ipairs(chars) do
@@ -2114,7 +2131,12 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
       line.chars[idx] = entry
       if not info.is_format then
         parts[#parts + 1] = info.char
-        if (info.size or font_size) > max_size then max_size = info.size end
+        if not fragment or fragment.size ~= info.size or fragment.bold ~= info.bold then
+          fragment = { x = x, size = info.size, bold = info.bold, parts = {} }
+          line.fragments[#line.fragments + 1] = fragment
+        end
+        fragment.parts[#fragment.parts + 1] = info.char
+        max_size = math.max(max_size, info.size)
       end
       x = x + info.width
     end
@@ -2133,6 +2155,7 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
       index = index + 1
     elseif byte == 10 then
       finalize_line(line_start_byte, current_chars, index)
+      run_size = nil
       current_chars = {}
       current_width = 0
       last_break_idx = nil
@@ -2159,9 +2182,10 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
     else
       local next_index = utf8.offset(text, 2, index) or (#text + 1)
       local char = text:sub(index, next_index - 1)
-      local char_width = scaled_text_width(ctx, char, current_size)
-      current_chars[#current_chars + 1] = { char = char, width = char_width, byte_start = index, byte_end = next_index - 1, size = current_size }
-      current_width = current_width + char_width
+      local info = { char = char, byte_start = index, byte_end = next_index - 1, size = current_size, bold = bold_lookup[index] }
+      measure_char(info)
+      current_chars[#current_chars + 1] = info
+      current_width = current_width + info.width
       if char == " " or char == "\t" then last_break_idx = #current_chars end
       if wrap_width > 0 and current_width > wrap_width and #current_chars > 1 then
         local break_idx = last_break_idx or (#current_chars - 1)
@@ -2180,6 +2204,7 @@ local function build_body_layout(ctx, text, wrap_width, line_height, font_size)
   end
 
   finalize_line(line_start_byte, current_chars, nil)
+  if measured_size then r.ImGui_PopFont(ctx) end
   local acc_y = 0
   for _, line in ipairs(lines) do
     line.y = acc_y
@@ -2231,7 +2256,10 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
   local scale = UIScale.value()
   local font_size = UIScale.round(normalize_font_size(block.font_size))
   local font_family = normalize_font_family(block.font_family)
-  local font = get_note_font(ctx, font_family, font_size)
+  local _, _, reaimgui_version = r.ImGui_GetVersion()
+  local minor_version = tonumber(reaimgui_version:match("^0%.(%d+)"))
+  local legacy_font = minor_version and minor_version < 10
+  local font = not legacy_font and get_note_font(ctx, font_family) or nil
   local checkbox_indent = math.max(UIScale.round(16), font_size + UIScale.round(4))
   local line_height = font_size + UIScale.round(6)
   local padding_x = UIScale.round(8)
@@ -2250,7 +2278,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     avail_w = math.max(UIScale.round(40), avail_w or child_w)
     avail_h = math.max(UIScale.round(40), avail_h or child_h)
     local wrap_width = math.max(UIScale.round(24), avail_w - padding_x * 2 - checkbox_indent)
-    local layout = build_body_layout(ctx, text, wrap_width, line_height, font_size)
+    local layout = build_body_layout(ctx, text, wrap_width, line_height, font_size, font_family, legacy_font)
     local image_rects = collect_image_rects(ctx, block)
     local fit_margin = line_height + padding_y
     local content_height = math.max(layout.total_height, image_content_height(block))
@@ -2838,7 +2866,7 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     if changed then
       block.body = text
       mark_dirty(block)
-      layout = build_body_layout(ctx, text, wrap_width, line_height, font_size)
+      layout = build_body_layout(ctx, text, wrap_width, line_height, font_size, font_family, legacy_font)
     end
 
     content_height = math.max(layout.total_height, image_content_height(block))
@@ -2861,7 +2889,6 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
     local draw_list = r.ImGui_GetWindowDrawList(ctx)
     r.ImGui_DrawList_PushClipRect(draw_list, origin_x, origin_y, origin_x + avail_w, origin_y + avail_h, true)
     local sel_start, sel_end = selection_range(editor)
-    local bold_lookup = build_bold_lookup(text)
     image_rects = collect_image_rects(ctx, block)
     if sel_start and sel_end and sel_end > sel_start then
       local highlight = Theme.colors.accent_soft or 0x2B4B78FF
@@ -2909,15 +2936,22 @@ local function draw_body_editor(ctx, block, width, height, note_color, text_colo
           end
         end
         local indent = line_indent(line)
-        for _, char in ipairs(line.chars or {}) do
-          if not char.is_format and char.char ~= "" then
-            local csize = char.size or font_size
-            local char_x = origin_x + padding_x + indent + char.x0
-            local frag_h = line_height * (csize / math.max(1, font_size))
-            local cy = line_y + EDITOR_BASELINE_RATIO * (lh - frag_h)
-            draw_text_sized(ctx, draw_list, char_x, cy, draw_color, char.char, csize, font)
-            if bold_lookup[char.byte_start] then draw_text_sized(ctx, draw_list, char_x + math.max(UIScale.px(0.7), csize * 0.05), cy, draw_color, char.char, csize, font) end
+        for _, fragment in ipairs(line.fragments) do
+          local size = fragment.size
+          local x = origin_x + padding_x + indent + fragment.x
+          local frag_h = line_height * (size / font_size)
+          local y = line_y + EDITOR_BASELINE_RATIO * (lh - frag_h)
+          if legacy_font then
+            r.ImGui_PushFont(ctx, get_note_font(ctx, font_family, size) or r.ImGui_GetFont(ctx))
+          else
+            r.ImGui_PushFont(ctx, font, size)
           end
+          local fragment_text = table.concat(fragment.parts)
+          r.ImGui_DrawList_AddText(draw_list, x, y, draw_color, fragment_text)
+          if fragment.bold then
+            r.ImGui_DrawList_AddText(draw_list, x + math.max(UIScale.px(0.7), size * 0.05), y, draw_color, fragment_text)
+          end
+          r.ImGui_PopFont(ctx)
         end
       end
     end

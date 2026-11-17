@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="1.0.6" author="TouristKiller" time="2026-11-13T22:40:29Z">
+    <version name="1.0.7" author="TouristKiller" time="2026-11-17T21:00:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -174,8 +174,9 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
-            v1.0.6
-            + Theme: New "TK Theme" preset. It takes the colours of TK Theme (0.9.41 or newer) and follows them live when you change its look, accent colour or colour setting, with neutral backgrounds in the Light look. Without TK Theme it falls back to the REAPER theme.
+            v1.0.7
+            + Notes: Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
+            + Control Room: The volume faders could not be dragged when TK Workbench was floating instead of docked: clicking a fader moved the whole window, so the only way to change the level was Shift+scroll. The faders are drawn by hand and ImGui took a click on them for a click on empty window. They now catch the mouse themselves, so dragging works in a floating window too. Reported on the forum.
 ]]></changelog>
      </version>
      </reapack>
@@ -653,7 +654,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.31" author="TouristKiller" time="2026-11-14T12:45:00Z">
+    <version name="3.2.32" author="TouristKiller" time="2026-11-17T21:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -670,10 +671,9 @@
     <source main="main" file="TK_Notes_Toggle_focus.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Notes_Toggle_focus.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
-                v3.2.31:
-                + Screenshots: x86 plugins (and other bridged plugins whose interface is not embedded in REAPER) can be captured again. They open their own window in the bridge process, which REAPER does not report, so every capture ended with "no plugin window". The browser now finds that window itself and brings it to the front before taking the picture. This also applies to Make Screenshot (OpenGL/DX). Reported by Makkie65.
-                + Screenshots: Plain interfaces with large flat areas and a few thin controls (ReaSynDr, for example) were taken for an empty window and not saved. The check now looks at many more points of the window before it calls a capture blank. Reported by Makkie65.
-                + TK FX BROWSER Mini 1.2.27: the same screenshot fixes.
+                v3.2.32:
+                + TK Notes 2.8.1: Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
+                + TK FX BROWSER Mini 1.2.28: no changes of its own; it moves up with the package.
 ]]></changelog>
     </version>
     </reapack>

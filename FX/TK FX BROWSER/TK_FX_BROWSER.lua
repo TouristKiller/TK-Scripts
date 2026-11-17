@@ -1,8 +1,10 @@
 -- @description TK FX BROWSER
 -- @author TouristKiller
--- @version 3.2.31
+-- @version 3.2.32
 -- @changelog:
 --[[
+    v3.2.32:
+        + TK Notes 2.8.1: Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
     v3.2.31:
         + Screenshots: x86 plugins (and other bridged plugins whose interface is not embedded in REAPER) can be captured again. They open their own window in the bridge process, which REAPER does not report, so every capture ended with "no plugin window". The browser now finds that window itself and brings it to the front before taking the picture. This also applies to Make Screenshot (OpenGL/DX). Reported by Makkie65.
         + Screenshots: Plain interfaces with large flat areas and a few thin controls (ReaSynDr, for example) were taken for an empty window and not saved. The check now looks at many more points of the window before it calls a capture blank. Reported by Makkie65.

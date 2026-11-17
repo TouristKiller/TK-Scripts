@@ -1,9 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.6
+-- @version 1.0.7
 -- @changelog:
--- v1.0.6
---   + Theme: New "TK Theme" preset. It takes the colours of TK Theme (0.9.41 or newer) and follows them live when you change its look, accent colour or colour setting, with neutral backgrounds in the Light look. Without TK Theme it falls back to the REAPER theme.
+-- v1.0.7
+--   + Notes: Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
+--   + Control Room: The volume faders could not be dragged when TK Workbench was floating instead of docked: clicking a fader moved the whole window, so the only way to change the level was Shift+scroll. The faders are drawn by hand and ImGui took a click on them for a click on empty window. They now catch the mouse themselves, so dragging works in a floating window too. Reported on the forum.
 
 local r = reaper
 

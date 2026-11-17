@@ -1,8 +1,10 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.27
+-- @version 1.2.28
 -- @changelog:
 --[[ 
+    v1.2.28:
+        + No changes to the Mini itself. It moves up with the TK FX BROWSER package (3.2.32), which brings TK Notes 2.8.1 with fixed letter spacing.
     v1.2.27:
         + Screenshots: x86 plugins (and other bridged plugins whose interface is not embedded in REAPER) can be captured again. They open their own window in the bridge process, which REAPER does not report, so every capture ended with "no plugin window". The browser now finds that window itself and brings it to the front before taking the picture. This also applies to Make Screenshot (OpenGL/DX). Reported by Makkie65.
         + Screenshots: Plain interfaces with large flat areas and a few thin controls (ReaSynDr, for example) were taken for an empty window and not saved. The check now looks at many more points of the window before it calls a capture blank. Reported by Makkie65.

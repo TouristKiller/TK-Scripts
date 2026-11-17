@@ -9,7 +9,7 @@ local M = {
   id = "control_room",
   title = "Control Room",
   icon = "CTL",
-  version = "0.2.0"
+  version = "0.2.1"
 }
 
 local defaults = {
@@ -2413,7 +2413,9 @@ local function draw_lane(app, lane, settings, width, height)
   local enabled = lane.enabled == true
   r.ImGui_PushID(ctx, lane.id)
   local left_x, top_y = r.ImGui_GetCursorScreenPos(ctx)
-  r.ImGui_Dummy(ctx, width, height)
+  -- A real item, not a Dummy: the fader below is drawn by hand, and a click on
+  -- a Dummy counts as a click on empty window, which drags an undocked window.
+  r.ImGui_InvisibleButton(ctx, "##control_room_lane", math.max(1, width), math.max(1, height))
   if lane.mode_options and lane.set_mode and r.ImGui_BeginPopupContextItem and r.ImGui_BeginPopupContextItem(ctx, "##control_room_lane_mode") then
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, tostring(lane.mode_menu_title or "Mode"))
     local mode_label = lane.mode_label or tostring
