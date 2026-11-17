@@ -183,7 +183,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.91" author="TouristKiller" time="2026-11-17T00:04:25Z">
+    <version name="0.9.92" author="TouristKiller" time="2026-11-17T12:04:54Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -609,7 +609,8 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Fixed: On Linux, REAPER crashed at every change in TK Theme Settings that changes images (since 0.9.80). Settings now steps onto a small stand-in theme (your colours, no images) before reloading TK Theme, on Linux and macOS. Windows keeps reloading directly. Reported by a Linux user on the forum.
++ Fixed: On Linux, REAPER crashed at every change in TK Theme Settings that rebuilds the theme's images (since 0.9.50). The cause was the small "Rebuilding theme..." window; on Linux and macOS that notice is now a bar at the top of the settings window. Windows is unchanged.
++ Changed: The reload works as in 0.9.90 again; the stand-in theme 0.9.91 added for Linux wasn't the cause and is gone. Thanks to the Linux user on the forum for the report.
 ]]></changelog>
     </version>
     </reapack>

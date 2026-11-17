@@ -259,6 +259,12 @@ do
     local f = io.open(r.GetResourcePath() .. "/Data/TK Theme/dev.txt", "rb")
     local dev = f and f:read("a") or ""
     if f then f:close() end
+    -- "Rebuilding theme..." in a window of its own crashed REAPER on Linux at every change that
+    -- rebuilds the theme (since 0.9.50, when it came; found 2026-11-17 on a Linux laptop): it
+    -- never showed there, and was closed again while REAPER was busy. Off Windows it is a bar
+    -- at the top of the settings window. "busywindow" in dev.txt brings the own window back
+    -- there, "busyinside" puts the bar on Windows too
+    state.busy_inside = dev:find("busyinside", 1, true) ~= nil or (not IS_WINDOWS and not dev:find("busywindow", 1, true))
     if dev:find("openlog", 1, true) then
         state.log_t0 = r.time_precise()
         state.log_file = r.GetResourcePath() .. "/Data/TK Theme/open_log.txt"
@@ -1497,22 +1503,9 @@ function parts.reload()
     local current = parts.loaded_theme()
     r.PreventUIRefresh(1)
     if parts.standin == nil then
-        -- Opening the loaded theme again directly is only proven on Windows. On Linux, REAPER
-        -- crashed at every change since 0.9.80 (reported 2026-11-16): it seems to keep reading
-        -- the old file it had open. Elsewhere another theme goes first, as before 0.9.80: a
-        -- small one (the colours without images, "light"), which costs next to nothing.
-        -- In Data/TK Theme/dev.txt: "standin" the full copy of before, "light" the small one
-        -- (also on Windows, to try it), "direct" neither
-        local dev = read_all(r.GetResourcePath() .. "/Data/TK Theme/dev.txt") or ""
-        parts.standin = dev:find("standin", 1, true) ~= nil
-        parts.light_standin = not parts.standin and (dev:find("light", 1, true) ~= nil or (not IS_WINDOWS and not dev:find("direct", 1, true)))
+        parts.standin = ((read_all(r.GetResourcePath() .. "/Data/TK Theme/dev.txt") or ""):find("standin", 1, true)) ~= nil
     end
-    local light = parts.light_standin and Zip.make_light_stand_in(current)
-    if light then
-        r.OpenColorThemeFile(light)
-        r.OpenColorThemeFile(current)
-        Zip.remove_stand_in(current, r.GetResourcePath() .. "/reaper-themeconfig.ini")
-    elseif parts.standin or parts.light_standin then
+    if parts.standin then
         local config = r.GetResourcePath() .. "/reaper-themeconfig.ini"
         local step = Zip.make_stand_in(current, config)
             or r.GetResourcePath() .. "/ColorThemes/Default_7.0.ReaperThemeZip"
@@ -4359,6 +4352,18 @@ local function draw_rebuilding()
     return visible
 end
 
+-- the same notice as a bar at the top of the settings window (see state.busy_inside)
+state.draw_busy_bar = function()
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    local w = r.ImGui_GetContentRegionAvail(ctx)
+    local text = "Rebuilding theme...   One moment: the theme is written and reloaded."
+    local tw = r.ImGui_CalcTextSize(ctx, text)
+    r.ImGui_DrawList_AddRectFilled(dl, x, y, x + w, y + 30, rgba(UI.accent), 6)
+    r.ImGui_DrawList_AddText(dl, x + (w - tw) / 2, y + 7, 0xFFFFFFFF, text)
+    r.ImGui_Dummy(ctx, w, 34)
+end
+
 local frame = 0
 local function loop()
     frame = frame + 1
@@ -4414,6 +4419,10 @@ local function loop()
             state.loading_shown = (state.loading_shown or 0) + 1
         else
             busy.ui = true
+            if #busy.queue > 0 and state.busy_inside then
+                state.draw_busy_bar()
+                busy.shown = busy.shown + 1
+            end
             draw_nav()
             r.ImGui_SameLine(ctx)
             draw_content()
@@ -4424,7 +4433,7 @@ local function loop()
         end
         r.ImGui_End(ctx)
     end
-    if #busy.queue > 0 and draw_rebuilding() then busy.shown = busy.shown + 1 end
+    if #busy.queue > 0 and not state.busy_inside and draw_rebuilding() then busy.shown = busy.shown + 1 end
     r.ImGui_PopFont(ctx)
     r.ImGui_PopStyleVar(ctx, vars)
     r.ImGui_PopStyleColor(ctx, colours)
