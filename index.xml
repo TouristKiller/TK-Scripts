@@ -656,7 +656,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.32" author="TouristKiller" time="2026-11-17T21:00:00Z">
+    <version name="3.2.33" author="TouristKiller" time="2026-11-18T20:00:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -673,9 +673,9 @@
     <source main="main" file="TK_Notes_Toggle_focus.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Notes_Toggle_focus.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
-                v3.2.32:
-                + TK Notes 2.8.1: Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
-                + TK FX BROWSER Mini 1.2.28: no changes of its own; it moves up with the package.
+                v3.2.33:
+                + Browser: Right-click a plugin for Remove from Track, under the Add to... entries. It takes the plugin off the current track in one go, instead of opening INFO, right-clicking it in the Track FX list and choosing Delete. It shows only when the plugin is on that track (Input FX included). When it is there more than once, a submenu lists each copy with its slot, plus Remove all. One undo step. Requested by makkie65
+                + TK FX BROWSER Mini 1.2.29: the same Remove from Track entry in its plugin right-click menu.
 ]]></changelog>
     </version>
     </reapack>

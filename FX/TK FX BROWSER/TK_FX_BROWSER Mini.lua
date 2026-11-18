@@ -1,8 +1,10 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.28
+-- @version 1.2.29
 -- @changelog:
 --[[ 
+    v1.2.29:
+        + Browser: Right-click a plugin for Remove from Track, under the Add to... entries, as in TK FX BROWSER 3.2.33. It takes the plugin off the current track in one go, instead of opening INFO, right-clicking it in the Track FX list and choosing Delete. It shows only when the plugin is on that track (Input FX included). When it is there more than once, a submenu lists each copy with its slot, plus Remove all. One undo step. Requested by makkie65
     v1.2.28:
         + No changes to the Mini itself. It moves up with the TK FX BROWSER package (3.2.32), which brings TK Notes 2.8.1 with fixed letter spacing.
     v1.2.27:
@@ -13385,6 +13387,72 @@ end
 
 
 local old_ShowPluginContextMenu = ShowPluginContextMenu
+-- Remove from Track (browser right-click menu): finds the instances of a browser
+-- plugin on the current track, regular chain and Input FX. The exact original
+-- name wins; the loose match (type prefix and punctuation ignored) is the
+-- fallback for names REAPER reports differently. Globals on purpose: this file
+-- is close to Lua's 200-local limit.
+function FindPluginOnTrack(track, plugin_name)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") or type(plugin_name) ~= "string" then return {} end
+    local norm = NormalizePluginNameForMatch(plugin_name)
+    local exact, loose = {}, {}
+    local function scan(count, offset, is_input)
+        for i = 0, count - 1 do
+            local idx = i + offset
+            local ok, orig = r.TrackFX_GetNamedConfigParm(track, idx, "fx_name")
+            local _, shown = r.TrackFX_GetFXName(track, idx, "")
+            if not ok or not orig or orig == "" then orig = shown end
+            local entry = {
+                idx = idx,
+                label = (is_input and "Input FX " or "") .. "#" .. (i + 1) .. "  " .. CleanPluginName(shown or orig),
+            }
+            if orig == plugin_name then
+                exact[#exact + 1] = entry
+            elseif norm ~= "" and NormalizePluginNameForMatch(orig) == norm then
+                loose[#loose + 1] = entry
+            end
+        end
+    end
+    scan(r.TrackFX_GetCount(track), 0, false)
+    scan(r.TrackFX_GetRecCount(track), 0x1000000, true)
+    return #exact > 0 and exact or loose
+end
+
+function RemovePluginInstances(track, hits, plugin_name)
+    if not track or not r.ValidatePtr(track, "MediaTrack*") or #hits == 0 then return end
+    local order = {}
+    for _, h in ipairs(hits) do order[#order + 1] = h.idx end
+    -- Highest index first, so removing one does not shift the next.
+    table.sort(order, function(a, b) return a > b end)
+    r.Undo_BeginBlock()
+    r.PreventUIRefresh(1)
+    for _, idx in ipairs(order) do r.TrackFX_Delete(track, idx) end
+    r.PreventUIRefresh(-1)
+    r.Undo_EndBlock("Remove " .. CleanPluginName(plugin_name) .. " from track", -1)
+end
+
+function DrawRemoveFromTrackMenu(plugin_name)
+    if not TRACK or not r.ValidatePtr(TRACK, "MediaTrack*") then return end
+    local hits = FindPluginOnTrack(TRACK, plugin_name)
+    if #hits == 0 then return end
+    if #hits == 1 then
+        if r.ImGui_MenuItem(ctx, "Remove from Track") then
+            RemovePluginInstances(TRACK, hits, plugin_name)
+        end
+    elseif r.ImGui_BeginMenu(ctx, "Remove from Track (" .. #hits .. ")") then
+        for _, h in ipairs(hits) do
+            if r.ImGui_MenuItem(ctx, h.label .. "##rft_" .. h.idx) then
+                RemovePluginInstances(TRACK, { h }, plugin_name)
+            end
+        end
+        r.ImGui_Separator(ctx)
+        if r.ImGui_MenuItem(ctx, "Remove all " .. #hits) then
+            RemovePluginInstances(TRACK, hits, plugin_name)
+        end
+        r.ImGui_EndMenu(ctx)
+    end
+end
+
 function ShowPluginContextMenu(plugin_name, menu_id)
     if type(plugin_name) == "table" then
         plugin_name = plugin_name.fx_name or plugin_name.name
@@ -13889,6 +13957,7 @@ function ShowPluginContextMenu(plugin_name, menu_id)
                 r.ImGui_SetTooltip(ctx, "Toggle auto slot assign (rules in Settings > SLOTS)")
             end
         end
+        DrawRemoveFromTrackMenu(plugin_name)
         
         -- Add to Selected Items option
         local item_count = r.CountSelectedMediaItems(0)
