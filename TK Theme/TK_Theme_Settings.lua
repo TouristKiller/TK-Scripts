@@ -531,29 +531,27 @@ local PAGES = {
             Off(lay_on("tkNameOnly"), T("Input row", "tkHideInput", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Button row", "tkHideButtons", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly"), T("Mute and solo", "tkHideMs", THIS_LAYOUT, nil, true)),
-            Off(plate_or(lay_on("tkNameOnly", "tkHideMs")), T("Mute and solo on the left", "tkMsLeft", THIS_LAYOUT)),
+            Off(lay_on("tkNameOnly", "tkHideMs"), { kind = "choice", label = "Mute and solo", param = "tkMsLeft", layouts = THIS_LAYOUT,
+              choices = { "Right", "Left", "Far right" },
+              hint = "Right: beside the name. Far right: at the row's end, in the same place at every track height. On a plate Far right puts R, M and S at the right in every form, the knobs left of them; Left there is as Right." }),
             Off(lay_on("tkNameOnly"), T("Record arm and monitor", "tkHideArm", THIS_LAYOUT, nil, true)),
             Off(plate_or(lay_on("tkNameOnly")), T("Record arm and monitor on the left", "tkArmLeft", THIS_LAYOUT, "At the start of the first row.")),
             Off(lay_on("tkNameOnly"), T("FX column", "tkNoFxCol", THIS_LAYOUT, "Without it, the FX button moves to the first row.", true)),
             Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without it, the IO button moves to the first row.", true)),
             -- the buttons sit on the first row without their column, or with the column in
             -- columns (2 or more), whose lowest tracks have no header
-            Off(function()
-                if lay_value("tkNameOnly") then return true end
-                local p = P["Layout" .. tcp_layout .. "-tkFxCols"]
-                return not lay_value("tkNoFxCol") and not (p and p.value > 1)
-            end, T("FX button", "tkHideFxBtn", THIS_LAYOUT, "On the first row: without the FX column, or on the lowest tracks with FX columns.", true)),
-            Off(function()
-                if lay_value("tkNameOnly") then return true end
-                local p = P["Layout" .. tcp_layout .. "-tkSendCols"]
-                return not lay_value("tkNoIoCol") and not (p and p.value > 1)
-            end, T("IO button", "tkHideIoBtn", THIS_LAYOUT, "On the first row: without the IO column, or on the lowest tracks with Send columns.", true)),
+            Off(function() return lay_value("tkNameOnly") or (lay_value("tkNoFxCol") and lay_value("tkNoIoCol")) end, T("List headers", "tkNoListHead", THIS_LAYOUT,
+                "The FX and IO buttons above the lists. Off: the lists start at the top, the buttons go to the first row (FX button, IO button below).", true)),
+            Off(lay_on("tkNameOnly"), T("FX button", "tkHideFxBtn", THIS_LAYOUT,
+                "On the first row: without the FX column, without list headers, or on the lowest tracks.", true)),
+            Off(lay_on("tkNameOnly"), T("IO button", "tkHideIoBtn", THIS_LAYOUT,
+                "On the first row: without the IO column, without list headers, or on the lowest tracks.", true)),
             Off(lay_on("tkNoFxCol", "tkNameOnly"), S("FX column width", "sectionRightW", THIS_LAYOUT)),
             Off(lay_on("tkNoIoCol", "tkNameOnly"), S("IO column width", "tkIoW", THIS_LAYOUT, "0: as the FX column.")),
             Off(lay_on("tkNoFxCol", "tkNameOnly"), S("FX columns", "tkFxCols", THIS_LAYOUT,
-                "FX side by side; give the FX column the width. From 2, the lowest tracks show the first FX: the FX button moves to the first row.")),
+                "FX side by side; give the FX column the width. The lowest tracks show the first FX: the FX button moves to the first row.")),
             Off(lay_on("tkNoIoCol", "tkNameOnly"), S("Send columns", "tkSendCols", THIS_LAYOUT,
-                "Sends side by side; give the IO column the width. From 2, the lowest tracks show the first sends: the IO button moves to the first row.")),
+                "Sends side by side; give the IO column the width. The lowest tracks show the first sends: the IO button moves to the first row.")),
             Off(lay_on("tkNameOnly"), T("FX parameters", "tkHideParms", THIS_LAYOUT, "The FX parameters shown in track controls.", true)),
             Off(lay_on("tkNameOnly"), T("Embedded FX", "tkHideEmbed", THIS_LAYOUT, "An FX's embedded UI under the controls.", true)),
             Off(lay_on("tkNameOnly"), T("Meter", "tkHideMeter", THIS_LAYOUT, nil, true)),
@@ -561,6 +559,8 @@ local PAGES = {
                 "With Meter in the plate (above): only where the plate has no room for it.")),
             Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT,
                 "With Meter in the plate (above): only where the plate has no room for it.")),
+            Off(lay_on("tkNameOnly", "tkHideMeter"), T("Peak value", "tkPeakVal", THIS_LAYOUT,
+                "The peak level as a number in the box at the meter's top. REAPER shows it only where the meter is wide enough: about 40 (Meter width).")),
             Off(lay_on("tkNameOnly"), S("Name size", "tcpLabelSize", THIS_LAYOUT)),
             Off(lay_on("tkNameOnly"), S("Minimum name width", "tkNameMin", THIS_LAYOUT,
                 "The name keeps this much on a narrow panel: the FX and IO columns give way first. 0: as before.")),
@@ -630,6 +630,7 @@ local PAGES = {
         } },
         { "Per layout", {
             { kind = "layout", label = "Layout", hint = "For the strips on this layout: A standard, B narrow, C with a sidebar. Set it in a track's right-click menu." },
+            T("Name only", "tkMcpNameOnly", THIS_LAYOUT, "Just the name, large: a divider. In a narrow strip (Width) it stands upright."),
             S("Width", "mcpWidth", THIS_LAYOUT, "Under 52 a narrow strip, under 88 an intermediate one (with a plate 76 and 100)."),
             S("Width when selected", "mcpWidthSel", THIS_LAYOUT), S("Width when armed", "mcpWidthRecarm", THIS_LAYOUT),
             Grow("Wider per channel", "mcpNchanGrow", { "mcpNchanGrowSel", "mcpNchanGrowRecarm" }),

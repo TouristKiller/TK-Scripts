@@ -213,6 +213,15 @@ LayoutC-tkNameMin
 ruler_font
 inter
 arial
+LayoutA-tkPeakVal
+LayoutB-tkPeakVal
+LayoutC-tkPeakVal
+LayoutA-tkMcpNameOnly
+LayoutB-tkMcpNameOnly
+LayoutC-tkMcpNameOnly
+LayoutA-tkNoListHead
+LayoutB-tkNoListHead
+LayoutC-tkNoListHead
 ]]
 
 local words, index = {}, {}
