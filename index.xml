@@ -184,7 +184,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.94" author="TouristKiller" time="2026-11-18T11:10:05Z">
+    <version name="0.9.95" author="TouristKiller" time="2026-11-18T20:10:44Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -615,16 +615,16 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: FX and sends in up to 4 columns side by side in the track panel (Track panel page, FX columns / Send columns, per layout). From 2 columns a low track drops the list's header and its FX/IO button joins the first row, so more fits on the lowest tracks. Requested by VSTHEM.
-+ Added: Minimum name width (Track panel page, per layout): the track name stays readable on a narrow panel; the FX and IO columns give way first.
-+ Added: Plate: low tracks also get a pan knob beside the volume knob when the name keeps room. Requested by VSTHEM.
-+ Added: The settings tell when the plate hides a setting (the plate places volume, pan, mute, solo and record arm itself), and the meter settings point to Meter in the plate.
-+ Changed: The FX and IO columns shrink, then step aside, instead of running off the right edge of the track panel.
-+ Changed: Plate: less room between the name window and the FX/IO window, and beside a meter on the left; less room between list columns.
-+ Changed: Basic: track names in the track colour too (on a light tint), and brighter text.
-+ Changed: Light: unselected tracks fade toward the glass instead of going dark grey; on Basic, dimmed names stay readable on a coloured panel.
-+ Fixed: With Basic and Track LCDs, opening the settings switched the lists' look back and forth.
-+ Fixed: Plate: the screws right of the FX/IO window disappeared beside the wooden rail.
++ Added: Ruler and markers font (General page, Window and toolbars): Inter or Arial. For systems where a copy of Inter installed by hand shows wrong characters in the ruler or the marker labels. Reported by Myke Robinson.
++ Changed: Every key is one square size in the track panel and the mixer: monitor, FX, FX bypass, IO, phase and automation. IO is no longer wider, and the mixer's IO no longer sits a pixel lower than FX. Reported by res.
++ Changed: Ice: a key's on and off are further apart, still in Ice's own white. Requested by res.
++ Changed: Item buttons are sharper, and their symbols (lock, mute, notes, info, FX, envelope) are one size. Reported by res.
++ Changed: The phase and monitor keys light in the accent colour, as FX and IO do. The transport's keys keep their own colours.
++ Changed: Toolbars: the last two of REAPER's own toolbar icons in the theme's style.
++ Fixed: The Lamp record arm was oval and sat a little low beside M and S; the glass record arms' letter was narrow. Reported by res.
++ Fixed: The master is dimmed and shows its selection like the tracks (Plate lit), instead of standing out brighter.
++ Fixed: On a plate, the fixed-lanes mark sits inside the window.
++ Fixed: At some track panel widths the FX and IO lists' keys jumped out of their window onto the first row, even with the FX and IO buttons switched off.
 ]]></changelog>
     </version>
     </reapack>

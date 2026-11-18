@@ -210,6 +210,9 @@ LayoutC-tkSendCols
 LayoutA-tkNameMin
 LayoutB-tkNameMin
 LayoutC-tkNameMin
+ruler_font
+inter
+arial
 ]]
 
 local words, index = {}, {}

@@ -481,6 +481,8 @@ local PAGES = {
             { kind = "part", part = "toolbar_blank", label = "Text buttons", choices = { { "plain", "Plain" }, { "cell", "Cell" } },
               hint = "A quiet cell behind toolbar buttons that show text." },
             { kind = "part", part = "toolbar_text", label = "Text size", choices = { { "small", "Small" }, { "normal", "Normal" }, { "large", "Large" } } },
+            { kind = "part", part = "ruler_font", label = "Ruler and markers", choices = { { "inter", "Inter" }, { "arial", "Arial" } },
+              hint = "The font of the ruler and the marker and region labels. Inter is the one REAPER ships with, as Default 7 uses. Arial: for when the ruler or the markers show wrong characters, which a copy of Inter you installed yourself can cause." },
         } },
     } },
     { title = "Track panel", cards = {
@@ -1000,7 +1002,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", track_lcd = "own", time_font = "standard" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "plain", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", track_lcd = "own", time_font = "standard", ruler_font = "inter" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the glass of the track panel's and the mixer's displays (meters have glass of their own)
         display_light = { "tcpGlass", "tcpGlassRound" },
@@ -1078,8 +1080,33 @@ function parts.pack(zip, accent)
     return parts.packs[path]
 end
 
+-- Ruler and markers (Window and toolbars): tl_font, REAPER's "Timeline font", which the ruler and
+-- the marker and region labels use (tried with a loud font, 2026-11-18). Arial swaps only its
+-- face: Myke Robinson's ruler and markers showed wrong characters with this theme and not with
+-- Default 7, Inter installed by hand beside the one REAPER ships (not reproduced here). Arial
+-- is on Windows and macOS (Linux maps it to Liberation Sans), as Horizon uses
+-- a LOGFONTA in hex (60 bytes and a checksum) with another face
+function parts.font_with_face(hex, face)
+    if #hex < 122 then return hex end
+    local b, sum = {}, 0
+    for i = 1, 120, 2 do b[#b + 1] = tonumber(hex:sub(i, i + 1), 16) or 0 end
+    for i = 29, 60 do b[i] = 0 end
+    for i = 1, math.min(#face, 31) do b[28 + i] = face:byte(i) end
+    for i = 1, 60 do sum = sum + b[i] b[i] = string.format("%02X", b[i]) end
+    return table.concat(b) .. string.format("%02X", sum % 256)
+end
+
+-- the colour file's tl_font line for a choice: the look's own (its factory colour file), Arial in it
+function parts.ruler_font_keys(variant, zip)
+    local theme = (zip or parts.zip_path()):match("([^\\/]+)%.ReaperThemeZip$") or ""
+    local own = (read_all(here .. "dist/" .. theme .. ".factory.ReaperTheme") or ""):match("[\r\n]tl_font=(%x+)")
+    if not own then return nil end
+    return "tl_font=" .. (variant == "arial" and parts.font_with_face(own, "Arial") or own) .. "\n"
+end
+
 function parts.read(zip, accent, part, variant, file)
     if part == "time_font" then return file == "keys.txt" and parts.time_font_keys(variant, zip) or nil end
+    if part == "ruler_font" then return file == "keys.txt" and parts.ruler_font_keys(variant, zip) or nil end
     if part == "track_lcd" then
         local _, _, shown = parts.lcd_on()
         local display = parts.display_pack(zip, shown)
@@ -1262,7 +1289,7 @@ function parts.files(part, zip, accent)
     end
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
     if part == "mcp_extmixbg" then return { "mcp_extmixbg.png" } end  -- only at 100%, in Default 7 too
-    if part == "toolbar_text" or part == "send_tint" or part == "shade" or part == "items" or part == "midi_keys" or part == "time_font" then return {} end  -- lines in the colour file only
+    if part == "toolbar_text" or part == "send_tint" or part == "shade" or part == "items" or part == "midi_keys" or part == "time_font" or part == "ruler_font" then return {} end  -- lines in the colour file only
     if part ~= "meter" and part ~= "meter_lying" then
         local files = {}
         for _, name in ipairs(parts.images_of[part] or { part }) do
@@ -1298,6 +1325,9 @@ function parts.known(zip, part)
     if part == "time_font" then
         add(parts.time_font_keys("standard", zip))
         add("trans_font=" .. parts.TIME_FONT_LCD)
+    elseif part == "ruler_font" then
+        add(parts.ruler_font_keys("inter", zip))
+        add(parts.ruler_font_keys("arial", zip))
     elseif part == "display" then
         for _, choice in ipairs(parts.variants.display) do
             local pack = parts.display_pack(zip, choice[1])
@@ -4114,7 +4144,7 @@ local DISPLAYS = { { "standard", "Standard" }, { "ice", "Ice" }, { "amber", "Amb
 parts.variants = { accent = ACCENTS, display = DISPLAYS,
     track_lcd = { { "own", "As now" }, { "display", "Display colour" }, { "full", "Like the transport" } },
     time_font = { { "standard", "Standard" }, { "lcd", "LCD" } } }
-parts.text_buttons = { track_lcd = true, time_font = true }
+parts.text_buttons = { track_lcd = true, time_font = true, ruler_font = true }
 
 -- The transport's time in an LCD font (Transport page, Time display): TK LCD, DSEG14 Classic Bold
 -- by keshikan with its glyphs at 65.5% of its line (tk_theme_lcd_font.py: REAPER picks the time's
