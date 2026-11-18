@@ -201,6 +201,15 @@ full
 tkLcdDim
 time_font
 lcd
+LayoutA-tkFxCols
+LayoutA-tkSendCols
+LayoutB-tkFxCols
+LayoutB-tkSendCols
+LayoutC-tkFxCols
+LayoutC-tkSendCols
+LayoutA-tkNameMin
+LayoutB-tkNameMin
+LayoutC-tkNameMin
 ]]
 
 local words, index = {}, {}

@@ -376,7 +376,11 @@ local function not_form(form)
 end
 -- off while a track panel plate is on (it lays the panel out itself), or when `when` says so
 local function plate_or(when)
-    return function() return global_value("tkTcpPlate") or (when ~= nil and when()) end
+    local fn = function() return global_value("tkTcpPlate") or (when ~= nil and when()) end
+    -- remembered, so the card can say it is the plate that hides them
+    state.plate_gated = state.plate_gated or {}
+    state.plate_gated[fn] = true
+    return fn
 end
 local function global_on(...)
     local names = { ... }
@@ -457,7 +461,7 @@ local PAGES = {
             Off(state.both_plates, T("Volume line in track colour", "tkLineVolTrk", nil, "The line on the volume slider and the mixer's fader. Off: neutral. A plate's knobs and caps have none.")),
             Off(state.both_plates, T("Pan line in track colour", "tkLinePanTrk", nil, "The lines on pan and width. Off: neutral. A plate's knobs have none.")),
             Off(state.both_plates, S("Selection strength", "selectStrength", nil, "How much a selected track stands out. On a plate: Selected track: plate lit or LED, on the Track panel page.")),
-            Grey(all_basic, T("Track names in track colour", "colorTrackLabels", nil, "Basic keeps names readable on the tint instead.")),
+            T("Track names in track colour", "colorTrackLabels", nil, "On Basic up to a Track colour strength of 30; on a stronger tint the panel is the track colour itself, so the names stay plain to stay readable."),
             T("Track names in accent colour", "tkNameAccent", nil, "Goes before the track colour."),
             T("Selection dot", "selDot", nil, "The small dot on the track number."),
             { kind = "part", part = "send_tint", label = "Send colours", choices = { { "off", "Off" }, { "subtle", "Subtle" }, { "medium", "Medium" } },
@@ -530,16 +534,34 @@ local PAGES = {
             Off(plate_or(lay_on("tkNameOnly")), T("Record arm and monitor on the left", "tkArmLeft", THIS_LAYOUT, "At the start of the first row.")),
             Off(lay_on("tkNameOnly"), T("FX column", "tkNoFxCol", THIS_LAYOUT, "Without it, the FX button moves to the first row.", true)),
             Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without it, the IO button moves to the first row.", true)),
-            Off(lay_off_or("tkNoFxCol", "tkNameOnly"), T("FX button", "tkHideFxBtn", THIS_LAYOUT, nil, true)),
-            Off(lay_off_or("tkNoIoCol", "tkNameOnly"), T("IO button", "tkHideIoBtn", THIS_LAYOUT, nil, true)),
+            -- the buttons sit on the first row without their column, or with the column in
+            -- columns (2 or more), whose lowest tracks have no header
+            Off(function()
+                if lay_value("tkNameOnly") then return true end
+                local p = P["Layout" .. tcp_layout .. "-tkFxCols"]
+                return not lay_value("tkNoFxCol") and not (p and p.value > 1)
+            end, T("FX button", "tkHideFxBtn", THIS_LAYOUT, "On the first row: without the FX column, or on the lowest tracks with FX columns.", true)),
+            Off(function()
+                if lay_value("tkNameOnly") then return true end
+                local p = P["Layout" .. tcp_layout .. "-tkSendCols"]
+                return not lay_value("tkNoIoCol") and not (p and p.value > 1)
+            end, T("IO button", "tkHideIoBtn", THIS_LAYOUT, "On the first row: without the IO column, or on the lowest tracks with Send columns.", true)),
             Off(lay_on("tkNoFxCol", "tkNameOnly"), S("FX column width", "sectionRightW", THIS_LAYOUT)),
             Off(lay_on("tkNoIoCol", "tkNameOnly"), S("IO column width", "tkIoW", THIS_LAYOUT, "0: as the FX column.")),
+            Off(lay_on("tkNoFxCol", "tkNameOnly"), S("FX columns", "tkFxCols", THIS_LAYOUT,
+                "FX side by side; give the FX column the width. From 2, the lowest tracks show the first FX: the FX button moves to the first row.")),
+            Off(lay_on("tkNoIoCol", "tkNameOnly"), S("Send columns", "tkSendCols", THIS_LAYOUT,
+                "Sends side by side; give the IO column the width. From 2, the lowest tracks show the first sends: the IO button moves to the first row.")),
             Off(lay_on("tkNameOnly"), T("FX parameters", "tkHideParms", THIS_LAYOUT, "The FX parameters shown in track controls.", true)),
             Off(lay_on("tkNameOnly"), T("Embedded FX", "tkHideEmbed", THIS_LAYOUT, "An FX's embedded UI under the controls.", true)),
             Off(lay_on("tkNameOnly"), T("Meter", "tkHideMeter", THIS_LAYOUT, nil, true)),
-            Off(lay_on("tkNameOnly", "tkHideMeter"), T("Meter on the left", "tkMeterLeft", THIS_LAYOUT)),
-            Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT)),
+            Off(lay_on("tkNameOnly", "tkHideMeter"), T("Meter on the left", "tkMeterLeft", THIS_LAYOUT,
+                "With Meter in the plate (above): only where the plate has no room for it.")),
+            Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT,
+                "With Meter in the plate (above): only where the plate has no room for it.")),
             Off(lay_on("tkNameOnly"), S("Name size", "tcpLabelSize", THIS_LAYOUT)),
+            Off(lay_on("tkNameOnly"), S("Minimum name width", "tkNameMin", THIS_LAYOUT,
+                "The name keeps this much on a narrow panel: the FX and IO columns give way first. 0: as before.")),
             Off(lay_on("tkNameOnly", "tkHideInput"), S("Input text size", "tcpInputFontSize", THIS_LAYOUT)),
         } },
         { "Set track height", {
@@ -1624,6 +1646,19 @@ function parts.in_zip(part, variant, zip)
     -- recoloured in a metal (Materials page, Hardware) and still as drawn: that is in place
     if patina and patina.forge.hw_owns(zip, part) then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local name = parts.files(part, zip)[1]
+    -- Basic on goes over what it shares with other parts (Track LCDs share 290 files with it):
+    -- judged by such a file, that part was written again at one opening and Basic at the next,
+    -- turn and turn about (seen 2026-11-18). Its first file of its own decides; none, Basic's
+    -- own check sees to them
+    if part ~= "basic" and (parts.chosen.basic or parts.default.basic) == "on" then
+        local mine = {}
+        for _, n in ipairs(parts.files("basic", zip)) do mine[n] = true end
+        name = nil
+        for _, n in ipairs(parts.files(part, zip)) do
+            if not mine[n] then name = n break end
+        end
+        if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
+    end
     if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local data = parts.read(zip, nil, part, variant, name)
     if not root or not data then return true end
@@ -2727,16 +2762,25 @@ end
 local function draw_param_page(page)
     for ci, card in ipairs(page.cards) do
         if begin_card(card[1], ci) then
-            local hidden = 0
+            local hidden, by_plate = 0, 0
             for ii, item in ipairs(card[2]) do
                 local off = item.off and item.off()
                 if off and not item.grey then
                     hidden = hidden + 1
+                    if state.plate_gated and state.plate_gated[item.off] and global_value("tkTcpPlate") then
+                        by_plate = by_plate + 1
+                    end
                 else
                     if off then r.ImGui_BeginDisabled(ctx, true) end
                     draw_setting(item, ci .. "_" .. ii)
                     if off then r.ImGui_EndDisabled(ctx) end
                 end
+            end
+            if by_plate > 0 then
+                hint_text((by_plate == 1 and "1 setting is" or by_plate .. " settings are")
+                    .. " hidden by the plate: it places volume, pan, mute, solo and record arm itself,"
+                    .. " also on the lowest tracks (pan when the name keeps room).")
+                hidden = hidden - by_plate
             end
             if hidden > 0 then
                 hint_text(hidden == 1 and "1 setting is hidden: it doesn't apply with the choices above."
