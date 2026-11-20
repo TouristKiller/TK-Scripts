@@ -184,7 +184,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.96" author="TouristKiller" time="2026-11-19T00:22:56Z">
+    <version name="0.9.97" author="TouristKiller" time="2026-11-20T22:44:05Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -210,6 +210,9 @@
      <source main="main" file="slots/TK_Theme_Slot_vkb.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_vkb.lua</source>
      <source file="TK_Theme_Slot.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Slot.lua</source>
      <source file="TK_Theme_Zip.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Zip.lua</source>
+     <source file="TK_Theme_Search.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Search.lua</source>
+     <source file="TK_Theme_Pics.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Pics.lua</source>
+     <source file="TK_Theme_MasterMix.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_MasterMix.lua</source>
      <source file="TK_Theme_Grid.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid.lua</source>
      <source file="TK_Theme_Auto.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Auto.lua</source>
      <source file="TK_Theme_Plate.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Plate.lua</source>
@@ -615,13 +618,23 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Peak value (Track panel page, per layout): the peak level as a number in the box at the meter's top, where the meter is wide enough (about 40). Requested by res.
-+ Added: Name only for mixer strips (Mixer page, per layout): a divider with just the name, large; in a narrow strip it stands upright. Requested by res.
-+ Added: List headers (Track panel page, per layout): off, the FX and send lists start at the top at every height, and their FX and IO buttons go to the first row, or away with FX button / IO button off. Requested by VSTHEM.
-+ Added: Mute and solo Far right (Track panel page, per layout): at the row's end, in the same place at every track height. On a plate R, M and S then stand at the right in every form, the knobs left of them. Requested by VSTHEM.
-+ Changed: On the lowest tracks the FX and send lists drop their header with one column too, so the first FX or send shows. Reported by VSTHEM.
-+ Fixed: FX and Send columns show exactly the number set: 4 showed 3, and 1 filled a wide window with several. Reported by VSTHEM.
-+ Fixed: On a very narrow track panel the plate's window covered its right screws.
++ Added: The settings window, made easier to find your way in: search every setting (Ctrl+F), the pages in three groups, tabs on the Track panel and Mixer pages, an A | B | C switch above the per-layout settings, a dot at every setting you changed (click it to go back) with Only what I changed, See also links between settings that belong together, and grey settings that say why, with a key to the page that changes it.
++ Added: An own title row for the settings window, with dock and close keys, and an i key that hides all explanation text (pointing at a setting still explains it).
++ Added: Pictures on the choices of where things go: knobs or sliders, keys above or beside the fader, mute and solo, side column, lying meter, track number.
++ Added: Three fader caps for the mixer's plate: Vintage (ivory), Knurled (black, with a line in your accent colour) and Glow (smoked acrylic with a light in your accent colour).
++ Added: Knobs for the plates (Track panel and Mixer pages): Classic, Chicken head (ivory) and Machined (turned aluminium). Machined takes the metal chosen under Hardware on the Materials page.
++ Added: Screw strips (Track panel and Mixer pages, with a plate): off, the plate goes without them and the room goes to the controls.
++ Added: Keys (Mixer page, per layout, with a plate): above the pan knobs, in a column beside the fader, or Auto; the master has its own.
++ Added: Master shown (Mixer page, Master): in the mixer on the left or the right, in a window of its own, docked, or hidden. These are REAPER's own options.
++ Added: Lists Boxes or Plain for the track panel too; the mixer's choice is now the same two.
++ Changed: Smaller margins on the plates; the lists follow Section margins, and the gap between the display and the FX window equals the one to the meter.
++ Changed: The meter lies in the plate as soon as there is room for it.
++ Changed: Standard's M and S keys, the master's i key and the narrow strips' input icon follow the display skin.
++ Changed: Basic per panel: a Basic track panel no longer changes the mixer's buttons, and the other way round. In the Light look with dark display glass Basic goes dark too.
++ Changed: Tighter gaps between meter and fader, and round the pan knobs, on the mixer strips.
++ Changed: With a plate the slider handle choice moves to Envelope lanes, the only sliders left there.
++ Fixed: The mixer's Show input / Show pan from height worked at other heights at 200% scaling. Reported by Vincent.
++ Fixed: A grey meter background in the Light look.
 ]]></changelog>
     </version>
     </reapack>

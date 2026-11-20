@@ -1758,6 +1758,68 @@ local function layer_names(kind, root)
     return plate, rust, fasten
 end
 
+-- ---------------------------------------------------------------- without screw strips
+-- The track panel's plate without its ears (Track panel page, Screw strips off; res 0.9.97):
+-- the fixed part at each side (screws and groove, 20 at 100%) taken off, the plate's edge put
+-- back. The image keeps WALTER's 1-pixel border, whose pink marks the fixed parts (left: the
+-- top row from the left; right: the bottom row from the right); they become the edge's few
+-- columns only. The mixer's plate the same, turned: its rails at the top and bottom (Mixer
+-- page), cut as rows (Forge.flat_rows).
+Forge.FLAT_VERSION = 1
+-- per plate: its switch, Style, Plain, image prefix
+Forge.FLAT = {
+    { kind = "tcp", switch = "tkTcpNoEars", plate = "tkTcpPlate", plain = "tkTcpPlain", pre = "tcp" },
+    { kind = "mcp", switch = "tkMcpNoEars", plate = "tkMcpPlate", plain = "tkMcpPlain", pre = "mcp", rows = true },
+}
+
+-- the image a plate shows, when it should go without its strips: nil with the switch off,
+-- with no plate, or Plain (REAPER fills a box, no image). m: the drawn material (drawn(kind))
+function Forge.flat_source(f, m)
+    if (param(f.switch) or 0) < 1 then return nil end
+    local plate = param(f.plate) or 0
+    if plate < 1 or (param(f.plain) or 0) > 0 then return nil end
+    if m then return f.pre .. "PlateMat" end
+    return f.pre .. (plate == 2 and "PlateBlack" or "PlateSilver")
+end
+
+-- the mixer's: its top and bottom fixed parts (the rails) off, read from the left column's
+-- pink from the top; the bottom one (the right column's from the bottom) is as tall
+function Forge.flat_rows(W, H, px, scale)
+    local pink, stride = "\255\0\255", W * 4
+    local rail = 0
+    while rail + 1 < H // 2 and px:sub((rail + 1) * stride + 1, (rail + 1) * stride + 3) == pink do rail = rail + 1 end
+    local edge = math.max(1, math.floor(scale + 0.5)) + 1
+    if rail <= edge then return H, px end
+    local nh = H - 2 * (rail - edge)
+    local mid = nh - 2 - 2 * edge
+    return nh, px:sub(1, (1 + edge) * stride)
+        .. px:sub((1 + rail) * stride + 1, (1 + rail + mid) * stride)
+        .. px:sub((H - 1 - edge) * stride + 1, H * stride)
+end
+
+-- W x H RGBA (a string) at a scale → the width and pixels without the ears
+function Forge.flat(W, H, px, scale)
+    local pink = "\255\0\255"
+    local ear = 0                               -- the fixed part's width, from the top row's pink
+    while ear + 1 < W // 2 and px:sub((ear + 1) * 4 + 1, (ear + 1) * 4 + 3) == pink do ear = ear + 1 end
+    local edge = math.max(1, math.floor(scale + 0.5)) + 1   -- the bevel's columns, and one more
+    if ear <= edge then return W, px end         -- nothing to cut
+    local nw = W - 2 * (ear - edge)
+    local mid = nw - 2 - 2 * edge
+    local rows = {}
+    for y = 0, H - 1 do
+        local at = y * W * 4
+        -- the border and the left edge, the middle past the left ear, the right edge and border
+        rows[y + 1] = px:sub(at + 1, at + (1 + edge) * 4)
+            .. px:sub(at + (1 + ear) * 4 + 1, at + (1 + ear + mid) * 4)
+            .. px:sub(at + (W - 1 - edge) * 4 + 1, at + W * 4)
+    end
+    -- (the marks need nothing more: WALTER reads the left fixed part from the top row's pink
+    -- at the left, the right one from the bottom row's at the right, and both now span the
+    -- border and the edge's columns, kept as they were)
+    return nw, concat(rows)
+end
+
 -- old copies of the plates (from before a theme update) out of Data/TK Theme/forge
 local function tidy_cache(zip, root)
     if not E.r.EnumerateFiles then return end
@@ -1842,6 +1904,57 @@ function Forge.ensure(force)
             out(rust_names, rname)
             out(fasten_names, fname)
         end
+    end
+    -- the plates without their screw strips (tkTcpNoEars, tkMcpNoEars): cut from the plate shown
+    for _, f in ipairs(Forge.FLAT) do
+    local flat_names = {}
+    for _, sc in ipairs(Forge.SCALES) do flat_names[#flat_names + 1] = root .. "/" .. sc[1] .. f.pre .. "PlateFlat.png" end
+    local flname = root .. "/tk_forge_" .. f.kind .. "_flat.txt"
+    local src = Forge.flat_source(f, drawn(f.kind))
+    if src then
+        -- the source at each scale: just drawn in this pass (still in files), or in the theme
+        local key, got = { "flat " .. Forge.FLAT_VERSION .. "|" .. src }, {}
+        for _, sc in ipairs(Forge.SCALES) do
+            local entry = root .. "/" .. sc[1] .. src .. ".png"
+            local png = files[entry]
+            local crc = png and E.Zip.crc32(png) or E.Zip.crc_of(zip, entry)
+            if not crc then src = nil break end
+            key[#key + 1] = string.format("%08x", crc)
+            got[sc[1]] = png or false
+        end
+        if src then
+            local k = concat(key, "|")
+            if force or E.Zip.crc_of(zip, flname) ~= E.Zip.crc32(k) then
+                E.r.RecursiveCreateDirectory(Forge.dir, 0)
+                for _, sc in ipairs(Forge.SCALES) do
+                    local W, H, px
+                    if got[sc[1]] then
+                        W, H, px = Forge.decode(got[sc[1]])
+                    else
+                        reader = reader or Forge.reader(E.Zip, zip, root, Forge.dir)
+                        W, H, px = reader(src, sc[1])
+                    end
+                    if not W then
+                        E.state.msg = "Could not make the plate without screw strips: no " .. src .. " in the theme."
+                        return false
+                    end
+                    local fw, fh, fpx = W, H, nil
+                    if f.rows then
+                        fh, fpx = Forge.flat_rows(W, H, px, sc[2])
+                    else
+                        fw, fpx = Forge.flat(W, H, px, sc[2])
+                    end
+                    files[root .. "/" .. sc[1] .. f.pre .. "PlateFlat.png"] = Forge.png_packed(fw, fh, fpx, E.Zip.crc32)
+                end
+                files[flname] = k
+                mark(f.kind .. " plate without screw strips cut")
+            end
+        else
+            out(flat_names, flname)
+        end
+    else
+        out(flat_names, flname)
+    end
     end
     -- the rails
     local rail_names = {}
@@ -2090,8 +2203,10 @@ end
 -- each set recoloured into all of them (their originals kept in the theme under tk_orig/)
 Forge.HW = {
     { key = "hw_knobs", label = "Knobs", cap = true, parts = {
-        { "tcp_hw", { "tcp_vol_knob_stack", "tcp_pan_knob_stack", "tcp_wid_knob_stack", "tcp_fxparm_knob_stack", "envcp_knob_stack" }, "silver", { silver = true, black = true } },
-        { "mcp_hw", { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack" }, "silver", { silver = true, black = true } } } },
+        -- knob: the part with the plate's other knob styles (0.9.97); Machined is recoloured
+        -- from itself, Chicken head (ivory) keeps its own
+        { "tcp_hw", { "tcp_vol_knob_stack", "tcp_pan_knob_stack", "tcp_wid_knob_stack", "tcp_fxparm_knob_stack", "envcp_knob_stack" }, "silver", { silver = true, black = true }, knob = "tcp_knob" },
+        { "mcp_hw", { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack" }, "silver", { silver = true, black = true }, knob = "mcp_knob" } } },
     { key = "hw_caps", label = "Fader caps", parts = {
         -- the metal caps, each recoloured from itself (Long throw, Colour cap and Wide grip keep theirs)
         { "mcp_volthumb", { "mcp_volthumb" }, "chosen", { hw = true, hw_chrome = true, hw_round = true, hw_studio = true } },
@@ -2213,7 +2328,7 @@ local function hw_state(zip, root, G)
     if m then
         local fin = Forge.finish(m.finish)
         local srcs = {}
-        for _, p in ipairs(G.parts or {}) do srcs[#srcs + 1] = p[1] .. "=" .. chosen(p[1]) end
+        for _, p in ipairs(G.parts or {}) do srcs[#srcs + 1] = p[1] .. "=" .. chosen(p[1]) .. (p.knob and ("+" .. chosen(p.knob)) or "") end
         desc = string.format("hw %d|%s|%s|%.2f|%.2f|%s|%s", Forge.VERSION, G.key, m.finish, plate_gloss(fin, m), m.contrast,
             chosen("accent"), concat(srcs, ","))
     end
@@ -2271,7 +2386,12 @@ function Forge.hw_files(zip, root)
                 for _, img in ipairs(p[2]) do
                     for _, sc in ipairs(Forge.SCALES) do
                         local file = sc[1] .. img .. ".png"
-                        if on then
+                        local kv = p.knob and chosen(p.knob) or ""
+                        if on and kv ~= "" and kv ~= "classic" then
+                            local data = E.parts.read(zip, nil, p.knob, kv, file)
+                            if data and kv == "machined" then put(root .. "/" .. file, data)
+                            elseif data then files[root .. "/" .. file] = data end
+                        elseif on then
                             local data = E.parts.read(zip, nil, p[1], p[3] == "chosen" and chosen(p[1]) or p[3], file)
                             if data then put(root .. "/" .. file, data) end
                         elseif stored then

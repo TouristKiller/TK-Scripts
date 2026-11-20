@@ -222,6 +222,19 @@ LayoutC-tkMcpNameOnly
 LayoutA-tkNoListHead
 LayoutB-tkNoListHead
 LayoutC-tkNoListHead
+tkTcpNoEars
+tkMcpNoEars
+LayoutA-tkMcpKeys
+LayoutB-tkMcpKeys
+LayoutC-tkMcpKeys
+tkMasterMcpKeys
+hw_vintage
+hw_knurled
+hw_glow
+tcp_knob
+mcp_knob
+chicken
+machined
 ]]
 
 local words, index = {}, {}
