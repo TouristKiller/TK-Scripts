@@ -625,6 +625,25 @@
     </reapack>
  </category>
 
+ <category name="TK Theme Bit">
+    <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
+    <version name="0.1.0" author="TouristKiller" time="2026-11-22T23:07:10Z">
+     <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
+     <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
+     <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
+     <source main="main" file="TK_Theme_Bit_Edit_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Edit_Menu.lua</source>
+     <source main="main" file="TK_Theme_Bit_Tracks_Minus10.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Tracks_Minus10.lua</source>
+     <source main="main" file="TK_Theme_Bit_Strip_Minus10.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Strip_Minus10.lua</source>
+     <source file="TK_Theme_Bit_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Menu.lua</source>
+     <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
+     <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
+     <changelog><![CDATA[
++ First release: a REAPER theme in the style of Bitwig Studio, with a settings window behind the gear in the transport display.
+]]></changelog>
+    </version>
+    </reapack>
+ </category>
+
  <category name="Extensions">
     <reapack name="reaper_tk_native_helper" type="extension" desc="TK Native Helper">
     <version name="1.1.0" author="TouristKiller" time="2026-11-02T14:04:03Z">
