@@ -43,15 +43,36 @@ function V.saxmand_command()
   return sax_cmd or nil
 end
 
+-- what the DEVICES key opens: by default Saxmand's script; in the settings any other
+-- action can be chosen (ExtState devices_action: a command id or a named one like _RS...)
+function V.devices_action()
+  return r.GetExtState(EXT, "devices_action")
+end
+
+function V.resolve(id)
+  if not id or id == "" then return nil end
+  local cmd = tonumber(id) or r.NamedCommandLookup(id)
+  if cmd and cmd > 0 then return math.floor(cmd) end
+  return nil
+end
+
+function V.devices_command()
+  local own = V.devices_action()
+  if own ~= "" then return V.resolve(own) end
+  return V.saxmand_command()
+end
+
+-- open = the action's toggle state is on (Saxmand's script sets it while it runs; other
+-- panels may not, and then the key simply stays grey)
 function V.devices_open()
-  local cmd = V.saxmand_command()
+  local cmd = V.devices_command()
   return cmd ~= nil and r.GetToggleCommandState(cmd) == 1
 end
 
 -- a view key closes the device panel: running its action again ends it (REAPER may ask
--- once whether to terminate it; "Remember my answer" keeps that quiet afterwards)
+-- once whether to terminate a script; "Remember my answer" keeps that quiet afterwards)
 local function close_devices()
-  if V.devices_open() then r.Main_OnCommand(V.saxmand_command(), 0) end
+  if V.devices_open() then r.Main_OnCommand(V.devices_command(), 0) end
 end
 
 local function close_midi_editor()

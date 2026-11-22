@@ -365,11 +365,12 @@ local function bar_slider(id, value, lo, hi, default)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   r.ImGui_DrawList_AddRectFilled(dl, x, y, x + BAR_W, y + BAR_H, 0x0A0A0AFF, 2)
   local fx = x + 1 + (new - lo) / (hi - lo) * (BAR_W - 2)
-  if fx > x + 2 then
+  -- the fader's look: a brown fill with a 2 px orange edge where the value is
+  if fx > x + 3 then
     r.ImGui_DrawList_AddRectFilled(dl, x + 1, y + 1, fx, y + BAR_H - 1, 0x562202FF)
-    r.ImGui_DrawList_AddRect(dl, x + 1, y + 1, fx, y + BAR_H - 1, C.accent)
+    r.ImGui_DrawList_AddRectFilled(dl, fx - 2, y + 1, fx, y + BAR_H - 1, C.accent)
   else
-    r.ImGui_DrawList_AddLine(dl, x + 1.5, y + 1, x + 1.5, y + BAR_H - 1, C.accent)
+    r.ImGui_DrawList_AddRectFilled(dl, x + 1, y + 1, x + 3, y + BAR_H - 1, C.accent)
   end
   r.ImGui_SameLine(ctx, 0, 6)
   local bx, by = r.ImGui_GetCursorScreenPos(ctx)
@@ -429,8 +430,12 @@ end
 local function devices_first_run()
   if r.GetExtState(EXT, "devices_checked") == "1" or not bit_active() then return end
   r.SetExtState(EXT, "devices_checked", "1", true)
-  if not saxmand_found() then set_theme_param("bitTransDevices", 0) end
+  if not saxmand_found() and r.GetExtState(EXT, "devices_action") == "" then
+    set_theme_param("bitTransDevices", 0)
+  end
 end
+-- the Other action choice before an ID is typed, and the ID being typed
+local devices_other, devices_typed
 
 ---------------------------------------------------------------- pages
 local function page_transport()
@@ -476,9 +481,47 @@ local function page_transport()
           local p = segmented("devices", { "Off", "Shown" }, dvalue == 0 and 1 or 2)
           if p then set_theme_param("bitTransDevices", p == 1 and 0 or 1) end
         end)
-        note(saxmand_found()
-          and "DEVICES opens Saxmand's FX Modulator Linking, a device panel like Bitwig's."
-          or "DEVICES opens Saxmand's FX Modulator Linking, which isn't installed: get it from Saxmand's ReaPack repository.")
+        -- what it opens: Saxmand's script, or any action (ExtState devices_action)
+        local own = r.GetExtState(EXT, "devices_action")
+        local other = own ~= "" or devices_other
+        r.ImGui_Spacing(ctx)
+        row("Devices key opens", function()
+          local p = segmented("devwhat", { "Saxmand", "Other action" }, other and 2 or 1)
+          if p == 1 then
+            r.DeleteExtState(EXT, "devices_action", true)
+            devices_other = false
+          elseif p == 2 then
+            devices_other = true
+          end
+        end)
+        if other then
+          row("Action ID", function()
+            r.ImGui_SetNextItemWidth(ctx, 260)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), C.field)
+            local _, s = r.ImGui_InputTextWithHint(ctx, "##devid", "_RS... or a number", devices_typed or own)
+            if r.ImGui_IsItemActive(ctx) then devices_typed = s end
+            if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+              s = s:gsub("^%s+", ""):gsub("%s+$", "")
+              if s == "" then r.DeleteExtState(EXT, "devices_action", true)
+              else r.SetExtState(EXT, "devices_action", s, true) end
+              devices_typed = nil
+            end
+            r.ImGui_PopStyleColor(ctx)
+          end)
+          local id = r.GetExtState(EXT, "devices_action")
+          local cmd = id ~= "" and (tonumber(id) or r.NamedCommandLookup(id)) or 0
+          if id == "" then
+            note("Paste an action's command ID (Actions list: right-click > Copy selected action command ID).")
+          elseif cmd and cmd > 0 then
+            note("Opens: " .. r.kbd_getTextFromCmd(math.floor(cmd), 0))
+          else
+            note("REAPER doesn't know this action.")
+          end
+        else
+          note(saxmand_found()
+            and "DEVICES opens Saxmand's FX Modulator Linking, a device panel like Bitwig's."
+            or "DEVICES opens Saxmand's FX Modulator Linking, which isn't installed: get it from Saxmand's ReaPack repository, or choose Other action.")
+        end
       end
     else
       note("TK Theme Bit is not the active theme.")
