@@ -202,12 +202,16 @@ function Icons.choose(key, choice)
 end
 
 -- ---------------------------------------------------------------- the picker
+-- images are NOT attached to the context: ReaImGui caps attachments (~1000), and paging
+-- through the toolbar icons hit it (Vincent, page 17). An unattached image lives as long as
+-- it is drawn every frame; ReaImGui frees the ones of pages left behind, and a freed one
+-- found in the cache is simply loaded again.
 local function texture(id, make)
-    local E = Icons.E
+    local r = Icons.E.r
     local t = Icons.tex[id]
+    if t and not r.ImGui_ValidatePtr(t, "ImGui_Image*") then t = nil end
     if t == nil then
         local ok, img = pcall(make)
-        if ok and img then E.r.ImGui_Attach(E.ctx, img) end
         t = ok and img or false
         Icons.tex[id] = t
     end

@@ -184,7 +184,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.99" author="TouristKiller" time="2026-11-22T13:22:23Z">
+    <version name="0.9.99.1" author="TouristKiller" time="2026-11-22T15:12:42Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -619,13 +619,7 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: Volume as Knob, Fader or Fader row (Track panel page, per layout, with a plate). Fader: a lying fader in the knob's place; where it would be shorter than 110 it stays the knob. Fader row: the fader on a row of its own across the plate, between the display and R M S; it goes before the display's input and button rows.
-+ Added: Fader cap for the track panel (Track panel page, All tracks): Same as mixer, or any of the ten hardware caps, lying. The metal ones take the metal under Hardware on the Materials page.
-+ Added: Icon picker for the transport (Transport page): an icon of your own on Custom 1 to 3 and on the ten swappable buttons, from TK's icons or REAPER's toolbar icons.
-+ Changed: With record arm or mute and solo hidden on a plate, nothing is left empty: M and S move up, and the meter in the plate and the fader start after the last key shown.
-+ Changed: Without the button row (hidden, or a track too low for it) the layout button moves to the input row, under the level.
-+ Fixed: The plates' R key was larger than M and S.
-+ Fixed: Meter on the left together with Meter in the plate brought the meter back in the right column on tracks without room for it in the plate; such a track now has no meter.
++ Fixed: Paging through the toolbar icons in the icon picker stopped with an error (ImGui_Attach: exceeded maximum object attachment limit) after about 16 pages.
 ]]></changelog>
     </version>
     </reapack>
