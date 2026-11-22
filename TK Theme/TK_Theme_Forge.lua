@@ -2366,9 +2366,15 @@ function Forge.hw_owns(zip, part)
     Forge.load()
     local root = E.Zip.root(zip)
     if not root then return false end
+    local function chosen(name) return E.parts.chosen[name] or E.parts.default[name] or "" end
     for _, G in ipairs(Forge.HW) do
         for _, p in ipairs(G.parts or {}) do
-            if p[1] == part and p[4][E.parts.chosen[part] or E.parts.default[part] or ""] then
+            -- the part itself, or the knob part whose images its hardware carries (tcp_knob in
+            -- tcp_hw's knobs): not seen as ours, Machined was written back at every opening and
+            -- the metal drawn again, two reloads each time (the user, 2026-11-22)
+            local hit = p[1] == part and p[4][chosen(part)]
+            if not hit and p.knob == part then hit = p[4][chosen(p[1])] end
+            if hit then
                 local m, _, _, valid = hw_state(zip, root, G)
                 if m and valid then return true end
             end

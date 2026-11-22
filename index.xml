@@ -184,7 +184,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.98" author="TouristKiller" time="2026-11-22T01:13:46Z">
+    <version name="0.9.98.1" author="TouristKiller" time="2026-11-22T02:23:07Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -618,6 +618,9 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
++ Fixed: The settings window took up to half a minute to open with Machined knobs and a metal of your own: it put the knobs back at every opening and drew the metal again. It opens in a second or two now, and after an update it puts your choices back with one reload instead of two.
+
+0.9.98:
 + Added: Hardware keys (Mixer page, with a plate): FX, bypass, IO, automation, phase and monitor as keys on the metal instead of in the windows, in a style of their own: Hardware, Metal, Round or Backlit. Every strip and the master. Requested by res.
 + Added: Keys beside the fader on every wide strip and on intermediate ones from 84 wide, the fader in the middle and the same room at both sides.
 + Added: Meter Fixed or Grow (Mixer page, per layout, with the keys beside the fader): Grow gives the meter the width left over.
