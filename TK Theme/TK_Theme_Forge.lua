@@ -2216,7 +2216,9 @@ Forge.HW = {
     { key = "hw_caps", label = "Fader caps", parts = {
         -- the metal caps, each recoloured from itself (Long throw, Colour cap and Wide grip keep theirs)
         { "mcp_volthumb", { "mcp_volthumb" }, "chosen", { hw = true, hw_chrome = true, hw_round = true, hw_studio = true } },
-        { "mcp_pan", { "mcp_panthumb", "mcp_widththumb" }, "hw", { hw = true } } } },
+        { "mcp_pan", { "mcp_panthumb", "mcp_widththumb" }, "hw", { hw = true } },
+        -- the track panel's lying fader cap (0.9.99), the metal ones as the mixer's
+        { "tcp_volcap", { "tcp_volthumb" }, "chosen", { hw = true, hw_chrome = true, hw_round = true, hw_studio = true } } } },
     -- the plate's R / M / S in the Metal style (0.9.98); their LEDs keep their colours
     { key = "hw_keys", label = "Keys", parts = {
         { "tcp_keys", { "track_mute_off_ol", "track_mute_on", "track_solo_off_ol", "track_solo_on", "track_recarm_off_ol", "track_recarm_on_ol",

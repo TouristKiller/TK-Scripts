@@ -585,6 +585,8 @@ local PAGES = {
             -- a plate has knobs: then the handle is only the envelope lanes' (on their tab)
             Off(function() return global_value("tkTcpPlate") end,
                 { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES, hint = "For volume, pan and width, also on the master and in envelope lanes." }),
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "tcpcap", label = "Fader cap",
+              hint = "The cap of the fader on the plate (Volume as Fader or Fader row, per layout). Same as mixer: the one chosen on the Mixer page (Console where the mixer has no plate). Colour cap, Knurled and Glow are in your accent colour; the metal ones take the metal under Hardware on the Materials page." }),
             S("Section margins", "sectionMargin", nil, "Space around and between the windows (6 as it comes). On a plate: between the display, the FX and IO window and the meter, and at the panel's edges without screw strips; the screw strips keep 20 there."),
             S("Folder indent", "tcpfolderIndentSize"),
         } },
@@ -592,6 +594,9 @@ local PAGES = {
             { kind = "layout", label = "Layout", hint = "For the tracks on this layout. Set a track's layout in its right-click menu." },
             T("Name only", "tkNameOnly", THIS_LAYOUT, "Just the name, large: a divider or a folder."),
             Off(lay_on("tkNameOnly"), T("Volume", "tkHideVol", THIS_LAYOUT, nil, true)),
+            Off(function() return not global_value("tkTcpPlate") or lay_value("tkNameOnly") or lay_value("tkHideVol") end,
+                { kind = "choice", label = "Volume as", param = "tkPlFader", layouts = THIS_LAYOUT, choices = { "Knob", "Fader", "Fader row" },
+                  hint = "With a plate, on tall tracks: the volume as a lying fader (its cap: Fader cap under All tracks). Fader: in the knob's place; where it would be shorter than 110 (the meter in the plate goes first) it stays the knob. Fader row: on a row of its own across the plate, between the glass and R M S; it goes before the glass's input and button rows, and a track too low for it beside the name row gets Fader. The lowest tracks keep the knob." }),
             Off(lay_on("tkNameOnly"), T("Pan", "tkHidePan", THIS_LAYOUT, nil, true)),
             Off(plate_or(lay_on("tkNameOnly")), T("Volume and pan on the first row", "tkTopSliders", THIS_LAYOUT, "Beside the name, also on the lowest tracks.")),
             Off(plate_or(lay_off_or("tkTopSliders", "tkNameOnly")), S("Name width", "tkNameW", THIS_LAYOUT, "The sliders take the rest.")),
@@ -630,7 +635,7 @@ local PAGES = {
             Off(lay_on("tkNameOnly"), T("Embedded FX", "tkHideEmbed", THIS_LAYOUT, "An FX's embedded UI under the controls.", true)),
             Off(lay_on("tkNameOnly"), T("Meter", "tkHideMeter", THIS_LAYOUT, nil, true)),
             Off(lay_on("tkNameOnly", "tkHideMeter"), T("Meter on the left", "tkMeterLeft", THIS_LAYOUT,
-                "With Meter in the plate (above): only where the plate has no room for it.")),
+                "With Meter in the plate (above): a track without room for it in the plate has no meter.")),
             Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT,
                 "With Meter in the plate (above): only where the plate has no room for it.")),
             -- on a plate, with the meter standing in its own window (res, 0.9.98)
@@ -1061,6 +1066,12 @@ local function draw_button_row(item, id)
             r.ThemeLayout_RefreshAll()
         end
     end
+    -- its icon (0.9.99): the theme's own, a TK icon or a toolbar icon (TK_Theme_Icons.lua)
+    if state.icons then
+        r.ImGui_SameLine(ctx)
+        state.icons.button(item.key, item.label)
+        state.icons.draw(item.key)
+    end
     r.ImGui_PopID(ctx)
     if own then
         r.ImGui_SetCursorPosX(ctx, LABEL_W)
@@ -1138,7 +1149,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", trans_knob = "classic", tcp_keys = "own", mcp_keys = "own", mcp_side = "off", fly = "v0", track_lcd = "own", time_font = "standard", ruler_font = "inter" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", trans_knob = "classic", tcp_keys = "own", mcp_keys = "own", mcp_side = "off", fly = "v0", tcp_volcap = "off", track_lcd = "own", time_font = "standard", ruler_font = "inter" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the track panel's list slots (Lists: Boxes or Plain; its FX slots its own since 0.9.97)
         tcp_lists = { "tcp_fxlist_norm", "tcp_fxlist_byp", "tcp_fxlist_off", "tcp_fxlist_empty", "tcp_sendlist_norm",
@@ -1167,6 +1178,9 @@ local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen
         mcp_side = { "mcp_fx_norm", "mcp_fx_empty", "mcp_fx_dis", "mcp_phase_norm_ol", "mcp_phase_inv", "mcp_monitor_off", "mcp_monitor_on", "mcp_monitor_auto", "mcp_io_ol", "mcp_io_dis_ol", "mcp_io_r_ol", "mcp_io_r_dis_ol", "mcp_io_s_ol", "mcp_io_s_dis_ol", "mcp_io_s_r_ol", "mcp_io_s_r_dis_ol", "track_fxon_v_ol", "track_fxoff_v_ol", "track_fxempty_v_ol", "mcp_env_ol", "mcp_env_read_ol", "mcp_env_touch_ol", "mcp_env_latch_ol", "mcp_env_write_ol", "mcp_env_preview_ol" },
         -- the fly on one track's plate (0.9.98): eight turns of it, v0..v7
         fly = { "tcpFly" },
+        -- the track panel's fader on a plate (0.9.99): the mixer's cap, lying. Not chosen by hand:
+        -- it follows the plate and the mixer's cap (parts.volcap_want); off is the slider handle's
+        tcp_volcap = { "tcp_volthumb" },
         -- the track panel's knobs and R / M / S: the theme's own, or hardware for the plate (the first differs per variant)
         mcp_hw = { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack", "mcp_mute_off_ol", "mcp_mute_on",
             "mcp_solo_off_ol", "mcp_solo_on", "mcp_recarm_off_ol", "mcp_recarm_on_ol", "mcp_recarm_norec_ol",
@@ -1310,6 +1324,25 @@ end
 
 -- the Hardware keys switch (Mixer page): the side keys written as they should be now
 function state.side_sync() parts.choose("mcp_side", parts.side_want()) end
+function state.volcap_sync() parts.choose("tcp_volcap", parts.volcap_want()) end
+
+-- the track panel's lying fader cap: the mixer's hardware cap (Console where the mixer has
+-- none) while the track panel has a plate (Silver or Black); else off: the slider handle's
+-- its own cap (Track panel page, Fader cap, global tkTcpCap): 0 Same as mixer, then these
+state.TCP_CAPS = { "hw", "hw_long", "hw_chrome", "hw_colour", "hw_round", "hw_wide", "hw_studio", "hw_vintage", "hw_knurled", "hw_glow" }
+function parts.volcap_want()
+    local hw = parts.chosen.tcp_hw or parts.default.tcp_hw
+    if hw ~= "silver" and hw ~= "black" then return "off" end
+    local own = P.tkTcpCap and state.TCP_CAPS[math.floor(P.tkTcpCap.value)]
+    if own then return own end
+    return parts.volcap_mixer()
+end
+-- Same as mixer: the mixer's hardware cap, Console where it has none
+function parts.volcap_mixer()
+    local cap = parts.chosen.mcp_volthumb or parts.default.mcp_volthumb
+    return cap:sub(1, 2) == "hw" and cap or "hw"
+end
+state.TCP_CAP_NAMES = { "Console", "Long throw", "Chrome", "Colour cap", "Round top", "Wide grip", "Studio", "Vintage", "Knurled", "Glow" }
 
 -- what the side keys should be: off unless Hardware keys has a style and the mixer has a
 -- plate (Silver or Black); Hardware is the hardware's own for that plate
@@ -1881,6 +1914,9 @@ function parts.write(part, variant, zip, accent)
         local ok, err = parts.write_display(parts.chosen.display or parts.default.display, zip, root, accent)
         if not ok then return nil, err end
     end
+    if part == "tcp_volcap" and variant == "off" then
+        return parts.write("tcp_thumb", parts.chosen.tcp_thumb or parts.default.tcp_thumb, zip, accent)
+    end
     if part == "mcp_side" and variant == "off" then
         local ok, err = true, nil
         if parts.glass_dark(zip) then
@@ -1950,6 +1986,7 @@ function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
     if part == "light_glass" and parts.is_light(zip) and parts.lcd_on() then return true end
     if part == "mcp_side" and variant == "off" then return true end
+    if part == "tcp_volcap" and variant == "off" then return true end
     if part == "track_lcd" and not parts.lcd_on() then return true end
     if parts.RECARM_HW[part] then
         local hw = parts.chosen[parts.RECARM_HW[part]] or parts.default[parts.RECARM_HW[part]]
@@ -1991,6 +2028,9 @@ function parts.in_zip(part, variant, zip)
     -- recoloured in a metal (Materials page, Hardware) and still as drawn: that is in place
     if patina and patina.forge.hw_owns(zip, part) then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local name = parts.files(part, zip)[1]
+    -- the slider handles under a plate's lying fader cap (0.9.99): their volume handle is the
+    -- cap's now, so the envelope's handle tells (else both were written at every opening)
+    if part == "tcp_thumb" and (parts.chosen.tcp_volcap or parts.default.tcp_volcap) ~= "off" then name = "envcp_fader.png" end
     -- Basic on goes over what it shares with other parts (Track LCDs share 290 files with it):
     -- judged by such a file, that part was written again at one opening and Basic at the next,
     -- turn and turn about (seen 2026-11-18). Its first file of its own decides; none, Basic's
@@ -2091,6 +2131,17 @@ function parts.write_choices(choices, zip)
             if parts.write("mcp_side", sw, zip) then parts.chosen.mcp_side = sw made = made + 1 end
         end
     end
+    local cap_given = false
+    for _, choice in ipairs(choices) do if choice[1] == "tcp_volcap" then cap_given = true end end
+    if not cap_given and look.current() then
+        local cw = parts.volcap_want()
+        local cap_now = parts.chosen.tcp_volcap or parts.default.tcp_volcap
+        if cw ~= cap_now or (cw ~= "off" and not parts.in_zip("tcp_volcap", cw, zip)) then
+            if parts.write("tcp_volcap", cw, zip) then parts.chosen.tcp_volcap = cw made = made + 1 end
+        end
+    end
+    -- the transport icons go back over the buttons a display, the look or an accent wrote
+    if state.icons and look.current() and state.icons.ensure(zip) then made = made + 1 end
     -- a lying meter that is the same as standing follows a new standing type, in whatever
     -- order the choices came (presets and undo bring them in any order)
     if meter and (parts.chosen.meter_lying or parts.default.meter_lying) == "same" then
@@ -2648,7 +2699,8 @@ local HANDLE_PART = "mcp_volthumb"
 local HANDLES = { { "cap", "Cap" }, { "classic", "Classic" }, { "classic_accent", "Accent" }, { "slim", "Slim" }, { "ring", "Ring" }, { "dot", "Dot" } }
 
 -- a row of picture buttons; returns the key of the one clicked, if it wasn't on already
-function parts.buttons(id, part, choices, current)
+-- (image_of: the variant whose picture a key shows, when that is another one)
+function parts.buttons(id, part, choices, current, image_of)
     local picked
     local left = r.ImGui_GetCursorPosX(ctx)
     local last_w = 0
@@ -2670,7 +2722,7 @@ function parts.buttons(id, part, choices, current)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
         end
         local x = r.ImGui_GetCursorPosX(ctx)
-        local image = not parts.text_buttons[part] and parts.image(part, key)
+        local image = not parts.text_buttons[part] and parts.image(part, image_of and image_of(key) or key)
         local clicked
         if parts.text_buttons[part] then
             clicked = r.ImGui_Button(ctx, name .. "##" .. key, 0, 30)
@@ -2975,7 +3027,7 @@ end
 local function draw_setting(item, id)
     state.mark_item = state.changed(item) and item or nil
     state.row_y = select(2, r.ImGui_GetCursorScreenPos(ctx))
-    reload_mark = item.kind == "part" or item.kind == "meter" or item.kind == "handle" or item.kind == "plate" or (item.kind == "choice" and item.part ~= nil)
+    reload_mark = item.kind == "part" or item.kind == "tcpcap" or item.kind == "meter" or item.kind == "handle" or item.kind == "plate" or (item.kind == "choice" and item.part ~= nil)
     if item.kind == "layout" then
         draw_layout_choice(item, id)
     elseif item.kind == "tracks" then
@@ -3100,6 +3152,23 @@ local function draw_setting(item, id)
         row_label(item.label)
         local picked = parts.buttons(id, item.part, item.choices, parts.chosen[item.part] or parts.default[item.part])
         if picked then parts.choose(item.part, picked) end
+    elseif item.kind == "tcpcap" then
+        -- the track panel's fader cap (global tkTcpCap): Same as mixer, then the ten caps, as
+        -- pictures of the lying caps; Same as mixer shows the mixer's
+        if not look.current() or not P.tkTcpCap then return end
+        row_label(item.label)
+        local choices = { { "same", "Same as mixer" } }
+        for i, key in ipairs(state.TCP_CAPS) do choices[#choices + 1] = { key, state.TCP_CAP_NAMES[i] } end
+        local now = state.TCP_CAPS[math.floor(P.tkTcpCap.value)] or "same"
+        local picked = parts.buttons(id, "tcp_volcap", choices, now,
+            function(key) return key == "same" and parts.volcap_mixer() or key end)
+        if picked then
+            local v = 0
+            for i, key in ipairs(state.TCP_CAPS) do if key == picked then v = i end end
+            set_param("tkTcpCap", v, true)
+            r.ThemeLayout_RefreshAll()
+            state.volcap_sync()
+        end
     elseif item.kind == "button" then
         draw_button_row(item, id)
     elseif item.kind == "place" then
@@ -4113,7 +4182,7 @@ local function code_data()
     end
     for part, def in pairs(parts.default) do
         local v = parts.chosen[part] or def
-        if v ~= def and part ~= "mcp_side" then data.parts[part] = v end
+        if v ~= def and part ~= "mcp_side" and part ~= "tcp_volcap" then data.parts[part] = v end
     end
     colour_keys(function(key)
         local now, fac = r.GetThemeColor(key, 0), factory_colour(key)
@@ -5162,6 +5231,12 @@ state.pics.bind({ r = r, ctx = ctx, UI = UI, rgba = rgba, mix = mix,
     trans_silver = function() return P.tkTransPlate and math.floor(P.tkTransPlate.value) == 2 end,
     own_logo = function() return (plate_name.preview()) end })
 
+-- the transport buttons' icons (Transport page, 0.9.99), in a file of its own too
+state.icons = dofile(here .. "TK_Theme_Icons.lua")
+state.icons.bind({ r = r, ctx = ctx, parts = parts, Zip = Zip,
+    decode = function(data) return patina.forge.decode(data) end,
+    png = function(W, H, rgba, crc32) return patina.forge.png_packed(W, H, rgba, crc32) end })
+
 -- searching every setting (Ctrl+F), in a file of its own (this one is near Lua's 200 locals)
 state.search = dofile(here .. "TK_Theme_Search.lua")
 state.search.bind({ r = r, ctx = ctx, PAGES = PAGES, draw_setting = draw_setting, begin_card = begin_card,
@@ -5350,7 +5425,16 @@ local function startup_checks()
         -- the mixer's side keys as Hardware keys, the plate and Keys want them
         local sw = parts.side_want()
         if (parts.chosen.mcp_side or parts.default.mcp_side) ~= sw then list[#list + 1] = { "mcp_side", sw } end
+        local cw = parts.volcap_want()
+        if (parts.chosen.tcp_volcap or parts.default.tcp_volcap) ~= cw then list[#list + 1] = { "tcp_volcap", cw } end
         if #list > 0 then parts.choose_many(list, true) end
+        -- the transport icons (0.9.99), where an update or another script put the buttons back
+        if state.icons then
+            local wrote = false
+            parts.together(function() wrote = state.icons.ensure() end)
+            state.log("icons.ensure done" .. (wrote and " (wrote)" or ""))
+            if wrote then parts.reload() state.log("reloaded for the icons") end
+        end
     end
     state.log("switches done")
     if look.current() and look.own_colours() then r.ThemeLayout_RefreshAll() state.log("own colours: layout refreshed") end

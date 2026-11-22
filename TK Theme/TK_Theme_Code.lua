@@ -271,6 +271,10 @@ tkFly
 tkFlyPX
 tkFlyPY
 fly
+LayoutA-tkPlFader
+LayoutB-tkPlFader
+LayoutC-tkPlFader
+tkTcpCap
 ]]
 
 local words, index = {}, {}

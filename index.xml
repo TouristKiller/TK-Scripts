@@ -184,7 +184,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.98.1" author="TouristKiller" time="2026-11-22T02:23:07Z">
+    <version name="0.9.99" author="TouristKiller" time="2026-11-22T13:22:23Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -212,6 +212,7 @@
      <source file="TK_Theme_Zip.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Zip.lua</source>
      <source file="TK_Theme_Search.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Search.lua</source>
      <source file="TK_Theme_Pics.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Pics.lua</source>
+     <source file="TK_Theme_Icons.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Icons.lua</source>
      <source file="TK_Theme_MasterMix.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_MasterMix.lua</source>
      <source file="TK_Theme_Grid.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid.lua</source>
      <source file="TK_Theme_Auto.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Auto.lua</source>
@@ -618,24 +619,13 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Fixed: The settings window took up to half a minute to open with Machined knobs and a metal of your own: it put the knobs back at every opening and drew the metal again. It opens in a second or two now, and after an update it puts your choices back with one reload instead of two.
-
-0.9.98:
-+ Added: Hardware keys (Mixer page, with a plate): FX, bypass, IO, automation, phase and monitor as keys on the metal instead of in the windows, in a style of their own: Hardware, Metal, Round or Backlit. Every strip and the master. Requested by res.
-+ Added: Keys beside the fader on every wide strip and on intermediate ones from 84 wide, the fader in the middle and the same room at both sides.
-+ Added: Meter Fixed or Grow (Mixer page, per layout, with the keys beside the fader): Grow gives the meter the width left over.
-+ Added: Keys styles for the plates' R, M and S (Track panel and Mixer pages): Hardware, Metal, Round and Backlit. Metal takes the metal chosen under Hardware on the Materials page.
-+ Added: The transport's rate knob on a plate in the plate's knob styles: Classic, Chicken head or Machined.
-+ Added: Fader line Normal or Thin (Mixer page, Handles), the master's too. Requested by res.
-+ Added: Name across the strip (Mixer page, per layout): the name's window as wide as the other windows.
-+ Added: Lying meter Long, Short or Fill, Lying meter height, Meter full height and Meter padding (Track panel page, per layout). Requested by res.
-+ Added: Lists on the lowest tracks (Track panel page, per layout): off leaves the FX and send lists out of the lowest tracks. Requested by res.
-+ Added: Pictures on the Rails, Plate logo and Style choices.
-+ Added: A fly (Materials page, On the plates): it lands on one track's plate, in the track panel and the mixer. Fly off, or shoo it.
-+ Changed: Far right with the meter in the plate: the meter starts where the display does, and a track without room for it leaves it out instead of moving it.
-+ Changed: Copper, brass and bronze wear brighter. The Materials page calls the transport's screws Transport screws: the plates' own screws stay steel.
-+ Fixed: On low plate tracks the FX, IO and monitor keys could run over the track number.
-+ Fixed: On a narrow, tall plate track the FX key could stand outside its window.
++ Added: Volume as Knob, Fader or Fader row (Track panel page, per layout, with a plate). Fader: a lying fader in the knob's place; where it would be shorter than 110 it stays the knob. Fader row: the fader on a row of its own across the plate, between the display and R M S; it goes before the display's input and button rows.
++ Added: Fader cap for the track panel (Track panel page, All tracks): Same as mixer, or any of the ten hardware caps, lying. The metal ones take the metal under Hardware on the Materials page.
++ Added: Icon picker for the transport (Transport page): an icon of your own on Custom 1 to 3 and on the ten swappable buttons, from TK's icons or REAPER's toolbar icons.
++ Changed: With record arm or mute and solo hidden on a plate, nothing is left empty: M and S move up, and the meter in the plate and the fader start after the last key shown.
++ Changed: Without the button row (hidden, or a track too low for it) the layout button moves to the input row, under the level.
++ Fixed: The plates' R key was larger than M and S.
++ Fixed: Meter on the left together with Meter in the plate brought the meter back in the right column on tracks without room for it in the plate; such a track now has no meter.
 ]]></changelog>
     </version>
     </reapack>
