@@ -50,7 +50,14 @@ local function tools(dl, x0, y0, on)
         t.box(x, y, w, 3, glass, 0)
         t.box(x, y, w * 0.6, 3, acc, 0)
     end
+    -- part of an image (u0 v0 to u1 v1 of it) into x, y, w, h of the box
+    function t.image(img, x, y, w, h, u0, v0, u1, v1)
+        if img then
+            r.ImGui_DrawList_AddImage(dl, img, x0 + x, y0 + y, x0 + x + w, y0 + y + h, u0 or 0, v0 or 0, u1 or 1, v1 or 1)
+        end
+    end
     t.line, t.soft, t.acc, t.glass = line, soft, acc, glass
+    t.W, t.H = W, H
     return t
 end
 
@@ -146,7 +153,7 @@ DRAW.lying = function(t, c)
     t.box(11, 7, 16, 6, t.glass, 1)
     t.knob(34, 10, 3.5, t.line)
     t.knob(44, 10, 3.5, t.line)
-    if c == 1 then t.hmeter(11, 18, W - 15) else t.hmeter(11, 18, 22) end
+    if c == 1 then t.hmeter(11, 18, W - 15) elseif c == 3 then t.hmeter(4, 18, W - 6) else t.hmeter(11, 18, 22) end
 end
 
 -- Track number: Colour (the column filled), Stripe
@@ -162,12 +169,121 @@ DRAW.number = function(t, c)
     t.hslider(15, 19, 34, 0.6, t.line)
 end
 
+-- ---------------------------------------------------------------- from the theme's own images
+-- (0.9.97) Rails, plate logos and the panels' styles: the theme's 200% images, read once from
+-- the loaded theme's zip (all at once, so the zip is read one time) and kept
+
+local THEME_IMAGES = { "tcpWoodWalnut", "tcpWoodTeak", "mcpWoodArmWalnut", "mcpWoodArmTeak",
+    "transPlateLogoSilver", "transPlateDevilSilver", "transPlateAngelSilver", "transPlateMetalSilver", "transPlateQuickSilver",
+    "transPlateLogoBlack", "transPlateDevilBlack", "transPlateAngelBlack", "transPlateMetalBlack", "transPlateQuickBlack" }
+
+local function theme_image(name)
+    local E = Pics.E
+    local r, ctx = E.r, E.ctx
+    local zip = E.zip_path and E.zip_path()
+    if not zip then return nil end
+    if Pics.zip ~= zip then
+        Pics.zip, Pics.images = zip, {}
+        E.Zip.hold(function()
+            local root = E.Zip.root(zip)
+            for _, n in ipairs(root and THEME_IMAGES or {}) do
+                local data, method = E.Zip.read_entry(zip, root .. "/200/" .. n .. ".png")
+                if data then data = E.unzip(data, method) end
+                local ok, img = false, nil
+                if data and data ~= "" then ok, img = pcall(r.ImGui_CreateImageFromMem, data) end
+                if ok and img then
+                    r.ImGui_Attach(ctx, img)
+                    Pics.images[n] = img
+                end
+            end
+        end)
+    end
+    return Pics.images[name]
+end
+
+-- the track panel's rail: Off, Walnut, Teak, Material (the number column on its left edge)
+DRAW.rails = function(t, c)
+    t.frame(0, 3, W, H - 6, t.line, 3)
+    t.box(15, 7, 18, 6, t.glass, 1)
+    t.hslider(15, 19, 34, 0.6, t.line)
+    if c == 2 or c == 3 then
+        -- a short piece of the lath, as long as it is wide x 2.2
+        t.image(theme_image(c == 2 and "tcpWoodWalnut" or "tcpWoodTeak"), 1, 3, 11, H - 6, 0, 0, 1, 0.06)
+    elseif c == 4 then
+        -- a material of your own: a metal-grey lath with its bevel
+        t.box(1, 3, 11, H - 6, t.soft, 2)
+        t.box(1, 3, 2, H - 6, t.line, 1)
+    else
+        t.box(2, 5, 8, H - 10, t.soft, 1)
+    end
+end
+
+-- the mixer's armrest: Off, Walnut, Teak, Material (along the strips' bottom)
+DRAW.armrest = function(t, c)
+    t.frame(14, 0, 28, H - 6, t.line, 3)
+    t.meter(18, 4, 14)
+    t.fader(32, 4, 14, t.line)
+    if c == 2 or c == 3 then
+        t.image(theme_image(c == 2 and "mcpWoodArmWalnut" or "mcpWoodArmTeak"), 4, H - 7, W - 8, 7, 0, 0, 0.25, 1)
+    elseif c == 4 then
+        t.box(4, H - 7, W - 8, 7, t.soft, 2)
+        t.box(4, H - 7, W - 8, 2, t.line, 1)
+    end
+end
+
+-- Plate logo: TK-S73, Red Devil, Blue Angel, Black Metal, Quicksilver, Own name (on the
+-- transport's plate as chosen, Silver or Black)
+local LOGOS = { "transPlateLogo", "transPlateDevil", "transPlateAngel", "transPlateMetal", "transPlateQuick" }
+DRAW.logo = function(t, c)
+    local E = Pics.E
+    local silver = E.trans_silver and E.trans_silver()
+    local img
+    if LOGOS[c] then
+        img = theme_image(LOGOS[c] .. (silver and "Silver" or "Black"))
+    elseif E.own_logo then
+        img = E.own_logo()
+    end
+    if img then
+        -- the logo's own shape is 96 by 42: as large as fits
+        local h = H
+        local w = math.floor(h * 96 / 42 + 0.5)
+        t.image(img, (W - w) / 2, 0, w, h)
+    else
+        t.box(4, 6, W - 8, H - 12, t.soft, 2)
+    end
+end
+
+-- Style: Standard, Basic, Material: the part's own picture (as Fader cap and Record arm have),
+-- the transport's drawn
+DRAW.style = function(t, c, item)
+    local E = Pics.E
+    local part = item and item.part
+    local key = ({ standard = "standard", basic = "basic", material = "silver" })[c]
+    local img = part and key and E.part_image and E.part_image(part, key)
+    if img then
+        -- the part's picture is 60 by 44
+        local w = math.floor(H * 60 / 44 + 0.5)
+        t.image(img, (W - w) / 2, 0, w, H)
+        return
+    end
+    -- the transport: its display window, keys, and on Material the plate's screws
+    if c == "material" then
+        t.box(0, 2, W, H - 4, t.soft, 3)
+        for _, x in ipairs({ 3, W - 6 }) do t.box(x, 4, 3, 3, t.line, 1.5) t.box(x, H - 7, 3, 3, t.line, 1.5) end
+    else
+        t.frame(0, 2, W, H - 4, t.line, 3)
+    end
+    t.box(9, 7, 20, 14, t.glass, 2)
+    t.box(12, 10, 10, 3, t.acc, 0)
+    for i = 0, 2 do t.box(33 + i * 6, 11, 5, 6, t.line, 1) end
+end
+
 function Pics.has(name)
     return DRAW[name] ~= nil
 end
 
 -- a choice button with its picture over its name; the same size for the whole row
-function Pics.button(name, label, choice, bw, active)
+function Pics.button(name, label, choice, bw, active, item)
     local E = Pics.E
     local r, ctx = E.r, E.ctx
     local x, y = r.ImGui_GetCursorScreenPos(ctx)
@@ -175,7 +291,7 @@ function Pics.button(name, label, choice, bw, active)
     local clicked = r.ImGui_Button(ctx, "##pic" .. choice, bw, bh)
     local dl = r.ImGui_GetWindowDrawList(ctx)
     local px, py = x + (bw - W) / 2, y + 6
-    DRAW[name](tools(dl, px, py, active), choice)
+    DRAW[name](tools(dl, px, py, active), choice, item)
     local tw = r.ImGui_CalcTextSize(ctx, label)
     r.ImGui_DrawList_AddText(dl, x + (bw - tw) / 2, y + bh - 20,
         E.rgba(active and E.UI.ink or E.UI.text), label)

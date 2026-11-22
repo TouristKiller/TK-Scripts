@@ -184,7 +184,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.97" author="TouristKiller" time="2026-11-20T22:44:05Z">
+    <version name="0.9.98" author="TouristKiller" time="2026-11-22T01:13:46Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -618,23 +618,21 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Added: The settings window, made easier to find your way in: search every setting (Ctrl+F), the pages in three groups, tabs on the Track panel and Mixer pages, an A | B | C switch above the per-layout settings, a dot at every setting you changed (click it to go back) with Only what I changed, See also links between settings that belong together, and grey settings that say why, with a key to the page that changes it.
-+ Added: An own title row for the settings window, with dock and close keys, and an i key that hides all explanation text (pointing at a setting still explains it).
-+ Added: Pictures on the choices of where things go: knobs or sliders, keys above or beside the fader, mute and solo, side column, lying meter, track number.
-+ Added: Three fader caps for the mixer's plate: Vintage (ivory), Knurled (black, with a line in your accent colour) and Glow (smoked acrylic with a light in your accent colour).
-+ Added: Knobs for the plates (Track panel and Mixer pages): Classic, Chicken head (ivory) and Machined (turned aluminium). Machined takes the metal chosen under Hardware on the Materials page.
-+ Added: Screw strips (Track panel and Mixer pages, with a plate): off, the plate goes without them and the room goes to the controls.
-+ Added: Keys (Mixer page, per layout, with a plate): above the pan knobs, in a column beside the fader, or Auto; the master has its own.
-+ Added: Master shown (Mixer page, Master): in the mixer on the left or the right, in a window of its own, docked, or hidden. These are REAPER's own options.
-+ Added: Lists Boxes or Plain for the track panel too; the mixer's choice is now the same two.
-+ Changed: Smaller margins on the plates; the lists follow Section margins, and the gap between the display and the FX window equals the one to the meter.
-+ Changed: The meter lies in the plate as soon as there is room for it.
-+ Changed: Standard's M and S keys, the master's i key and the narrow strips' input icon follow the display skin.
-+ Changed: Basic per panel: a Basic track panel no longer changes the mixer's buttons, and the other way round. In the Light look with dark display glass Basic goes dark too.
-+ Changed: Tighter gaps between meter and fader, and round the pan knobs, on the mixer strips.
-+ Changed: With a plate the slider handle choice moves to Envelope lanes, the only sliders left there.
-+ Fixed: The mixer's Show input / Show pan from height worked at other heights at 200% scaling. Reported by Vincent.
-+ Fixed: A grey meter background in the Light look.
++ Added: Hardware keys (Mixer page, with a plate): FX, bypass, IO, automation, phase and monitor as keys on the metal instead of in the windows, in a style of their own: Hardware, Metal, Round or Backlit. Every strip and the master. Requested by res.
++ Added: Keys beside the fader on every wide strip and on intermediate ones from 84 wide, the fader in the middle and the same room at both sides.
++ Added: Meter Fixed or Grow (Mixer page, per layout, with the keys beside the fader): Grow gives the meter the width left over.
++ Added: Keys styles for the plates' R, M and S (Track panel and Mixer pages): Hardware, Metal, Round and Backlit. Metal takes the metal chosen under Hardware on the Materials page.
++ Added: The transport's rate knob on a plate in the plate's knob styles: Classic, Chicken head or Machined.
++ Added: Fader line Normal or Thin (Mixer page, Handles), the master's too. Requested by res.
++ Added: Name across the strip (Mixer page, per layout): the name's window as wide as the other windows.
++ Added: Lying meter Long, Short or Fill, Lying meter height, Meter full height and Meter padding (Track panel page, per layout). Requested by res.
++ Added: Lists on the lowest tracks (Track panel page, per layout): off leaves the FX and send lists out of the lowest tracks. Requested by res.
++ Added: Pictures on the Rails, Plate logo and Style choices.
++ Added: A fly (Materials page, On the plates): it lands on one track's plate, in the track panel and the mixer. Fly off, or shoo it.
++ Changed: Far right with the meter in the plate: the meter starts where the display does, and a track without room for it leaves it out instead of moving it.
++ Changed: Copper, brass and bronze wear brighter. The Materials page calls the transport's screws Transport screws: the plates' own screws stay steel.
++ Fixed: On low plate tracks the FX, IO and monitor keys could run over the track number.
++ Fixed: On a narrow, tall plate track the FX key could stand outside its window.
 ]]></changelog>
     </version>
     </reapack>

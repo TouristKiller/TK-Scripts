@@ -17,9 +17,11 @@ Forge.FINISHES = {
     { name = "Silver", base = 1, ramp = { { 16, 17, 19 }, { 158, 161, 165 }, { 236, 238, 240 } }, corr = "rust" },
     { name = "Gunmetal", base = 1, ramp = { { 16, 18, 22 }, { 78, 84, 92 }, { 176, 182, 190 } }, corr = "rust", bare = { 196, 202, 210 }, bare_a = 0.9 },
     { name = "Titanium", base = 1, ramp = { { 30, 31, 34 }, { 128, 126, 122 }, { 216, 215, 212 } }, corr = "heat", bare = { 228, 228, 230 }, bare_a = 0.9 },
-    { name = "Copper", base = 1, ramp = { { 58, 22, 10 }, { 178, 98, 58 }, { 255, 214, 176 } }, corr = "verdigris", bare = { 255, 206, 168 }, bare_a = 0.85 },
-    { name = "Brass", base = 1, ramp = { { 62, 44, 12 }, { 182, 146, 66 }, { 255, 238, 176 } }, corr = "tarnish", bare = { 255, 240, 186 }, bare_a = 0.85 },
-    { name = "Bronze", base = 1, ramp = { { 52, 30, 14 }, { 140, 92, 52 }, { 232, 190, 140 } }, corr = "verdigris", bare = { 240, 202, 152 }, bare_a = 0.85 },
+    -- (0.9.98: the scratches on Copper, Brass and Bronze brighter and stronger: the user found
+    -- them far too faint on these light warm metals)
+    { name = "Copper", base = 1, ramp = { { 58, 22, 10 }, { 178, 98, 58 }, { 255, 214, 176 } }, corr = "verdigris", bare = { 255, 238, 220 }, bare_a = 1.4 },
+    { name = "Brass", base = 1, ramp = { { 62, 44, 12 }, { 182, 146, 66 }, { 255, 238, 176 } }, corr = "tarnish", bare = { 255, 252, 228 }, bare_a = 1.4 },
+    { name = "Bronze", base = 1, ramp = { { 52, 30, 14 }, { 140, 92, 52 }, { 232, 190, 140 } }, corr = "verdigris", bare = { 255, 230, 196 }, bare_a = 1.25 },
     { name = "Anodized", base = 1, ramp = { { 8, 22, 58 }, { 42, 92, 168 }, { 156, 200, 244 } }, corr = "oxide", bare = { 214, 220, 228 }, bare_a = 1.0 },
     { name = "Anodized red", base = 1, ramp = { { 60, 6, 10 }, { 176, 30, 40 }, { 250, 150, 150 } }, corr = "oxide", bare = { 214, 220, 228 }, bare_a = 1.0 },
     -- made from the Black plate: black anodizing, its scratches bare aluminium
@@ -1673,7 +1675,7 @@ end
 local function save()
     E.r.RecursiveCreateDirectory(Forge.dir, 0)
     local lib, lines = Forge.applied, {}
-    for _, kind in ipairs({ "tcp", "mcp", "trans", "rails", "hw_knobs", "hw_caps", "hw_brackets", "hw_screws" }) do
+    for _, kind in ipairs({ "tcp", "mcp", "trans", "rails", "hw_knobs", "hw_caps", "hw_keys", "hw_brackets", "hw_screws" }) do
         if lib.use[kind] then lines[#lines + 1] = "use " .. kind .. "=" .. lib.use[kind] end
     end
     for _, f in ipairs(Forge.FINISHES) do
@@ -2108,6 +2110,8 @@ function Forge.apply()
         rust_param()
         -- On the plates: their switches, and new patterns where asked for
         for name, v in pairs(ui.plate.v) do E.set_param(name, v, true) end
+        -- the fly's turn is an image (part fly, v0..v7)
+        if ui.plate.fly_turn then E.parts.choose("fly", ui.plate.fly_turn, true) end
         if ui.plate.scratch then E.patina.new_seed() end
         if ui.plate.graffiti then E.patina.graffiti_seed(true) end
         ui.plate = { v = {}, scratch = false, graffiti = false }
@@ -2206,15 +2210,27 @@ Forge.HW = {
         -- knob: the part with the plate's other knob styles (0.9.97); Machined is recoloured
         -- from itself, Chicken head (ivory) keeps its own
         { "tcp_hw", { "tcp_vol_knob_stack", "tcp_pan_knob_stack", "tcp_wid_knob_stack", "tcp_fxparm_knob_stack", "envcp_knob_stack" }, "silver", { silver = true, black = true }, knob = "tcp_knob" },
-        { "mcp_hw", { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack" }, "silver", { silver = true, black = true }, knob = "mcp_knob" } } },
+        { "mcp_hw", { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack" }, "silver", { silver = true, black = true }, knob = "mcp_knob" },
+        -- the transport's rate knob (0.9.98), from its own style; Chicken head keeps its ivory
+        { "trans_knob", { "transRateKnob" }, "chosen", { classic = true, machined = true } } } },
     { key = "hw_caps", label = "Fader caps", parts = {
         -- the metal caps, each recoloured from itself (Long throw, Colour cap and Wide grip keep theirs)
         { "mcp_volthumb", { "mcp_volthumb" }, "chosen", { hw = true, hw_chrome = true, hw_round = true, hw_studio = true } },
         { "mcp_pan", { "mcp_panthumb", "mcp_widththumb" }, "hw", { hw = true } } } },
+    -- the plate's R / M / S in the Metal style (0.9.98); their LEDs keep their colours
+    { key = "hw_keys", label = "Keys", parts = {
+        { "tcp_keys", { "track_mute_off_ol", "track_mute_on", "track_solo_off_ol", "track_solo_on", "track_recarm_off_ol", "track_recarm_on_ol",
+            "track_recarm_norec_ol", "track_recarm_auto_ol", "track_recarm_auto_on_ol", "track_recarm_auto_norec_ol", "track_mono",
+            "track_stereo_ol", "envcp_arm_off_ol", "envcp_arm_on" }, "chosen", { metal = true } },
+        { "mcp_keys", { "mcp_mute_off_ol", "mcp_mute_on", "mcp_solo_off_ol", "mcp_solo_on", "mcp_recarm_off_ol", "mcp_recarm_on_ol",
+            "mcp_recarm_norec_ol", "mcp_recarm_auto_ol", "mcp_recarm_auto_on_ol", "mcp_recarm_auto_norec_ol" }, "chosen", { metal = true } },
+        -- the mixer's FX, IO, phase and monitor as Hardware keys (0.9.98), in Metal
+        { "mcp_side", { "mcp_fx_norm", "mcp_fx_empty", "mcp_fx_dis", "mcp_phase_norm_ol", "mcp_phase_inv", "mcp_monitor_off", "mcp_monitor_on", "mcp_monitor_auto", "mcp_io_ol", "mcp_io_dis_ol", "mcp_io_r_ol", "mcp_io_r_dis_ol", "mcp_io_s_ol", "mcp_io_s_dis_ol", "mcp_io_s_r_ol", "mcp_io_s_r_dis_ol", "track_fxon_v_ol", "track_fxoff_v_ol", "track_fxempty_v_ol", "mcp_env_ol", "mcp_env_read_ol", "mcp_env_touch_ol", "mcp_env_latch_ol", "mcp_env_write_ol", "mcp_env_preview_ol" }, "chosen", { metal = true } } } },
     { key = "hw_brackets", label = "Brackets", theme = {
         { "tcpRackRailS", "tcpRackRailB" }, { "tcpRackEndS", "tcpRackEndB" }, { "tcpRackHeadS", "tcpRackHeadB" },
         { "mcpRackRailS", "mcpRackRailB" }, { "mcpRackEndS", "mcpRackEndB" }, { "mcpRackStartS", "mcpRackStartB" } } },
-    { key = "hw_screws", label = "Screws", theme = { { "transScrew1" }, { "transScrew2" }, { "transScrew3" }, { "transScrew4" } } },
+    -- (the plates' own screws are drawn in the plate and stay steel: 0.9.98 says so on the page)
+    { key = "hw_screws", label = "Transport screws", hint = "The screws beside the transport. The plates' own screws are part of the plate and stay steel.", theme = { { "transScrew1" }, { "transScrew2" }, { "transScrew3" }, { "transScrew4" } } },
 }
 
 -- a material hardware can have: a metal
@@ -2466,7 +2482,7 @@ function Forge.hw_ensure()
 end
 
 -- ---- presets and undo: which material is on what, with its settings
-local USE_KINDS = { "tcp", "mcp", "trans", "rails", "hw_knobs", "hw_caps", "hw_brackets", "hw_screws" }
+local USE_KINDS = { "tcp", "mcp", "trans", "rails", "hw_knobs", "hw_caps", "hw_keys", "hw_brackets", "hw_screws" }
 
 function Forge.saved_lines(lines)
     Forge.load()
@@ -2712,6 +2728,10 @@ local function changes()
     local cof = ui.plate.v.tkCoffee
     if cof ~= nil and cof ~= (param("tkCoffee") or 0) then
         out[#out + 1] = cof > 0 and ("Coffee ring on track " .. cof) or "Coffee ring wiped off"
+    end
+    local fly = ui.plate.v.tkFly
+    if fly ~= nil and fly ~= (param("tkFly") or 0) then
+        out[#out + 1] = fly > 0 and ("A fly on track " .. fly) or "The fly shooed off"
     end
     if ui.plate.scratch then out[#out + 1] = "New scratches" end
     if ui.plate.graffiti then out[#out + 1] = "New graffiti" end
@@ -2997,13 +3017,15 @@ function Forge.draw()
                 end
                 r.ImGui_EndCombo(ctx)
             end
+            if G.hint and r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, G.hint) end
             -- where the shape chosen isn't hardware, there is nothing to colour
             if id and G.parts then
                 local any = false
                 for _, p in ipairs(G.parts) do if p[4][chosen(p[1])] then any = true end end
                 if not any then
                     r.ImGui_SameLine(ctx)
-                    soft(G.key == "hw_knobs" and "shows with Style Material (its hardware knobs)"
+                    soft((G.key == "hw_knobs" and "shows with Style Material (its hardware knobs)")
+                        or (G.key == "hw_keys" and "shows with Keys: Metal")
                         or "shows with the Hardware fader handle", E.UI.dim)
                 end
             end
@@ -3055,6 +3077,36 @@ function Forge.draw()
                         if cof > 0 then
                             r.ImGui_SameLine(ctx, 0, 2)
                             if r.ImGui_Button(ctx, "Wipe off") then pick("tkCoffee", 0) end
+                        end
+                        -- a fly (0.9.98): on one track's plate, somewhere, turned any way;
+                        -- in the track panel and the mixer (on the plate each has)
+                        if param("tkFly") ~= nil then
+                            E.row_label("Fly")
+                            local fly = plate_value("tkFly")
+                            local function land(t)
+                                pick("tkFly", t)
+                                if t > 0 then
+                                    ui.plate.v.tkFlyPX = math.random(4, 96)
+                                    ui.plate.v.tkFlyPY = math.random(8, 92)
+                                    ui.plate.fly_turn = "v" .. math.random(0, 7)
+                                end
+                            end
+                            local function elsewhere()
+                                local count = r.CountTracks(0)
+                                local t = 1
+                                if count > 1 then repeat t = math.random(1, count) until t ~= fly end
+                                return t
+                            end
+                            if fly > 0 then
+                                r.ImGui_AlignTextToFramePadding(ctx)
+                                r.ImGui_Text(ctx, "On track " .. fly)
+                                r.ImGui_SameLine(ctx, 0, 8)
+                            end
+                            if r.ImGui_Button(ctx, fly > 0 and "Fly off" or "Let one in") then land(elsewhere()) end
+                            if fly > 0 then
+                                r.ImGui_SameLine(ctx, 0, 2)
+                                if r.ImGui_Button(ctx, "Shoo") then land(0) end
+                            end
                         end
                     end
                 end

@@ -449,6 +449,7 @@ state.PLATE_ITEMS = {
       hint = "Scratches, rubbed edges and corners, on the plates of the track panel and the mixer. Drawn for you alone: no one else has the same." }),
     Off(function() return not (state.any_plate() and global_value("tkPatina")) end, { kind = "rescratch", label = "" }),
     Off(function() return not state.any_plate() end, { kind = "coffee", label = "Coffee ring" }),
+    Off(function() return not state.any_plate() end, { kind = "fly", label = "Fly" }),
     Off(function() return not state.any_plate() end, { kind = "choice", label = "Graffiti", param = "tkGraffiti",
       choices = { "Off", "Light", "Wild" }, after = function() patina.graffiti_ensure() end,
       hint = "Spray paint, splats with drips and doodles on the plates of the track panel and the mixer, every track its own. Drawn for you alone." }),
@@ -550,13 +551,16 @@ local PAGES = {
                 item.after = function() patina.forge.ensure() end
                 return item
             end)()),
-            Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Rails", param = "tkWood", choices = { "Off", "Walnut", "Teak", "Material" },
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "choice", label = "Rails", param = "tkWood", pic = "rails", choices = { "Off", "Walnut", "Teak", "Material" },
               after = function() patina.forge.rails_changed() end,
               hint = "With a plate: the number column as a rail, the track colour as a stripe on it. Walnut and Teak are the theme's own; Material uses one from the Materials page." }),
             Off(function() return not (global_value("tkTcpPlate") and P.tkWood and P.tkWood.value == 3) end, { kind = "plate_material", plate = "rails", label = "Rail material" }),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkWood")) end, T("Right rail", "tkRailRight", nil, "A second rail on the right.")),
             Off(function() return not global_value("tkTcpPlate") end, { kind = "part", part = "tcp_recarm", label = "Record arm",
               choices = { { "cap", "Cap" }, { "lamp", "Lamp" }, { "glass_white", "Glass white" }, { "glass_red", "Glass red" } } }),
+            Off(function() return not global_value("tkTcpPlate") end, { kind = "part", part = "tcp_keys", label = "Keys",
+              choices = { { "own", "Hardware" }, { "metal", "Metal" }, { "round", "Round" }, { "backlit", "Backlit" } },
+              hint = "R, M and S on the plate. Metal takes the metal chosen under Hardware on the Materials page (Keys); a Record arm other than Cap goes over its R." }),
             Off(function() return not global_value("tkTcpPlate") end, { kind = "part", part = "tcp_knob", label = "Knobs",
               choices = { { "classic", "Classic" }, { "chicken", "Chicken head" }, { "machined", "Machined" } },
               hint = "The plate's knobs: volume, pan, width, FX parameters and the envelope lanes. Classic and Machined take the metal chosen under Hardware on the Materials page." }),
@@ -569,8 +573,10 @@ local PAGES = {
               "The meter lies in the plate between the controls.")),
             Off(function() return not global_value("tkTcpPlate") end, state.See("Meter type", "General", "Meters")),
             Off(function() return not (global_value("tkTcpPlate") and global_value("tkPlMeterIn")) end,
-              { kind = "choice", label = "Lying meter", param = "tkPlMeterShort", pic = "lying", choices = { "Long", "Short" },
-                hint = "Short stays in the plate on narrower panels. Short lamps are 6.",
+              { kind = "choice", label = "Lying meter", param = "tkPlMeterShort", pic = "lying", choices = { "Long", "Short", "Fill" },
+                -- the lamps can't stretch: Fill is grey with them
+                grey_choice = function(i) return i == 3 and P.tkPlLamps ~= nil and P.tkPlLamps.value ~= 0 end,
+                hint = "Short stays in the plate on narrower panels. Short lamps are 6. Fill: as long as the room between the controls allows (not the lamps).",
                 -- the lamps have a strip per length
                 after = function() rewrite_meters(true) end }),
             T("Layout button", "tkTcpLayBtn", nil, "Shows the track's layout (A, B, C); click for the next. Selected tracks go along."),
@@ -603,6 +609,8 @@ local PAGES = {
             Off(lay_on("tkNameOnly"), T("IO column", "tkNoIoCol", THIS_LAYOUT, "Without it, the IO button moves to the first row.", true)),
             -- the buttons sit on the first row without their column, or with the column in
             -- columns (2 or more), whose lowest tracks have no header
+            Off(function() return lay_value("tkNameOnly") or (lay_value("tkNoFxCol") and lay_value("tkNoIoCol")) end, T("Lists on the lowest tracks", "tkLowNoLists", THIS_LAYOUT,
+                "The FX and send columns on the lowest tracks (a plate's lowest form). Off: none there, their buttons go to the first row.", true)),
             Off(function() return lay_value("tkNameOnly") or (lay_value("tkNoFxCol") and lay_value("tkNoIoCol")) end, T("List headers", "tkNoListHead", THIS_LAYOUT,
                 "The FX and IO buttons above the lists. Off: the lists start at the top, the buttons go to the first row (FX button, IO button below).", true)),
             Off(lay_on("tkNameOnly"), T("FX button", "tkHideFxBtn", THIS_LAYOUT,
@@ -625,6 +633,13 @@ local PAGES = {
                 "With Meter in the plate (above): only where the plate has no room for it.")),
             Off(lay_on("tkNameOnly", "tkHideMeter"), S("Meter width", "tcpMeterWidth", THIS_LAYOUT,
                 "With Meter in the plate (above): only where the plate has no room for it.")),
+            -- on a plate, with the meter standing in its own window (res, 0.9.98)
+            Off(function() return not global_value("tkTcpPlate") or global_value("tkPlMeterIn") or lay_value("tkNameOnly") or lay_value("tkHideMeter") end,
+                T("Meter full height", "tkPlMeterFull", THIS_LAYOUT, "With a plate: the meter's window from the plate's top to its bottom.")),
+            Off(function() return not global_value("tkTcpPlate") or lay_value("tkNameOnly") or lay_value("tkHideMeter") end,
+                S("Meter padding", "tkPlMeterPad", THIS_LAYOUT, "With a plate: the room between the meter and its window's edge (4 as it comes), also round the meter lying in the plate.")),
+            Off(function() return not (global_value("tkTcpPlate") and global_value("tkPlMeterIn")) or lay_value("tkNameOnly") or lay_value("tkHideMeter") end,
+                S("Lying meter height", "tkPlMeterHt", THIS_LAYOUT, "The height of the lying meter's window (22 as it comes). Meter padding is the room inside it: the meter gets thinner or thicker, the window stays. The lamps keep their own height.")),
             Off(lay_on("tkNameOnly", "tkHideMeter"), T("Peak value", "tkPeakVal", THIS_LAYOUT,
                 "The peak level as a number in the box at the meter's top. REAPER shows it only where the meter is wide enough: about 40 (Meter width).")),
             Off(lay_on("tkNameOnly"), S("Name size", "tcpLabelSize", THIS_LAYOUT)),
@@ -676,12 +691,18 @@ local PAGES = {
                 item.after = function() patina.forge.ensure() end
                 return item
             end)()),
-            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Rails", param = "tkMcpWood", choices = { "Off", "Walnut", "Teak", "Material" },
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Rails", param = "tkMcpWood", pic = "armrest", choices = { "Off", "Walnut", "Teak", "Material" },
               after = function() patina.forge.rails_changed() end,
               hint = "With a plate: an armrest along the bottom, with the numbers on it. Walnut and Teak are the theme's own; Material uses one from the Materials page (the same as the track panels' rails)." }),
             Off(function() return not (global_value("tkMcpPlate") and P.tkMcpWood and P.tkMcpWood.value == 3) end, { kind = "plate_material", plate = "rails", label = "Rail material" }),
             Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_recarm", label = "Record arm",
               choices = { { "cap", "Cap" }, { "lamp", "Lamp" }, { "glass_white", "Glass white" }, { "glass_red", "Glass red" } } }),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_keys", label = "Keys",
+              choices = { { "own", "Hardware" }, { "metal", "Metal" }, { "round", "Round" }, { "backlit", "Backlit" } },
+              hint = "R, M and S on the plate. Metal takes the metal chosen under Hardware on the Materials page (Keys); a Record arm other than Cap goes over its R." }),
+            Off(function() return not global_value("tkMcpPlate") end, { kind = "choice", label = "Hardware keys", param = "tkMcHwKeys",
+              choices = { "Off", "Hardware", "Metal", "Round", "Backlit" }, after = function() state.side_sync() end,
+              hint = "FX, bypass, IO, automation, phase and monitor as keys on the metal, in a style of their own (Keys is R, M and S). Hardware keys have no glass: REAPER has one image for each in the whole mixer, so this is every strip and the master too. Above the knobs they sit in rows under the window, beside the fader they fill the column. Metal takes the metal chosen under Hardware on the Materials page (Keys). Requested by res." }),
             Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_knob", label = "Knobs",
               choices = { { "classic", "Classic" }, { "chicken", "Chicken head" }, { "machined", "Machined" } },
               hint = "The plate's pan and width knobs. Classic and Machined take the metal chosen under Hardware on the Materials page." }),
@@ -691,6 +712,8 @@ local PAGES = {
         } },
         { "Handles", {
             Off(function() return global_value("tkMcpPlate") end, { kind = "handle", label = "Fader", hint = "For all layouts." }),
+            { kind = "choice", label = "Fader line", param = "tkMcFadThin", choices = { "Normal", "Thin" },
+              hint = "The fader's line (on a plate its slot) thinner. Requested by res." },
             Off(function() return not global_value("tkMcpPlate") end, { kind = "part", part = "mcp_volthumb", label = "Fader cap",
               choices = { { "hw", "Console" }, { "hw_long", "Long throw" }, { "hw_chrome", "Chrome" }, { "hw_colour", "Colour cap" },
                           { "hw_round", "Round top" }, { "hw_wide", "Wide grip" }, { "hw_studio", "Studio" },
@@ -715,10 +738,14 @@ local PAGES = {
         { "Per layout", {
             { kind = "layout", label = "Layout", hint = "For the strips on this layout: A standard, B narrow, C with a sidebar. Set it in a track's right-click menu." },
             T("Name only", "tkMcpNameOnly", THIS_LAYOUT, "Just the name, large: a divider. In a narrow strip (Width) it stands upright."),
+            Off(lay_on("tkMcpNameOnly"), T("Name across the strip", "tkMcNameW", THIS_LAYOUT, "The name's window across the whole strip, 2 from its sides, so a long name shows more of itself.")),
             Off(function() return lay_value("tkMcpNameOnly") or not global_value("tkMcpPlate") end,
                 { kind = "choice", label = "Keys", param = "tkMcpKeys", pic = "keys", layouts = THIS_LAYOUT,
                   choices = { "Above", "Beside fader", "Auto" },
-                  hint = "With a plate, on wide strips: the keys (FX, bypass, IO, automation, phase, monitor) above the pan knobs, or in a column beside the fader, which leaves the meter more height. Auto: beside where the strip is low. On a low strip the last keys go first." }),
+                  hint = "With a plate, on wide strips and intermediate ones from 84: the keys (FX, bypass, IO, automation, phase, monitor) above the pan knobs, or in a column beside the fader, which leaves the meter more height. Auto: beside where the strip is low. On a low strip the last keys go first." }),
+            Off(function() return lay_value("tkMcpNameOnly") or not global_value("tkMcpPlate") or not lay_value("tkMcpKeys") end,
+                { kind = "choice", label = "Meter", param = "tkMcMtrGrow", layouts = THIS_LAYOUT, choices = { "Fixed", "Grow" },
+                  hint = "With the keys beside the fader. Fixed: the meter keeps its width and the fader stays in the middle of the strip, the plate wider round them. Grow: the meter takes the width left over (4 from the sides), the keys stay close to the fader, which then sits a little right of the middle." }),
             S("Width", "mcpWidth", THIS_LAYOUT, "Under 52 a narrow strip, under 88 an intermediate one (with a plate 76 and 100)."),
             S("Width when selected", "mcpWidthSel", THIS_LAYOUT), S("Width when armed", "mcpWidthRecarm", THIS_LAYOUT),
             Grow("Wider per channel", "mcpNchanGrow", { "mcpNchanGrowSel", "mcpNchanGrowRecarm" }),
@@ -778,7 +805,10 @@ local PAGES = {
             { kind = "plate", plate = "trans", label = "Plate", param = "tkTransPlate", styles = { "standard", "material" } },
             Off(function() return not global_value("tkTransPlate") end, { kind = "plate_material", plate = "trans", label = "Material" }),
             Off(function() return not global_value("tkTransPlate") end, T("Rate as a knob", "tkRateKnob", nil, "On the right of the plate. Off keeps the slider in the display.")),
-            Off(function() return not global_value("tkTransPlate") end, { kind = "choice", label = "Plate logo", param = "tkPlateLogo", choices = { "TK-S73", "Red Devil", "Blue Angel", "Black Metal", "Quicksilver", "Own name" },
+            Off(function() return not (global_value("tkTransPlate") and global_value("tkRateKnob")) end, { kind = "part", part = "trans_knob", label = "Rate knob",
+              choices = { { "classic", "Classic" }, { "chicken", "Chicken head" }, { "machined", "Machined" } },
+              hint = "As the plates' knobs. Classic and Machined take the metal chosen under Hardware on the Materials page (Knobs)." }),
+            Off(function() return not global_value("tkTransPlate") end, { kind = "choice", label = "Plate logo", param = "tkPlateLogo", pic = "logo", choices = { "TK-S73", "Red Devil", "Blue Angel", "Black Metal", "Quicksilver", "Own name" },
               after = function(v) if v == 5 then plate_name.ensure() end end }),
             Off(function() return not (global_value("tkTransPlate") and P.tkPlateLogo and math.floor(P.tkPlateLogo.value) == 5) end,
               { kind = "platename", label = "Your name" }),
@@ -1108,7 +1138,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", track_lcd = "own", time_font = "standard", ruler_font = "inter" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", trans_knob = "classic", tcp_keys = "own", mcp_keys = "own", mcp_side = "off", fly = "v0", track_lcd = "own", time_font = "standard", ruler_font = "inter" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the track panel's list slots (Lists: Boxes or Plain; its FX slots its own since 0.9.97)
         tcp_lists = { "tcp_fxlist_norm", "tcp_fxlist_byp", "tcp_fxlist_off", "tcp_fxlist_empty", "tcp_sendlist_norm",
@@ -1123,6 +1153,20 @@ local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen
         -- the plate's knobs in another style (Classic: the hardware part's own)
         tcp_knob = { "tcp_vol_knob_stack", "tcp_pan_knob_stack", "tcp_wid_knob_stack", "tcp_fxparm_knob_stack", "envcp_knob_stack" },
         mcp_knob = { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack" },
+        -- the transport's rate knob on a plate (0.9.98)
+        trans_knob = { "transRateKnob" },
+        -- the plate's R / M / S in another style (0.9.98)
+        tcp_keys = { "track_mute_off_ol", "track_mute_on", "track_solo_off_ol", "track_solo_on", "track_recarm_off_ol", "track_recarm_on_ol",
+            "track_recarm_norec_ol", "track_recarm_auto_ol", "track_recarm_auto_on_ol", "track_recarm_auto_norec_ol", "track_mono",
+            "track_stereo_ol", "envcp_arm_off_ol", "envcp_arm_on" },
+        mcp_keys = { "mcp_mute_off_ol", "mcp_mute_on", "mcp_solo_off_ol", "mcp_solo_on", "mcp_recarm_off_ol", "mcp_recarm_on_ol",
+            "mcp_recarm_norec_ol", "mcp_recarm_auto_ol", "mcp_recarm_auto_on_ol", "mcp_recarm_auto_norec_ol" },
+        -- the mixer's FX, IO, phase and monitor as hardware keys (Hardware keys, 0.9.98): off (the
+        -- look's own), the hardware's own for each plate (own_silver, own_black), or a Keys style.
+        -- Not chosen by hand: it follows the switch, the plate and Keys (parts.side_want)
+        mcp_side = { "mcp_fx_norm", "mcp_fx_empty", "mcp_fx_dis", "mcp_phase_norm_ol", "mcp_phase_inv", "mcp_monitor_off", "mcp_monitor_on", "mcp_monitor_auto", "mcp_io_ol", "mcp_io_dis_ol", "mcp_io_r_ol", "mcp_io_r_dis_ol", "mcp_io_s_ol", "mcp_io_s_dis_ol", "mcp_io_s_r_ol", "mcp_io_s_r_dis_ol", "track_fxon_v_ol", "track_fxoff_v_ol", "track_fxempty_v_ol", "mcp_env_ol", "mcp_env_read_ol", "mcp_env_touch_ol", "mcp_env_latch_ol", "mcp_env_write_ol", "mcp_env_preview_ol" },
+        -- the fly on one track's plate (0.9.98): eight turns of it, v0..v7
+        fly = { "tcpFly" },
         -- the track panel's knobs and R / M / S: the theme's own, or hardware for the plate (the first differs per variant)
         mcp_hw = { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack", "mcp_mute_off_ol", "mcp_mute_on",
             "mcp_solo_off_ol", "mcp_solo_on", "mcp_recarm_off_ol", "mcp_recarm_on_ol", "mcp_recarm_norec_ol",
@@ -1133,8 +1177,12 @@ local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen
             "envcp_arm_off_ol", "envcp_arm_on", "envcp_knob_stack" } } }
 -- parts that only count on a plate and go over its hardware: the record arm (0.9.95) and the
 -- knobs (0.9.97). Their first choice is the hardware's own (OWN): then the hardware is written
-parts.RECARM_HW = { tcp_recarm = "tcp_hw", mcp_recarm = "mcp_hw", tcp_knob = "tcp_hw", mcp_knob = "mcp_hw" }
-parts.HW_OWN = { tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic" }
+parts.RECARM_HW = { tcp_recarm = "tcp_hw", mcp_recarm = "mcp_hw", tcp_knob = "tcp_hw", mcp_knob = "mcp_hw",
+    tcp_keys = "tcp_hw", mcp_keys = "mcp_hw" }
+parts.HW_OWN = { tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", tcp_keys = "own", mcp_keys = "own" }
+-- over the hardware in this order: the keys' style first, the record arm's own R over it
+parts.HW_OVER = { "tcp_keys", "mcp_keys", "tcp_recarm", "mcp_recarm", "tcp_knob", "mcp_knob" }
+parts.KEYS_RECARM = { tcp_keys = "tcp_recarm", mcp_keys = "mcp_recarm" }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
 
@@ -1235,7 +1283,7 @@ function parts.read(zip, accent, part, variant, file)
         if file == "keys.txt" then return nil end
         part, variant = "meter", parts.lying_type(variant)
         -- the lamps lying Short: a strip of 6 (the 11 would squash)
-        if variant == "lamps" and file ~= "preview.png" and global_value("tkPlMeterShort") then variant = "lamps_s" end
+        if variant == "lamps" and file ~= "preview.png" and P.tkPlMeterShort and math.floor(P.tkPlMeterShort.value) == 1 then variant = "lamps_s" end
     end
     -- Unlit segments off (General > Meters): each type's images with the unlit half see-through
     if part == "meter" and file ~= "preview.png" and global_value("tkMeterNoUnlit") then variant = variant .. "_nu" end
@@ -1258,6 +1306,18 @@ function parts.read(zip, accent, part, variant, file)
         if dark then return dark end
     end
     return pack["parts/" .. part .. "/" .. variant .. "/" .. file]
+end
+
+-- the Hardware keys switch (Mixer page): the side keys written as they should be now
+function state.side_sync() parts.choose("mcp_side", parts.side_want()) end
+
+-- what the side keys should be: off unless Hardware keys has a style and the mixer has a
+-- plate (Silver or Black); Hardware is the hardware's own for that plate
+function parts.side_want()
+    local hw = parts.chosen.mcp_hw or parts.default.mcp_hw
+    local v = P.tkMcHwKeys and math.floor(P.tkMcHwKeys.value) or 0
+    if v < 1 or (hw ~= "silver" and hw ~= "black") then return "off" end
+    return ({ "own_" .. hw, "metal", "round", "backlit" })[v] or "off"
 end
 
 -- the layout's lines for dark glass: "line number<TAB>line", numbered from 0
@@ -1739,6 +1799,10 @@ function parts.write(part, variant, zip, accent)
         -- the layout can't see an image: it learns from this that the R is a lamp (a round shadow)
         local lp = (part == "tcp_recarm" and "tkTcpRecLamp") or (part == "mcp_recarm" and "tkMcpRecLamp") or nil
         local want = variant == "lamp" and 1 or 0
+        -- keys Round: the layout leaves out the caps' square shadows (the keys bring round ones)
+        if part == "tcp_keys" or part == "mcp_keys" then
+            lp, want = part == "tcp_keys" and "tkTcpKeysRound" or "tkMcpKeysRound", variant == "round" and 1 or 0
+        end
         if lp and P[lp] and math.floor(P[lp].value) ~= want then set_param(lp, want, true) end
         local hw = parts.chosen[recarm_hw] or parts.default[recarm_hw]
         if hw ~= "silver" and hw ~= "black" then return true end
@@ -1750,9 +1814,11 @@ function parts.write(part, variant, zip, accent)
         end
     end
     local files = {}
+    local arm = parts.KEYS_RECARM[part]
+    local keep_r = arm and (parts.chosen[arm] or parts.default[arm]) ~= parts.HW_OWN[arm]
     for _, name in ipairs(parts.files(part, zip, accent)) do
         local from = part == "basic" and parts.basic_from(name, variant) or variant
-        if not (part == "basic" and parts.in_glass and from == "off" and (variant == "mixer" or variant == "tcp")) then
+        if not (keep_r and name:find("recarm", 1, true)) and not (part == "basic" and parts.in_glass and from == "off" and (variant == "mixer" or variant == "tcp")) then
             local data = parts.read(zip, accent, part, from, name)
             if not data then return nil, "the images of this choice are missing" end
             files[root .. "/" .. name] = data
@@ -1760,7 +1826,8 @@ function parts.write(part, variant, zip, accent)
     end
     -- the hardware brings its own R: a chosen Lamp or Glass goes over it again
     if (part == "tcp_hw" or part == "mcp_hw") and not parts.recarm_skip and (variant == "silver" or variant == "black") then
-        for rp, hwp in pairs(parts.RECARM_HW) do
+        for _, rp in ipairs(parts.HW_OVER) do
+            local hwp = parts.RECARM_HW[rp]
             local rv = parts.chosen[rp] or parts.default[rp]
             if hwp == part and rv ~= parts.HW_OWN[rp] then
                 for _, name in ipairs(parts.files(rp, zip, accent)) do
@@ -1812,6 +1879,15 @@ function parts.write(part, variant, zip, accent)
     end
     if (part == "tcp_hw" or part == "mcp_hw") and variant == "standard" then
         local ok, err = parts.write_display(parts.chosen.display or parts.default.display, zip, root, accent)
+        if not ok then return nil, err end
+    end
+    if part == "mcp_side" and variant == "off" then
+        local ok, err = true, nil
+        if parts.glass_dark(zip) then
+            ok, err = parts.write("light_glass", parts.chosen.light_glass or parts.default.light_glass, zip, accent)
+        elseif parts.lcd_on() then
+            ok, err = parts.write_display(parts.chosen.display or parts.default.display, zip, root, accent)
+        end
         if not ok then return nil, err end
     end
     if part == "basic" and variant == "off" and parts.is_light(zip) and (parts.chosen.light_glass or parts.default.light_glass) == "dark" then
@@ -1873,6 +1949,7 @@ end
 function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
     if part == "light_glass" and parts.is_light(zip) and parts.lcd_on() then return true end
+    if part == "mcp_side" and variant == "off" then return true end
     if part == "track_lcd" and not parts.lcd_on() then return true end
     if parts.RECARM_HW[part] then
         local hw = parts.chosen[parts.RECARM_HW[part]] or parts.default[parts.RECARM_HW[part]]
@@ -2002,6 +2079,16 @@ function parts.write_choices(choices, zip)
             if choice[1] == "meter" then meter = true end
         else
             state.msg = "Could not change the theme file: " .. tostring(why) .. "."
+        end
+    end
+    -- the side keys follow Hardware keys, the plate and Keys, and go back over what an accent,
+    -- a display or the glass wrote over them
+    local side_now, side_given = parts.chosen.mcp_side or parts.default.mcp_side, false
+    for _, choice in ipairs(choices) do if choice[1] == "mcp_side" then side_given = true end end
+    if not side_given and look.current() then
+        local sw = parts.side_want()
+        if sw ~= side_now or (sw ~= "off" and not parts.in_zip("mcp_side", sw, zip)) then
+            if parts.write("mcp_side", sw, zip) then parts.chosen.mcp_side = sw made = made + 1 end
         end
     end
     -- a lying meter that is the same as standing follows a new standing type, in whatever
@@ -2273,7 +2360,8 @@ function patina.draw_plate(item, id)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
         end
-        local clicked = r.ImGui_Button(ctx, s[2], 96, 0)
+        -- with its picture: the part's own, as Fader cap and Record arm have (TK_Theme_Pics.lua)
+        local clicked = state.pics.button("style", s[2], s[1], math.max(96, state.pics.WIDTH), active, item)
         if active then r.ImGui_PopStyleColor(ctx, 2) end
         if clicked and not active then
             if s[1] == "material" then
@@ -2817,6 +2905,46 @@ function patina.draw_rescratch(item, id)
     r.ImGui_PopID(ctx)
 end
 
+-- a fly on one track's plate (0.9.98): on a track at random, somewhere on it, turned any
+-- way; again elsewhere, or shooed off. Its turn is the part fly (v0..v7)
+function patina.draw_fly(item, id)
+    local p = P.tkFly
+    if not p or not look.current() then return end
+    r.ImGui_PushID(ctx, id)
+    row_label(item.label)
+    local on = math.floor(p.value)
+    local function land(v)
+        set_param("tkFly", v, true)
+        if v > 0 then
+            set_param("tkFlyPX", math.random(4, 96), true)
+            set_param("tkFlyPY", math.random(8, 92), true)
+            parts.choose("fly", "v" .. math.random(0, 7), true)
+        end
+        r.ThemeLayout_RefreshAll()
+    end
+    local function elsewhere()
+        local count = r.CountTracks(0)
+        local pick = 1
+        if count > 1 then
+            repeat pick = math.random(1, count) until pick ~= on
+        end
+        return pick
+    end
+    if on == 0 then
+        if r.ImGui_Button(ctx, "Let one in") then land(elsewhere()) end
+    else
+        r.ImGui_AlignTextToFramePadding(ctx)
+        r.ImGui_Text(ctx, "On track " .. on)
+        r.ImGui_SameLine(ctx, 0, 8)
+        if r.ImGui_Button(ctx, "Fly off") then land(elsewhere()) end
+        r.ImGui_SameLine(ctx, 0, 2)
+        if r.ImGui_Button(ctx, "Shoo") then land(0) end
+    end
+    r.ImGui_PopID(ctx)
+    r.ImGui_SetCursorPosX(ctx, LABEL_W)
+    hint_text("A house fly on one track's plate, somewhere at random; in the mixer too.")
+end
+
 -- a coffee ring on one track's plate: spilt on a track at random, again, or wiped off
 function patina.draw_coffee(item, id)
     local p = P.tkCoffee
@@ -2892,6 +3020,8 @@ local function draw_setting(item, id)
         patina.draw_regraffiti(item, id)
     elseif item.kind == "coffee" then
         patina.draw_coffee(item, id)
+    elseif item.kind == "fly" then
+        patina.draw_fly(item, id)
     elseif item.kind == "plate" then
         patina.draw_plate(item, id)
     elseif item.kind == "plate_material" then
@@ -2932,9 +3062,12 @@ local function draw_setting(item, id)
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(mix(UI.raised, UI.accent, 0.55)))
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
             end
+            local grey = item.grey_choice and item.grey_choice(i)
+            if grey then r.ImGui_BeginDisabled(ctx, true) end
             local clicked
-            if pic then clicked = state.pics.button(pic, name, i, bw, active)
+            if pic then clicked = state.pics.button(pic, name, i, bw, active, item)
             else clicked = r.ImGui_Button(ctx, name, bw, 0) end
+            if grey then r.ImGui_EndDisabled(ctx) end
             if active then r.ImGui_PopStyleColor(ctx, 2) end
             if clicked and not active then
                 for _, n in ipairs(names) do set_param(n, is_extra and 0 or i - 1, true) end
@@ -3980,7 +4113,7 @@ local function code_data()
     end
     for part, def in pairs(parts.default) do
         local v = parts.chosen[part] or def
-        if v ~= def then data.parts[part] = v end
+        if v ~= def and part ~= "mcp_side" then data.parts[part] = v end
     end
     colour_keys(function(key)
         local now, fac = r.GetThemeColor(key, 0), factory_colour(key)
@@ -5021,7 +5154,13 @@ state.mastermix.bind({ r = r, ctx = ctx, UI = UI, rgba = rgba, mix = mix, state 
 
 -- the drawn pictures on choice buttons, in a file of its own too
 state.pics = dofile(here .. "TK_Theme_Pics.lua")
-state.pics.bind({ r = r, ctx = ctx, UI = UI, rgba = rgba, mix = mix })
+state.pics.bind({ r = r, ctx = ctx, UI = UI, rgba = rgba, mix = mix,
+    -- the pictures made from the theme's own images (rails, plate logos, styles)
+    Zip = Zip, zip_path = function() return parts.zip_path() end,
+    unzip = function(data, method) return patina.forge.unzip(data, method) end,
+    part_image = function(part, key) return look.current() and parts.image(part, key) or nil end,
+    trans_silver = function() return P.tkTransPlate and math.floor(P.tkTransPlate.value) == 2 end,
+    own_logo = function() return (plate_name.preview()) end })
 
 -- searching every setting (Ctrl+F), in a file of its own (this one is near Lua's 200 locals)
 state.search = dofile(here .. "TK_Theme_Search.lua")
@@ -5185,8 +5324,8 @@ local function startup_checks()
         if math.floor(P.tkPlLamps.value) ~= lamps then set_param("tkPlLamps", lamps, true) end
     end
     -- whether the record arm is the lamp (its round shadow), as with the lamps above
-    for rp, lp in pairs({ tcp_recarm = "tkTcpRecLamp", mcp_recarm = "tkMcpRecLamp" }) do
-        local want = (parts.chosen[rp] or parts.default[rp]) == "lamp" and 1 or 0
+    for rp, lp in pairs({ tcp_recarm = "tkTcpRecLamp", mcp_recarm = "tkMcpRecLamp", tcp_keys = "tkTcpKeysRound", mcp_keys = "tkMcpKeysRound" }) do
+        local want = (parts.chosen[rp] or parts.default[rp]) == (rp:find("keys", 1, true) and "round" or "lamp") and 1 or 0
         if P[lp] and math.floor(P[lp].value) ~= want then set_param(lp, want, true) end
     end
     -- Basic's buttons and lists follow its switches, also when those were set before the
@@ -5203,6 +5342,9 @@ local function startup_checks()
         local thw = parts.chosen.tcp_hw or parts.default.tcp_hw
         if global_value("tkTcpBasic") and not global_value("tkTcpPlate") and thw ~= "basic" then list[#list + 1] = { "tcp_hw", "basic" }
         elseif not global_value("tkTcpBasic") and thw == "basic" then list[#list + 1] = { "tcp_hw", "standard" } end
+        -- the mixer's side keys as Hardware keys, the plate and Keys want them
+        local sw = parts.side_want()
+        if (parts.chosen.mcp_side or parts.default.mcp_side) ~= sw then list[#list + 1] = { "mcp_side", sw } end
         if #list > 0 then parts.choose_many(list, true) end
     end
     state.log("switches done")
