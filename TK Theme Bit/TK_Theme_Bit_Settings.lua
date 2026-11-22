@@ -413,6 +413,25 @@ local function note(s)
   r.ImGui_PopTextWrapPos(ctx)
 end
 
+---------------------------------------------------------------- Saxmand's device panel
+-- the DEVICES key opens Saxmand's FX Modulator Linking; whether it is installed is read
+-- once from REAPER's action list. Not installed: the key is switched off once, so a new
+-- user doesn't get a key that only says "not installed" (switching it on stays possible)
+local saxmand
+local function saxmand_found()
+  if saxmand == nil then
+    saxmand = ((read_all(r.GetResourcePath() .. "/reaper-kb.ini") or "")
+      :find("Saxmand_FX Modulator Linking.lua", 1, true)) ~= nil
+  end
+  return saxmand
+end
+
+local function devices_first_run()
+  if r.GetExtState(EXT, "devices_checked") == "1" or not bit_active() then return end
+  r.SetExtState(EXT, "devices_checked", "1", true)
+  if not saxmand_found() then set_theme_param("bitTransDevices", 0) end
+end
+
 ---------------------------------------------------------------- pages
 local function page_transport()
   section("Transport", function()
@@ -439,6 +458,27 @@ local function page_transport()
           local p = segmented("center", { "After the keys", "Centred" }, cvalue == 0 and 1 or 2)
           if p then set_theme_param("bitTransCenter", p == 1 and 0 or 1) end
         end)
+      end
+      local vidx, vvalue = theme_param("bitTransViews")
+      if vidx then
+        r.ImGui_Spacing(ctx)
+        row("View keys", function()
+          local p = segmented("views", { "Off", "Arrange / Mix / Edit" }, vvalue == 0 and 1 or 2)
+          if p then set_theme_param("bitTransViews", p == 1 and 0 or 1) end
+        end)
+        note("At the right end of the bar: ARRANGE closes the mixer and MIDI editor, MIX shows the mixer, "
+          .. "EDIT opens the selected MIDI item. They hide on a bar too narrow for them.")
+      end
+      local didx, dvalue = theme_param("bitTransDevices")
+      if didx then
+        r.ImGui_Spacing(ctx)
+        row("Devices key", function()
+          local p = segmented("devices", { "Off", "Shown" }, dvalue == 0 and 1 or 2)
+          if p then set_theme_param("bitTransDevices", p == 1 and 0 or 1) end
+        end)
+        note(saxmand_found()
+          and "DEVICES opens Saxmand's FX Modulator Linking, a device panel like Bitwig's."
+          or "DEVICES opens Saxmand's FX Modulator Linking, which isn't installed: get it from Saxmand's ReaPack repository.")
       end
     else
       note("TK Theme Bit is not the active theme.")
@@ -1227,4 +1267,5 @@ local function loop()
 end
 
 look_restore()
+devices_first_run()
 r.defer(loop)
