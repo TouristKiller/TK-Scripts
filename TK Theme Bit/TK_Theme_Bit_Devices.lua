@@ -1,29 +1,18 @@
--- TK Theme Bit - the DEVICES key: starts Saxmand's "FX Modulator Linking", a device panel
--- in the spirit of Bitwig's. It is Saxmand's own script, installed from his ReaPack
--- repository; this only finds it in REAPER's action list (by its file name, so its
--- action id doesn't matter) and runs it. Not installed: a message says where to get it.
+-- TK Theme Bit - the DEVICES key: opens or closes Saxmand's "FX Modulator Linking", a
+-- device panel in the spirit of Bitwig's. It is Saxmand's own script, installed from his
+-- ReaPack repository; this only finds it in REAPER's action list (TK_Theme_Bit_View.lua,
+-- by its file name) and runs it. Not installed: a message says where to get it.
+-- The key is orange while the panel is open; the view keys' background loop keeps that
+-- in step, and is started here too.
 
 local r = reaper
-local FILE = "Saxmand_FX Modulator Linking.lua"
+local dir = ({r.get_action_context()})[2]:match("^(.*)[\\/]")
+local V = dofile(dir .. "/TK_Theme_Bit_View.lua")
 
-local function find_command()
-  local f = io.open(r.GetResourcePath() .. "/reaper-kb.ini", "rb")
-  if not f then return nil end
-  local text = f:read("a")
-  f:close()
-  for line in text:gmatch("[^\r\n]+") do
-    local id = line:match("^SCR %d+ %d+ (%S+) ")
-    if id and line:find(FILE, 1, true) then
-      local cmd = r.NamedCommandLookup("_" .. id)
-      if cmd ~= 0 then return cmd end
-    end
-  end
-  return nil
-end
-
-local cmd = find_command()
+local cmd = V.saxmand_command()
 if cmd then
-  r.Main_OnCommand(cmd, 0)
+  r.Main_OnCommand(cmd, 0)          -- opens it, or (when open) ends it
+  V.watch()
 else
   r.ShowMessageBox("The DEVICES key opens Saxmand's \"FX Modulator Linking\", which isn't installed.\n\n"
     .. "Get it with ReaPack: add Saxmand's repository (Extensions > ReaPack > Import repositories), "

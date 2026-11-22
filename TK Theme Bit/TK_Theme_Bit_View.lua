@@ -17,17 +17,42 @@ local MIXER = 40078                 -- View: Toggle mixer visible
 local OPEN_MIDI = 40153             -- Item: Open in built-in MIDI editor
 local PARAM, EXT = "bitView", "TK Theme Bit"
 
-local function param_index()
-  local i = 0
-  while true do
-    local name = r.ThemeLayout_GetParameter(i)
-    if not name then return nil end
-    if name == PARAM then return i end
-    i = i + 1
+local function mixer_shown() return r.GetToggleCommandState(MIXER) == 1 end
+
+-- Saxmand's FX Modulator Linking (the DEVICES key): found by its file name in REAPER's
+-- action list, so its id doesn't matter. While it runs, it sets its own toggle state to 1.
+local SAXMAND = "Saxmand_FX Modulator Linking.lua"
+local sax_cmd
+
+function V.saxmand_command()
+  if sax_cmd == nil then
+    sax_cmd = false
+    local f = io.open(r.GetResourcePath() .. "/reaper-kb.ini", "rb")
+    if f then
+      local text = f:read("a")
+      f:close()
+      for line in text:gmatch("[^\r\n]+") do
+        local id = line:match("^SCR %d+ %d+ (%S+) ")
+        if id and line:find(SAXMAND, 1, true) then
+          local cmd = r.NamedCommandLookup("_" .. id)
+          if cmd ~= 0 then sax_cmd = cmd break end
+        end
+      end
+    end
   end
+  return sax_cmd or nil
 end
 
-local function mixer_shown() return r.GetToggleCommandState(MIXER) == 1 end
+function V.devices_open()
+  local cmd = V.saxmand_command()
+  return cmd ~= nil and r.GetToggleCommandState(cmd) == 1
+end
+
+-- a view key closes the device panel: running its action again ends it (REAPER may ask
+-- once whether to terminate it; "Remember my answer" keeps that quiet afterwards)
+local function close_devices()
+  if V.devices_open() then r.Main_OnCommand(V.saxmand_command(), 0) end
+end
 
 local function close_midi_editor()
   local ed = r.MIDIEditor_GetActive()
@@ -48,17 +73,31 @@ function V.current()
   return 0
 end
 
-function V.show(view)
-  local idx = param_index()
-  if not idx then return end
-  local _, _, value = r.ThemeLayout_GetParameter(idx)
-  if value ~= view then
-    r.ThemeLayout_SetParameter(idx, view, false)
-    r.ThemeLayout_RefreshAll()
+local function set_param(name, value)
+  local i = 0
+  while true do
+    local n, _, v = r.ThemeLayout_GetParameter(i)
+    if not n then return false end
+    if n == name then
+      if v ~= value then
+        r.ThemeLayout_SetParameter(i, value, false)
+        return true
+      end
+      return false
+    end
+    i = i + 1
   end
 end
 
+-- the lit keys: the view (bitView) and whether the device panel is open (bitDevOn)
+function V.show(view)
+  local a = set_param(PARAM, view)
+  local b = set_param("bitDevOn", V.devices_open() and 1 or 0)
+  if a or b then r.ThemeLayout_RefreshAll() end
+end
+
 function V.switch(view)
+  close_devices()
   if view == 0 then
     close_midi_editor()
     if mixer_shown() then r.Main_OnCommand(MIXER, 0) end

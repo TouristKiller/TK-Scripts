@@ -627,7 +627,7 @@
 
  <category name="TK Theme Bit">
     <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
-    <version name="0.1.1" author="TouristKiller" time="2026-11-22T23:36:15Z">
+    <version name="0.1.2" author="TouristKiller" time="2026-11-22T23:42:40Z">
      <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
      <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
      <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
@@ -643,8 +643,9 @@
      <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
      <changelog><![CDATA[
-+ Added: ARRANGE / MIX / EDIT view keys at the right end of the transport, the active view in orange. ARRANGE closes the mixer and the MIDI editor, MIX shows the mixer, EDIT opens the selected MIDI item. They can be switched off in the settings (Transport > View keys).
-+ Added: a DEVICES key that opens Saxmand's FX Modulator Linking as a device panel, like Bitwig's. Saxmand's script is installed separately from his ReaPack repository; without it the key is switched off (Transport > Devices key).
++ Changed: the automation key now sits after the transport keys (after forward), no longer between record and forward.
++ Fixed: ARRANGE, MIX and EDIT now close the device panel (Saxmand's FX Modulator Linking). Before, MIX and EDIT only covered it in the docker and ARRANGE brought it back.
++ Added: the DEVICES key turns orange while the device panel is open.
 ]]></changelog>
     </version>
     </reapack>
