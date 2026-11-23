@@ -1,8 +1,10 @@
 -- @description TK FX BROWSER Mini
 -- @author TouristKiller
--- @version 1.2.29
+-- @version 1.2.30
 -- @changelog:
 --[[ 
+    v1.2.30:
+        + Fix (as in TK FX BROWSER 3.2.34): In a narrow or very low docker the browser could stop with "Calling End() too many times" or "Missing PopStyleVar()". When a section no longer fits, ReaImGui leaves it out, and the browser still closed it, which closed the docked window itself. Sections that do not fit are now skipped cleanly: the browser panel, the screenshot area, Projects, Sends/Receives, Scripts, the search banners, the Track and Item FX lists and the smaller windows (Settings, folder icons and colours, shortcuts, debug log).
     v1.2.29:
         + Browser: Right-click a plugin for Remove from Track, under the Add to... entries, as in TK FX BROWSER 3.2.33. It takes the plugin off the current track in one go, instead of opening INFO, right-clicking it in the Track FX list and choosing Delete. It shows only when the plugin is on that track (Input FX included). When it is there more than once, a submenu lists each copy with its slot, plus Remove all. One undo step. Requested by makkie65
     v1.2.28:
@@ -351,6 +353,18 @@
 --------------------------------------------------------------------------
    
 local r                     = reaper
+-- A child that is fully clipped (narrow docker) makes BeginChild return false; ReaImGui then
+-- wants no EndChild, or it closes the parent window instead. These helpers remember the result.
+TKSafeChildStack = {}
+function TKSafeBeginChild(ctx, ...)
+    local ok = r.ImGui_BeginChild(ctx, ...)
+    TKSafeChildStack[#TKSafeChildStack + 1] = ok
+    return ok
+end
+function TKSafeEndChild(ctx)
+    local ok = table.remove(TKSafeChildStack)
+    if ok then r.ImGui_EndChild(ctx) end
+end
 local script_path           = debug.getinfo(1, "S").source:match("@?(.*[/\\])")
 local script_name           = debug.getinfo(1, "S").source:match("([^/\\]+)$")
 local is_mini              = string.find(script_name, "Mini") ~= nil
@@ -886,7 +900,7 @@ function RenderActionsSection()
             r.ImGui_EndPopup(ctx)
         end
     end
-    r.ImGui_EndChild(ctx)
+    if action_child_open then r.ImGui_EndChild(ctx) end
     r.ImGui_Separator(ctx)
     r.ImGui_TextWrapped(ctx, "Left-click: Execute. Right-click: Context menu.")
 end
@@ -2119,7 +2133,7 @@ function DrawCustomFolderIconsWindow()
                     r.ImGui_PopID(ctx)
                 end
             end
-            r.ImGui_EndChild(ctx)
+            if child_visible then r.ImGui_EndChild(ctx) end
             if r.ImGui_Button(ctx, "Reset All") then
                 config.custom_folder_icons = {}
                 SaveConfig()
@@ -2130,7 +2144,7 @@ function DrawCustomFolderIconsWindow()
             show_custom_folder_icons_window = false
         end
     end
-    r.ImGui_End(ctx)
+    if visible then r.ImGui_End(ctx) end
 end
 
 function DrawCustomFolderColorsWindow()
@@ -2170,7 +2184,7 @@ function DrawCustomFolderColorsWindow()
                     r.ImGui_PopID(ctx)
                 end
             end
-            r.ImGui_EndChild(ctx)
+            if child_visible then r.ImGui_EndChild(ctx) end
             if r.ImGui_Button(ctx, "Reset All") then
                 config.custom_folder_colors = {}
                 SaveConfig()
@@ -2181,7 +2195,7 @@ function DrawCustomFolderColorsWindow()
             show_custom_folder_colors_window = false
         end
     end
-    r.ImGui_End(ctx)
+    if visible then r.ImGui_End(ctx) end
 end
 
 
@@ -6853,7 +6867,7 @@ function ShowPluginManagerTab()
             r.ImGui_Text(ctx, disp)
         end
     end
-    r.ImGui_EndChild(ctx)
+    if plugin_list_open then r.ImGui_EndChild(ctx) end
     local button_width = (r.ImGui_GetWindowWidth(ctx) -28) / 4
     if r.ImGui_Button(ctx, "Select Bulk", button_width, 20) then
         for _, plugin in ipairs(filtered_plugins) do
@@ -8701,6 +8715,8 @@ function ShowConfigWindow()
 r.ImGui_PopFont(ctx)
 r.ImGui_PopStyleColor(ctx, 2)
 r.ImGui_End(ctx)
+else
+r.ImGui_PopStyleColor(ctx, 2)
 end
 return config_open and open
 end
@@ -10246,7 +10262,7 @@ function DrawShortcutsWindow()
         Row("Ctrl + Z",                 "Undo last action (REAPER)")
         Row("Mouse Wheel (dropdowns)",  "Cycle dropdown options")
     end
-    r.ImGui_End(ctx)
+    if visible then r.ImGui_End(ctx) end
 
     if not open then
         show_shortcuts_window = false
@@ -12746,7 +12762,7 @@ function ShowRoutingMatrix()
             r.ImGui_Text(ctx, string.format("%d: %s", visible[vi].idx + 1, visible[vi].name))
         end
     end
-    r.ImGui_EndChild(ctx)
+    if routing_open then r.ImGui_EndChild(ctx) end
 end
 
 function ShowRoutingHubs()
@@ -17564,7 +17580,7 @@ function ShowBrowserPanel()
     info_inputfx_drop_hovered = false
     drag_drop_target_folder = nil
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), 0)
-    r.ImGui_BeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
+    TKSafeBeginChild(ctx, "BrowserSection", config.browser_panel_width, -1)
     local section_pos_y = r.ImGui_GetCursorScreenPos(ctx)
     local section_start_y = section_pos_y 
 
@@ -17675,7 +17691,7 @@ function ShowBrowserPanel()
         r.ImGui_Dummy(ctx, 0, 2)
     end
     end
-    r.ImGui_EndChild(ctx)
+    if header_open then r.ImGui_EndChild(ctx) end
 
     if TRACK and r.ValidatePtr(TRACK, "MediaTrack*") then
         local bt_track_num = r.GetMediaTrackInfo_Value(TRACK, "IP_TRACKNUMBER") or 0
@@ -18659,8 +18675,8 @@ function ShowBrowserPanel()
     end
     if content_open then
         r.ImGui_EndChild(ctx) -- BrowserContent
-        r.ImGui_PopStyleVar(ctx) -- ScrollbarSize (from BrowserContent)
     end
+    r.ImGui_PopStyleVar(ctx) -- ScrollbarSize (from BrowserContent), also when the child was clipped away
     else
         r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_browser_panel_scrollbar and 14 or 0)
         local info_open = r.ImGui_BeginChild(ctx, "InfoContent", -1, content_h)
@@ -19742,7 +19758,7 @@ function ShowBrowserPanel()
         r.ImGui_SetTooltip(ctx, browser_panel_show_info and "Switch to Plugin Browser" or "Switch to Track Info Panel")
     end
 
-    r.ImGui_EndChild(ctx) -- BrowserSection
+    TKSafeEndChild(ctx) -- BrowserSection
     r.ImGui_PopStyleVar(ctx) -- outer ScrollbarSize
 
     r.ImGui_SameLine(ctx)
@@ -22194,7 +22210,7 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
     local current_y = r.ImGui_GetCursorPosY(ctx)
     local footer_height = 0 
     local available_height = window_height - current_y - footer_height
-    r.ImGui_BeginChild(ctx, "ScriptsLauncherList", -1, available_height)
+    TKSafeBeginChild(ctx, "ScriptsLauncherList", -1, available_height)
         local avail_w = r.ImGui_GetContentRegionAvail(ctx)
         local cell_w = config.script_thumb_size or 120
         local cell_h = math.floor(cell_w * 80 / 120)
@@ -22466,7 +22482,7 @@ function RenderScriptsLauncherSection(popped_view_stylevars)
             r.ImGui_EndPopup(ctx)
         end
 
-    r.ImGui_EndChild(ctx)
+    TKSafeEndChild(ctx)
     return popped_view_stylevars
 end
 
@@ -22489,7 +22505,7 @@ function ShowDebugWindow()
         r.ImGui_Separator(ctx)
         
         -- Scrollable log area
-        r.ImGui_BeginChild(ctx, "DebugLogArea", -1, -1)
+        TKSafeBeginChild(ctx, "DebugLogArea", -1, -1)
         
         for i, msg in ipairs(debug_messages) do
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0x00FF00FF) -- Green for timestamp
@@ -22516,9 +22532,9 @@ function ShowDebugWindow()
             r.ImGui_SetScrollHereY(ctx, 1.0)
         end
         
-        r.ImGui_EndChild(ctx)
+        TKSafeEndChild(ctx)
     end
-    r.ImGui_End(ctx)
+    if visible then r.ImGui_End(ctx) end
     
     if not open then
         config.show_debug_window = false
@@ -22668,7 +22684,7 @@ function ShowScreenshotWindow()
         ShowBrowserPanel()
         r.ImGui_SameLine(ctx)
         
-        r.ImGui_BeginChild(ctx, "ScreenshotSection", -1, -1, 0, r.ImGui_WindowFlags_NoNavInputs())
+        TKSafeBeginChild(ctx, "ScreenshotSection", -1, -1, 0, r.ImGui_WindowFlags_NoNavInputs())
        
       
     r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_ScrollbarSize(), config.show_screenshot_scrollbar and 14 or 1)
@@ -22908,7 +22924,7 @@ function ShowScreenshotWindow()
             local current_y = r.ImGui_GetCursorPosY(ctx)
             local footer_height = config.show_project_info and 230 or 1
             local available_height = window_height - current_y - footer_height
-            r.ImGui_BeginChild(ctx, "ProjectsList", -1, available_height)
+            TKSafeBeginChild(ctx, "ProjectsList", -1, available_height)
                 local project_tile_size = math.floor(tonumber(config.project_tile_size) or 0)
                 if project_tile_size >= 64 then
                     DrawProjectsGrid(project_tile_size)
@@ -23459,7 +23475,7 @@ function ShowScreenshotWindow()
                 r.ImGui_EndTable(ctx)
                 end
                 end
-            r.ImGui_EndChild(ctx)
+            TKSafeEndChild(ctx)
 
             TKFXBProjectMeta.DrawEditor()
 
@@ -23571,7 +23587,7 @@ function ShowScreenshotWindow()
                 r.ImGui_Separator(ctx)
                 local info_footer_h = 195
                 r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x1E1E1EFF)
-                r.ImGui_BeginChild(ctx, "ProjectInfoFooter", -1, info_footer_h, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
+                TKSafeBeginChild(ctx, "ProjectInfoFooter", -1, info_footer_h, 0, r.ImGui_WindowFlags_NoScrollbar() | r.ImGui_WindowFlags_NoScrollWithMouse())
                 
                 local has_cover = false
                 local cover_w, cover_h = 0, 0
@@ -23778,7 +23794,7 @@ function ShowScreenshotWindow()
                     end
                 end
 
-                r.ImGui_EndChild(ctx)
+                TKSafeEndChild(ctx)
                 r.ImGui_PopStyleColor(ctx)
 
                 r.ImGui_Text(ctx, "Project:")
@@ -23811,7 +23827,7 @@ function ShowScreenshotWindow()
                 local footer_height = 40
                 local available_height = window_height - current_y - footer_height
 
-                r.ImGui_BeginChild(ctx, "SendsReceivesList", 0, available_height, 0)
+                TKSafeBeginChild(ctx, "SendsReceivesList", 0, available_height, 0)
 
                 if config.routing_view_mode == "patchbay" then
                     ShowRoutingPatchbay()
@@ -23820,7 +23836,7 @@ function ShowScreenshotWindow()
                 else
                     ShowRoutingMatrix()
                 end
-            r.ImGui_EndChild(ctx)
+            TKSafeEndChild(ctx)
             do
                 local mode = config.routing_view_mode or "matrix"
                 local btn_w, btn_h = 90, 26
@@ -23937,13 +23953,13 @@ function ShowScreenshotWindow()
         if search_warning_message then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFFF00FF) -- Gele tekst
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x444400FF) -- Donkere achtergrond
-            r.ImGui_BeginChild(ctx, "SearchWarning", -1, 25)
+            TKSafeBeginChild(ctx, "SearchWarning", -1, 25)
             local text_width = r.ImGui_CalcTextSize(ctx, search_warning_message)
             local window_width = r.ImGui_GetWindowWidth(ctx)
             local center_x = (window_width - text_width) * 0.5
             r.ImGui_SetCursorPosX(ctx, center_x)
             r.ImGui_Text(ctx, search_warning_message)
-            r.ImGui_EndChild(ctx)
+            TKSafeEndChild(ctx)
         r.ImGui_PopStyleColor(ctx, 2)
         end
    
@@ -23968,12 +23984,12 @@ function ShowScreenshotWindow()
             local tip_text = "Tip: Press 'All' for a global search if you miss results."
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFFAA00FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x332200FF)
-            r.ImGui_BeginChild(ctx, "SearchFolderTip", -1, 22)
+            TKSafeBeginChild(ctx, "SearchFolderTip", -1, 22)
                 local text_w = r.ImGui_CalcTextSize(ctx, tip_text)
                 local win_w = r.ImGui_GetWindowWidth(ctx)
                 r.ImGui_SetCursorPosX(ctx, (win_w - text_w) * 0.5)
                 r.ImGui_Text(ctx, tip_text)
-            r.ImGui_EndChild(ctx)
+            TKSafeEndChild(ctx)
             r.ImGui_PopStyleColor(ctx, 2)
         end
 
@@ -23983,12 +23999,12 @@ function ShowScreenshotWindow()
             local msg = 'No results for "' .. browser_search_term .. '"'
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), 0xFF6666FF)
             r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), 0x330000FF)
-            r.ImGui_BeginChild(ctx, "NoResultsBanner", -1, 22)
+            TKSafeBeginChild(ctx, "NoResultsBanner", -1, 22)
                 local text_w = r.ImGui_CalcTextSize(ctx, msg)
                 local win_w = r.ImGui_GetWindowWidth(ctx)
                 r.ImGui_SetCursorPosX(ctx, (win_w - text_w) * 0.5)
                 r.ImGui_Text(ctx, msg)
-            r.ImGui_EndChild(ctx)
+            TKSafeEndChild(ctx)
             r.ImGui_PopStyleColor(ctx, 2)
         end
 
@@ -26351,7 +26367,7 @@ function ShowScreenshotWindow()
             end
         if not popped_view_stylevars then r.ImGui_PopStyleVar(ctx, 2) end
         
-        r.ImGui_EndChild(ctx) -- End ScreenshotList
+        TKSafeEndChild(ctx) -- End ScreenshotList
         
         config.screenshot_window_width = r.ImGui_GetWindowWidth(ctx)
         -- Store window height without progress bar adjustment
@@ -28431,7 +28447,7 @@ function ShowTrackFX()
             end
         end       
     end
-    r.ImGui_EndChild(ctx)
+    if track_fxlist_open then r.ImGui_EndChild(ctx) end
 end
 
 function ShowItemFX()
@@ -28526,7 +28542,7 @@ function ShowItemFX()
             end
         end
     end
-    r.ImGui_EndChild(ctx)
+    if item_fxlist_open then r.ImGui_EndChild(ctx) end
 end
 
 

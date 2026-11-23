@@ -690,7 +690,7 @@
 
  <category name="FX">
     <reapack name="TK_FX_BROWSER.lua" type="script" desc="TK FX BROWSER">
-    <version name="3.2.33" author="TouristKiller" time="2026-11-18T20:00:00Z">
+    <version name="3.2.34" author="TouristKiller" time="2026-11-23T19:30:00Z">
     <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER.lua</source>
     <source file="DrawMeter.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/DrawMeter.lua</source>
     <source file="TKFXBVariables.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TKFXBVariables.lua</source>
@@ -707,9 +707,9 @@
     <source main="main" file="TK_Notes_Toggle_focus.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_Notes_Toggle_focus.lua</source>
     <source main="main" file="TK_FX_BROWSER_SnapshotFX.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/FX/TK%20FX%20BROWSER/TK_FX_BROWSER_SnapshotFX.lua</source>
                 <changelog><![CDATA[
-                v3.2.33:
-                + Browser: Right-click a plugin for Remove from Track, under the Add to... entries. It takes the plugin off the current track in one go, instead of opening INFO, right-clicking it in the Track FX list and choosing Delete. It shows only when the plugin is on that track (Input FX included). When it is there more than once, a submenu lists each copy with its slot, plus Remove all. One undo step. Requested by makkie65
-                + TK FX BROWSER Mini 1.2.29: the same Remove from Track entry in its plugin right-click menu.
+                v3.2.34:
+                + Fix: In a narrow or very low docker the browser could stop with "Calling End() too many times" or "Missing PopStyleVar()". When a section no longer fits, ReaImGui leaves it out, and the browser still closed it, which closed the docked window itself. Sections that do not fit are now skipped cleanly: the browser panel, the screenshot area, Projects, Sends/Receives, Scripts, the search banners, the Track and Item FX lists and the smaller windows (Settings, folder icons and colours, shortcuts, debug log).
+                + TK FX BROWSER Mini 1.2.30: the same fix.
 ]]></changelog>
     </version>
     </reapack>
