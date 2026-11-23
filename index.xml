@@ -627,7 +627,7 @@
 
  <category name="TK Theme Bit">
     <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
-    <version name="0.1.5" author="TouristKiller" time="2026-11-23T01:27:05Z">
+    <version name="0.1.6" author="TouristKiller" time="2026-11-23T01:53:25Z">
      <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
      <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
      <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
@@ -644,7 +644,7 @@
      <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
      <changelog><![CDATA[
-+ Added: a Restart REAPER now button once window colours are written (Settings > Window, and a bar at the top of the settings). It quits REAPER, asking to save as usual, and starts it again (Windows, where these colours apply). Cancelled at the save question, REAPER stays open.
++ Added: the theme's own clip buttons (mute, lock, notes, properties, FX, envelopes, pooled, group, timebase, take rank) instead of REAPER's built-in white boxes. Each is a small symbol on a dark backing, so it reads on any clip colour, above the clip or on it: white when off, orange when on.
 ]]></changelog>
     </version>
     </reapack>
