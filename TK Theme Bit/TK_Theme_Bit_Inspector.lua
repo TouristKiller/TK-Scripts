@@ -594,7 +594,26 @@ local function loop()
   if open then r.defer(loop) end
 end
 
+-- the inspector key in the transport is orange while this runs: theme parameter bitInspOn
+local function theme_says_open(v)
+  local i = 0
+  while true do
+    local name, _, value = r.ThemeLayout_GetParameter(i)
+    if not name then return end
+    if name == "bitInspOn" then
+      if value ~= v then
+        r.ThemeLayout_SetParameter(i, v, false)
+        r.ThemeLayout_RefreshAll()
+      end
+      return
+    end
+    i = i + 1
+  end
+end
+theme_says_open(1)
+
 r.atexit(function()
+  theme_says_open(0)
   if cmd_id and cmd_id ~= 0 then
     r.SetToggleCommandState(section_id, cmd_id, 0)
     r.RefreshToolbar2(section_id, cmd_id)

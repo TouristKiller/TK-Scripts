@@ -419,6 +419,23 @@ end
 -- once from REAPER's action list. Not installed: the key is switched off once, so a new
 -- user doesn't get a key that only says "not installed" (switching it on stays possible)
 local saxmand
+-- a registered script's command, found by its file name in REAPER's action list (read once
+-- per file: reaper-kb.ini is large and pages draw every frame)
+local script_cmds = {}
+local function script_command(file)
+  if script_cmds[file] == nil then
+    script_cmds[file] = false
+    for line in (read_all(r.GetResourcePath() .. "/reaper-kb.ini") or ""):gmatch("[^\r\n]+") do
+      local id = line:match("^SCR %d+ %d+ (%S+) ")
+      if id and line:find(file, 1, true) then
+        local cmd = r.NamedCommandLookup("_" .. id)
+        if cmd ~= 0 then script_cmds[file] = cmd break end
+      end
+    end
+  end
+  return script_cmds[file] or nil
+end
+
 local function saxmand_found()
   if saxmand == nil then
     saxmand = ((read_all(r.GetResourcePath() .. "/reaper-kb.ini") or "")
@@ -473,6 +490,23 @@ local function page_transport()
         end)
         note("At the right end of the bar: ARRANGE closes the mixer and MIDI editor, MIX shows the mixer, "
           .. "EDIT opens the selected MIDI item. They hide on a bar too narrow for them.")
+      end
+      -- the inspector: its key in the transport, and a button to open / close it here
+      local iidx, ivalue = theme_param("bitTransInsp")
+      if iidx then
+        r.ImGui_Spacing(ctx)
+        row("Inspector key", function()
+          local p = segmented("insp", { "Off", "Shown" }, ivalue == 0 and 1 or 2)
+          if p then set_theme_param("bitTransInsp", p == 1 and 0 or 1) end
+        end)
+        local cmd = script_command("TK_Theme_Bit_Inspector.lua")
+        if cmd then
+          local open = r.GetToggleCommandState(cmd) == 1
+          row("Inspector", function()
+            if action_button(open and "Close inspector" or "Open inspector", 140) then r.Main_OnCommand(cmd, 0) end
+          end)
+        end
+        note("The track or clip you touched last, like Bitwig's inspector. Dock it with the icon at its top.")
       end
       local didx, dvalue = theme_param("bitTransDevices")
       if didx then
