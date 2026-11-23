@@ -713,11 +713,25 @@ local IS_WINDOWS = r.GetOS():find("Win", 1, true) ~= nil
 -- Bitwig's: greys, black lists and fields, selection in the fader's brown, orange focus.
 -- REAPER reads them at start-up, so a change needs a restart.
 local DARK = {}
-DARK.BIT = "1e1e1e 3a3a3a d2d2d2 6e6e6e 1e1e1e 242424 161616 0e0e0e c8c8c8 6e6e6e 0a0a0a "
+-- Slot 7 is "Dark mode color child": what Windows paints behind child windows. The docked
+-- mixer only draws its strips, so its empty part shows this, not col_mixerbg (proven with
+-- a probe that painted col_mixerbg magenta: the area stayed as it was). So it is the
+-- theme's own mixer / track list black, 020202; lists in REAPER's windows share it.
+DARK.BIT = "1e1e1e 3a3a3a d2d2d2 6e6e6e 1e1e1e 242424 020202 0e0e0e c8c8c8 6e6e6e 0a0a0a "
   .. "3a3a3a 3a3a3a 262626 a0a0a0 ffffff 1e1e1e 3a3a3a 242424 562202 333333 202020 ff8000"
+-- earlier Bitwig sets: still "Bitwig" (switching from one doesn't make it the Previous)
+DARK.OLD = {
+  "1e1e1e 3a3a3a d2d2d2 6e6e6e 1e1e1e 242424 161616 0e0e0e c8c8c8 6e6e6e 0a0a0a "
+    .. "3a3a3a 3a3a3a 262626 a0a0a0 ffffff 1e1e1e 3a3a3a 242424 562202 333333 202020 ff8000",
+}
 
+-- reaper.ini is large and the notice asks every frame: its text is kept for a second
 function DARK.ini_get(key)
-  return (read_all(r.get_ini_file()) or ""):match("[\r\n]" .. key .. "=([^\r\n]*)")
+  local now = r.time_precise()
+  if not DARK.text or now - DARK.read_at > 1 then
+    DARK.text, DARK.read_at = read_all(r.get_ini_file()) or "", now
+  end
+  return DARK.text:match("[\r\n]" .. key .. "=([^\r\n]*)")
 end
 
 function DARK.ini_set(key, value)
@@ -732,6 +746,7 @@ function DARK.ini_set(key, value)
     if not stop then return false end
     s = s:sub(1, stop) .. key .. "=" .. value .. eol .. s:sub(stop + 1)
   end
+  DARK.text = nil                  -- read it fresh next time
   return write_all(path, s)
 end
 
@@ -739,19 +754,67 @@ function DARK.norm(v) return ((v or ""):lower():gsub("%s+", " "):gsub("^ ", ""):
 
 function DARK.is_bit() return DARK.norm(DARK.ini_get("win32_darkmode_colors")) == DARK.norm(DARK.BIT) end
 
+function DARK.is_old_bit()
+  local cur = DARK.norm(DARK.ini_get("win32_darkmode_colors"))
+  for _, v in ipairs(DARK.OLD) do if cur == DARK.norm(v) then return true end end
+  return false
+end
+
 -- to Bitwig's: the colours in use now are kept, so "Previous" can bring them back
+-- (unless they are an earlier Bitwig set: the Previous from then stays)
 function DARK.use_bit()
   local cur = DARK.ini_get("win32_darkmode_colors")
-  if cur and not DARK.is_bit() then r.SetExtState(EXT, "prev_darkmode", cur, true) end
+  local mode = DARK.ini_get("win32_darkmode") or "0"
+  if not DARK.is_bit() and not DARK.is_old_bit() then
+    -- what to go back to: the colours and whether dark mode was on at all
+    if cur then r.SetExtState(EXT, "prev_darkmode", cur, true) end
+    r.SetExtState(EXT, "prev_darkmode_on", mode, true)
+  end
   local ok = DARK.ini_set("win32_darkmode_colors", DARK.BIT)
-  if ok and (DARK.ini_get("win32_darkmode") or "0") == "0" then ok = DARK.ini_set("win32_darkmode", "1") end
+  -- the colours only work with Windows dark mode on, so Bitwig switches it on
+  if ok and mode == "0" then ok = DARK.ini_set("win32_darkmode", "1") end
+  -- for TK Theme's settings: they recognise this set and offer their own back
+  if ok then r.SetExtState(EXT, "applied_darkmode", DARK.BIT, true) end
   DARK.msg = ok and "Written. Restart REAPER to see it." or "Could not write reaper.ini."
+end
+
+-- the notice at the top of SETTINGS: REAPER's window colours aren't Bit's (another theme's
+-- set, or dark mode off). "Keep as is" hides it until the colours change again.
+function DARK.state_key()
+  return DARK.norm(DARK.ini_get("win32_darkmode_colors")) .. "|" .. (DARK.ini_get("win32_darkmode") or "0")
+end
+
+function DARK.mismatch()
+  if not IS_WINDOWS or not bit_active() or DARK.msg then return false end
+  -- dark mode off: REAPER uses this theme's own colours (col_main_bg's override flag), fine
+  if (DARK.ini_get("win32_darkmode") or "0") == "0" or DARK.is_bit() then return false end
+  return r.GetExtState(EXT, "dark_keep") ~= DARK.state_key()
+end
+
+function DARK.notice()
+  if not DARK.mismatch() then return end
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local w = r.ImGui_GetContentRegionAvail(ctx)
+  r.ImGui_DrawList_AddRectFilled(dl, x, y, x + w, y + 34, 0x2A1A0EFF, 3)
+  r.ImGui_DrawList_AddRectFilled(dl, x, y, x + 3, y + 34, C.accent)
+  r.ImGui_SetCursorScreenPos(ctx, x + 12, y + 9)
+  text_col(C.text, "REAPER's dark mode colours belong to another theme.")
+  r.ImGui_SetCursorScreenPos(ctx, x + w - 236, y + 6)
+  if action_button("Switch to Bitwig (restart)", 150) then DARK.use_bit() end
+  r.ImGui_SameLine(ctx, 0, 4)
+  if action_button("Keep as is", 76) then r.SetExtState(EXT, "dark_keep", DARK.state_key(), true) end
+  r.ImGui_SetCursorScreenPos(ctx, x, y + 42)
+  r.ImGui_Dummy(ctx, 1, 0)
 end
 
 function DARK.use_previous()
   local prev = r.GetExtState(EXT, "prev_darkmode")
   if prev == "" then return end
   local ok = DARK.ini_set("win32_darkmode_colors", prev)
+  -- dark mode back off if it was off before Bitwig
+  local on = r.GetExtState(EXT, "prev_darkmode_on")
+  if ok and on ~= "" then ok = DARK.ini_set("win32_darkmode", on) end
   DARK.msg = ok and "Written. Restart REAPER to see it." or "Could not write reaper.ini."
 end
 
@@ -776,7 +839,9 @@ local function page_window()
         elseif p == 1 and bit and has_prev then DARK.use_previous() end
       end)
       note("REAPER's own windows (Media Explorer, FX chain, actions, routing, menus) in Bitwig's greys. "
-        .. "This is a REAPER setting for every theme; it shows after a restart.")
+        .. "These are Windows dark mode colours, so Bitwig also switches dark mode on; Previous puts back "
+        .. "the colours and dark mode as they were. A REAPER setting for every theme; it shows after a restart. "
+        .. "With dark mode off, REAPER uses this theme's own colours inside its windows (only the window frames stay light).")
       if DARK.msg then note(DARK.msg) end
     end)
   end
@@ -1288,6 +1353,7 @@ local function loop()
         r.ImGui_EndChild(ctx)
       end
     elseif tab == 2 then
+      DARK.notice()
       if r.ImGui_BeginChild(ctx, "##side", SIDEBAR, 0) then
         page = sidebar(PAGES, page)
         r.ImGui_EndChild(ctx)
