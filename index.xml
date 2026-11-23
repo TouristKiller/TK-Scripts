@@ -627,7 +627,7 @@
 
  <category name="TK Theme Bit">
     <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
-    <version name="0.1.7" author="TouristKiller" time="2026-11-23T02:02:36Z">
+    <version name="0.1.8" author="TouristKiller" time="2026-11-23T02:23:55Z">
      <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
      <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
      <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
@@ -644,8 +644,7 @@
      <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
      <changelog><![CDATA[
-+ Added: an inspector key in the transport (a panel icon, left of DEVICES) that opens and closes the inspector; its icon is orange while the inspector is open.
-+ Added: Settings > Transport > Inspector key (shown or hidden) and an Open / Close inspector button.
++ Changed: the mixer can now be made as low as Bitwig's. On the way down the parts between the name and rec / S / M give way one by one (devices, sends, the key row, input, output), until the name block sits right on the rec / S / M keys. Stereo and dual pan show their second row only when there is room for it.
 ]]></changelog>
     </version>
     </reapack>
