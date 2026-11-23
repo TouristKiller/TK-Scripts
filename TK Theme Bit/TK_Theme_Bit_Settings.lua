@@ -775,6 +775,7 @@ function DARK.use_bit()
   if ok and mode == "0" then ok = DARK.ini_set("win32_darkmode", "1") end
   -- for TK Theme's settings: they recognise this set and offer their own back
   if ok then r.SetExtState(EXT, "applied_darkmode", DARK.BIT, true) end
+  DARK.written = ok
   DARK.msg = ok and "Written. Restart REAPER to see it." or "Could not write reaper.ini."
 end
 
@@ -791,21 +792,54 @@ function DARK.mismatch()
   return r.GetExtState(EXT, "dark_keep") ~= DARK.state_key()
 end
 
-function DARK.notice()
-  if not DARK.mismatch() then return end
+-- Restart REAPER (Windows: the dark mode colours only exist there). REAPER has no restart
+-- action, so a hidden PowerShell waits until REAPER has closed and starts it again; then
+-- "File: Quit REAPER" (40004), which asks to save as always. Cancelled there, REAPER stays
+-- open: the helper gives up after 2 minutes and starts nothing.
+function DARK.restart()
+  local exe = (r.GetExePath() .. "\\reaper.exe"):gsub("'", "''")
+  local ps = "$p = Get-Process -Name reaper -ErrorAction SilentlyContinue; "
+    .. "if ($p) { $p | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue }; "
+    .. "Start-Sleep -Milliseconds 500; "
+    .. "if (-not (Get-Process -Name reaper -ErrorAction SilentlyContinue)) { Start-Process -FilePath '" .. exe .. "' }"
+  r.ExecProcess('powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "' .. ps .. '"', -2)
+  r.Main_OnCommand(40004, 0)          -- File: Quit REAPER
+end
+
+-- a bar at the top of SETTINGS: a restart once colours are written, or the colours of
+-- another theme found
+local function bar(text, buttons)
   local dl = r.ImGui_GetWindowDrawList(ctx)
   local x, y = r.ImGui_GetCursorScreenPos(ctx)
   local w = r.ImGui_GetContentRegionAvail(ctx)
   r.ImGui_DrawList_AddRectFilled(dl, x, y, x + w, y + 34, 0x2A1A0EFF, 3)
   r.ImGui_DrawList_AddRectFilled(dl, x, y, x + 3, y + 34, C.accent)
   r.ImGui_SetCursorScreenPos(ctx, x + 12, y + 9)
-  text_col(C.text, "REAPER's dark mode colours belong to another theme.")
-  r.ImGui_SetCursorScreenPos(ctx, x + w - 236, y + 6)
-  if action_button("Switch to Bitwig (restart)", 150) then DARK.use_bit() end
-  r.ImGui_SameLine(ctx, 0, 4)
-  if action_button("Keep as is", 76) then r.SetExtState(EXT, "dark_keep", DARK.state_key(), true) end
+  text_col(C.text, text)
+  local bw = 0
+  for _, b in ipairs(buttons) do bw = bw + b[2] + 4 end
+  r.ImGui_SetCursorScreenPos(ctx, x + w - bw - 2, y + 6)
+  for i, b in ipairs(buttons) do
+    if i > 1 then r.ImGui_SameLine(ctx, 0, 4) end
+    if action_button(b[1], b[2]) then b[3]() end
+  end
   r.ImGui_SetCursorScreenPos(ctx, x, y + 42)
   r.ImGui_Dummy(ctx, 1, 0)
+end
+
+function DARK.notice()
+  if DARK.written then
+    bar("Window colours written: REAPER shows them after a restart.", {
+      { "Restart REAPER now", 140, DARK.restart },
+      { "Later", 60, function() DARK.written = false end },
+    })
+    return
+  end
+  if not DARK.mismatch() then return end
+  bar("REAPER's dark mode colours belong to another theme.", {
+    { "Switch to Bitwig", 120, DARK.use_bit },
+    { "Keep as is", 76, function() r.SetExtState(EXT, "dark_keep", DARK.state_key(), true) end },
+  })
 end
 
 function DARK.use_previous()
@@ -815,6 +849,7 @@ function DARK.use_previous()
   -- dark mode back off if it was off before Bitwig
   local on = r.GetExtState(EXT, "prev_darkmode_on")
   if ok and on ~= "" then ok = DARK.ini_set("win32_darkmode", on) end
+  DARK.written = ok
   DARK.msg = ok and "Written. Restart REAPER to see it." or "Could not write reaper.ini."
 end
 
@@ -843,6 +878,11 @@ local function page_window()
         .. "the colours and dark mode as they were. A REAPER setting for every theme; it shows after a restart. "
         .. "With dark mode off, REAPER uses this theme's own colours inside its windows (only the window frames stay light).")
       if DARK.msg then note(DARK.msg) end
+      if DARK.written then
+        row("", function()
+          if action_button("Restart REAPER now", 160) then DARK.restart() end
+        end)
+      end
     end)
   end
   section("REAPER", function()

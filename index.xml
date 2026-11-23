@@ -627,7 +627,7 @@
 
  <category name="TK Theme Bit">
     <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
-    <version name="0.1.4" author="TouristKiller" time="2026-11-23T01:08:41Z">
+    <version name="0.1.5" author="TouristKiller" time="2026-11-23T01:27:05Z">
      <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
      <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
      <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
@@ -644,10 +644,7 @@
      <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
      <changelog><![CDATA[
-+ Fixed: the theme now turns on "Theme overrides normal Windows colors" (in the theme tweaker), as other themes do. With Windows dark mode off, REAPER's own windows and the empty part of a docked mixer now use the theme's dark colours instead of light Windows ones.
-+ Changed: the Bitwig window colours (Settings > Window) now use the same black as the empty mixer and track list for the background behind REAPER's windows.
-+ Changed: choosing Bitwig window colours switches Windows dark mode on, as before, but Previous now also switches it back off when it was off.
-+ Added: a notice at the top of the settings when Windows dark mode is on with another theme's colours (for example TK Theme's), with Switch to Bitwig or Keep as is.
++ Added: a Restart REAPER now button once window colours are written (Settings > Window, and a bar at the top of the settings). It quits REAPER, asking to save as usual, and starts it again (Windows, where these colours apply). Cancelled at the save question, REAPER stays open.
 ]]></changelog>
     </version>
     </reapack>
