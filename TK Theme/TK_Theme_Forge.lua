@@ -1623,10 +1623,14 @@ end
 
 local function parse_fields(s, m)
     for k, v in s:gmatch("(%a+)=(%S+)") do
-        if k == "finish" then m.finish = Forge.finish(v).name
-        elseif k == "colour" then m.colour = tonumber(v, 16) or m.colour
-        elseif m[k] ~= nil then m[k] = tonumber(v) or m[k] end
+        if k == "colour" then m.colour = tonumber(v, 16) or m.colour
+        elseif k ~= "finish" and m[k] ~= nil then m[k] = tonumber(v) or m[k] end
     end
+    -- the finish up to the next field: "White board" and "Grey board" have a space, and read
+    -- as one word they were "White" and "Grey", unknown, so Silver: a cardboard plate turned
+    -- silver with rust at the next opening (2026-11-23)
+    local fin = s:match("finish=(.-)%s+%a+=") or s:match("finish=(.-)%s*$")
+    if fin then m.finish = Forge.finish(fin).name end
     return m
 end
 

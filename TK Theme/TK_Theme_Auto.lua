@@ -12,7 +12,7 @@ Auto.LIGHT, Auto.DARK = "TK Theme Light", "TK Theme Dark"
 Auto.DEFAULT = { light = "08:00", dark = "19:00" }
 -- what the running watcher does: one that started before an update keeps its old code, so a
 -- higher number here has it restarted. Raise it whenever TK_Theme_Metronome_Watch.lua changes.
-Auto.WATCHER = "2"
+Auto.WATCHER = "3"     -- 3: the count-in button's tkCountInOn (2026-11-23)
 
 -- whether the watcher runs, and is the one this version of the theme comes with
 function Auto.watcher_current()

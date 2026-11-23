@@ -206,16 +206,22 @@ end
 -- through the toolbar icons hit it (Vincent, page 17). An unattached image lives as long as
 -- it is drawn every frame; ReaImGui frees the ones of pages left behind, and a freed one
 -- found in the cache is simply loaded again.
+-- A freed image can't be told by ValidatePtr alone: a new image may get its address, and the
+-- old entry then passes as valid and shows that other picture (Vincent: after a tab switch the
+-- TK icons sat over the toolbar ones until the settings were reopened). So an entry is only
+-- trusted when it was drawn in the frame before; one left undrawn is loaded again.
 local function texture(id, make)
-    local r = Icons.E.r
-    local t = Icons.tex[id]
-    if t and not r.ImGui_ValidatePtr(t, "ImGui_Image*") then t = nil end
-    if t == nil then
+    local r, ctx = Icons.E.r, Icons.E.ctx
+    local frame = r.ImGui_GetFrameCount(ctx)
+    local e = Icons.tex[id]
+    if e and e.img and (e.used < frame - 1 or not r.ImGui_ValidatePtr(e.img, "ImGui_Image*")) then e = nil end
+    if e == nil then
         local ok, img = pcall(make)
-        t = ok and img or false
-        Icons.tex[id] = t
+        e = { img = ok and img or false }
+        Icons.tex[id] = e
     end
-    return t or nil
+    e.used = frame
+    return e.img or nil
 end
 
 -- a TK icon's picture: its 200% button image, normal frame

@@ -116,8 +116,27 @@ function Zip.root(path)
     return index_of(path).root
 end
 
+-- Inside Zip.batch a file given to Zip.replace counts as the zip's already: a check made
+-- later in the same batch sees what will be written, not what was there before it. Without
+-- this a part another part had just written over still passed as in place, and the settings
+-- left it lost until the next opening (found 2026-11-23). Checksums worked out once per file
+local function pending_crc(path, name)
+    if not (pending and pending.path == path) then return nil end
+    local data = pending.files[name]
+    if data == nil then return nil end
+    if data == false then return false end
+    local c = pending.crcs[name]
+    if not c then
+        c = Zip.crc32(data)
+        pending.crcs[name] = c
+    end
+    return c
+end
+
 -- the checksum of one file in the zip, to tell whether it holds the file you expect
 function Zip.crc_of(path, name)
+    local p = pending_crc(path, name)
+    if p ~= nil then return p or nil end
     return index_of(path).crcs[name]
 end
 
@@ -161,6 +180,9 @@ end
 function Zip.crc_map(path)
     local crcs = {}
     for name, crc in pairs(index_of(path).crcs) do crcs[name] = crc end
+    if pending and pending.path == path then
+        for name in pairs(pending.files) do crcs[name] = pending_crc(path, name) or nil end
+    end
     return crcs
 end
 
@@ -305,7 +327,10 @@ end
 -- given to Zip.replace; a later one for the same name wins, as it would on disk.
 function Zip.replace(path, files)
     if pending and pending.path == path then
-        for name, data in pairs(files) do pending.files[name] = data end
+        for name, data in pairs(files) do
+            pending.files[name] = data
+            pending.crcs[name] = nil
+        end
         return true
     end
     return replace_now(path, files)
@@ -321,7 +346,7 @@ end
 function Zip.batch(path, fn, ...)
     if pending then return fn(...) end
     return Zip.hold(function(...)
-        pending = { path = path, files = {} }
+        pending = { path = path, files = {}, crcs = {} }
         local res = table.pack(pcall(fn, ...))
         local files = pending.files
         pending = nil

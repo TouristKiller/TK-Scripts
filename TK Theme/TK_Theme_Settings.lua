@@ -34,7 +34,7 @@ end
 
 local SCRIPT = "TK Theme Settings"
 -- set by TK_Theme_Metronome_Watch.lua as things change: no settings, so presets and undo leave them
-local LIVE = { tkTransMetroOn = true, tkGridV = true, tkGridA = true, tkSnapOn = true }
+local LIVE = { tkTransMetroOn = true, tkGridV = true, tkGridA = true, tkSnapOn = true, tkCountInOn = true }
 local IS_WINDOWS = r.GetOS():find("Win", 1, true) ~= nil    -- dark mode colours exist only there
 local here = debug.getinfo(1, "S").source:match("^@(.*[\\/])")
 local ini = r.get_ini_file()
@@ -86,7 +86,11 @@ local function ini_set(key, value)
         if not stop then return false end
         s = s:sub(1, stop) .. key .. "=" .. value .. eol .. s:sub(stop + 1)
     end
-    return write_all(ini, s)
+    local ok = write_all(ini, s)
+    -- the dark mode colours this window wrote last ("-": REAPER's original), so colours another
+    -- theme or script put there can be told from yours (dark.notice_wanted)
+    if ok and key == "win32_darkmode_colors" then r.SetExtState(SCRIPT, "dark_written", value or "-", true) end
+    return ok
 end
 
 -- the theme's editable colour file; a zip can't be written, its loose copy can
@@ -832,6 +836,9 @@ local PAGES = {
         } },
         { "Transport", {
             N("Metronome", "metro", "With a small arrow for the metronome and pre-roll settings."),
+            N("Count-in", "countin", "1234: the metronome's count-in on or off, lit while on. Needs the SWS extension: REAPER itself has no action for it. Requested by Vincent."),
+            { kind = "choice", label = "Count-in before", param = "tkCountInMode", choices = { "Recording", "Playback" },
+              hint = "Which count-in the 1234 button switches." },
         } },
         { "Project", {
             N("New project", "new"), N("Open project", "open"), N("Save project", "save"),
@@ -1326,6 +1333,31 @@ end
 function state.side_sync() parts.choose("mcp_side", parts.side_want()) end
 function state.volcap_sync() parts.choose("tcp_volcap", parts.volcap_want()) end
 
+-- the parts that follow switches (theme parameters), not chosen by hand: Basic's images, the
+-- Basic R / M / S, the mixer's side keys and the track panel's lying fader cap. Each that
+-- differs from what its switches want, as { part, variant }. At opening, and after a theme
+-- code or preset set the switches: a code holds no side keys (they follow Hardware keys), so
+-- res's Metal side keys only came at the next opening (2026-11-23)
+function parts.switch_choices()
+    local want = parts.basic_want()
+    local list = {}
+    if (parts.chosen.basic or parts.default.basic) ~= want then list[#list + 1] = { "basic", want } end
+    -- the mixer's R / M / S follow the mixer's own choice
+    local hw = parts.chosen.mcp_hw or parts.default.mcp_hw
+    if global_value("tkMcpBasic") and not global_value("tkMcpPlate") and hw ~= "basic" then list[#list + 1] = { "mcp_hw", "basic" }
+    elseif not global_value("tkMcpBasic") and hw == "basic" then list[#list + 1] = { "mcp_hw", "standard" } end
+    -- and the track panel's knobs and R / M / S its own
+    local thw = parts.chosen.tcp_hw or parts.default.tcp_hw
+    if global_value("tkTcpBasic") and not global_value("tkTcpPlate") and thw ~= "basic" then list[#list + 1] = { "tcp_hw", "basic" }
+    elseif not global_value("tkTcpBasic") and thw == "basic" then list[#list + 1] = { "tcp_hw", "standard" } end
+    -- the mixer's side keys as Hardware keys, the plate and Keys want them
+    local sw = parts.side_want()
+    if (parts.chosen.mcp_side or parts.default.mcp_side) ~= sw then list[#list + 1] = { "mcp_side", sw } end
+    local cw = parts.volcap_want()
+    if (parts.chosen.tcp_volcap or parts.default.tcp_volcap) ~= cw then list[#list + 1] = { "tcp_volcap", cw } end
+    return list
+end
+
 -- the track panel's lying fader cap: the mixer's hardware cap (Console where the mixer has
 -- none) while the track panel has a plate (Silver or Black); else off: the slider handle's
 -- its own cap (Track panel page, Fader cap, global tkTcpCap): 0 Same as mixer, then these
@@ -1715,7 +1747,7 @@ function parts.write_display(variant, zip, root, accent)
     end
     -- the track panel's Plain lists over the slots the display brought (Basic writes them
     -- again itself, above)
-    if (parts.chosen.tcp_lists or parts.default.tcp_lists) == "plain" and not (restored and b_now and b_now ~= "off") then
+    if (parts.lists_now or parts.chosen.tcp_lists or parts.default.tcp_lists) == "plain" and not (restored and b_now and b_now ~= "off") then
         ok, err = parts.write("tcp_lists", "plain", zip, accent)
         if not ok then return nil, err end
     end
@@ -1840,7 +1872,10 @@ function parts.write(part, variant, zip, accent)
         local hw = parts.chosen[recarm_hw] or parts.default[recarm_hw]
         if hw ~= "silver" and hw ~= "black" then return true end
         if variant == parts.HW_OWN[part] then
-            parts.recarm_skip = true
+            -- only this part goes back to the hardware's own: the others chosen over the
+            -- hardware go on again. Skipping them all, Keys: Hardware also took the record arm
+            -- and the knobs back to the hardware's until the next opening (res, 2026-11-23)
+            parts.recarm_skip = part
             local ok, err = parts.write(recarm_hw, hw, zip, accent)
             parts.recarm_skip = nil
             return ok, err
@@ -1858,11 +1893,11 @@ function parts.write(part, variant, zip, accent)
         end
     end
     -- the hardware brings its own R: a chosen Lamp or Glass goes over it again
-    if (part == "tcp_hw" or part == "mcp_hw") and not parts.recarm_skip and (variant == "silver" or variant == "black") then
+    if (part == "tcp_hw" or part == "mcp_hw") and (variant == "silver" or variant == "black") then
         for _, rp in ipairs(parts.HW_OVER) do
             local hwp = parts.RECARM_HW[rp]
             local rv = parts.chosen[rp] or parts.default[rp]
-            if hwp == part and rv ~= parts.HW_OWN[rp] then
+            if hwp == part and rp ~= parts.recarm_skip and rv ~= parts.HW_OWN[rp] then
                 for _, name in ipairs(parts.files(rp, zip, accent)) do
                     local data = parts.read(zip, accent, rp, rv, name)
                     if data then files[root .. "/" .. name] = data end
@@ -1916,6 +1951,18 @@ function parts.write(part, variant, zip, accent)
     end
     if part == "tcp_volcap" and variant == "off" then
         return parts.write("tcp_thumb", parts.chosen.tcp_thumb or parts.default.tcp_thumb, zip, accent)
+    end
+    -- Boxes chosen under the track LCDs or the dark glass: their slots back over the look's own
+    if part == "tcp_lists" and variant ~= "plain" and (parts.glass_dark(zip) or parts.lcd_on()) then
+        parts.lists_now = variant
+        local ok, err
+        if parts.is_light(zip) then
+            ok, err = parts.write("light_glass", parts.chosen.light_glass or parts.default.light_glass, zip, accent)
+        else
+            ok, err = parts.write_display(parts.chosen.display or parts.default.display, zip, root, accent)
+        end
+        parts.lists_now = nil
+        if not ok then return nil, err end
     end
     if part == "mcp_side" and variant == "off" then
         local ok, err = true, nil
@@ -1986,6 +2033,10 @@ function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
     if part == "light_glass" and parts.is_light(zip) and parts.lcd_on() then return true end
     if part == "mcp_side" and variant == "off" then return true end
+    -- the track panel's Boxes under the track LCDs or Light's dark glass: those bring their own
+    -- slots (parts.write puts them back). Compared with the look's own boxes it was never in
+    -- place, and white boxes went over the LCD's at every opening (res's code, 2026-11-23)
+    if part == "tcp_lists" and variant ~= "plain" and (parts.lcd_on() or parts.glass_dark(zip)) then return true end
     if part == "tcp_volcap" and variant == "off" then return true end
     if part == "track_lcd" and not parts.lcd_on() then return true end
     if parts.RECARM_HW[part] then
@@ -1994,6 +2045,27 @@ function parts.in_zip(part, variant, zip)
     end
     local root = Zip.root(zip)
     if part == "accent" then return not root or parts.accent_in_zip(variant, zip, root) end
+    -- Basic off under Light's dark glass: its off images are the light glass's, which the dark
+    -- glass, the track LCDs, keys and knobs go over, so there's no image of its own to find. It
+    -- is in place when none of Basic's own images is left. Compared with its off images, it
+    -- never was, and it was written again, with a reload, at every opening (found 2026-11-23)
+    if part == "basic" and variant == "off" and parts.glass_dark(zip) then
+        local pack = parts.pack(zip)
+        if not root or not pack then return true end
+        local crcs = Zip.crc_map(zip)
+        for _, name in ipairs(parts.files("basic", zip)) do
+            local have = crcs[root .. "/" .. name]
+            for _, v in ipairs({ "on", "on_dg" }) do
+                local key = "parts/basic/" .. v .. "/" .. name
+                local off = pack["parts/basic/off/" .. name] and Zip.stored_crc(pack, "parts/basic/off/" .. name)
+                if pack[key] and have == Zip.stored_crc(pack, key) and have ~= off then
+                    if state.log then state.log("in_zip basic=off: " .. name .. " is still Basic's") end
+                    return false
+                end
+            end
+        end
+        return true
+    end
     -- Basic's images (and the mixer's Basic keys): every file, so one remade on its own
     -- (tk_theme_parts.py) comes in too. Not under Light's dark glass, which has its own.
     if (part == "basic" or (part == "mcp_hw" or part == "tcp_hw") and variant == "basic") and not parts.glass_dark(zip) then
@@ -2044,6 +2116,25 @@ function parts.in_zip(part, variant, zip)
             if not mine[n] then name = n break end
         end
         if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
+    end
+    -- a plate's hardware under Keys, Knobs or a record arm of another style: those go over its
+    -- images, so it is judged by a file none of them covers. Judged by its first file (a knob),
+    -- it was never in place with other knobs, and it and all over it were written again, with
+    -- a reload, at every opening (found 2026-11-23). All covered: theirs decide
+    if (part == "tcp_hw" or part == "mcp_hw") and (variant == "silver" or variant == "black") then
+        local skip = {}
+        for _, rp in ipairs(parts.HW_OVER) do
+            if parts.RECARM_HW[rp] == part and (parts.chosen[rp] or parts.default[rp]) ~= parts.HW_OWN[rp] then
+                for _, n in ipairs(parts.files(rp, zip)) do skip[n] = true end
+            end
+        end
+        if part ~= "basic" and b_now and b_now ~= "off" then
+            for _, n in ipairs(parts.files("basic", zip)) do skip[n] = true end
+        end
+        name = nil
+        for _, n in ipairs(parts.files(part, zip)) do
+            if not skip[n] then name = n break end
+        end
     end
     if not name then return (parts.keys(parts.read(zip, nil, part, variant, "keys.txt"), zip, part)) end
     local data = parts.read(zip, nil, part, variant, name)
@@ -2211,7 +2302,14 @@ function parts.restore()
                 state.log("restore: basic=" .. basic .. " not in place, written again")
                 if parts.write("basic", basic, zip) then wrote = true end
             end
-            for rp in pairs(parts.RECARM_HW) do
+            -- what goes over the others, checked again last: the loop's order is anyone's, and a
+            -- display, the glass or Basic written after these took their images (the checks see
+            -- what this batch wrote, see Zip.crc_of)
+            local last = {}
+            for _, rp in ipairs(parts.HW_OVER) do last[#last + 1] = rp end
+            last[#last + 1] = "mcp_side"
+            last[#last + 1] = "tcp_volcap"
+            for _, rp in ipairs(last) do
                 local rv = parts.chosen[rp]
                 if rv and not parts.in_zip(rp, rv, zip) then
                     state.log("restore: " .. rp .. "=" .. rv .. " not in place, written again")
@@ -3516,7 +3614,10 @@ local COLOUR_GROUPS = {
         { "Marker lane", { "marker_lane_bg" } }, { "Region lane", { "region_lane_bg" } },
     } },
     { "Media items", {
-        { "Items without a colour", { "col_mi_bg", "col_mi_bg2" } }, { "Waveform", { "col_tr1_peaks", "col_tr2_peaks" } },
+        { "Items without a colour", { "col_mi_bg", "col_mi_bg2" } },
+        -- (res, 2026-11-23)
+        { "Items without a colour, selected", { "col_tr1_itembgsel", "col_tr2_itembgsel" } },
+        { "Waveform", { "col_tr1_peaks", "col_tr2_peaks" } },
         { "Waveform when selected", { "col_tr1_ps2", "col_tr2_ps2" } },
         { "Item name", { "col_mi_label" } }, { "Item name when selected", { "col_mi_label_sel" } },
     } },
@@ -3812,6 +3913,45 @@ local function load_dark()
     dark.dirty = false
 end
 
+-- The dark mode colours are one REAPER setting for every theme: TK Theme Bit writes its
+-- Bitwig greys there, other themes and scripts their own. While colours this window didn't
+-- write are in under one of TK Theme's looks, a bar at the top of every page offers TK
+-- Theme's back, as Bit's own settings do the other way round (at the bottom of the Look page,
+-- and for Bit only, it went unseen: the user, 2026-11-23). Yours are the theme's own set or
+-- the last one this window wrote (ini_set keeps it). "Keep as is" hides the bar until the
+-- colours change again
+dark.BIT_SETS = {
+    "1e1e1e 3a3a3a d2d2d2 6e6e6e 1e1e1e 242424 020202 0e0e0e c8c8c8 6e6e6e 0a0a0a 3a3a3a 3a3a3a 262626 a0a0a0 ffffff 1e1e1e 3a3a3a 242424 562202 333333 202020 ff8000",
+    "1e1e1e 3a3a3a d2d2d2 6e6e6e 1e1e1e 242424 161616 0e0e0e c8c8c8 6e6e6e 0a0a0a 3a3a3a 3a3a3a 262626 a0a0a0 ffffff 1e1e1e 3a3a3a 242424 562202 333333 202020 ff8000",
+}
+function dark.norm(v) return ((v or ""):lower():gsub("%s+", " "):gsub("^ ", ""):gsub(" $", "")) end
+
+function dark.is_bit()
+    local cur = dark.norm(dark.saved)
+    if cur == "" then return false end
+    for _, v in ipairs({ r.GetExtState("TK Theme Bit", "applied_darkmode"), table.unpack(dark.BIT_SETS) }) do
+        if v ~= "" and cur == dark.norm(v) then return true end
+    end
+    return false
+end
+
+function dark.notice_wanted()
+    if not IS_WINDOWS or not look.current() or not dark.on or state.restart then return false end
+    local cur = dark.norm(dark.saved)
+    -- none in reaper.ini: REAPER's original (the welcome card offers the theme's)
+    if cur == "" then return false end
+    if cur == dark.norm(theme_dark_value()) or cur == dark.norm(r.GetExtState(SCRIPT, "dark_written")) then return false end
+    return r.GetExtState(SCRIPT, "dark_keep") ~= cur
+end
+
+-- the colours "Use TK Theme's colours" brings back: the last ones this window wrote, else
+-- the ones in use before Bit's (Bit keeps them), else the theme's own
+function dark.tk_slots()
+    return parse_dark(r.GetExtState(SCRIPT, "dark_written"))
+        or (dark.is_bit() and parse_dark(r.GetExtState("TK Theme Bit", "prev_darkmode")))
+        or parse_dark(theme_dark_value())
+end
+
 local function apply_dark()
     local ok = ini_set("win32_darkmode", dark.on and "1" or "0")
     ok = ini_set("win32_darkmode_colors", format_dark(dark.slots)) and ok
@@ -3821,6 +3961,36 @@ local function apply_dark()
         r.SetExtState(SCRIPT, "restart", "1", false)
     end
     state.msg = ok and "Written to reaper.ini. Restart REAPER to see it." or "Could not write reaper.ini."
+end
+
+-- the bar itself, under the page's title; after "Use TK Theme's colours" the restart line
+-- under it offers "Restart REAPER now", as Bit's bar does
+function dark.draw_bit_bar()
+    if not dark.notice_wanted() then return end
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local x, y = r.ImGui_GetCursorScreenPos(ctx)
+    local w = r.ImGui_GetContentRegionAvail(ctx)
+    r.ImGui_DrawList_AddRectFilled(dl, x, y, x + w, y + 34, rgba(mix(UI.panel, UI.warn, 0.18)), 3)
+    r.ImGui_DrawList_AddRectFilled(dl, x, y, x + 3, y + 34, rgba(UI.warn))
+    r.ImGui_SetCursorScreenPos(ctx, x + 12, y + 9)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.ink))
+    r.ImGui_Text(ctx, dark.is_bit() and "Window colours: still TK Theme Bit's." or "Window colours: from another theme.")
+    r.ImGui_PopStyleColor(ctx)
+    if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "REAPER's lists, menus and borders (Windows dark mode) use colours another theme or script\nwrote. TK Theme's back: Use TK Theme's colours, then restart REAPER. Its factory ones:\nDark mode page, Theme colours, Apply.")
+    end
+    r.ImGui_SetCursorScreenPos(ctx, x + w - 166 - 4 - 84 - 2, y + 6)
+    if r.ImGui_Button(ctx, "Use TK Theme's colours##bitbar", 166, 22) then
+        dark.slots = dark.tk_slots()
+        dark.on = true
+        apply_dark()
+    end
+    r.ImGui_SameLine(ctx, 0, 4)
+    if r.ImGui_Button(ctx, "Keep as is##bitbar", 84, 22) then
+        r.SetExtState(SCRIPT, "dark_keep", dark.norm(dark.saved), true)
+    end
+    r.ImGui_SetCursorScreenPos(ctx, x, y + 42)
+    r.ImGui_Dummy(ctx, 1, 0)
 end
 
 local function draw_darkmode()
@@ -4145,6 +4315,9 @@ local function load_preset(name, with_dark)
     for _, key in ipairs(ARRANGE_EXTRA) do      -- a preset from before these were kept
         colours[key] = colours[key] or factory_colour(key)
     end
+    for _, key in ipairs({ "col_tr1_itembgsel", "col_tr2_itembgsel" }) do    -- on the page since 2026-11-23
+        colours[key] = colours[key] or factory_colour(key)
+    end
     for key, native in pairs(colours) do
         r.SetThemeColor(key, native, 1)
         changed_colours[key] = native
@@ -4158,6 +4331,12 @@ local function load_preset(name, with_dark)
         notes[#notes + 1] = missing .. (missing == 1 and " chosen action isn't" or " chosen actions aren't") .. " on this computer, so those buttons do nothing."
     end
     load_params()
+    -- the parts that follow the switches just set: a preset from before a part existed (the
+    -- side keys, 0.9.98) brought its default, which its switches may not want
+    if look.current() and P.tkTcpBasic then
+        local follow = parts.switch_choices()
+        if #follow > 0 then parts.choose_many(follow, true) end
+    end
     look.materials_from_saved(s, name)
     load_dark()
     refresh_palette()
@@ -4262,6 +4441,12 @@ local function apply_code(code)
             plate_name.save()
         end
         load_params()
+        -- the parts that follow the switches just set (the side keys, Basic, the lying cap):
+        -- a code holds none of them, so they stayed at their defaults until the next opening
+        if P.tkTcpBasic then
+            local follow = parts.switch_choices()
+            if #follow > 0 then parts.choose_many(follow, true) end
+        end
         refresh_palette()
         repaint_after_colour()
         -- the plates' own materials: kept as saved materials, then drawn
@@ -4940,9 +5125,10 @@ function parts.apply_pending()
 end
 
 -- the Apply row, under the accent colours and under the display while something waits
-function parts.draw_apply(id)
+-- what waits for Apply, by name ("accent Red", ...), or nil when nothing does
+function parts.pending_names()
     local p = parts.pending
-    if not (p.accent or p.display or p.track_lcd) then return end
+    if not (p.accent or p.display or p.track_lcd) then return nil end
     local function label(list, key)
         for _, c in ipairs(list) do if c[1] == key then return c[2] end end
         return key
@@ -4951,6 +5137,53 @@ function parts.draw_apply(id)
     if p.accent then names[#names + 1] = "accent " .. label(ACCENTS, p.accent) end
     if p.display then names[#names + 1] = "display " .. label(DISPLAYS, p.display) end
     if p.track_lcd then names[#names + 1] = "track LCDs " .. label(parts.variants.track_lcd, p.track_lcd) end
+    return names
+end
+
+-- closing the window with an accent, display or track LCDs not applied: asked first, as the
+-- choice was lost without a word (res, 2026-11-23: "the accent is forgotten on reopening")
+function parts.draw_close_ask()
+    local id = "Not applied yet##closeask"
+    if state.ask_close then
+        r.ImGui_OpenPopup(ctx, id)
+        state.ask_close = nil
+    end
+    if not r.ImGui_BeginPopupModal(ctx, id, nil, r.ImGui_WindowFlags_AlwaysAutoResize()) then return end
+    local names = parts.pending_names()
+    if not names then
+        r.ImGui_CloseCurrentPopup(ctx)
+        r.ImGui_EndPopup(ctx)
+        return
+    end
+    r.ImGui_Text(ctx, "Not applied yet: " .. table.concat(names, ", ") .. ".")
+    r.ImGui_Text(ctx, "Without Apply these choices are lost when the window closes.")
+    r.ImGui_Dummy(ctx, 0, 6)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(UI.accent))
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.base))
+    local apply = r.ImGui_Button(ctx, "Apply and close", 130, 28)
+    r.ImGui_PopStyleColor(ctx, 2)
+    r.ImGui_SameLine(ctx, 0, 6)
+    local drop = r.ImGui_Button(ctx, "Close without applying", 170, 28)
+    r.ImGui_SameLine(ctx, 0, 6)
+    local stay = r.ImGui_Button(ctx, "Keep open", 90, 28)
+    if apply then
+        -- the rebuild waits for "Rebuilding theme..." (busy queue); the window closes after it
+        if parts.apply_pending() then state.msg = "Applied: " .. table.concat(names, ", ") .. "." end
+        state.close_after = true
+        r.ImGui_CloseCurrentPopup(ctx)
+    elseif drop then
+        parts.pending = {}
+        state.close_after = true
+        r.ImGui_CloseCurrentPopup(ctx)
+    elseif stay then
+        r.ImGui_CloseCurrentPopup(ctx)
+    end
+    r.ImGui_EndPopup(ctx)
+end
+
+function parts.draw_apply(id)
+    local names = parts.pending_names()
+    if not names then return end
     r.ImGui_Dummy(ctx, 0, 4)
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Button(), rgba(UI.accent))
     r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.base))
@@ -5112,7 +5345,7 @@ local function draw_look()
     if IS_WINDOWS and current and dark.on ~= wants_dark then
         r.ImGui_Dummy(ctx, 0, 2)
         if begin_card("Dark mode", "lkd") then
-            hint_text(wants_dark and "Dark mode is off, so lists and scrollbars are light beside this dark look."
+            hint_text(wants_dark and "Dark mode is off, so scrollbars and window frames stay light beside this dark look."
                 or "Dark mode is on, so menus, lists and scrollbars stay dark beside this light look. Whether you like that is up to you.")
             if r.ImGui_Button(ctx, (wants_dark and "Turn dark mode on" or "Turn dark mode off") .. " (restart needed)") then
                 dark.on = wants_dark
@@ -5121,6 +5354,7 @@ local function draw_look()
             r.ImGui_EndChild(ctx)
         end
     end
+    -- TK Theme Bit's dark mode colours: a bar at the top of every page (dark.draw_bit_bar)
 end
 
 -- ---------------------------------------------------------------- guide
@@ -5339,10 +5573,28 @@ local function draw_content()
     r.ImGui_Text(ctx, searching and "Search" or page.title)
     r.ImGui_PopStyleColor(ctx)
     r.ImGui_PopFont(ctx)
+    dark.draw_bit_bar()
     if state.restart then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.warn))
+        r.ImGui_AlignTextToFramePadding(ctx)
         r.ImGui_Text(ctx, "Restart REAPER to see the dark mode changes.")
         r.ImGui_PopStyleColor(ctx)
+        r.ImGui_SameLine(ctx)
+        -- REAPER has no restart action. On Windows (where dark mode lives) a hidden
+        -- PowerShell waits until REAPER has closed and starts it again; then "File: Quit
+        -- REAPER" (40004), which asks to save as always. Cancelled there, REAPER stays open
+        -- and the helper gives up after 2 minutes. Elsewhere: quit only.
+        if r.ImGui_Button(ctx, IS_WINDOWS and "Restart REAPER now" or "Quit REAPER") then
+            if IS_WINDOWS then
+                local exe = (r.GetExePath() .. "\\reaper.exe"):gsub("'", "''")
+                local ps = "$p = Get-Process -Name reaper -ErrorAction SilentlyContinue; "
+                    .. "if ($p) { $p | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue }; "
+                    .. "Start-Sleep -Milliseconds 500; "
+                    .. "if (-not (Get-Process -Name reaper -ErrorAction SilentlyContinue)) { Start-Process -FilePath '" .. exe .. "' }"
+                r.ExecProcess('powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "' .. ps .. '"', -2)
+            end
+            r.Main_OnCommand(40004, 0)      -- File: Quit REAPER
+        end
     end
     if state.msg then
         r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), rgba(UI.accent))
@@ -5394,6 +5646,31 @@ local function startup_checks()
         state.log("forge.ensure done")
     end)
     state.log("restored, one reload at most")
+    -- REAPER keeps the layout it loaded: a newer one in the zip (an update, a build) only counts
+    -- after a reload. When the opening wrote nothing it didn't reload, and settings the new layout
+    -- has were missing from this window (the count-in, 2026-11-23). So: does the loaded theme know
+    -- every parameter the zip's layout defines? Read once per layout (~0.2 s), kept across
+    -- sessions: a REAPER start loads the zip as it is, so a layout checked once stays checked
+    -- (no parameters at all: not a theme with a layout of ours loaded, nothing to compare)
+    if look.current() and next(P) then
+        local zip = parts.zip_path()
+        local root = Zip.root(zip)
+        local crc = root and Zip.crc_of(zip, root .. "/rtconfig.txt")
+        if crc and r.GetExtState(SCRIPT, "layout_known") ~= tostring(crc) then
+            local data, method = Zip.read_entry(zip, root .. "/rtconfig.txt")
+            local text = data and patina.forge.unzip(data, method)
+            if text then
+                for name in text:gmatch("\ndefine_parameter%s+([%w_%-]+)") do
+                    if not P[name] then
+                        state.log("the loaded layout lacks " .. name .. ": reloaded")
+                        parts.reload()
+                        break
+                    end
+                end
+                r.SetExtState(SCRIPT, "layout_known", tostring(crc), true)
+            end
+        end
+    end
     -- a colour setting chosen before its colours were worked out anew: as it is now
     -- (only when the colours are still exactly what it gave: refresh_mood checks)
     if look.current() then look.refresh_mood(look.current()) end
@@ -5411,22 +5688,7 @@ local function startup_checks()
     -- Basic's buttons and lists follow its switches, also when those were set before the
     -- images came (or by hand in REAPER's own theme adjuster)
     if look.current() and P.tkTcpBasic then
-        local want = parts.basic_want()
-        local list = {}
-        if (parts.chosen.basic or parts.default.basic) ~= want then list[#list + 1] = { "basic", want } end
-        -- the mixer's R / M / S follow the mixer's own choice
-        local hw = parts.chosen.mcp_hw or parts.default.mcp_hw
-        if global_value("tkMcpBasic") and not global_value("tkMcpPlate") and hw ~= "basic" then list[#list + 1] = { "mcp_hw", "basic" }
-        elseif not global_value("tkMcpBasic") and hw == "basic" then list[#list + 1] = { "mcp_hw", "standard" } end
-        -- and the track panel's knobs and R / M / S its own
-        local thw = parts.chosen.tcp_hw or parts.default.tcp_hw
-        if global_value("tkTcpBasic") and not global_value("tkTcpPlate") and thw ~= "basic" then list[#list + 1] = { "tcp_hw", "basic" }
-        elseif not global_value("tkTcpBasic") and thw == "basic" then list[#list + 1] = { "tcp_hw", "standard" } end
-        -- the mixer's side keys as Hardware keys, the plate and Keys want them
-        local sw = parts.side_want()
-        if (parts.chosen.mcp_side or parts.default.mcp_side) ~= sw then list[#list + 1] = { "mcp_side", sw } end
-        local cw = parts.volcap_want()
-        if (parts.chosen.tcp_volcap or parts.default.tcp_volcap) ~= cw then list[#list + 1] = { "tcp_volcap", cw } end
+        local list = parts.switch_choices()
         if #list > 0 then parts.choose_many(list, true) end
         -- the transport icons (0.9.99), where an update or another script put the buttons back
         if state.icons then
@@ -5576,6 +5838,7 @@ local function loop()
             draw_nav()
             r.ImGui_SameLine(ctx)
             draw_content()
+            parts.draw_close_ask()
             busy.ui = false
             local wx, wy = r.ImGui_GetWindowPos(ctx)
             local ww, wh = r.ImGui_GetWindowSize(ctx)
@@ -5588,6 +5851,13 @@ local function loop()
     r.ImGui_PopStyleVar(ctx, vars)
     r.ImGui_PopStyleColor(ctx, colours)
     if state.close then open = false end
+    state.close = nil
+    -- an accent, display or track LCDs not applied: ask before closing (parts.draw_close_ask);
+    -- after its answer the window closes once a rebuild it started has run
+    if not open and not state.close_after and parts.pending_names() and visible and not loading then
+        open, state.ask_close = true, true
+    end
+    if state.close_after and #busy.queue == 0 and not busy.running then open = false end
     if open then
         r.defer(loop)
     else
@@ -5614,10 +5884,10 @@ undo_reset = deferred(undo_reset)
 -- the theme's buttons call these scripts by action ID, which only exists once
 -- they are in the action list; once per install location is enough
 local function register_helpers()
-    if r.GetExtState(SCRIPT, "registered6") == here then return end
+    if r.GetExtState(SCRIPT, "registered7") == here then return end
     local files = { "TK_Theme_Settings.lua", "TK_Theme_Toggle_TCP_Lists.lua", "TK_Theme_Toggle_TCP_Meter.lua", "TK_Theme_Cycle_Layout.lua",
         "TK_Theme_Metronome.lua", "TK_Theme_Metronome_Watch.lua", "TK_Theme_Toggle_Menu_Bar.lua", "TK_Theme_Make_Divider.lua",
-        "TK_Theme_Grid_Menu.lua", "TK_Theme_Snap.lua" }
+        "TK_Theme_Grid_Menu.lua", "TK_Theme_Snap.lua", "TK_Theme_CountIn.lua" }
     for _, key in ipairs(SLOT_KEYS) do files[#files + 1] = "slots/TK_Theme_Slot_" .. key .. ".lua" end
     local ok = true
     for i, file in ipairs(files) do
@@ -5628,7 +5898,7 @@ local function register_helpers()
             ok = false
         end
     end
-    if ok then r.SetExtState(SCRIPT, "registered6", here, true) end
+    if ok then r.SetExtState(SCRIPT, "registered7", here, true) end
 end
 
 -- REAPER's Theme Adjuster action (the gear in the transport) only looks directly

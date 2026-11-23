@@ -275,6 +275,8 @@ LayoutA-tkPlFader
 LayoutB-tkPlFader
 LayoutC-tkPlFader
 tkTcpCap
+tkBtn_countin
+tkCountInMode
 ]]
 
 local words, index = {}, {}

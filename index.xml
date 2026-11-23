@@ -184,7 +184,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.99.1" author="TouristKiller" time="2026-11-22T15:12:42Z">
+    <version name="0.9.99.2" author="TouristKiller" time="2026-11-23T23:56:00Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -195,6 +195,7 @@
      <source main="main" file="TK_Theme_Cycle_Layout.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Cycle_Layout.lua</source>
      <source main="main" file="TK_Theme_Grid_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid_Menu.lua</source>
      <source main="main" file="TK_Theme_Snap.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Snap.lua</source>
+     <source main="main" file="TK_Theme_CountIn.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_CountIn.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_actions.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_actions.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_bay.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_bay.lua</source>
      <source main="main" file="slots/TK_Theme_Slot_clock.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/slots/TK_Theme_Slot_clock.lua</source>
@@ -215,6 +216,7 @@
      <source file="TK_Theme_Icons.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Icons.lua</source>
      <source file="TK_Theme_MasterMix.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_MasterMix.lua</source>
      <source file="TK_Theme_Grid.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Grid.lua</source>
+     <source file="TK_Theme_Count.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Count.lua</source>
      <source file="TK_Theme_Auto.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Auto.lua</source>
      <source file="TK_Theme_Plate.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Plate.lua</source>
      <source file="TK_Theme_Code.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Code.lua</source>
@@ -619,7 +621,19 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Fixed: Paging through the toolbar icons in the icon picker stopped with an error (ImGui_Attach: exceeded maximum object attachment limit) after about 16 pages.
++ Added: Count-in button (Transport page): 1234 switches the metronome's count-in before recording or before playback, and lights while it is on. Needs the SWS extension. Requested by Vincent.
++ Added: Items without a colour, selected (Colours page, Media items). Requested by res.
++ Added: Closing the settings with an accent, display or track LCDs not applied yet now asks first: apply and close, close without applying, or keep the window open.
++ Changed: When REAPER's window colours (Windows dark mode) belong to another theme, TK Theme Bit or any other, a bar at the top of every page offers TK Theme's back, with a restart. It was a card at the bottom of the Look page, in Dark only.
++ Changed: The snap button lights in the accent colour, as the metronome. Reported by Vincent.
++ Changed: The Lamp record arm shows a readable A for automatic record arm. Requested by res.
++ Fixed: Keys set to Hardware also took the record arm and the knob style back to the hardware's own, until the settings were opened again. Reported by res.
++ Fixed: Opening the settings could put keys, knobs, side keys or lists back to an earlier state, and rewrote and reloaded the theme each time. Opening is faster now. Reported by res.
++ Fixed: A theme code left the mixer's side keys (Hardware keys), Basic and the track panel's fader cap as they were until the settings were opened again. Reported by res.
++ Fixed: Cardboard materials (White board, Grey board) turned into silver with rust the next time the settings opened.
++ Fixed: With the track LCDs on, the track panel's list slots turned white the next time the settings opened.
++ Fixed: After an update the settings could miss new settings until REAPER was restarted; they now reload the theme once when its layout is newer.
++ Fixed: In the icon picker, switching tabs could show one set of icons over the other. Reported by Vincent.
 ]]></changelog>
     </version>
     </reapack>

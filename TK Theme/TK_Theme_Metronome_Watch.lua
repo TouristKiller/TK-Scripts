@@ -1,8 +1,9 @@
 -- @description TK Theme Dark: keep the transport's metronome button and grid box in step
 -- @author TouristKiller
--- @version 0.9.19
--- A theme can't read whether the metronome or snap is on, or what the grid is, so
--- this background script passes them on as theme parameters: tkTransMetroOn, and
+-- @version 0.9.99.2
+-- A theme can't read whether the metronome, count-in or snap is on, or what the grid is,
+-- so this background script passes them on as theme parameters: tkTransMetroOn,
+-- tkCountInOn (TK_Theme_Count.lua), and
 -- tkGridV, tkGridA and tkSnapOn for the grid box. It also keeps the grid box's
 -- adaptive grid in step with the zoom, and switches between Light and Dark by the
 -- time of day when that's on (TK_Theme_Auto.lua). Started by the metronome button,
@@ -13,6 +14,9 @@ local TOGGLE, PARAM = 40364, "tkTransMetroOn"
 local here = debug.getinfo(1, "S").source:match("^@(.*[\\/])")
 local Grid = dofile(here .. "TK_Theme_Grid.lua")
 local Auto = dofile(here .. "TK_Theme_Auto.lua")
+-- the count-in button (0.9.99.2), as tkCountInOn; an older theme has no such parameter
+local Count = dofile(here .. "TK_Theme_Count.lua")
+local count_shown
 
 -- running this again replaces the running copy, without REAPER's dialog
 if r.set_action_options then r.set_action_options(3) end
@@ -50,7 +54,7 @@ local function loop()
         next_check = now + 2
         if not idx or r.ThemeLayout_GetParameter(idx) ~= PARAM then
             idx = find_param()
-            shown = nil
+            shown, count_shown = nil, nil
             Grid.forget()
         end
     end
@@ -74,6 +78,15 @@ local function loop()
             shown = on
             r.ThemeLayout_SetParameter(idx, on, false)
             r.ThemeLayout_RefreshAll()
+        end
+        local ci = Count.param(Count.ON_PARAM)
+        if ci then
+            local on = Count.on() and 1 or 0
+            if on ~= count_shown then
+                count_shown = on
+                r.ThemeLayout_SetParameter(ci, on, false)
+                r.ThemeLayout_RefreshAll()
+            end
         end
     end
     Grid.adapt()
