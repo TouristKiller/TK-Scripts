@@ -493,12 +493,13 @@ local function page_transport()
       local vidx, vvalue = theme_param("bitTransViews")
       if vidx then
         r.ImGui_Spacing(ctx)
-        row("View keys", function()
-          local p = segmented("views", { "Off", "Arrange / Mix / Edit" }, vvalue == 0 and 1 or 2)
+        row("Mixer / editor icons", function()
+          local p = segmented("views", { "Off", "Shown" }, vvalue == 0 and 1 or 2)
           if p then set_theme_param("bitTransViews", p == 1 and 0 or 1) end
         end)
-        note("At the right end of the bar: ARRANGE closes the mixer and MIDI editor, MIX shows the mixer, "
-          .. "EDIT opens the selected MIDI item. They hide on a bar too narrow for them.")
+        note("Icons at the right end of the bar, as Bitwig's panel icons: the mixer, and the selected MIDI "
+          .. "item in the MIDI editor. One at a time, orange while open; click the orange one again to close it. "
+          .. "They hide on a bar too narrow for them.")
       end
       -- the inspector: its key in the transport, and a button to open / close it here
       local iidx, ivalue = theme_param("bitTransInsp")
@@ -648,7 +649,71 @@ local function page_display()
   end)
 end
 
+-- REAPER settings that make the arrange look like Bitwig's: grid lines through the clips
+-- (SWS's grid Z order actions, found by name: SWS ids differ per install) and a ruler with
+-- seconds over the bars. The ruler as it was is kept, so "Bars" puts it back.
+local BW = {
+  RULER_BITWIG = 41916, RULER_BITWIG2 = 43705,   -- Measures.Beats (minimal) / Minutes:Seconds (minimal)
+  RULER = { 40365, 40366, 40367, 40368, 40369, 40370, 41916, 41918, 41973, 43204, 43205 },
+  RULER2 = { 42360, 42361, 42362, 42363, 42364, 42365, 43705 },
+}
+function BW.sws_grid(which)       -- "Over items" / "Through items" / "Under items"
+  BW.grid_ids = BW.grid_ids or {}
+  if BW.grid_ids[which] == nil then
+    BW.grid_ids[which] = false
+    local i = 0
+    while true do
+      local id, name = r.kbd_enumerateActions(0, i)
+      if not id or id == 0 then break end
+      if name:find('Set grid line Z order to "' .. which .. '"', 1, true) then BW.grid_ids[which] = id break end
+      i = i + 1
+    end
+  end
+  return BW.grid_ids[which] or nil
+end
+function BW.first_on(list)
+  for _, id in ipairs(list) do if r.GetToggleCommandState(id) == 1 then return id end end
+end
+function BW.ruler_bitwig()
+  return r.GetToggleCommandState(BW.RULER_BITWIG) == 1 and r.GetToggleCommandState(BW.RULER_BITWIG2) == 1
+end
+function BW.set_ruler(bitwig)
+  if bitwig then
+    local a, b = BW.first_on(BW.RULER), BW.first_on(BW.RULER2)
+    if a and a ~= BW.RULER_BITWIG then r.SetExtState(EXT, "ruler_prev", tostring(a), true) end
+    if b and b ~= BW.RULER_BITWIG2 then r.SetExtState(EXT, "ruler_prev2", tostring(b), true) end
+    r.Main_OnCommand(BW.RULER_BITWIG, 0)
+    r.Main_OnCommand(BW.RULER_BITWIG2, 0)
+  else
+    r.Main_OnCommand(tonumber(r.GetExtState(EXT, "ruler_prev")) or 40367, 0)    -- Measures.Beats
+    r.Main_OnCommand(tonumber(r.GetExtState(EXT, "ruler_prev2")) or 42360, 0)   -- no second line
+  end
+end
+function BW.section()
+  section("Grid and ruler", function()
+    local through, under = BW.sws_grid("Through items"), BW.sws_grid("Under items")
+    if through and under then
+      local on = r.GetToggleCommandState(through) == 1
+      row("Grid lines", function()
+        local p = segmented("gridz", { "Behind clips", "Through clips" }, on and 2 or 1)
+        if p then r.Main_OnCommand(p == 2 and through or under, 0) end
+      end)
+      note("Through clips: the beat lines run through the clips, so you see the bars inside them, as in Bitwig.")
+    else
+      note("Grid lines through the clips need SWS. In REAPER: Snap/Grid settings (Alt+L) > Grid line Z order.")
+    end
+    r.ImGui_Spacing(ctx)
+    row("Ruler", function()
+      local p = segmented("ruler", { "Bars", "Seconds + bars" }, BW.ruler_bitwig() and 2 or 1)
+      if p then BW.set_ruler(p == 2) end
+    end)
+    note("Seconds + bars: two lines in the ruler, minutes:seconds over the bar numbers, as Bitwig's. "
+      .. "Bars puts back the ruler you had.")
+  end)
+end
+
 local function page_arrange()
+  BW.section()
   section("Clips", function()
     if has_sws then
       row("Item names", function()

@@ -1,5 +1,6 @@
--- TK Theme Bit - views, as Bitwig's ARRANGE / MIX / EDIT keys (library for the three
--- TK_Theme_Bit_View_*.lua actions, which the keys in the transport call).
+-- TK Theme Bit - views (library for the three TK_Theme_Bit_View_*.lua actions). The
+-- transport shows them as panel icons (mixer, MIDI editor); clicking a lit one goes back to
+-- ARRANGE. The ARRANGE action stays for toolbars and shortcuts.
 --
 --   ARRANGE  the arrange alone: the mixer and the MIDI editor are closed
 --   MIX      the mixer shown, the MIDI editor closed
@@ -156,7 +157,10 @@ function V.watch()
   r.defer(loop)
 end
 
+-- the panel icons toggle: clicking the lit mixer or MIDI editor icon goes back to the
+-- arrange alone (what the ARRANGE key did)
 function V.run(view)
+  if view ~= 0 and V.current() == view then view = 0 end
   V.switch(view)
   V.watch()
 end

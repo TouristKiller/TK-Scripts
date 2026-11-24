@@ -1608,16 +1608,63 @@ local function draw_points(env, pts)
   end)
 end
 
+---------------------------------------------------------------- time range
+-- Bitwig's TIME RANGE, shown when nothing is selected: REAPER's time selection (From / To
+-- editable, as the clip's position), or the edit cursor in both when there is none
+local function draw_time_range()
+  head("TIME RANGE", true)
+  local s, e = r.GetSet_LoopTimeRange2(0, false, false, 0, 0, false)
+  local none = e <= s
+  if none then s = r.GetCursorPosition(); e = s end
+  local function set(ns, ne)
+    if ne < ns then ns, ne = ne, ns end
+    r.GetSet_LoopTimeRange2(0, true, false, math.max(0, ns), math.max(0, ne), false)
+  end
+  local step = function() return shift_down() and 0.0625 or 0.25 end
+  row("From", function()
+    local steps, typed = dragbox("trfrom", r.format_timestr_pos(s, "", 2))
+    if steps ~= 0 then set(move_beats(s, steps * step()), e) end
+    local t = typed and r.parse_timestr_pos(typed, 2)
+    if t then set(t, e) end
+  end)
+  row("To", function()
+    local steps, typed = dragbox("trto", r.format_timestr_pos(e, "", 2))
+    if steps ~= 0 then set(s, move_beats(e, steps * step())) end
+    local t = typed and r.parse_timestr_pos(typed, 2)
+    if t then set(s, t) end
+  end)
+  -- the length as plain text, no box (Bitwig's)
+  row("Time", function(w)
+    local t = string.format("%.3f s", e - s)
+    local tw = r.ImGui_CalcTextSize(ctx, t)
+    r.ImGui_SetCursorPosX(ctx, r.ImGui_GetCursorPosX(ctx) + w - tw - 6)
+    r.ImGui_AlignTextToFramePadding(ctx)
+    text_col(C.label, t)
+  end)
+end
+
+-- "No item selected" in the middle of the empty part under the blocks, as Bitwig's
+local function nothing_selected()
+  local w, h = r.ImGui_GetContentRegionAvail(ctx)
+  local text = "No item selected"
+  local tw, th = r.ImGui_CalcTextSize(ctx, text)
+  local x, y = r.ImGui_GetCursorPos(ctx)
+  r.ImGui_SetCursorPos(ctx, x + math.max(0, (w - tw) / 2), y + math.max(0, h * 0.75 - th / 2))
+  text_col(C.label, text)
+end
+
 ---------------------------------------------------------------- what to show
+-- the selected track only: with none selected the inspector shows the time range
 local function current_track()
-  return r.GetSelectedTrack2(0, 0, true) or r.GetLastTouchedTrack()
+  return r.GetSelectedTrack2(0, 0, true)
 end
 
 local function follow_selection()
   local c = r.GetCursorContext2(true)
   if c ~= last_context then
     last_context = c
-    if c == 1 and r.CountSelectedMediaItems(0) > 0 then mode = "clip"
+    -- the arrange area: its clips, or the time range when a click there left none selected
+    if c == 1 then mode = "clip"
     elseif c == 2 and r.GetSelectedEnvelope(0) then mode = "env"
     elseif c == 0 then mode = "track" end
   end
@@ -1669,12 +1716,11 @@ local function loop()
       block("##main", function()
         if mode == "env" then
           if env then draw_lane(env) else label("No automation lane selected.") end
-        elseif mode == "clip" then
-          if item then draw_clip(item) else label("No clip selected.") end
-        else
-          if tr then draw_track(tr) else label("No track selected.") end
-        end
+        elseif mode == "clip" and item then draw_clip(item)
+        elseif mode == "track" and tr then draw_track(tr)
+        else draw_time_range() end       -- nothing selected: Bitwig's TIME RANGE
       end)
+      local range_only = (mode == "clip" and not item) or (mode == "track" and not tr)
       local take = item and r.GetActiveTake(item)
       local midi = take and r.TakeIsMIDI(take)
       local ais = env and E.items(env)
@@ -1692,6 +1738,7 @@ local function loop()
         if midi then block("##expr", function() draw_expressions(take) end) end
         bottom_h = r.ImGui_GetCursorPosY(ctx) - y0
       end
+      if range_only then nothing_selected() end
       r.ImGui_EndChild(ctx)
     end
     footer()
