@@ -1243,6 +1243,371 @@ local function footer()
   end
 end
 
+---------------------------------------------------------------- automation lane / point
+-- Bitwig's AUTOMATION LANE (the selected envelope) at the top and its POINT block (the
+-- selected points) at the bottom. Bitwig shows these in two panels; here they share one,
+-- laid out as a note clip with its NOTES.
+local E = { cache = {} }
+E.SHAPES = { "Linear", "Hold", "Slow Start/End", "Fast Start", "Fast End", "Bezier" }
+E.MODES = { [0] = "Trim/Read", "Read", "Touch", "Write", "Latch", "Latch Preview" }
+
+local function clamp01(t) return math.max(0, math.min(1, t)) end
+
+-- REAPER's own text for an envelope value ("-2.20 dB", "35%L", "120.00 BPM", ...)
+function E.format(env, v)
+  local ok, s = pcall(r.Envelope_FormatValue, env, v)
+  if ok and type(s) == "string" and s ~= "" then return s end
+  return string.format("%.2f", v)
+end
+
+-- what the lane is: its name, its owner (FX or the mixer, and the track or clip), how a
+-- value maps to the 0..1 of a value box, and the lane's own state from its chunk
+function E.build(env)
+  local _, name = r.GetEnvelopeName(env)
+  local K = { name = name, base = 0 }
+  local take, tfx, tpar = r.Envelope_GetParentTake(env)
+  local owner
+  if take then
+    K.take = take
+    K.base = r.GetMediaItemInfo_Value(r.GetMediaItemTake_Item(take), "D_POSITION")
+    if tfx and tfx >= 0 then
+      owner = select(2, r.TakeFX_GetFXName(take, tfx))
+      local _, lo, hi = r.TakeFX_GetParamEx(take, tfx, tpar)
+      K.lo, K.hi = lo, hi
+    else
+      owner = "Clip"
+    end
+    owner = owner .. "  \u{00B7}  " .. select(2, r.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false))
+  else
+    local tr, fx, par = r.Envelope_GetParentTrack(env)
+    if tr then
+      K.track = tr
+      if fx and fx >= 0 then
+        owner = select(2, r.TrackFX_GetFXName(tr, fx))
+        local _, lo, hi = r.TrackFX_GetParamEx(tr, fx, par)
+        K.lo, K.hi = lo, hi
+      else
+        owner = "Mixer"
+      end
+      owner = owner .. "  \u{00B7}  " .. select(2, r.GetTrackName(tr))
+    end
+  end
+  K.owner = owner or ""
+
+  local lname = name:lower()
+  if K.lo and K.hi and K.hi > K.lo then                      -- an FX parameter: its range
+    K.to_t = function(v) return (v - K.lo) / (K.hi - K.lo) end
+    K.from_t = function(t) return K.lo + t * (K.hi - K.lo) end
+    K.parse = function(s) local n = num(s); return n and (n - K.lo) / (K.hi - K.lo) end
+  elseif lname:find("volume") then                           -- volume: the fader's mapping
+    local m = r.GetEnvelopeScalingMode(env)
+    K.to_t = function(v) return amp_to_t(r.ScaleFromEnvelopeMode(m, v)) end
+    K.from_t = function(t) return r.ScaleToEnvelopeMode(m, t_to_amp(t)) end
+    K.text = function(v) return amp_db(r.ScaleFromEnvelopeMode(m, v)) end
+    K.parse, K.def = parse_db, amp_to_t(1)
+  elseif lname:find("pan") or lname:find("width") then       -- -1 .. 1 (pan may run reversed)
+    local pan = lname:find("pan") ~= nil
+    local inv = (pan and E.format(env, 1):upper():find("L")) and -1 or 1
+    K.to_t = function(v) return (v * inv + 1) / 2 end
+    K.from_t = function(t) return (t * 2 - 1) * inv end
+    K.parse = pan and parse_pan or function(s) local n = num(s); return n and (n / 100 + 1) / 2 end
+    K.def = 0.5
+  else                                                       -- tempo, pitch, mute, ...: the
+    local lo, hi = 0, 1                                      -- points' range, with room
+    for i = 0, r.CountEnvelopePoints(env) - 1 do
+      local _, _, v = r.GetEnvelopePoint(env, i)
+      lo, hi = math.min(lo, v), math.max(hi, v)
+    end
+    if lo < 0 then local m = math.max(-lo, hi); lo, hi = -m, m
+    elseif hi > 1 then hi = hi * 1.25 end
+    K.to_t = function(v) return (v - lo) / (hi - lo) end
+    K.from_t = function(t) return lo + t * (hi - lo) end
+    K.parse = function(s) local n = num(s); return n and (n - lo) / (hi - lo) end
+  end
+  K.text = K.text or function(v) return E.format(env, v) end
+
+  local _, chunk = r.GetEnvelopeStateChunk(env, "", false)
+  K.act = chunk:match("\nACT (%-?%d+)") ~= "0"
+  K.vis = chunk:match("\nVIS (%-?%d+)") ~= "0"
+  K.arm = chunk:match("\nARM (%-?%d+)") == "1"
+  K.defshape = tonumber(chunk:match("\nDEFSHAPE (%-?%d+)") or "0") or 0
+  return K
+end
+
+-- the lane, rebuilt when the project changed (not while a value is being dragged: the
+-- range of a tempo or pitch lane follows its points)
+function E.kind(env)
+  local c, cc = E.cache, r.GetProjectStateChangeCount(0)
+  if c.env ~= env or (c.count ~= cc and not r.ImGui_IsAnyItemActive(ctx)) then
+    c = E.build(env)
+    c.env, c.count = env, cc
+    E.cache = c
+  end
+  return c
+end
+
+-- a field of the lane's chunk: ACT, VIS, ARM, DEFSHAPE
+function E.lane_set(env, key_, val)
+  local _, chunk = r.GetEnvelopeStateChunk(env, "", false)
+  local new, n = chunk:gsub("\n" .. key_ .. " %-?%d+", "\n" .. key_ .. " " .. val, 1)
+  if n == 0 then return end
+  r.SetEnvelopeStateChunk(env, new, false)
+  E.cache = {}
+  r.TrackList_AdjustWindows(false)
+  r.UpdateArrange()
+end
+
+-- the selected points: the lane's own (ai -1) and those in its automation items
+function E.selected(env)
+  local list = {}
+  for ai = -1, r.CountAutomationItems(env) - 1 do
+    for i = 0, r.CountEnvelopePointsEx(env, ai) - 1 do
+      local _, time, v, shape, tension, sel = r.GetEnvelopePointEx(env, ai, i)
+      if sel then list[#list + 1] = { ai = ai, i = i, time = time, value = v, shape = shape, tension = tension } end
+    end
+  end
+  return list
+end
+
+-- the selected automation items (Bitwig's clips on an automation lane)
+function E.items(env)
+  local list = {}
+  for ai = 0, r.CountAutomationItems(env) - 1 do
+    if r.GetSetAutomationItemInfo(env, ai, "D_UISEL", 0, false) ~= 0 then list[#list + 1] = ai end
+  end
+  return list
+end
+
+function E.ai_get(env, ai, key_) return r.GetSetAutomationItemInfo(env, ai, key_, 0, false) end
+function E.ai_set(env, list, key_, fn)
+  for _, ai in ipairs(list) do r.GetSetAutomationItemInfo(env, ai, key_, fn(E.ai_get(env, ai, key_)), true) end
+  r.UpdateArrange()
+end
+
+-- Bitwig's lane value: a dark bar filled up to the value with an orange edge
+function E.bar(t, tip)
+  local w = r.ImGui_GetContentRegionAvail(ctx)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local h = ROW_H + 4
+  r.ImGui_Dummy(ctx, w, h)
+  r.ImGui_DrawList_AddRectFilled(dl, x, y, x + w, y + h, C.field, 2)
+  local fx = x + 1 + (w - 2) * t
+  r.ImGui_DrawList_AddRectFilled(dl, x + 1, y + 1, fx, y + h - 1, C.fill)
+  r.ImGui_DrawList_AddRectFilled(dl, math.max(x + 1, fx - 2), y + 1, fx, y + h - 1, C.accent)
+  r.ImGui_DrawList_AddTriangleFilled(dl, x + 1, y + 1, x + 6, y + 1, x + 1, y + 6, C.accent)
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, tip) end
+end
+
+-- Bitwig's Hold glyph: a little square with the level running on
+function E.hold_icon(dl, cx, cy, col)
+  r.ImGui_DrawList_AddRect(dl, cx - 9, cy - 2.5, cx - 4, cy + 2.5, col, 0, 0, 1.2)
+  r.ImGui_DrawList_AddLine(dl, cx - 4, cy, cx + 9, cy, col, 1.2)
+end
+
+function E.changed(env, desc, sort_pts)
+  if sort_pts then
+    local done_ = {}
+    for _, q in ipairs(sort_pts) do
+      if not done_[q.ai] then done_[q.ai] = true; r.Envelope_SortPointsEx(env, q.ai) end
+    end
+  end
+  r.UpdateArrange()
+  if desc then undo(desc) end
+end
+
+local function draw_lane(env)
+  local K = E.kind(env)
+  head("AUTOMATION LANE", true)
+  r.ImGui_PushFont(ctx, font_bold, 13)
+  text_col(C.text, K.name)
+  r.ImGui_PopFont(ctx)
+  label(K.owner)
+
+  -- the value now: at the edit cursor, or where it plays
+  local now = (r.GetPlayState() & 1) == 1 and r.GetPlayPosition() or r.GetCursorPosition()
+  local _, v = r.Envelope_Evaluate(env, now - K.base, 44100, 1)
+  r.ImGui_Dummy(ctx, 0, 2)
+  E.bar(clamp01(K.to_t(v)), K.text(v) .. ((r.GetPlayState() & 1) == 1 and " (playing)" or " (at the edit cursor)"))
+
+  if K.track then
+    -- Bitwig's "When parent is edited": REAPER's option to move points with the clips
+    r.ImGui_Dummy(ctx, 0, 2)
+    label("When clips are moved:")
+    local on = r.GetToggleCommandState(40070) == 1     -- Options: Envelope points move with media items
+    combo_box("withclips", on and "Points move with them" or "Points stay in place",
+      r.ImGui_GetContentRegionAvail(ctx), function()
+        if r.ImGui_Selectable(ctx, "Points move with them", on) and not on then r.Main_OnCommand(40070, 0) end
+        if r.ImGui_Selectable(ctx, "Points stay in place", not on) and on then r.Main_OnCommand(40070, 0) end
+      end)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "REAPER's option for every lane") end
+  end
+
+  sep()
+  row("Lane", function()
+    local c = toggles("lane", {
+      { label = "On", on = K.act }, { label = "Show", on = K.vis }, { label = "Arm", on = K.arm, col = 0xD03030FF },
+    })
+    if c == 1 then E.lane_set(env, "ACT", K.act and 0 or 1); undo("lane active")
+    elseif c == 2 then E.lane_set(env, "VIS", K.vis and 0 or 1); undo("lane visible")
+    elseif c == 3 then E.lane_set(env, "ARM", K.arm and 0 or 1); undo("lane armed") end
+  end)
+  if K.track then
+    row("Automation", function(w)
+      local m = r.GetTrackAutomationMode(K.track)
+      combo_box("automode", E.MODES[m] or "?", w, function()
+        for i = 0, 5 do
+          if r.ImGui_Selectable(ctx, E.MODES[i], i == m) then
+            r.SetTrackAutomationMode(K.track, i); undo("automation mode")
+          end
+        end
+      end)
+      if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "The track's automation mode") end
+    end)
+  end
+  row("New Points", function(w)
+    combo_box("defshape", E.SHAPES[K.defshape + 1] or "?", w, function()
+      for i = 0, 5 do
+        if r.ImGui_Selectable(ctx, E.SHAPES[i + 1], i == K.defshape) then
+          E.lane_set(env, "DEFSHAPE", i); undo("lane point shape")
+        end
+      end
+    end)
+  end)
+  row("Points", function() tbox(tostring(r.CountEnvelopePoints(env)), C.text) end)
+end
+
+-- the selected automation items: Bitwig's clip rows for them, plus REAPER's own
+-- baseline / amplitude and the pool they share points with
+local function draw_ai(env, list)
+  local a = list[1]
+  head(#list > 1 and ("AUTOMATION ITEMS (" .. #list .. ")") or "AUTOMATION ITEM")
+  local pos, len = E.ai_get(env, a, "D_POSITION"), E.ai_get(env, a, "D_LENGTH")
+  local step = function() return shift_down() and 0.0625 or 0.25 end
+  row("Position", function()
+    local steps, typed, _, done = dragbox("aipos", r.format_timestr_pos(pos, "", 2))
+    local d
+    if steps ~= 0 then d = move_beats(pos, steps * step()) - pos end
+    local t = typed and r.parse_timestr_pos(typed, 2)
+    if t then d = t - pos end
+    if d and d ~= 0 then E.ai_set(env, list, "D_POSITION", function(p) return math.max(0, p + d) end) end
+    if done or t then undo("automation item position") end
+  end)
+  row("Length", function()
+    local steps, typed, _, done = dragbox("ailen", r.format_timestr_len(len, "", pos, 2))
+    local l
+    if steps ~= 0 then l = math.max(0.01, move_beats(pos + len, steps * step()) - pos) end
+    local tl = typed and r.parse_timestr_len(typed, pos, 2)
+    if tl and tl > 0 then l = tl end
+    if l then E.ai_set(env, list, "D_LENGTH", function() return l end) end
+    if done or tl then undo("automation item length") end
+  end)
+  local loop = E.ai_get(env, a, "D_LOOPSRC") ~= 0
+  row("Looping", function()
+    if tkey("ailoop", loop_icon, loop) then
+      E.ai_set(env, list, "D_LOOPSRC", function() return loop and 0 or 1 end); undo("automation item loop")
+    end
+  end)
+  row("Rate", function()
+    local rate = E.ai_get(env, a, "D_PLAYRATE")
+    local steps, typed, reset, done = dragbox("airate", string.format("%.2fx", rate),
+      { tick = true, step_px = 3, can_reset = true, edit_text = string.format("%.2f", rate) })
+    local nr
+    if steps ~= 0 then nr = rate + steps * (shift_down() and 0.01 or 0.05) end
+    if typed then nr = num(typed) end
+    if reset then nr = 1 end
+    if nr then E.ai_set(env, list, "D_PLAYRATE", function() return math.max(0.01, nr) end) end
+    if done or typed then undo("automation item rate") end
+  end)
+
+  sep()
+  row("Baseline", function()
+    local b = E.ai_get(env, a, "D_BASELINE")
+    local t, moved, done = vbox("aibase", b, string.format("%.0f %%", b * 100), {
+      default = 0.5, parse = function(s) local n = num(s); return n and n / 100 end,
+    })
+    if moved then E.ai_set(env, list, "D_BASELINE", function() return t end) end
+    if done then undo("automation item baseline") end
+  end)
+  row("Amplitude", function()
+    local am = E.ai_get(env, a, "D_AMPLITUDE")
+    local t, moved, done = vbox("aiamp", (am + 1) / 2, string.format("%.0f %%", am * 100), {
+      default = 1, parse = function(s) local n = num(s); return n and (n / 100 + 1) / 2 end,
+    })
+    if moved then E.ai_set(env, list, "D_AMPLITUDE", function() return t * 2 - 1 end) end
+    if done then undo("automation item amplitude") end
+  end)
+  row("Pool", function()
+    tbox(string.format("%d", math.floor(E.ai_get(env, a, "D_POOL_ID"))), C.text)
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Items in the same pool share their points") end
+  end)
+end
+
+local function draw_points(env, pts)
+  local K = E.kind(env)
+  local p = pts[1]
+  head(#pts > 1 and ("POINTS (" .. #pts .. ")") or "POINT")
+
+  row("Position", function()
+    local abs = K.base + p.time
+    local steps, typed, _, done = dragbox("ppos", r.format_timestr_pos(abs, "", 2))
+    local d
+    if steps ~= 0 then d = move_beats(abs, steps * (shift_down() and 0.0625 or 0.25)) - abs end
+    local t = typed and r.parse_timestr_pos(typed, 2)
+    if t then d = t - abs end
+    if d and d ~= 0 then
+      for _, q in ipairs(pts) do r.SetEnvelopePointEx(env, q.ai, q.i, math.max(0, q.time + d), nil, nil, nil, nil, true) end
+      E.changed(env, nil, pts)
+    end
+    if done or t then undo("point position") end
+  end)
+
+  row("Value", function()
+    local t0 = clamp01(K.to_t(p.value))
+    local t, moved, done = vbox("pval", t0, K.text(p.value), { parse = K.parse, default = K.def })
+    if moved then
+      local dt = t - t0
+      for _, q in ipairs(pts) do
+        local v = (q == p or #pts == 1) and K.from_t(t) or K.from_t(clamp01(K.to_t(q.value) + dt))
+        r.SetEnvelopePointEx(env, q.ai, q.i, nil, v, nil, nil, nil, true)
+      end
+      E.changed(env)
+    end
+    if done then undo("point value") end
+  end)
+
+  -- Curvature: REAPER's bezier tension (a point that is not bezier becomes one)
+  row("Curvature", function()
+    local t0 = (p.tension + 1) / 2
+    local t, moved, done = vbox("pcurve", t0, string.format("%.2f %%", p.tension * 100), {
+      default = 0.5, parse = function(s) local n = num(s); return n and (n / 100 + 1) / 2 end,
+    })
+    if moved then
+      for _, q in ipairs(pts) do r.SetEnvelopePointEx(env, q.ai, q.i, nil, nil, 5, t * 2 - 1, nil, true) end
+      E.changed(env)
+    end
+    if done then undo("point curvature") end
+  end)
+
+  local hold = p.shape == 1
+  row("Hold", function()
+    if tkey("phold", E.hold_icon, hold) then
+      for _, q in ipairs(pts) do r.SetEnvelopePointEx(env, q.ai, q.i, nil, nil, hold and 0 or 1, nil, nil, true) end
+      E.changed(env, "point hold")
+    end
+  end)
+  row("Shape", function(w)
+    combo_box("pshape", E.SHAPES[p.shape + 1] or "?", w, function()
+      for i = 0, 5 do
+        if r.ImGui_Selectable(ctx, E.SHAPES[i + 1], i == p.shape) then
+          for _, q in ipairs(pts) do r.SetEnvelopePointEx(env, q.ai, q.i, nil, nil, i, nil, nil, true) end
+          E.changed(env, "point shape")
+        end
+      end
+    end)
+  end)
+end
+
 ---------------------------------------------------------------- what to show
 local function current_track()
   return r.GetSelectedTrack2(0, 0, true) or r.GetLastTouchedTrack()
@@ -1253,6 +1618,7 @@ local function follow_selection()
   if c ~= last_context then
     last_context = c
     if c == 1 and r.CountSelectedMediaItems(0) > 0 then mode = "clip"
+    elseif c == 2 and r.GetSelectedEnvelope(0) then mode = "env"
     elseif c == 0 then mode = "track" end
   end
 end
@@ -1298,9 +1664,12 @@ local function loop()
     -- at the top, its contents (NOTES / AUDIO EVENT) as a block at the bottom
     if r.ImGui_BeginChild(ctx, "##body", 0, -FOOT_H) then
       local item = mode == "clip" and r.GetSelectedMediaItem(0, 0)
-      local tr = mode ~= "clip" and current_track()
+      local tr = mode == "track" and current_track()
+      local env = mode == "env" and r.GetSelectedEnvelope(0)
       block("##main", function()
-        if mode == "clip" then
+        if mode == "env" then
+          if env then draw_lane(env) else label("No automation lane selected.") end
+        elseif mode == "clip" then
           if item then draw_clip(item) else label("No clip selected.") end
         else
           if tr then draw_track(tr) else label("No track selected.") end
@@ -1308,12 +1677,17 @@ local function loop()
       end)
       local take = item and r.GetActiveTake(item)
       local midi = take and r.TakeIsMIDI(take)
-      if take and (not midi or select(2, r.MIDI_CountEvts(take)) > 0) then
+      local ais = env and E.items(env)
+      if ais and #ais > 0 then block("##ai", function() draw_ai(env, ais) end) end
+      local pts = env and E.selected(env)
+      if pts and #pts == 0 then pts = nil end
+      if pts or (take and (not midi or select(2, r.MIDI_CountEvts(take)) > 0)) then
         local _, avail_h = r.ImGui_GetContentRegionAvail(ctx)
         if bottom_h and avail_h > bottom_h then r.ImGui_Dummy(ctx, 0, avail_h - bottom_h) end
         local y0 = r.ImGui_GetCursorPosY(ctx)
         block("##bottom", function()
-          if midi then draw_notes(take) else draw_audio_event(item, take) end
+          if pts then draw_points(env, pts)
+          elseif midi then draw_notes(take) else draw_audio_event(item, take) end
         end)
         if midi then block("##expr", function() draw_expressions(take) end) end
         bottom_h = r.ImGui_GetCursorPosY(ctx) - y0

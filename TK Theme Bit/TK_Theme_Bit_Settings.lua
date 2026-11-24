@@ -481,6 +481,15 @@ local function page_transport()
           if p then set_theme_param("bitTransCenter", p == 1 and 0 or 1) end
         end)
       end
+      local lidx, lvalue = theme_param("bitTransLogo")
+      if lidx then
+        r.ImGui_Spacing(ctx)
+        row("Logo", function()
+          local p = segmented("logo", { "Off", "Over the display" }, lvalue == 0 and 1 or 2)
+          if p then set_theme_param("bitTransLogo", p == 1 and 0 or 1) end
+        end)
+        note("Bit's dot mark over the display, in the style of Bitwig's logo. The bar grows a little to make room.")
+      end
       local vidx, vvalue = theme_param("bitTransViews")
       if vidx then
         r.ImGui_Spacing(ctx)
@@ -887,6 +896,59 @@ function DARK.use_previous()
   DARK.msg = ok and "Written. Restart REAPER to see it." or "Could not write reaper.ini."
 end
 
+-- TK's own toolbar icons (TK_*): a separate ReaPack package (TK Toolbar Icons) holds them
+-- in more than one look and copies the chosen one over the TK_ names. Bit follows with
+-- its own look unless you pick another.
+local ICONS = {}
+function ICONS.lib()
+  if ICONS.m == nil then
+    ICONS.m = false
+    local p = r.GetResourcePath() .. "/Scripts/TK Scripts/TK Toolbar Icons/TK_Toolbar_Icons.lua"
+    if r.file_exists(p) then
+      TK_TOOLBAR_ICONS_LIB = true
+      local ok, m = pcall(dofile, p)
+      TK_TOOLBAR_ICONS_LIB = nil
+      if ok and type(m) == "table" and m.installed() then ICONS.m = m end
+    end
+  end
+  return ICONS.m
+end
+function ICONS.follow() return r.GetExtState(EXT, "icons_follow") ~= "0" end
+-- at the window's start: Bit's look back in place (a TK Theme update puts its own back)
+function ICONS.startup()
+  local m = ICONS.lib()
+  if m and bit_active() and ICONS.follow() and not m.in_place("Bit") then m.apply("Bit") end
+end
+function ICONS.section()
+  section("Toolbar icons", function()
+    local m = ICONS.lib()
+    if not m then
+      row("TK icons", function()
+        if action_button("Get them through ReaPack", 200) then
+          if r.ReaPack_BrowsePackages then r.ReaPack_BrowsePackages("TK Toolbar Icons")
+          else r.ShowMessageBox("Install ReaPack first (reapack.com).", "TK Theme Bit", 0) end
+        end
+      end)
+      note("TK's own toolbar icons (TK_...) in Bit's look come as a separate ReaPack package, "
+        .. "TK Toolbar Icons. REAPER's own icons follow this theme already.")
+      return
+    end
+    local styles = m.styles()
+    local cur = m.current()
+    local idx = 1
+    for i, s in ipairs(styles) do if s == cur then idx = i end end
+    row("TK icons", function()
+      local p = segmented("icons", styles, idx)
+      if p and styles[p] ~= cur then
+        m.apply(styles[p], true)
+        r.SetExtState(EXT, "icons_follow", styles[p] == "Bit" and "1" or "0", true)
+      end
+    end)
+    note("The look of TK's own toolbar icons (TK_...). Bit keeps them in its look each time this window "
+      .. "opens, unless you pick another here. A window shows the new icons the next time it opens.")
+  end)
+end
+
 local function page_window()
   if bit_active() then
     section("Scaling", function()
@@ -919,6 +981,7 @@ local function page_window()
       end
     end)
   end
+  ICONS.section()
   section("REAPER", function()
     if not IS_WINDOWS then
       note("Hiding REAPER's menu bar works on Windows only.")
@@ -1451,4 +1514,5 @@ end
 
 look_restore()
 devices_first_run()
+ICONS.startup()
 r.defer(loop)
