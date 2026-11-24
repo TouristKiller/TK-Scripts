@@ -641,7 +641,7 @@
 
  <category name="TK Theme Bit">
     <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
-    <version name="0.1.9" author="TouristKiller" time="2026-11-24T02:10:12Z">
+    <version name="0.1.10" author="TouristKiller" time="2026-11-24T02:50:57Z">
      <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
      <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
      <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
@@ -658,11 +658,8 @@
      <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
      <changelog><![CDATA[
-+ Changed: the inspector is rebuilt after Bitwig's: one header that follows the selection (ARRANGER CLIP, TRACK), blocks on a darker ground, Bitwig's colours, keys with depth, a colour chip with a 3 x 8 palette, and grey labels beside black value boxes with orange figures. Drag a value (Shift for fine steps), double-click to type, right-click for the default.
-+ Added: clip Signature, editable Position / Length / Offset (in beats, along the tempo map), loop Start and Length, and fade shapes (linear / S-curve).
-+ Added: an AUDIO EVENT block for audio clips: stretch algorithm and mode, timebase, rate, keep pitch, gain, pan, pitch, reverse and the source.
-+ Added: a NOTES block for MIDI clips (the selected notes in the MIDI editor, or all notes of the clip): length, mute, channel, key range (drag to transpose) and velocity; and an EXPRESSIONS block with Pressure (polyphonic aftertouch).
-+ Added: footer keys at the bottom of the inspector: browser (Media Explorer), project settings, studio I/O (routing matrix) and the virtual MIDI keyboard.
++ Changed: the FILE, ADD and EDIT menus now look like Bitwig's: an icon per entry, Bitwig-style names, and each action's shortcut on the right, read live from REAPER (so your own key bindings show). Undo and Redo grey out when there is nothing to undo or redo. Without ReaImGui 0.10 or newer the plain menu is used.
++ Fixed: clicking Reverse in the inspector's AUDIO EVENT block gave an error (GetMediaSourceFileName: PCM_source expected).
 ]]></changelog>
     </version>
     </reapack>

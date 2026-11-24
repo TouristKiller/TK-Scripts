@@ -2,14 +2,14 @@
 local dir = ({reaper.get_action_context()})[2]:match("^(.*)[\\/]")
 local M = dofile(dir .. "/TK_Theme_Bit_Menu.lua")
 M.show({
-  40023, -- File: New project
-  40025, -- File: Open project
+  { 40023, "new", "New Project" },                  -- File: New project
+  { 40025, "open", "Open Project..." },             -- File: Open project
   0,
-  40026, -- File: Save project
-  40022, -- File: Save project as
+  { 40026, "save", "Save" },                        -- File: Save project
+  { 40022, "saveas", "Save As..." },                -- File: Save project as
   0,
-  40015, -- File: Render project to disk
+  { 40015, "render", "Render..." },                 -- File: Render project to disk
   0,
-  40021, -- File: Project settings
-  40016, -- Options: Preferences
+  { 40021, "settings", "Project Settings..." },     -- File: Project settings
+  { 40016, "prefs", "Preferences..." },             -- Options: Preferences
 })

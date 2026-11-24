@@ -947,11 +947,14 @@ local function draw_audio_event(item, take)
   end)
 
   sep()
+  -- Reverse swaps the take's source for a new one and frees the old: the action waits until
+  -- this block is drawn, so nothing below reads a source that is gone
   local src = r.GetMediaItemTake_Source(take)
-  local rev = false
+  if src and not r.ValidatePtr(src, "PCM_source*") then src = nil end
+  local rev, want_reverse = false, false
   if src then rev = select(4, r.PCM_Source_GetSectionInfo(src)) == true end
   row("Reverse", function()
-    if tkey("reverse", "\u{21C4}", rev) then r.Main_OnCommand(41051, 0) end   -- Item properties: Toggle take reverse
+    if tkey("reverse", "\u{21C4}", rev) then want_reverse = true end
   end)
   if src then
     local file = r.GetMediaSourceFileName(src, "")
@@ -967,6 +970,7 @@ local function draw_audio_event(item, take)
   end
   r.ImGui_Dummy(ctx, 0, 2)
   if button("props", "Properties") then r.Main_OnCommand(40009, 0) end   -- Item properties
+  if want_reverse then r.Main_OnCommand(41051, 0) end                     -- Item properties: Toggle take reverse
 end
 
 ---------------------------------------------------------------- notes
