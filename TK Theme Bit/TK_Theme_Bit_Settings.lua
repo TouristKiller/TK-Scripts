@@ -155,6 +155,7 @@ end
 -- file becomes the loaded one. The choices are also kept in an ExtState, so they come back
 -- when a theme update or rebuild replaces that file (checked when this window opens).
 local EXT = "TK Theme Bit"
+local AUD = {}          -- the audio editor row: "Other action" chosen, the ID being typed
 local LOOK_DEFAULT = { timeline = 100, grid_white = 0, grid_lines = 100, headers = 0 }
 -- mi_font, Inter: small 10 px / 500 as the theme ships, large 13 px / 600 (LOGFONT hex)
 local MI_FONT = {
@@ -565,6 +566,57 @@ local function page_transport()
           note(saxmand_found()
             and "DEVICES opens Saxmand's FX Modulator Linking, a device panel like Bitwig's."
             or "DEVICES opens Saxmand's FX Modulator Linking, which isn't installed: get it from Saxmand's ReaPack repository, or choose Other action.")
+        end
+      end
+      -- the audio editor icon: SneakPeak, or any action (ExtState audio_action)
+      local aidx, avalue = theme_param("bitTransAudio")
+      if aidx then
+
+        r.ImGui_Spacing(ctx)
+        row("Audio editor icon", function()
+          local p = segmented("audio", { "Off", "Shown" }, avalue == 0 and 1 or 2)
+          if p then set_theme_param("bitTransAudio", p == 1 and 0 or 1) end
+        end)
+        local own = r.GetExtState(EXT, "audio_action")
+        local other = own ~= "" or AUD.other
+        r.ImGui_Spacing(ctx)
+        row("Audio editor opens", function()
+          local p = segmented("audwhat", { "SneakPeak", "Other action" }, other and 2 or 1)
+          if p == 1 then
+            r.DeleteExtState(EXT, "audio_action", true)
+            AUD.other = false
+          elseif p == 2 then
+            AUD.other = true
+          end
+        end)
+        if other then
+          row("Action ID", function()
+            r.ImGui_SetNextItemWidth(ctx, 260)
+            r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), C.field)
+            local _, s = r.ImGui_InputTextWithHint(ctx, "##audid", "_RS... or a number", AUD.typed or own)
+            if r.ImGui_IsItemActive(ctx) then AUD.typed = s end
+            if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+              s = s:gsub("^%s+", ""):gsub("%s+$", "")
+              if s == "" then r.DeleteExtState(EXT, "audio_action", true)
+              else r.SetExtState(EXT, "audio_action", s, true) end
+              AUD.typed = nil
+            end
+            r.ImGui_PopStyleColor(ctx)
+          end)
+          local id = r.GetExtState(EXT, "audio_action")
+          local cmd = id ~= "" and (tonumber(id) or r.NamedCommandLookup(id)) or 0
+          if id == "" then
+            note("Paste an action's command ID, TK Audio Editor's for one (Actions list: right-click > Copy selected action command ID).")
+          elseif cmd and cmd > 0 then
+            note("Opens: " .. r.kbd_getTextFromCmd(math.floor(cmd), 0))
+          else
+            note("REAPER doesn't know this action.")
+          end
+        else
+          note(r.NamedCommandLookup("_SneakPeak_Toggle") ~= 0
+            and "Opens SneakPeak, a waveform editor for the selected audio clip, like Bitwig's audio editor. Dock it at the bottom from its right-click menu."
+            or "Opens SneakPeak, which isn't installed: add its ReaPack repository "
+              .. "(https://raw.githubusercontent.com/b451c/SneakPeak/main/index.xml), or choose Other action.")
         end
       end
     else

@@ -70,6 +70,54 @@ function V.devices_open()
   return cmd ~= nil and r.GetToggleCommandState(cmd) == 1
 end
 
+-- the audio editor icon: SneakPeak by default (its own Open/Close action), or any action
+-- chosen in the settings (ExtState audio_action)
+local SNEAKPEAK = "_SneakPeak_Toggle"
+function V.audio_action() return r.GetExtState(EXT, "audio_action") end
+function V.sneakpeak_command()
+  local cmd = r.NamedCommandLookup(SNEAKPEAK)
+  return cmd ~= 0 and cmd or nil
+end
+function V.audio_command()
+  local own = V.audio_action()
+  if own ~= "" then return V.resolve(own) end
+  return V.sneakpeak_command()
+end
+-- SneakPeak's action opens it but reports no toggle state and doesn't close it (seen
+-- 2026-11-24), so its window is looked up by title (js_ReaScriptAPI): "SneakPeak ..."
+function V.sneakpeak_window()
+  if not r.JS_Window_ListFind then return nil end
+  local n, list = r.JS_Window_ListFind("SneakPeak", false)
+  if not n or n == 0 then return nil end
+  local main = r.GetMainHwnd()
+  for addr in (list or ""):gmatch("[^,]+") do
+    local hwnd = r.JS_Window_HandleFromAddress(tonumber(addr))
+    if hwnd and hwnd ~= main and r.JS_Window_IsVisible(hwnd) then
+      local title = r.JS_Window_GetTitle(hwnd) or ""
+      if title:find("SneakPeak", 1, true) and not title:find("REAPER", 1, true) then return hwnd end
+    end
+  end
+  return nil
+end
+
+function V.audio_open()
+  local cmd = V.audio_command()
+  if not cmd then return false end
+  if r.GetToggleCommandState(cmd) == 1 then return true end
+  return V.audio_action() == "" and V.sneakpeak_window() ~= nil
+end
+
+-- close SneakPeak's window: out of the docker first when docked, then a close message
+function V.close_sneakpeak()
+  local hwnd = V.sneakpeak_window()
+  if not hwnd then return false end
+  if r.DockIsChildOfDock and r.DockIsChildOfDock(hwnd) ~= -1 and r.DockWindowRemove then
+    r.DockWindowRemove(hwnd)
+  end
+  r.JS_WindowMessage_Post(hwnd, "WM_CLOSE", 0, 0, 0, 0)
+  return true
+end
+
 -- a view key closes the device panel: running its action again ends it (REAPER may ask
 -- once whether to terminate a script; "Remember my answer" keeps that quiet afterwards)
 local function close_devices()
@@ -115,7 +163,8 @@ end
 function V.show(view)
   local a = set_param(PARAM, view)
   local b = set_param("bitDevOn", V.devices_open() and 1 or 0)
-  if a or b then r.ThemeLayout_RefreshAll() end
+  local c = set_param("bitAudOn", V.audio_open() and 1 or 0)
+  if a or b or c then r.ThemeLayout_RefreshAll() end
 end
 
 function V.switch(view)

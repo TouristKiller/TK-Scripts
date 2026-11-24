@@ -641,7 +641,7 @@
 
  <category name="TK Theme Bit">
     <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
-    <version name="0.2.1" author="TouristKiller" time="2026-11-24T13:45:17Z">
+    <version name="0.2.2" author="TouristKiller" time="2026-11-24T14:15:05Z">
      <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
      <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
      <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
@@ -652,18 +652,14 @@
      <source main="main" file="TK_Theme_Bit_View_Mix.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_View_Mix.lua</source>
      <source main="main" file="TK_Theme_Bit_View_Edit.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_View_Edit.lua</source>
      <source main="main" file="TK_Theme_Bit_Devices.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Devices.lua</source>
+     <source main="main" file="TK_Theme_Bit_Audio.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Audio.lua</source>
      <source main="main" file="TK_Theme_Bit_Inspector.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Inspector.lua</source>
      <source file="TK_Theme_Bit_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Menu.lua</source>
      <source file="TK_Theme_Bit_View.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_View.lua</source>
      <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
      <changelog><![CDATA[
-+ New: with nothing selected the inspector shows TIME RANGE, as Bitwig's: From / To of the time selection (drag or type), and its length. Without a time selection both show the edit cursor.
-+ New: Settings > Arrange > Grid and ruler: grid lines through the clips (needs SWS) and a ruler with seconds over the bars, as in Bitwig. Bars puts back the ruler you had.
-+ Changed: the right end of the transport has flat panel icons, as Bitwig's: devices, MIDI editor, mixer and the inspector. Orange while open; click an orange one again to close it (what ARRANGE did).
-+ Changed: the time selection in the display is Start / End / Length stacked, so the display is narrower.
-+ Changed: the mixer strip is calmer: the key row is gone, monitoring is the input row's icon (as Bitwig's speaker there), and phase, -10 and automation sit quietly at the top of the sends area.
-+ Changed: the inspector follows a click in the arrange: an empty spot shows the time range, and a track shows only when one is selected.
++ New: an audio editor icon in the transport's panel icons, as Bitwig's audio editor at the bottom. It opens SneakPeak (b451c's waveform item editor, from its own ReaPack repository) and closes it on a second click, orange while it is open. Settings > Transport > Audio editor opens: SneakPeak, or any other action.
 ]]></changelog>
     </version>
     </reapack>
