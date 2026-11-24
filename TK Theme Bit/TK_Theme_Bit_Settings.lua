@@ -577,18 +577,19 @@ local function page_transport()
           local p = segmented("audio", { "Off", "Shown" }, avalue == 0 and 1 or 2)
           if p then set_theme_param("bitTransAudio", p == 1 and 0 or 1) end
         end)
+        -- Clip Edit (the theme's own, the default), SneakPeak, or another action; the action
+        -- typed for "other" is kept when you switch away and back
         local own = r.GetExtState(EXT, "audio_action")
-        local other = own ~= "" or AUD.other
+        local choice = r.GetExtState(EXT, "audio_choice")
+        if choice == "" then choice = own ~= "" and "other" or "clipedit" end
+        local CHOICES = { "clipedit", "sneakpeak", "other" }
+        local cur = choice == "sneakpeak" and 2 or choice == "other" and 3 or 1
         r.ImGui_Spacing(ctx)
         row("Audio editor opens", function()
-          local p = segmented("audwhat", { "SneakPeak", "Other action" }, other and 2 or 1)
-          if p == 1 then
-            r.DeleteExtState(EXT, "audio_action", true)
-            AUD.other = false
-          elseif p == 2 then
-            AUD.other = true
-          end
+          local p = segmented("audwhat", { "Clip Edit", "SneakPeak", "Other action" }, cur)
+          if p and p ~= cur then r.SetExtState(EXT, "audio_choice", CHOICES[p], true) end
         end)
+        local other = choice == "other"
         if other then
           row("Action ID", function()
             r.ImGui_SetNextItemWidth(ctx, 260)
@@ -612,11 +613,14 @@ local function page_transport()
           else
             note("REAPER doesn't know this action.")
           end
-        else
+        elseif choice == "sneakpeak" then
           note(r.NamedCommandLookup("_SneakPeak_Toggle") ~= 0
-            and "Opens SneakPeak, a waveform editor for the selected audio clip, like Bitwig's audio editor. Dock it at the bottom from its right-click menu."
+            and "Opens SneakPeak, a waveform editor for the selected audio clip. Dock it at the bottom from its right-click menu."
             or "Opens SneakPeak, which isn't installed: add its ReaPack repository "
-              .. "(https://raw.githubusercontent.com/b451c/SneakPeak/main/index.xml), or choose Other action.")
+              .. "(https://raw.githubusercontent.com/b451c/SneakPeak/main/index.xml), or choose Clip Edit.")
+        else
+          note("Opens TK Bit Clip Edit, this theme's own audio editor in Bitwig's style, for the selected audio clip. "
+            .. "Dock it at the bottom, under the arrange, as Bitwig's.")
         end
       end
     else

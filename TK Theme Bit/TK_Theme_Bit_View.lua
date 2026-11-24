@@ -70,18 +70,48 @@ function V.devices_open()
   return cmd ~= nil and r.GetToggleCommandState(cmd) == 1
 end
 
--- the audio editor icon: SneakPeak by default (its own Open/Close action), or any action
--- chosen in the settings (ExtState audio_action)
+-- the audio editor icon opens, as chosen in the settings (ExtState audio_choice):
+--   clipedit   TK Bit Clip Edit, this theme's own editor (the default)
+--   sneakpeak  SneakPeak (its own Open/Close action)
+--   other      any action (ExtState audio_action)
 local SNEAKPEAK = "_SneakPeak_Toggle"
+local CLIP_EDIT = "TK_Theme_Bit_Clip_Edit.lua"
 function V.audio_action() return r.GetExtState(EXT, "audio_action") end
+function V.audio_choice()
+  local c = r.GetExtState(EXT, "audio_choice")
+  if c ~= "" then return c end
+  return V.audio_action() ~= "" and "other" or "clipedit"     -- before the choice existed
+end
 function V.sneakpeak_command()
   local cmd = r.NamedCommandLookup(SNEAKPEAK)
   return cmd ~= 0 and cmd or nil
 end
+-- a script of this theme, found by its file name in REAPER's action list
+local script_cmds = {}
+function V.script_command(file)
+  if script_cmds[file] == nil then
+    script_cmds[file] = false
+    local f = io.open(r.GetResourcePath() .. "/reaper-kb.ini", "rb")
+    if f then
+      local text = f:read("a")
+      f:close()
+      for line in text:gmatch("[^\r\n]+") do
+        local id = line:match("^SCR %d+ %d+ (%S+) ")
+        if id and line:find("/" .. file, 1, true) then
+          local cmd = r.NamedCommandLookup("_" .. id)
+          if cmd ~= 0 then script_cmds[file] = cmd break end
+        end
+      end
+    end
+  end
+  return script_cmds[file] or nil
+end
+function V.clip_edit_command() return V.script_command(CLIP_EDIT) end
 function V.audio_command()
-  local own = V.audio_action()
-  if own ~= "" then return V.resolve(own) end
-  return V.sneakpeak_command()
+  local c = V.audio_choice()
+  if c == "other" then return V.resolve(V.audio_action()) end
+  if c == "sneakpeak" then return V.sneakpeak_command() end
+  return V.clip_edit_command()
 end
 -- SneakPeak's action opens it but reports no toggle state and doesn't close it (seen
 -- 2026-11-24), so its window is looked up by title (js_ReaScriptAPI): "SneakPeak ..."
@@ -104,7 +134,7 @@ function V.audio_open()
   local cmd = V.audio_command()
   if not cmd then return false end
   if r.GetToggleCommandState(cmd) == 1 then return true end
-  return V.audio_action() == "" and V.sneakpeak_window() ~= nil
+  return V.audio_choice() == "sneakpeak" and V.sneakpeak_window() ~= nil
 end
 
 -- close SneakPeak's window: out of the docker first when docked, then a close message
