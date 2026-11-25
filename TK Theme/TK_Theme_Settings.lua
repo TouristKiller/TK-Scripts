@@ -1270,6 +1270,16 @@ function parts.pack(zip, accent)
         local own = Zip.read_stored(path)
         local common = own and Zip.read_stored(dir .. "common.zip")
         parts.packs[path] = own and (common and Zip.merge_stored(common, own) or own) or false
+        -- the FX, send and parameter lists' text in the accent, as the look has it for the play
+        -- cursor (bright in Dark, darker in Light): one more line each in the accent's colour
+        -- lines. Dark kept the glass's ink for it, Light one blue (res and the user, 2026-11-25)
+        local pk = parts.packs[path]
+        local keys = pk and pk["keys.txt"]
+        local cursor = keys and (keys:match("[\r\n]playcursor_color=(%-?%d+)") or keys:match("^playcursor_color=(%-?%d+)"))
+        if cursor and not keys:find("mcp_fx_normal=", 1, true) then
+            pk["keys.txt"] = keys .. (keys:sub(-1) == "\n" and "" or "\n") .. "mcp_fx_normal=" .. cursor
+                .. "\nmcp_sends_normal=" .. cursor .. "\nmcp_fxparm_normal=" .. cursor .. "\n"
+        end
     end
     return parts.packs[path]
 end
@@ -1326,7 +1336,7 @@ function parts.read(zip, accent, part, variant, file)
         -- dark glass's FX, send and parameter list text: the accent, as Light has it for the play
         -- cursor (made for light grounds, and the lists are on both), not one blue for every
         -- accent (res, 2026-11-25). The glass pack is the same for every accent
-        if data and file == "keys.txt" and variant == "dark" then
+        if data and file == "keys.txt" then     -- (light glass too: its own was a teal ink)
             local cursor = (pack["keys.txt"] or ""):match("[\r\n]playcursor_color=(%-?%d+)") or (pack["keys.txt"] or ""):match("^playcursor_color=(%-?%d+)")
             if cursor then
                 data = data:gsub("(mcp_fx_normal=)%-?%d+", "%1" .. cursor):gsub("(mcp_sends_normal=)%-?%d+", "%1" .. cursor)
