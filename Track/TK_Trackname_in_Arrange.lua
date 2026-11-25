@@ -1,8 +1,12 @@
 -- @description TK_Trackname_in_Arrange
 -- @author TouristKiller
--- @version 2.0.2
+-- @version 2.0.3
 -- @changelog
 --[[
+v2.0.3:
++ Fixed: envelope lanes lost their color when their track's own row was scrolled out of view; the visible-track check now counts the envelope lanes as part of the track
++ Fixed: envelope lanes below a track that is hidden behind pinned tracks lost their color too; only the hidden track row is skipped now, the envelopes below it are still colored
+
 v2.0.2:
 + Added: label font can now be any font installed on your system, e.g. to match your theme. Tick "System Fonts" at the top of the font list to browse and search all installed fonts; the choice is stored by name, so it is kept in presets
 + System font scan covers fonts installed for all users and fonts installed for your account only (Windows), plus macOS and Linux; use "Rescan" after installing a new font
@@ -511,7 +515,10 @@ local function FindVisibleTrackRange(track_count, view_bottom)
             local track_height = r.GetMediaTrackInfo_Value(track, "I_TCPH") / screen_scale
             if track_height > 0 then
                 local track_y = r.GetMediaTrackInfo_Value(track, "I_TCPY") / screen_scale
-                local track_bottom = track_y + track_height
+                -- I_WNDH includes envelope lanes: a track whose row is above the view
+                -- but whose envelopes are still on screen must stay in the range
+                local full_height = r.GetMediaTrackInfo_Value(track, "I_WNDH") / screen_scale
+                local track_bottom = track_y + math.max(track_height, full_height)
                 if track_bottom >= 0 and track_y < view_bottom then
                     if first_idx < 0 then first_idx = i end
                     last_idx = i
@@ -4254,7 +4261,7 @@ function RenderSolidOverlay(draw_list, track, track_y, track_height, color, wind
     
     if pinned_height > 0 and track_y < pinned_height then
         if track_y + track_height <= pinned_height then
-            return
+            goto draw_envelope_overlay
         end
         local actual_y = window_y + pinned_height
         local actual_height = track_height - (pinned_height - track_y)
@@ -4277,7 +4284,8 @@ function RenderSolidOverlay(draw_list, track, track_y, track_height, color, wind
             color
         )
     end
-    
+
+    ::draw_envelope_overlay::
     local track_env_cnt = r.CountTrackEnvelopes(track)
     if track_env_cnt > 0 and settings.show_envelope_colors and not settings.disable_all_color_overlays then
         local env_y = track_y + track_height
@@ -4349,7 +4357,7 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
     
     if pinned_height > 0 and track_y < pinned_height then
         if track_y + track_height <= pinned_height then
-            return
+            goto draw_envelope_overlay
         end
         local actual_y = window_y + pinned_height
         local actual_height = track_height - (pinned_height - track_y)
@@ -4398,7 +4406,8 @@ function RenderGradientOverlay(draw_list, track, track_y, track_height, color, w
             )
         end
     end
-    
+
+    ::draw_envelope_overlay::
     local track_env_cnt = r.CountTrackEnvelopes(track)
     if track_env_cnt > 0 and settings.show_envelope_colors and not settings.disable_all_color_overlays then
         local env_y = track_y + track_height

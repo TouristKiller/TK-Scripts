@@ -2112,12 +2112,11 @@ v0.2.52
 
 <category name="Track">
     <reapack name="TK_Trackname_in_Arrange.lua" type="script" desc="TK_Trackname_in_Arrange">
-        <version name="2.0.2" author="TouristKiller" time="2026-10-28T16:14:39Z">
+        <version name="2.0.3" author="TouristKiller" time="2026-11-25T20:09:41Z">
             <changelog><![CDATA[
-            v2.0.2:
-            + Added: label font can now be any font installed on your system, e.g. to match your theme. Tick "System Fonts" at the top of the font list to browse and search all installed fonts; the choice is stored by name, so it is kept in presets
-            + System font scan covers fonts installed for all users and fonts installed for your account only (Windows), plus macOS and Linux; use "Rescan" after installing a new font
-            + The built-in font list and existing presets are unchanged
+            v2.0.3:
+            + Fixed: envelope lanes lost their color when their track's own row was scrolled out of view; the visible-track check now counts the envelope lanes as part of the track
+            + Fixed: envelope lanes below a track that is hidden behind pinned tracks lost their color too; only the hidden track row is skipped now, the envelopes below it are still colored
 ]]></changelog>
             <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_in_Arrange.lua</source>
             <source main="main" file="TK_Trackname_Overlay_Toggle.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/Track/TK_Trackname_Overlay_Toggle.lua</source>
