@@ -586,6 +586,13 @@ local PAGES = {
             T("Layout button", "tkTcpLayBtn", nil, "Shows the track's layout (A, B, C); click for the next. Selected tracks go along."),
             Off(function() return global_value("tkTcpPlate") and global_value("tkWood") end, { kind = "choice", label = "Track number", param = "tkNumStyle", pic = "number", choices = { "Colour", "Stripe" },
               hint = "Colour fills the number column; Stripe is a thin line of the track colour." }),
+            -- (res, 2026-11-25) the column REAPER draws for track icons, beside the panel, and the
+            -- envelope lanes' background
+            { kind = "part", part = "icon_bg", label = "Icon background",
+              choices = { { "own", "Auto" }, { "light", "Light" }, { "dark", "Dark" }, { "track", "Track colour" }, { "white", "White" }, { "black", "Black" } },
+              hint = "The column beside the track panel where track icons sit (mixer too). Auto: this look's panel over the track colour, as the windows' rims; Light or Dark: either look's panel that way; Track colour: the track colour as it is; White and Black: one colour for every track. Envelope lanes leave this column free. Requested by res." },
+            { kind = "choice", label = "Envelope lanes", param = "tkEnvBg", choices = { "Auto", "Light", "Dark", "Track colour" },
+              hint = "The background of envelope lanes. Auto as the look has it (on a plate in Light with dark glass, Dark's); Track colour: the panel with the track colour in it. The lane's display stays as it is. Requested by res." },
             -- a plate has knobs: then the handle is only the envelope lanes' (on their tab)
             Off(function() return global_value("tkTcpPlate") end,
                 { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES, hint = "For volume, pan and width, also on the master and in envelope lanes." }),
@@ -1156,7 +1163,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", trans_knob = "classic", tcp_keys = "own", mcp_keys = "own", mcp_side = "off", fly = "v0", tcp_volcap = "off", track_lcd = "own", time_font = "standard", ruler_font = "inter" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", trans_knob = "classic", tcp_keys = "own", mcp_keys = "own", mcp_side = "off", fly = "v0", tcp_volcap = "off", track_lcd = "own", time_font = "standard", ruler_font = "inter", icon_bg = "own" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the track panel's list slots (Lists: Boxes or Plain; its FX slots its own since 0.9.97)
         tcp_lists = { "tcp_fxlist_norm", "tcp_fxlist_byp", "tcp_fxlist_off", "tcp_fxlist_empty", "tcp_sendlist_norm",
@@ -1173,6 +1180,8 @@ local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen
         mcp_knob = { "mcp_vol_knob_stack", "mcp_pan_knob_stack", "mcp_wid_knob_stack" },
         -- the transport's rate knob on a plate (0.9.98)
         trans_knob = { "transRateKnob" },
+        -- the track icon column, track panel and mixer (0.9.99.3, res)
+        icon_bg = { "tcp_iconbg", "tcp_iconbgsel", "mcp_iconbg", "mcp_iconbgsel" },
         -- the plate's R / M / S in another style (0.9.98)
         tcp_keys = { "track_mute_off_ol", "track_mute_on", "track_solo_off_ol", "track_solo_on", "track_recarm_off_ol", "track_recarm_on_ol",
             "track_recarm_norec_ol", "track_recarm_auto_ol", "track_recarm_auto_on_ol", "track_recarm_auto_norec_ol", "track_mono",
@@ -1204,6 +1213,7 @@ parts.HW_OWN = { tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", m
 -- over the hardware in this order: the keys' style first, the record arm's own R over it
 parts.HW_OVER = { "tcp_keys", "mcp_keys", "tcp_recarm", "mcp_recarm", "tcp_knob", "mcp_knob" }
 parts.KEYS_RECARM = { tcp_keys = "tcp_recarm", mcp_keys = "mcp_recarm" }
+parts.ICON_BG_PARAM = { own = 0, light = 1, dark = 2, track = 3, white = 4, black = 5 }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
 
@@ -1313,6 +1323,16 @@ function parts.read(zip, accent, part, variant, file)
     if part == "light_glass" then
         -- the light ones that differ per accent are the pack's own
         local data = parts.glass_get(zip, accent, "parts/light_glass/" .. variant .. "/" .. file)
+        -- dark glass's FX, send and parameter list text: the accent, as Light has it for the play
+        -- cursor (made for light grounds, and the lists are on both), not one blue for every
+        -- accent (res, 2026-11-25). The glass pack is the same for every accent
+        if data and file == "keys.txt" and variant == "dark" then
+            local cursor = (pack["keys.txt"] or ""):match("[\r\n]playcursor_color=(%-?%d+)") or (pack["keys.txt"] or ""):match("^playcursor_color=(%-?%d+)")
+            if cursor then
+                data = data:gsub("(mcp_fx_normal=)%-?%d+", "%1" .. cursor):gsub("(mcp_sends_normal=)%-?%d+", "%1" .. cursor)
+                    :gsub("(mcp_fxparm_normal=)%-?%d+", "%1" .. cursor)
+            end
+        end
         if data or file == "keys.txt" then return data end
         return variant == "light" and pack[file] or nil
     end
@@ -1859,6 +1879,12 @@ function parts.write(part, variant, zip, accent)
     end
     -- record arm on the plates: Cap is the hardware part's own R, so that part is written
     -- again for it; Lamp and Glass only count on a plate (the hardware Silver or Black)
+    -- the icon column: the envelope lanes' field under it takes the same colour, which the
+    -- layout learns from tkIconBg (0 own, 1 light, 2 dark, 3 track colour)
+    if part == "icon_bg" then
+        local want = parts.ICON_BG_PARAM[variant] or 0
+        if P.tkIconBg and math.floor(P.tkIconBg.value) ~= want then set_param("tkIconBg", want, true) end
+    end
     local recarm_hw = parts.RECARM_HW[part]
     if recarm_hw then
         -- the layout can't see an image: it learns from this that the R is a lamp (a round shadow)
@@ -2031,7 +2057,12 @@ end
 
 function parts.in_zip(part, variant, zip)
     zip = zip or parts.zip_path()
-    if part == "light_glass" and parts.is_light(zip) and parts.lcd_on() then return true end
+    -- the track LCDs on: the glass is dark whatever was chosen, and the display's own check sees
+    -- to its images. Its colour lines still count: the list text follows the accent since
+    -- 0.9.99.3, and without this check a theme from before kept the old blue (2026-11-25)
+    if part == "light_glass" and parts.is_light(zip) and parts.lcd_on() then
+        return (parts.keys(parts.read(zip, nil, "light_glass", "dark", "keys.txt"), zip, part))
+    end
     if part == "mcp_side" and variant == "off" then return true end
     -- the track panel's Boxes under the track LCDs or Light's dark glass: those bring their own
     -- slots (parts.write puts them back). Compared with the look's own boxes it was never in
@@ -2309,8 +2340,11 @@ function parts.restore()
             for _, rp in ipairs(parts.HW_OVER) do last[#last + 1] = rp end
             last[#last + 1] = "mcp_side"
             last[#last + 1] = "tcp_volcap"
+            -- Light's glass also when never chosen: with the track LCDs on its colour lines (the
+            -- list text in the accent) are there whatever Light glass says
+            if parts.is_light(zip) and parts.lcd_on() and not parts.chosen.light_glass then last[#last + 1] = "light_glass" end
             for _, rp in ipairs(last) do
-                local rv = parts.chosen[rp]
+                local rv = parts.chosen[rp] or (rp == "light_glass" and parts.default.light_glass or nil)
                 if rv and not parts.in_zip(rp, rv, zip) then
                     state.log("restore: " .. rp .. "=" .. rv .. " not in place, written again")
                     if parts.write(rp, rv, zip) then wrote = true end
@@ -3600,7 +3634,10 @@ end
 local COLOUR_GROUPS = {
     { "Arrange", {
         { "Empty area", { "col_arrangebg" } }, { "Empty area under the track panels", { "col_tracklistbg" } },
-        { "Track lanes", { "col_tr1_bg", "col_tr2_bg" } }, { "Lines between tracks", { "col_tr1_divline", "col_tr2_divline" } },
+        { "Track lanes", { "col_tr1_bg", "col_tr2_bg" } },
+        -- (res, 2026-11-25; were only kept, as ARRANGE_EXTRA)
+        { "Track lanes, selected", { "selcol_tr1_bg", "selcol_tr2_bg" } },
+        { "Lines between tracks", { "col_tr1_divline", "col_tr2_divline" } },
         { "Grid, measures", { "col_gridlines2" } }, { "Grid, beats", { "col_gridlines3" } }, { "Grid, between beats", { "col_gridlines" } },
         { "Edit cursor", { "col_cursor", "col_cursor2" } }, { "Play cursor", { "playcursor_color" } },
         { "Area selection", { "areasel_fill" } },
@@ -4226,12 +4263,17 @@ local function preset_names()
 end
 
 local function colour_keys(fn)
+    -- each key once: the selected lanes are on the page and in ARRANGE_EXTRA too
+    local seen = {}
+    local function once(key)
+        if not seen[key] then seen[key] = true fn(key) end
+    end
     for _, group in ipairs(COLOUR_GROUPS) do
         for _, entry in ipairs(group[2]) do
-            for _, key in ipairs(entry[2]) do fn(key) end
+            for _, key in ipairs(entry[2]) do once(key) end
         end
     end
-    for _, key in ipairs(ARRANGE_EXTRA) do fn(key) end
+    for _, key in ipairs(ARRANGE_EXTRA) do once(key) end
 end
 
 local function save_preset(name, with_dark)
@@ -5684,6 +5726,11 @@ local function startup_checks()
     for rp, lp in pairs({ tcp_recarm = "tkTcpRecLamp", mcp_recarm = "tkMcpRecLamp", tcp_keys = "tkTcpKeysRound", mcp_keys = "tkMcpKeysRound" }) do
         local want = (parts.chosen[rp] or parts.default[rp]) == (rp:find("keys", 1, true) and "round" or "lamp") and 1 or 0
         if P[lp] and math.floor(P[lp].value) ~= want then set_param(lp, want, true) end
+    end
+    -- and the icon column's colour, for the envelope lanes' field under it
+    do
+        local want = parts.ICON_BG_PARAM[parts.chosen.icon_bg or parts.default.icon_bg] or 0
+        if P.tkIconBg and math.floor(P.tkIconBg.value) ~= want then set_param("tkIconBg", want, true) end
     end
     -- Basic's buttons and lists follow its switches, also when those were set before the
     -- images came (or by hand in REAPER's own theme adjuster)

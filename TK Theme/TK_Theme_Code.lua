@@ -277,6 +277,12 @@ LayoutC-tkPlFader
 tkTcpCap
 tkBtn_countin
 tkCountInMode
+icon_bg
+tkIconBg
+tkEnvBg
+track
+white
+black
 ]]
 
 local words, index = {}, {}
