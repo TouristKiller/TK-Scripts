@@ -1119,12 +1119,447 @@ local function page_window()
   end)
 end
 
+-- Bitwig shortcuts: one of REAPER's 16 alternative lists of the main section holds them,
+-- switched on and off at once; Main stays untouched (TK_Theme_Bit_Keys.lua tells why).
+-- The list below shows every action with the keys that work while the list is on.
+local KEYS = { search = "", only_keys = true, pick = nil }
+function KEYS.lib()
+  if KEYS.m == nil then
+    local ok, m = pcall(dofile, dir .. "/TK_Theme_Bit_Keys.lua")
+    KEYS.m = ok and m or false
+  end
+  return KEYS.m
+end
+-- the list in the look of Bitwig's Settings > Shortcuts: two black filter fields (type to
+-- filter actions / press a key to filter), the actions grouped under their category with
+-- a fold arrow, each key a small grey pill with its cross, a plain + to add one
+KEYS.TXT = { bitwig = C.accent, own = C.text, default = 0x8C8C8CFF, hidden = 0x4A4A4AFF, lost = 0x5E5E5EFF }
+KEYS.TIP = {
+  bitwig = "Bitwig key. Click to change it, the cross removes it.",
+  own = "Your own key in the Bitwig list. Click to change it, the cross removes it.",
+  default = "REAPER's default key, working while the Bitwig list is on. The cross takes it out of the list.",
+  hidden = "Taken by another key in the Bitwig list.",
+  lost = "Your own key in REAPER's main list: it doesn't work while the Bitwig list is on. Click to add a key.",
+}
+KEYS.LIST_BG, KEYS.PILL, KEYS.PILL_HI, KEYS.PILL_DIM = 0x0A0A0AFF, 0x343434FF, 0x484848FF, 0x1C1C1CFF
+KEYS.closed, KEYS.ver = {}, 0
+KEYS.keyfilter = ""
+
+-- REAPER's shortcut dialog is modal and blocks this script, so it runs after the frame
+function KEYS.later(f) KEYS.after = f end
+function KEYS.dialog(cmd, idx)
+  local m = KEYS.lib()
+  KEYS.later(function()
+    r.DoActionShortcutDialog(r.GetMainHwnd(), r.SectionFromUniqueID(m.alt()), cmd, idx)
+    KEYS.refresh(cmd)
+  end)
+end
+
+-- after a change: only the rows it touches are read again, not all actions
+function KEYS.refresh(cmd)
+  if not KEYS.rows then return end
+  KEYS.lib().refresh(KEYS.rows, cmd)
+  KEYS.key = nil                     -- filter again (a row may have gained or lost its keys)
+end
+
+-- the rows to draw: a header per category ("Item: Split..." -> Item; no colon -> General),
+-- then its actions without the prefix, unless the category is folded
+function KEYS.filtered()
+  local key = table.concat({ KEYS.search, KEYS.keyfilter, tostring(KEYS.only_keys), KEYS.ver }, "\0")
+  if KEYS.rows and KEYS.key == key and KEYS.list then return KEYS.list end
+  if not KEYS.rows then KEYS.rows = KEYS.lib().model() end
+  local q = KEYS.search:lower()
+  local groups, names = {}, {}
+  for _, row in ipairs(KEYS.rows) do
+    local ok = (not KEYS.only_keys or #row.keys > 0) and (q == "" or row.name:lower():find(q, 1, true))
+    if ok and KEYS.keyfilter ~= "" then
+      ok = false
+      for _, k in ipairs(row.keys) do if k.desc == KEYS.keyfilter then ok = true break end end
+    end
+    if ok then
+      local g, short = row.name:match("^(.-):%s+(.+)$")
+      if not g or #g > 40 then g, short = "General", row.name end
+      -- thousands of scripts: one group per maker, by the file name's prefix (TK_, mpl_, X-Raym_)
+      if g == "Script" or g == "Custom" then
+        local maker = short:match("^([%w%-]+)_")
+        g = "Script: " .. (maker or "other")
+      end
+      row.short = short
+      if not groups[g] then groups[g] = {} names[#names + 1] = g end
+      table.insert(groups[g], row)
+    end
+  end
+  table.sort(names, function(a, b) return a:lower() < b:lower() end)
+  local open_all = q ~= "" or KEYS.keyfilter ~= ""
+  local list = {}
+  for _, g in ipairs(names) do
+    list[#list + 1] = { head = g, n = #groups[g] }
+    if open_all or not KEYS.closed[g] then
+      for _, row in ipairs(groups[g]) do list[#list + 1] = row end
+    end
+  end
+  KEYS.key, KEYS.list = key, list
+  return list
+end
+
+-- one key as a pill: grey, rounded, its text in the kind's colour, a cross when it can
+-- go. Returns "change", "remove", "add" or nil.
+function KEYS.chip(k, id)
+  r.ImGui_PushFont(ctx, font, 11)
+  local tw, th = r.ImGui_CalcTextSize(ctx, k.desc)
+  local can_x = k.kind == "bitwig" or k.kind == "own" or k.kind == "default"
+  local w = tw + 12 + (can_x and 11 or 0)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local hit = r.ImGui_InvisibleButton(ctx, "##chip" .. id, w, 17)
+  local hover = r.ImGui_IsItemHovered(ctx)
+  local mx = r.ImGui_GetMousePos(ctx)
+  local on_x = can_x and hover and mx >= x + w - 13
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local dim = k.kind == "hidden" or k.kind == "lost"
+  local fill = dim and KEYS.PILL_DIM or ((hover and not on_x) and KEYS.PILL_HI or KEYS.PILL)
+  r.ImGui_DrawList_AddRectFilled(dl, x, y + 1, x + w, y + 16, fill, 4)
+  local col = KEYS.TXT[k.kind]
+  r.ImGui_DrawList_AddText(dl, x + 6, y + (17 - th) / 2, col, k.desc)
+  if dim then r.ImGui_DrawList_AddLine(dl, x + 4, y + 9, x + 8 + tw, y + 9, col, 1) end
+  if can_x then
+    local cx, cy, s = x + w - 8, y + 8.5, 2.5
+    local xc = on_x and C.text or 0xA0A0A0FF
+    r.ImGui_DrawList_AddLine(dl, cx - s, cy - s, cx + s, cy + s, xc, 1.2)
+    r.ImGui_DrawList_AddLine(dl, cx - s, cy + s, cx + s, cy - s, xc, 1.2)
+  end
+  r.ImGui_PopFont(ctx)
+  if hover then r.ImGui_SetTooltip(ctx, on_x and "Remove from the Bitwig list" or KEYS.TIP[k.kind]) end
+  if not hit then return nil end
+  if on_x then return "remove" end
+  if k.kind == "lost" then return "add" end
+  if k.kind ~= "hidden" then return "change" end
+end
+
+-- Bitwig's plain white plus
+function KEYS.plus(id)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local hit = r.ImGui_InvisibleButton(ctx, "##plus" .. id, 16, 17)
+  local col = r.ImGui_IsItemHovered(ctx) and C.accent or C.text
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  r.ImGui_DrawList_AddLine(dl, x + 3, y + 8.5, x + 13, y + 8.5, col, 1.2)
+  r.ImGui_DrawList_AddLine(dl, x + 8, y + 3.5, x + 8, y + 13.5, col, 1.2)
+  if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "Add a key in the Bitwig list") end
+  return hit
+end
+
+-- a black filter field with a cross on the right when it holds something
+function KEYS.field_frame(x, y, w, h)
+  r.ImGui_DrawList_AddRectFilled(r.ImGui_GetWindowDrawList(ctx), x, y, x + w, y + h, 0x000000FF)
+end
+
+function KEYS.clear_button(id, x, y)
+  r.ImGui_SetCursorScreenPos(ctx, x, y)
+  local hit = r.ImGui_InvisibleButton(ctx, "##clr" .. id, 18, 18)
+  local col = r.ImGui_IsItemHovered(ctx) and C.text or 0xA0A0A0FF
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  local cx, cy, s = x + 9, y + 9, 3.5
+  r.ImGui_DrawList_AddLine(dl, cx - s, cy - s, cx + s, cy + s, col, 1.4)
+  r.ImGui_DrawList_AddLine(dl, cx - s, cy + s, cx + s, cy - s, col, 1.4)
+  return hit
+end
+
+function KEYS.search_field(w)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  KEYS.field_frame(x, y, w, 24)
+  -- a small magnifier
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  r.ImGui_DrawList_AddCircle(dl, x + 11, y + 11, 4, 0xA0A0A0FF, 0, 1.2)
+  r.ImGui_DrawList_AddLine(dl, x + 14, y + 14, x + 17, y + 17, 0xA0A0A0FF, 1.2)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), 0x00000000)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_TextDisabled(), 0x6E6E6EFF)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FramePadding(), 4, 5)
+  r.ImGui_SetCursorScreenPos(ctx, x + 22, y)
+  r.ImGui_SetNextItemWidth(ctx, w - 44)
+  local _, s = r.ImGui_InputTextWithHint(ctx, "##keysearch", "Type to filter actions", KEYS.search)
+  KEYS.search = s
+  r.ImGui_PopStyleVar(ctx)
+  r.ImGui_PopStyleColor(ctx, 2)
+  if KEYS.search ~= "" and KEYS.clear_button("s", x + w - 21, y + 3) then KEYS.search = "" end
+  r.ImGui_SetCursorScreenPos(ctx, x, y + 24)
+end
+
+-- REAPER's names of the keys this field listens to (ImGui key -> text)
+function KEYS.key_names()
+  if not KEYS.knames then
+    local t = {}
+    local function add(imgui, name)
+      local f = r["ImGui_Key_" .. imgui]
+      if f then t[#t + 1] = { f(), name } end
+    end
+    for c in ("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"):gmatch(".") do add(c, c) end
+    for i = 1, 12 do add("F" .. i, "F" .. i) end
+    for _, p in ipairs({ { "Space", "Space" }, { "Backspace", "Backspace" }, { "Enter", "Enter" },
+      { "Delete", "Delete" }, { "Tab", "Tab" }, { "Comma", "," }, { "Period", "." },
+      { "UpArrow", "Up" }, { "DownArrow", "Down" }, { "LeftArrow", "Left" }, { "RightArrow", "Right" },
+      { "Home", "Home" }, { "End", "End" }, { "Insert", "Insert" } }) do add(p[1], p[2]) end
+    KEYS.knames = t
+  end
+  return KEYS.knames
+end
+
+function KEYS.read_key()
+  for _, k in ipairs(KEYS.key_names()) do
+    if r.ImGui_IsKeyPressed(ctx, k[1], false) then
+      local s = ""
+      if r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Ctrl()) then s = s .. "Ctrl+" end
+      if r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Alt()) then s = s .. "Alt+" end
+      if r.ImGui_IsKeyDown(ctx, r.ImGui_Mod_Shift()) then s = s .. "Shift+" end
+      return s .. k[2]
+    end
+  end
+end
+
+-- "Press keyboard to filter": click it, press a key (with its modifiers), the list shows
+-- the actions on that key
+function KEYS.key_field(w)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  KEYS.field_frame(x, y, w, 24)
+  local clicked = r.ImGui_InvisibleButton(ctx, "##keyfield", w - 22, 24)
+  local hovered = r.ImGui_IsItemHovered(ctx)
+  if clicked then KEYS.capturing = true end
+  if KEYS.capturing and r.ImGui_IsMouseClicked(ctx, 0) and not hovered then KEYS.capturing = false end
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  if KEYS.capturing then
+    r.ImGui_DrawList_AddLine(dl, x + 6, y + 5, x + 6, y + 19, C.accent, 1.5)
+    r.ImGui_SetNextFrameWantCaptureKeyboard(ctx, true)
+    if r.ImGui_IsKeyPressed(ctx, r.ImGui_Key_Escape(), false) then
+      KEYS.capturing = false
+    else
+      local d = KEYS.read_key()
+      if d then KEYS.keyfilter, KEYS.capturing = d, false end
+    end
+  end
+  local text = KEYS.keyfilter ~= "" and KEYS.keyfilter or "Press keyboard to filter"
+  r.ImGui_DrawList_AddText(dl, x + 10, y + 5, KEYS.keyfilter ~= "" and C.text or 0x6E6E6EFF, text)
+  if KEYS.keyfilter ~= "" and KEYS.clear_button("k", x + w - 21, y + 3) then KEYS.keyfilter = "" end
+  r.ImGui_SetCursorScreenPos(ctx, x, y + 24)
+end
+
+-- Bitwig's round orange tick box
+function KEYS.tick(label, on)
+  local x, y = r.ImGui_GetCursorScreenPos(ctx)
+  local tw = r.ImGui_CalcTextSize(ctx, label)
+  local hit = r.ImGui_InvisibleButton(ctx, "##tick" .. label, 26 + tw, 20)
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  if on then
+    r.ImGui_DrawList_AddCircleFilled(dl, x + 9, y + 10, 8, C.accent)
+    r.ImGui_DrawList_AddLine(dl, x + 5, y + 10, x + 8, y + 13, C.dark, 1.8)
+    r.ImGui_DrawList_AddLine(dl, x + 8, y + 13, x + 13, y + 7, C.dark, 1.8)
+  else
+    r.ImGui_DrawList_AddCircle(dl, x + 9, y + 10, 8, 0x8C8C8CFF, 0, 1.2)
+  end
+  r.ImGui_DrawList_AddText(dl, x + 24, y + 3, C.text, label)
+  return hit
+end
+
+function KEYS.table()
+  local w = r.ImGui_GetContentRegionAvail(ctx)
+  local half = math.floor((w - 8) / 2)
+  local x0, y0 = r.ImGui_GetCursorScreenPos(ctx)
+  KEYS.search_field(half)
+  r.ImGui_SetCursorScreenPos(ctx, x0 + half + 8, y0)
+  KEYS.key_field(w - half - 8)
+  r.ImGui_SetCursorScreenPos(ctx, x0, y0 + 30)
+  local list = KEYS.filtered()
+  local _, avail_h = r.ImGui_GetContentRegionAvail(ctx)
+  r.ImGui_PushStyleColor(ctx, r.ImGui_Col_ChildBg(), KEYS.LIST_BG)
+  r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 6, 4)
+  local visible = r.ImGui_BeginChild(ctx, "##keylist", 0, math.max(160, avail_h - 32),
+    r.ImGui_ChildFlags_AlwaysUseWindowPadding and r.ImGui_ChildFlags_AlwaysUseWindowPadding() or 0)
+  r.ImGui_PopStyleVar(ctx)
+  r.ImGui_PopStyleColor(ctx)
+  if visible then
+    if not r.ImGui_ValidatePtr(KEYS.clipper, "ImGui_ListClipper*") then
+      KEYS.clipper = r.ImGui_CreateListClipper(ctx)
+    end
+    local cw = r.ImGui_GetContentRegionAvail(ctx)
+    local name_w = math.floor(cw * 0.48)
+    local dl = r.ImGui_GetWindowDrawList(ctx)
+    local open_all = KEYS.search ~= "" or KEYS.keyfilter ~= ""
+    r.ImGui_ListClipper_Begin(KEYS.clipper, #list, 23)
+    while r.ImGui_ListClipper_Step(KEYS.clipper) do
+      local a, b = r.ImGui_ListClipper_GetDisplayRange(KEYS.clipper)
+      for i = a + 1, b do
+        local row = list[i]
+        local x, y = r.ImGui_GetCursorScreenPos(ctx)
+        if row.head then
+          -- the category: a fold arrow and its name in bold white
+          if r.ImGui_InvisibleButton(ctx, "##head" .. i, cw, 23) and not open_all then
+            KEYS.closed[row.head] = not KEYS.closed[row.head] or nil
+            KEYS.ver = KEYS.ver + 1
+          end
+          local open = open_all or not KEYS.closed[row.head]
+          local ax, ay = x + 8, y + 11.5
+          if open then
+            r.ImGui_DrawList_AddTriangleFilled(dl, ax - 3.5, ay - 2, ax + 3.5, ay - 2, ax, ay + 2.5, C.text)
+          else
+            r.ImGui_DrawList_AddTriangleFilled(dl, ax - 2, ay - 3.5, ax - 2, ay + 3.5, ax + 2.5, ay, C.text)
+          end
+          r.ImGui_PushFont(ctx, font, 13)
+          r.ImGui_DrawList_AddText(dl, x + 20, y + 4, C.text, row.head)
+          r.ImGui_PopFont(ctx)
+        else
+          local indent = 34
+          r.ImGui_PushClipRect(ctx, x + indent, y, x + name_w - 6, y + 23, true)
+          r.ImGui_DrawList_AddText(dl, x + indent, y + 4, #row.keys > 0 and C.text or 0xB4B4B4FF, row.short)
+          r.ImGui_PopClipRect(ctx)
+          r.ImGui_SetCursorScreenPos(ctx, x + indent, y)
+          r.ImGui_InvisibleButton(ctx, "##name" .. i, name_w - indent - 6, 23)
+          if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, row.name) end
+          r.ImGui_SetCursorScreenPos(ctx, x + name_w, y + 3)
+          for j, k in ipairs(row.keys) do
+            if j > 1 then r.ImGui_SameLine(ctx, 0, 4) end
+            local act = KEYS.chip(k, i .. "_" .. j)
+            if act == "remove" then
+              r.DeleteActionShortcut(r.SectionFromUniqueID(KEYS.lib().alt()), row.cmd, k.idx)
+              KEYS.refresh(row.cmd)
+            elseif act == "change" then
+              KEYS.dialog(row.cmd, k.idx)
+            elseif act == "add" then
+              KEYS.dialog(row.cmd, -1)
+            end
+          end
+          if #row.keys > 0 then r.ImGui_SameLine(ctx, 0, 8) end
+          if KEYS.plus(i) then KEYS.dialog(row.cmd, -1) end
+        end
+        r.ImGui_SetCursorScreenPos(ctx, x, y + 23)
+        r.ImGui_Dummy(ctx, 1, 0)
+      end
+    end
+    if #list == 0 then
+      r.ImGui_Dummy(ctx, 1, 6)
+      text_col(C.dim, (KEYS.search ~= "" or KEYS.keyfilter ~= "") and "  Nothing matches." or "  No keys.")
+    end
+    r.ImGui_EndChild(ctx)
+  end
+  -- the bottom line: the tick box on the left, what the key colours mean on the right,
+  -- both centred on the same 20 px row
+  local bx, by = r.ImGui_GetCursorScreenPos(ctx)
+  r.ImGui_SetCursorScreenPos(ctx, bx, by + 6)
+  if KEYS.tick("Only actions with keys", KEYS.only_keys) then KEYS.only_keys = not KEYS.only_keys end
+  r.ImGui_PushFont(ctx, font, 11)
+  local legend = { { "bitwig", "Bitwig" }, { "own", "Yours" }, { "default", "REAPER default" }, { "lost", "Not active" } }
+  local total = 0
+  for i, l in ipairs(legend) do total = total + r.ImGui_CalcTextSize(ctx, l[2]) + (i > 1 and 14 or 0) end
+  local _, th = r.ImGui_CalcTextSize(ctx, "Ay")
+  local lx, ly = bx + w - total - 6, by + 6 + (20 - th) / 2
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  for _, l in ipairs(legend) do
+    local tw = r.ImGui_CalcTextSize(ctx, l[2])
+    r.ImGui_SetCursorScreenPos(ctx, lx, ly)
+    text_col(KEYS.TXT[l[1]], l[2])
+    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, KEYS.TIP[l[1]]) end
+    if l[1] == "lost" then r.ImGui_DrawList_AddLine(dl, lx, ly + th / 2 + 1, lx + tw, ly + th / 2 + 1, KEYS.TXT.lost, 1) end
+    lx = lx + tw + 14
+  end
+  r.ImGui_PopFont(ctx)
+  r.ImGui_SetCursorScreenPos(ctx, bx, by + 26)
+  r.ImGui_Dummy(ctx, 1, 0)
+end
+
+local function page_shortcuts()
+  local m = KEYS.lib()
+  if not m then
+    note("TK_Theme_Bit_Keys.lua is missing next to this script: update TK Theme Bit in ReaPack.")
+    return
+  end
+  local installed = m.installed()
+  if KEYS.restart then
+    bar("Bitwig keys written: REAPER reads them after a restart.", {
+      { "Restart REAPER now", 140, DARK.restart },
+      { "Later", 60, function() KEYS.restart = false end },
+    })
+  elseif installed and KEYS.arrived == nil then
+    KEYS.arrived = m.arrived()
+  end
+  if installed and KEYS.arrived == false and not KEYS.restart then
+    bar("The Bitwig keys didn't arrive: REAPER rewrote its key file before the restart.", {
+      { "Write them again", 140, function() m.install(m.alt()) KEYS.restart = true end },
+    })
+  end
+  section("Shortcuts", function()
+    row("Keyboard", function()
+      local p = segmented("keys", { "REAPER", "Bitwig" }, (installed and m.active()) and 2 or 1)
+      if p == 1 and installed then m.set_on(false)
+      elseif p == 2 then
+        if installed then m.set_on(true)
+        else
+          local ok, missing = m.install(KEYS.pick or m.suggest())
+          if ok then
+            KEYS.restart, KEYS.missing, KEYS.rows = true, missing, nil
+          else
+            KEYS.msg = missing
+          end
+        end
+      end
+    end)
+    if installed then
+      row("Bitwig list", function()
+        r.ImGui_AlignTextToFramePadding(ctx)
+        text_col(C.text, "alt-" .. m.alt())
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "REAPER's alternative key list Main (alt-" .. m.alt() .. "), in front of your "
+            .. "own keys while Bitwig is on.\nA key not in it works as in REAPER's defaults, not as your own keys: "
+            .. "those are struck through below and can be added.")
+        end
+        r.ImGui_SameLine(ctx, 0, 12)
+        if action_button("Defaults", 76) then
+          local ok, missing = m.install(m.alt())
+          if ok then KEYS.restart, KEYS.missing = true, missing else KEYS.msg = missing end
+        end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Put Bitwig's keys back as they came (needs a restart). Keys you added stay.")
+        end
+        r.ImGui_SameLine(ctx, 0, 4)
+        if action_button("Remove", 70) then m.remove() KEYS.rows = nil KEYS.arrived = nil end
+        if r.ImGui_IsItemHovered(ctx) then
+          r.ImGui_SetTooltip(ctx, "Take the Bitwig keys out of the list and stop switching it on. Keys you added stay.")
+        end
+      end)
+      note("Changes below work at once. Hover a key for what it is.")
+    else
+      local counts = m.alt_lists()
+      KEYS.pick = KEYS.pick or m.suggest()
+      row("Use list", function()
+        r.ImGui_SetNextItemWidth(ctx, 180)
+        local label = ("Main (alt-%d)"):format(KEYS.pick)
+        if r.ImGui_BeginCombo(ctx, "##altlist", label) then
+          for n = 1, 16 do
+            local text = ("Main (alt-%d)   %s"):format(n, counts[n] == 0 and "empty" or counts[n] .. " keys")
+            if r.ImGui_Selectable(ctx, text, n == KEYS.pick) then KEYS.pick = n end
+          end
+          r.ImGui_EndCombo(ctx)
+        end
+      end)
+      if counts[KEYS.pick] > 0 then
+        note(("This list holds %d keys already: the Bitwig keys are added to it and win where they clash.")
+          :format(counts[KEYS.pick]))
+      end
+      note("Bitwig's keys go into one of REAPER's 16 alternative key lists; your own keys are never changed. "
+        .. "The first time needs a restart.")
+    end
+    if KEYS.msg then note(KEYS.msg) end
+    if KEYS.missing and #KEYS.missing > 0 then
+      note("Not found in this REAPER, left out: " .. table.concat(KEYS.missing, ", "))
+    end
+  end)
+  if installed and not KEYS.restart then
+    KEYS.table()
+  end
+end
+
 local PAGES = {
   { "Transport", page_transport },
   { "Display", page_display },
   { "Arrange", page_arrange },
   { "Tracks & Mixer", page_tracks },
   { "Window", page_window },
+  { "Shortcuts", page_shortcuts },
 }
 local page = 1
 local tab = 2          -- 1 USER, 2 SETTINGS, 3 HELP
@@ -1512,18 +1947,6 @@ U.PAGES = {
 }
 U.page = 3
 
-local function page_help()
-  r.ImGui_PushTextWrapPos(ctx, 0)
-  text_col(C.text, "TK Theme Bit", false)
-  r.ImGui_Spacing(ctx)
-  text_col(C.dim, "A REAPER theme in the style of a modern flat DAW. These settings switch the theme's own options "
-    .. "and a few REAPER preferences that belong to the look (through SWS).", true)
-  r.ImGui_Spacing(ctx)
-  text_col(C.dim, "The FILE / ADD / EDIT buttons and this gear are small scripts, registered once by "
-    .. "TK_Theme_Bit_Setup.lua.", true)
-  r.ImGui_PopTextWrapPos(ctx)
-end
-
 ---------------------------------------------------------------- window
 local function header(open)
   -- large thin titles across the top, the active one white; a close cross on the right
@@ -1585,6 +2008,190 @@ local function user_sidebar()
   end
 end
 
+-- HELP: chapters in the sidebar, as the SETTINGS pages. Each chapter is a list of blocks:
+--   { "h", "Heading" }            a sub heading
+--   { "p", "Text" }               a paragraph
+--   { "k", "Key / mouse", "What" } a key or mouse action with what it does
+--   { "i", "Name", "What" }        a named thing (icon, button, setting) with what it does
+local HELP = { page = 1 }
+HELP.CHAPTERS = {
+  { "Getting started", {
+    { "p", "TK Theme Bit is a REAPER theme in the style of a modern flat DAW, with a few scripts that add "
+      .. "what the theme alone can't: menus, an inspector, an audio editor, Bitwig's keys." },
+    { "h", "What you need" },
+    { "i", "ReaImGui", "Draws the menus, the inspector, Clip Edit and this window. Required." },
+    { "i", "SWS", "Lets the settings change REAPER preferences (labels, grid, default volume). Recommended." },
+    { "i", "js_ReaScriptAPI", "Lets the audio editor icon close SneakPeak. Only needed for that." },
+    { "p", "All three come through ReaPack. Install them, then restart REAPER." },
+    { "h", "Opening this window" },
+    { "p", "Click the gear next to the transport display, or the logo above it when it's shown. "
+      .. "USER holds your projects, SETTINGS the theme's options, HELP this text." },
+    { "h", "Closing a panel script" },
+    { "p", "Panels (inspector, Clip Edit, devices) close when you run them again. The first time REAPER "
+      .. "may ask whether to end the running script: tick \"Remember my answer\" and choose Terminate." },
+  } },
+  { "Transport", {
+    { "i", "FILE  ADD  EDIT", "Menus with what you need most, each with its icon and your own shortcut. "
+      .. "They replace REAPER's menu bar, which you can hide (Settings > Window)." },
+    { "i", "Play  Stop  Record", "Bitwig's three keys. Settings > Transport adds rewind, pause and forward." },
+    { "i", "Display", "Position, tempo and time signature. The time selection shows as Start, End and "
+      .. "Length, stacked. Optional: play rate (Settings > Transport)." },
+    { "i", "Follow", "The key in the display: the view follows the playhead. How it scrolls is set in "
+      .. "Settings > Arrange." },
+    { "i", "Logo", "Bit's dot mark over the display (optional). Click it for these settings." },
+    { "h", "Panel icons (right)" },
+    { "p", "Like Bitwig's panel icons. Orange means open; click an orange one again to close it." },
+    { "i", "Devices", "Opens the device panel: Saxmand's FX Modulator Linking, or an action you choose." },
+    { "i", "Audio editor", "Opens Clip Edit for the selected audio clip (or SneakPeak, or an action you choose)." },
+    { "i", "MIDI editor", "Opens the selected MIDI clip. One view at a time: it closes the mixer." },
+    { "i", "Mixer", "Shows the mixer and closes the MIDI editor." },
+    { "i", "Inspector", "Opens the inspector panel (after the line)." },
+    { "p", "Each icon can be switched off in Settings > Transport. They hide when the bar is too narrow." },
+  } },
+  { "Inspector", {
+    { "p", "Like Bitwig's inspector: it shows what you touched last. Dock it at the left with the icon at its top." },
+    { "i", "Track", "Name, colour, volume, pan, mute / solo / arm / monitoring, input, output, sends, FX." },
+    { "i", "Clip", "Name, colour, position, gain, pan, fades, pitch, rate, mute / loop / reverse, source. "
+      .. "Changes go to every selected clip." },
+    { "i", "Envelope", "Select an envelope lane: the lane on top (active, visible, armed, shape) and the "
+      .. "selected points below. Works in automation items too." },
+    { "i", "Time range", "Nothing selected: the time selection's start, end and length." },
+    { "i", "TRACK | CLIP", "At the top: pick one by hand. It follows the selection again when you click elsewhere." },
+    { "h", "Changing a value" },
+    { "k", "Drag up or right", "Change it. Hold Shift for fine steps." },
+    { "k", "Double-click", "Type a value." },
+    { "k", "Right-click", "Back to the default." },
+  } },
+  { "Clip Edit", {
+    { "p", "The theme's own audio editor, like Bitwig's. It follows the selected audio clip; dock it at the "
+      .. "bottom. Open it with the audio editor icon or the E key (Bitwig shortcuts)." },
+    { "i", "Clip | Track", "Clip: the clips on that track that touch each other, each one an event. "
+      .. "Track: all clips of the track." },
+    { "h", "Tools (keys at the right)" },
+    { "i", "Pointer", "Select and move events. Drag an event's edge to trim it; Alt+drag slips the audio inside." },
+    { "i", "Time selection", "Drag a time selection." },
+    { "i", "Draw", "Add volume envelope points." },
+    { "i", "Erase", "Remove points and stretch markers." },
+    { "i", "Knife", "Split an event." },
+    { "i", "Stretch", "Add stretch markers. Dashed lines are transients: drag one to make it a marker." },
+    { "h", "In the event" },
+    { "i", "Fades", "Drag the white squares. Right-click one for the next shape." },
+    { "i", "Gain", "Drag the dB box in the event's header. Double-click: 0 dB." },
+    { "i", "Lanes", "Volume, pan and pitch under the waveform. Right-click a lane to choose. "
+      .. "Hover or drag a point to see its value." },
+    { "h", "Right-click menu" },
+    { "p", "Trim to time selection, reverse, normalize, slice at transients, stretch markers on transients, "
+      .. "transient sensitivity, quantize events or stretch markers (strength 25-100%, only inside a time "
+      .. "selection when there is one), remove markers or points, fade shapes." },
+    { "h", "Keys and mouse" },
+    { "k", "Wheel", "Scroll." },
+    { "k", "Ctrl+wheel", "Zoom." },
+    { "k", "Alt+wheel", "A taller waveform." },
+    { "k", "Shift", "No snap, fine steps." },
+    { "k", "Alt- or right-click", "Delete a point or marker." },
+    { "k", "Space / S / Ctrl+Z", "Play / split / undo, while the panel has focus." },
+    { "k", "Delete / Ctrl+D", "Delete / duplicate the selected events." },
+    { "p", "The grid button (1/16 and so on) sets the project grid; Snap is in its menu. The overview at the bottom scrolls." },
+  } },
+  { "Mixer & tracks", {
+    { "i", "Input row", "Its icon is the monitoring switch." },
+    { "i", "Phase  -10  Automation", "Small icons at the top of the sends area. -10 sets that track to "
+      .. "-10 dB (the whole selection when the track is in it)." },
+    { "i", "-10 dB", "Bitwig starts tracks at -10 dB for headroom. Settings > Tracks & Mixer sets it for "
+      .. "new tracks, and has a button for the selected ones." },
+    { "i", "Numbers", "Bitwig shows no track numbers; small ones can be added (Settings > Tracks & Mixer)." },
+    { "i", "Meters", "Peak, Peak/RMS or LUFS-M for every track in the project." },
+  } },
+  { "Shortcuts", {
+    { "p", "Settings > Shortcuts gives REAPER Bitwig's keys, and switches back at once." },
+    { "h", "How it works" },
+    { "p", "REAPER has 16 alternative key lists. The Bitwig keys go into the one you choose; Bitwig puts it "
+      .. "in front of your own keys, REAPER takes it away. Your own key list is never changed." },
+    { "p", "The first time needs a restart of REAPER. After that, switching and editing work at once." },
+    { "p", "While Bitwig is on, a key that isn't in the list works as in REAPER's defaults, not as you set it "
+      .. "yourself. Those keys show struck through: click one to add it to the Bitwig list." },
+    { "h", "The list" },
+    { "k", "Type to filter", "Find actions by name." },
+    { "k", "Press keyboard to filter", "Click it, press a key: the actions on that key." },
+    { "k", "Click a key", "Change it. The cross removes it." },
+    { "k", "+", "Add a key." },
+    { "i", "Colours", "Orange: Bitwig. White: yours. Grey: REAPER's default. Struck through: not active." },
+    { "i", "Defaults", "Puts Bitwig's keys back as they came (restart). Keys you added stay." },
+    { "i", "Remove", "Takes the Bitwig keys out. Keys you added stay." },
+    { "h", "Some keys" },
+    { "k", "M  E  D  I  O", "Mixer, editor, devices, inspector, arranger." },
+    { "k", "Ctrl+E  Ctrl+D  Ctrl+J", "Split, duplicate, consolidate." },
+    { "k", "F9  C  Shift+L  Shift+F", "Record, metronome, loop, follow." },
+  } },
+  { "Settings", {
+    { "i", "Transport", "Which keys and icons the bar shows, the logo, and what Devices and Audio editor open." },
+    { "i", "Display", "Contrast (REAPER's own colour controls), timeline background, beat grid colour and lines." },
+    { "i", "Arrange", "Grid lines through clips, the seconds-over-bars ruler, item names, clip header size, "
+      .. "playhead follow." },
+    { "i", "Tracks & Mixer", "Default volume, track list volume, meters, track numbers." },
+    { "i", "Window", "Theme size, REAPER's window colours, TK icons, the menu bar." },
+    { "i", "Shortcuts", "Bitwig's keys (see that chapter)." },
+    { "p", "Right-click a slider for its default. A note under a setting says when it needs SWS or a restart." },
+  } },
+  { "Icons", {
+    { "p", "REAPER's own toolbar icons follow the theme: white, orange when on, no frame." },
+    { "p", "TK's own icons (TK_...) come as a separate ReaPack package, TK Toolbar Icons, in a TK and a "
+      .. "Bit look. Bit keeps them in its look; choose another in Settings > Window. A window shows new "
+      .. "icons the next time it opens." },
+  } },
+}
+
+function HELP.sidebar()
+  local pages = {}
+  for i, c in ipairs(HELP.CHAPTERS) do pages[i] = { c[1] } end
+  HELP.page = sidebar(pages, HELP.page)
+end
+
+-- a key or name in a small grey pill (as the shortcut list), its text after it
+function HELP.pair(left, right, pill)
+  local x0, y0 = r.ImGui_GetCursorScreenPos(ctx)
+  local col_w = 150
+  local dl = r.ImGui_GetWindowDrawList(ctx)
+  if pill then
+    r.ImGui_PushFont(ctx, font, 11)
+    local tw, th = r.ImGui_CalcTextSize(ctx, left)
+    r.ImGui_DrawList_AddRectFilled(dl, x0, y0 + 1, x0 + tw + 12, y0 + 17, KEYS.PILL, 4)
+    r.ImGui_DrawList_AddText(dl, x0 + 6, y0 + (18 - th) / 2, C.text, left)
+    r.ImGui_PopFont(ctx)
+  else
+    r.ImGui_DrawList_AddText(dl, x0, y0 + 1, C.text, left)
+  end
+  r.ImGui_SetCursorScreenPos(ctx, x0 + col_w, y0 + 1)
+  r.ImGui_PushTextWrapPos(ctx, 0)
+  text_col(C.dim, right, true)
+  r.ImGui_PopTextWrapPos(ctx)
+  r.ImGui_Dummy(ctx, 1, 4)
+end
+
+function HELP.page_draw()
+  local c = HELP.CHAPTERS[HELP.page]
+  r.ImGui_PushFont(ctx, font, 20)
+  text_col(C.text, c[1])
+  r.ImGui_PopFont(ctx)
+  r.ImGui_Dummy(ctx, 1, 6)
+  for _, b in ipairs(c[2]) do
+    if b[1] == "h" then
+      r.ImGui_Dummy(ctx, 1, 6)
+      r.ImGui_PushFont(ctx, font, 13)
+      text_col(C.accent, b[2]:upper())
+      r.ImGui_PopFont(ctx)
+      r.ImGui_Dummy(ctx, 1, 2)
+    elseif b[1] == "p" then
+      r.ImGui_PushTextWrapPos(ctx, 0)
+      text_col(C.dim, b[2], true)
+      r.ImGui_PopTextWrapPos(ctx)
+      r.ImGui_Dummy(ctx, 1, 4)
+    else
+      HELP.pair(b[2], b[3], b[1] == "k")
+    end
+  end
+end
+
 local function loop()
   r.ImGui_PushFont(ctx, font, 13)
   r.ImGui_PushStyleColor(ctx, r.ImGui_Col_WindowBg(), C.bg)
@@ -1595,10 +2202,18 @@ local function loop()
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowRounding(), 10)
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowPadding(), 30, 22)
   r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_WindowBorderSize(), 1)
-  r.ImGui_SetNextWindowSize(ctx, W, H, r.ImGui_Cond_Always())
-  local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoResize() | r.ImGui_WindowFlags_NoCollapse()
+  -- the height can be dragged at the bottom edge (the width stays); the last one is kept
+  if not KEYS.height then KEYS.height = tonumber(r.GetExtState(EXT, "settings_h")) or H end
+  r.ImGui_SetNextWindowSize(ctx, W, KEYS.height, r.ImGui_Cond_Appearing())
+  r.ImGui_SetNextWindowSizeConstraints(ctx, W, H, W, 3000)
+  local flags = r.ImGui_WindowFlags_NoTitleBar() | r.ImGui_WindowFlags_NoCollapse()
   local visible, open = r.ImGui_Begin(ctx, "TK Theme Bit settings", true, flags)
   if visible then
+    local _, h = r.ImGui_GetWindowSize(ctx)
+    if math.abs(h - KEYS.height) >= 1 and not r.ImGui_IsMouseDown(ctx, 0) then
+      KEYS.height = math.floor(h)
+      r.SetExtState(EXT, "settings_h", tostring(KEYS.height), true)
+    end
     open = header(open)
     if tab == 1 then
       if r.ImGui_BeginChild(ctx, "##uside", SIDEBAR, 0) then
@@ -1622,7 +2237,15 @@ local function loop()
         r.ImGui_EndChild(ctx)
       end
     else
-      page_help()
+      if r.ImGui_BeginChild(ctx, "##hside", SIDEBAR, 0) then
+        HELP.sidebar()
+        r.ImGui_EndChild(ctx)
+      end
+      r.ImGui_SameLine(ctx)
+      if r.ImGui_BeginChild(ctx, "##hpage", 0, 0) then
+        HELP.page_draw()
+        r.ImGui_EndChild(ctx)
+      end
     end
     r.ImGui_End(ctx)
   end
@@ -1630,6 +2253,19 @@ local function loop()
   r.ImGui_PopStyleColor(ctx, 5)
   r.ImGui_PopFont(ctx)
   if U.close then open = false end   -- a project was opened: off, as Bitwig's dashboard
+  -- REAPER's shortcut dialog (modal) runs here, between frames; a context left unused
+  -- while it was open may be gone afterwards, so a new one takes over
+  if KEYS.after then
+    local f = KEYS.after
+    KEYS.after = nil
+    f()
+    if not r.ImGui_ValidatePtr(ctx, "ImGui_Context*") then
+      ctx = r.ImGui_CreateContext("TK Theme Bit settings")
+      font = r.ImGui_CreateFont("Inter")
+      r.ImGui_Attach(ctx, font)
+      KEYS.clipper = nil
+    end
+  end
   if open then r.defer(loop) end
 end
 

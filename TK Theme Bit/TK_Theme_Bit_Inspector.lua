@@ -918,7 +918,17 @@ local function draw_audio_event(item, take)
     end
   end)
 
-  sep()
+  -- Bitwig's EXPRESSIONS: gain, pan, pitch, with step keys under gain and pitch
+  head("EXPRESSIONS")
+  local function steps(id, list, apply)
+    row("", function(w)
+      local each = (w - (#list - 1)) / #list
+      for i, v in ipairs(list) do
+        if i > 1 then r.ImGui_SameLine(ctx, 0, 1) end
+        if key(id .. i, (v > 0 and "+" or "") .. v, false, each, ROW_H) then apply(v) end
+      end
+    end)
+  end
   row("Gain", function()
     local vol = r.GetMediaItemTakeInfo_Value(take, "D_VOL")
     local t, moved, done = vbox("cgain", amp_to_t(math.abs(vol)), amp_db(math.abs(vol)), { default = amp_to_t(1), parse = parse_db })
@@ -927,6 +937,12 @@ local function draw_audio_event(item, take)
       for_items(function(_, tk) if tk then r.SetMediaItemTakeInfo_Value(tk, "D_VOL", a) end end)
     end
     if done then undo("clip gain") end
+  end)
+  steps("gst", { -6, -1, 1, 6 }, function(db)
+    for_items(function(_, tk)
+      if tk then r.SetMediaItemTakeInfo_Value(tk, "D_VOL", r.GetMediaItemTakeInfo_Value(tk, "D_VOL") * 10 ^ (db / 20)) end
+    end)
+    undo("clip gain")
   end)
   row("Pan", function()
     local pan = r.GetMediaItemTakeInfo_Value(take, "D_PAN")
@@ -944,6 +960,12 @@ local function draw_audio_event(item, take)
       for_items(function(_, tk) if tk then r.SetMediaItemTakeInfo_Value(tk, "D_PITCH", st) end end)
     end
     if done then undo("clip pitch") end
+  end)
+  steps("pst", { -12, -1, 1, 12 }, function(st)
+    for_items(function(_, tk)
+      if tk then r.SetMediaItemTakeInfo_Value(tk, "D_PITCH", r.GetMediaItemTakeInfo_Value(tk, "D_PITCH") + st) end
+    end)
+    undo("clip pitch")
   end)
 
   sep()
@@ -1691,7 +1713,13 @@ for i = #STYLE, 1, -1 do                 -- only what this ReaImGui has
   if not STYLE[i][1] then table.remove(STYLE, i) end
 end
 
+local beat_at = 0
 local function loop()
+  local now = r.time_precise()          -- heartbeat for Clip Edit (see below)
+  if now - beat_at > 0.5 then
+    beat_at = now
+    r.SetExtState("TK Theme Bit", "inspector_open", string.format("%.3f", now), false)
+  end
   follow_selection()
   r.ImGui_PushFont(ctx, font, 13)
   for _, c in ipairs(STYLE) do r.ImGui_PushStyleColor(ctx, c[1](), c[2]) end
@@ -1768,9 +1796,12 @@ local function theme_says_open(v)
   end
 end
 theme_says_open(1)
+-- Clip Edit folds its own value column while the inspector runs: the loop writes the
+-- time every half second, so a crash (no atexit) does not leave it folded
 
 r.atexit(function()
   theme_says_open(0)
+  r.DeleteExtState("TK Theme Bit", "inspector_open", false)
   if cmd_id and cmd_id ~= 0 then
     r.SetToggleCommandState(section_id, cmd_id, 0)
     r.RefreshToolbar2(section_id, cmd_id)
