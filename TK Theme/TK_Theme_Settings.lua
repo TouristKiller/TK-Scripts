@@ -532,6 +532,9 @@ local PAGES = {
             { kind = "part", part = "toolbar_blank", label = "Text buttons", choices = { { "plain", "Plain" }, { "cell", "Cell" } },
               hint = "A quiet cell behind toolbar buttons that show text." },
             { kind = "part", part = "toolbar_text", label = "Text size", choices = { { "small", "Small" }, { "normal", "Normal" }, { "large", "Large" } } },
+            -- (res, 2026-11-26) the window scrollbars are an image sheet, so choices, not a colour
+            { kind = "part", part = "scrollbar", label = "Scrollbars", choices = { { "own", "Auto" }, { "light", "Light" }, { "dark", "Dark" }, { "grey", "Grey" } },
+              hint = "REAPER's scrollbars in the arrange, mixer and other windows. Auto: this look's own; Light or Dark: either look's; Grey: a neutral grey for both looks. A dragged scrollbar shows in your accent colour. Requested by res." },
             { kind = "part", part = "ruler_font", label = "Ruler and markers", choices = { { "inter", "Inter" }, { "arial", "Arial" } },
               hint = "The font of the ruler and the marker and region labels. Inter is the one REAPER ships with, as Default 7 uses. Arial: for when the ruler or the markers show wrong characters, which a copy of Inter you installed yourself can cause." },
         } },
@@ -589,10 +592,8 @@ local PAGES = {
             -- (res, 2026-11-25) the column REAPER draws for track icons, beside the panel, and the
             -- envelope lanes' background
             { kind = "part", part = "icon_bg", label = "Icon background",
-              choices = { { "own", "Auto" }, { "light", "Light" }, { "dark", "Dark" }, { "track", "Track colour" }, { "white", "White" }, { "black", "Black" } },
-              hint = "The column beside the track panel where track icons sit (mixer too). Auto: this look's panel over the track colour, as the windows' rims; Light or Dark: either look's panel that way; Track colour: the track colour as it is; White and Black: one colour for every track. Envelope lanes leave this column free. Requested by res." },
-            { kind = "choice", label = "Envelope lanes", param = "tkEnvBg", choices = { "Auto", "Light", "Dark", "Track colour" },
-              hint = "The background of envelope lanes. Auto as the look has it (on a plate in Light with dark glass, Dark's); Track colour: the panel with the track colour in it. The lane's display stays as it is. Requested by res." },
+              choices = { { "own", "Auto" }, { "light", "Light" }, { "dark", "Dark" }, { "track", "Track colour" }, { "white", "White" }, { "grey", "Grey" }, { "black", "Black" } },
+              hint = "The column beside the track panel where track icons sit (mixer too). Auto: this look's panel over the track colour, as the windows' rims; Light or Dark: either look's panel that way; Track colour: the track colour as it is; White, Grey and Black: one colour for every track (Grey fits Light and keeps white icons clear). Envelope lanes leave this column free. Requested by res." },
             -- a plate has knobs: then the handle is only the envelope lanes' (on their tab)
             Off(function() return global_value("tkTcpPlate") end,
                 { kind = "part", part = "tcp_thumb", label = "Slider handle", choices = SLIDER_HANDLES, hint = "For volume, pan and width, also on the master and in envelope lanes." }),
@@ -685,6 +686,16 @@ local PAGES = {
             Off(global_on("tkMasterMeterOnly", "tkMasterHideMeter"), S("Meter width", "tkMasterMeterW", nil, "0: as the tracks on layout A.")),
         } },
         { "Envelope lanes", {
+            -- (res, 2026-11-25/26; in their own card since 2026-11-26, the user)
+            { kind = "choice", label = "Background", param = "tkEnvBg", choices = { "Auto", "Light", "Dark", "Track colour", "Plate" },
+              after = function() patina.forge.ensure() end,
+              hint = "The background of envelope lanes. Auto as the look has it (on a plate in Light with dark glass, Dark's); Track colour: the panel with the track colour in it; Plate: the track panel's plate, in its material (with a plate on). The lane's display stays as it is. Requested by res." },
+            Off(function() return not (global_value("tkTcpPlate") and P.tkEnvBg and math.floor(P.tkEnvBg.value) == 4) end, (function()
+                local item = T("Screw strips", "tkEnvNoEars", nil,
+                    "The plate's screw strips on envelope lanes too. Off: the plate without them there (the tracks keep theirs, set on the Track panel page).", true)
+                item.after = function() patina.forge.ensure() end
+                return item
+            end)()),
             T("Show value", "showEnvValue"), T("Follow the track's indent", "indentEnvcp"),
             S("Name length", "envcpLabelLength"), S("Fader length", "envcpFaderLength"), S("Name size", "envcpFontSize"),
             Off(function() return not global_value("tkTcpPlate") end,
@@ -1163,7 +1174,7 @@ end
 -- back when an update has replaced the zip.
 local Zip = dofile(here .. "TK_Theme_Zip.lua")
 local parts = { file = r.GetResourcePath() .. "/Data/TK Theme/parts.txt", chosen = {}, images = {},
-    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", trans_knob = "classic", tcp_keys = "own", mcp_keys = "own", mcp_side = "off", fly = "v0", tcp_volcap = "off", track_lcd = "own", time_font = "standard", ruler_font = "inter", icon_bg = "own" },
+    default = { basic = "off", midi_keys = "accent", items = "classic", tcp_hw = "standard", mcp_hw = "standard", mcp_volthumb = "cap", meter = "segment", meter_lying = "same", display_light = "off", light_glass = "light", tcp_thumb = "dot", mcp_pan = "dot", accent = "blue", display = "standard", mcp_extmixbg = "grid", tcp_lists = "boxes", toolbar_blank = "plain", toolbar_text = "normal", send_tint = "off", shade = "standard", tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", mcp_knob = "classic", trans_knob = "classic", tcp_keys = "own", mcp_keys = "own", mcp_side = "off", fly = "v0", tcp_volcap = "off", track_lcd = "own", time_font = "standard", ruler_font = "inter", icon_bg = "own", scrollbar = "own" },
     images_of = { tcp_thumb = { "tcp_volthumb", "tcp_panthumb", "tcp_widththumb", "envcp_fader" }, mcp_pan = { "mcp_panthumb", "mcp_widththumb" },
         -- the track panel's list slots (Lists: Boxes or Plain; its FX slots its own since 0.9.97)
         tcp_lists = { "tcp_fxlist_norm", "tcp_fxlist_byp", "tcp_fxlist_off", "tcp_fxlist_empty", "tcp_sendlist_norm",
@@ -1213,7 +1224,7 @@ parts.HW_OWN = { tcp_recarm = "cap", mcp_recarm = "cap", tcp_knob = "classic", m
 -- over the hardware in this order: the keys' style first, the record arm's own R over it
 parts.HW_OVER = { "tcp_keys", "mcp_keys", "tcp_recarm", "mcp_recarm", "tcp_knob", "mcp_knob" }
 parts.KEYS_RECARM = { tcp_keys = "tcp_recarm", mcp_keys = "mcp_recarm" }
-parts.ICON_BG_PARAM = { own = 0, light = 1, dark = 2, track = 3, white = 4, black = 5 }
+parts.ICON_BG_PARAM = { own = 0, light = 1, dark = 2, track = 3, white = 4, black = 5, grey = 6 }
 -- a look is a theme file of its own, with its own images, colours and parts
 local look = { list = { { name = "Dark", theme = "TK Theme Dark" }, { name = "Light", theme = "TK Theme Light" } } }
 
@@ -1559,6 +1570,9 @@ function parts.files(part, zip, accent)
         return files
     end
     if part == "display" then return { "transSectionBg.png" } end     -- what parts.in_zip compares
+    -- REAPER's scrollbars: one sheet, only at 100% (Default 7 has no 150/200 ones), and its
+    -- light-window copy
+    if part == "scrollbar" then return { "scrollbar.png", "scrollbar_3.png" } end
     if part == "mcp_extmixbg" then
         -- the background above the strips (only at 100%, in Default 7 too), and the mixer's list
         -- slots: Lists, Boxes or Plain, as the track panel's (0.9.97)
@@ -3658,7 +3672,11 @@ local COLOUR_GROUPS = {
     } },
     { "Markers and regions", {
         { "Markers", { "marker" } }, { "Regions", { "region" } },
-        { "Marker lane", { "marker_lane_bg" } }, { "Region lane", { "region_lane_bg" } },
+        -- (a probe in REAPER, 2026-11-26: region_lane_bg is the ground of the marker AND region
+        -- lanes, marker_lane_bg only the lines between them; they were named "Region lane" and
+        -- "Marker lane". The tempo lane is the strip above the timeline res asked for)
+        { "Marker and region lanes", { "region_lane_bg" } }, { "Lines between the lanes", { "marker_lane_bg" } },
+        { "Tempo lane", { "ts_lane_bg" } },
     } },
     { "Media items", {
         { "Items without a colour", { "col_mi_bg", "col_mi_bg2" } },
@@ -3678,6 +3696,30 @@ local COLOUR_GROUPS = {
 -- The Inverted colour setting takes the arrange from the other look, with what has to
 -- contrast with it. These aren't on the page above, so they are reset along with it.
 local ARRANGE_EXTRA = { "selcol_tr1_bg", "selcol_tr2_bg", "arrange_vgrid", "col_mi_label_float", "col_mi_label_float_sel" }
+
+-- The Advanced tab: every colour REAPER draws itself, with REAPER's own names
+-- (TK_Theme_ColourList.lua, written by tk_theme_colour_list.py). Not the ones a choice of
+-- the theme sets (meters, light glass), which would fight it. res asked for one more colour
+-- at a time; the user wanted them all, behind a tab (2026-11-26)
+state.colour_list = dofile(here .. "TK_Theme_ColourList.lua")
+
+-- every colour the page keeps (saved, remembered over an update, in presets, codes and
+-- resets), each key once: some are on both tabs, and the selected lanes in ARRANGE_EXTRA too
+local function colour_keys(fn)
+    local seen = {}
+    local function once(key)
+        if not seen[key] then seen[key] = true fn(key) end
+    end
+    for _, group in ipairs(COLOUR_GROUPS) do
+        for _, entry in ipairs(group[2]) do
+            for _, key in ipairs(entry[2]) do once(key) end
+        end
+    end
+    for _, key in ipairs(ARRANGE_EXTRA) do once(key) end
+    for _, group in ipairs(state.colour_list) do
+        for _, entry in ipairs(group[2]) do once(entry[1]) end
+    end
+end
 
 local changed_colours = {}
 function parts.colours_unsaved() return next(changed_colours) ~= nil end
@@ -3744,18 +3786,11 @@ end
 
 remember_colours = function()
     local lines = {}
-    local keys = {}
-    for _, group in ipairs(COLOUR_GROUPS) do
-        for _, entry in ipairs(group[2]) do
-            for _, key in ipairs(entry[2]) do keys[#keys + 1] = key end
-        end
-    end
-    for _, key in ipairs(ARRANGE_EXTRA) do keys[#keys + 1] = key end
-    for _, key in ipairs(keys) do
+    colour_keys(function(key)
         local factory = factory_colour(key)
         local current = r.GetThemeColor(key, 0) & 0xFFFFFF
         if factory and factory ~= current then lines[#lines + 1] = key .. "=" .. current end
-    end
+    end)
     if #lines == 0 then
         os.remove(my_colours_file())
     else
@@ -3792,17 +3827,68 @@ local function set_colour(entry, native)
 end
 
 local function reset_colours()
-    for _, group in ipairs(COLOUR_GROUPS) do
+    colour_keys(function(key)
+        local native = factory_colour(key)
+        if native and native ~= r.GetThemeColor(key, 0) & 0xFFFFFF then set_colour({ key, { key } }, native) end
+    end)
+    repaint_after_colour()
+end
+
+-- Advanced: the whole list, in groups that open on a click; a search opens the groups it
+-- finds something in. The swatch goes first, as REAPER's names are long
+function state.draw_colours_advanced()
+    r.ImGui_SetNextItemWidth(ctx, CONTROL_W)
+    local ch, text = r.ImGui_InputTextWithHint(ctx, "##colour_find", "Search, e.g. ruler or midi", state.colour_find or "")
+    if ch then state.colour_find = text end
+    r.ImGui_SameLine(ctx, 0, 12)
+    local och, only = r.ImGui_Checkbox(ctx, "Only what I changed##colour_only", state.colour_only or false)
+    if och then state.colour_only = only end
+    r.ImGui_Dummy(ctx, 0, 2)
+    local find = (state.colour_find or ""):lower()
+    local flags = r.ImGui_ColorEditFlags_NoInputs() | r.ImGui_ColorEditFlags_NoLabel()
+    local shown = 0
+    for gi, group in ipairs(state.colour_list) do
+        local rows = {}
         for _, entry in ipairs(group[2]) do
-            local native = factory_colour(entry[2][1])
-            if native then set_colour(entry, native) end
+            local key, label = entry[1], entry[2]
+            local factory = factory_colour(key)
+            local changed = factory and factory ~= r.GetThemeColor(key, 0) & 0xFFFFFF
+            local match = find == "" or label:lower():find(find, 1, true) or key:find(find, 1, true) or group[1]:lower():find(find, 1, true)
+            if match and (changed or not state.colour_only) then rows[#rows + 1] = { key, label, factory, changed } end
+        end
+        if #rows > 0 then
+            shown = shown + #rows
+            if find ~= "" or state.colour_only then r.ImGui_SetNextItemOpen(ctx, true) end
+            if r.ImGui_CollapsingHeader(ctx, group[1] .. "  (" .. #rows .. ")###cadv" .. gi) then
+                for _, row in ipairs(rows) do
+                    local key, label, factory, changed = row[1], row[2], row[3], row[4]
+                    r.ImGui_PushID(ctx, key)
+                    local rgb = theme_rgb(key, 0)
+                    local cc, value = r.ImGui_ColorEdit3(ctx, "##colour", rgb, flags)
+                    if cc then
+                        set_colour({ key, { key } }, rgb_to_native(value))
+                        repaint_after_colour()
+                    end
+                    r.ImGui_SameLine(ctx)
+                    r.ImGui_AlignTextToFramePadding(ctx)
+                    r.ImGui_Text(ctx, label)
+                    if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, key) end
+                    if changed then
+                        r.ImGui_SameLine(ctx)
+                        if r.ImGui_SmallButton(ctx, "Reset") then
+                            set_colour({ key, { key } }, factory)
+                            repaint_after_colour()
+                        end
+                    end
+                    r.ImGui_PopID(ctx)
+                end
+                r.ImGui_Dummy(ctx, 0, 4)
+            end
         end
     end
-    for _, key in ipairs(ARRANGE_EXTRA) do
-        local native = factory_colour(key)
-        if native then set_colour({ key, { key } }, native) end
+    if shown == 0 then
+        hint_text(state.colour_only and find == "" and "No colour differs from the theme's own." or "Nothing found.")
     end
-    repaint_after_colour()
 end
 
 local function draw_colours()
@@ -3813,7 +3899,21 @@ local function draw_colours()
         state.msg = "Colours reset. Click Save colours to keep them."
     end
     r.ImGui_Dummy(ctx, 0, 2)
-    for gi, group in ipairs(COLOUR_GROUPS) do
+    local advanced = false
+    if r.ImGui_BeginTabBar(ctx, "##colourtabs") then
+        if r.ImGui_BeginTabItem(ctx, "Basic###colourbasic") then r.ImGui_EndTabItem(ctx) end
+        if r.ImGui_BeginTabItem(ctx, "Advanced###colouradv") then
+            advanced = true
+            r.ImGui_EndTabItem(ctx)
+        end
+        r.ImGui_EndTabBar(ctx)
+    end
+    if advanced then
+        hint_text("Every colour REAPER draws itself, with REAPER's own names. Point at a name for its key in the theme file. The meters' colours come with the meter type you choose, so they're not here.")
+        r.ImGui_Dummy(ctx, 0, 2)
+        state.draw_colours_advanced()
+    end
+    for gi, group in ipairs(advanced and {} or COLOUR_GROUPS) do
         if begin_card(group[1], "c" .. gi) then
             for ii, entry in ipairs(group[2]) do
                 r.ImGui_PushID(ctx, gi .. "_" .. ii)
@@ -4272,20 +4372,6 @@ local function preset_names()
     return names
 end
 
-local function colour_keys(fn)
-    -- each key once: the selected lanes are on the page and in ARRANGE_EXTRA too
-    local seen = {}
-    local function once(key)
-        if not seen[key] then seen[key] = true fn(key) end
-    end
-    for _, group in ipairs(COLOUR_GROUPS) do
-        for _, entry in ipairs(group[2]) do
-            for _, key in ipairs(entry[2]) do once(key) end
-        end
-    end
-    for _, key in ipairs(ARRANGE_EXTRA) do once(key) end
-end
-
 local function save_preset(name, with_dark)
     r.RecursiveCreateDirectory(preset_dir, 0)
     local lines = { "tk_theme_preset=1", "date=" .. os.date("%Y-%m-%d %H:%M") }
@@ -4364,12 +4450,11 @@ local function load_preset(name, with_dark)
     if values.handle then set_handle(values.handle == "dot") end
     local notes = {}
     changed_colours = {}
-    for _, key in ipairs(ARRANGE_EXTRA) do      -- a preset from before these were kept
+    -- a colour the preset doesn't hold (one from before it was kept: ARRANGE_EXTRA, the
+    -- selected items of 2026-11-23, the Advanced tab of 2026-11-26) goes to the theme's own
+    colour_keys(function(key)
         colours[key] = colours[key] or factory_colour(key)
-    end
-    for _, key in ipairs({ "col_tr1_itembgsel", "col_tr2_itembgsel" }) do    -- on the page since 2026-11-23
-        colours[key] = colours[key] or factory_colour(key)
-    end
+    end)
     for key, native in pairs(colours) do
         r.SetThemeColor(key, native, 1)
         changed_colours[key] = native
@@ -4790,13 +4875,25 @@ look.mood_keys = { col_arrangebg = true, col_tracklistbg = true, col_tr1_bg = tr
 -- look that didn't change all the way, so this page says so
 -- whether all that differs from the look's own is what a colour setting changes
 function look.only_mood_colours()
-    for _, group in ipairs(COLOUR_GROUPS) do
-        for _, item in ipairs(group[2]) do
-            local factory = factory_colour(item[2][1])
-            if factory and not look.mood_keys[item[2][1]] and not look.invert_keys[item[2][1]] and factory ~= r.GetThemeColor(item[2][1], 0) & 0xFFFFFF then return false end
+    -- what a colour setting changes: a page row whose first key it has (with the row's other
+    -- keys, the even tracks), and ARRANGE_EXTRA
+    if not look.set_keys then
+        look.set_keys = {}
+        for _, group in ipairs(COLOUR_GROUPS) do
+            for _, item in ipairs(group[2]) do
+                if look.mood_keys[item[2][1]] or look.invert_keys[item[2][1]] then
+                    for _, key in ipairs(item[2]) do look.set_keys[key] = true end
+                end
+            end
         end
+        for _, key in ipairs(ARRANGE_EXTRA) do look.set_keys[key] = true end
     end
-    return true
+    local only = true
+    colour_keys(function(key)
+        local factory = factory_colour(key)
+        if only and factory and not look.set_keys[key] and factory ~= r.GetThemeColor(key, 0) & 0xFFFFFF then only = false end
+    end)
+    return only
 end
 
 function look.has_own_colours()

@@ -1781,7 +1781,10 @@ Forge.FLAT = {
 -- the image a plate shows, when it should go without its strips: nil with the switch off,
 -- with no plate, or Plain (REAPER fills a box, no image). m: the drawn material (drawn(kind))
 function Forge.flat_source(f, m)
-    if (param(f.switch) or 0) < 1 then return nil end
+    -- (the track panel's also for envelope lanes on the plate without screw strips: Envelope
+    -- lanes Plate, tkEnvBg 4, with tkEnvNoEars; 2026-11-26)
+    local env = f.kind == "tcp" and (param("tkEnvBg") or 0) == 4 and (param("tkEnvNoEars") or 0) > 0
+    if (param(f.switch) or 0) < 1 and not env then return nil end
     local plate = param(f.plate) or 0
     if plate < 1 or (param(f.plain) or 0) > 0 then return nil end
     if m then return f.pre .. "PlateMat" end

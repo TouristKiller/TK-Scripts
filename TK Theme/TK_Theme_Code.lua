@@ -283,6 +283,9 @@ tkEnvBg
 track
 white
 black
+tkEnvNoEars
+grey
+scrollbar
 ]]
 
 local words, index = {}, {}

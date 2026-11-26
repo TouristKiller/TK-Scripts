@@ -367,7 +367,7 @@
 
  <category name="TK Theme">
     <reapack name="TK_Theme_Dark" type="script" desc="TK Theme">
-    <version name="0.9.99.4" author="TouristKiller" time="2026-11-25T17:44:54Z">
+    <version name="0.9.99.5" author="TouristKiller" time="2026-11-26T20:38:06Z">
      <source main="main" file="TK_Theme_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Settings.lua</source>
      <source main="main" file="TK_Theme_Metronome.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome.lua</source>
      <source main="main" file="TK_Theme_Metronome_Watch.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Metronome_Watch.lua</source>
@@ -406,6 +406,7 @@
      <source file="TK_Theme_Patina.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Patina.lua</source>
      <source file="TK_Theme_Forge.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Forge.lua</source>
      <source file="TK_Theme_Graffiti.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_Graffiti.lua</source>
+     <source file="TK_Theme_ColourList.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/TK_Theme_ColourList.lua</source>
      <source file="dist/darkmode_colors.txt">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/darkmode_colors.txt</source>
      <source file="dist/plate_font.bin">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/plate_font.bin</source>
      <source file="dist/TK Theme Dark.factory.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/dist/TK%20Theme%20Dark.factory.ReaperTheme</source>
@@ -804,8 +805,15 @@
      <source type="data" file="toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Wood_Bar_Walnut_Tall_Plate.png</source>
      <source type="data" file="toolbar_icons/TK_Zoom.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme/toolbar_icons/TK_Zoom.png</source>
      <changelog><![CDATA[
-+ Changed: The names in the FX, send and parameter lists follow the accent colour in Dark too, and in Light without dark glass: as bright as the play cursor in Dark, a darker shade in Light.
-+ Fixed: The item properties button (i) stayed grey while the other buttons on media items followed the accent colour.
++ Added: Colours page in two tabs. Basic is the page as it was; Advanced lists every colour REAPER draws itself (about 320, under REAPER's own names, in groups), with a search field and Only what I changed. Saved, kept through updates, in presets and theme codes.
++ Added: Tempo lane colour (Colours page, Markers and regions): the strip just above the timeline.
++ Added: Scrollbars (General page, Window and toolbars): Auto, Light, Dark or Grey; a dragged scrollbar still lights up in the accent colour.
++ Added: Envelope lanes can have the track panel's plate as background, with or without screw strips.
++ Added: Icon background Grey: one mid grey for every track.
++ Changed: Light: the info line under the track panel and the toolbar button text are darker and in Inter Medium, so they read clearly.
++ Changed: The two ruler colours have their right names: Marker and region lanes (the lanes' background) and Lines between the lanes.
++ Fixed: In the mixer the record mode key ("in" and its arrow) was drawn twice, which made the "in" look garbled.
++ Fixed: Reset all colours gave the even tracks the odd tracks' colour where the two differ.
 ]]></changelog>
     </version>
     </reapack>
