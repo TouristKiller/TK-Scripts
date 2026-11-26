@@ -25,6 +25,7 @@ local defaults = {
   hide_scrollbars = false,
   tooltips_enabled = true,
   tooltip_delay = 1.0,
+  module_icon_style = "line",
   module_order = {},
   theme_preset = "Graphite",
   custom_themes = {},

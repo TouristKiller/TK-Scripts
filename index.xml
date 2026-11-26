@@ -33,7 +33,7 @@
 
  <category name="TK Workbench">
      <reapack name="TK_Workbench.lua" type="script" desc="TK Workbench">
-    <version name="1.0.7" author="TouristKiller" time="2026-11-17T21:00:00Z">
+    <version name="1.0.8" author="TouristKiller" time="2026-11-26T21:00:00Z">
      <source main="main">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench.lua</source>
      <source main="main" file="TK_Workbench_2.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Workbench_2.lua</source>
      <source main="main" file="TK_Instrument_Rack_Horizontal.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/TK_Instrument_Rack_Horizontal.lua</source>
@@ -128,6 +128,7 @@
     <source main="main" file="Module Actions/TK_Workbench_Open_Track_Tags.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Track_Tags.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Calculator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Calculator.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Lyrics.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Lyrics.lua</source>
+    <source main="main" file="Module Actions/TK_Workbench_Open_Chords.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Chords.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_XY_Pad.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_XY_Pad.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Render_Hub.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Render_Hub.lua</source>
     <source main="main" file="Module Actions/TK_Workbench_Open_Sidechain.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Module%20Actions/TK_Workbench_Open_Sidechain.lua</source>
@@ -147,6 +148,188 @@
     <source file="modules/arrange_bg_presets.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/arrange_bg_presets.lua</source>
     <source file="modules/calculator.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/calculator.lua</source>
     <source file="modules/lyrics.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/lyrics.lua</source>
+    <source file="modules/chords.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/chords.lua</source>
+    <source file="core/module_icons.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/core/module_icons.lua</source>
+    <source file="icons/modules/bold/24/action_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/action_browser.png</source>
+    <source file="icons/modules/bold/24/action_clipboard.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/action_clipboard.png</source>
+    <source file="icons/modules/bold/24/arrange_bg_presets.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/arrange_bg_presets.png</source>
+    <source file="icons/modules/bold/24/automation_item_manager.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/automation_item_manager.png</source>
+    <source file="icons/modules/bold/24/calculator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/calculator.png</source>
+    <source file="icons/modules/bold/24/chords.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/chords.png</source>
+    <source file="icons/modules/bold/24/color_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/color_studio.png</source>
+    <source file="icons/modules/bold/24/control_room.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/control_room.png</source>
+    <source file="icons/modules/bold/24/cue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/cue.png</source>
+    <source file="icons/modules/bold/24/fx_chain_builder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/fx_chain_builder.png</source>
+    <source file="icons/modules/bold/24/fx_groups.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/fx_groups.png</source>
+    <source file="icons/modules/bold/24/idea_vault.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/idea_vault.png</source>
+    <source file="icons/modules/bold/24/instrument_rack.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/instrument_rack.png</source>
+    <source file="icons/modules/bold/24/lyrics.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/lyrics.png</source>
+    <source file="icons/modules/bold/24/media_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/media_browser.png</source>
+    <source file="icons/modules/bold/24/navigator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/navigator.png</source>
+    <source file="icons/modules/bold/24/notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/notes.png</source>
+    <source file="icons/modules/bold/24/plugin_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/plugin_browser.png</source>
+    <source file="icons/modules/bold/24/project_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/project_browser.png</source>
+    <source file="icons/modules/bold/24/project_overview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/project_overview.png</source>
+    <source file="icons/modules/bold/24/render_hub.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/render_hub.png</source>
+    <source file="icons/modules/bold/24/script_launcher.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/script_launcher.png</source>
+    <source file="icons/modules/bold/24/send_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/send_studio.png</source>
+    <source file="icons/modules/bold/24/sidechain.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/sidechain.png</source>
+    <source file="icons/modules/bold/24/time_machine.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/time_machine.png</source>
+    <source file="icons/modules/bold/24/timepiece.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/timepiece.png</source>
+    <source file="icons/modules/bold/24/track_recall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/track_recall.png</source>
+    <source file="icons/modules/bold/24/track_tags.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/track_tags.png</source>
+    <source file="icons/modules/bold/24/transport.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/transport.png</source>
+    <source file="icons/modules/bold/24/xy_pad.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/24/xy_pad.png</source>
+    <source file="icons/modules/bold/48/action_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/action_browser.png</source>
+    <source file="icons/modules/bold/48/action_clipboard.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/action_clipboard.png</source>
+    <source file="icons/modules/bold/48/arrange_bg_presets.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/arrange_bg_presets.png</source>
+    <source file="icons/modules/bold/48/automation_item_manager.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/automation_item_manager.png</source>
+    <source file="icons/modules/bold/48/calculator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/calculator.png</source>
+    <source file="icons/modules/bold/48/chords.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/chords.png</source>
+    <source file="icons/modules/bold/48/color_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/color_studio.png</source>
+    <source file="icons/modules/bold/48/control_room.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/control_room.png</source>
+    <source file="icons/modules/bold/48/cue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/cue.png</source>
+    <source file="icons/modules/bold/48/fx_chain_builder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/fx_chain_builder.png</source>
+    <source file="icons/modules/bold/48/fx_groups.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/fx_groups.png</source>
+    <source file="icons/modules/bold/48/idea_vault.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/idea_vault.png</source>
+    <source file="icons/modules/bold/48/instrument_rack.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/instrument_rack.png</source>
+    <source file="icons/modules/bold/48/lyrics.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/lyrics.png</source>
+    <source file="icons/modules/bold/48/media_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/media_browser.png</source>
+    <source file="icons/modules/bold/48/navigator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/navigator.png</source>
+    <source file="icons/modules/bold/48/notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/notes.png</source>
+    <source file="icons/modules/bold/48/plugin_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/plugin_browser.png</source>
+    <source file="icons/modules/bold/48/project_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/project_browser.png</source>
+    <source file="icons/modules/bold/48/project_overview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/project_overview.png</source>
+    <source file="icons/modules/bold/48/render_hub.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/render_hub.png</source>
+    <source file="icons/modules/bold/48/script_launcher.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/script_launcher.png</source>
+    <source file="icons/modules/bold/48/send_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/send_studio.png</source>
+    <source file="icons/modules/bold/48/sidechain.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/sidechain.png</source>
+    <source file="icons/modules/bold/48/time_machine.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/time_machine.png</source>
+    <source file="icons/modules/bold/48/timepiece.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/timepiece.png</source>
+    <source file="icons/modules/bold/48/track_recall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/track_recall.png</source>
+    <source file="icons/modules/bold/48/track_tags.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/track_tags.png</source>
+    <source file="icons/modules/bold/48/transport.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/transport.png</source>
+    <source file="icons/modules/bold/48/xy_pad.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/48/xy_pad.png</source>
+    <source file="icons/modules/bold/96/action_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/action_browser.png</source>
+    <source file="icons/modules/bold/96/action_clipboard.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/action_clipboard.png</source>
+    <source file="icons/modules/bold/96/arrange_bg_presets.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/arrange_bg_presets.png</source>
+    <source file="icons/modules/bold/96/automation_item_manager.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/automation_item_manager.png</source>
+    <source file="icons/modules/bold/96/calculator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/calculator.png</source>
+    <source file="icons/modules/bold/96/chords.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/chords.png</source>
+    <source file="icons/modules/bold/96/color_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/color_studio.png</source>
+    <source file="icons/modules/bold/96/control_room.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/control_room.png</source>
+    <source file="icons/modules/bold/96/cue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/cue.png</source>
+    <source file="icons/modules/bold/96/fx_chain_builder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/fx_chain_builder.png</source>
+    <source file="icons/modules/bold/96/fx_groups.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/fx_groups.png</source>
+    <source file="icons/modules/bold/96/idea_vault.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/idea_vault.png</source>
+    <source file="icons/modules/bold/96/instrument_rack.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/instrument_rack.png</source>
+    <source file="icons/modules/bold/96/lyrics.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/lyrics.png</source>
+    <source file="icons/modules/bold/96/media_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/media_browser.png</source>
+    <source file="icons/modules/bold/96/navigator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/navigator.png</source>
+    <source file="icons/modules/bold/96/notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/notes.png</source>
+    <source file="icons/modules/bold/96/plugin_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/plugin_browser.png</source>
+    <source file="icons/modules/bold/96/project_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/project_browser.png</source>
+    <source file="icons/modules/bold/96/project_overview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/project_overview.png</source>
+    <source file="icons/modules/bold/96/render_hub.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/render_hub.png</source>
+    <source file="icons/modules/bold/96/script_launcher.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/script_launcher.png</source>
+    <source file="icons/modules/bold/96/send_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/send_studio.png</source>
+    <source file="icons/modules/bold/96/sidechain.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/sidechain.png</source>
+    <source file="icons/modules/bold/96/time_machine.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/time_machine.png</source>
+    <source file="icons/modules/bold/96/timepiece.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/timepiece.png</source>
+    <source file="icons/modules/bold/96/track_recall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/track_recall.png</source>
+    <source file="icons/modules/bold/96/track_tags.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/track_tags.png</source>
+    <source file="icons/modules/bold/96/transport.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/transport.png</source>
+    <source file="icons/modules/bold/96/xy_pad.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/bold/96/xy_pad.png</source>
+    <source file="icons/modules/line/24/action_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/action_browser.png</source>
+    <source file="icons/modules/line/24/action_clipboard.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/action_clipboard.png</source>
+    <source file="icons/modules/line/24/arrange_bg_presets.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/arrange_bg_presets.png</source>
+    <source file="icons/modules/line/24/automation_item_manager.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/automation_item_manager.png</source>
+    <source file="icons/modules/line/24/calculator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/calculator.png</source>
+    <source file="icons/modules/line/24/chords.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/chords.png</source>
+    <source file="icons/modules/line/24/color_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/color_studio.png</source>
+    <source file="icons/modules/line/24/control_room.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/control_room.png</source>
+    <source file="icons/modules/line/24/cue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/cue.png</source>
+    <source file="icons/modules/line/24/fx_chain_builder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/fx_chain_builder.png</source>
+    <source file="icons/modules/line/24/fx_groups.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/fx_groups.png</source>
+    <source file="icons/modules/line/24/idea_vault.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/idea_vault.png</source>
+    <source file="icons/modules/line/24/instrument_rack.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/instrument_rack.png</source>
+    <source file="icons/modules/line/24/lyrics.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/lyrics.png</source>
+    <source file="icons/modules/line/24/media_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/media_browser.png</source>
+    <source file="icons/modules/line/24/navigator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/navigator.png</source>
+    <source file="icons/modules/line/24/notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/notes.png</source>
+    <source file="icons/modules/line/24/plugin_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/plugin_browser.png</source>
+    <source file="icons/modules/line/24/project_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/project_browser.png</source>
+    <source file="icons/modules/line/24/project_overview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/project_overview.png</source>
+    <source file="icons/modules/line/24/render_hub.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/render_hub.png</source>
+    <source file="icons/modules/line/24/script_launcher.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/script_launcher.png</source>
+    <source file="icons/modules/line/24/send_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/send_studio.png</source>
+    <source file="icons/modules/line/24/sidechain.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/sidechain.png</source>
+    <source file="icons/modules/line/24/time_machine.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/time_machine.png</source>
+    <source file="icons/modules/line/24/timepiece.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/timepiece.png</source>
+    <source file="icons/modules/line/24/track_recall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/track_recall.png</source>
+    <source file="icons/modules/line/24/track_tags.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/track_tags.png</source>
+    <source file="icons/modules/line/24/transport.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/transport.png</source>
+    <source file="icons/modules/line/24/xy_pad.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/24/xy_pad.png</source>
+    <source file="icons/modules/line/48/action_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/action_browser.png</source>
+    <source file="icons/modules/line/48/action_clipboard.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/action_clipboard.png</source>
+    <source file="icons/modules/line/48/arrange_bg_presets.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/arrange_bg_presets.png</source>
+    <source file="icons/modules/line/48/automation_item_manager.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/automation_item_manager.png</source>
+    <source file="icons/modules/line/48/calculator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/calculator.png</source>
+    <source file="icons/modules/line/48/chords.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/chords.png</source>
+    <source file="icons/modules/line/48/color_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/color_studio.png</source>
+    <source file="icons/modules/line/48/control_room.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/control_room.png</source>
+    <source file="icons/modules/line/48/cue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/cue.png</source>
+    <source file="icons/modules/line/48/fx_chain_builder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/fx_chain_builder.png</source>
+    <source file="icons/modules/line/48/fx_groups.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/fx_groups.png</source>
+    <source file="icons/modules/line/48/idea_vault.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/idea_vault.png</source>
+    <source file="icons/modules/line/48/instrument_rack.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/instrument_rack.png</source>
+    <source file="icons/modules/line/48/lyrics.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/lyrics.png</source>
+    <source file="icons/modules/line/48/media_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/media_browser.png</source>
+    <source file="icons/modules/line/48/navigator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/navigator.png</source>
+    <source file="icons/modules/line/48/notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/notes.png</source>
+    <source file="icons/modules/line/48/plugin_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/plugin_browser.png</source>
+    <source file="icons/modules/line/48/project_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/project_browser.png</source>
+    <source file="icons/modules/line/48/project_overview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/project_overview.png</source>
+    <source file="icons/modules/line/48/render_hub.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/render_hub.png</source>
+    <source file="icons/modules/line/48/script_launcher.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/script_launcher.png</source>
+    <source file="icons/modules/line/48/send_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/send_studio.png</source>
+    <source file="icons/modules/line/48/sidechain.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/sidechain.png</source>
+    <source file="icons/modules/line/48/time_machine.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/time_machine.png</source>
+    <source file="icons/modules/line/48/timepiece.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/timepiece.png</source>
+    <source file="icons/modules/line/48/track_recall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/track_recall.png</source>
+    <source file="icons/modules/line/48/track_tags.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/track_tags.png</source>
+    <source file="icons/modules/line/48/transport.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/transport.png</source>
+    <source file="icons/modules/line/48/xy_pad.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/48/xy_pad.png</source>
+    <source file="icons/modules/line/96/action_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/action_browser.png</source>
+    <source file="icons/modules/line/96/action_clipboard.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/action_clipboard.png</source>
+    <source file="icons/modules/line/96/arrange_bg_presets.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/arrange_bg_presets.png</source>
+    <source file="icons/modules/line/96/automation_item_manager.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/automation_item_manager.png</source>
+    <source file="icons/modules/line/96/calculator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/calculator.png</source>
+    <source file="icons/modules/line/96/chords.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/chords.png</source>
+    <source file="icons/modules/line/96/color_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/color_studio.png</source>
+    <source file="icons/modules/line/96/control_room.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/control_room.png</source>
+    <source file="icons/modules/line/96/cue.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/cue.png</source>
+    <source file="icons/modules/line/96/fx_chain_builder.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/fx_chain_builder.png</source>
+    <source file="icons/modules/line/96/fx_groups.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/fx_groups.png</source>
+    <source file="icons/modules/line/96/idea_vault.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/idea_vault.png</source>
+    <source file="icons/modules/line/96/instrument_rack.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/instrument_rack.png</source>
+    <source file="icons/modules/line/96/lyrics.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/lyrics.png</source>
+    <source file="icons/modules/line/96/media_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/media_browser.png</source>
+    <source file="icons/modules/line/96/navigator.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/navigator.png</source>
+    <source file="icons/modules/line/96/notes.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/notes.png</source>
+    <source file="icons/modules/line/96/plugin_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/plugin_browser.png</source>
+    <source file="icons/modules/line/96/project_browser.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/project_browser.png</source>
+    <source file="icons/modules/line/96/project_overview.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/project_overview.png</source>
+    <source file="icons/modules/line/96/render_hub.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/render_hub.png</source>
+    <source file="icons/modules/line/96/script_launcher.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/script_launcher.png</source>
+    <source file="icons/modules/line/96/send_studio.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/send_studio.png</source>
+    <source file="icons/modules/line/96/sidechain.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/sidechain.png</source>
+    <source file="icons/modules/line/96/time_machine.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/time_machine.png</source>
+    <source file="icons/modules/line/96/timepiece.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/timepiece.png</source>
+    <source file="icons/modules/line/96/track_recall.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/track_recall.png</source>
+    <source file="icons/modules/line/96/track_tags.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/track_tags.png</source>
+    <source file="icons/modules/line/96/transport.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/transport.png</source>
+    <source file="icons/modules/line/96/xy_pad.png">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/icons/modules/line/96/xy_pad.png</source>
     <source file="modules/xy_pad.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/xy_pad.lua</source>
     <source file="modules/action_clipboard.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/action_clipboard.lua</source>
      <source file="modules/automation_item_manager.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/modules/automation_item_manager.lua</source>
@@ -174,9 +357,9 @@
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Meter.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Meter.jsfx</source>
      <source type="effect" file="TK Scripts/Mixer/TK_Control_Room_Downmix.jsfx">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Workbench/Effects/TK_Control_Room_Downmix.jsfx</source>
     <changelog><![CDATA[
-            v1.0.7
-            + Notes: Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
-            + Control Room: The volume faders could not be dragged when TK Workbench was floating instead of docked: clicking a fader moved the whole window, so the only way to change the level was Shift+scroll. The faders are drawn by hand and ImGui took a click on them for a click on empty window. They now catch the mouse themselves, so dragging works in a floating window too. Reported on the forum.
+            v1.0.8
+            + Chords: New module for writing chord progressions. Eight slots per project hold chords you pick by root, quality, inversion and octave, each with a fold-open keyboard; drag cards to reorder them, play them one by one or as a list, and insert them as one MIDI item at the edit cursor (optionally with markers), with strum, humanize, velocity and fill options. The Inspiration side rolls progressions in the key you choose and sends them to empty slots. Previews play through the target track, which is armed only for the moment the chord sounds; Esc or Stop silences everything, and keys 1-8 insert a slot. Slot sets can be saved and loaded. Ideas by res on the forum.
+            + Home screen: New module icons. The old hand-drawn icons looked uneven, so every module now has a cleanly drawn icon that follows the theme and accent colours. Settings has a choice between Line (outlined) and Bold (solid with cut-out details).
 ]]></changelog>
      </version>
      </reapack>

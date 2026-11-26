@@ -1,10 +1,10 @@
 -- @description TK Workbench
 -- @author TouristKiller
--- @version 1.0.7
+-- @version 1.0.8
 -- @changelog:
--- v1.0.7
---   + Notes: Letter spacing fixed. Letters drifted apart or bunched up along a line, most visibly in larger and bold text, because each letter was measured on its own at the base size and then scaled, and the rounding of all those separate widths added up across the line. Text is now measured and drawn in runs at the size it is shown in, so letters sit at their natural distance and the caret and selection line up with them again.
---   + Control Room: The volume faders could not be dragged when TK Workbench was floating instead of docked: clicking a fader moved the whole window, so the only way to change the level was Shift+scroll. The faders are drawn by hand and ImGui took a click on them for a click on empty window. They now catch the mouse themselves, so dragging works in a floating window too. Reported on the forum.
+-- v1.0.8
+--   + Chords: New module for writing chord progressions. Eight slots per project hold chords you pick by root, quality, inversion and octave, each with a fold-open keyboard; drag cards to reorder them, play them one by one or as a list, and insert them as one MIDI item at the edit cursor (optionally with markers), with strum, humanize, velocity and fill options. The Inspiration side rolls progressions in the key you choose and sends them to empty slots. Previews play through the target track, which is armed only for the moment the chord sounds; Esc or Stop silences everything, and keys 1-8 insert a slot. Slot sets can be saved and loaded. Ideas by res on the forum.
+--   + Home screen: New module icons. The old hand-drawn icons looked uneven, so every module now has a cleanly drawn icon that follows the theme and accent colours. Settings has a choice between Line (outlined) and Bold (solid with cut-out details).
 
 local r = reaper
 
@@ -25,6 +25,7 @@ local ModuleLoader = require("core.module_loader")
 local UI = require("core.ui")
 local UIScale = require("core.ui_scale")
 local Profile = require("core.profile")
+local ModuleIcons = require("core.module_icons")
 
 local ctx = r.ImGui_CreateContext(SCRIPT_NAME)
 local config_name = rawget(_G, "TK_WORKBENCH_CONFIG_NAME") or "config.json"
@@ -133,6 +134,7 @@ local module_names = {
   "arrange_bg_presets",
   "calculator",
   "lyrics",
+  "chords",
   "xy_pad",
   "render_hub",
   "sidechain"
@@ -975,6 +977,7 @@ end
 
 local function draw_module_icon(draw_list, module, cx, cy, size, color)
   local id = module and module.id or ""
+  if ModuleIcons.draw(app, draw_list, id, cx, cy, size, color) then return end
   local s = size / 48
   local left = cx - size * 0.5
   local right = cx + size * 0.5
@@ -1595,7 +1598,7 @@ local profile_ui = {
     { label = "Mixing", ids = { "control_room", "send_studio", "sidechain", "fx_groups", "transport", "timepiece", "xy_pad" } },
     { label = "Production", ids = { "plugin_browser", "instrument_rack", "fx_chain_builder", "media_browser", "track_recall", "idea_vault", "xy_pad" } },
     { label = "Project", ids = { "project_overview", "project_browser", "transport", "navigator", "time_machine", "track_tags", "color_studio", "notes", "render_hub" } },
-    { label = "Writing", ids = { "lyrics", "notes", "idea_vault", "cue", "transport", "timepiece" } },
+    { label = "Writing", ids = { "lyrics", "chords", "notes", "idea_vault", "cue", "transport", "timepiece" } },
     { label = "Tools", ids = { "action_browser", "action_clipboard", "script_launcher", "arrange_bg_presets", "automation_item_manager", "calculator" } }
   }
 }
@@ -1983,6 +1986,19 @@ local function draw_preferences_settings()
     end
     r.ImGui_PopItemWidth(ctx)
     r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Lowers the module panel background opacity.")
+    r.ImGui_Separator(ctx)
+    r.ImGui_Text(ctx, "Module icons")
+    r.ImGui_SameLine(ctx)
+    for _, opt in ipairs({ { "line", "Line" }, { "bold", "Bold" } }) do
+      if r.ImGui_RadioButton(ctx, opt[2] .. "##module_icon_style", ModuleIcons.style(app.settings) == opt[1]) then
+        app.settings.module_icon_style = opt[1]
+        app.status = "Module icons: " .. opt[2]
+        save_settings()
+      end
+      r.ImGui_SameLine(ctx)
+    end
+    r.ImGui_NewLine(ctx)
+    r.ImGui_TextColored(ctx, Theme.colors.text_dim, "Outlined or solid icons on the home screen and the rail.")
     r.ImGui_Separator(ctx)
     local changed, value = r.ImGui_Checkbox(ctx, "Hide scrollbars", app.settings.hide_scrollbars == true)
     if changed then
