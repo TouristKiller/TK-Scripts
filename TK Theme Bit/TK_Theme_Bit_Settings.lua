@@ -448,7 +448,8 @@ end
 local function devices_first_run()
   if r.GetExtState(EXT, "devices_checked") == "1" or not bit_active() then return end
   r.SetExtState(EXT, "devices_checked", "1", true)
-  if not saxmand_found() and r.GetExtState(EXT, "devices_action") == "" then
+  if not script_command("TK_Theme_Bit_Devices_Panel.lua") and not saxmand_found()
+    and r.GetExtState(EXT, "devices_action") == "" then
     set_theme_param("bitTransDevices", 0)
   end
 end
@@ -526,16 +527,22 @@ local function page_transport()
           local p = segmented("devices", { "Off", "Shown" }, dvalue == 0 and 1 or 2)
           if p then set_theme_param("bitTransDevices", p == 1 and 0 or 1) end
         end)
-        -- what it opens: Saxmand's script, or any action (ExtState devices_action)
+        -- what it opens: TK Bit Devices (""), Saxmand's script ("saxmand"), or any action
+        -- (ExtState devices_action)
         local own = r.GetExtState(EXT, "devices_action")
-        local other = own ~= "" or devices_other
+        local sax = own == "saxmand"
+        local other = (own ~= "" and not sax) or devices_other
         r.ImGui_Spacing(ctx)
         row("Devices key opens", function()
-          local p = segmented("devwhat", { "Saxmand", "Other action" }, other and 2 or 1)
+          local p = segmented("devwhat", { "TK Devices", "Saxmand", "Other action" }, other and 3 or (sax and 2 or 1))
           if p == 1 then
             r.DeleteExtState(EXT, "devices_action", true)
             devices_other = false
           elseif p == 2 then
+            r.SetExtState(EXT, "devices_action", "saxmand", true)
+            devices_other = false
+          elseif p == 3 then
+            if sax then r.DeleteExtState(EXT, "devices_action", true) end
             devices_other = true
           end
         end)
@@ -562,10 +569,13 @@ local function page_transport()
           else
             note("REAPER doesn't know this action.")
           end
-        else
+        elseif sax then
           note(saxmand_found()
-            and "DEVICES opens Saxmand's FX Modulator Linking, a device panel like Bitwig's."
-            or "DEVICES opens Saxmand's FX Modulator Linking, which isn't installed: get it from Saxmand's ReaPack repository, or choose Other action.")
+            and "DEVICES opens Saxmand's FX Modulator Linking."
+            or "DEVICES opens Saxmand's FX Modulator Linking, which isn't installed: get it from Saxmand's ReaPack repository, or choose TK Devices.")
+        else
+          note("DEVICES opens TK Bit Devices, this theme's device panel: the track's devices with their parameters, "
+            .. "remote controls and Bitwig's modulators (LFO, Steps, ADSR, MIDI, Keytrack+, Macros and more).")
         end
       end
       -- the audio editor icon: SneakPeak, or any action (ExtState audio_action)
@@ -2041,7 +2051,7 @@ HELP.CHAPTERS = {
     { "i", "Logo", "Bit's dot mark over the display (optional). Click it for these settings." },
     { "h", "Panel icons (right)" },
     { "p", "Like Bitwig's panel icons. Orange means open; click an orange one again to close it." },
-    { "i", "Devices", "Opens the device panel: Saxmand's FX Modulator Linking, or an action you choose." },
+    { "i", "Devices", "Opens the device panel: TK Bit Devices, Saxmand's FX Modulator Linking, or an action you choose." },
     { "i", "Audio editor", "Opens Clip Edit for the selected audio clip (or SneakPeak, or an action you choose)." },
     { "i", "MIDI editor", "Opens the selected MIDI clip. One view at a time: it closes the mixer." },
     { "i", "Mixer", "Shows the mixer and closes the MIDI editor." },

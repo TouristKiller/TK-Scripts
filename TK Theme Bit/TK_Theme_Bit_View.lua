@@ -44,8 +44,9 @@ function V.saxmand_command()
   return sax_cmd or nil
 end
 
--- what the DEVICES key opens: by default Saxmand's script; in the settings any other
--- action can be chosen (ExtState devices_action: a command id or a named one like _RS...)
+-- what the DEVICES key opens (ExtState devices_action): "" = TK Bit Devices, this theme's own
+-- panel (the default; Saxmand's script when it is not registered), "saxmand" = Saxmand's FX
+-- Modulator Linking, else any action (a command id or a named one like _RS...)
 function V.devices_action()
   return r.GetExtState(EXT, "devices_action")
 end
@@ -57,10 +58,12 @@ function V.resolve(id)
   return nil
 end
 
+local DEVICES_PANEL = "TK_Theme_Bit_Devices_Panel.lua"
 function V.devices_command()
   local own = V.devices_action()
+  if own == "saxmand" then return V.saxmand_command() end
   if own ~= "" then return V.resolve(own) end
-  return V.saxmand_command()
+  return V.script_command(DEVICES_PANEL) or V.saxmand_command()
 end
 
 -- open = the action's toggle state is on (Saxmand's script sets it while it runs; other

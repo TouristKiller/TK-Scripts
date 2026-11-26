@@ -630,7 +630,7 @@
 
  <category name="TK Theme Bit">
     <reapack name="TK_Theme_Bit" type="script" desc="TK Theme Bit">
-    <version name="0.3.0" author="TouristKiller" time="2026-11-25T12:24:05Z">
+    <version name="0.4.0" author="TouristKiller" time="2026-11-26T13:53:46Z">
      <source main="main" file="TK_Theme_Bit_Settings.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Settings.lua</source>
      <source main="main" file="TK_Theme_Bit_File_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_File_Menu.lua</source>
      <source main="main" file="TK_Theme_Bit_Add_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Add_Menu.lua</source>
@@ -645,12 +645,18 @@
      <source main="main" file="TK_Theme_Bit_Inspector.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Inspector.lua</source>
      <source main="main" file="TK_Theme_Bit_Clip_Edit.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Clip_Edit.lua</source>
      <source main="main" file="TK_Theme_Bit_Editor.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Editor.lua</source>
+     <source main="main" file="TK_Theme_Bit_Devices_Panel.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Devices_Panel.lua</source>
      <source file="TK_Theme_Bit_Menu.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Menu.lua</source>
      <source file="TK_Theme_Bit_View.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_View.lua</source>
      <source file="TK_Theme_Bit_Keys.lua">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK_Theme_Bit_Keys.lua</source>
      <source type="theme" file="TK Theme Bit.ReaperThemeZip">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperThemeZip</source>
      <source type="theme" file="TK Theme Bit.ReaperTheme">https://github.com/TouristKiller/TK-Scripts/raw/master/TK%20Theme%20Bit/TK%20Theme%20Bit.ReaperTheme</source>
      <changelog><![CDATA[
++ New: TK Bit Devices, a device panel in Bitwig's style for the bottom docker, now behind the DEVICES key (Saxmand's FX Modulator Linking or any action can still be chosen in the settings). The selected track's strip, then each plug-in as a device: power, presets, its window, every parameter as a list with search, filters and the last touched parameter on top.
++ New: remote controls: pages of 8 knobs per plug-in. Learn them by moving a parameter in the plug-in's window, or let Auto pages make them from the plug-in's groups (OSC, FILTER, AMP, Envelope ...). Double-click a page's name to rename it.
++ New: modulators, as Bitwig's: LFO, Steps, Random, Envelope Follower, ADSR, MIDI, Keytrack+ (with a curve editor), Macro, Macro-4, Button and Buttons. Click a modulator's routing arrow, then a parameter, and drag for the amount; click a tile for its editor. Modulators can modulate each other.
++ New: global modulation: select another track while routing and a modulator drives parameters there too. The track strip has the track's own modulators; on the master they are the project's.
++ New: the inspector's device list can be reordered by dragging; parameter links follow.
 + New: Bitwig shortcuts (Settings > Shortcuts). Bitwig's keys go into one of REAPER's alternative key lists that you choose; your own key list is never changed. Switch between REAPER and Bitwig at once, put Bitwig's keys back with Defaults, or take them out with Remove. The first time needs a restart.
 + New: a shortcut list in Bitwig's style with every action, also those without a key: filter by name or by pressing a key, click a key to change it, + to add one. Colours show Bitwig, your own and REAPER's default keys; struck-through keys are not active.
 + New: Bitwig's transport keys: F9 record, C metronome, Shift+L loop, Shift+F follow playhead.

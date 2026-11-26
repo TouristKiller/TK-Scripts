@@ -43,6 +43,45 @@ local bottom_h            -- the bottom block's height, measured the frame befor
 
 local function undo(desc) r.Undo_OnStateChangeEx2(0, "Inspector: " .. desc, -1, -1) end
 
+-- FX order by dragging in DEVICES. Moving FX renumbers them, and a parameter link (plink.effect)
+-- holds a number: every link is noted by GUID before the move and put right after it.
+local fxmove = {}
+function fxmove.cfg(tr, i, p, key)
+  local ok, v = r.TrackFX_GetNamedConfigParm(tr, i, "param." .. p .. "." .. key)
+  return ok and tonumber(v) or nil
+end
+function fxmove.snap(tr)
+  local out, n = {}, r.TrackFX_GetCount(tr)
+  for i = 0, n - 1 do
+    local g = r.TrackFX_GetFXGUID(tr, i)
+    for p = 0, r.TrackFX_GetNumParams(tr, i) - 1 do
+      if (fxmove.cfg(tr, i, p, "plink.active") or 0) ~= 0 then
+        local e = fxmove.cfg(tr, i, p, "plink.effect") or -1
+        if e >= 0 and e < n then out[#out + 1] = { tgt = g, p = p, src = r.TrackFX_GetFXGUID(tr, e) } end
+      end
+    end
+  end
+  return out
+end
+function fxmove.index(tr, guid)
+  for i = 0, r.TrackFX_GetCount(tr) - 1 do
+    if r.TrackFX_GetFXGUID(tr, i) == guid then return i end
+  end
+end
+function fxmove.move(tr, from, to)
+  if not from or from == to then return end
+  local snap = fxmove.snap(tr)
+  r.Undo_BeginBlock2(0)
+  r.TrackFX_CopyToTrack(tr, from, tr, to, true)
+  for _, e in ipairs(snap) do
+    local ti, si = fxmove.index(tr, e.tgt), fxmove.index(tr, e.src)
+    if ti and si and fxmove.cfg(tr, ti, e.p, "plink.effect") ~= si then
+      r.TrackFX_SetNamedConfigParm(tr, ti, "param." .. e.p .. ".plink.effect", tostring(si))
+    end
+  end
+  r.Undo_EndBlock2(0, "Inspector: move FX", -1)
+end
+
 local function amp_db(a)
   if a < 0.0000001 then return "-inf dB" end
   return string.format("%.1f dB", 20 * math.log(a, 10))
@@ -567,6 +606,23 @@ local function draw_track(tr)
   if c == 3 then r.SetMediaTrackInfo_Value(tr, "I_RECARM", list[3].on and 0 or 1); undo("record arm") end
   if c == 4 then r.SetMediaTrackInfo_Value(tr, "B_PHASE", list[4].on and 0 or 1); undo("phase") end
 
+  -- Bitwig's Active: REAPER can't switch a track off, so this takes its devices offline
+  -- (no CPU, no sound from instruments), as Bitwig's deactivated track
+  local nfx = r.TrackFX_GetCount(tr)
+  if nfx > 0 then
+    local active = false
+    for i = 0, nfx - 1 do if not r.TrackFX_GetOffline(tr, i) then active = true end end
+    row("Active", function()
+      if tkey("active", active and "On" or "Off", active) then
+        for i = 0, nfx - 1 do r.TrackFX_SetOffline(tr, i, active) end
+        undo(active and "devices offline" or "devices online")
+      end
+      if r.ImGui_IsItemHovered(ctx) then
+        r.ImGui_SetTooltip(ctx, "Off takes all of the track's devices offline: they use no CPU.")
+      end
+    end)
+  end
+
   if not master then
     sep()
     row("Input", function(w) input_combo(tr, w) end)
@@ -602,12 +658,41 @@ local function draw_track(tr)
     end
   end
 
+  -- Bitwig's comment field: the track's SWS notes (shown in SWS's Notes window too)
+  sep()
+  if r.NF_GetSWSTrackNotes then
+    local key_ = r.GetTrackGUID(tr)
+    local buf = edit_name["note" .. key_] or r.NF_GetSWSTrackNotes(tr)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_FrameBg(), C.field)
+    r.ImGui_PushStyleColor(ctx, r.ImGui_Col_Text(), C.label)
+    r.ImGui_PushStyleVar(ctx, r.ImGui_StyleVar_FrameBorderSize(), 0)
+    local _, s = r.ImGui_InputTextMultiline(ctx, "##tnotes", buf, -1, ROW_H * 3)
+    r.ImGui_PopStyleVar(ctx)
+    r.ImGui_PopStyleColor(ctx, 2)
+    if buf == "" and not r.ImGui_IsItemActive(ctx) then
+      local x0, y0 = r.ImGui_GetItemRectMin(ctx)
+      r.ImGui_DrawList_AddText(r.ImGui_GetWindowDrawList(ctx), x0 + 5, y0 + 3, C.dim, "Comment")
+    end
+    if r.ImGui_IsItemActive(ctx) then edit_name["note" .. key_] = s end
+    if r.ImGui_IsItemDeactivatedAfterEdit(ctx) then
+      r.NF_SetSWSTrackNotes(tr, s)
+      undo("track comment")
+      edit_name["note" .. key_] = nil
+    elseif not r.ImGui_IsItemActive(ctx) then
+      edit_name["note" .. key_] = nil
+    end
+  else
+    label("Comment: needs SWS.")
+  end
+
   head("DEVICES")
   local n = r.TrackFX_GetCount(tr)
   local dl = r.ImGui_GetWindowDrawList(ctx)
+  local move                                  -- { from, to }: done after the list
   for i = 0, n - 1 do
     local _, fx = r.TrackFX_GetFXName(tr, i, "")
     fx = fx:gsub("^%w+:%s*", ""):gsub("%s*%(.-%)$", "")
+    if r.TrackFX_GetOffline(tr, i) then fx = fx .. "  (offline)" end
     local on = r.TrackFX_GetEnabled(tr, i)
     local x, y = r.ImGui_GetCursorScreenPos(ctx)
     if r.ImGui_InvisibleButton(ctx, "##fxon" .. i, 14, 18) then
@@ -625,7 +710,19 @@ local function draw_track(tr)
       r.TrackFX_Show(tr, i, r.TrackFX_GetOpen(tr, i) and 2 or 3)
     end
     r.ImGui_PopStyleColor(ctx)
+    -- drag a device onto another to put it there
+    if r.ImGui_BeginDragDropSource(ctx) then
+      r.ImGui_SetDragDropPayload(ctx, "TKBIT_FX", tostring(i))
+      r.ImGui_Text(ctx, fx)
+      r.ImGui_EndDragDropSource(ctx)
+    end
+    if r.ImGui_BeginDragDropTarget(ctx) then
+      local ok, payload = r.ImGui_AcceptDragDropPayload(ctx, "TKBIT_FX")
+      if ok then move = { tonumber(payload), i } end
+      r.ImGui_EndDragDropTarget(ctx)
+    end
   end
+  if move then fxmove.move(tr, move[1], move[2]) end
   if n == 0 then label("No devices") end
   r.ImGui_Dummy(ctx, 0, 2)
   if button("fxchain", "FX chain") then
@@ -659,14 +756,17 @@ local function source_len(take, pos)
   return l / r.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
 end
 
--- a fade: its length box, then Bitwig's two shape keys (linear / S-curve)
+-- a fade: its length box, then Bitwig's two shape keys (linear / S-curve) and a third key
+-- with all of REAPER's seven shapes (orange when the fade has one of the other five)
+local FADE_SHAPES = { "Linear", "Fast start", "Fast end", "Fast start (steep)", "Fast end (steep)",
+  "Slow start/end", "Slow start/end (steep)" }
 local function fade_row(item, label_, key_len, key_shape, id, len)
   row(label_, function(w)
     local fmax = math.max(0.001, math.min(len, 10))
     local v = r.GetMediaItemInfo_Value(item, key_len)
     local text = v < 1 and string.format("%.0f ms", v * 1000) or string.format("%.2f s", v)
     local t, moved, done = vbox(id, math.min(1, v / fmax), text, {
-      w = w - 46, plain = true, default = 0,
+      w = w - 62, plain = true, default = 0,
       parse = function(s)
         local n = num(s)
         if not n then return nil end
@@ -686,6 +786,20 @@ local function fade_row(item, label_, key_len, key_shape, id, len)
       for_items(function(it) r.SetMediaItemInfo_Value(it, key_shape, 5) end); undo("fade shape")
     end
     if r.ImGui_IsItemHovered(ctx) then r.ImGui_SetTooltip(ctx, "S-curve") end
+    r.ImGui_SameLine(ctx, 0, 1)
+    local other = shape ~= 0 and shape ~= 5
+    if key(id .. "more", "\u{25BE}", other, 15, ROW_H) then r.ImGui_OpenPopup(ctx, "##shapes" .. id) end
+    if r.ImGui_IsItemHovered(ctx) then
+      r.ImGui_SetTooltip(ctx, (FADE_SHAPES[shape + 1] or "Shape") .. ". Click for all shapes.")
+    end
+    if r.ImGui_BeginPopup(ctx, "##shapes" .. id) then
+      for i, name in ipairs(FADE_SHAPES) do
+        if r.ImGui_Selectable(ctx, name, shape == i - 1) then
+          for_items(function(it) r.SetMediaItemInfo_Value(it, key_shape, i - 1) end); undo("fade shape")
+        end
+      end
+      r.ImGui_EndPopup(ctx)
+    end
   end)
 end
 
