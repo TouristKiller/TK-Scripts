@@ -119,7 +119,7 @@ end
 
 -- Bitwig's "Scaling": the theme's layout for every section. Auto lets REAPER pick by the
 -- screen's scaling (layout_dpi_translate); 150 / 200 force the larger image sets
-local SCALE_LAYOUTS = { "", "150%_A", "200%_A" }
+local SCALE_LAYOUTS = { "", "125%_A", "150%_A", "200%_A" }
 local LAYOUT_SECTIONS = { "tcp", "mcp", "envcp", "trans", "master_tcp", "master_mcp" }
 
 local function theme_scale()
@@ -633,6 +633,23 @@ local function page_transport()
             .. "Dock it at the bottom, under the arrange, as Bitwig's.")
         end
       end
+      -- the clip launcher: its icon in the transport, and a button to open / close it here
+      local lidx, lvalue = theme_param("bitTransLaunch")
+      if lidx then
+        r.ImGui_Spacing(ctx)
+        row("Clip launcher icon", function()
+          local p = segmented("launch", { "Off", "Shown" }, lvalue == 0 and 1 or 2)
+          if p then set_theme_param("bitTransLaunch", p == 1 and 0 or 1) end
+        end)
+        local cmd = script_command("TK_Theme_Bit_Launcher.lua")
+        if cmd then
+          local open = r.GetToggleCommandState(cmd) == 1
+          row("Clip launcher", function()
+            if action_button(open and "Close launcher" or "Open launcher", 140) then r.Main_OnCommand(cmd, 0) end
+          end)
+        end
+        note("Bitwig's clip launcher: slots per track, scenes, launch quantize. Dock it at the left of the arrange.")
+      end
     else
       note("TK Theme Bit is not the active theme.")
     end
@@ -846,6 +863,28 @@ local function page_tracks()
       end)
     end
   end)
+  section("Mixer strips", function()
+    -- the strip widths are theme parameters (px at 100 %): the fields, keys and input row
+    -- grow with them, the meter and fader stay as they are, centred in their box
+    local shown = false
+    for _, s in ipairs({ { "bitMcpW", "Tracks", "mcpw" }, { "bitMstW", "Master", "mstw" } }) do
+      local idx = theme_param(s[1])
+      if idx then
+        local _, _, value, def, min, max = r.ThemeLayout_GetParameter(idx)
+        if shown then r.ImGui_Spacing(ctx) end
+        shown = true
+        row(s[2] .. " width", function()
+          local new, moved, done = bar_slider(s[3], value, min, max, def)
+          if moved or done then
+            -- live while dragging, stored in the theme's settings on release
+            r.ThemeLayout_SetParameter(idx, new, done)
+            if moved then r.ThemeLayout_RefreshAll() end
+          end
+        end)
+      end
+    end
+    if shown then note("In pixels at 100 %. Right-click a slider for Bitwig's width (88).") end
+  end)
   section("Meters", function()
     row("Meter mode", function()
       local p = segmented("meter", { "Peak", "Peak/RMS", "LUFS-M" }, meter_mode())
@@ -924,6 +963,20 @@ function DARK.ini_set(key, value)
   return write_all(path, s)
 end
 
+-- the key gone from reaper.ini: REAPER's own dark mode colours again
+function DARK.ini_remove(key)
+  local path = r.get_ini_file()
+  local s = read_all(path)
+  if not s then return false end
+  s = s:gsub("([\r\n])" .. key .. "=[^\r\n]*\r?\n", "%1", 1)
+  DARK.text = nil
+  return write_all(path, s)
+end
+
+-- reaper.ini had no colours of its own before Bitwig (REAPER's defaults): kept as this
+-- word, so the way back removes Bitwig's instead of leaving them
+DARK.NONE = "none"
+
 function DARK.norm(v) return ((v or ""):lower():gsub("%s+", " "):gsub("^ ", ""):gsub(" $", "")) end
 
 function DARK.is_bit() return DARK.norm(DARK.ini_get("win32_darkmode_colors")) == DARK.norm(DARK.BIT) end
@@ -941,7 +994,7 @@ function DARK.use_bit()
   local mode = DARK.ini_get("win32_darkmode") or "0"
   if not DARK.is_bit() and not DARK.is_old_bit() then
     -- what to go back to: the colours and whether dark mode was on at all
-    if cur then r.SetExtState(EXT, "prev_darkmode", cur, true) end
+    r.SetExtState(EXT, "prev_darkmode", cur or DARK.NONE, true)
     r.SetExtState(EXT, "prev_darkmode_on", mode, true)
   end
   local ok = DARK.ini_set("win32_darkmode_colors", DARK.BIT)
@@ -1016,10 +1069,13 @@ function DARK.notice()
   })
 end
 
+-- back to the colours from before Bitwig; nothing kept (Bitwig's set from an older Bit, or
+-- reaper.ini had none): REAPER's own, by removing the key
 function DARK.use_previous()
   local prev = r.GetExtState(EXT, "prev_darkmode")
-  if prev == "" then return end
-  local ok = DARK.ini_set("win32_darkmode_colors", prev)
+  local ok
+  if prev == "" or prev == DARK.NONE then ok = DARK.ini_remove("win32_darkmode_colors")
+  else ok = DARK.ini_set("win32_darkmode_colors", prev) end
   -- dark mode back off if it was off before Bitwig
   local on = r.GetExtState(EXT, "prev_darkmode_on")
   if ok and on ~= "" then ok = DARK.ini_set("win32_darkmode", on) end
@@ -1084,24 +1140,27 @@ local function page_window()
   if bit_active() then
     section("Scaling", function()
       row("Theme size", function()
-        local p = segmented("scale", { "Auto", "150%", "200%" }, theme_scale())
+        local p = segmented("scale", { "Auto", "125%", "150%", "200%" }, theme_scale())
         if p then set_theme_scale(p) end
       end)
-      note("Auto follows the screen's scaling. 150% and 200% use the larger images on any screen.")
+      note("Auto follows the screen's scaling. 125%, 150% and 200% use the larger images on any screen.")
     end)
   end
   if IS_WINDOWS then
     section("Windows", function()
       local bit = DARK.is_bit()
-      local has_prev = r.GetExtState(EXT, "prev_darkmode") ~= ""
+      local prev = r.GetExtState(EXT, "prev_darkmode")
+      local has_prev = prev ~= "" and prev ~= DARK.NONE
       row("Window colours", function()
-        local labels = has_prev and { "Previous", "Bitwig" } or { "Other", "Bitwig" }
+        -- always clickable: with nothing kept, the first key gives REAPER's own colours back
+        local labels = has_prev and { "Previous", "Bitwig" } or { "REAPER's", "Bitwig" }
         local p = segmented("dark", labels, bit and 2 or 1)
         if p == 2 and not bit then DARK.use_bit()
-        elseif p == 1 and bit and has_prev then DARK.use_previous() end
+        elseif p == 1 and bit then DARK.use_previous() end
       end)
       note("REAPER's own windows (Media Explorer, FX chain, actions, routing, menus) in Bitwig's greys. "
-        .. "These are Windows dark mode colours, so Bitwig also switches dark mode on; Previous puts back "
+        .. "These are Windows dark mode colours, so Bitwig also switches dark mode on; "
+        .. (has_prev and "Previous" or "REAPER's") .. " puts back "
         .. "the colours and dark mode as they were. A REAPER setting for every theme; it shows after a restart. "
         .. "With dark mode off, REAPER uses this theme's own colours inside its windows (only the window frames stay light).")
       if DARK.msg then note(DARK.msg) end
@@ -2056,6 +2115,7 @@ HELP.CHAPTERS = {
     { "i", "MIDI editor", "Opens the selected MIDI clip. One view at a time: it closes the mixer." },
     { "i", "Mixer", "Shows the mixer and closes the MIDI editor." },
     { "i", "Inspector", "Opens the inspector panel (after the line)." },
+    { "i", "Clip launcher", "Opens the clip launcher (see that chapter)." },
     { "p", "Each icon can be switched off in Settings > Transport. They hide when the bar is too narrow." },
   } },
   { "Inspector", {
@@ -2103,6 +2163,105 @@ HELP.CHAPTERS = {
     { "k", "Delete / Ctrl+D", "Delete / duplicate the selected events." },
     { "p", "The grid button (1/16 and so on) sets the project grid; Snap is in its menu. The overview at the bottom scrolls." },
   } },
+  { "Clip Launcher", {
+    { "p", "Bitwig's clip launcher: clips wait in slots and play on the project's bars, together with the "
+      .. "arrangement. Every track is a row, lined up with the arrange; every scene is a column." },
+    { "h", "Opening it" },
+    { "i", "Launcher icon", "The grid icon left of Devices opens and closes it. Orange while open. "
+      .. "Settings > Transport can hide it." },
+    { "i", "Docking", "Click the dock icon at its top, and put that docker left of the arrange. The rows then "
+      .. "line up with the arrange's tracks (exactly with js_ReaScriptAPI)." },
+    { "p", "While it's open, REAPER's own track panel is hidden: the launcher has its own track headers. "
+      .. "Switch that off in the Q menu." },
+    { "h", "The layout" },
+    { "i", "Track header", "Name, rec / S / M, volume and a meter. Click selects the track (Ctrl adds, Shift "
+      .. "selects a range), double-click renames it, right-click opens REAPER's track menu. Drag its bottom "
+      .. "edge to change the height." },
+    { "i", "Envelope rows", "An envelope with its own lane gets its own row, with a bar for its value. Click "
+      .. "selects it, right-click opens REAPER's envelope menu, the bottom edge sets the height." },
+    { "i", "Stop square", "Left of the slots. Stops the track's clip on the next line. The track stays with "
+      .. "the launcher, silent, until you click its return arrow." },
+    { "i", "Return arrow", "Right of the slots. Orange while the launcher plays the track instead of the "
+      .. "arrangement. Click it to give the track back to the arrangement at once." },
+    { "i", "Top row", "Stop all (left), the scene buttons, + to add a scene, and all back to the "
+      .. "arrangement (right)." },
+    { "i", "Master row", "When the master shows in the track panel: a launch button per scene, stop all and "
+      .. "all back to the arrangement." },
+    { "h", "Toolbar (top left)" },
+    { "i", "Q", "Launch Q, the grid that launches, stops and recordings land on (shows e.g. 1 bar). Its "
+      .. "menu also holds the project's defaults and switches." },
+    { "i", "Track panel icon", "Shows or hides REAPER's own track panel." },
+    { "i", "Red dot", "REC: writes what the launcher plays into the arrangement (see below)." },
+    { "i", "H", "Full track headers, or names only." },
+    { "i", "Eye", "Shows or hides the Bit Launcher tracks, where the clips are kept." },
+    { "i", "Dock / close", "The dock icon docks or floats the launcher; the cross at the top right closes it." },
+    { "h", "Launching and stopping" },
+    { "i", "Triangle", "Click the small box with the triangle to launch the clip. It waits for the next "
+      .. "Launch Q line: the box blinks while it waits, stays light while it plays, and a line runs "
+      .. "through the clip." },
+    { "p", "A launched clip takes its track from the arrangement: from that line the track's own items are "
+      .. "muted. Stopping the transport gives every track back to the arrangement." },
+    { "i", "Launch Q values", "Off (as soon as possible, about 0.3 s ahead), 1/16 to 1/2, or 1 to 8 bars. "
+      .. "The Q menu sets it for the project; a clip can have its own (clip menu > Main)." },
+    { "i", "Play mode", "Trigger from Start: from the beginning. Legato from Clip: from where the playing clip "
+      .. "on that track is (or from the start / from the project's position when none plays). Legato from "
+      .. "Project: from the position counted from the project's start." },
+    { "i", "Release", "What happens when you let go of the triangle. Continue: nothing. Stop: silent at once. "
+      .. "Return: back to the clip that played before, or to the arrangement. Next Action: runs it now." },
+    { "i", "Alt-click", "Uses the clip's ALT settings instead. Defaults: Q Off, Legato from Clip, Release Return: "
+      .. "hold the mouse on a variation, let go to return." },
+    { "i", "Next Action", "Clip menu. After 1 to 16 loops: stop, back to the arrangement or the last clip, or "
+      .. "play the next, previous, first, last, a random, another, or round-robin. A small arrow marks the clip." },
+    { "h", "Scenes" },
+    { "i", "Scene button", "Launches every clip in that column. Tracks without a clip there stop." },
+    { "i", "Right-click", "Rename, insert a scene before it, or delete it with its clips." },
+    { "k", "Shift+wheel", "Scroll the scenes when they don't all fit." },
+    { "h", "Adding clips" },
+    { "i", "+ in an empty slot", "Hover an empty slot: the + adds the arrange's selected items from here "
+      .. "(several fill the next slots), or opens a file dialog when nothing is selected." },
+    { "i", "Drop a file", "From Windows Explorer, REAPER's Media Explorer, or TK Media Browser / Workbench." },
+    { "i", "Tempo", "Audio files follow the project tempo, read from the file, its name (\"120bpm\") or "
+      .. "guessed. Per clip in its menu; for all files in the Q menu. Clips from the arrange keep their speed." },
+    { "p", "A click on an empty slot stops the track, or starts recording when the track is armed." },
+    { "h", "Recording into a slot" },
+    { "p", "Arm the track and click an empty slot (it shows a dot). Recording starts on the next Launch Q "
+      .. "line; a stopped transport starts. Click the slot again, or its stop square, to stop on the nearest "
+      .. "line. The clip is cut from the take and plays at once; the take leaves the arrangement." },
+    { "p", "REAPER records every armed track: other armed tracks record into the arrangement as usual." },
+    { "h", "Editing a clip" },
+    { "k", "Double-click a clip", "MIDI opens in the MIDI editor (changes are heard while it plays). Audio "
+      .. "opens in Clip Edit (changes are heard from the next launch)." },
+    { "i", "Inspector", "Click a clip and the inspector shows it; changes there go to the clip. Colours "
+      .. "are shared: set in either place, they show in both." },
+    { "i", "Clip menu", "Right-click: launch, launch with ALT, edit, rename, colour, Main and ALT settings, "
+      .. "Next Action, tempo, copy to the arrangement at the edit cursor, delete." },
+    { "h", "Automation clips" },
+    { "p", "In an envelope row: select an automation item on that lane, or make a time selection, then "
+      .. "click the + in an empty slot. Launching lays the curve over the envelope as a looping automation "
+      .. "item; stopping gives the envelope its own points back." },
+    { "p", "A track clip's launch also launches the automation clips in the same column. Right-click an "
+      .. "automation clip to copy it into the arrangement." },
+    { "h", "Into the arrangement" },
+    { "i", "REC (red dot)", "While it's on, every clip and automation clip that plays is written onto its "
+      .. "track when the transport stops or REC goes off. Existing items stay; the new ones lie on top." },
+    { "i", "Copy to arrangement", "Clip menu: one pass of the clip at the edit cursor." },
+    { "h", "Behind the scenes" },
+    { "i", "Bit Launcher tracks", "One hidden track per track with clips. It holds the clips and sends into "
+      .. "the real track, so you hear its effects. Show them with the eye; don't delete them." },
+    { "i", "Gate", "A small effect (TK Bit Launcher Gate) on such a track, for a release that has to stop at "
+      .. "once. It comes when needed and goes when no clip on that track uses Stop or Return. With the ALT "
+      .. "release on Return (the default) it stays." },
+    { "i", "Safety", "Muted arrange items come back when the launcher closes, when the transport stops, and "
+      .. "after a crash the next time it opens." },
+    { "i", "Undo", "Launcher changes are normal undo steps (\"Launcher: ...\")." },
+    { "h", "Mouse and keys" },
+    { "k", "Click the triangle", "Launch. Alt+click: with ALT settings." },
+    { "k", "Click a clip", "Select it (inspector)." },
+    { "k", "Drag a clip", "Move it to another slot. Hold Ctrl when you let go to copy it." },
+    { "k", "Wheel", "Scroll the tracks. Shift+wheel: the scenes." },
+    { "k", "Enter / Delete", "Launch / delete the selected clip." },
+    { "k", "Space / Ctrl+Z / Ctrl+Y", "Play / undo / redo, while the launcher has focus." },
+  } },
   { "Mixer & tracks", {
     { "i", "Input row", "Its icon is the monitoring switch." },
     { "i", "Phase  -10  Automation", "Small icons at the top of the sends area. -10 sets that track to "
@@ -2135,10 +2294,12 @@ HELP.CHAPTERS = {
   } },
   { "Settings", {
     { "i", "Transport", "Which keys and icons the bar shows, the logo, and what Devices and Audio editor open." },
+    { "i", "Clip launcher", "Settings > Transport: show or hide its icon, and open or close it. Its own "
+      .. "settings are in the launcher's Q menu." },
     { "i", "Display", "Contrast (REAPER's own colour controls), timeline background, beat grid colour and lines." },
     { "i", "Arrange", "Grid lines through clips, the seconds-over-bars ruler, item names, clip header size, "
       .. "playhead follow." },
-    { "i", "Tracks & Mixer", "Default volume, track list volume, meters, track numbers." },
+    { "i", "Tracks & Mixer", "Default volume, track list volume, mixer strip widths (tracks, master), meters, track numbers." },
     { "i", "Window", "Theme size, REAPER's window colours, TK icons, the menu bar." },
     { "i", "Shortcuts", "Bitwig's keys (see that chapter)." },
     { "p", "Right-click a slider for its default. A note under a setting says when it needs SWS or a restart." },
